@@ -15,9 +15,11 @@
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
+#include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -26,6 +28,9 @@
 #endif
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#endif
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#include <HYPRE_utilities.h>
 #endif
 
 #include <cmath>
@@ -192,6 +197,10 @@ void configure_one_iteration_demag_solver(fullmag::fem::Context &ctx) {
 }
 
 void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
+#ifdef MFEM_USE_MPI
+    check(HYPRE_GetError() == 0,
+          "one-iteration Hypre rejection must enter with a clean library error flag");
+#endif
     fullmag::fem::Context ctx;
     configure_one_iteration_demag_solver(ctx);
     mfem::SparseMatrix op = nontrivial_spd_matrix(8);
@@ -228,6 +237,18 @@ void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
           "explicit Hypre reset records a fresh zero guess without rebuilding setup");
     fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
+#ifdef MFEM_USE_MPI
+    // This fixture deliberately exhausts PCG's single permitted iteration.
+    // Consume only that proven expected error after all rejection/rollback
+    // checks. Any additional error remains a test failure.
+    const HYPRE_Int expected_error = HYPRE_GetError();
+    check(expected_error == HYPRE_ERROR_CONV,
+          "one-iteration Hypre rejection must produce only the expected convergence error");
+    check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0 && HYPRE_GetError() == 0,
+          "one-iteration Hypre rejection must consume only its expected convergence error");
+    std::fprintf(stderr, "expected HYPRE nonconvergence consumed: error=%d\n",
+                 static_cast<int>(expected_error));
+#endif
 }
 
 void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
@@ -387,6 +408,26 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(ctx.poisson_demag.fresh_zero_guess_count == 1u,
           "periodic rejected solve records one fresh zero guess");
 
+    auto *periodic_matrix =
+        static_cast<mfem::SparseMatrix *>(ctx.poisson_demag.periodic_matrix);
+    auto *periodic_rhs = static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_rhs);
+    auto *periodic_solution =
+        static_cast<mfem::Vector *>(ctx.poisson_demag.periodic_solution);
+    check(periodic_matrix != nullptr && periodic_rhs != nullptr && periodic_solution != nullptr,
+          "periodic warm-start test retains its reduced system");
+    const auto relative_residual = [&]() {
+        mfem::Vector residual(periodic_rhs->Size());
+        periodic_matrix->Mult(*periodic_solution, residual);
+        residual -= *periodic_rhs;
+        const double rhs_norm = periodic_rhs->Norml2();
+        check(std::isfinite(rhs_norm) && rhs_norm > 0.0,
+              "periodic warm-start test RHS norm is finite and nonzero");
+        return residual.Norml2() / rhs_norm;
+    };
+    const mfem::Vector accepted_rhs(*periodic_rhs);
+    const double rhs_norm = periodic_rhs->Norml2();
+    const double cold_initial_residual = relative_residual();
+
     ctx.demag.solver.max_iterations = 100;
     ctx.demag.solver.relative_tolerance = 1.0e-10;
     solved = nullptr;
@@ -403,6 +444,10 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
           "periodic cold solve must exercise at least one iteration");
     mfem::Vector accepted_solution(solved->Size());
     accepted_solution = *solved;
+    const double cold_final_residual = relative_residual();
+    check(std::isfinite(cold_final_residual) && cold_final_residual <= 1.0e-10,
+          "periodic cold solution meets the requested RHS-relative residual");
+    const double warm_initial_residual = relative_residual();
 
     solved = nullptr;
     error.clear();
@@ -413,8 +458,21 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
     check(solved != nullptr, "periodic warm-start solve publishes a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "periodic warm-start solve does not zero the previous solution");
-    check(ctx.poisson_demag.last_iterations < cold_iterations,
-          "periodic warm start reduces iterations for an unchanged RHS");
+    mfem::Vector rhs_difference(*periodic_rhs);
+    rhs_difference -= accepted_rhs;
+    check(rhs_difference.Norml2() == 0.0,
+          "periodic warm start uses exactly the same reduced RHS");
+    const double warm_final_residual = relative_residual();
+    check(std::isfinite(warm_final_residual) && warm_final_residual <= 1.0e-10,
+          "periodic warm solution meets the same RHS-relative residual");
+    // MFEM scales its iterative stopping criterion by each call's initial
+    // residual. Reusing an accurate solution can therefore request a much
+    // smaller final residual without guaranteeing fewer iterations.
+    std::fprintf(stderr,
+                 "periodic warm-start diagnostic: cold_iterations=%d warm_iterations=%d cold_initial_relative_residual=%.17g cold_final_relative_residual=%.17g warm_initial_relative_residual=%.17g warm_final_relative_residual=%.17g rhs_norm=%.17g\n",
+                 cold_iterations, ctx.poisson_demag.last_iterations,
+                 cold_initial_residual, cold_final_residual,
+                 warm_initial_residual, warm_final_residual, rhs_norm);
     mfem::Vector warm_start_difference(solved->Size());
     warm_start_difference = *solved;
     warm_start_difference -= accepted_solution;
@@ -422,6 +480,7 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
         warm_start_difference.Norml2() <=
             1.0e-12 * std::max(1.0, accepted_solution.Norml2()),
         "periodic warm start preserves the qualified solution");
+    const mfem::Vector accepted_reduced_solution(*periodic_solution);
 
     for (int i = 0; i < rhs.Size(); ++i) {
         rhs(i) = -rhs(i);
@@ -438,6 +497,10 @@ void periodic_demag_reuses_warm_start_and_resets_after_failure() {
           "rejected periodic candidate must not publish a lifted solution");
     check(ctx.poisson_demag.fresh_zero_guess_count == 2u,
           "rejected periodic candidate must retain the accepted warm start");
+    mfem::Vector rejected_difference(*periodic_solution);
+    rejected_difference -= accepted_reduced_solution;
+    check(rejected_difference.Norml2() == 0.0,
+          "rejected periodic candidate restores the exact accepted reduced solution");
 
     ctx.demag.solver.max_iterations = 100;
     ctx.demag.solver.relative_tolerance = 1.0e-10;
@@ -1546,6 +1609,359 @@ void airbox_dirichlet_and_robin_match_manufactured_slab_oracle() {
     }
 }
 
+void check_cpu_transfer_vectors(const std::vector<double> &actual,
+                                const std::vector<double> &oracle,
+                                double zero_scale, const char *message) {
+    check(actual.size() == oracle.size(), "CPU transfer oracle extent");
+    long double error2 = 0.0L, reference2 = 0.0L;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        check(std::isfinite(actual[i]) && std::isfinite(oracle[i]), "finite CPU transfer oracle");
+        const long double difference = static_cast<long double>(actual[i]) - oracle[i];
+        error2 += difference * difference;
+        reference2 += static_cast<long double>(oracle[i]) * oracle[i];
+    }
+    const long double error = std::sqrt(error2);
+    const long double reference = std::sqrt(reference2);
+    const long double limit = reference > 1.0e-12L * zero_scale
+        ? 1.0e-12L * reference : 1.0e-12L * zero_scale;
+    if (error > limit) {
+        std::fprintf(stderr, "FAIL: %s error=%.17Lg reference=%.17Lg limit=%.17Lg\n",
+                     message, error, reference, limit);
+        std::exit(1);
+    }
+}
+
+std::vector<double> cpu_transfer_vector(const mfem::Vector &value) {
+    const double *data = value.HostRead();
+    return std::vector<double>(data, data + value.Size());
+}
+
+void cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup() {
+    for (int mesh_kind = 0; mesh_kind < 4; ++mesh_kind) {
+        for (int material_kind = 0; material_kind < 3; ++material_kind) {
+            // The existing exact DG0 material runtime supports tetrahedra.
+            if (material_kind == 2 && (mesh_kind == 1 || mesh_kind == 3)) continue;
+            mfem::Mesh mesh = (mesh_kind == 1 || mesh_kind == 3)
+                ? mixed_prism_pyramid_tet_poisson_mesh() : independent_all_tet_poisson_mesh();
+            if (mesh_kind == 3) {
+                for (int element = 0; element < mesh.GetNE(); ++element) {
+                    mesh.GetElement(element)->SetAttribute(7);
+                }
+                mesh.SetAttributes();
+            }
+            if (mesh_kind == 2) {
+                mesh.SetCurvature(2);
+                mfem::VectorFunctionCoefficient deformation(3,
+                    [](const mfem::Vector &x, mfem::Vector &y) {
+                        y = x;
+                        y[2] += 0.02 * x[0] * x[1];
+                    });
+                mesh.Transform(deformation);
+            }
+            mfem::H1_FECollection state_fec(1, 3);
+            mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+            fullmag::fem::Context ctx;
+            mixed_poisson_context(ctx, mesh, state_fes, element_mask_for_attribute(mesh, 7));
+            ctx.mfem_device.device_string_override = "cpu";
+            if (mesh_kind == 3) {
+                ctx.mesh.periodic_node_pairs = {0u, 7u};
+                ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+                ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+                ctx.mesh.periodic_reduced_node_count = 7u;
+            }
+            if (material_kind == 1) {
+                ctx.material_fields.Ms_field.resize(static_cast<size_t>(state_fes.GetNDofs()));
+                for (int i = 0; i < state_fes.GetNDofs(); ++i) {
+                    ctx.material_fields.Ms_field[static_cast<size_t>(i)] = 1.0 + 0.03 * i;
+                }
+            } else if (material_kind == 2) {
+                ctx.material_fields.Ms_element_field.resize(static_cast<size_t>(mesh.GetNE()));
+                ctx.material_fields.A_element_field.assign(static_cast<size_t>(mesh.GetNE()), 0.0);
+                for (int i = 0; i < mesh.GetNE(); ++i) {
+                    ctx.material_fields.Ms_element_field[static_cast<size_t>(i)] =
+                        mesh.GetAttribute(i) == 7 ? 0.7 + 0.1 * i : 0.0;
+                }
+                std::string material_error;
+                check_result(fullmag::fem::initialize_material_runtime(ctx, material_error),
+                             material_error, "CPU transfer DG0 fixture");
+            }
+            std::string error;
+            check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                         "CPU transfer context setup");
+            auto *potential_fes = ctx.poisson_demag.potential_fes;
+            for (int sample = 0; sample < 2; ++sample) {
+                std::vector<double> m(3u * static_cast<size_t>(state_fes.GetNDofs()));
+                for (size_t i = 0; i < m.size(); ++i) m[i] = std::sin(0.37 * (i + 1u) + sample);
+                mfem::Vector *rhs = nullptr;
+                check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error), error,
+                             "cached CPU RHS");
+                const mfem::Vector cached_rhs(*rhs);
+                check_result(fullmag::fem::assemble_demag_poisson_rhs_quadrature(ctx, m, rhs, error),
+                             error, "quadrature CPU RHS oracle");
+                check_cpu_transfer_vectors(cpu_transfer_vector(cached_rhs), cpu_transfer_vector(*rhs),
+                                           0.0, "fixed RHS matches quadrature");
+                mfem::GridFunction potential(potential_fes);
+                mfem::FunctionCoefficient function([sample](const mfem::Vector &x) {
+                    return (sample + 1.0) * (x[0] + 2.0 * x[1] - 0.7 * x[2]) +
+                        0.13 * x[0] * x[2];
+                });
+                potential.ProjectCoefficient(function);
+                mfem::Vector true_potential;
+                potential.GetTrueDofs(true_potential);
+                std::vector<double> cached_field, oracle_field;
+                double cached_energy = 0.0, oracle_energy = 0.0;
+                uint64_t energy_ns = 0;
+                check_result(fullmag::fem::recover_demag_poisson_field(ctx, true_potential,
+                    cached_field, cached_energy, m, &energy_ns, error, &cached_rhs), error,
+                    "cached CPU recovery");
+                const auto cached_visual = ctx.demag.h_visual_xyz;
+                const double cached_recovered_energy = ctx.poisson_demag.last_recovered_field_energy_joules;
+                check_result(fullmag::fem::recover_demag_poisson_field_quadrature(ctx, true_potential,
+                    oracle_field, oracle_energy, m, &energy_ns, error, rhs), error,
+                    "quadrature CPU recovery oracle");
+                check_cpu_transfer_vectors(cached_field, oracle_field, 1.0,
+                                           "physical fixed recovery matches quadrature");
+                check_cpu_transfer_vectors(cached_visual, ctx.demag.h_visual_xyz, 1.0,
+                                           "visual fixed recovery matches quadrature");
+                check_cpu_transfer_vectors({cached_energy}, {oracle_energy}, 0.0,
+                                           "fixed transfer variational energy");
+                check_cpu_transfer_vectors({cached_recovered_energy},
+                    {ctx.poisson_demag.last_recovered_field_energy_joules}, 0.0,
+                    "fixed transfer recovered energy");
+            }
+            check(ctx.poisson_demag.rhs_transfer.state == "ready" &&
+                  ctx.poisson_demag.recovery_transfer.state == "ready", "CPU caches were exercised");
+            check(ctx.poisson_demag.rhs_transfer.build_count == 1u &&
+                  ctx.poisson_demag.recovery_transfer.build_count == 1u &&
+                  ctx.poisson_demag.rhs_transfer.reuse_count == 2u &&
+                  ctx.poisson_demag.recovery_transfer.reuse_count == 2u,
+                  "two distinct inputs reuse one fixed CPU transfer setup");
+            check(ctx.poisson_demag.rhs_transfer.persistent_bytes +
+                  ctx.poisson_demag.recovery_transfer.persistent_bytes <=
+                  ctx.poisson_demag.cpu_transfer_persistent_limit_bytes,
+                  "reported persistent cache stays within budget");
+            mfem::Vector zero_potential(potential_fes->GetTrueVSize());
+            zero_potential = 0.0;
+            std::vector<double> zero_field;
+            const std::vector<double> uniform_m(3u * static_cast<size_t>(state_fes.GetNDofs()), 0.3);
+            double zero_energy = 0.0;
+            check_result(fullmag::fem::recover_demag_poisson_field(ctx, zero_potential,
+                zero_field, zero_energy, uniform_m, nullptr, error), error,
+                "cached zero-potential field");
+            check_cpu_transfer_vectors(zero_field, std::vector<double>(zero_field.size(), 0.0),
+                                       1.0, "cached near-zero H uses absolute Ms scale");
+            const auto before = ctx.poisson_demag.operator_lifecycle.active_key;
+            if (mesh_kind == 2) {
+                (*mesh.GetNodes())[0] += 0.01;
+                check(fullmag::fem::make_poisson_operator_dependency_key(ctx, mesh,
+                    mfem::Device::IsEnabled()) != before, "curved Nodes change dependency identity");
+            } else {
+                ctx.material_fields.Ms_field.assign(static_cast<size_t>(state_fes.GetNDofs()), 2.0);
+                check(fullmag::fem::make_poisson_operator_dependency_key(ctx, mesh,
+                    mfem::Device::IsEnabled()) != before, "Ms changes dependency identity");
+            }
+            check(!fullmag::fem::demag_poisson_operator_dependencies_current(ctx, error),
+                  "stale coupling refuses apply until context rebuild");
+            fullmag::fem::context_destroy_poisson(ctx);
+            check(ctx.poisson_demag.rhs_transfer.persistent_bytes == 0u &&
+                  ctx.poisson_demag.recovery_transfer.persistent_bytes == 0u,
+                  "teardown resets transfer ownership diagnostics");
+        }
+    }
+}
+
+void cpu_fixed_transfer_peak_guard_retains_transient_kernel_high_water_mark() {
+    constexpr uint64_t mib = 1024u * 1024u;
+    std::istringstream status("VmRSS: 103424 kB\nVmHWM: 2048000 kB\n");
+    const auto sample = fullmag::fem::cpu_transfer_parse_memory_status(status);
+    check(sample.rss_bytes == 101u * mib && sample.peak_rss_bytes == 2000u * mib,
+          "VmRSS and kernel VmHWM are distinct byte observations");
+    fullmag::fem::Context ctx;
+    ctx.poisson_demag.cpu_transfer_setup_rss_baseline_bytes = 100u * mib;
+    bool refused = false;
+    try {
+        fullmag::fem::cpu_transfer_observe_peak(ctx, ctx.poisson_demag.rhs_transfer, sample);
+    } catch (const fullmag::fem::CpuTransferUnavailable &) {
+        refused = true;
+    }
+    check(refused, "peak guard refuses an already freed transient above 1.5 GiB");
+    const auto &rhs = ctx.poisson_demag.rhs_transfer;
+    check(rhs.setup_rss_baseline_bytes == 100u * mib &&
+          rhs.setup_observed_peak_rss_bytes == 2000u * mib &&
+          rhs.setup_observed_peak_delta_bytes == 1900u * mib &&
+          rhs.setup_estimated_peak_delta_bytes == 0u,
+          "observed peak and delta are retained separately from construction estimates");
+    refused = false;
+    try {
+        fullmag::fem::cpu_transfer_observe_peak(ctx, ctx.poisson_demag.recovery_transfer,
+                                              {102u * mib, 2000u * mib});
+    } catch (const fullmag::fem::CpuTransferUnavailable &) {
+        refused = true;
+    }
+    check(refused && ctx.poisson_demag.cpu_transfer_setup_rss_baseline_bytes == 100u * mib &&
+          ctx.poisson_demag.recovery_transfer.setup_observed_peak_delta_bytes == 1900u * mib,
+          "recovery uses the same initial RSS baseline instead of rebasing after RHS");
+}
+
+void cpu_fixed_transfer_partial_setup_failure_releases_staged_matrices() {
+    const auto live_before = fullmag::fem::cpu_transfer_live_matrix_count_for_tests();
+    mfem::Mesh mesh = independent_all_tet_poisson_mesh();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fes, element_mask_for_attribute(mesh, 7));
+    ctx.mfem_device.device_string_override = "cpu";
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "partial cache failure fixture setup");
+    ctx.poisson_demag.cpu_transfer_test_fail_after_finalized_matrices = 1;
+    std::vector<double> m(3u * static_cast<size_t>(fes.GetNDofs()));
+    for (size_t i = 0; i < m.size(); ++i) m[i] = std::sin(0.3 * (i + 1u));
+    mfem::Vector *rhs = nullptr;
+    check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error), error,
+                 "partial RHS setup failure uses quadrature");
+    const auto cached_attempt_rhs = cpu_transfer_vector(*rhs);
+    check(ctx.poisson_demag.cpu_transfer_test_finalized_matrices == 1u &&
+          ctx.poisson_demag.cpu_transfer_test_peak_live_matrices > live_before &&
+          fullmag::fem::cpu_transfer_live_matrix_count_for_tests() == live_before,
+          "one finalized staged RHS matrix was destroyed on refusal");
+    check_result(fullmag::fem::assemble_demag_poisson_rhs_quadrature(ctx, m, rhs, error), error,
+                 "partial RHS failure oracle");
+    check_cpu_transfer_vectors(cached_attempt_rhs, cpu_transfer_vector(*rhs), 0.0,
+                               "partial RHS failure preserves the quadrature result");
+    mfem::GridFunction potential(ctx.poisson_demag.potential_fes);
+    mfem::FunctionCoefficient function([](const mfem::Vector &x) {
+        return x[0] + 0.5 * x[1] - 2.0 * x[2];
+    });
+    potential.ProjectCoefficient(function);
+    mfem::Vector true_potential;
+    potential.GetTrueDofs(true_potential);
+    std::vector<double> actual, oracle;
+    double actual_energy = 0.0, oracle_energy = 0.0;
+    check_result(fullmag::fem::recover_demag_poisson_field(ctx, true_potential, actual,
+        actual_energy, m, nullptr, error, rhs), error,
+        "partial recovery setup failure uses quadrature");
+    const auto actual_visual = ctx.demag.h_visual_xyz;
+    check(ctx.poisson_demag.cpu_transfer_test_finalized_matrices == 2u &&
+          ctx.poisson_demag.cpu_transfer_test_peak_live_matrices > live_before &&
+          fullmag::fem::cpu_transfer_live_matrix_count_for_tests() == live_before,
+          "one finalized staged recovery matrix was destroyed on refusal");
+    check_result(fullmag::fem::recover_demag_poisson_field_quadrature(ctx, true_potential, oracle,
+        oracle_energy, m, nullptr, error, rhs), error, "partial recovery failure oracle");
+    check_cpu_transfer_vectors(actual, oracle, 1.0, "partial recovery preserves physical H");
+    check_cpu_transfer_vectors(actual_visual, ctx.demag.h_visual_xyz, 1.0,
+                               "partial recovery preserves visual H");
+    check_cpu_transfer_vectors({actual_energy}, {oracle_energy}, 0.0,
+                               "partial recovery preserves energy");
+    for (const auto *diagnostics : {&ctx.poisson_demag.rhs_transfer,
+                                   &ctx.poisson_demag.recovery_transfer}) {
+        check(diagnostics->state == "quadrature" && diagnostics->build_count == 0u &&
+              diagnostics->persistent_bytes == 0u && diagnostics->nnz == 0u &&
+              diagnostics->reason.find("injected setup-only failure") != std::string::npos,
+              "partial setup never publishes a transfer or success receipt");
+    }
+    fullmag::fem::context_destroy_poisson(ctx);
+    check(fullmag::fem::cpu_transfer_live_matrix_count_for_tests() == live_before &&
+          ctx.poisson_demag.cpu_transfer_test_fail_after_finalized_matrices == 0u,
+          "teardown retains no staged matrix and clears the private fault seam");
+}
+
+void cpu_fixed_transfer_eligibility_preserves_unqualified_spaces() {
+    mfem::Mesh mesh = independent_all_tet_poisson_mesh();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace scalar(&mesh, &fec);
+    mfem::FiniteElementSpace vector_space(&mesh, &fec, 2);
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cpu";
+    bool refused = false;
+    try {
+        fullmag::fem::cpu_transfer_begin(ctx, vector_space, scalar, ctx.poisson_demag.rhs_transfer);
+    } catch (const fullmag::fem::CpuTransferUnavailable &) {
+        refused = true;
+    }
+    check(refused, "unqualified FE space requests retained quadrature, not new CPU admission");
+    check(fullmag::fem::transfer_dof_index(-4) == 3 &&
+          fullmag::fem::transfer_dof_sign(-4) == -1.0 &&
+          fullmag::fem::transfer_dof_index(3) == 3 &&
+          fullmag::fem::transfer_dof_sign(3) == 1.0,
+          "fixed transfer uses MFEM signed DOF convention");
+}
+
+void cpu_fixed_transfer_constraints_retain_existing_rhs_operation() {
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        2, 1, 1, mfem::Element::HEXAHEDRON, 2.0, 1.0, 1.0);
+    mesh.EnsureNCMesh();
+    mfem::Array<int> refine;
+    refine.Append(0);
+    mesh.GeneralRefinement(refine);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    check(fes.GetVSize() != fes.GetTrueVSize(), "fixture has genuine hanging-node constraints");
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cpu";
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.fes = &fes;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(fes.GetNDofs());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    ctx.mesh.magnetic_element_mask.assign(static_cast<size_t>(mesh.GetNE()), 1u);
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+    std::string error;
+    check_result(fullmag::fem::initialize_demag_poisson_rhs_workspace(ctx, fes, error),
+                 error, "constrained RHS workspace");
+    std::vector<double> m(3u * static_cast<size_t>(fes.GetNDofs()));
+    for (size_t i = 0; i < m.size(); ++i) m[i] = std::sin(0.2 * i);
+    mfem::Vector *rhs = nullptr;
+    check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error), error,
+                 "constrained request retains the existing CPU operation");
+    const auto actual = cpu_transfer_vector(*rhs);
+    check_result(fullmag::fem::assemble_demag_poisson_rhs_quadrature(ctx, m, rhs, error), error,
+                 "constrained RHS oracle");
+    check_cpu_transfer_vectors(actual, cpu_transfer_vector(*rhs), 0.0,
+                               "constrained RHS remains unchanged");
+    check(ctx.poisson_demag.rhs_transfer.state == "quadrature" &&
+          ctx.poisson_demag.rhs_transfer.persistent_bytes == 0u,
+          "constraints refuse only the optional cache");
+    fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
+}
+
+void cpu_fixed_transfers_refuse_budget_without_changing_quadrature() {
+    mfem::Mesh mesh = independent_all_tet_poisson_mesh();
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, fes, element_mask_for_attribute(mesh, 7));
+    ctx.mfem_device.device_string_override = "cpu";
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error, "budget fixture setup");
+    ctx.poisson_demag.cpu_transfer_persistent_limit_bytes = 0;
+    std::vector<double> m(3u * static_cast<size_t>(fes.GetNDofs()), 0.5);
+    mfem::Vector *rhs = nullptr;
+    check_result(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error), error,
+                 "budget refusal retains CPU RHS");
+    const auto actual = cpu_transfer_vector(*rhs);
+    check_result(fullmag::fem::assemble_demag_poisson_rhs_quadrature(ctx, m, rhs, error), error,
+                 "budget refusal RHS oracle");
+    check_cpu_transfer_vectors(actual, cpu_transfer_vector(*rhs), 0.0, "budget RHS is unchanged");
+    mfem::Vector potential(ctx.poisson_demag.potential_fes->GetTrueVSize());
+    potential = 0.0;
+    std::vector<double> field;
+    double energy = 0.0;
+    check_result(fullmag::fem::recover_demag_poisson_field(ctx, potential, field, energy,
+        m, nullptr, error, rhs), error, "budget refusal retains CPU recovery");
+    check_cpu_transfer_vectors(field, std::vector<double>(field.size(), 0.0), 1.0,
+                               "zero potential produces zero recovery after refusal");
+    check(ctx.poisson_demag.rhs_transfer.state == "quadrature" &&
+          ctx.poisson_demag.recovery_transfer.state == "quadrature" &&
+          ctx.poisson_demag.rhs_transfer.build_count == 0u &&
+          ctx.poisson_demag.recovery_transfer.build_count == 0u &&
+          ctx.poisson_demag.rhs_transfer.persistent_bytes == 0u &&
+          ctx.poisson_demag.recovery_transfer.persistent_bytes == 0u,
+          "optional refusal publishes no partial cache");
+    check(!ctx.poisson_demag.rhs_transfer.reason.empty() &&
+          !ctx.poisson_demag.recovery_transfer.reason.empty(), "refusal has explicit diagnostics");
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
 void nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization() {
     mfem::Mesh mesh = independent_all_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
@@ -1711,6 +2127,10 @@ void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
 }
 
 void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
+#ifdef MFEM_USE_MPI
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson workspace test must enter with a clean HYPRE error flag");
+#endif
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
@@ -1753,6 +2173,11 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
     size_t steady_visual_field_capacity = 0u;
     for (int repeat = 0; repeat < kRepeatedSolves; ++repeat) {
         error.clear();
+#ifdef MFEM_USE_MPI
+        const HYPRE_Int before_compute = HYPRE_GetError();
+        check(before_compute == 0,
+              "repeated Poisson solve must start without an inherited HYPRE error");
+#endif
         check_result(fullmag::fem::context_compute_demag_poisson(
                          ctx,
                          m_xyz,
@@ -1763,6 +2188,15 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
                          error),
                      error,
                      "repeated nonperiodic Poisson solve");
+#ifdef MFEM_USE_MPI
+        std::fprintf(stderr,
+                     "HYPRE repeated compute: repeat=%d before=%d after=%d iterations=%d certified_residual=%.17g\n",
+                     repeat, static_cast<int>(before_compute),
+                     static_cast<int>(HYPRE_GetError()),
+                     ctx.poisson_demag.last_iterations, ctx.poisson_demag.last_residual);
+        check(HYPRE_Initialized() != 0 && HYPRE_GetError() == 0,
+              "first vector setup and every repeated solve must retain initialized, error-free HYPRE");
+#endif
         check(h_demag.size() == m_xyz.size() && std::isfinite(demag_energy),
               "repeated Poisson solve must publish finite field and energy");
         if (repeat == 0) {
@@ -1817,7 +2251,19 @@ void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
               ctx.poisson_demag.last_solver_setup_reused,
           "repeated Poisson solves must retain cached Hypre operator and solver");
 
+#ifdef MFEM_USE_MPI
+    std::fprintf(stderr, "HYPRE repeated teardown: before=%d\n",
+                 static_cast<int>(HYPRE_GetError()));
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson workspace must be error-free before teardown");
+#endif
     fullmag::fem::context_destroy_poisson(ctx);
+#ifdef MFEM_USE_MPI
+    std::fprintf(stderr, "HYPRE repeated teardown: after=%d\n",
+                 static_cast<int>(HYPRE_GetError()));
+    check(HYPRE_GetError() == 0,
+          "repeated Poisson teardown must not introduce a HYPRE error");
+#endif
 }
 
 void failed_hypre_setup_does_not_publish_partial_state() {
@@ -2254,25 +2700,58 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed mixed-P1 GPU Poisson contract requires a CUDA device");
 
-    for (const int realization : {
-             FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
-             FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET}) {
+    constexpr std::array<int, 2> realizations = {
+        FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
+        FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET};
+    struct CpuOracle {
+        std::vector<double> magnetization;
+        std::vector<double> field;
+        double energy = 0.0;
+    };
+    std::array<CpuOracle, realizations.size()> cpu_oracles;
+    // Finish and destroy every CPU workspace before configuring MFEM's
+    // process-wide CUDA backend, as the production MFEM entry point does.
+    for (size_t index = 0; index < realizations.size(); ++index) {
+        mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+        mfem::H1_FECollection fixture_fec(1, 3);
+        mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
+        fullmag::fem::Context ctx;
+        mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
+        ctx.demag.realization = realizations[index];
+        auto &oracle = cpu_oracles[index];
+        oracle.magnetization = smooth_magnetization(mesh, 0.2);
+        std::string error;
+        check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                     "mixed CUDA/Hypre CPU oracle workspace initialization");
+        check_result(fullmag::fem::context_compute_demag_poisson(
+                  ctx, oracle.magnetization, oracle.field, oracle.energy,
+                  false, nullptr, error),
+              error, "mixed CUDA/Hypre CPU oracle solve");
+        fullmag::fem::context_destroy_poisson(ctx);
+    }
+    int selected_device = 0;
+    check(cudaGetDevice(&selected_device) == cudaSuccess,
+          "mixed CUDA/Hypre contract must resolve the selected CUDA device");
+    std::fprintf(stderr, "mixed CUDA/Hypre before MFEM Device: hypre_error=%d device=%d\n",
+                 static_cast<int>(HYPRE_GetError()), selected_device);
+    // Device must outlive both GPU cases, including all MFEM/Hypre objects.
+    mfem::Device cuda_device("cuda", selected_device);
+    for (size_t index = 0; index < realizations.size(); ++index) {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
     fullmag::fem::Context ctx;
     mixed_poisson_context(ctx, mesh, fixture_fes, {1u, 0u, 0u});
-    ctx.demag.realization = realization;
+    ctx.demag.realization = realizations[index];
     const std::vector<double> m_xyz = smooth_magnetization(mesh, 0.2);
+    const auto &oracle = cpu_oracles[index];
+    check(m_xyz == oracle.magnetization,
+          "mixed CUDA/Hypre CPU and GPU must use identical magnetization");
+    const auto &cpu_field = oracle.field;
+    const double cpu_energy = oracle.energy;
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
                  "mixed CUDA/Hypre Poisson runtime workspace initialization");
-
-    std::vector<double> cpu_field;
-    double cpu_energy = 0.0;
-    check_result(fullmag::fem::context_compute_demag_poisson(
-              ctx, m_xyz, cpu_field, cpu_energy, false, nullptr, error),
-          error, "mixed CUDA/Hypre CPU oracle solve");
 
     check_result(fullmag::fem::gpu_state_initialize(
               ctx.gpu_state.device,
@@ -2309,7 +2788,17 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               error),
           error, "mixed CUDA/Hypre runtime coefficient upload");
     ctx.poisson_demag.gpu_demag_mode = FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
-    check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx, error), error,
+    std::fprintf(stderr, "mixed CUDA/Hypre before device policy: hypre_error=%d bc=%d\n",
+                 static_cast<int>(HYPRE_GetError()), realizations[index]);
+    const bool gpu_initialized = fullmag::fem::gpu_demag_poisson_initialize(ctx, error);
+    if (!gpu_initialized) {
+        const auto policy = fullmag::fem::configure_hypre_cuda_device_policy();
+        std::fprintf(stderr,
+                     "mixed CUDA/Hypre policy failure: first_error=%d configured=%d memory_device=%d execution_device=%d\n",
+                     policy.first_error_code, policy.configured,
+                     policy.memory_location_device, policy.execution_policy_device);
+    }
+    check_result(gpu_initialized, error,
                  "mixed CUDA/Hypre Poisson operator initialization");
     check(fullmag::fem::gpu_demag_poisson_ready(ctx),
           "mixed-P1 Robin GPU Poisson workspace must be ready");
@@ -2876,7 +3365,6 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
         "double robin_reference_radius_for_mesh(",
         "if (!periodic_axis[axis])",
         "ctx.poisson_demag.robin_effective_beta = c / R_star;",
-        "A_robin->Add(ctx.poisson_demag.robin_effective_beta",
         "A_bc->EliminateRowCol",
     };
     for (const char *symbol : symbols) {
@@ -2887,6 +3375,15 @@ void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
             boundary.find(symbol) != std::string::npos,
             "Poisson demag boundary operator must be defined in demag_poisson_boundary.cpp");
     }
+
+    const char *robin_operator_add =
+        "std::unique_ptr<mfem::SparseMatrix>(mfem::Add(";
+    check(
+        poisson.find(robin_operator_add) == std::string::npos,
+        "Poisson demag Robin operator addition must not be defined in demag_poisson.cpp");
+    check(
+        boundary.find(robin_operator_add) != std::string::npos,
+        "Poisson demag boundary owner must construct the Robin operator with MFEM sparse-matrix addition");
 }
 
 void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
@@ -3756,16 +4253,31 @@ void demag_visual_effective_field_preserves_full_domain_demag() {
         7.0, 8.0, 9.0,
         1.0, 2.0, 3.0,
     };
+    const auto full_domain_h_demag = ctx.demag.h_visual_xyz;
+    ctx.mesh.n_nodes = 2;
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
 
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
     check(ctx.effective_field.h_visual_xyz.size() == h_eff.size(), "visual H_eff size");
-    check(ctx.effective_field.h_visual_xyz[0] == 4.0, "visual H_eff first x");
-    check(ctx.effective_field.h_visual_xyz[1] == 14.0, "visual H_eff first y");
-    check(ctx.effective_field.h_visual_xyz[2] == 24.0, "visual H_eff first z");
-    check(ctx.effective_field.h_visual_xyz[3] == 43.0, "visual H_eff second x");
-    check(ctx.effective_field.h_visual_xyz[4] == 53.0, "visual H_eff second y");
-    check(ctx.effective_field.h_visual_xyz[5] == 63.0, "visual H_eff second z");
+    check(ctx.effective_field.h_visual_xyz[0] == 1.0, "magnetic H_eff x stays solver value");
+    check(ctx.effective_field.h_visual_xyz[1] == 2.0, "magnetic H_eff y stays solver value");
+    check(ctx.effective_field.h_visual_xyz[2] == 3.0, "magnetic H_eff z stays solver value");
+    check(ctx.effective_field.h_visual_xyz[3] == 43.0, "airbox H_eff x gets demag continuation");
+    check(ctx.effective_field.h_visual_xyz[4] == 53.0, "airbox H_eff y gets demag continuation");
+    check(ctx.effective_field.h_visual_xyz[5] == 63.0, "airbox H_eff z gets demag continuation");
+    check(ctx.demag.h_visual_xyz == full_domain_h_demag,
+          "publishing H_eff must preserve full-domain H_demag");
 
+    ctx.mesh.magnetic_node_mask.clear();
+    fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
+    check(ctx.effective_field.h_visual_xyz == h_eff,
+          "an empty mask treats every node as magnetic");
+
+    ctx.mesh.magnetic_node_mask = {1u};
+    fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
+    check(ctx.effective_field.h_visual_xyz.empty(), "visual H_eff clears on mismatched mask size");
+
+    ctx.mesh.magnetic_node_mask = {1u, 0u};
     ctx.demag.h_visual_xyz.pop_back();
     fullmag::fem::update_demag_poisson_visual_effective_field(ctx, h_eff, h_demag);
     check(ctx.effective_field.h_visual_xyz.empty(), "visual H_eff clears on mismatched demag visual size");
@@ -3817,76 +4329,104 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
     check(ctx.demag.h_visual_xyz.empty(), "empty visual demag remains empty");
 }
 
+void run_contract_case(const char *name, void (*body)()) {
+    (void)name;
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const HYPRE_Int before = HYPRE_GetError();
+    if (before != 0) {
+        std::fprintf(stderr, "HYPRE contract carry-in: case=%s error=%d\n",
+                     name, static_cast<int>(before));
+    }
+#endif
+    body();
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    const HYPRE_Int after = HYPRE_GetError();
+    if (after != before) {
+        std::fprintf(stderr,
+                     "HYPRE contract transition: case=%s before=%d after=%d newly_set=%d\n",
+                     name, static_cast<int>(before), static_cast<int>(after),
+                     static_cast<int>(after & ~before));
+    }
+#endif
+}
+
 } // namespace
 
 int main() {
-    demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
-    demag_linear_solve_validation_rejects_invalid_results();
-    poisson_runtime_wrappers_are_owned_by_separate_modules();
-    poisson_aggregate_header_documents_submodule_boundaries();
-    poisson_source_files_document_module_boundaries();
-    poisson_dependency_key_and_guard_are_owned_by_dependency_module();
-    poisson_debug_env_gate_is_cached_on_hot_path();
-    demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
+    run_contract_case("demag_amg_policy_resolves_defaults_overrides_and_invalid_values", demag_amg_policy_resolves_defaults_overrides_and_invalid_values);
+    run_contract_case("demag_linear_solve_validation_rejects_invalid_results", demag_linear_solve_validation_rejects_invalid_results);
+    run_contract_case("poisson_runtime_wrappers_are_owned_by_separate_modules", poisson_runtime_wrappers_are_owned_by_separate_modules);
+    run_contract_case("poisson_aggregate_header_documents_submodule_boundaries", poisson_aggregate_header_documents_submodule_boundaries);
+    run_contract_case("poisson_source_files_document_module_boundaries", poisson_source_files_document_module_boundaries);
+    run_contract_case("poisson_dependency_key_and_guard_are_owned_by_dependency_module", poisson_dependency_key_and_guard_are_owned_by_dependency_module);
+    run_contract_case("poisson_debug_env_gate_is_cached_on_hot_path", poisson_debug_env_gate_is_cached_on_hot_path);
+    run_contract_case("demag_energy_uses_half_factor_ms_mass_and_magnetic_mask", demag_energy_uses_half_factor_ms_mass_and_magnetic_mask);
 #if FULLMAG_HAS_MFEM_STACK
-    demag_variational_energy_uses_rhs_potential_pairing();
+    run_contract_case("demag_variational_energy_uses_rhs_potential_pairing", demag_variational_energy_uses_rhs_potential_pairing);
 #endif
-    demag_cache_refresh_policy_matches_bridge_contract();
-    cached_demag_energy_matches_direct_without_legacy_robin_addition();
-    demag_energy_is_owned_by_poisson_energy_module();
-    demag_cache_store_and_reuse_are_owned_by_poisson_module();
-    demag_telemetry_is_owned_by_poisson_telemetry_module();
-    demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
-    demag_rhs_assembly_is_owned_by_poisson_rhs_module();
-    demag_rhs_sign_contract_matches_laplace_phi_equals_div_m();
-    sharp_ms_demag_energy_and_delta_use_active_exact_mass();
-    sharp_ms_demag_rhs_uses_typed_element_accessor();
+    run_contract_case("demag_cache_refresh_policy_matches_bridge_contract", demag_cache_refresh_policy_matches_bridge_contract);
+    run_contract_case("cached_demag_energy_matches_direct_without_legacy_robin_addition", cached_demag_energy_matches_direct_without_legacy_robin_addition);
+    run_contract_case("demag_energy_is_owned_by_poisson_energy_module", demag_energy_is_owned_by_poisson_energy_module);
+    run_contract_case("demag_cache_store_and_reuse_are_owned_by_poisson_module", demag_cache_store_and_reuse_are_owned_by_poisson_module);
+    run_contract_case("demag_telemetry_is_owned_by_poisson_telemetry_module", demag_telemetry_is_owned_by_poisson_telemetry_module);
+    run_contract_case("demag_field_visual_postprocessing_is_owned_by_poisson_field_module", demag_field_visual_postprocessing_is_owned_by_poisson_field_module);
+    run_contract_case("demag_rhs_assembly_is_owned_by_poisson_rhs_module", demag_rhs_assembly_is_owned_by_poisson_rhs_module);
+    run_contract_case("demag_rhs_sign_contract_matches_laplace_phi_equals_div_m", demag_rhs_sign_contract_matches_laplace_phi_equals_div_m);
+    run_contract_case("sharp_ms_demag_energy_and_delta_use_active_exact_mass", sharp_ms_demag_energy_and_delta_use_active_exact_mass);
+    run_contract_case("sharp_ms_demag_rhs_uses_typed_element_accessor", sharp_ms_demag_rhs_uses_typed_element_accessor);
 #if FULLMAG_HAS_MFEM_STACK
-    sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
-    nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization();
-    mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential();
-    periodic_poisson_remains_explicit_p1_node_class_space();
-    poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
-    nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();
-    failed_hypre_setup_does_not_publish_partial_state();
-    failed_poisson_reinitialize_preserves_published_state();
-    mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace();
-    airbox_dirichlet_and_robin_match_manufactured_slab_oracle();
-    mixed_poisson_rhs_is_magnetic_only_with_air_present();
-    mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
-#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
-    mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step();
+    run_contract_case("sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle", sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle);
+    run_contract_case("cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup", cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup);
+    run_contract_case("cpu_fixed_transfers_refuse_budget_without_changing_quadrature", cpu_fixed_transfers_refuse_budget_without_changing_quadrature);
+    run_contract_case("cpu_fixed_transfer_eligibility_preserves_unqualified_spaces", cpu_fixed_transfer_eligibility_preserves_unqualified_spaces);
+    run_contract_case("cpu_fixed_transfer_constraints_retain_existing_rhs_operation", cpu_fixed_transfer_constraints_retain_existing_rhs_operation);
+    run_contract_case("cpu_fixed_transfer_peak_guard_retains_transient_kernel_high_water_mark", cpu_fixed_transfer_peak_guard_retains_transient_kernel_high_water_mark);
+    run_contract_case("cpu_fixed_transfer_partial_setup_failure_releases_staged_matrices", cpu_fixed_transfer_partial_setup_failure_releases_staged_matrices);
+    run_contract_case("nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization", nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization);
+    run_contract_case("mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential", mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential);
+    run_contract_case("periodic_poisson_remains_explicit_p1_node_class_space", periodic_poisson_remains_explicit_p1_node_class_space);
+    run_contract_case("poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation", poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation);
+    run_contract_case("nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves", nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves);
+    run_contract_case("failed_hypre_setup_does_not_publish_partial_state", failed_hypre_setup_does_not_publish_partial_state);
+    run_contract_case("failed_poisson_reinitialize_preserves_published_state", failed_poisson_reinitialize_preserves_published_state);
+    run_contract_case("mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace", mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace);
+    run_contract_case("airbox_dirichlet_and_robin_match_manufactured_slab_oracle", airbox_dirichlet_and_robin_match_manufactured_slab_oracle);
+    run_contract_case("mixed_poisson_rhs_is_magnetic_only_with_air_present", mixed_poisson_rhs_is_magnetic_only_with_air_present);
+    run_contract_case("mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem", mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem);
+    run_contract_case("mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn", mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn);
+    run_contract_case("mixed_poisson_robin_mass_uses_outer_tri_and_quad_only", mixed_poisson_robin_mass_uses_outer_tri_and_quad_only);
+    run_contract_case("mixed_poisson_energy_sign_and_directional_derivative", mixed_poisson_energy_sign_and_directional_derivative);
+    run_contract_case("mixed_poisson_matches_independently_refined_all_tet_reference", mixed_poisson_matches_independently_refined_all_tet_reference);
+    run_contract_case("nonperiodic_hypre_demag_rejects_one_iteration_candidate", nonperiodic_hypre_demag_rejects_one_iteration_candidate);
+    run_contract_case("nonperiodic_hypre_rejected_candidate_preserves_published_warm_start", nonperiodic_hypre_rejected_candidate_preserves_published_warm_start);
+    run_contract_case("periodic_demag_rejects_one_iteration_candidate", periodic_demag_rejects_one_iteration_candidate);
+    run_contract_case("periodic_demag_reuses_warm_start_and_resets_after_failure", periodic_demag_reuses_warm_start_and_resets_after_failure);
 #endif
-    mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn();
-    mixed_poisson_robin_mass_uses_outer_tri_and_quad_only();
-    mixed_poisson_energy_sign_and_directional_derivative();
-    mixed_poisson_matches_independently_refined_all_tet_reference();
-    nonperiodic_hypre_demag_rejects_one_iteration_candidate();
-    nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
-    periodic_demag_rejects_one_iteration_candidate();
-    periodic_demag_reuses_warm_start_and_resets_after_failure();
-#endif
-    demag_boundary_operator_is_owned_by_poisson_boundary_module();
-    demag_periodic_reduction_is_owned_by_poisson_periodic_module();
-    demag_periodic_reduction_predicate_requires_complete_class_map();
-    backend_demag_tangent_abi_uses_fresh_poisson_dispatch();
-    demag_robin_boundary_mass_excludes_periodic_seam_markers();
-    demag_hypre_solve_is_owned_by_poisson_hypre_module();
-    demag_hypre_solve_returns_workspace_solution_without_final_host_copy();
-    demag_poisson_solver_runtime_state_is_owned_by_poisson_module();
-    demag_recovery_is_owned_by_poisson_recovery_module();
-    demag_recovery_parallel_path_avoids_full_per_thread_node_buffers();
+    run_contract_case("demag_boundary_operator_is_owned_by_poisson_boundary_module", demag_boundary_operator_is_owned_by_poisson_boundary_module);
+    run_contract_case("demag_periodic_reduction_is_owned_by_poisson_periodic_module", demag_periodic_reduction_is_owned_by_poisson_periodic_module);
+    run_contract_case("demag_periodic_reduction_predicate_requires_complete_class_map", demag_periodic_reduction_predicate_requires_complete_class_map);
+    run_contract_case("backend_demag_tangent_abi_uses_fresh_poisson_dispatch", backend_demag_tangent_abi_uses_fresh_poisson_dispatch);
+    run_contract_case("demag_robin_boundary_mass_excludes_periodic_seam_markers", demag_robin_boundary_mass_excludes_periodic_seam_markers);
+    run_contract_case("demag_hypre_solve_is_owned_by_poisson_hypre_module", demag_hypre_solve_is_owned_by_poisson_hypre_module);
+    run_contract_case("demag_hypre_solve_returns_workspace_solution_without_final_host_copy", demag_hypre_solve_returns_workspace_solution_without_final_host_copy);
+    run_contract_case("demag_poisson_solver_runtime_state_is_owned_by_poisson_module", demag_poisson_solver_runtime_state_is_owned_by_poisson_module);
+    run_contract_case("demag_recovery_is_owned_by_poisson_recovery_module", demag_recovery_is_owned_by_poisson_recovery_module);
+    run_contract_case("demag_recovery_parallel_path_avoids_full_per_thread_node_buffers", demag_recovery_parallel_path_avoids_full_per_thread_node_buffers);
 #if FULLMAG_HAS_MFEM_STACK
-    demag_recovery_uses_negative_scalar_potential_gradient();
+    run_contract_case("demag_recovery_uses_negative_scalar_potential_gradient", demag_recovery_uses_negative_scalar_potential_gradient);
 #endif
-    demag_recovery_finalizes_periodic_field_before_energy();
-    demag_solver_stats_are_filled_by_poisson_module();
-    demag_step_stats_provenance_abi_is_append_only();
-    demag_poisson_ready_contract_is_owned_by_poisson_module();
-    demag_solver_telemetry_names_are_owned_by_poisson_module();
-    demag_phase_timings_are_owned_by_poisson_module();
-    demag_call_profile_format_is_owned_by_poisson_module();
-    demag_visual_effective_field_preserves_full_domain_demag();
-    demag_recovered_field_finalize_projects_periodic_and_syncs_visual();
+    run_contract_case("demag_recovery_finalizes_periodic_field_before_energy", demag_recovery_finalizes_periodic_field_before_energy);
+    run_contract_case("demag_solver_stats_are_filled_by_poisson_module", demag_solver_stats_are_filled_by_poisson_module);
+    run_contract_case("demag_step_stats_provenance_abi_is_append_only", demag_step_stats_provenance_abi_is_append_only);
+    run_contract_case("demag_poisson_ready_contract_is_owned_by_poisson_module", demag_poisson_ready_contract_is_owned_by_poisson_module);
+    run_contract_case("demag_solver_telemetry_names_are_owned_by_poisson_module", demag_solver_telemetry_names_are_owned_by_poisson_module);
+    run_contract_case("demag_phase_timings_are_owned_by_poisson_module", demag_phase_timings_are_owned_by_poisson_module);
+    run_contract_case("demag_call_profile_format_is_owned_by_poisson_module", demag_call_profile_format_is_owned_by_poisson_module);
+    run_contract_case("demag_visual_effective_field_preserves_full_domain_demag", demag_visual_effective_field_preserves_full_domain_demag);
+    run_contract_case("demag_recovered_field_finalize_projects_periodic_and_syncs_visual", demag_recovered_field_finalize_projects_periodic_and_syncs_visual);
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+    // Keep the process-wide CUDA configuration after all CPU oracle tests.
+    run_contract_case("mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step", mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step);
+#endif
     return 0;
 }

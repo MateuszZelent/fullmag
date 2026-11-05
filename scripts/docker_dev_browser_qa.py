@@ -17,7 +17,7 @@ import json
 import math
 import os
 from decimal import Decimal, ROUND_HALF_UP, localcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import time
 from urllib.error import HTTPError, URLError
@@ -38,6 +38,7 @@ from docker_build_control import (
 from docker_compose_identity import compose_project_identity, source_labels, validate_source_labels
 from docker_dev_defaults import _validate_live_network, resolve_defaults
 from docker_backend_volume_cache import _safe_project_id as cache_project_id_for_layout
+from bootstrap_docker_toolchain import CONTROL_ROOT, CONTROL_VOLUME_SCHEMA
 
 
 PLAYWRIGHT_VERSION = "1.62.1"
@@ -73,6 +74,12 @@ CANVAS_ONLY_SKIPPED_AREAS = [
     "scene/model adoption readiness endpoint",
     "viewport performance instrumentation",
 ]
+RUN_PERFORMANCE_VIEWPORT_DOM_SKIPPED_AREA = "viewport DOM/model-adoption observations (performance-only scope)"
+RUN_PERFORMANCE_VIEWPORT_DOM_OMISSION_REASON = (
+    "The performance-only scope proves the viewport canvas and footer performance panel; "
+    "it does not inspect model-adoption or quantity-label DOM."
+)
+RUN_PERFORMANCE_QA_SCOPE = "canvas-engine-run-performance"
 VIEWPORT_DOM_OBSERVATIONS_NOTE = (
     "Viewport dataset and quantity label attributes are DOM observations only; "
     "they do not prove field payload presence or values."
@@ -82,7 +89,9 @@ LIVE_FIELD_OBSERVATION_NOTE = (
     "they do not prove field payload presence or values."
 )
 FEM_AIRBOX_VECTOR_OBSERVATION_SCHEMA = "fullmag.fem-airbox-vector-observation.v1"
+PLANAR_AIRBOX_OBSERVATION_SCHEMA = "fullmag.docker-dev-planar-airbox-browser-proof.v1"
 TERMINAL_TELEMETRY_RESULT_SCHEMA = "fullmag.docker-dev-terminal-telemetry.v1"
+RUN_PERFORMANCE_PROOF_SCHEMA = "fullmag.docker-dev-run-performance-browser-proof.v1"
 TERMINAL_TELEMETRY_ENERGY_FORMAT = "en-US:maxFractionDigits=6;scientific:toExponential(6)"
 MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991
 
@@ -125,20 +134,205 @@ def _inspect_existing_volume(name: str, label: str) -> dict[str, object]:
     return records[0]
 
 
-def _validate_existing_control_volume(control: BuildControl) -> None:
+def _has_authenticated_source_namespace(control: BuildControl) -> bool:
+    """Use the constructor's receipt-bound namespace, not historical root labels.
+
+    BuildControl resolves and authenticates the root registry before this
+    read-only preflight. Subsequent helper reads retain its registry CAS.
+    """
+    from docker_control_namespace import REGISTRY_SCHEMA
+
+    registry = getattr(control, "namespace_registry", None)
+    identity = getattr(control, "identity", None)
+    namespace = getattr(control, "namespace", None)
+    registry_sha = getattr(control, "namespace_registry_sha256", None)
+    if not isinstance(registry, Mapping) or not isinstance(identity, Mapping):
+        return False
+    token = registry.get("recovery_id")
+    if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        return False
+    expected = {
+        "schema": REGISTRY_SCHEMA,
+        "namespace": "namespaces/" + token,
+        "receipt_path": "namespace-recovery/" + token + "/terminal.json",
+        "compose_project": control.project,
+        "control_volume": control.volume,
+        "source_worktree_id": identity.get("worktree_id"),
+        "source_project_id": identity.get("project_id"),
+    }
+    retirement = registry.get("retirement")
+    if (namespace != expected["namespace"]
+            or any(not isinstance(value, str) or not value for value in expected.values())
+            or any(registry.get(key) != value for key, value in expected.items())
+            or not isinstance(retirement, Mapping)
+            or not isinstance(registry_sha, str) or SHA256_RE.fullmatch(registry_sha) is None):
+        return False
+    raw_registry = {key: value for key, value in registry.items() if key != "retirement"}
+    try:
+        # Cold recovery writes canonical registry bytes without a newline;
+        # the regular control writer appends one. The constructor pins the
+        # actual bytes, so only those two exact encodings are admissible.
+        registry_bytes = canonical(raw_registry)
+        return (registry_sha in {hashlib.sha256(registry_bytes).hexdigest(),
+                                 hashlib.sha256(registry_bytes + b"\n").hexdigest()}
+                and hashlib.sha256(canonical(retirement) + b"\n").hexdigest()
+                == registry.get("receipt_sha256"))
+    except (TypeError, ValueError):
+        return False
+
+
+def _validate_existing_control_volume(control: BuildControl) -> dict[str, object]:
     """Authenticate the control volume before any helper mount can create it."""
-    volume = _inspect_existing_volume(control.volume, "Selected control volume")
+    import docker_group_storage as group_storage
+
+    try:
+        expected_name = group_storage.volume_declaration(control)["name"]
+    except BuildControlError as error:
+        raise BuildControlError("Selected control volume is not the canonical group volume") from error
+    volume = _inspect_existing_volume(expected_name, "Selected control volume")
     labels = volume.get("Labels")
+    expected_labels = {
+        "com.fullmag.compose.project": control.project,
+        "com.fullmag.toolchain.control.schema": CONTROL_VOLUME_SCHEMA,
+        "com.fullmag.toolchain.control.project": control.project,
+        "com.fullmag.toolchain.control.mount": CONTROL_ROOT,
+    }
+    optional_labels = {
+        key: value for key, value in control.labels.items()
+        if isinstance(key, str) and key.startswith("org.fullmag.")
+    }
+    allowed_labels = set(expected_labels) | set(optional_labels)
+    try:
+        from docker_named_volume_safety import validate_local_named_volume
+        validate_local_named_volume(volume, expected_name)
+    except ValueError as error:
+        raise BuildControlError("Selected control volume backing differs") from error
     if (
-        volume.get("Name") != control.volume
+        control.volume != expected_name
+        or getattr(control, "shared_labels", None) != expected_labels
+        or volume.get("Name") != expected_name
         or volume.get("Driver") != "local"
-        or volume.get("Options")
+        or volume.get("Options") not in (None, {})
         or not isinstance(labels, Mapping)
-        or any(labels.get(key) != value for key, value in control.shared_labels.items())
+        or any(labels.get(key) != value for key, value in expected_labels.items())
+        or any(key in labels and labels.get(key) != value
+               and not (key == "org.fullmag.source.worktree-id"
+                        and _has_authenticated_source_namespace(control))
+               for key, value in optional_labels.items())
+        or set(labels) - allowed_labels
     ):
         raise BuildControlError(
             "Selected control volume ownership/driver differs; browser QA retains existing data"
         )
+    return volume
+
+
+def _private_group_storage_mode(receipt: Mapping[str, object]) -> bool:
+    """Select the retained single-volume layout without guessing from its name."""
+    marker = receipt.get("private_group_storage")
+    if marker is None:
+        return False
+    if marker != "group-volume-v1":
+        raise BuildControlError("Development receipt has an unsupported private group storage profile")
+    return True
+
+
+def _control_subpath(control: BuildControl, relative: str) -> str:
+    """Resolve a control subpath while keeping namespace and relative path exact."""
+    namespace = getattr(control, "namespace", None)
+    if (not isinstance(namespace, str)
+            or (namespace and re.fullmatch(r"namespaces/[0-9a-f]{32}", namespace) is None)):
+        raise BuildControlError("Selected control namespace is malformed")
+    expected = "/".join(value for value in (namespace, relative) if value)
+    resolver = getattr(control, "subpath", None)
+    if not callable(resolver) or resolver(relative) != expected:
+        raise BuildControlError("Selected control namespace subpath resolver differs")
+    return expected
+
+
+def _volume_mount_source(mountpoint: object, subpath: str) -> str:
+    if not isinstance(mountpoint, str) or not mountpoint.startswith("/"):
+        raise BuildControlError("Selected group volume has no canonical Docker mountpoint")
+    root = PurePosixPath(mountpoint)
+    if str(root) != mountpoint or ".." in root.parts:
+        raise BuildControlError("Selected group volume mountpoint is not canonical")
+    if not isinstance(subpath, str) or (subpath and (
+        subpath.startswith("/") or "\\" in subpath
+        or any(part in {"", ".", ".."} for part in subpath.split("/"))
+    )):
+        raise BuildControlError("Selected group volume subpath is not canonical")
+    return str(root.joinpath(*subpath.split("/"))) if subpath else str(root)
+
+
+def _validate_group_volume_mounts(
+    document: Mapping[str, object],
+    control: BuildControl,
+    volume: Mapping[str, object],
+    expected: Mapping[str, tuple[str, bool]],
+) -> None:
+    """Match Docker declarations and resolved mounts for selected private leaves."""
+    host = document.get("HostConfig")
+    if not isinstance(host, Mapping):
+        raise BuildControlError("Selected service HostConfig is malformed")
+    host_mounts = host.get("Mounts")
+    actual_mounts = document.get("Mounts")
+    if not isinstance(host_mounts, list) or not isinstance(actual_mounts, list):
+        raise BuildControlError("Selected service does not expose both configured and resolved mounts")
+    if (any(not isinstance(mount, Mapping) for mount in host_mounts)
+            or any(not isinstance(mount, Mapping) for mount in actual_mounts)):
+        raise BuildControlError("Selected service mount records are malformed")
+    host_targets = [mount.get("Target") for mount in host_mounts]
+    actual_targets = [mount.get("Destination") for mount in actual_mounts]
+    if (any(not isinstance(target, str) or not target for target in host_targets + actual_targets)
+            or len(set(host_targets)) != len(host_targets)
+            or len(set(actual_targets)) != len(actual_targets)
+            or set(host_targets) != set(actual_targets)):
+        raise BuildControlError("Selected service configured and resolved mount targets differ")
+
+    targets = set(expected)
+    declared = [
+        mount for mount in host_mounts
+        if isinstance(mount, Mapping)
+        and (mount.get("Target") in targets or mount.get("Source") == control.volume)
+    ]
+    if len(declared) != len(expected) or {mount.get("Target") for mount in declared} != targets:
+        raise BuildControlError("Selected service has a missing, duplicate, or extra group-volume declaration")
+    for mount in declared:
+        target = mount.get("Target")
+        subpath, read_only = expected[target]
+        options = mount.get("VolumeOptions")
+        observed_read_only = mount.get("ReadOnly")
+        read_only_matches = (
+            observed_read_only is True if read_only
+            else observed_read_only is None or observed_read_only is False
+        )
+        if (mount.get("Type") != "volume" or mount.get("Source") != control.volume
+                or not read_only_matches
+                or not isinstance(options, Mapping)
+                or set(options) != {"NoCopy", "Subpath"}
+                or options.get("NoCopy") is not True
+                or options.get("Subpath") != subpath):
+            raise BuildControlError("Selected service group-volume options differ")
+
+    resolved = [
+        mount for mount in actual_mounts
+        if isinstance(mount, Mapping)
+        and (mount.get("Destination") in targets or mount.get("Name") == control.volume)
+    ]
+    if (len(resolved) != len(expected)
+            or {mount.get("Destination") for mount in resolved} != targets):
+        raise BuildControlError("Selected service has a missing, duplicate, or extra resolved group mount")
+    mountpoint = volume.get("Mountpoint")
+    for mount in resolved:
+        target = mount.get("Destination")
+        subpath, read_only = expected[target]
+        root_source = _volume_mount_source(mountpoint, "")
+        role_source = _volume_mount_source(mountpoint, subpath)
+        if (mount.get("Type") != "volume" or mount.get("Name") != control.volume
+                or mount.get("RW") is not (not read_only)
+                or mount.get("Driver") != "local"
+                or mount.get("Source") not in {root_source, role_source}):
+            raise BuildControlError("Selected service resolved group mount differs from its private subpath")
 
 
 def _mount_path(value: object) -> str | None:
@@ -219,12 +413,37 @@ def _terminal_telemetry_helper_sha256(selected: Path) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _run_performance_harness_sha256(selected: Path) -> str:
+    harness = selected / "apps/control-room/scripts/docker-dev-browser-qa.mjs"
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the run performance browser harness") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Run performance browser harness exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _planar_airbox_harness_sha256(selected: Path, relative_path: str) -> str:
+    harness = selected / relative_path
+    try:
+        with harness.open("rb") as source:
+            payload = source.read(2 * 1024 * 1024 + 1)
+    except OSError as error:
+        raise BuildControlError("Selected checkout is missing the planar Airbox browser proof source") from error
+    if len(payload) > 2 * 1024 * 1024:
+        raise BuildControlError("Planar Airbox browser proof source exceeds its source pin bound")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _validate_frontend_volume(
     control: BuildControl,
     frontend_volume: str,
     frontend_inputs: Mapping[str, object],
+    current: Mapping[str, object] | None = None,
 ) -> None:
-    """Require the exact retained frontend volume ownership contract."""
+    """Require the selected legacy or single-volume frontend ownership contract."""
     if frontend_inputs.get("schema") != "fullmag.docker-development-inputs.v1":
         raise BuildControlError("Frontend inputs have an unsupported schema")
     dependency_digest = frontend_inputs.get("dependency_seed_sha256")
@@ -233,6 +452,28 @@ def _validate_frontend_volume(
         raise BuildControlError("Frontend inputs have an invalid dependency seed digest")
     if not isinstance(toolpins_digest, str) or SHA256_RE.fullmatch(toolpins_digest) is None:
         raise BuildControlError("Frontend inputs have an invalid tool pin digest")
+    grouped = _private_group_storage_mode(current or {})
+    if grouped:
+        import docker_group_storage as group_storage
+
+        if frontend_volume != control.volume:
+            raise BuildControlError("Frontend state volume differs from the pinned private group volume")
+        volume = _validate_existing_control_volume(control)
+        try:
+            expected_marker = group_storage.owner_manifest(
+                control, control.identity.get("source_root"),
+            )
+            owner_marker = control.read("private/.owner.json", optional=True)
+        except BuildControlError:
+            raise
+        except Exception as error:
+            raise BuildControlError("Private group storage owner marker could not be validated") from error
+        if not isinstance(owner_marker, Mapping) or dict(owner_marker) != expected_marker:
+            raise BuildControlError("Private group storage owner marker differs from selected checkout")
+        _volume_mount_source(volume.get("Mountpoint"), group_storage.role_subpath(control, "frontend"))
+        _volume_mount_source(volume.get("Mountpoint"), _control_subpath(control, "frontend"))
+        return
+
     from docker_development_inputs import metadata_cache_key
     cache_key = metadata_cache_key(frontend_inputs, control.project)
     expected_name = "fullmag-dev-frontend-v1-" + cache_key[:24]
@@ -412,6 +653,127 @@ def _validate_shared_frontend_pnpm(document, identity):
     return {descriptor["name"]}
 
 
+def _validate_private_group_compose(
+    compose: Mapping[str, object],
+    control: BuildControl,
+    current: Mapping[str, object],
+) -> None:
+    """Validate retained frontend/backend/ledger leaves for group-volume-v1."""
+    import docker_backend_volume_cache as backend_cache
+    import docker_group_ledger as group_ledger
+    import docker_group_storage as group_storage
+
+    if not _private_group_storage_mode(current):
+        raise BuildControlError("Private group Compose validation has no pinned layout marker")
+    volumes = compose.get("volumes")
+    services = compose.get("services")
+    if not isinstance(volumes, Mapping) or not isinstance(services, Mapping):
+        raise BuildControlError("Retained private group Compose services or volumes are malformed")
+
+    def require_group_volume(alias: str) -> None:
+        declaration = volumes.get(alias)
+        if (not isinstance(declaration, Mapping)
+                or dict(declaration) != {"name": control.volume, "external": True}):
+            raise BuildControlError("Retained private group volume declaration differs")
+
+    try:
+        group_storage.volume_declaration(control)
+        frontend_subpath = group_storage.role_subpath(control, "frontend")
+        backend_subpath = group_storage.role_subpath(control, "backend")
+        ledger_subpath = group_storage.role_subpath(control, "ledger")
+        control_subpath = _control_subpath(control, "frontend")
+        expected_frontend_mount = group_storage.compose_mount_descriptor(
+            control, "frontend", "/state/development", compose_name="frontend-build",
+        )
+        expected_backend_mount = group_storage.compose_mount_descriptor(
+            control, "backend", backend_cache.BUILD_TARGET,
+            compose_name=backend_cache.COMPOSE_BUILD_VOLUME,
+        )
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Retained private group storage paths are invalid") from error
+
+    frontend = services.get("frontend")
+    backend = services.get("backend")
+    if not isinstance(frontend, Mapping) or not isinstance(backend, Mapping):
+        raise BuildControlError("Retained private group Compose service is missing")
+    frontend_environment = frontend.get("environment")
+    backend_environment = backend.get("environment")
+    if (not isinstance(frontend_environment, Mapping)
+            or frontend_environment.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1"
+            or frontend_environment.get("FULLMAG_DEVELOPMENT_INPUTS_PATH")
+            != "/opt/fullmag/control/development-inputs.json"
+            or not isinstance(backend_environment, Mapping)
+            or backend_environment.get("FULLMAG_PRIVATE_GROUP_STORAGE") != "group-volume-v1"):
+        raise BuildControlError("Retained private group Compose marker differs")
+
+    for alias in ("frontend-build", "build-control", backend_cache.COMPOSE_BUILD_VOLUME,
+                  group_ledger.COMPOSE_VOLUME):
+        require_group_volume(alias)
+
+    frontend_mounts = frontend.get("volumes")
+    if not isinstance(frontend_mounts, list):
+        raise BuildControlError("Retained frontend has no explicit volume declarations")
+    expected_control_mount = {
+        "type": "volume",
+        "source": "build-control",
+        "target": "/opt/fullmag/control",
+        "read_only": True,
+        "volume": {"nocopy": True, "subpath": control_subpath},
+    }
+    for target, expected_mount in (
+        ("/state/development", expected_frontend_mount),
+        ("/opt/fullmag/control", expected_control_mount),
+    ):
+        matches = [mount for mount in frontend_mounts
+                   if isinstance(mount, Mapping) and mount.get("target") == target]
+        expected_shapes = [expected_mount]
+        if target == "/state/development" and expected_mount.get("read_only") is False:
+            no_explicit_rw = dict(expected_mount)
+            no_explicit_rw.pop("read_only")
+            expected_shapes.append(no_explicit_rw)
+        if len(matches) != 1 or dict(matches[0]) not in expected_shapes:
+            raise BuildControlError("Retained frontend role/control subpath mount differs")
+
+    group_aliases = {
+        alias for alias, declaration in volumes.items()
+        if isinstance(alias, str) and isinstance(declaration, Mapping)
+        and declaration.get("name") == control.volume
+    }
+    frontend_group_mounts = [mount for mount in frontend_mounts
+                             if isinstance(mount, Mapping)
+                             and mount.get("source") in group_aliases]
+    if (len(frontend_group_mounts) != 2
+            or {mount.get("target") for mount in frontend_group_mounts}
+            != {"/state/development", "/opt/fullmag/control"}):
+        raise BuildControlError("Retained frontend exposes an extra group-volume path")
+
+    backend_mounts = backend.get("volumes")
+    if not isinstance(backend_mounts, list):
+        raise BuildControlError("Retained backend has no explicit volume declarations")
+    build_mounts = [mount for mount in backend_mounts
+                    if isinstance(mount, Mapping) and mount.get("target") == backend_cache.BUILD_TARGET]
+    if len(build_mounts) != 1 or dict(build_mounts[0]) != expected_backend_mount:
+        raise BuildControlError("Retained backend cache mount is not its private/backend subpath")
+    backend_group_mounts = [mount for mount in backend_mounts
+                            if isinstance(mount, Mapping)
+                            and mount.get("source") in group_aliases]
+    if any(mount.get("target") == "/" for mount in backend_group_mounts):
+        raise BuildControlError("Retained backend exposes the private group volume root")
+
+    backend_image = (current.get("inputs") or {}).get("image_id")
+    try:
+        ledger = group_ledger.retained_profile(compose, backend_image)
+    except Exception as error:
+        raise BuildControlError("Retained group ledger mount/profile is invalid") from error
+    if (ledger.get("volume_name") != control.volume
+            or ledger.get("ledger_subpath") != ledger_subpath):
+        raise BuildControlError("Retained group ledger is not the private/ledger subpath")
+    if backend_subpath != expected_backend_mount["volume"].get("subpath"):
+        raise BuildControlError("Retained backend subpath is not canonical")
+
+
 def _validate_frontend(
     document: dict[str, object],
     control: BuildControl,
@@ -421,6 +783,9 @@ def _validate_frontend(
     port: int,
     *, cache_project_id: str | None = None,
 ) -> None:
+    grouped = _private_group_storage_mode(current)
+    if grouped and frontend_volume != control.volume:
+        raise BuildControlError("Frontend state volume differs from the pinned private group volume")
     try:
         validate_source_labels(document, identity)
     except ValueError as error:
@@ -450,6 +815,8 @@ def _validate_frontend(
             or not isinstance(services.get("backend"), Mapping)
             or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
         raise BuildControlError("Pinned development service image declarations differ")
+    if grouped:
+        _validate_private_group_compose(compose, control, current)
     expected_image = services["frontend"].get("image")
     if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
             or document.get("Image") != expected_image):
@@ -466,12 +833,21 @@ def _validate_frontend(
     mounts = document.get("Mounts") or []
     if not isinstance(mounts, list):
         raise BuildControlError("Frontend mount inspection is invalid")
-    state_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/state/development"]
-    if len(state_mounts) != 1 or state_mounts[0].get("Type") != "volume" or state_mounts[0].get("Name") != frontend_volume or state_mounts[0].get("RW") is not True:
-        raise BuildControlError("Frontend state mount is not the retained named volume")
-    control_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/opt/fullmag/control"]
-    if len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume" or control_mounts[0].get("Name") != control.volume or control_mounts[0].get("RW") is not False:
-        raise BuildControlError("Frontend control mount is not the selected readonly control namespace")
+    if grouped:
+        import docker_group_storage as group_storage
+
+        volume = _validate_existing_control_volume(control)
+        _validate_group_volume_mounts(document, control, volume, {
+            "/state/development": (group_storage.role_subpath(control, "frontend"), False),
+            "/opt/fullmag/control": (_control_subpath(control, "frontend"), True),
+        })
+    else:
+        state_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/state/development"]
+        if len(state_mounts) != 1 or state_mounts[0].get("Type") != "volume" or state_mounts[0].get("Name") != frontend_volume or state_mounts[0].get("RW") is not True:
+            raise BuildControlError("Frontend state mount is not the retained named volume")
+        control_mounts = [m for m in mounts if isinstance(m, Mapping) and m.get("Destination") == "/opt/fullmag/control"]
+        if len(control_mounts) != 1 or control_mounts[0].get("Type") != "volume" or control_mounts[0].get("Name") != control.volume or control_mounts[0].get("RW") is not False:
+            raise BuildControlError("Frontend control mount is not the selected readonly control namespace")
     shared_volumes = _validate_shared_frontend_pnpm(document, {"project_id": cache_project_id})
     for mount in mounts:
         if not isinstance(mount, Mapping):
@@ -751,7 +1127,33 @@ def _compose_document(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    expect_run_performance: bool | None = None,
+    expect_planar_airbox: bool = False,
+    control: BuildControl | None = None,
+    private_group_storage: bool = False,
 ) -> dict[str, object]:
+    if type(private_group_storage) is not bool:
+        raise BuildControlError("Browser QA private group storage marker must be boolean")
+    if type(expect_planar_airbox) is not bool:
+        raise BuildControlError("Planar Airbox browser expectation must be boolean")
+    frontend_state_volume = {"type": "volume", "source": "frontend-state",
+                             "target": "/state/development", "read_only": True,
+                             "volume": {"nocopy": True}}
+    if private_group_storage:
+        import docker_group_storage as group_storage
+
+        if (control is None or control.project != identity.get("project_name")
+                or frontend_volume != control.volume):
+            raise BuildControlError("Browser QA private group volume differs from the selected BuildControl")
+        try:
+            group_storage.volume_declaration(control)
+            frontend_state_volume["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+        except BuildControlError:
+            raise
+        except Exception as error:
+            raise BuildControlError("Browser QA private frontend subpath is invalid") from error
+    elif control is not None and control.project != identity.get("project_name"):
+        raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
             raise BuildControlError("Saved Playback QA requires a decimal item id of at most 20 digits")
@@ -764,6 +1166,8 @@ def _compose_document(
             or expect_airbox_vectors is not None
             or expect_fem_airbox_vectors is True
             or expect_terminal_telemetry is True
+            or expect_run_performance is True
+            or expect_planar_airbox
             or expect_ambiguous_compute_fields is not None
             or airbox_inspector
         ):
@@ -783,6 +1187,7 @@ def _compose_document(
         or expect_ambiguous_compute_fields is True
         or prepare_viewport_fixture
         or expect_terminal_telemetry is True
+        or expect_run_performance is True
     ):
         raise BuildControlError(
             "FEM Airbox-vector QA requires canvas-only m readiness and excludes other scenarios"
@@ -800,6 +1205,35 @@ def _compose_document(
         raise BuildControlError(
             "Terminal telemetry QA requires canvas-only primary m observation and excludes mutation scenarios"
         )
+    if expect_run_performance is True and (
+        canvas_only is not True
+        or expect_live_field is not None
+        or expect_airbox_vectors is True
+        or expect_fem_airbox_vectors is True
+        or expect_ambiguous_compute_fields is True
+        or expect_terminal_telemetry is True
+        or prepare_viewport_fixture
+        or airbox_inspector
+        or saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "Run performance QA requires standalone canvas-only scope and excludes other browser scenarios"
+        )
+    if expect_planar_airbox and (
+        canvas_only is not True
+        or expect_live_field != "m"
+        or expect_airbox_vectors is not False
+        or prepare_viewport_fixture
+        or expect_fem_airbox_vectors is True
+        or expect_terminal_telemetry is True
+        or expect_run_performance is True
+        or expect_ambiguous_compute_fields is not False
+        or airbox_inspector
+        or saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "Planar Airbox QA requires canvas-only m readiness and excludes other browser scenarios"
+        )
     if airbox_inspector and (
         prepare_viewport_fixture
         or canvas_only is not None
@@ -807,6 +1241,7 @@ def _compose_document(
         or expect_airbox_vectors is not None
         or expect_fem_airbox_vectors is not None
         or expect_terminal_telemetry is True
+        or expect_run_performance is True
         or expect_ambiguous_compute_fields is not None
         or saved_playback_item_id is not None
     ):
@@ -830,12 +1265,17 @@ def _compose_document(
         "CONTROL_ROOM_BROWSER_QA_TIMEOUT_MS": str(timeout * 1000),
         "NVIDIA_VISIBLE_DEVICES": "void",
     }
+    if private_group_storage:
+        environment["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
     if airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "saved-playback"
         environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_ITEM_ID"] = saved_playback_item_id
         environment["CONTROL_ROOM_BROWSER_QA_SAVED_PLAYBACK_SCRIPT_SHA256"] = source_script_sha256
+    elif expect_planar_airbox:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "planar-airbox"
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX"] = "1"
     if prepare_viewport_fixture:
         environment["CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE"] = "1"
     if canvas_only is not None:
@@ -848,6 +1288,8 @@ def _compose_document(
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS"] = "1"
     if expect_terminal_telemetry is True:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY"] = "1"
+    if expect_run_performance is True:
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE"] = "1"
     if expect_ambiguous_compute_fields is not None:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS"] = (
             "1" if expect_ambiguous_compute_fields else "0"
@@ -888,13 +1330,7 @@ def _compose_document(
                     ]
                 ),
                 "volumes": [
-                    {
-                        "type": "volume",
-                        "source": "frontend-state",
-                        "target": "/state/development",
-                        "read_only": True,
-                        "volume": {"nocopy": True},
-                    },
+                    frontend_state_volume,
                     {
                         "type": "bind",
                         "source": str(selected / "apps/control-room/scripts"),
@@ -933,7 +1369,14 @@ def _validate_browser_helper(
     source_script_sha256: str | None = None,
     expect_fem_airbox_vectors: bool | None = None,
     expect_terminal_telemetry: bool | None = None,
+    expect_run_performance: bool | None = None,
+    expect_planar_airbox: bool = False,
+    private_group_storage: bool = False,
 ) -> None:
+    if type(private_group_storage) is not bool:
+        raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
+    if private_group_storage and frontend_volume != control.volume:
+        raise ControlOutcomeUnknown("Browser helper frontend volume differs from the pinned group volume")
     try:
         validate_source_labels(document, identity)
     except ValueError as error:
@@ -955,13 +1398,25 @@ def _validate_browser_helper(
         raise ControlOutcomeUnknown("Browser helper user does not match the owned frontend volume")
     if (host.get("GroupAdd") or []) != _script_bind_groups(selected):
         raise ControlOutcomeUnknown("Browser helper source read group differs")
-    environment = set(config.get("Env") or [])
+    raw_environment = config.get("Env") or []
+    if not isinstance(raw_environment, list) or any(not isinstance(entry, str) for entry in raw_environment):
+        raise ControlOutcomeUnknown("Browser helper runtime environment is malformed")
+    environment = set(raw_environment)
     if {
         "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
         "CONTROL_ROOM_URL=http://frontend:8080",
         "NVIDIA_VISIBLE_DEVICES=void",
     } - environment:
         raise ControlOutcomeUnknown("Browser helper runtime environment differs")
+    private_storage_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("FULLMAG_PRIVATE_GROUP_STORAGE=")
+    ]
+    if private_group_storage:
+        if private_storage_environment != ["FULLMAG_PRIVATE_GROUP_STORAGE=group-volume-v1"]:
+            raise ControlOutcomeUnknown("Browser helper private group storage profile differs")
+    elif private_storage_environment:
+        raise ControlOutcomeUnknown("Legacy browser helper unexpectedly declares a private group profile")
     if saved_playback_item_id is not None:
         if (not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
                 or not isinstance(source_script_sha256, str)
@@ -990,7 +1445,6 @@ def _validate_browser_helper(
             "/state/development/workspace/apps/control-room/scripts/verify-airbox-inspector.mjs",
         ]:
             raise ControlOutcomeUnknown("Browser helper did not run the selected Airbox Inspector harness")
-    raw_environment = config.get("Env") or []
     fem_observation_environment = [
         entry for entry in raw_environment
         if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS=")
@@ -1023,6 +1477,35 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper terminal telemetry expectation is duplicated or malformed")
     elif terminal_telemetry_environment:
         raise ControlOutcomeUnknown("Browser helper reported an unrequested terminal telemetry scenario")
+    run_performance_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE=")
+    ]
+    if expect_run_performance is True:
+        if canvas_only is not True or expect_live_field is not None:
+            raise ControlOutcomeUnknown("Run performance helper is outside standalone canvas-only scope")
+        if run_performance_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE=1"]:
+            raise ControlOutcomeUnknown("Browser helper run performance expectation is duplicated or malformed")
+    elif run_performance_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested run performance scenario")
+    planar_airbox_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX=")
+    ]
+    planar_airbox_scenario_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=planar-airbox")
+    ]
+    if expect_planar_airbox:
+        if (canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False
+                or expect_fem_airbox_vectors is True or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_ambiguous_compute_fields is not False):
+            raise ControlOutcomeUnknown("Planar Airbox helper differs from the admitted canvas/m scenario")
+        if (planar_airbox_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX=1"]
+                or planar_airbox_scenario_environment != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=planar-airbox"]):
+            raise ControlOutcomeUnknown("Browser helper Planar Airbox scenario identity differs")
+    elif planar_airbox_environment or planar_airbox_scenario_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested Planar Airbox scenario")
     if canvas_only is not None:
         mode_environment = [
             entry for entry in environment
@@ -1078,6 +1561,40 @@ def _validate_browser_helper(
     }
     if destinations != expected:
         raise ControlOutcomeUnknown("Browser helper has an unexpected mount boundary")
+    if private_group_storage:
+        import docker_group_storage as group_storage
+
+        volume = _validate_existing_control_volume(control)
+        try:
+            frontend_subpath = group_storage.role_subpath(control, "frontend")
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown("Browser helper private frontend subpath is invalid") from error
+        try:
+            _validate_group_volume_mounts(document, control, volume, {
+                "/state/development": (frontend_subpath, True),
+            })
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        host_mounts = host.get("Mounts")
+        if not isinstance(host_mounts, list) or len(host_mounts) != 2:
+            raise ControlOutcomeUnknown("Browser helper has a missing or unknown configured mount")
+        host_binds = [mount for mount in host_mounts if isinstance(mount, Mapping)
+                      and mount.get("Target") == "/state/development/workspace/apps/control-room/scripts"]
+        resolved_binds = [mount for mount in mounts if isinstance(mount, Mapping)
+                          and mount.get("Destination") == "/state/development/workspace/apps/control-room/scripts"]
+        if (len(host_binds) != 1 or len(resolved_binds) != 1
+                or host_binds[0].get("Type") != "bind"
+                or host_binds[0].get("ReadOnly") is not True
+                or not _source_mount_matches_selected(
+                    host_binds[0].get("Source"), selected / "apps/control-room/scripts"
+                )):
+            raise ControlOutcomeUnknown("Browser helper configured script mount is not the selected readonly bind")
+        if (resolved_binds[0].get("Type") != "bind"
+                or resolved_binds[0].get("RW") is not False
+                or not _source_mount_matches_selected(
+                    resolved_binds[0].get("Source"), selected / "apps/control-room/scripts"
+                )):
+            raise ControlOutcomeUnknown("Browser helper resolved script mount is not the selected readonly bind")
     for mount in mounts:
         if mount.get("RW") is not False:
             raise ControlOutcomeUnknown("Browser helper has a writable volume or bind")
@@ -1149,7 +1666,24 @@ def _validate_session_result(value: object) -> None:
             raise BuildControlError(f"Browser helper session identity field is invalid: {key}")
 
 
-def _validate_viewport_dom_observations(value: object) -> None:
+def _validate_viewport_dom_observations(
+    value: object,
+    *,
+    performance_scope_only: bool = False,
+) -> None:
+    if performance_scope_only:
+        expected_omission = {
+            "field_data_proven": False,
+            "note": VIEWPORT_DOM_OBSERVATIONS_NOTE,
+            "reason": RUN_PERFORMANCE_VIEWPORT_DOM_OMISSION_REASON,
+            "scope": RUN_PERFORMANCE_QA_SCOPE,
+            "state": "omitted",
+        }
+        if not isinstance(value, Mapping) or dict(value) != expected_omission:
+            raise BuildControlError(
+                "Run performance-only browser QA must explicitly omit viewport DOM/model-adoption observations"
+            )
+        return
     if (not isinstance(value, Mapping) or value.get("field_data_proven") is not False
             or value.get("note") != VIEWPORT_DOM_OBSERVATIONS_NOTE):
         raise BuildControlError("Browser helper omitted bounded viewport DOM observations")
@@ -1583,6 +2117,268 @@ def _validate_canvas_screenshot(value: object) -> None:
             raise BuildControlError("Browser helper screenshot capture omission is malformed")
     else:
         raise BuildControlError("Browser helper canvas screenshot state is unknown")
+
+
+def _validate_run_performance_browser_proof(
+    value: object,
+    session: object,
+    harness_sha256: str | None,
+) -> None:
+    if not isinstance(value, Mapping) or value.get("schema") != RUN_PERFORMANCE_PROOF_SCHEMA:
+        raise BuildControlError("Browser helper run performance proof is missing or malformed")
+    if value.get("state") != "passed" or value.get("engine_tab_clicked") is not True:
+        raise BuildControlError("Browser helper did not open Engine for run performance QA")
+    api = value.get("api")
+    if not isinstance(api, Mapping) or not isinstance(session, Mapping):
+        raise BuildControlError("Run performance proof omitted its API or active-session identity")
+    api_instance_id = api.get("api_instance_id")
+    if (not isinstance(api_instance_id, str)
+            or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", api_instance_id) is None):
+        raise BuildControlError("Run performance API instance identity is malformed")
+    for key in ("session_id", "session_epoch", "request_scope_epoch"):
+        field = api.get(key)
+        if not isinstance(field, str) or not field or len(field) > 512 or field != session.get(key):
+            raise BuildControlError(f"Run performance API session identity differs at {key}")
+    expected_scope = "session=" + quote(api["session_id"], safe="-_.!~*'()")
+    expected_scope += "&epoch=" + quote(api["session_epoch"], safe="-_.!~*'()")
+    expected_scope += "&request_scope_epoch=" + quote(api["request_scope_epoch"], safe="-_.!~*'()")
+
+    def validate_api_snapshot(candidate: object) -> tuple[dict[str, int], float]:
+        if not isinstance(candidate, Mapping):
+            raise BuildControlError("Run performance API snapshot is malformed")
+        for key in ("run_id", "task_id", "step_id", "attempt_id"):
+            field = candidate.get(key)
+            if not isinstance(field, str) or not field.strip() or len(field) > 512:
+                raise BuildControlError(f"Run performance API identity field is malformed: {key}")
+        identity_fields = (
+            "api_instance_id", "session_id", "session_epoch", "request_scope_epoch",
+            "run_id", "task_id", "step_id", "attempt_id", "ownership_epoch",
+        )
+        if any(candidate.get(key) != api.get(key) for key in identity_fields):
+            raise BuildControlError("Run performance API snapshot changed its run/task/attempt/session/API identity")
+        if candidate.get("status_run_id") != candidate.get("run_id"):
+            raise BuildControlError("Run performance resource differs from the current session run")
+        if not isinstance(candidate.get("state"), str) or candidate["state"] == "unavailable":
+            raise BuildControlError("Run performance proof has no verified attempt state")
+        revision = candidate.get("revision")
+        if not isinstance(revision, str) or not revision or len(revision) > 512:
+            raise BuildControlError("Run performance resource revision is malformed")
+        integer_fields = (
+            "ownership_epoch", "first_step_index", "step_index", "elapsed_monotonic_ns",
+            "point_count", "sample_sequence",
+        )
+        integers: dict[str, int] = {}
+        for key in integer_fields:
+            number = candidate.get(key)
+            if type(number) is not int or not 0 <= number <= MAX_SAFE_JSON_INTEGER:
+                raise BuildControlError(f"Run performance {key} is not a safe non-negative integer")
+            integers[key] = number
+        if (integers["elapsed_monotonic_ns"] <= 0
+                or integers["step_index"] < integers["first_step_index"]
+                or not 1 <= integers["point_count"] <= 120):
+            raise BuildControlError("Run performance step span, elapsed time, or bounded sample count is invalid")
+        measured: dict[str, int | float | None] = {}
+        for key in ("cpu_percent", "gpu_percent"):
+            number = candidate.get(key)
+            if number is not None and (type(number) not in (int, float) or not math.isfinite(number) or number < 0):
+                raise BuildControlError(f"Run performance {key} is not a finite non-negative measurement")
+            measured[key] = number
+        if measured["cpu_percent"] is None and measured["gpu_percent"] is None:
+            raise BuildControlError("Run performance has neither a measured CPU nor GPU value")
+        calculated_rate = (
+            integers["step_index"] - integers["first_step_index"]
+        ) / (integers["elapsed_monotonic_ns"] / 1_000_000_000)
+        reported_rate = candidate.get("stage_rate_steps_per_s")
+        if (type(reported_rate) not in (int, float) or not math.isfinite(reported_rate)
+                or not math.isclose(reported_rate, calculated_rate, rel_tol=1e-12, abs_tol=1e-12)):
+            raise BuildControlError("Run performance stage rate does not match the verified step span and elapsed time")
+        return integers, calculated_rate
+
+    main_integers, main_rate = validate_api_snapshot(api)
+    snapshots = value.get("api_snapshots")
+    if not isinstance(snapshots, list) or not 1 <= len(snapshots) <= 8:
+        raise BuildControlError("Run performance proof omitted its bounded recent API snapshots")
+    previous_sequence = -1
+    previous_elapsed = -1
+    for snapshot in snapshots:
+        integers, _ = validate_api_snapshot(snapshot)
+        if (integers["sample_sequence"] < previous_sequence
+                or integers["elapsed_monotonic_ns"] < previous_elapsed):
+            raise BuildControlError("Run performance API snapshots are not in monotonic sequence order")
+        previous_sequence = integers["sample_sequence"]
+        previous_elapsed = integers["elapsed_monotonic_ns"]
+    if not any(snapshot == api for snapshot in snapshots):
+        raise BuildControlError("Run performance selected API snapshot is outside its bounded observation history")
+
+    requests = value.get("api_requests")
+    if (not isinstance(requests, list) or not 2 <= len(requests) <= 9
+            or not isinstance(requests[0], Mapping)):
+        raise BuildControlError("Run performance proof must include bounded scoped status and performance GETs")
+    status_request = requests[0]
+    if (status_request.get("method") != "GET"
+            or status_request.get("path") != "/v2/sessions/current/status"
+            or status_request.get("status") != 200
+            or status_request.get("api_instance_id") != api_instance_id
+            or status_request.get("session_scope_header_sent") != expected_scope
+            or status_request.get("api_instance_header_sent") is not None):
+        raise BuildControlError("Run performance status GET is not correctly scoped")
+    successful_performance_reads = 0
+    busy_performance_reads = 0
+    for request in requests[1:]:
+        if (not isinstance(request, Mapping)
+                or request.get("method") != "GET"
+                or request.get("path") != "/v2/sessions/current/diagnostics/performance"
+                or request.get("session_scope_header_sent") != expected_scope
+                or request.get("api_instance_header_sent") != api_instance_id
+                or request.get("api_instance_id") != api_instance_id):
+            raise BuildControlError("Run performance resource GET changed its session/API scope")
+        if request.get("status") == 200 and "error_code" not in request:
+            successful_performance_reads += 1
+        elif (request.get("status") == 409
+                and request.get("error_code") == "performance_observation_busy"):
+            busy_performance_reads += 1
+        else:
+            raise BuildControlError("Run performance observation reported a non-retryable API response")
+    if successful_performance_reads != len(snapshots) or successful_performance_reads + busy_performance_reads > 8:
+        raise BuildControlError("Run performance snapshot and bounded API request counts differ")
+
+    def parse_displayed_number(text: object, suffix: str, label: str) -> float | None:
+        if text == "N/A":
+            return None
+        if not isinstance(text, str) or not text.endswith(suffix):
+            raise BuildControlError(f"Run performance panel {label} display is malformed")
+        number_text = text[:-len(suffix)].strip().replace(",", "")
+        try:
+            number = float(number_text)
+        except ValueError as error:
+            raise BuildControlError(f"Run performance panel {label} is not numeric") from error
+        if not math.isfinite(number):
+            raise BuildControlError(f"Run performance panel {label} is not finite")
+        return number
+
+    def require_display_matches(text: object, raw: int | float | None, suffix: str, label: str) -> None:
+        displayed = parse_displayed_number(text, suffix, label)
+        if raw is None:
+            if displayed is not None:
+                raise BuildControlError(f"Run performance panel {label} must show N/A for an unavailable value")
+        elif displayed is None or not math.isclose(displayed, float(raw), rel_tol=1e-12, abs_tol=0.0051):
+            raise BuildControlError(f"Run performance panel {label} differs from its scoped API value")
+
+    def validate_panel_match(candidate: object, candidate_api: Mapping[str, object]) -> None:
+        if not isinstance(candidate, Mapping) or candidate.get("visible") is not True:
+            raise BuildControlError("Automatic performance panel match is not visibly rendered")
+        candidate_integers, candidate_rate = validate_api_snapshot(candidate_api)
+        expected_identity = " · ".join((
+            f"Run {candidate_api['run_id']}", f"Task {candidate_api['task_id']}",
+            f"Step {candidate_api['step_id']}", f"Attempt {candidate_api['attempt_id']}",
+            f"Epoch {candidate_integers['ownership_epoch']}",
+        ))
+        if candidate.get("identity") != expected_identity:
+            raise BuildControlError("Automatic performance panel identity differs from its matched API snapshot")
+        elapsed_ns = candidate_integers["elapsed_monotonic_ns"]
+        if elapsed_ns >= 1_000_000_000:
+            elapsed_unit, elapsed_expected = " s", elapsed_ns / 1_000_000_000
+        elif elapsed_ns >= 1_000_000:
+            elapsed_unit, elapsed_expected = " ms", elapsed_ns / 1_000_000
+        else:
+            elapsed_unit, elapsed_expected = " ns", float(math.floor(elapsed_ns + 0.5))
+        elapsed_display = parse_displayed_number(candidate.get("elapsed"), elapsed_unit, "elapsed")
+        elapsed_tolerance = 0.51 if elapsed_unit == " ns" else 0.0051
+        if elapsed_display is None or not math.isclose(elapsed_display, elapsed_expected, rel_tol=1e-12, abs_tol=elapsed_tolerance):
+            raise BuildControlError("Automatic performance panel elapsed value differs from its matched API snapshot")
+        require_display_matches(candidate.get("stage_rate"), candidate_rate, " steps/s", "stage rate")
+        require_display_matches(candidate.get("cpu"), candidate_api.get("cpu_percent"), "%", "CPU")
+        require_display_matches(candidate.get("gpu"), candidate_api.get("gpu_percent"), "%", "GPU")
+
+    panel_matches = value.get("panel_matches")
+    if not isinstance(panel_matches, list) or not 1 <= len(panel_matches) <= 8:
+        raise BuildControlError("Run performance proof omitted bounded atomically sampled panel matches")
+    matched_sequences: set[int] = set()
+    for match in panel_matches:
+        if not isinstance(match, Mapping) or match.get("matched") is not True:
+            raise BuildControlError("Run performance panel observation was not matched to an API snapshot")
+        matched_api = match.get("api")
+        if not isinstance(matched_api, Mapping) or not any(matched_api == snapshot for snapshot in snapshots):
+            raise BuildControlError("Run performance panel match points outside the sampled API history")
+        sample_sequence = matched_api.get("sample_sequence")
+        if type(sample_sequence) is not int or sample_sequence in matched_sequences:
+            raise BuildControlError("Run performance panel matches duplicated a sample sequence")
+        matched_sequences.add(sample_sequence)
+        validate_panel_match(match.get("panel"), matched_api)
+
+    panel = value.get("panel")
+    if not isinstance(panel, Mapping):
+        raise BuildControlError("Automatic performance panel observation is missing")
+    final_match = panel_matches[-1]
+    final_panel_observation = final_match.get("panel")
+    if not isinstance(final_panel_observation, Mapping):
+        raise BuildControlError("Automatic performance final panel observation is malformed")
+    validate_panel_match(final_panel_observation, final_match["api"])
+    for key in ("identity", "elapsed", "stage_rate", "cpu", "gpu", "visible", "gpu_scope_note", "status"):
+        if panel.get(key) != final_panel_observation.get(key):
+            raise BuildControlError("Final Automatic performance panel differs from its atomically matched observation")
+    measured = {key: api.get(key) for key in ("cpu_percent", "gpu_percent")}
+    expected_metric_label = "CPU per core" if measured["cpu_percent"] is not None else "GPU whole device"
+    expected_metric = measured["cpu_percent"] if measured["cpu_percent"] is not None else measured["gpu_percent"]
+    if (panel.get("visible") is not True
+            or panel.get("metric_label") != expected_metric_label
+            or panel.get("metric_value") != panel.get("cpu" if expected_metric_label.startswith("CPU") else "gpu")):
+        raise BuildControlError("Automatic performance panel/chart metric differs from its measured API series")
+
+    state_was_running = any(snapshot.get("state") == "running" for snapshot in snapshots)
+    live_refresh = value.get("live_refresh")
+    if not isinstance(live_refresh, Mapping):
+        raise BuildControlError("Run performance proof omitted its refresh classification")
+    if state_was_running:
+        if live_refresh.get("state") != "verified":
+            raise BuildControlError("Running performance proof did not verify a live panel refresh")
+        refresh_pair = None
+        for first_index, first in enumerate(panel_matches):
+            first_api = first["api"]
+            for second in panel_matches[first_index + 1:]:
+                second_api = second["api"]
+                if (first_api.get("state") == second_api.get("state") == "running"
+                        and first_api.get("revision") != second_api.get("revision")
+                        and first_api.get("sample_sequence") < second_api.get("sample_sequence")
+                        and first_api.get("elapsed_monotonic_ns") < second_api.get("elapsed_monotonic_ns")
+                        and first["panel"].get("elapsed") != second["panel"].get("elapsed")):
+                    refresh_pair = (first, second)
+                    break
+            if refresh_pair:
+                break
+        if refresh_pair is None:
+            raise BuildControlError("Running performance panel did not match two advancing revisions/sample sequences")
+        unique_revisions = {item["api"]["revision"] for item in panel_matches}
+        unique_sequences = {item["api"]["sample_sequence"] for item in panel_matches}
+        window_ms = live_refresh.get("window_ms")
+        if (live_refresh.get("matched_revision_count") != len(unique_revisions)
+                or live_refresh.get("matched_sample_sequence_count") != len(unique_sequences)
+                or type(window_ms) is not int or not 0 <= window_ms <= 20_000):
+            raise BuildControlError("Running performance refresh counts or observation bound are invalid")
+    elif live_refresh.get("state") != "terminal-single-snapshot":
+        raise BuildControlError("Terminal performance proof changed its single-snapshot QA behavior")
+    gpu_scope_note = panel.get("gpu_scope_note")
+    if (not isinstance(gpu_scope_note, str)
+            or "whole_device" not in gpu_scope_note
+            or "not kernel occupancy" not in gpu_scope_note.lower()):
+        raise BuildControlError("Automatic performance panel omitted its whole-device GPU scope")
+    chart = value.get("chart")
+    if (not isinstance(chart, Mapping)
+            or chart.get("visible") is not True
+            or type(chart.get("canvas_count")) is not int
+            or not 1 <= chart["canvas_count"] <= 8
+            or type(chart.get("canvas_width")) is not int or chart["canvas_width"] <= 0
+            or type(chart.get("canvas_height")) is not int or chart["canvas_height"] <= 0
+            or type(chart.get("css_width")) not in (int, float) or chart["css_width"] <= 0
+            or type(chart.get("css_height")) not in (int, float) or chart["css_height"] <= 0):
+        raise BuildControlError("Automatic performance chart has no nonzero rendered canvas")
+    _validate_canvas_screenshot(value.get("screenshot"))
+    if (value.get("no_non_read_only_requests") is not True
+            or type(value.get("blocked_mutation_count")) is not int
+            or value["blocked_mutation_count"] != 0):
+        raise BuildControlError("Run performance browser proof did not preserve the read-only boundary")
+    if (not isinstance(harness_sha256, str) or not SHA256_RE.fullmatch(harness_sha256)):
+        raise BuildControlError("Run performance selected-source harness hash is missing")
 
 
 def _validate_ambiguous_command_submission(value: object, session: object) -> None:
@@ -2136,6 +2932,130 @@ def _parse_saved_playback_result(
     return payload
 
 
+def _validate_planar_airbox_observation(value: object, session: object) -> None:
+    if not isinstance(value, Mapping) or value.get("schema") != PLANAR_AIRBOX_OBSERVATION_SCHEMA:
+        raise BuildControlError("Browser helper Planar Airbox evidence is missing or malformed")
+    if (value.get("state") != "passed" or value.get("quantity_id") != "H_demag"
+            or value.get("source_kind") != "default" or value.get("source_id") != "default"
+            or value.get("scope_kind") != "airbox" or value.get("scope_id") is not None):
+        raise BuildControlError("Browser helper Planar Airbox source or scope differs")
+    before, after = value.get("session_before"), value.get("session_after")
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping) or not isinstance(session, Mapping):
+        raise BuildControlError("Planar Airbox evidence omitted active session/run identity")
+    identity_keys = ("session_id", "session_epoch", "request_scope_epoch", "run_id")
+    if any(not isinstance(before.get(key), str) or not before[key] for key in identity_keys):
+        raise BuildControlError("Planar Airbox before identity is malformed")
+    if any(before.get(key) != after.get(key) for key in identity_keys):
+        raise BuildControlError("Planar Airbox presentation changed session or run identity")
+    if any(after.get(key) != session.get(key) for key in identity_keys[:3]):
+        raise BuildControlError("Planar Airbox session identity differs from the browser result")
+    request = value.get("meta_request")
+    if (not isinstance(request, Mapping) or request.get("method") != "GET"
+            or request.get("path") != "/v2/sessions/current/data/fields/H_demag/planar-default/meta"
+            or request.get("scope_kind") != "airbox" or request.get("scope_id_present") is not False
+            or request.get("status") != 200):
+        raise BuildControlError("Planar Airbox metadata request did not use the exact default airbox scope")
+    meta, evidence = value.get("meta"), value.get("evidence")
+    if not isinstance(meta, Mapping) or not isinstance(evidence, Mapping):
+        raise BuildControlError("Planar Airbox evidence omitted metadata or rendered field evidence")
+    source = meta.get("source")
+    if (not isinstance(source, Mapping) or source.get("kind") != "default"
+            or meta.get("scope_kind") != "airbox"
+            or not isinstance(meta.get("etag"), str) or not meta["etag"]
+            or not isinstance(meta.get("sample_token"), str) or not meta["sample_token"]
+            or evidence.get("sampleToken") != meta.get("sample_token")
+            or evidence.get("metaIdentity") != meta.get("etag")
+            or evidence.get("scalarIdentity") != meta.get("etag")
+            or evidence.get("quantityId") != "H_demag"
+            or evidence.get("sourceKind") != "default" or evidence.get("sourceId") != "default"
+            or evidence.get("component") != "magnitude"):
+        raise BuildControlError("Planar Airbox sample token, raster, or metadata identity differs")
+    raster = evidence.get("raster")
+    if (not isinstance(raster, Mapping) or not isinstance(raster.get("checksum"), str)
+            or not raster["checksum"] or type(raster.get("sampleCount")) is not int
+            or raster["sampleCount"] <= 0 or type(evidence.get("glyphCount")) is not int
+            or evidence["glyphCount"] < 0):
+        raise BuildControlError("Planar Airbox raster evidence is missing or malformed")
+    for key in ("min", "max"):
+        number = raster.get(key)
+        if type(number) not in (int, float) or not math.isfinite(number):
+            raise BuildControlError("Planar Airbox raster range is non-finite")
+    if raster["min"] > raster["max"]:
+        raise BuildControlError("Planar Airbox raster range is inverted")
+    layout = value.get("domain_layout")
+    airbox = layout.get("airbox") if isinstance(layout, Mapping) else None
+    if (not isinstance(layout, Mapping) or layout.get("schema_version") != "fdm-multilayer-layout.v1"
+            or layout.get("available") is not True or layout.get("backend") != "fdm_multilayer"
+            or layout.get("domain_generation_id") != evidence.get("domainGenerationId")
+            or not isinstance(airbox, Mapping) or airbox.get("carrier_available") is not True
+            or airbox.get("h_demag_available") is not True or airbox.get("target_only") is not True):
+        raise BuildControlError("Planar Airbox frame has no current authoritative multilayer Airbox layout")
+    cells, origin, spacing = airbox.get("cells"), airbox.get("origin_m"), airbox.get("cell_size_m")
+    if (not isinstance(cells, list) or len(cells) != 3
+            or any(type(item) is not int or item <= 0 for item in cells)
+            or not isinstance(origin, list) or len(origin) != 3
+            or not isinstance(spacing, list) or len(spacing) != 3
+            or any(type(item) not in (int, float) or not math.isfinite(item) for item in origin + spacing)
+            or any(item <= 0 for item in spacing)):
+        raise BuildControlError("Authoritative multilayer Airbox grid is malformed")
+    frame = meta.get("frame")
+    plane = evidence.get("defaultPlane")
+    fraction = evidence.get("positionFraction")
+    operator_kind = evidence.get("operatorKind")
+    if (not isinstance(frame, Mapping) or plane not in {"xy", "xz", "yz"}
+            or type(fraction) not in (int, float) or not math.isfinite(fraction) or not 0 <= fraction <= 1
+            or operator_kind not in {"plane_sample", "slab_average"}):
+        raise BuildControlError("Planar Airbox default slice frame identity is malformed")
+    normal_axis, u_axis, v_axis = {
+        "xy": (2, 0, 1), "xz": (1, 0, 2), "yz": (0, 1, 2),
+    }[plane]
+    bounds = [[origin[axis], origin[axis] + cells[axis] * spacing[axis]] for axis in range(3)]
+    midpoints = [(minimum + maximum) * 0.5 for minimum, maximum in bounds]
+    continuous = bounds[normal_axis][0] + fraction * (bounds[normal_axis][1] - bounds[normal_axis][0])
+    expected_coordinate = continuous
+    if operator_kind == "plane_sample":
+        count = cells[normal_axis]
+        scaled = fraction * count
+        index = min(max(math.ceil(scaled) - 1, 0), count - 1)
+        expected_coordinate = origin[normal_axis] + (index + 0.5) * spacing[normal_axis]
+    expected_origin = list(midpoints)
+    expected_origin[normal_axis] = expected_coordinate
+    expected_bounds_uv = [
+        -0.5 * (bounds[u_axis][1] - bounds[u_axis][0]),
+        0.5 * (bounds[u_axis][1] - bounds[u_axis][0]),
+        -0.5 * (bounds[v_axis][1] - bounds[v_axis][0]),
+        0.5 * (bounds[v_axis][1] - bounds[v_axis][0]),
+    ]
+    expected_axes = {
+        "xy": ([1, 0, 0], [0, 1, 0], [0, 0, 1]),
+        "xz": ([1, 0, 0], [0, 0, 1], [0, -1, 0]),
+        "yz": ([0, 1, 0], [0, 0, 1], [1, 0, 0]),
+    }[plane]
+    for key, expected in (("origin_m", expected_origin), ("bounds_uv_m", expected_bounds_uv),
+                          ("u_axis", expected_axes[0]), ("v_axis", expected_axes[1]),
+                          ("normal", expected_axes[2])):
+        actual = frame.get(key)
+        if (not isinstance(actual, list) or len(actual) != len(expected)
+                or any(type(item) not in (int, float) or not math.isfinite(item) for item in actual)
+                or any(not math.isclose(a, b, rel_tol=1e-10, abs_tol=1e-18)
+                       for a, b in zip(actual, expected))):
+            raise BuildControlError(f"Planar Airbox {key} differs from the authoritative Airbox frame")
+    canvas = value.get("canvas")
+    if (not isinstance(canvas, Mapping) or canvas.get("visible") is not True
+            or canvas.get("non_transparent") is not True
+            or type(canvas.get("width")) is not int or canvas["width"] <= 0
+            or type(canvas.get("height")) is not int or canvas["height"] <= 0):
+        raise BuildControlError("Planar Airbox browser canvas is not visibly rendered")
+    screenshot = value.get("screenshot")
+    _validate_canvas_screenshot(screenshot)
+    if not isinstance(screenshot, Mapping) or screenshot.get("state") != "captured":
+        raise BuildControlError("Planar Airbox browser screenshot is missing")
+    if (value.get("presentation_restored") is not True
+            or value.get("blocked_mutation_count") != 0
+            or value.get("no_computation_or_monitor_mutations") is not True):
+        raise BuildControlError("Planar Airbox browser scenario changed or attempted a non-presentation resource")
+
+
 def _parse_result(
     output: bytes,
     public_url: str,
@@ -2147,6 +3067,11 @@ def _parse_result(
     expect_fem_airbox_vectors: bool = False,
     expect_terminal_telemetry: bool = False,
     terminal_telemetry_helper_sha256: str | None = None,
+    expect_run_performance: bool = False,
+    run_performance_harness_sha256: str | None = None,
+    expect_planar_airbox: bool = False,
+    planar_airbox_harness_sha256: str | None = None,
+    planar_field_evidence_sha256: str | None = None,
 ) -> dict[str, object]:
     text = output.decode("utf-8", "replace")
     payload = None
@@ -2176,10 +3101,17 @@ def _parse_result(
         raise BuildControlError("Browser helper did not report the pinned SwiftShader browser mode")
     if type(payload.get("canvas_only")) is not bool or payload["canvas_only"] is not canvas_only:
         raise BuildControlError("Browser helper canvas-only mode differs from the admitted operation")
+    run_performance_expectation = payload.get("expect_run_performance", False)
+    if (type(run_performance_expectation) is not bool
+            or run_performance_expectation is not expect_run_performance):
+        raise BuildControlError("Browser helper run performance expectation differs from the admitted operation")
     if (payload.get("expect_live_field") != expect_live_field
             or type(payload.get("expect_airbox_vectors")) is not bool
             or payload["expect_airbox_vectors"] is not expect_airbox_vectors):
         raise BuildControlError("Browser helper live-field expectation differs from the admitted operation")
+    planar_expectation = payload.get("expect_planar_airbox", False)
+    if type(planar_expectation) is not bool or planar_expectation is not expect_planar_airbox:
+        raise BuildControlError("Browser helper Planar Airbox expectation differs from the admitted operation")
     fem_expectation = payload.get("expect_fem_airbox_vectors", False)
     if type(fem_expectation) is not bool or fem_expectation is not expect_fem_airbox_vectors:
         raise BuildControlError("Browser helper FEM Airbox expectation differs from the admitted operation")
@@ -2203,9 +3135,22 @@ def _parse_result(
         or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
     ):
         raise BuildControlError("Terminal telemetry result is outside its canvas-only primary-m scenario")
+    if expect_run_performance and (
+        not canvas_only or expect_live_field is not None or expect_airbox_vectors
+        or expect_fem_airbox_vectors or expect_ambiguous_compute_fields or expect_terminal_telemetry
+    ):
+        raise BuildControlError("Run performance result is outside standalone canvas-only QA scope")
+    if expect_planar_airbox and (
+        not canvas_only or expect_live_field != "m" or expect_airbox_vectors
+        or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
+        or expect_terminal_telemetry or expect_run_performance
+    ):
+        raise BuildControlError("Planar Airbox result is outside its canvas-only primary-m scenario")
     if expect_ambiguous_compute_fields and not canvas_only:
         raise BuildControlError("Ambiguous Compute Fields result is outside canvas-only QA scope")
     expected_scope = (
+        "canvas-home-planar-airbox" if expect_planar_airbox else
+        "canvas-engine-run-performance" if expect_run_performance else
         "canvas-home-ambiguous-compute-fields" if expect_ambiguous_compute_fields else
         "canvas-home-fem-airbox-vectors" if expect_fem_airbox_vectors else
         "canvas-home-live-field-airbox" if expect_airbox_vectors else
@@ -2215,7 +3160,12 @@ def _parse_result(
     )
     if payload.get("qa_scope") != expected_scope:
         raise BuildControlError("Browser helper QA scope differs from the admitted operation")
-    expected_skipped = CANVAS_ONLY_SKIPPED_AREAS if canvas_only else []
+    if expect_run_performance:
+        expected_skipped = [*CANVAS_ONLY_SKIPPED_AREAS, RUN_PERFORMANCE_VIEWPORT_DOM_SKIPPED_AREA]
+    elif canvas_only:
+        expected_skipped = CANVAS_ONLY_SKIPPED_AREAS
+    else:
+        expected_skipped = []
     if payload.get("skipped_areas") != expected_skipped:
         raise BuildControlError("Browser helper skipped-area declaration differs from its QA scope")
     if payload.get("home_round_trip") is not True:
@@ -2227,7 +3177,10 @@ def _parse_result(
         raise BuildControlError("Browser helper did not prove a visible, stable workspace canvas")
     _validate_canvas_result(payload.get("canvas_before"), "before Home")
     _validate_canvas_result(payload.get("canvas_after"), "after Home")
-    _validate_viewport_dom_observations(payload.get("viewport_dom_observations"))
+    _validate_viewport_dom_observations(
+        payload.get("viewport_dom_observations"),
+        performance_scope_only=expect_run_performance,
+    )
     if expect_live_field is not None:
         _validate_live_field_observation(
             payload.get("live_field_observation"), expect_live_field, expect_airbox_vectors
@@ -2261,6 +3214,42 @@ def _parse_result(
     elif ("expect_terminal_telemetry" in payload or "terminal_telemetry" in payload
             or terminal_telemetry_helper_sha256 is not None):
         raise BuildControlError("Browser helper reported an unrequested terminal telemetry proof")
+    if expect_run_performance:
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(run_performance_harness_sha256, str)
+                or not SHA256_RE.fullmatch(run_performance_harness_sha256)
+                or not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("runner_before") != run_performance_harness_sha256
+                or harness_hashes.get("runner_after") != run_performance_harness_sha256):
+            raise BuildControlError("Run performance browser harness source pin differs or changed during QA")
+        _validate_run_performance_browser_proof(
+            payload.get("run_performance"), payload.get("session"), run_performance_harness_sha256,
+        )
+    elif ("run_performance" in payload or run_performance_harness_sha256 is not None):
+        raise BuildControlError("Browser helper reported an unrequested run performance proof")
+    if expect_planar_airbox:
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(planar_airbox_harness_sha256, str)
+                or not SHA256_RE.fullmatch(planar_airbox_harness_sha256)
+                or not isinstance(planar_field_evidence_sha256, str)
+                or not SHA256_RE.fullmatch(planar_field_evidence_sha256)
+                or not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("runner_before") != planar_airbox_harness_sha256
+                or harness_hashes.get("runner_after") != planar_airbox_harness_sha256
+                or harness_hashes.get("planar_field_evidence_before") != planar_field_evidence_sha256
+                or harness_hashes.get("planar_field_evidence_after") != planar_field_evidence_sha256):
+            raise BuildControlError("Planar Airbox browser source pin differs or changed during QA")
+        _validate_planar_airbox_observation(
+            payload.get("planar_airbox_observation"), payload.get("session"),
+        )
+    elif ("planar_airbox_observation" in payload
+          or planar_airbox_harness_sha256 is not None
+          or planar_field_evidence_sha256 is not None):
+        raise BuildControlError("Browser helper reported an unrequested Planar Airbox proof")
     ambiguous_submission = payload.get("ambiguous_command_submission")
     if expect_ambiguous_compute_fields:
         _validate_ambiguous_command_submission(ambiguous_submission, payload.get("session"))
@@ -2344,6 +3333,12 @@ def _run(
     expect_fem_airbox_vectors: bool = False,
     expect_terminal_telemetry: bool = False,
     terminal_telemetry_helper_sha256: str | None = None,
+    expect_run_performance: bool = False,
+    run_performance_harness_sha256: str | None = None,
+    private_group_storage: bool = False,
+    expect_planar_airbox: bool = False,
+    planar_airbox_harness_sha256: str | None = None,
+    planar_field_evidence_sha256: str | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -2396,6 +3391,7 @@ def _run(
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
         expect_fem_airbox_vectors=(True if expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if expect_terminal_telemetry else None),
+        expect_run_performance=(True if expect_run_performance else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
             if not airbox_inspector and saved_playback_item_id is None
@@ -2403,7 +3399,9 @@ def _run(
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        expect_planar_airbox=expect_planar_airbox,
+        private_group_storage=private_group_storage)
     if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
@@ -2435,7 +3433,12 @@ def _run(
                 expect_ambiguous_compute_fields=expect_ambiguous_compute_fields,
                 expect_fem_airbox_vectors=expect_fem_airbox_vectors,
                 expect_terminal_telemetry=expect_terminal_telemetry,
-                terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256)
+                terminal_telemetry_helper_sha256=terminal_telemetry_helper_sha256,
+                expect_run_performance=expect_run_performance,
+                run_performance_harness_sha256=run_performance_harness_sha256,
+                expect_planar_airbox=expect_planar_airbox,
+                planar_airbox_harness_sha256=planar_airbox_harness_sha256,
+                planar_field_evidence_sha256=planar_field_evidence_sha256)
     except BuildControlError as error:
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
@@ -2460,25 +3463,143 @@ def _run(
     operation["daemon_pending"] = False
 
 
-def reconcile_browser_qa(control, selected, identity, args):
+def _assert_no_qa_controller(selected):
+    """Require host /proc visibility; a sandbox PID namespace cannot prove absence."""
+    proc = Path("/proc")
+    if (not proc.is_dir() or b"codex-linux-sandbox" in (proc / "1/cmdline").read_bytes()):
+        raise BuildControlError("Prestart QA reconciliation requires the full host /proc view")
+    count = 0
+    for path in proc.iterdir():
+        if not path.name.isdigit() or int(path.name) == os.getpid():
+            continue
+        count += 1
+        if count > 65536:
+            raise BuildControlError("Host controller inventory exceeds its bound")
+        try:
+            argv = [value.decode("utf-8", "strict") for value in (path / "cmdline").read_bytes().split(b"\0") if value]
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError) as error:
+            raise BuildControlError("Host QA controller absence cannot be proven") from error
+        if argv and Path(argv[0]).name.startswith("python") and any(
+                Path(value).name == "docker_dev_browser_qa.py" for value in argv[1:]):
+            source = None
+            for flag in ("--source-root", "--repo-root"):
+                if flag in argv and argv.index(flag) + 1 < len(argv):
+                    source = argv[argv.index(flag) + 1]
+                    break
+            if source is None or Path(source).resolve() == selected:
+                raise BuildControlError("A host QA controller still owns the selected source")
+
+
+def _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, *, cache_project_id):
+    from docker_volume_activation_reconcile import _control_bytes, _probe_helper_absence
+    _assert_no_qa_controller(selected)
+    root = "browser-qa/attempts/" + args.reconcile_attempt
+    if any(key in receipt for key in ("browser_container_name", "browser_container_id", "exit_code")):
+        raise BuildControlError("Prestart receipt contains browser launch/exit evidence")
+    for name in ("terminal.json", "result.json", "public-loopback-probe.json"):
+        if _control_bytes(control, root + "/" + name, optional=True) is not None:
+            raise BuildControlError("Prestart QA already has execution or terminal evidence")
+    current, backend_id, frontend_id, volume, frontend_inputs = _read_live_development(control, selected, identity, args.port)
+    inputs = receipt["inputs"]
+    if (current.get("attempt") != inputs.get("development_attempt")
+            or current.get("config_sha256") != inputs.get("development_config_sha256")
+            or frontend_id != inputs.get("frontend_container")
+            or volume != inputs.get("frontend_volume")
+            or hashlib.sha256(canonical(frontend_inputs)).hexdigest() != inputs.get("frontend_inputs_sha256")):
+        raise BuildControlError("Prestart QA session services changed since admission")
+    frontend = _inspect(frontend_id)
+    _validate_frontend(frontend, control, identity, volume, current, args.port,
+        cache_project_id=cache_project_id)
+    backend = _inspect(backend_id)
+    from docker_volume_dev import _validate_retained_service
+    development_compose = control.read("development/attempts/" + current["attempt"] + "/compose.json")
+    image = _inspect_image(backend["Image"])
+    _validate_retained_service(development_compose, backend, "backend", image["Config"],
+        expected_started_at=current.get("backend_started_at"))
+    validate_source_labels(backend, identity)
+    helper = _inspect(helper_id)
+    pins = {}
+    for service, observed in (("backend", backend), ("frontend", frontend), ("helper", helper)):
+        if observed.get("ExecIDs") not in (None, []):
+            raise BuildControlError("A selected QA/session container still has an active Docker exec")
+        state = observed.get("State", {})
+        if state.get("Running") is not True:
+            raise BuildControlError("Prestart QA requires unchanged running session services and helper")
+        pins[service] = {"id": observed["Id"], "image": observed["Image"],
+            "started_at": state.get("StartedAt"), "pid": state.get("Pid"),
+            "config_sha256": hashlib.sha256(canonical(observed["Config"])).hexdigest(),
+            "host_config_sha256": hashlib.sha256(canonical(observed["HostConfig"])).hexdigest(),
+            "mounts_sha256": hashlib.sha256(canonical(observed["Mounts"])).hexdigest()}
+    browser_name = "fullmag-browser-qa-" + args.reconcile_attempt[:12]
+    absence = _probe_helper_absence(browser_name)
+    if absence is None:
+        raise BuildControlError("Prestart QA browser name exists; no release permitted")
+    listed = docker_capture("ps", "--all", "--no-trunc", "--filter",
+        "label=com.docker.compose.project=" + control.project, "--format", "{{.ID}}", timeout=30)
+    if set(listed.stdout.decode().split()) != {backend_id, frontend_id, helper_id}:
+        raise BuildControlError("Prestart QA group has a browser or unknown container")
+    return {"schema": "fullmag.browser-qa-prestart-absence.v1", "browser_state": "NOT RUN",
+            "browser_name_absence_sha256": absence, "host_controllers": [], "service_pins": pins,
+            "development_fence_sha256": current["development_fence_sha256"]}
+
+
+def _reconcile_prestart_qa(control, selected, identity, args, receipt, helper_id, helper_log, *, cache_project_id):
+    from docker_volume_activation_reconcile import _control_bytes, _wait_for_helper_exit
+    root = "browser-qa/attempts/" + args.reconcile_attempt
+    before = _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, cache_project_id=cache_project_id)
+    if _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, cache_project_id=cache_project_id) != before:
+        raise BuildControlError("Prestart QA absence/session proof changed")
+    terminal = {**receipt, "state": "failed-confirmed", "browser_state": "NOT RUN",
+        "error": "Host controller lost before browser launch; browser QA was not run",
+        "verification": "NOT VERIFIED", "finished_at": time.time(),
+        "prestart_reconciliation": {**before, "helper_id": helper_id, "helper_log": helper_log,
+            "receipt_sha256": args.expected_receipt_sha256, "compose_sha256": args.expected_compose_sha256}}
+    payload = canonical(terminal) + b"\n"
+    path = control.path(root + "/terminal.json")
+    script = ("set -eu; test \"$(cat /control/active)\" = '" + args.reconcile_attempt + "'; "
+        "test \"$(sha256sum '" + control.path(root + "/receipt.json") + "' | cut -d' ' -f1)\" = '" + args.expected_receipt_sha256 + "'; "
+        "test \"$(sha256sum '" + control.path(root + "/compose.json") + "' | cut -d' ' -f1)\" = '" + args.expected_compose_sha256 + "'; "
+        "test ! -e '" + path + "'; umask 027; t=$(mktemp '" + control.path(root) + "/.prestart.XXXXXXXX'); "
+        "trap 'rm -f -- \"$t\"' EXIT; cat > \"$t\"; sync \"$t\"; mv -T -- \"$t\" '" + path + "'; sync '" + control.path(root) + "'")
+    from docker_build_control import bounded_capture
+    result = bounded_capture(control.helper_args(script), data=payload, timeout=90)
+    if result.returncode:
+        raise ControlOutcomeUnknown("Prestart QA terminal publication was not confirmed")
+    _wait_for_helper_exit(helper_id)
+    if _control_bytes(control, "active", optional=True) is not None:
+        raise ControlOutcomeUnknown("Prestart QA original helper did not release its lease")
+    mirror_console(json.dumps({"state": "failed-confirmed", "attempt": args.reconcile_attempt,
+        "browser_state": "NOT RUN", "lease_released": True, "verification": "NOT VERIFIED"}) + "\n")
+
+
+def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=None):
     """Close one stopped, failed QA attempt; never infer a successful proof."""
     from docker_volume_activation_reconcile import (
         _control_bytes, _probe_helper_absence, _validate_helper,
         _validate_helper_logged, _wait_for_helper_exit,
     )
     attempt = args.reconcile_attempt
+    prestart = bool(getattr(args, "reconcile_prestart", False))
+    if prestart and (not isinstance(cache_project_id, str) or not cache_project_id):
+        raise BuildControlError("Prestart reconciliation requires the resolver's cache project identity")
     if not re.fullmatch(r"[0-9a-f]{32}", attempt or ""):
         raise BuildControlError("QA reconciliation requires a full attempt UUID")
     for value in (args.expected_receipt_sha256, args.expected_compose_sha256):
         if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
             raise BuildControlError("QA reconciliation requires exact receipt and Compose hashes")
-    for value in (args.expected_browser_id, args.expected_helper_id):
+    if prestart and args.expected_browser_id is not None:
+        raise BuildControlError("Prestart reconciliation cannot consume a browser container pin")
+    for value in ((args.expected_helper_id,) if prestart else (args.expected_browser_id, args.expected_helper_id)):
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
             raise BuildControlError("QA reconciliation requires full container IDs")
     root = "browser-qa/attempts/" + attempt
     active_raw = _control_bytes(control, "active", optional=True)
     retained_terminal = control.read(root + "/terminal.json", optional=True)
     already_released = active_raw is None
+    if prestart and (already_released or retained_terminal is not None):
+        raise BuildControlError("Prestart reconciliation requires its still-held original lease without terminal")
     if ((already_released and not isinstance(retained_terminal, Mapping))
             or (not already_released and active_raw != (attempt + "\n").encode())):
         raise BuildControlError("QA reconciliation active fence differs")
@@ -2488,8 +3609,12 @@ def reconcile_browser_qa(control, selected, identity, args):
             or hashlib.sha256(compose_raw).hexdigest() != args.expected_compose_sha256):
         raise BuildControlError("QA reconciliation evidence CAS differs")
     receipt, document = json.loads(receipt_raw), json.loads(compose_raw)
+    if prestart and (receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or receipt.get("control_namespace") != getattr(control, "namespace", None)
+            or receipt.get("namespace_registry_sha256") != getattr(control, "namespace_registry_sha256", None)):
+        raise BuildControlError("Prestart QA receipt schema/namespace differs")
     required = {"phase": "browser-qa", "attempt": attempt, "compose_project": control.project,
-                "control_volume": control.volume, "state": "outcome-unknown-resources-retained"}
+                "control_volume": control.volume, "state": "starting" if prestart else "outcome-unknown-resources-retained"}
     if any(receipt.get(key) != value for key, value in required.items()):
         raise BuildControlError("QA reconciliation receipt identity/outcome differs")
     inputs = receipt.get("inputs")
@@ -2497,15 +3622,47 @@ def reconcile_browser_qa(control, selected, identity, args):
         raise BuildControlError("QA reconciliation inputs are missing")
     if inputs.get("source_root") != str(selected) or inputs.get("worktree_id") != identity["worktree_id"]:
         raise BuildControlError("QA reconciliation source identity differs")
+    private_group_marker = inputs.get("private_group_storage")
+    if private_group_marker not in (None, "group-volume-v1"):
+        raise BuildControlError("QA reconciliation private group storage profile is unsupported")
+    private_group_storage = private_group_marker == "group-volume-v1"
+    if private_group_storage and inputs.get("frontend_volume") != control.volume:
+        raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
     scenario = inputs.get("scenario", "standard")
-    if scenario not in {"standard", "airbox-inspector", "saved-playback"}:
+    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
+    expect_planar_airbox_input = inputs.get("expect_planar_airbox", False)
+    if type(expect_planar_airbox_input) is not bool:
+        raise BuildControlError("QA reconciliation Planar Airbox expectation must be boolean")
+    if expect_planar_airbox_input != (scenario == "planar-airbox"):
+        raise BuildControlError("QA reconciliation Planar Airbox scenario identity differs")
+    planar_airbox_harness_sha256 = None
+    planar_field_evidence_sha256 = None
+    if expect_planar_airbox_input:
+        planar_airbox_harness_sha256 = inputs.get("planar_airbox_harness_sha256")
+        planar_field_evidence_sha256 = inputs.get("planar_field_evidence_sha256")
+        if (not isinstance(planar_airbox_harness_sha256, str)
+                or not SHA256_RE.fullmatch(planar_airbox_harness_sha256)
+                or _planar_airbox_harness_sha256(
+                    selected, "apps/control-room/scripts/docker-dev-browser-qa.mjs"
+                ) != planar_airbox_harness_sha256
+                or not isinstance(planar_field_evidence_sha256, str)
+                or not SHA256_RE.fullmatch(planar_field_evidence_sha256)
+                or _planar_airbox_harness_sha256(
+                    selected, "apps/control-room/scripts/lib/planar-field-evidence.mjs"
+                ) != planar_field_evidence_sha256):
+            raise BuildControlError("QA reconciliation Planar Airbox source pin differs")
+    elif "planar_airbox_harness_sha256" in inputs or "planar_field_evidence_sha256" in inputs:
+        raise BuildControlError("QA reconciliation has an unrequested Planar Airbox source pin")
     expect_fem_airbox_vectors_input = inputs.get("expect_fem_airbox_vectors", False)
     if type(expect_fem_airbox_vectors_input) is not bool:
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation must be boolean")
     expect_terminal_telemetry_input = inputs.get("expect_terminal_telemetry", False)
     if type(expect_terminal_telemetry_input) is not bool:
         raise BuildControlError("QA reconciliation terminal telemetry expectation must be boolean")
+    expect_run_performance_input = inputs.get("expect_run_performance", False)
+    if type(expect_run_performance_input) is not bool:
+        raise BuildControlError("QA reconciliation run performance expectation must be boolean")
     terminal_telemetry_helper_sha256 = None
     if expect_terminal_telemetry_input:
         terminal_telemetry_helper_sha256 = inputs.get("terminal_telemetry_helper_sha256")
@@ -2515,6 +3672,15 @@ def reconcile_browser_qa(control, selected, identity, args):
             raise BuildControlError("QA reconciliation terminal telemetry helper source pin differs")
     elif "terminal_telemetry_helper_sha256" in inputs:
         raise BuildControlError("QA reconciliation unrequested terminal telemetry helper source pin")
+    run_performance_harness_sha256 = None
+    if expect_run_performance_input:
+        run_performance_harness_sha256 = inputs.get("run_performance_harness_sha256")
+        if (not isinstance(run_performance_harness_sha256, str)
+                or not SHA256_RE.fullmatch(run_performance_harness_sha256)
+                or _run_performance_harness_sha256(selected) != run_performance_harness_sha256):
+            raise BuildControlError("QA reconciliation run performance harness source pin differs")
+    elif "run_performance_harness_sha256" in inputs:
+        raise BuildControlError("QA reconciliation unrequested run performance harness source pin")
     if expect_fem_airbox_vectors_input and scenario != "standard":
         raise BuildControlError("QA reconciliation FEM Airbox-vector expectation has another scenario identity")
     saved_playback_item_id = None
@@ -2534,6 +3700,7 @@ def reconcile_browser_qa(control, selected, identity, args):
                 or inputs.get("expect_live_field") is not None
                 or inputs.get("expect_airbox_vectors") is not False
                 or inputs.get("expect_fem_airbox_vectors", False) is not False
+                or inputs.get("expect_planar_airbox", False) is not False
                 or inputs.get("expect_ambiguous_compute_fields") is not False):
             raise BuildControlError("QA reconciliation Saved Playback receipt includes another browser scenario")
     elif "saved_playback_item_id" in inputs or "source_script_sha256" in inputs:
@@ -2611,6 +3778,28 @@ def reconcile_browser_qa(control, selected, identity, args):
         or expect_ambiguous_command_input
     ):
         raise BuildControlError("QA reconciliation terminal telemetry scenario does not match the primary-m canvas contract")
+    if expect_run_performance_input and (
+        scenario != "standard"
+        or not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input is not None
+        or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input
+        or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input
+    ):
+        raise BuildControlError("QA reconciliation run performance scenario is outside standalone canvas-only scope")
+    if expect_planar_airbox_input and (
+        not canvas_only_input
+        or prepare_viewport_fixture
+        or expect_live_field_input != "m"
+        or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input
+        or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input
+        or expect_run_performance_input
+    ):
+        raise BuildControlError("QA reconciliation Planar Airbox scenario differs from canvas-only m scope")
     if canvas_only_input and prepare_viewport_fixture:
         raise BuildControlError("Canvas-only browser QA receipt cannot prepare a viewport fixture")
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
@@ -2623,13 +3812,17 @@ def reconcile_browser_qa(control, selected, identity, args):
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
+        expect_run_performance=(True if expect_run_performance_input else None),
+        expect_planar_airbox=expect_planar_airbox_input,
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        control=control,
+        private_group_storage=private_group_storage)
     if canonical(document) != canonical(expected_document):
         raise BuildControlError("QA reconciliation Compose recipe differs")
     helper_name = "fullmag-control-" + attempt
@@ -2648,6 +3841,10 @@ def reconcile_browser_qa(control, selected, identity, args):
         if helper_id != args.expected_helper_id:
             raise BuildControlError("QA reconciliation lease helper incarnation differs")
         helper_log = _validate_helper_logged(helper_id)
+    if prestart:
+        _reconcile_prestart_qa(control, selected, identity, args, receipt, helper_id, helper_log,
+            cache_project_id=cache_project_id)
+        return
     browser_name = "fullmag-browser-qa-" + attempt[:12]
     if receipt.get("browser_container_name") != browser_name:
         raise BuildControlError("QA reconciliation browser name differs")
@@ -2685,13 +3882,16 @@ def reconcile_browser_qa(control, selected, identity, args):
             None if scenario != "standard" else expect_fem_airbox_compose_pin
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
+        expect_run_performance=(True if expect_run_performance_input else None),
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
         saved_playback_item_id=saved_playback_item_id,
-        source_script_sha256=source_script_sha256)
+        source_script_sha256=source_script_sha256,
+        expect_planar_airbox=expect_planar_airbox_input,
+        private_group_storage=private_group_storage)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
             or observed["Config"].get("Entrypoint") != image["Config"].get("Entrypoint")):
@@ -2785,9 +3985,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Select FEM Airbox H_demag vectors and require live render-adoption evidence (canvas-only, --expect-live-field m)",
     )
     parser.add_argument(
+        "--expect-planar-airbox",
+        action="store_true",
+        help="Prove the current default H_demag planar field against the Universe/Airbox scope (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
         "--expect-terminal-telemetry",
         action="store_true",
         help="Prove visible terminal Step and total energy against scoped API provenance before and after page reload (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
+        "--expect-run-performance",
+        action="store_true",
+        help="Prove the visible Automatic performance panel against scoped current-run diagnostics (canvas-only)",
     )
     parser.add_argument(
         "--expect-ambiguous-compute-fields",
@@ -2804,6 +4014,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Inspect one registered saved-results item through its read-only playback resource",
     )
     parser.add_argument("--reconcile-attempt")
+    parser.add_argument("--reconcile-prestart", action="store_true", help="Close an orphaned starting attempt only after proving its browser was never launched")
     parser.add_argument("--expected-receipt-sha256")
     parser.add_argument("--expected-compose-sha256")
     parser.add_argument("--expected-browser-id")
@@ -2813,6 +4024,8 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("FULLMAG_BROWSER_QA_IMAGE", DEFAULT_BROWSER_IMAGE),
     )
     args = parser.parse_args(argv)
+    if args.reconcile_prestart and not args.reconcile_attempt:
+        raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
     defaults = resolve_defaults(args.repo_root, source_root=args.source_root, port=args.port)
     args.source_root = defaults.source_root
     args.port = defaults.port
@@ -2833,6 +4046,21 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError("Focused live-field and Airbox-vector expectations require --canvas-only")
     if args.expect_airbox_vectors and args.expect_live_field is None:
         raise BuildControlError("--expect-airbox-vectors requires --expect-live-field")
+    if args.expect_planar_airbox and (
+        not args.canvas_only
+        or args.expect_live_field != "m"
+        or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
+        or args.expect_terminal_telemetry
+        or args.expect_run_performance
+        or args.expect_ambiguous_compute_fields
+        or args.prepare_viewport_fixture
+        or args.airbox_inspector
+        or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "--expect-planar-airbox requires --canvas-only --expect-live-field m and excludes other scenarios"
+        )
     if args.expect_fem_airbox_vectors and (
         args.expect_live_field != "m"
         or args.expect_airbox_vectors
@@ -2855,6 +4083,21 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError(
             "--expect-terminal-telemetry requires --canvas-only --expect-live-field m and excludes other scenarios"
         )
+    if args.expect_run_performance and (
+        not args.canvas_only
+        or args.prepare_viewport_fixture
+        or args.expect_live_field is not None
+        or args.expect_airbox_vectors
+        or args.expect_fem_airbox_vectors
+        or args.expect_planar_airbox
+        or args.expect_terminal_telemetry
+        or args.expect_ambiguous_compute_fields
+        or args.airbox_inspector
+        or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError(
+            "--expect-run-performance requires standalone --canvas-only scope and excludes other scenarios"
+        )
     if args.airbox_inspector and (
         args.prepare_viewport_fixture
         or args.canvas_only
@@ -2874,6 +4117,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.expect_live_field is not None
             or args.expect_airbox_vectors
             or args.expect_fem_airbox_vectors
+            or args.expect_planar_airbox
             or args.expect_terminal_telemetry
             or args.expect_ambiguous_compute_fields
             or args.airbox_inspector
@@ -2890,12 +4134,14 @@ def main(argv: list[str] | None = None) -> int:
     control = BuildControl(identity, helper_image)
     _validate_existing_control_volume(control)
     if args.reconcile_attempt:
-        reconcile_browser_qa(control, selected, identity, args)
+        reconcile_browser_qa(control, selected, identity, args,
+            cache_project_id=cache_project_id_for_layout(layout))
         return 0
     current, backend_id, frontend_id, frontend_volume, frontend_inputs = _read_live_development(
         control, selected, identity, args.port
     )
-    _validate_frontend_volume(control, frontend_volume, frontend_inputs)
+    private_group_storage = _private_group_storage_mode(current)
+    _validate_frontend_volume(control, frontend_volume, frontend_inputs, current)
     frontend = _inspect(frontend_id)
     _validate_frontend(frontend, control, identity, frontend_volume, current, args.port, cache_project_id=cache_project_id_for_layout(layout))
     try:
@@ -2916,6 +4162,17 @@ def main(argv: list[str] | None = None) -> int:
     terminal_telemetry_helper_sha256 = (
         _terminal_telemetry_helper_sha256(selected) if args.expect_terminal_telemetry else None
     )
+    run_performance_harness_sha256 = (
+        _run_performance_harness_sha256(selected) if args.expect_run_performance else None
+    )
+    planar_airbox_harness_sha256 = (
+        _planar_airbox_harness_sha256(selected, "apps/control-room/scripts/docker-dev-browser-qa.mjs")
+        if args.expect_planar_airbox else None
+    )
+    planar_field_evidence_sha256 = (
+        _planar_airbox_harness_sha256(selected, "apps/control-room/scripts/lib/planar-field-evidence.mjs")
+        if args.expect_planar_airbox else None
+    )
     document = _compose_document(
         selected,
         identity,
@@ -2929,6 +4186,8 @@ def main(argv: list[str] | None = None) -> int:
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if args.expect_terminal_telemetry else None),
+        expect_run_performance=(True if args.expect_run_performance else None),
+        expect_planar_airbox=args.expect_planar_airbox,
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
@@ -2936,6 +4195,8 @@ def main(argv: list[str] | None = None) -> int:
         airbox_inspector=args.airbox_inspector,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
+        control=control,
+        private_group_storage=private_group_storage,
     )
     source_commit = (current.get("source_commit") or (current.get("inputs") or {}).get("source_commit"))
     inputs = {
@@ -2965,14 +4226,19 @@ def main(argv: list[str] | None = None) -> int:
         "expect_live_field": args.expect_live_field,
         "expect_airbox_vectors": args.expect_airbox_vectors,
         "expect_terminal_telemetry": args.expect_terminal_telemetry,
+        "expect_run_performance": args.expect_run_performance,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
+        "expect_planar_airbox": args.expect_planar_airbox,
         "scenario": (
             "saved-playback" if args.saved_playback_item_id is not None
             else "airbox-inspector" if args.airbox_inspector
+            else "planar-airbox" if args.expect_planar_airbox
             else "standard"
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if private_group_storage:
+        inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
         inputs["expect_fem_airbox_vectors"] = True
     if args.saved_playback_item_id is not None:
@@ -2980,6 +4246,11 @@ def main(argv: list[str] | None = None) -> int:
         inputs["source_script_sha256"] = source_script_sha256
     if args.expect_terminal_telemetry:
         inputs["terminal_telemetry_helper_sha256"] = terminal_telemetry_helper_sha256
+    if args.expect_run_performance:
+        inputs["run_performance_harness_sha256"] = run_performance_harness_sha256
+    if args.expect_planar_airbox:
+        inputs["planar_airbox_harness_sha256"] = planar_airbox_harness_sha256
+        inputs["planar_field_evidence_sha256"] = planar_field_evidence_sha256
     with control.operation("browser-qa", inputs) as operation:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
@@ -3009,6 +4280,12 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_fem_airbox_vectors,
             args.expect_terminal_telemetry,
             terminal_telemetry_helper_sha256,
+            args.expect_run_performance,
+            run_performance_harness_sha256,
+            private_group_storage,
+            args.expect_planar_airbox,
+            planar_airbox_harness_sha256,
+            planar_field_evidence_sha256,
         )
     return 0
 

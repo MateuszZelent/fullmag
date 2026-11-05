@@ -66,12 +66,15 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         parallel_execution: None,
         pbc: None,
         fem_demag_solver_policy: None,
+        fem_demag_accuracy_contract: None,
+        fem_domain_mesh: None,
         exchange_enabled: true,
         demag_enabled: true,
         demag_realization: None,
         fdm: None,
         external_field: None,
         rotated_interfacial_dmi: None,
+            rotated_interfacial_dmi_object_ids: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
             integrator: "rk45".to_string(),
             fixed_timestep: String::new(),
@@ -19428,6 +19431,28 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
         format!("stage_snapshot:{snapshot_id}")
     );
     assert_eq!(valid["scalar_max"], 9.0);
+
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    let default_airbox_snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v2/sessions/current/data/fields/m/planar-default/meta?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=airbox&stage_id=stage-000&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let default_airbox_snapshot_status = default_airbox_snapshot.status();
+    let default_airbox_snapshot = body_json(default_airbox_snapshot).await;
+    assert_eq!(
+        default_airbox_snapshot_status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{default_airbox_snapshot:#}"
+    );
+    assert_eq!(default_airbox_snapshot["code"], "target_unsupported");
 
     let outside_stage = app
         .clone()
@@ -46287,6 +46312,155 @@ async fn planar_default_child_resources_share_meta_identity_and_resolve_probe_wo
 }
 
 #[tokio::test]
+async fn planar_default_multilayer_airbox_uses_target_grid_bounds_and_slice_position() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    let fingerprint = test_fdm_multilayer_airbox_fingerprint(&carrier_dir);
+    let carrier_revision = u64::from_str_radix(&fingerprint[..16], 16)
+        .expect("test carrier fingerprint revision")
+        .max(1)
+        .to_string();
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    {
+        let mut presentation = state.current_display_presentation.write().await;
+        let planar = presentation.visualization_planar.get_or_insert_with(
+            crate::schemas::visualization_state::default_planar_visualization_state,
+        );
+        planar.default_slice.plane = crate::schemas::visualization_state::PlanarAxisPlane::Yz;
+    }
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should exist");
+        let mut scene = sample_scene_document();
+        scene.revision = 19;
+        scene.monitors.planar.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "airbox-authored-plane",
+                "name": "Airbox authored plane",
+                "target": {"kind": "domain"},
+                "frame": {
+                    "origin_m": [10.25, 20.25, 31.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "preset": "xy",
+                    "normalization_version": "planar_frame_v1",
+                    "extent": {
+                        "kind": "explicit",
+                        "u_min_m": -0.1,
+                        "u_max_m": 0.1,
+                        "v_min_m": -0.05,
+                        "v_max_m": 0.05
+                    }
+                },
+                "operator": {"kind": "plane_sample"}
+            }))
+            .expect("authored Airbox test plane should deserialize"),
+        );
+        snapshot.scene_document = Some(scene);
+    }
+
+    let request_meta = |app: axum::Router, position_fraction: f64| async move {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/H_demag/planar-default/meta?scope_kind=airbox&position_fraction={position_fraction}&resolution_x=16&resolution_y=16"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let meta = body_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{meta}");
+        meta
+    };
+    let first_slice = request_meta(app.clone(), 0.5).await;
+    let second_slice = request_meta(app.clone(), 0.75).await;
+
+    assert_eq!(
+        first_slice["frame"]["origin_m"],
+        serde_json::json!([10.25, 20.25, 31.0])
+    );
+    assert_eq!(
+        second_slice["frame"]["origin_m"],
+        serde_json::json!([10.75, 20.25, 31.0])
+    );
+    for meta in [&first_slice, &second_slice] {
+        assert_eq!(
+            meta["frame"]["u_axis"],
+            serde_json::json!([0.0, 1.0, 0.0])
+        );
+        assert_eq!(
+            meta["frame"]["v_axis"],
+            serde_json::json!([0.0, 0.0, 1.0])
+        );
+        assert_eq!(
+            meta["frame"]["bounds_uv_m"],
+            serde_json::json!([-0.25, 0.25, -1.0, 1.0])
+        );
+        assert_eq!(meta["scope_kind"], "airbox");
+        assert_eq!(meta["field_revision"], "17");
+        assert_eq!(meta["carrier_revision"], carrier_revision);
+    }
+    assert_ne!(
+        first_slice["source"]["default_slice_hash"],
+        second_slice["source"]["default_slice_hash"]
+    );
+    assert_ne!(first_slice["sample_token"], second_slice["sample_token"]);
+    assert_eq!(first_slice["section"]["requested_coordinate_m"], 10.5);
+    assert_eq!(first_slice["section"]["resolved_coordinate_m"], 10.25);
+    assert_eq!(second_slice["section"]["requested_coordinate_m"], 10.75);
+    assert_eq!(second_slice["section"]["resolved_coordinate_m"], 10.75);
+
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{}&u_m=0&v_m=0",
+                    first_slice["links"]["probe"].as_str().expect("probe link")
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+    let probe = body_json(probe).await;
+    assert_eq!(
+        probe["world_m"],
+        serde_json::json!([10.25, 20.25, 31.0])
+    );
+
+    let authored = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/planar-monitors/airbox-authored-plane/meta?scope_kind=airbox&resolution_x=16&resolution_y=16")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = authored.status();
+    let authored = body_json(authored).await;
+    assert_eq!(status, StatusCode::OK, "{authored}");
+    assert_eq!(authored["source"]["kind"], "monitor");
+    assert_eq!(
+        authored["frame"]["origin_m"],
+        serde_json::json!([10.25, 20.25, 31.0])
+    );
+    assert_eq!(
+        authored["frame"]["bounds_uv_m"],
+        serde_json::json!([-0.1, 0.1, -0.05, 0.05])
+    );
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn planar_default_identity_changes_for_position_not_presentation_style() {
     let state = default_planar_fdm_test_state().await;
     let app = build_v2_router().with_state(state.clone());
@@ -55336,3 +55510,6 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
     assert!(String::from_utf8_lossy(&body_bytes(command).await).contains("outside"));
     assert!(state.current_control_queue.lock().await.is_empty());
 }
+
+#[path = "tests_planar_composition.rs"]
+mod planar_composition_tests;

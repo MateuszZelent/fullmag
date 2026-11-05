@@ -7,6 +7,7 @@ network, Docker socket, host writes, or application execution responsibility.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import errno
 import hashlib
 import json
@@ -47,6 +48,27 @@ class BuildControlError(RuntimeError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def semantic_build_inputs(inputs):
+    """Project build identity while retaining console ownership in receipts.
+
+    Only the exact, validated operation token is non-semantic. Every other
+    input, including unknown future keys, remains covered by the digest.
+    """
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Build inputs must be an object")
+    result = dict(inputs)
+    if "console_session_id" in result:
+        token = result["console_session_id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise BuildControlError("Build input console session identity is invalid")
+        del result["console_session_id"]
+    return result
+
+
+def build_input_digest(inputs):
+    return hashlib.sha256(canonical(semantic_build_inputs(inputs))).hexdigest()
 
 
 def _available_space(space):
@@ -161,6 +183,10 @@ class ControlOutcomeUnknown(BuildControlError):
     """The client observation ended without proving a daemon-side outcome."""
 
 
+class DockerObservationBudgetExceeded(ControlOutcomeUnknown):
+    """A Docker client observation did not finish within its bounded budget."""
+
+
 def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOCUMENT_BYTES):
     # Identify the failing control step without logging command arguments,
     # stdin, or environment values (which may contain private runtime data).
@@ -212,7 +238,7 @@ def bounded_capture(command, *, data=None, timeout=90, env=None, maximum=MAX_DOC
     if sender is not None and not sender.is_alive() and not process.stdin.closed:
         process.stdin.close()
     if interrupted or exceeded.is_set() or any(t.is_alive() for t in readers) or (sender and sender.is_alive()):
-        raise ControlOutcomeUnknown(
+        raise DockerObservationBudgetExceeded(
             f"Docker observation exceeded its time/output budget during {caller} "
             f"(timeout={timeout}s); daemon resources retained"
         )
@@ -713,6 +739,15 @@ class BuildControl:
                 or (minimum_free_bytes < MIN_FREE_BUILD_BYTES
                     and phase not in CACHE_ONLY_PHASES)):
             raise BuildControlError("Invalid build-space admission for operation phase")
+        console_id = os.environ.get("FULLMAG_CONSOLE_SESSION_ID")
+        if console_id is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", console_id):
+                raise BuildControlError("Invalid console session identity")
+            if os.environ.get("FULLMAG_CONSOLE_CANCEL_REQUESTED") == console_id:
+                raise BuildControlError("Console startup cancelled before the next managed operation")
+            if "console_session_id" in inputs and inputs["console_session_id"] != console_id:
+                raise BuildControlError("Console session identity differs from operation inputs")
+            inputs = {**inputs, "console_session_id": console_id}
         token = uuid.uuid4().hex
         root = f"{phase}/attempts/{token}"
         path = self.path(root)
@@ -859,7 +894,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
-    digest = hashlib.sha256(canonical(source_identity)).hexdigest()
+    digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
                            minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
@@ -938,7 +973,7 @@ def build_volume_runtime_images(repo, control, toolchain, *, helper_source_bindi
         identity = {"parent_image_id": parent, "files": manifest}
         if helper_source_binding is not None:
             identity["helper_source"] = helper_source_binding
-        digest = hashlib.sha256(canonical(identity)).hexdigest()
+        digest = build_input_digest(identity)
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
         parent_digest = parent[7:] if parent.startswith("sha256:") else parent
         parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest

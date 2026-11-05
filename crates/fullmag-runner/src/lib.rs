@@ -15,6 +15,9 @@
 pub const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 
 pub mod adaptive_resources;
+mod run_performance;
+mod run_performance_gpu;
+mod run_performance_integration;
 pub mod artifact_generation;
 mod antenna_external_lead_solution;
 pub use antenna_external_lead_solution::{
@@ -3522,6 +3525,8 @@ fn run_planned_problem_with_artifact_context(
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
+    let mut performance = run_performance_integration::start(problem, plan, output_dir, "terminal_replay_no_callback");
+    let result = (|| {
     if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
     }
@@ -3703,6 +3708,12 @@ fn run_planned_problem_with_artifact_context(
     }
 
     Ok(executed.result)
+    })();
+    if let Ok(run) = &result {
+        for stats in &run.steps { performance.observe(stats); }
+    }
+    run_performance_integration::finish(&mut performance, &result);
+    result
 }
 
 /// Run a problem while providing the canonical stage id for hysteresis artifacts.
@@ -4103,7 +4114,13 @@ fn run_planned_problem_with_callback_artifact_context(
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
-    let mut on_step = bind_live_magnetization_layout(plan, on_step);
+    let mut performance = run_performance_integration::start(problem, plan, output_dir, "live_callback");
+    let result = (|| {
+    let mut consumer = bind_live_magnetization_layout(plan, on_step);
+    let mut on_step = |update: StepUpdate| {
+        if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+        consumer(update)
+    };
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
     if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
@@ -4404,6 +4421,9 @@ fn run_planned_problem_with_callback_artifact_context(
         finished: true,
     });
     Ok(executed.result)
+    })();
+    run_performance_integration::finish(&mut performance, &result);
+    result
 }
 
 /// Run a problem with a live callback and scoped hysteresis artifact refs.
@@ -4707,6 +4727,23 @@ pub fn run_planned_problem_with_live_preview_and_frozen_stage_context_and_observ
         false, on_step, None, Some((frozen, source_frozen_plan)))
 }
 
+fn live_step_action_with_interrupt<T>(
+    update: T,
+    on_step: &mut dyn FnMut(T) -> StepAction,
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+) -> StepAction {
+    // Publish the accepted update before checking cancellation so a terminal
+    // accepted state is not lost when the stop signal is already set.
+    let action = on_step(update);
+    if interrupt_requested.is_some_and(|signal| {
+        signal.load(std::sync::atomic::Ordering::Acquire)
+    }) {
+        StepAction::Stop
+    } else {
+        action
+    }
+}
+
 fn run_planned_problem_with_live_preview_artifact_context(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -4722,7 +4759,13 @@ fn run_planned_problem_with_live_preview_artifact_context(
     artifact_identity: Option<&eigen::FrequencyDomainArtifactIdentity>,
     frozen_stage: Option<(&constraints::FrozenStageContextV1, Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>)>,
 ) -> Result<RunResult, RunError> {
-    let mut on_step = bind_live_magnetization_layout(plan, on_step);
+    let mut performance = run_performance_integration::start(problem, plan, output_dir, "live_callback");
+    let result = (|| {
+    let mut consumer = bind_live_magnetization_layout(plan, on_step);
+    let mut on_step = |update: StepUpdate| {
+        if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+        consumer(update)
+    };
     let live_layout = study_magnetization_layout_for_plan(plan).ok();
     if frozen_stage.is_some() && !matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         return Err(RunError { message: "frozen stage context requires an accepted FDM CPU plan".into() });
@@ -4816,6 +4859,13 @@ fn run_planned_problem_with_live_preview_artifact_context(
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
             let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut interruptible_on_step = |update| {
+                live_step_action_with_interrupt(
+                    update,
+                    &mut on_step,
+                    interrupt_requested,
+                )
+            };
             let mut executed = dispatch::execute_fdm_multilayer(
                 resolution.engine,
                 fdm,
@@ -4825,7 +4875,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                     &fdm.common_cells,
                     field_every_n,
                     live_layout.as_ref(),
-                    &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
+                    &mut interruptible_on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
             )?;
@@ -5048,6 +5098,9 @@ fn run_planned_problem_with_live_preview_artifact_context(
         finished: true,
     });
     Ok(executed.result)
+    })();
+    run_performance_integration::finish(&mut performance, &result);
+    result
 }
 
 /// Run a problem with live preview and scoped hysteresis artifact refs.
@@ -5210,9 +5263,16 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     field_every_n: u64,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    let mut performance = run_performance_integration::start(problem, &plan, output_dir, "live_callback");
+    let result = (|| {
+    let mut consumer = on_step;
+    let mut on_step = |update: StepUpdate| {
+        if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+        consumer(update)
+    };
     require_physics_graph_runtime_provenance(problem, &plan)?;
     let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
         return Err(RunError {
@@ -5283,6 +5343,9 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     )?;
 
     Ok(executed.result)
+    })();
+    run_performance_integration::finish(&mut performance, &result);
+    result
 }
 
 /// Run a FEM problem using a persistent interactive runtime for low-latency
@@ -5316,9 +5379,16 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     field_every_n: u64,
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
-    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    let mut performance = run_performance_integration::start(problem, &plan, output_dir, "live_callback");
+    let result = (|| {
+    let mut consumer = on_step;
+    let mut on_step = |update: StepUpdate| {
+        if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+        consumer(update)
+    };
     let execution_problem = bind_fem_execution_stage_identity(problem, &plan)?;
     let problem = execution_problem.as_ref();
     require_physics_graph_runtime_provenance(problem, &plan)?;
@@ -5423,6 +5493,9 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
     });
 
     Ok(executed.result)
+    })();
+    run_performance_integration::finish(&mut performance, &result);
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -6952,7 +7025,11 @@ pub fn run_reference_multilayer_fdm(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
-    fdm::reject_adaptive_multilayer_plan(plan)?;
+    if !plan.relaxation.as_ref().is_some_and(|control|
+        control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb)
+    {
+        fdm::reject_adaptive_multilayer_plan(plan)?;
+    }
     Ok(multilayer_reference::execute_reference_fdm_multilayer(
         plan,
         until_seconds,
@@ -7031,6 +7108,31 @@ pub fn run_eigen_k_worker_request_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fdm_multilayer_interrupt_publishes_accepted_update_before_stop() {
+        let interrupt_requested = std::sync::atomic::AtomicBool::new(true);
+        let mut published_updates = Vec::new();
+        let mut on_step = |update| {
+            published_updates.push(update);
+            StepAction::Pause
+        };
+
+        let action = live_step_action_with_interrupt(
+            17_u8,
+            &mut on_step,
+            Some(&interrupt_requested),
+        );
+
+        assert_eq!(published_updates, vec![17_u8]);
+        assert_eq!(action, StepAction::Stop);
+
+        let mut on_step = |_| StepAction::Pause;
+        assert_eq!(
+            live_step_action_with_interrupt(23_u8, &mut on_step, None),
+            StepAction::Pause,
+        );
+    }
 
     #[test]
     fn eigen_progress_keeps_residual_separate_from_physical_field() {
@@ -8860,7 +8962,10 @@ mod tests {
     #[test]
     fn every_direct_minimizer_owner_observes_energy_evaluation() {
         for (path, accepted_boundary) in [
-            ("fdm/cpu/reference.rs", "steps.push(final_stats);"),
+            (
+                "fdm/cpu/reference.rs",
+                "record_direct_minimizer_terminal_stats(final_stats, &mut steps, &mut artifacts)?;",
+            ),
             (
                 "fdm/gpu/cuda/direct_minimizer.rs",
                 "artifacts.record_scalar(&accepted_stats)?;",

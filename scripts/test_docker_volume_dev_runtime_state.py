@@ -237,7 +237,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
         )
         self.assertLess(
             source.index("_precreate_new_windows_runtime_state(state)"),
-            source.index("_start_compose_services(control, operation, document)"),
+            source.index("_start_compose_services("),
         )
 
 

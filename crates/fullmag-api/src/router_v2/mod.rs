@@ -520,6 +520,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             post(handlers::simulation::report_command_failure),
         )
         .route(
+            "/v2/sessions/current/diagnostics/performance",
+            get(handlers::diagnostics::get_run_performance),
+        )
+        .route(
             "/v2/sessions/current/diagnostics/solver-profile",
             get(handlers::diagnostics::get_solver_profile),
         )

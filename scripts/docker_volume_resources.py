@@ -81,7 +81,7 @@ def apply_group_budget(document, configured, capacity=None):
     environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(backend_memory)
 
 
-def apply_saved_budget(control, document):
+def apply_saved_budget(control, document, *, superseded=False):
     """Apply only this control namespace's explicitly saved backend budget."""
     profile = control.read(PROFILE_PATH, optional=True)
     if profile is None:
@@ -108,6 +108,11 @@ def apply_saved_budget(control, document):
     if (type(memory) is not int or memory < GIB or type(cpus) is not int or cpus < 1
             or type(swap) is not int or (swap != -1 and swap < memory)):
         raise BuildControlError("Saved backend resource budget is invalid")
+    if superseded:
+        # Authenticate the historical receipt above even when its limits lose
+        # precedence to an exact stored-budget restore. Only effective limits
+        # participate in capacity admission and Compose rendering.
+        return
     backend = document["services"]["backend"]
     capacity = _docker_capacity()
     if (memory < int(backend["mem_limit"]) or cpus < float(backend["cpus"])
@@ -120,6 +125,25 @@ def apply_saved_budget(control, document):
     environment["CARGO_BUILD_JOBS"] = str(min(cpus, 64))
     environment["FULLMAG_DOCKER_CPU_MILLIS"] = str(cpus * 1000)
     environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(memory)
+
+
+def apply_development_budget(control, document, configured, *, cold_budget_restore=None,
+                             source_root=None, capacity=None):
+    """Render one budget, with the authenticated retained pin taking precedence."""
+    restored = None
+    if cold_budget_restore is not None:
+        from docker_volume_cold_budget_restore import authenticated_budget
+        restored = authenticated_budget(control, document, cold_budget_restore, source_root=source_root)
+        configured = {**configured,
+            "FULLMAG_DEV_BACKEND_CPUS": restored["cpus"],
+            "FULLMAG_DEV_BACKEND_MEMORY_GIB": restored["memory_bytes"] // GIB}
+    apply_group_budget(document, configured, capacity=capacity)
+    if restored is None:
+        apply_saved_budget(control, document)
+    else:
+        apply_saved_budget(control, document, superseded=True)
+        from docker_volume_cold_budget_restore import overlay_budget
+        overlay_budget(document, restored)
 
 
 def _assert_no_unresolved_increases(control, root):

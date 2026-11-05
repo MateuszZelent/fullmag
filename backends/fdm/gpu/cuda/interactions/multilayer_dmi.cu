@@ -368,8 +368,8 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
             layer.material.saturation_magnetisation,
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.D_interfacial,
-            ctx.has_rotated_interfacial_dmi ? 1 : 0,
-            ctx.D_rotated_interfacial,
+            layer.has_rotated_interfacial_dmi ? 1 : 0,
+            layer.D_rotated_interfacial,
             ctx.has_bulk_dmi ? 1 : 0,
             ctx.D_bulk);
     }

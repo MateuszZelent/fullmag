@@ -21,6 +21,92 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 f"--request '{request}' --request-sha256 '{digest}' --source-root '{source}'"
                 + (' --apply' if apply else ''))
 
+    def interrupted_archive_recipe(self, *, source='/selected/worktree', prior='a' * 32,
+                                   config='b' * 64, recreation='c' * 32,
+                                   unknown='d' * 64, helper='e' * 64,
+                                   image='registry.example/fullmag/helper:dev@sha256:' + 'f' * 64,
+                                   engine='engine-id', apply=False, plan='1' * 64):
+        recipe = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
+                  'resume-interrupted-fresh-archive '
+                  f"--prior-attempt '{prior}' --config-sha256 '{config}' "
+                  f"--source-root '{source}' --recreation-attempt '{recreation}' "
+                  f"--unknown-receipt-sha256 '{unknown}' --helper-container-id '{helper}' "
+                  f"--helper-image '{image}' --engine-id '{engine}'")
+        if apply:
+            recipe += f" --apply --expected-plan-sha256 '{plan}'"
+        return recipe
+
+    def test_cold_quarantine_real_recipe_preserves_preview_and_apply_pins(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        for apply in (False, True):
+            arguments = [source, 'a' * 32, 'b' * 32]
+            if apply:
+                arguments.extend(['true', 'c' * 64])
+            dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-quarantine-failed-bootstrap', *arguments],
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = [b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+                        b'--repo-root', b'/registered/checkout', b'quarantine-failed-bootstrap',
+                        b'--source-root', source.encode(), b'--operation-attempt', b'a' * 32,
+                        b'--recovery-id', b'b' * 32]
+            if apply:
+                expected.extend([b'--apply', b'--expected-plan-sha256', b'c' * 64])
+            self.assertEqual(result.stdout.split(b'\0')[:-1], expected)
+
+    def test_completed_cache_real_recipe_preserves_preview_and_apply_pins(self):
+        repo = Path(__file__).resolve().parents[1]
+        target = 'fullmag-backend-v2-' + 'a' * 24 + '-package'
+        registry = '/registered/storage/index/completed task.json'
+        for apply in (False, True):
+            arguments = [registry, target, 'b' * 32]
+            if apply:
+                arguments.extend(['true', 'c' * 64])
+            dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-reconcile-completed-cache', *arguments],
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected = [b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+                        b'--repo-root', b'/registered/checkout', b'reconcile-completed-cache',
+                        b'--registry', registry.encode(), b'--volume', target.encode(),
+                        b'--recovery-id', b'b' * 32]
+            if apply:
+                expected.extend([b'--apply', b'--expected-plan-sha256', b'c' * 64])
+            self.assertEqual(result.stdout.split(b'\0')[:-1], expected)
+
+    def test_retire_stopped_real_recipe_does_not_lose_retire_only_flag(self):
+        repo = Path(__file__).resolve().parents[1]
+        dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+            'docker-dev-retire-stopped', 'a' * 32, 'b' * 64, '/selected/worktree', '3342'],
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[-3:-1], [b'--fresh-state', b'--retire-only'])
+
+    def test_cold_and_retirement_dispatch_reject_unpinned_or_composite_mutations(self):
+        cold = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
+                "quarantine-failed-bootstrap --source-root '/selected/worktree' "
+                "--operation-attempt '" + 'a' * 32 + "' --recovery-id '" + 'b' * 32 + "'")
+        retire = ('python "/ignored/scripts/docker_dev.py" --repo-root "/ignored" '
+                  "recreate-volume --attempt '" + 'a' * 32 + "' --config-sha256 '" + 'b' * 64
+                  + "' --source-root '/selected/worktree' --port '3342' --fresh-state --retire-only")
+        invalid = [cold + ' --apply', cold + " --expected-plan-sha256 '" + 'c' * 64 + "'",
+                   cold + " --apply --expected-plan-sha256 'short'",
+                   retire.replace(' --fresh-state', ''), retire + ' --retire-only']
+        invalid.extend(recipe + suffix for recipe in (cold, retire)
+                       for suffix in ('; printf injected', ' && printf injected', '\nprintf injected'))
+        for recipe in invalid:
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
     def test_preview_dispatches_fixed_arguments_without_apply(self):
         source = '/selected/$(printf injected);worktree'
         result = self.dispatch(self.recipe(source=source, apply=False))
@@ -48,6 +134,80 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                        self.recipe(source="/selected/unsafe'quote")):
             with self.subTest(recipe=recipe):
                 result = self.dispatch(recipe)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
+    def test_interrupted_fresh_archive_preview_dispatches_exact_pins_literally(self):
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        engine = 'engine-$(printf injected);literal'
+        image = 'registry.example/$(printf_injected);literal/helper:dev@sha256:' + 'f' * 64
+        recipe = self.interrupted_archive_recipe(source=source, engine=engine, image=image)
+        result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'resume-interrupted-fresh-archive',
+            b'--prior-attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
+            b'--source-root', source.encode(), b'--recreation-attempt', b'c' * 32,
+            b'--unknown-receipt-sha256', b'd' * 64, b'--helper-container-id', b'e' * 64,
+            b'--helper-image', image.encode(), b'--engine-id', engine.encode(),
+        ])
+
+    def test_interrupted_fresh_archive_apply_dispatches_exact_plan_pin(self):
+        recipe = self.interrupted_archive_recipe(apply=True, plan='2' * 64)
+        result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'resume-interrupted-fresh-archive',
+            b'--prior-attempt', b'a' * 32, b'--config-sha256', b'b' * 64,
+            b'--source-root', b'/selected/worktree', b'--recreation-attempt', b'c' * 32,
+            b'--unknown-receipt-sha256', b'd' * 64, b'--helper-container-id', b'e' * 64,
+            b'--helper-image', ('registry.example/fullmag/helper:dev@sha256:' + 'f' * 64).encode(),
+            b'--engine-id', b'engine-id', b'--apply', b'--expected-plan-sha256', b'2' * 64,
+        ])
+
+    def test_real_just_recipe_preview_and_apply_are_accepted_by_dispatch(self):
+        repo = Path(__file__).resolve().parents[1]
+        pins = ['a' * 32, 'b' * 64, '/selected/worktree', 'c' * 32,
+                'd' * 64, 'e' * 64,
+                'registry.example/helper:dev@sha256:' + 'f' * 64, 'engine-id']
+        for apply in (False, True):
+            with self.subTest(apply=apply):
+                arguments = pins + (['2' * 64, 'true'] if apply else [])
+                dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'),
+                    '--dry-run', 'docker-dev-resume-interrupted-fresh-archive', *arguments],
+                    capture_output=True, text=True, timeout=15)
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                words = result.stdout.split(b'\0')[:-1]
+                self.assertEqual(b'--apply' in words, apply)
+                if apply:
+                    self.assertEqual(words[-3:], [b'--apply', b'--expected-plan-sha256', b'2' * 64])
+
+    def test_interrupted_fresh_archive_rejects_bad_pins_and_noncanonical_options(self):
+        base = self.interrupted_archive_recipe()
+        invalid = (
+            self.interrupted_archive_recipe(prior='A' * 32),
+            self.interrupted_archive_recipe(config='short'),
+            self.interrupted_archive_recipe(recreation='z' * 32),
+            self.interrupted_archive_recipe(unknown='z' * 64),
+            self.interrupted_archive_recipe(helper='short'),
+            self.interrupted_archive_recipe(image='registry.example/fullmag/helper:mutable'),
+            self.interrupted_archive_recipe(engine=''),
+            self.interrupted_archive_recipe(source='relative/worktree'),
+            self.interrupted_archive_recipe(apply=True, plan='not-a-sha'),
+            base + " --unexpected 'value'",
+            base + " --apply",
+            base + " --expected-plan-sha256 '" + '1' * 64 + "'",
+            base + "; printf injected",
+            base + " && printf injected",
+            base + "\nprintf injected",
+        )
+        for recipe in invalid:
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
 
@@ -107,6 +267,39 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                 result = self.dispatch(recipe + tail, marker='  *"scripts/docker_dev.py"*)\n')
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
+
+    def test_frontend_completion_closed_prepare_and_apply_dispatch(self):
+        marker = '  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)\n'
+        script = 'python "/ignored/scripts/docker_volume_frontend_refresh_reconcile.py" '
+        source = '/selected/$(printf injected);worktree'
+        prepare = (script + "--prepare --attempt '" + 'a'*32 + "' --base-attempt '" + 'b'*32
+                   + "' --source-root '" + source + "' --port '3342'")
+        request = 'verification/frontend-refresh-completion/' + 'c'*64 + '/request.json'
+        apply = script + "--apply --request '" + request + "' --request-sha256 '" + 'd'*64 + "' --source-root '" + source + "'"
+        prefix = [b'/recorded/python', b'-B', b'/registered/checkout/scripts/docker_volume_frontend_refresh_reconcile.py']
+        for recipe, expected in ((prepare, [b'--prepare', b'--attempt', b'a'*32,
+                b'--base-attempt', b'b'*32, b'--source-root', source.encode(), b'--port', b'3342']),
+                (apply, [b'--apply', b'--request', request.encode(), b'--request-sha256', b'd'*64,
+                         b'--source-root', source.encode()])):
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker=marker)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.split(b'\0')[:-1], prefix + expected)
+        for recipe in (prepare + '; printf injected', apply + ' && printf injected',
+                       prepare + '\nprintf injected', prepare.replace('a'*32, 'A'*32),
+                       apply.replace('d'*64, 'short'), apply.replace(request, '../../request.json'),
+                       prepare.replace("'" + source + "'", "'relative/source'"),
+                       prepare.replace("'3342'", "'3342' --apply"),
+                       apply + ' --request-sha256 ' + 'e'*64):
+            with self.subTest(recipe=recipe):
+                result = self.dispatch(recipe, marker=marker)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
+    def test_frontend_completion_dispatch_precedes_storage_resolver(self):
+        source = globals().get('WRAPPER') or (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text()
+        dispatch = source.index('  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)')
+        self.assertLess(dispatch, source.rindex('"${resolver}" run'))
 
 
 if __name__ == '__main__':

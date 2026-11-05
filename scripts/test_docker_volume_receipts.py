@@ -1071,12 +1071,17 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         backend={'Id':'b'*64,'State':{'StartedAt':'same','Running':True,'Health':{'Status':'healthy'}}}
         frontend={'Id':'f'*64,'Image':'image','State':{'StartedAt':'new','Running':True,'Health':{'Status':'healthy'}}}
         frontend['HostConfig']={'Memory':6*1024**3 if fault=='memory-drift' else 8*1024**3}
-        document={'services':{'backend':{'same':'declaration'},'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944'}},
+        document={'services':{'backend':{'same':'declaration'},'frontend':{'environment':{'FULLMAG_FRONTEND_HOST_PORT':'3202'},'mem_limit':'6442450944','volumes':[]}},
                   'volumes':{'frontend-build':{'name':'old'}}}
         old={'backend':backend,'frontend':{**frontend,'Id':'o'*64,'HostConfig':{'Memory':6*1024**3}}}
         args=types.SimpleNamespace(port=3202,attempt='a'*32,config_sha256='c'*64)
         previous={'inputs':{'attempt':'old','config_sha256':'old'},'state_root':'/state','backend_volumes':{'same':'cache'},'frontend_volume':'old'}
         seed={'files':[],'source_commit':'commit'}
+        carry_documents={
+            'backend-cache.json':{'retained':'cache'},
+            'group-ledger.json':{'retained':'group-ledger'},
+            'cache-maintenance-compose.json':{'retained':'cache-maintenance'},
+        }
         source={'commit':'commit','source_digest':'digest','snapshot':'snapshot'}
         stopped=[]
         def stop(*argv,**kwargs):
@@ -1116,14 +1121,18 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
              mock.patch.object(frontend_inputs,'describe',return_value=seed), \
              mock.patch.object(frontend_inputs,'frontend_view',return_value={'files':[]}), \
              mock.patch.object(dev,'_frontend',return_value=(seed,'new-volume')) as seeded, \
-             mock.patch.object(dev,'compose_capture',side_effect=compose) as composed, \
-             mock.patch.object(dev,'_validate_retained_service'):
+             mock.patch.multiple(dev, _frontend_refresh_carry_documents=mock.DEFAULT,
+                                 _validate_retained_service=mock.DEFAULT) as dev_patches, \
+             mock.patch.object(dev,'compose_capture',side_effect=compose) as composed:
+            dev_patches['_frontend_refresh_carry_documents'].return_value=carry_documents
+            if fault=='carry-preflight':
+                dev_patches['_frontend_refresh_carry_documents'].side_effect=BuildControlError('carry preflight rejected')
             try:
                 dev._refresh_frontend_services(control,args,'development/attempts/old',previous,document,
                     Path('/selected'),{'runtime_root':'/runtime'},old,{'backend':'b'*64,'frontend':'o'*64},'image',{})
             except (BuildControlError,codegen.CodegenError,OSError):
                 if fault is None:raise
-        if fault=='source-mismatch' or fault=='unknown-source':stopped_call.assert_not_called()
+        if fault in ('source-mismatch','unknown-source','carry-preflight'):stopped_call.assert_not_called()
         else:stopped_call.assert_called_once_with('stop','--time','60','o'*64,timeout=90)
         return writes,seeded,composed,logger
 
@@ -1135,8 +1144,19 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         self.assertEqual(terminal['frontend_container'],'f'*64)
         self.assertFalse(terminal['native_build_executed'])
         self.assertNotIn('config_sha256',terminal['inputs'])
+        copied={Path(path).name:value for path,value in writes.items()
+                if Path(path).name in ('backend-cache.json','group-ledger.json','cache-maintenance-compose.json')}
+        self.assertEqual(copied,{
+            'backend-cache.json':{'retained':'cache'},
+            'group-ledger.json':{'retained':'group-ledger'},
+            'cache-maintenance-compose.json':{'retained':'cache-maintenance'},
+        })
+        self.assertFalse(any(Path(path).name in ('host-ledger.json','ledger-maintenance-compose.json')
+                             for path in writes))
         from docker_volume_activate import _linked_runtime_terminals
-        self.assertEqual(_linked_runtime_terminals(mock.Mock(),terminal['attempt'],terminal,
+        retained_control = mock.Mock()
+        retained_control.read.return_value = None  # No later resume/iteration exists.
+        self.assertEqual(_linked_runtime_terminals(retained_control,terminal['attempt'],terminal,
             source_root='/selected',image='image',config_sha256=terminal['config_sha256']),[terminal])
         lifecycle=composed.call_args_list[0]
         self.assertEqual(lifecycle.args[1:],('up','--detach','--no-build','--pull','never','--no-deps','--force-recreate','frontend'))
@@ -1165,6 +1185,11 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         seeded.assert_not_called();composed.assert_not_called()
         self.assertEqual(next(value for path,value in writes.items() if path.endswith('/terminal.json'))['state'],'failed-confirmed')
 
+    def test_carry_preflight_failure_refuses_before_operation_or_frontend_stop(self):
+        writes,seeded,composed,logger=self.run_refresh('carry-preflight')
+        self.assertEqual(writes,{})
+        seeded.assert_not_called();composed.assert_not_called();logger.wait.assert_not_called()
+
     def test_unknown_probe_or_late_proof_failure_retains_real_control_lease(self):
         for fault in ('unknown-source','unknown-stop','post-quiesce-health','last-proof','certificate-drift','owner-drift','memory-drift'):
             with self.subTest(fault=fault):
@@ -1173,6 +1198,280 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
                 receipt=next(value for path,value in writes.items() if path.endswith('/receipt.json'))
                 self.assertEqual(receipt['state'],'outcome-unknown-resources-retained')
                 logger.wait.assert_not_called()
+
+
+class FrontendRefreshCarryDocumentsTests(IsolatedReceiptTests):
+    def group_fixture(self, *, missing=(), corrupt=None):
+        import copy
+        import docker_group_ledger as group_ledger
+        import docker_volume_dev as dev
+
+        project = 'selected-group'
+        image = 'sha256:' + 'f' * 64
+        volume = group_ledger.VOLUME_PREFIX + 'a' * 16
+        profile = group_ledger.profile('d' * 64, project, volume, image)
+        document = {
+            'name': project,
+            'services': {'backend': {'image': image, 'environment': dict(profile['environment']),
+                                     'volumes': copy.deepcopy(profile['backend']['volumes'])}},
+            'volumes': {group_ledger.COMPOSE_VOLUME: {'name': volume, 'external': True}},
+        }
+        record = {'schema': 'fullmag.docker-group-ledger.v1', 'profile': group_ledger.PROFILE,
+                  'daemon_id_sha256': 'd' * 64, 'compose_project': project,
+                  'volume_name': volume,
+                  'host_id': profile['environment'][group_ledger.HOST_ID_ENV]}
+        if corrupt == 'environment':
+            document['services']['backend']['environment'][group_ledger.HOST_ID_ENV] = 'wrong'
+        elif corrupt == 'profile-marker':
+            document['services']['backend']['environment']['FULLMAG_HOST_LEDGER_PROFILE'] = 'host-ledger-v1'
+        elif corrupt == 'record':
+            record['volume_name'] = group_ledger.VOLUME_PREFIX + 'b' * 16
+        elif corrupt == 'record-profile':
+            record['profile'] = 'host-ledger-v1'
+        elif corrupt == 'record-project':
+            record['compose_project'] = 'another-group'
+        artifacts = {
+            'backend-cache.json': {'cache': 'retained'},
+            'group-ledger.json': record,
+            'cache-maintenance-compose.json': {'services': {'cache-maintenance': {}}},
+            'group-ledger-attestation.json': {'schema': group_ledger.ATTESTATION_SCHEMA},
+        }
+        if corrupt == 'malformed-cache-maintenance':
+            artifacts['cache-maintenance-compose.json'] = ['malformed']
+        for name in missing:
+            artifacts.pop(name, None)
+        previous_root = 'development/attempts/prior'
+        reads = []
+
+        def read(path, *, optional=False):
+            reads.append((path, optional))
+            name = path.removeprefix(previous_root + '/')
+            if name not in artifacts:
+                if optional:
+                    return None
+                raise dev.BuildControlError('missing retained document: ' + name)
+            return copy.deepcopy(artifacts[name])
+
+        control = mock.Mock(project=project)
+        control.read.side_effect = read
+        return dev, control, previous_root, document, image, reads
+
+    def legacy_fixture(self):
+        import copy
+        import docker_volume_dev as dev
+
+        image = 'sha256:' + 'f' * 64
+        document = {
+            'name': 'selected-group',
+            'services': {'backend': {'image': image, 'environment': {
+                'FULLMAG_HOST_LEDGER_PROFILE': 'host-ledger-v1',
+                'FULLMAG_HOST_LEDGER_MOUNT_ROOT': '/host/ledger',
+                'FULLMAG_HOST_LEDGER_PROJECT_ID': 'project-id',
+                'FULLMAG_HOST_LEDGER_BACKING_IMAGE': 'backing-image',
+            }}},
+            'volumes': {},
+        }
+        artifacts = {
+            'backend-cache.json': {'cache': 'retained'},
+            'host-ledger.json': {'schema': 'legacy-host-ledger'},
+            'ledger-maintenance-compose.json': {'services': {'host-ledger-maintenance': {}}},
+        }
+        previous_root = 'development/attempts/prior'
+        reads = []
+
+        def read(path, *, optional=False):
+            reads.append((path, optional))
+            name = path.removeprefix(previous_root + '/')
+            if name not in artifacts:
+                if optional:
+                    return None
+                raise dev.BuildControlError('missing retained document: ' + name)
+            return copy.deepcopy(artifacts[name])
+
+        control = mock.Mock(project='selected-group')
+        control.read.side_effect = read
+        return dev, control, previous_root, document, image, reads
+
+    def test_group_profile_carries_group_artifacts_without_legacy_requirements(self):
+        dev, control, previous_root, document, image, reads = self.group_fixture()
+
+        documents = dev._frontend_refresh_carry_documents(control, previous_root, document, image)
+
+        self.assertEqual(set(documents), {
+            'backend-cache.json', 'group-ledger.json', 'cache-maintenance-compose.json',
+            'group-ledger-attestation.json',
+        })
+        self.assertNotIn('host-ledger.json', documents)
+        self.assertNotIn('ledger-maintenance-compose.json', documents)
+        self.assertFalse(any(path.endswith(('/host-ledger.json', '/ledger-maintenance-compose.json'))
+                             for path, _ in reads))
+        with self.assertRaises(TypeError):
+            documents['host-ledger.json'] = {}
+
+    def test_legacy_profile_keeps_the_host_ledger_artifact_names(self):
+        dev, control, previous_root, document, image, reads = self.legacy_fixture()
+
+        documents = dev._frontend_refresh_carry_documents(control, previous_root, document, image)
+
+        self.assertEqual(set(documents), {
+            'backend-cache.json', 'host-ledger.json', 'ledger-maintenance-compose.json',
+        })
+        self.assertEqual(documents['host-ledger.json']['schema'], 'legacy-host-ledger')
+        self.assertFalse(any(path.endswith(('/group-ledger.json', '/cache-maintenance-compose.json'))
+                             for path, _ in reads))
+
+    def test_missing_or_malformed_group_carry_document_fails_preflight(self):
+        for kwargs in (
+            {'missing': ('cache-maintenance-compose.json',)},
+            {'corrupt': 'malformed-cache-maintenance'},
+        ):
+            with self.subTest(kwargs=kwargs):
+                dev, control, previous_root, document, image, reads = self.group_fixture(**kwargs)
+                with self.assertRaises(dev.BuildControlError):
+                    dev._frontend_refresh_carry_documents(control, previous_root, document, image)
+                self.assertFalse(any(path.endswith(('/host-ledger.json', '/ledger-maintenance-compose.json'))
+                                     for path, _ in reads))
+
+    def test_group_environment_or_record_mismatch_never_falls_back_to_legacy(self):
+        for corrupt in ('environment', 'profile-marker', 'record', 'record-profile', 'record-project'):
+            with self.subTest(corrupt=corrupt):
+                dev, control, previous_root, document, image, reads = self.group_fixture(corrupt=corrupt)
+                with self.assertRaises(dev.BuildControlError):
+                    dev._frontend_refresh_carry_documents(control, previous_root, document, image)
+                self.assertFalse(any(path.endswith(('/host-ledger.json', '/ledger-maintenance-compose.json'))
+                                     for path, _ in reads))
+
+
+class FrontendDaemonBindRepinTests(IsolatedReceiptTests):
+    def fixture(self):
+        import copy
+
+        alias = '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/' + 'a' * 64
+        source_target = '/opt/fullmag/source'
+        app_target = '/state/development/workspace/apps/control-room/app'
+        document = {
+            'services': {
+                'backend': {
+                    'volumes': [{'type': 'bind', 'source': '/selected', 'target': source_target,
+                                 'read_only': True}],
+                    'x-fullmag-daemon-binds': {source_target: alias},
+                },
+                'frontend': {
+                    'volumes': [
+                        {'type': 'bind', 'source': '/selected', 'target': source_target, 'read_only': True},
+                        {'type': 'bind', 'source': '/selected/apps/control-room/app', 'target': app_target,
+                         'read_only': True},
+                    ],
+                    'x-fullmag-daemon-binds': {
+                        source_target: '/home/operator/fullmag',
+                        app_target: '/home/operator/fullmag/apps/control-room/app',
+                    },
+                    'environment': {'FULLMAG_SOURCE_ROOT': '/selected'},
+                    'tmpfs': ['/tmp:rw,nosuid,nodev,size=512m'],
+                },
+            },
+            'volumes': {},
+        }
+        actual = {
+            'backend': {'Mounts': [{'Destination': source_target, 'Source': alias,
+                                    'Type': 'bind', 'RW': False}]},
+            'frontend': {'Mounts': [
+                {'Destination': source_target, 'Source': alias, 'Type': 'bind', 'RW': False},
+                {'Destination': app_target, 'Source': alias + '/apps/control-room/app',
+                 'Type': 'bind', 'RW': False},
+            ]},
+        }
+
+        def derive(original, services, selected):
+            derived = copy.deepcopy(original)
+            witness = {}
+            for mount in original['services']['frontend']['volumes']:
+                target = mount['target']
+                observed = next(item for item in services['frontend']['Mounts']
+                                if item['Destination'] == target)
+                if observed['Source'] != original['services']['frontend']['x-fullmag-daemon-binds'].get(target):
+                    derived['services']['frontend']['x-fullmag-daemon-binds'][target] = observed['Source']
+                    witness[target] = {'daemon_source': observed['Source'], 'files': [{'sha256': 'b' * 64}]}
+            return derived, witness
+
+        return document, actual, derive, source_target, app_target
+
+    def test_drift_uses_independent_witness_and_changes_only_frontend_pins(self):
+        import copy
+        import types
+        import docker_volume_dev as dev
+
+        document, actual, derive, source_target, app_target = self.fixture()
+        original = copy.deepcopy(document)
+        reconcile = types.SimpleNamespace(derive_document=mock.Mock(side_effect=derive))
+
+        derived, witness = dev._repin_frontend_daemon_binds(document, actual, '/selected', reconcile)
+
+        reconcile.derive_document.assert_called_once_with(document, actual, Path('/selected'))
+        self.assertEqual(document, original)
+        self.assertEqual(derived['services']['backend'], document['services']['backend'])
+        self.assertEqual(derived['services']['frontend']['volumes'], document['services']['frontend']['volumes'])
+        self.assertEqual(derived['services']['frontend']['environment'], document['services']['frontend']['environment'])
+        self.assertEqual(derived['services']['frontend']['x-fullmag-daemon-binds'], {
+            source_target: actual['frontend']['Mounts'][0]['Source'],
+            app_target: actual['frontend']['Mounts'][1]['Source'],
+        })
+        self.assertEqual(set(witness), {source_target, app_target})
+
+    def test_matching_pins_do_not_trigger_repair_or_change_compose(self):
+        import docker_volume_dev as dev
+
+        document, actual, _, _, _ = self.fixture()
+        document['services']['frontend']['x-fullmag-daemon-binds'] = {
+            mount['Destination']: mount['Source'] for mount in actual['frontend']['Mounts']
+        }
+        reconcile = mock.Mock()
+
+        derived, witness = dev._repin_frontend_daemon_binds(document, actual, '/selected', reconcile)
+
+        self.assertIs(derived, document)
+        self.assertIsNone(witness)
+        reconcile.derive_document.assert_not_called()
+
+    def test_subdirectory_drift_revalidates_matching_source_root_anchor(self):
+        import copy
+        import types
+        import docker_volume_dev as dev
+
+        document, actual, derive, source_target, app_target = self.fixture()
+        document['services']['frontend']['x-fullmag-daemon-binds'][source_target] = actual['frontend']['Mounts'][0]['Source']
+        original = copy.deepcopy(document)
+        reconcile = types.SimpleNamespace(derive_document=mock.Mock(side_effect=derive))
+
+        derived, witness = dev._repin_frontend_daemon_binds(document, actual, '/selected', reconcile)
+
+        reconcile.derive_document.assert_called_once()
+        proof_document, proof_actual, proof_source = reconcile.derive_document.call_args.args
+        self.assertEqual(proof_actual, actual)
+        self.assertEqual(proof_source, Path('/selected'))
+        self.assertNotIn(source_target,
+                         proof_document['services']['frontend']['x-fullmag-daemon-binds'])
+        self.assertEqual(document, original)
+        self.assertEqual(derived['services']['frontend']['x-fullmag-daemon-binds'][source_target],
+                         actual['frontend']['Mounts'][0]['Source'])
+        self.assertEqual(derived['services']['frontend']['x-fullmag-daemon-binds'][app_target],
+                         actual['frontend']['Mounts'][1]['Source'])
+        self.assertEqual(set(witness), {source_target, app_target})
+
+    def test_reconciler_cannot_change_backend_or_unrelated_frontend_configuration(self):
+        import copy
+        import docker_volume_dev as dev
+
+        document, actual, derive, _, _ = self.fixture()
+
+        def mutate_backend(original, services, selected):
+            derived, witness = derive(original, services, selected)
+            derived['services']['backend']['x-fullmag-daemon-binds']['/other'] = '/foreign'
+            return derived, witness
+
+        reconcile = mock.Mock(derive_document=mutate_backend)
+        with self.assertRaisesRegex(dev.BuildControlError, 'changed the retained backend'):
+            dev._repin_frontend_daemon_binds(copy.deepcopy(document), actual, '/selected', reconcile)
 
 
 class WorkerCgroupNamespaceTests(unittest.TestCase):

@@ -7,7 +7,7 @@
 //! submit routes.  This module never starts a solver and never allocates a
 //! host resource.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1495,6 +1495,28 @@ fn apply_resolved_docker_output_storage_binding(
     Ok(())
 }
 
+fn select_live_preparation_scene(
+    scene: &fullmag_authoring::SceneDocument,
+    allow_legacy_profile: bool,
+) -> Result<
+    (fullmag_authoring::SceneDocument, fullmag_ir::ExecutionProfileIR),
+    ApiError,
+> {
+    let profile = match scene.study.execution_profile.as_ref() {
+        Some(profile) => profile.clone(),
+        None if allow_legacy_profile => fullmag_application::legacy_live_execution_profile(),
+        None => {
+            return Err(ApiError::unprocessable_with_code(
+                "accepted_execution_profile_missing",
+                "accepted live execution requires a published execution profile",
+            ));
+        }
+    };
+    // The profile belongs to the StudyPlan defaults. Injecting it into a legacy
+    // Scene before Python capture suppresses its authored execution selectors.
+    Ok((scene.clone(), profile))
+}
+
 /// Expensive preparation with no accepted durable-state publication. It may
 /// materialize bounded geometry/cache/staging assets in the workspace and reads
 /// immutable profile data; RunIntent/CAS and run catalog publication happen in
@@ -1513,6 +1535,13 @@ fn prepare_live_accepted(
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
     solver_profile: Option<fullmag_runner::SolverProfileConfig>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
+    // Script-backed scenes retain relative native mesh references after the
+    // startup request. Resolve them with the same original asset parent.
+    let asset_root = if scene.study.fem_domain_mesh.is_some() {
+        asset_root.or_else(|| source_script_path.as_deref().and_then(Path::parent))
+    } else {
+        asset_root
+    };
     let queue_tasks = match &submission {
         LiveAcceptedSubmission::Command { .. } => true,
         LiveAcceptedSubmission::Startup { auto_run, .. } => *auto_run,
@@ -1528,32 +1557,11 @@ fn prepare_live_accepted(
         .validate()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
-    // Keep the current workspace immutable. Docker legacy scenes receive an
-    // effective clone containing the canonical default profile; the authored
-    // layer is added only after the selected StudyPlan step is known, so typed
-    // resources cannot be borrowed from a different stage.
-    let mut effective_scene = scene.clone();
-    let needs_legacy_profile_migration = effective_scene.study.execution_profile.is_none();
-    if needs_legacy_profile_migration {
-        if !docker_api_only_runtime() {
-            return Err(ApiError::unprocessable_with_code(
-                "accepted_execution_profile_missing",
-                "accepted live execution requires a published execution profile",
-            ));
-        }
-        let profile = fullmag_application::legacy_live_execution_profile();
-        effective_scene.study.execution_profile = Some(profile);
-    }
-    let profile = effective_scene
-        .study
-        .execution_profile
-        .clone()
-        .ok_or_else(|| {
-            ApiError::unprocessable_with_code(
-                "accepted_execution_profile_missing",
-                "accepted live execution requires a published execution profile",
-            )
-        })?;
+    // Migrate each legacy step only after Python has captured its authored
+    // selectors. Keep the selected default profile outside that Scene capture.
+    let needs_legacy_profile_migration = scene.study.execution_profile.is_none();
+    let (effective_scene, profile) =
+        select_live_preparation_scene(scene, docker_api_only_runtime())?;
 
     let (command_id, request_idempotency_key, command_value, startup_source_sha256) =
         match &submission {
@@ -1918,6 +1926,7 @@ fn prepare_live_accepted(
     let entries = catalog.entries();
     let requested_gpu = requested_execution.device.eq_ignore_ascii_case("gpu");
     let mut run_budget = None;
+    let mut deferred_fdm_gpu_bb = BTreeSet::new();
     for entry in entries {
         let profile_requests_gpu = entry
             .execution_materialization()
@@ -1938,13 +1947,12 @@ fn prepare_live_accepted(
         }
         let gpu_requested = requested_gpu || profile_requests_gpu;
         if gpu_requested && !bounded_gpu_scope(entry.problem()) {
-            return Err(ApiError::unprocessable_with_code(
-                "accepted_gpu_scope_unsupported",
-                format!(
-                    "accepted GPU execution for study step `{}` is limited to TimeEvolution, LLG-overdamped Relaxation, and explicit FEM ProjectedGradientBb",
-                    entry.step_id()
-                ),
-            ));
+            if explicit_fdm_projected_bb(entry.problem()) {
+                // Geometry and operator eligibility belong to the lowered plan.
+                deferred_fdm_gpu_bb.insert(entry.step_id().to_owned());
+            } else {
+                return Err(accepted_gpu_scope_error(entry.step_id()));
+            }
         }
         let budget = minimum_resource_budget(
             entry.problem(),
@@ -1989,7 +1997,18 @@ fn prepare_live_accepted(
                 ));
             }
         }
+        if deferred_fdm_gpu_bb.remove(&execution_step.step_id) {
+            let problem = entries.iter().find(|entry| entry.step_id() == execution_step.step_id)
+                .map(|entry| entry.problem());
+            if !problem.is_some_and(|problem| bounded_fdm_gpu_bb_plan(problem, execution_plan)) {
+                return Err(accepted_gpu_scope_error(&execution_step.step_id));
+            }
+        }
         step_ids.push(execution_step.step_id.clone());
+    }
+    if let Some(step_id) = deferred_fdm_gpu_bb.first() {
+        // A skipped or unresolved deferred step must not publish RunIntent/CAS.
+        return Err(accepted_gpu_scope_error(step_id));
     }
     if step_ids.is_empty() {
         return Err(ApiError::unprocessable_with_code(
@@ -2386,6 +2405,44 @@ fn apply_live_accepted_observation_output_defaults(study: &mut fullmag_authoring
     }
 }
 
+fn accepted_gpu_scope_error(step_id: &str) -> ApiError {
+    ApiError::unprocessable_with_code(
+        "accepted_gpu_scope_unsupported",
+        format!(
+            "accepted GPU execution for study step `{step_id}` requires TimeEvolution, LLG-overdamped Relaxation, explicit FEM ProjectedGradientBb, or explicit FDM ProjectedGradientBb lowered to the qualified native CUDA multilayer scope",
+        ),
+    )
+}
+
+fn explicit_fdm_projected_bb(problem: &fullmag_ir::ProblemIR) -> bool {
+    problem.backend_policy.requested_backend == fullmag_ir::BackendTarget::Fdm
+        && matches!(&problem.study, fullmag_ir::StudyIR::Relaxation {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+        })
+}
+
+fn bounded_fdm_gpu_bb_plan(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> bool {
+    let device = problem.problem_meta.runtime_metadata.get("runtime_selection")
+        .and_then(|selection| selection.get("device"))
+        .and_then(Value::as_str);
+    let explicit_gpu = device.is_some_and(|device| {
+        matches!(device, "gpu" | "cuda")
+            || device.strip_prefix("cuda:").is_some_and(|index| index.parse::<u32>().is_ok())
+    });
+    explicit_fdm_projected_bb(problem)
+        && explicit_gpu
+        && problem.backend_policy.execution_precision == fullmag_ir::ExecutionPrecision::Double
+        && problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && plan.common.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && plan.common.requested_backend == fullmag_ir::BackendTarget::Fdm
+        && plan.common.resolved_backend == fullmag_ir::BackendTarget::Fdm
+        && matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer)
+            if fullmag_plan::fdm_multilayer_cuda_projected_bb_error(multilayer).is_none())
+}
+
 fn bounded_gpu_scope(problem: &fullmag_ir::ProblemIR) -> bool {
     match &problem.study {
         fullmag_ir::StudyIR::TimeEvolution { .. }
@@ -2406,8 +2463,8 @@ fn bounded_gpu_scope(problem: &fullmag_ir::ProblemIR) -> bool {
 
 /// Accepted GPU direct-minimizer scope is deliberately narrower than the
 /// runner support matrix: the first durable Workspace extension is the
-/// explicit FEM native CUDA PG-BB lane.  FDM PG-BB and other direct minimizers
-/// stay fail-closed until their own accepted receipt contract exists.
+/// explicit FEM native CUDA PG-BB lane. Explicit FDM PG-BB is deferred to
+/// the separate lowered multilayer-plan gate; other direct minimizers stay closed.
 fn bounded_gpu_relaxation_algorithm(
     backend: fullmag_ir::BackendTarget,
     algorithm: fullmag_ir::RelaxationAlgorithmIR,
@@ -2645,7 +2702,7 @@ mod tests {
         accepted_frontier_preparation_is_ready, apply_docker_output_storage_binding,
         apply_live_accepted_observation_output_defaults,
         apply_resolved_docker_output_storage_binding, bounded_gpu_relaxation_algorithm,
-        bounded_recovery_error,
+        bounded_recovery_error, bounded_fdm_gpu_bb_plan, explicit_fdm_projected_bb,
         request_accepted_stop_for_catalog, validate_scene_revision_and_content,
         AcceptedLiveStudyExecution, AcceptedLiveStudyPreparationError, MAX_RECOVERY_ERROR_CHARS,
     };
@@ -2669,6 +2726,136 @@ mod tests {
                 "requested_device": "cpu", "requested_precision": "double",
                 "fdm": {"default_cell": [10e-9, 10e-9, 10e-9]}}
         })).unwrap()
+    }
+
+    #[test]
+    fn legacy_preparation_capture_preserves_cpu_threads_through_python_and_binding() {
+        let root = crate::script::repo_root();
+        for raw_threads in [
+            None,
+            Some(serde_json::Value::Null),
+            Some(serde_json::json!(1)),
+            Some(serde_json::json!(2)),
+            Some(serde_json::json!(6)),
+        ] {
+            let threads = raw_threads
+                .as_ref()
+                .and_then(serde_json::Value::as_u64)
+                .map(|threads| u32::try_from(threads).unwrap());
+            let mut document = serde_json::to_value(ui_source_scene()).unwrap();
+            if let Some(value) = raw_threads {
+                document["study"]["requested_cpu_threads"] = value;
+            } else {
+                document["study"].as_object_mut().unwrap().remove("requested_cpu_threads");
+            }
+            let mut authored: fullmag_authoring::SceneDocument =
+                serde_json::from_value(document).unwrap();
+            authored.study.stages = serde_json::from_value(serde_json::json!([{
+                "kind": "run", "entrypoint_kind": "flat_run",
+                "until_seconds": 1e-13
+            }]))
+            .unwrap();
+            let (capture_scene, profile) =
+                super::select_live_preparation_scene(&authored, true).unwrap();
+            let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+                model: fullmag_authoring::StudyModelReference {
+                    model_id: "model:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                solver_config: fullmag_authoring::StudySolverConfigReference {
+                    preset_id: "solver:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                discretization: fullmag_authoring::StudyDiscretizationReference {
+                    recipe_id: "mesh:legacy-thread-capture".into(),
+                    version: "1".into(),
+                },
+                execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                    profile_id: profile.profile_id.clone(),
+                    version: profile.version.clone(),
+                },
+            };
+            let study = fullmag_authoring::scene_document_to_study_plan(
+                &capture_scene,
+                "study:legacy-thread-capture",
+                capture_scene.revision,
+                &defaults,
+            )
+            .unwrap();
+            let requested = fullmag_application::RequestedExecution {
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                mode: "strict".into(),
+                minimum_resources: None,
+            };
+            let workspace = tempfile::tempdir().unwrap();
+            let inputs = crate::script::scene_document_to_study_execution_inputs(
+                &root,
+                workspace.path(),
+                &capture_scene,
+                &requested,
+                &study,
+            )
+            .expect("capture actual Python Scene-to-IR preparation inputs");
+            assert_eq!(inputs.len(), 1);
+            for input in inputs {
+                assert_eq!(
+                    input.problem.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"]
+                        .as_u64(),
+                    threads.map(u64::from),
+                    "preparation must retain the authored count before migration"
+                );
+                let location = format!("live.scene.study.legacy_execution.{}", input.step_id);
+                let migration = fullmag_application::migrate_legacy_live_execution(
+                    &input.problem,
+                    &requested,
+                    fullmag_ir::ExecutionOriginKindIR::Study,
+                    &location,
+                )
+                .unwrap();
+                assert_eq!(migration.profile, profile);
+                let bound = fullmag_application::bind_materialized_execution(
+                    &input.problem,
+                    &migration.materialized,
+                )
+                .unwrap();
+                let worker_resources = fullmag_ir::ComputeResourcesIR::from_problem(&bound)
+                    .unwrap()
+                    .expect("bound worker resources");
+                assert_eq!(worker_resources.cpu.threads.count(), threads);
+                assert_eq!(
+                    bound.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"]
+                        .as_u64(),
+                    threads.map(u64::from)
+                );
+                let origin = &migration.materialized.origins["resources.cpu.threads"];
+                if threads.is_some() {
+                    assert_eq!(origin.kind, fullmag_ir::ExecutionOriginKindIR::Study);
+                    assert_eq!(origin.location, location);
+                } else {
+                    assert_eq!(origin.kind, fullmag_ir::ExecutionOriginKindIR::ProductDefault);
+                }
+            }
+            assert!(authored.study.execution_profile.is_none());
+        }
+    }
+
+    #[test]
+    fn preparation_profile_selection_preserves_authored_profiles_and_missing_profile_guard() {
+        let legacy = ui_source_scene();
+        let error = super::select_live_preparation_scene(&legacy, false).unwrap_err();
+        assert!(error.message.contains("published execution profile"));
+        let mut authored = legacy;
+        let mut profile = fullmag_application::legacy_live_execution_profile();
+        profile.profile_id = "exec:authored-thread-capture".into();
+        authored.study.execution_profile = Some(profile);
+        for allow_legacy in [false, true] {
+            let (capture, profile) =
+                super::select_live_preparation_scene(&authored, allow_legacy).unwrap();
+            assert_eq!(capture, authored);
+            assert_eq!(Some(profile), authored.study.execution_profile);
+        }
     }
 
     #[test]
@@ -2977,6 +3164,99 @@ mod tests {
             BackendTarget::Fem,
             RelaxationAlgorithmIR::TangentPlaneImplicit
         ));
+    }
+
+    fn accepted_multilayer_bb_fixture() -> (fullmag_ir::ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        use fullmag_ir::*;
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Double;
+        problem.validation_profile.execution_mode = ExecutionMode::Strict;
+        let mut plan = fullmag_plan::plan(&problem).expect("bootstrap FDM plan");
+        let stop: RelaxStopIR = serde_json::from_value(serde_json::json!({"max_steps": 10})).unwrap();
+        problem.study = StudyIR::Relaxation {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, dynamics: None,
+            stop: stop.clone(), sampling: SamplingIR { outputs: vec![], table_autosave: None, stage_autosave: None },
+        };
+        problem.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device": "gpu"}));
+        plan.common.requested_backend = BackendTarget::Fdm;
+        plan.common.resolved_backend = BackendTarget::Fdm;
+        plan.common.execution_mode = ExecutionMode::Strict;
+        let layer = FdmLayerPlanIR {
+            rotated_interfacial_dmi: None, magnet_name: "magnet".into(), layer_id: "layer:magnet".into(),
+            object_id: "magnet".into(), native_grid: [2, 2, 1], native_cell_size: [1e-9; 3],
+            native_origin: [0.0; 3], native_active_mask: None, native_region_mask: None, native_region_legend: None,
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4], material: FdmMaterialIR::default(),
+            convolution_grid: [2, 2, 1], convolution_cell_size: [1e-9; 3], convolution_origin: [0.0; 3],
+            transfer_kind: "identity".into(),
+        };
+        plan.backend_plan = BackendPlanIR::FdmMultilayer(FdmMultilayerPlanIR {
+            mode: "three_d".into(), common_cells: [2, 2, 1], requested_common_cell_size: None,
+            grid_certificate: None, layers: vec![layer], frozen_spins: None,
+            enable_exchange: true, enable_demag: true, fft: None, external_field: None,
+            interfacial_dmi: None, rotated_interfacial_dmi: None, bulk_dmi: None,
+            gyromagnetic_ratio: 2.211e5, precision: ExecutionPrecision::Double,
+            precision_policy: FdmPrecisionPolicyIR::default(), exchange_bc: ExchangeBoundaryCondition::Neumann,
+            periodicity: None, resolved_periodic_images: None, integrator: IntegratorChoice::Rk23,
+            fixed_timestep: None, field_refresh: None,
+            relaxation: Some(RelaxationControlIR { algorithm: RelaxationAlgorithmIR::ProjectedGradientBb, stop }),
+            planner_summary: FdmMultilayerSummaryIR {
+                requested_strategy: "multilayer_convolution".into(), selected_strategy: "multilayer_convolution".into(),
+                requested_mode: "three_d".into(), resolved_mode: "three_d".into(), eligibility: "eligible".into(),
+                estimated_pair_kernels: 1, estimated_unique_kernels: 1, estimated_kernel_bytes: 0, warnings: vec![],
+            },
+        });
+        (problem, plan)
+    }
+
+    #[test]
+    fn accepted_fdm_bb_requires_qualified_lowered_native_gpu_multilayer() {
+        let (problem, plan) = accepted_multilayer_bb_fixture();
+        assert!(explicit_fdm_projected_bb(&problem));
+        assert!(bounded_fdm_gpu_bb_plan(&problem, &plan));
+        for device in ["gpu", "cuda", "cuda:0"] {
+            let mut problem = problem.clone();
+            problem.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device": device}));
+            assert!(bounded_fdm_gpu_bb_plan(&problem, &plan));
+        }
+        let mut single_grid = plan.clone();
+        single_grid.backend_plan = fullmag_plan::plan(&fullmag_ir::ProblemIR::bootstrap_example()).unwrap().backend_plan;
+        assert!(!bounded_fdm_gpu_bb_plan(&problem, &single_grid));
+        for case in 0..3 {
+            let mut invalid = plan.clone();
+            let fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) = &mut invalid.backend_plan else { unreachable!() };
+            match case {
+                0 => multilayer.relaxation.as_mut().unwrap().algorithm = fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+                1 => multilayer.precision = fullmag_ir::ExecutionPrecision::Single,
+                _ => multilayer.layers[0].native_cell_size[0] *= 0.5,
+            }
+            assert!(!bounded_fdm_gpu_bb_plan(&problem, &invalid), "case {case}");
+        }
+    }
+
+    #[test]
+    fn accepted_fdm_bb_rejects_automatic_cpu_backend_and_non_bb_intent() {
+        let (problem, plan) = accepted_multilayer_bb_fixture();
+        for device in ["auto", "cpu", "cuda:", "cuda:invalid"] {
+            let mut invalid = problem.clone();
+            invalid.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device": device}));
+            assert!(!bounded_fdm_gpu_bb_plan(&invalid, &plan));
+        }
+        let mut missing = problem.clone(); missing.problem_meta.runtime_metadata.remove("runtime_selection");
+        assert!(!bounded_fdm_gpu_bb_plan(&missing, &plan));
+        for backend in [fullmag_ir::BackendTarget::Auto, fullmag_ir::BackendTarget::Fem] {
+            let mut invalid = problem.clone(); invalid.backend_policy.requested_backend = backend;
+            assert!(!explicit_fdm_projected_bb(&invalid));
+            assert!(!bounded_fdm_gpu_bb_plan(&invalid, &plan));
+            let mut invalid_plan = plan.clone(); invalid_plan.common.resolved_backend = backend;
+            assert!(!bounded_fdm_gpu_bb_plan(&problem, &invalid_plan));
+        }
+        let mut invalid = problem.clone();
+        if let fullmag_ir::StudyIR::Relaxation { algorithm, .. } = &mut invalid.study {
+            *algorithm = fullmag_ir::RelaxationAlgorithmIR::NonlinearCg;
+        }
+        assert!(!explicit_fdm_projected_bb(&invalid));
+        assert!(!bounded_fdm_gpu_bb_plan(&invalid, &plan));
     }
 
     fn queued_task(task_id: &str) -> fullmag_session::FmsTaskCatalogEntry {

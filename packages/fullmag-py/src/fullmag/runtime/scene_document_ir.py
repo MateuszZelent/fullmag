@@ -17,8 +17,10 @@ from fullmag.runtime.output_storage_lowering import (
 )
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import SelectionDefinition
+from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
+from fullmag.runtime.scene_document import validate_fem_domain_mesh_reference
 from fullmag.runtime.script_builder import render_scene_document_as_script
 
 _SCENE_DOCUMENT_FIELDS = frozenset(
@@ -68,15 +70,18 @@ _STUDY_FIELDS = frozenset(
         "execution_layers",
         "compute_resources",
         "fem_demag_solver_policy",
+        "fem_demag_accuracy_contract",
         "exchange_enabled",
         "demag_enabled",
         "demag_realization",
         "fdm",
         "external_field",
         "rotated_interfacial_dmi",
+        "rotated_interfacial_dmi_object_ids",
         "solver",
         "universe_mesh",
         "shared_domain_mesh",
+        "fem_domain_mesh",
         "mesh_defaults",
         "mesh_interfaces",
         "stages",
@@ -132,6 +137,9 @@ def _capture_scene_document(
         raise TypeError("SceneDocument must be a JSON object")
     scene = copy.deepcopy(dict(scene_document))
     _reject_unlowered_scene_fields(scene)
+    stable_source_root = (
+        Path(source_root).resolve() if source_root is not None else Path.cwd().resolve()
+    )
 
     device = str(requested_device).strip().lower()
     if device not in {"auto", "cpu", "gpu"}:
@@ -140,6 +148,20 @@ def _capture_scene_document(
     study = scene.get("study")
     if not isinstance(study, dict):
         study = {}
+    fem_domain_mesh = study.get("fem_domain_mesh")
+    if fem_domain_mesh is not None:
+        reference = validate_fem_domain_mesh_reference(fem_domain_mesh)
+        declared_backends = {
+            str(value).strip().lower()
+            for value in (
+                requested_backend,
+                study.get("requested_backend"),
+                study.get("backend"),
+            )
+            if value is not None
+        }
+        if "fdm" in declared_backends:
+            raise ValueError("fem_domain_mesh requires the FEM backend")
     output_storage = study.get("output_storage")
     if output_storage is not None:
         output_storage = OutputStorage.from_ir(output_storage).to_ir()
@@ -172,12 +194,22 @@ def _capture_scene_document(
         raise ValueError("SceneDocument.magnetization_constraints must be a list")
     typed_selections = tuple(SelectionDefinition.from_ir(item) for item in selections)
     typed_constraints = tuple(FrozenSpins.from_ir(item) for item in constraints)
+    accuracy_contract = validate_fem_demag_accuracy_contract(
+        study.get("fem_demag_accuracy_contract"),
+        context="SceneDocument.study.fem_demag_accuracy_contract",
+    )
     study_pipeline = study.get("study_pipeline")
     if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
         raise ValueError("SceneDocument.study.study_pipeline must be an object")
 
     def attach_scene_semantics(problem):
         runtime_metadata = dict(problem.runtime_metadata)
+        if accuracy_contract is None:
+            runtime_metadata.pop("fem_demag_accuracy_contract", None)
+        else:
+            runtime_metadata["fem_demag_accuracy_contract"] = copy.deepcopy(
+                accuracy_contract
+            )
         if output_storage is not None:
             runtime_metadata["output_storage"] = copy.deepcopy(output_storage)
         if isinstance(study_pipeline, Mapping):
@@ -199,6 +231,7 @@ def _capture_scene_document(
         scene,
         include_authored_stages=include_authored_stages,
         include_legacy_relax_stages=include_legacy_relax_stages,
+        _source_root=stable_source_root,
     )
     with tempfile.TemporaryDirectory(prefix="fullmag-scene-problem-ir-") as temporary:
         script_path = Path(temporary) / "scene_document.py"
@@ -216,9 +249,6 @@ def _capture_scene_document(
                 replace(stage, problem=attach_scene_semantics(stage.problem))
                 for stage in loaded.stages
             ),
-        )
-        stable_source_root = (
-            Path(source_root).resolve() if source_root is not None else Path.cwd().resolve()
         )
         raw_study_name = scene.get("study_name")
         stable_source_stem = (
@@ -476,6 +506,12 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
     if study is not None and not isinstance(study, Mapping):
         raise ValueError("SceneDocument.study must be an object")
     if isinstance(study, Mapping):
+        if study.get("fem_domain_mesh") is not None:
+            validate_fem_domain_mesh_reference(study["fem_domain_mesh"])
+        validate_fem_demag_accuracy_contract(
+            study.get("fem_demag_accuracy_contract"),
+            context="SceneDocument.study.fem_demag_accuracy_contract",
+        )
         unknown_study_fields = set(study) - _STUDY_FIELDS
         if unknown_study_fields:
             names = ", ".join(sorted(str(name) for name in unknown_study_fields))

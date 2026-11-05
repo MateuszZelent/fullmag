@@ -21,7 +21,7 @@ import {
   settleViewport3DCameraGesture,
   type Viewport3DCameraGestureRef,
 } from "../layers/viewport3DCameraGesture";
-import { beginOrientationCameraGesture, commitOrientationCameraGesture } from "./orientationCameraGesture";
+import { beginOrientationCameraGesture, clearOrientationCameraMomentum, commitOrientationCameraGesture } from "./orientationCameraGesture";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type {
@@ -124,6 +124,7 @@ export const OrientationHudLayer = memo(function OrientationHudLayer({
   );
   const applyLiveCamera = useCallback(
     (nextCamera: Viewport3DCameraState) => {
+      clearOrientationCameraMomentum(controls);
       camera.up.set(...nextCamera.up);
       camera.position.set(...nextCamera.position);
       camera.lookAt(...nextCamera.target);

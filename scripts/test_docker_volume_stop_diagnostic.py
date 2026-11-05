@@ -15,6 +15,51 @@ from test_docker_volume_stop_failed import ready_owner
 
 
 class DiagnosticUnknownStopTests(unittest.TestCase):
+    def test_pending_cgroup_stop_proof_rejects_active_owner_and_foreign_request(self):
+        from types import SimpleNamespace
+        backend={'Id':'b'*64,'Image':'image','Config':{'Labels':{'com.docker.compose.project':'project'}}}
+        before={'failed_owner':{'state':'failed'},'probe':{'process_ids':[1,7,99,101]},
+                'process_receipt':{'api_pid':99}}
+        request={'container_id':'b'*64,'compose_project':'project','pid':7,'nonce':'a'*32}
+        ready={'container_id':'b'*64,'compose_project':'project','image_id':'image'}
+        proof={'request':request,'stale_ready':ready,'catalogs':{},'cgroup_not_ready':True}
+        with patch.object(stop,'docker_capture',return_value=SimpleNamespace(stdout=json.dumps(proof).encode())):
+            self.assertEqual(stop._failed_iteration_runtime_probe(backend,before),proof)
+            for state in ('ready','unknown'):
+                with self.subTest(state=state),self.assertRaises(BuildControlError):
+                    stop._failed_iteration_runtime_probe(backend,{**before,'failed_owner':{'state':state}})
+        for change in ({'container_id':'foreign'},{'pid':99},{'nonce':'invalid'}):
+            invalid={**proof,'request':{**request,**change}}
+            with patch.object(stop,'docker_capture',return_value=SimpleNamespace(stdout=json.dumps(invalid).encode())):
+                with self.assertRaises(BuildControlError):stop._failed_iteration_runtime_probe(backend,before)
+
+    def test_failed_iteration_requires_exact_receipt_and_frontend_enospc(self):
+        from types import SimpleNamespace
+        import hashlib
+        control=SimpleNamespace(project='project',volume='volume',namespace='ns')
+        previous={'inputs':{'source_root':'/source','image_id':'sha256:'+'1'*64},
+                  'state_root':'/state','backend_container':'b'*64,'frontend_container':'f'*64,
+                  'control_namespace':'ns'}
+        receipt={'schema':'fullmag.docker-build-operation.v1','phase':'iteration',
+                 'state':'failed-confirmed','attempt':'a'*32,'compose_project':'project',
+                 'control_volume':'volume','control_namespace':'ns','config_sha256':'c'*64,
+                 'inputs':{'attempt':'d'*32,'config_sha256':'c'*64,**previous['inputs']},
+                 'state_root':'/state','backend_container':'b'*64,'frontend_container':'f'*64,
+                 'backend_started_at':'current','frontend_started_at':'front-current',
+                 'error':"linux_native_probe.py\nOSError: [Errno 28] No space left on device: '/state/.linux-native-probe-test'"}
+        def validate(r,sha=None):
+            raw=json.dumps(r).encode()
+            with patch.object(stop,'_read_raw',return_value=raw):
+                return stop._validate_failed_iteration_terminal(control,'a'*32,
+                    sha or hashlib.sha256(raw).hexdigest(),development_attempt='d'*32,
+                    config_sha256='c'*64,previous=previous)
+        self.assertEqual(validate(receipt)['backend_started_at'],'current')
+        for field,value in [('state','succeeded'),('backend_container','other'),
+                            ('control_namespace','foreign'),('error','backend build failed')]:
+            with self.subTest(field=field),self.assertRaises(BuildControlError):
+                validate({**receipt,field:value})
+        with self.assertRaises(BuildControlError):validate(receipt,'0'*64)
+
     def fixture(self):
         ready=ready_owner()
         owner={**ready,'state':'unknown','heartbeat_at':'2026-10-25T14:00:00Z',

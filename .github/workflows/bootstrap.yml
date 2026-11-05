@@ -123,6 +123,7 @@ jobs:
           cargo test -p fullmag-session --lib read_transaction
           cargo test -p fullmag-runtime-control --lib accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event
           cargo test -p fullmag-runtime-control --lib failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
 
@@ -157,6 +158,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
           cargo test -p fullmag-runtime-control --lib scheduler::accepted_start_tests
           cargo test -p fullmag-api --bin fullmag-api live_accepted_projection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_run_performance::tests
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_study_worker::source_contract_tests
           cargo test -p fullmag-api --bin fullmag-api live_scene_preparation::tests
@@ -250,6 +252,7 @@ jobs:
         run: |
           cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
           cargo test --locked -p fullmag-engine --lib exchange_face_tests
+          cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
           cargo test --locked -p fullmag-plan --lib fdm_region_
           cargo test --locked -p fullmag-plan --lib fdm_cuda_region_material_fields
           cargo test --locked -p fullmag-plan --lib fdm_cuda_absorbing_boundary_plans_cellwise_damping
@@ -258,6 +261,8 @@ jobs:
           cargo test --locked -p fullmag-plan --lib pure_inherited_region_preserves_parent_material_and_continuous_exchange
           cargo test --locked -p fullmag-engine --lib magnetoelastic::tests
           cargo test --locked -p fullmag-runner --lib scalar_metrics::tests::fdm_average_m_
+          cargo test --locked -p fullmag-engine --lib fem::tests::periodic_dmi_class_field_divides_class_residual_by_class_mass
+          cargo test --locked -p fullmag-engine --lib fem::tests::observe_evaluates_time_dependent_external_field_at_state_time
 
       - name: Run typed active eigen Stop and Pause contracts
         run: |
@@ -402,6 +407,12 @@ jobs:
 
       - name: Run application materialization and eigen selector contracts
         run: cargo test -p fullmag-application --no-fail-fast
+
+      - name: Run FEM StageAutosave origin contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact
+          cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer -- --exact
+          cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_initial_snapshot_is_lazy_for_headless_time_domain -- --exact
 
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
@@ -867,17 +878,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libglu1-mesa
 
+      - name: Install just for recipe dispatch contracts
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.51.0'
+
       - name: Verify Docker storage probes and runtime lifecycle contracts
         run: |
           python -B scripts/test_fullmag_docker_runtime.py -v
           python -B scripts/test_fem_cpu_hypre_host_policy.py -v
           python -B scripts/test_docker_backend_dev.py -v
+          python -B scripts/test_backend_native_contracts.py -v
+          python -B scripts/test_docker_native_contract_integration.py -v
           python -B scripts/test_docker_shared_build_storage.py -v
           python -B scripts/test_backend_shared_store.py -v
           python -B scripts/test_backend_shared_integration.py -v
           python -B scripts/test_backend_shared_recovery.py -v
           python -B scripts/test_backend_group_retirement.py -v
           python -B scripts/test_backend_compiler_cache.py -v
+          python -B scripts/test_docker_backend_volume_cache.py -v
+          python -B scripts/test_docker_group_backend_cache.py -v
           python -B scripts/test_backend_auto_maintenance.py -v
           python -B scripts/test_docker_helper_source.py -v
           python -B scripts/test_backend_package_backup_retirement.py -v
@@ -908,14 +928,19 @@ jobs:
           python -B scripts/test_docker_bind_overlap_probe.py -v
           python -B scripts/test_runtime_service_terminal_container_recovery.py -v
           python -B scripts/test_docker_volume_empty_quarantine.py -v
+          python -B scripts/test_docker_volume_failed_bootstrap_quarantine.py -v
+          python -B scripts/test_docker_volume_retire_stopped.py -v
+          python -B scripts/test_docker_completed_cache_reconcile.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_oom_snapshot_identity.py -v
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
+          python -B scripts/test_docker_volume_cold_budget_restore.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
           python -B scripts/test_docker_stopped_network.py -v
@@ -968,6 +993,11 @@ jobs:
           python -B scripts/test_docker_accepted_reattach.py -v
           python -B scripts/test_docker_volume_accepted_reattach.py -v
           python -B scripts/test_docker_console_progress.py -v
+          python -B scripts/test_fullmag_console.py -v
+          python -B scripts/test_fullmag_console_runtime.py -v
+          python -B scripts/test_fullmag_console_control.py -v
+          python -B scripts/test_fullmag_console_cancellation.py -v
+          python -B scripts/test_just_fullmag_console_shell.py -v
           python -B scripts/test_docker_volume_stop_unadmitted.py -v
           python -B scripts/test_docker_startup_script.py -v
           python -B scripts/test_docker_live_retirement.py -v

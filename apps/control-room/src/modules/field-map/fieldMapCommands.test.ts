@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fieldMapCommands } from "./fieldMapCommands";
+import { registerFieldMapCapture } from "./fieldMapCaptureRegistry";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
@@ -72,6 +73,8 @@ describe("field-map commands", () => {
   afterEach(() => {
     planarMonitorFramePreviewStore.clear();
     discardPlanarMonitorDraft();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("registers the one-key 2D shortcut on the canonical open command", () => {
@@ -340,6 +343,113 @@ describe("field-map commands", () => {
       expect.objectContaining({ quality: "export" }),
       { sessionScopeKey },
     );
+  });
+
+  it("exports the currently visible 2D capture without fetching a base-only server PNG", async () => {
+    const sessionScopeKey = "session=session-1&epoch=session-1%401";
+    const blob = new Blob(["composite"], { type: "image/png" });
+    const capture = vi.fn(async () => ({
+      blob,
+      filename: "default-xy-z3nm_m_r12_a-m_layers-1-ferromagnet-h-demag.png",
+      identity: "visible:B:base-r12:overlay-H_demag-r3",
+    }));
+    const unregister = registerFieldMapCapture(sessionScopeKey, capture);
+    const click = vi.fn();
+    const createObjectURL = vi.fn(() => "blob:current-composite");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("document", { createElement: vi.fn(() => ({ click, download: "", href: "" })) });
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const visualizationState = vi.fn();
+    const meta = vi.fn();
+    const renderPng = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-png");
+
+    try {
+      const result = await command?.run({
+        api: {
+          data: { fields: { planar: { meta, renderPng } } },
+          visualization: { state: visualizationState },
+        } as never,
+        sessionScopeKey,
+        source: "test",
+      });
+
+      expect(result).toMatchObject({ status: "completed", message: expect.stringContaining("default-xy-z3nm_m_r12_a-m_layers-1-ferromagnet-h-demag.png") });
+      expect(capture).toHaveBeenCalledTimes(1);
+      expect(visualizationState).not.toHaveBeenCalled();
+      expect(meta).not.toHaveBeenCalled();
+      expect(renderPng).not.toHaveBeenCalled();
+      expect(document.createElement).toHaveBeenCalledWith("a");
+      expect(createObjectURL).toHaveBeenCalledWith(blob);
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:current-composite");
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not download a capture after the command session becomes obsolete", async () => {
+    const sessionScopeKey = "session=session-old&epoch=old%401";
+    let current = true;
+    const click = vi.fn();
+    const createObjectURL = vi.fn(() => "blob:stale-session");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("document", { createElement: vi.fn(() => ({ click, download: "", href: "" })) });
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const unregister = registerFieldMapCapture(sessionScopeKey, async () => {
+      current = false;
+      return {
+        blob: new Blob(["old session"], { type: "image/png" }),
+        filename: "old-session.png",
+        identity: "old-session-view",
+      };
+    });
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-png");
+
+    try {
+      const result = await command?.run({
+        isCurrentSessionScope: () => current,
+        sessionScopeKey,
+        source: "test",
+      });
+
+      expect(result).toMatchObject({ status: "cancelled" });
+      expect(document.createElement).not.toHaveBeenCalled();
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(click).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("refuses a base-only server export when the inactive view has visible field overlays", async () => {
+    const visualizationState = vi.fn().mockResolvedValue({
+      planar: {
+        component: "magnitude",
+        field_overlays: [{ id: "object:ferromagnet", raster_visible: true, vectors_visible: true }],
+        layers: { mesh: false },
+        quantity_id: "m",
+        resolution: { height: 256, vector_budget: 64, width: 512 },
+        source: { kind: "default" },
+        view_scope: { kind: "monitor_target" },
+      },
+    });
+    const meta = vi.fn();
+    const renderPng = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-png");
+
+    const result = await command?.run({
+      api: {
+        data: { fields: { planar: { meta, renderPng } } },
+        visualization: { state: visualizationState },
+      } as never,
+      source: "test",
+    });
+
+    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining("open the 2D view") });
+    expect(visualizationState).toHaveBeenCalledTimes(1);
+    expect(meta).not.toHaveBeenCalled();
+    expect(renderPng).not.toHaveBeenCalled();
   });
 
   it("routes context-menu rename to the Inspector when no name was supplied", async () => {

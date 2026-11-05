@@ -259,6 +259,7 @@ fn adaptive_attempt_reason_name(reason: AdaptiveAttemptReason) -> &'static str {
 enum ArtifactJob {
     TerminalHistory(serde_json::Value),
     ScalarRow(StepStats),
+    StageAutosaveScalarRow(StepStats),
     FieldSnapshot {
         snapshot: FieldSnapshot,
         provenance: ExecutionProvenance,
@@ -267,6 +268,10 @@ enum ArtifactJob {
     NativeFieldSnapshot {
         snapshot: NativeFdmFieldSnapshot,
         provenance: ExecutionProvenance,
+    },
+    #[cfg(feature = "cuda")]
+    NativeFieldSnapshotBarrier {
+        acknowledgement: mpsc::Sender<Result<(), String>>,
     },
     #[cfg(feature = "fem-gpu")]
     NativeFemFieldSnapshot {
@@ -294,7 +299,9 @@ impl ArtifactJob {
     fn estimated_bytes(&self) -> u64 {
         match self {
             ArtifactJob::TerminalHistory(value) => value.to_string().len() as u64,
-            ArtifactJob::ScalarRow(_) => std::mem::size_of::<StepStats>() as u64,
+            ArtifactJob::ScalarRow(_) | ArtifactJob::StageAutosaveScalarRow(_) => {
+                std::mem::size_of::<StepStats>() as u64
+            }
             ArtifactJob::FieldSnapshot { snapshot, .. } => snapshot
                 .values
                 .len()
@@ -302,6 +309,8 @@ impl ArtifactJob {
                 as u64,
             #[cfg(feature = "cuda")]
             ArtifactJob::NativeFieldSnapshot { .. } => 0,
+            #[cfg(feature = "cuda")]
+            ArtifactJob::NativeFieldSnapshotBarrier { .. } => 0,
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
             #[cfg(any(feature = "cuda", test))]
@@ -322,11 +331,39 @@ pub(crate) struct ArtifactPipelineSender {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    has_physical_time_stage_autosave_table: bool,
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_table_every: Option<u64>,
 }
 
 impl ArtifactPipelineSender {
+    pub(crate) fn has_accepted_step_autosave_schedules(&self) -> bool {
+        let has_field_schedule = {
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            {
+                !self.accepted_step_fields.is_empty()
+            }
+            #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+            {
+                false
+            }
+        };
+        #[cfg(feature = "fem-gpu")]
+        {
+            has_field_schedule || self.accepted_step_table_every.is_some()
+        }
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            has_field_schedule
+        }
+    }
+
+    pub(crate) fn has_physical_time_stage_autosave_table(&self) -> bool {
+        self.has_physical_time_stage_autosave_table
+    }
+
     fn push(&self, job: ArtifactJob) -> Result<ArtifactEnqueueMetrics, RunError> {
         let estimated_bytes = job.estimated_bytes();
         let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
@@ -430,6 +467,62 @@ impl ArtifactPipelineSender {
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
                 message: "artifact writer stopped before terminal solver attempts were durable"
                     .into(),
+            }),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn drain_prior_native_field_snapshots(&self) -> Result<(), RunError> {
+        self.drain_prior_native_field_snapshots_with_timeout(Duration::from_secs(10))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn drain_prior_native_field_snapshots_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<(), RunError> {
+        let deadline = std::time::Instant::now() + timeout;
+        let (acknowledgement, completed) = mpsc::channel();
+        let mut job = ArtifactJob::NativeFieldSnapshotBarrier { acknowledgement };
+        let queue_depth_after = self.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        self.diagnostics
+            .current_queue_depth
+            .store(queue_depth_after as u64, Ordering::Relaxed);
+        update_atomic_max(&self.diagnostics.max_queue_depth, queue_depth_after as u64);
+
+        loop {
+            match self.tx.try_send(job) {
+                Ok(()) => break,
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    job = returned;
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        self.rollback_queue_depth();
+                        return Err(RunError {
+                            message: "timed out enqueueing native field snapshot barrier".into(),
+                        });
+                    }
+                    thread::park_timeout(remaining.min(Duration::from_millis(1)));
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.rollback_queue_depth();
+                    return Err(RunError {
+                        message: "artifact writer stopped before native field snapshot barrier was queued"
+                            .into(),
+                    });
+                }
+            }
+        }
+
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match completed.recv_timeout(remaining) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(message)) => Err(RunError { message }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RunError {
+                message: "timed out waiting for native field snapshots to drain".into(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RunError {
+                message: "artifact writer stopped before native field snapshots drained".into(),
             }),
         }
     }
@@ -569,8 +662,11 @@ pub(crate) struct ArtifactPipeline {
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    has_physical_time_stage_autosave_table: bool,
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_table_every: Option<u64>,
 }
 
 impl ArtifactPipeline {
@@ -683,7 +779,7 @@ impl ArtifactPipeline {
                 error
             ),
         })?;
-        #[cfg(feature = "fem-gpu")]
+        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
         let accepted_step_fields = Arc::new(
             stage_autosave
                 .as_ref()
@@ -701,6 +797,15 @@ impl ArtifactPipeline {
                 })
                 .unwrap_or_default(),
         );
+        #[cfg(feature = "fem-gpu")]
+        let accepted_step_table_every = stage_autosave
+            .as_ref()
+            .and_then(|config| config.policy.table.as_ref())
+            .and_then(|table| table.accepted_step_cadence());
+        let has_physical_time_stage_autosave_table = stage_autosave
+            .as_ref()
+            .and_then(|config| config.policy.table.as_ref())
+            .is_some_and(|table| table.accepted_step_cadence().is_none());
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let writer_queue_depth = Arc::clone(&queue_depth);
         let diagnostics = Arc::new(ArtifactPipelineDiagnosticsState::default());
@@ -730,8 +835,11 @@ impl ArtifactPipeline {
             queue_depth,
             diagnostics,
             physics_execution_context,
-            #[cfg(feature = "fem-gpu")]
+            has_physical_time_stage_autosave_table,
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields,
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_table_every,
         })
     }
 
@@ -745,8 +853,11 @@ impl ArtifactPipeline {
             queue_depth: Arc::clone(&self.queue_depth),
             diagnostics: Arc::clone(&self.diagnostics),
             physics_execution_context: self.physics_execution_context.clone(),
-            #[cfg(feature = "fem-gpu")]
+            has_physical_time_stage_autosave_table: self.has_physical_time_stage_autosave_table,
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::clone(&self.accepted_step_fields),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_table_every: self.accepted_step_table_every,
         }
     }
 
@@ -1067,10 +1178,12 @@ pub(crate) struct ArtifactRecorder {
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     accepted_step_field_last_sample: std::collections::BTreeMap<String, u64>,
+    #[cfg(feature = "fem-gpu")]
+    accepted_step_table_every: Option<u64>,
 }
 
 impl ArtifactRecorder {
@@ -1084,10 +1197,12 @@ impl ArtifactRecorder {
             pipeline: None,
             provenance,
             physics_execution_context: None,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::new(Vec::new()),
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_table_every: None,
         }
     }
 
@@ -1095,8 +1210,10 @@ impl ArtifactRecorder {
         provenance: ExecutionProvenance,
         pipeline: ArtifactPipelineSender,
     ) -> Self {
-        #[cfg(feature = "fem-gpu")]
+        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
         let accepted_step_fields = Arc::clone(&pipeline.accepted_step_fields);
+        #[cfg(feature = "fem-gpu")]
+        let accepted_step_table_every = pipeline.accepted_step_table_every;
         let physics_execution_context = pipeline.physics_execution_context.clone();
         Self {
             field_snapshots: Vec::new(),
@@ -1107,14 +1224,16 @@ impl ArtifactRecorder {
             pipeline: Some(pipeline),
             provenance,
             physics_execution_context,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_table_every,
         }
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     pub(crate) fn due_accepted_step_fields(
         &mut self,
         accepted_step: u64,
@@ -1134,6 +1253,30 @@ impl ArtifactRecorder {
                 .insert(name.clone(), accepted_step);
         }
         due
+    }
+
+    pub(crate) fn has_accepted_step_table(&self) -> bool {
+        #[cfg(feature = "fem-gpu")]
+        {
+            self.accepted_step_table_every.is_some()
+        }
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn accepted_step_table_due(&self, accepted_step: u64) -> bool {
+        #[cfg(feature = "fem-gpu")]
+        {
+            self.accepted_step_table_every
+                .is_some_and(|every| every > 0 && accepted_step % every == 0)
+        }
+        #[cfg(not(feature = "fem-gpu"))]
+        {
+            let _ = accepted_step;
+            false
+        }
     }
 
     pub(crate) fn begin_terminal_history(&mut self, outputs: &[fullmag_ir::OutputIR]) -> Result<(), RunError> {
@@ -1185,6 +1328,17 @@ impl ArtifactRecorder {
     ) -> Result<ArtifactEnqueueMetrics, RunError> {
         if let Some(pipeline) = self.pipeline.as_ref() {
             return pipeline.push(ArtifactJob::ScalarRow(stats.clone()));
+        }
+        Ok(ArtifactEnqueueMetrics::default())
+    }
+
+    /// Enqueue a scalar sample for the StageAutosave table without writing legacy traces.
+    pub(crate) fn record_stage_autosave_scalar(
+        &mut self,
+        stats: &StepStats,
+    ) -> Result<ArtifactEnqueueMetrics, RunError> {
+        if let Some(pipeline) = self.pipeline.as_ref() {
+            return pipeline.push(ArtifactJob::StageAutosaveScalarRow(stats.clone()));
         }
         Ok(ArtifactEnqueueMetrics::default())
     }
@@ -1302,6 +1456,15 @@ impl ArtifactRecorder {
         }
         self.field_snapshot_count += 1;
         Ok(metrics)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn drain_prior_native_field_snapshots(&self) -> Result<(), RunError> {
+        let pipeline = self.pipeline.as_ref().ok_or_else(|| RunError {
+            message: "native field snapshot barrier requires the streaming artifact pipeline"
+                .to_string(),
+        })?;
+        pipeline.drain_prior_native_field_snapshots()
     }
 
     #[cfg(feature = "cuda")]
@@ -1879,6 +2042,19 @@ fn writer_loop(
                     job_start.elapsed(),
                 );
             }
+            ArtifactJob::StageAutosaveScalarRow(stats) => {
+                let job_start = std::time::Instant::now();
+                let runtime = stage_autosave
+                    .as_mut()
+                    .ok_or("stage-autosave scalar row received without an active stage")?;
+                runtime.append_scalar(&stats)?;
+                record_writer_job_time(
+                    &mut summary,
+                    &diagnostics,
+                    ArtifactWriterJobKind::StageAutosaveTableRow,
+                    job_start.elapsed(),
+                );
+            }
             ArtifactJob::FieldSnapshot {
                 snapshot,
                 provenance,
@@ -2042,6 +2218,12 @@ fn writer_loop(
                     ArtifactWriterJobKind::NativeFieldSnapshot,
                     job_start.elapsed(),
                 );
+            }
+            #[cfg(feature = "cuda")]
+            ArtifactJob::NativeFieldSnapshotBarrier { acknowledgement } => {
+                // The writer is FIFO: all earlier CUDA snapshot jobs have
+                // completed and dropped their native handles before this ack.
+                let _ = acknowledgement.send(Ok(()));
             }
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot {
@@ -2289,6 +2471,7 @@ fn write_terminal_cpu_adaptive_attempts(
 
 enum ArtifactWriterJobKind {
     ScalarRow,
+    StageAutosaveTableRow,
     FieldSnapshot,
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     NativeFieldSnapshot,
@@ -2320,6 +2503,7 @@ fn record_writer_job_time(
                 .scalar_row_writer_wall_time_ns
                 .fetch_add(wall_time_ns, Ordering::Relaxed);
         }
+        ArtifactWriterJobKind::StageAutosaveTableRow => {}
         ArtifactWriterJobKind::FieldSnapshot => {
             summary.field_snapshot_writer_wall_time_ns = summary
                 .field_snapshot_writer_wall_time_ns
@@ -2355,6 +2539,57 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn native_field_snapshot_barrier_waits_for_prior_writer_jobs() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-native-field-barrier-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "native-field-barrier".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
+            .expect("start artifact pipeline");
+        let sender = pipeline.sender();
+        let (prior_acknowledgement, prior_completed) = mpsc::channel();
+        sender
+            .push(ArtifactJob::FailedRunProvenance {
+                provenance: ExecutionProvenance::default(),
+                primary_error: "barrier ordering regression".into(),
+                acknowledgement: prior_acknowledgement,
+            })
+            .expect("enqueue prior writer job");
+
+        sender
+            .drain_prior_native_field_snapshots()
+            .expect("barrier should acknowledge after prior writer job");
+        assert!(
+            output_dir.join("failed-run-provenance.v1.json").exists(),
+            "barrier ack must follow completion of queued writer jobs"
+        );
+        assert_eq!(
+            prior_completed
+                .recv_timeout(Duration::from_secs(1))
+                .expect("prior job acknowledgement"),
+            Ok(())
+        );
+
+        drop(sender);
+        pipeline.finish().expect("finish artifact pipeline");
+        fs::remove_dir_all(output_dir).expect("remove barrier test output");
+    }
+
     #[test]
     fn flat_field_snapshot_estimate_counts_each_stored_scalar_once() {
         let job = ArtifactJob::FieldSnapshot {
@@ -2378,6 +2613,30 @@ mod tests {
             job.estimated_bytes(),
             18 * std::mem::size_of::<f64>() as u64
         );
+    }
+
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[test]
+    fn accepted_step_field_policy_samples_step_zero_and_forces_one_terminal_sample() {
+        let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        recorder.accepted_step_fields =
+            Arc::new(vec![("m".into(), 2), ("H_rotated_dmi".into(), 3)]);
+
+        assert_eq!(
+            recorder.due_accepted_step_fields(0, false),
+            vec!["m".to_string(), "H_rotated_dmi".to_string()]
+        );
+        assert!(recorder.due_accepted_step_fields(0, false).is_empty());
+        assert!(recorder.due_accepted_step_fields(1, false).is_empty());
+        assert_eq!(
+            recorder.due_accepted_step_fields(2, false),
+            vec!["m".to_string()]
+        );
+        assert_eq!(
+            recorder.due_accepted_step_fields(2, true),
+            vec!["H_rotated_dmi".to_string()]
+        );
+        assert!(recorder.due_accepted_step_fields(2, true).is_empty());
     }
 
     #[test]
@@ -2452,9 +2711,31 @@ mod tests {
             queue_depth: Arc::new(AtomicUsize::new(initial_depth)),
             diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
             physics_execution_context: None,
-            #[cfg(feature = "fem-gpu")]
+            has_physical_time_stage_autosave_table: false,
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
             accepted_step_fields: Arc::new(Vec::new()),
+            #[cfg(feature = "fem-gpu")]
+            accepted_step_table_every: None,
         }
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn accepted_step_table_cadence_is_detected_without_field_schedules() {
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        let mut sender = isolated_pipeline_sender(tx, 0);
+        sender.accepted_step_table_every = Some(10);
+        assert!(sender.has_accepted_step_autosave_schedules());
+        assert!(!sender.has_physical_time_stage_autosave_table());
+
+        let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        recorder.accepted_step_table_every = Some(10);
+        assert!(recorder.has_accepted_step_table());
+        assert!(recorder.accepted_step_table_due(0));
+        assert!(!recorder.accepted_step_table_due(9));
+        assert!(recorder.accepted_step_table_due(10));
+        assert!(recorder.accepted_step_table_due(20));
+        assert!(!recorder.accepted_step_table_due(271));
     }
 
     fn terminal_attempt_batch(target_step: u64) -> CpuAdaptiveAttemptBatch {
@@ -2906,6 +3187,82 @@ mod tests {
             serde_json::to_value(resolution).expect("serialize execution resolution")
         );
         fs::remove_dir_all(output_dir).expect("remove exact physics fixture");
+    }
+
+    #[test]
+    fn initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-stage-autosave-t0-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-stage-autosave-t0-root-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "stage-autosave-t0".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fem", "node_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "run".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: Some(fullmag_ir::TableAutosaveIR {
+                    kind: "table_autosave".into(),
+                    table_id: "default".into(),
+                    sample_period_s: Some(1.0e-12),
+                    sample_period_policy: None,
+                    resolved_sample_period_s: None,
+                    every_steps: None,
+                    quantities: vec!["step".into()],
+                    expressions: Vec::new(),
+                }),
+                fields: Vec::new(),
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            field_context,
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start artifact pipeline");
+        let sender = pipeline.sender();
+        assert!(sender.has_physical_time_stage_autosave_table());
+        let mut recorder = ArtifactRecorder::streaming(ExecutionProvenance::default(), sender);
+        recorder
+            .record_stage_autosave_scalar(&StepStats {
+                step: 0,
+                time: 0.0,
+                ..StepStats::default()
+            })
+            .expect("enqueue initial StageAutosave table row");
+
+        let summary = pipeline.finish().expect("finish artifact pipeline");
+        assert_eq!(summary.scalar_rows_written, 0);
+        assert!(!output_dir.join("scalars.csv").exists());
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_run/manifest.json"))
+                .expect("read StageAutosave stage manifest"),
+        )
+        .expect("decode StageAutosave stage manifest");
+        assert_eq!(stage_manifest["table_sample_count"], 1);
+        fs::remove_dir_all(output_dir).expect("remove t0 artifact output");
+        fs::remove_dir_all(autosave_root).expect("remove t0 autosave output");
     }
 
     #[test]

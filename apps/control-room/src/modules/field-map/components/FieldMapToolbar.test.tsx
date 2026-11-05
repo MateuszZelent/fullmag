@@ -6,14 +6,14 @@ import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { FieldMapToolbar, type FieldMapToolbarQuantity } from "./FieldMapToolbar";
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
-const mocks = vi.hoisted(() => ({ selects: [] as { disabled?: boolean; onValueChange: (value: string) => void }[] }));
+const mocks = vi.hoisted(() => ({ selects: [] as { disabled?: boolean; value?: string; onValueChange: (value: string) => void }[] }));
 vi.mock("@/shared/ui/Select", () => ({
-  Select: (props: { children: ReactNode; disabled?: boolean; onValueChange: (value: string) => void }) => {
+  Select: (props: { children: ReactNode; disabled?: boolean; value?: string; onValueChange: (value: string) => void }) => {
     mocks.selects.push(props);
     return <div>{props.children}</div>;
   },
   SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  SelectItem: ({ children, disabled }: { children: ReactNode; disabled?: boolean }) => <button disabled={disabled}>{children}</button>,
+  SelectItem: ({ children, disabled, value }: { children: ReactNode; disabled?: boolean; value: string }) => <button data-value={value} disabled={disabled}>{children}</button>,
   SelectTrigger: ({ children, "aria-label": label }: { children: ReactNode; "aria-label"?: string }) => <button aria-label={label}>{children}</button>,
   SelectValue: () => null,
 }));
@@ -27,7 +27,7 @@ const tensor: FieldMapToolbarQuantity = {
 };
 function profile(component = "frobenius"): PlanarState {
   return { quantity_id: "J_spin", component, colormap: "viridis", range: { mode: "auto" },
-    layers: { vectors: true, mesh: false } } as PlanarState;
+    layers: { vectors: true, mesh: false }, view_scope: { kind: "monitor_target" } } as PlanarState;
 }
 function render(planar = profile(), quantities: FieldMapToolbarQuantity[] = [tensor]) {
   const onPatch = vi.fn();
@@ -72,5 +72,33 @@ describe("FieldMapToolbar tensor projection contract", () => {
     mocks.selects[0].onValueChange("J_spin");
     mocks.selects[1].onValueChange("frobenius");
     expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it("patches only the selected canonical planar scope and retains an active extra scope item", () => {
+    const planar = {
+      ...profile("spin_flow_z"),
+      source: { kind: "monitor", monitor_id: "monitor-1" },
+      default_slice: {
+        operator: { kind: "plane_sample" },
+        plane: "yz",
+        position_fraction: 0.25,
+      },
+      interaction: { pan_u_m: 1.5, pan_v_m: -0.25, zoom: 2 },
+      view_scope: { kind: "mesh_part", scope_id: "part-7" },
+    } as PlanarState;
+    const { html, onPatch } = render(planar);
+    const scope = mocks.selects.find((select) => select.value === "mesh_part");
+
+    expect(html).toContain("Monitor target");
+    expect(html).toContain("Universe / Airbox");
+    expect(html).toContain("Current mesh part");
+    expect(scope).toBeDefined();
+    scope?.onValueChange("mesh_part");
+    expect(onPatch).not.toHaveBeenCalled();
+
+    scope?.onValueChange("airbox");
+    expect(onPatch).toHaveBeenCalledExactlyOnceWith({ view_scope: { kind: "airbox" } });
+    expect(onPatch.mock.calls[0]?.[0]).not.toHaveProperty("source");
+    expect(onPatch.mock.calls[0]?.[0]).not.toHaveProperty("quantity_id");
   });
 });

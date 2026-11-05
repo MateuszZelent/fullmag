@@ -443,8 +443,15 @@ impl InteractiveRuntime {
         field_every_n: u64,
         display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
         interrupt_requested: Option<&AtomicBool>,
-        mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+        on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
+        let mut performance = crate::run_performance_integration::start(problem, plan, output_dir, "live_callback");
+        let result = (|| {
+        let mut consumer = on_step;
+        let mut on_step = |update: StepUpdate| {
+            if !update.terminal_field_snapshot { performance.observe(&update.stats); }
+            consumer(update)
+        };
         let execution_problem = crate::bind_fem_execution_stage_identity(problem, plan)?;
         let problem = execution_problem.as_ref();
         crate::require_resolved_runtime_sampling(problem, plan)?;
@@ -535,6 +542,9 @@ impl InteractiveRuntime {
         self.state_revision += 1;
         self.display_cache.invalidate();
         Ok(executed.result)
+        })();
+        crate::run_performance_integration::finish(&mut performance, &result);
+        result
     }
 }
 

@@ -158,6 +158,8 @@ struct DeviceMultilayerLayer {
     double Ku1 = 0.0;
     double Ku2 = 0.0;
     double anisU[3] = {0.0, 0.0, 1.0};
+    bool has_rotated_interfacial_dmi = false;
+    double D_rotated_interfacial = 0.0;
     bool has_cubic_anisotropy = false;
     double Kc1 = 0.0;
     double Kc2 = 0.0;
@@ -842,6 +844,12 @@ struct Context {
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
+    // Lazily allocated once for FP64 multilayer PG-BB scalar reductions.
+    bool multilayer_bb_history_valid = false;
+    bool multilayer_bb_evaluation_valid = false;
+    double *multilayer_bb_partials = nullptr;
+    double *multilayer_bb_scalars = nullptr;
+    uint64_t multilayer_bb_partial_capacity = 0;
     std::vector<DeviceMultilayerLayer> multilayer_layers;
     std::vector<DeviceMultilayerTensorKernel> multilayer_kernels;
 
@@ -2938,6 +2946,10 @@ bool context_download_scalar_f32(
     fullmag_fdm_observable observable,
     float *out_values,
     uint64_t out_len);
+
+// FP64 PG-BB: op 0 evaluates, 1 captures accepted m/g/H, 2 retracts a
+// trial from accepted state, 3 restores accepted m. Scalars are layer-major.
+bool context_multilayer_bb(Context &, uint32_t, double, double *, uint64_t);
 
 /// Download a v2 multilayer layer field observable from device to host as f64 AoS.
 bool context_download_layer_field_f64(

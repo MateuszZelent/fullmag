@@ -874,6 +874,7 @@ pub(crate) struct AcceptedRunnerExecution {
     pub(crate) accepted_state_ref: Option<AcceptedStateRef>,
     pub(crate) observation_source: Option<ObservationSourcePayload>,
     pub(crate) terminal_stats: Option<fullmag_runner::StepStats>,
+    pub(crate) completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 pub(crate) enum AcceptedWorkerProcessOutcome {
@@ -980,9 +981,43 @@ where
     Ok(version)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerExecutionCompletedReceiptV4 {
+    #[serde(deserialize_with = "deserialize_completed_worker_receipt_v4_schema")]
+    schema_version: String,
+    identity: WorkerExecutionReceiptIdentity,
+    status: RunStatus,
+    completed_step_count: usize,
+    outputs: Vec<WorkerExecutionOutputReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_state_ref: Option<AcceptedStateRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_source: Option<WorkerObservationSourceReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_publication: Option<fullmag_runtime_control::PreparedTerminalPublicationV4>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_stats: Option<fullmag_runner::StepStats>,
+    completion: Option<fullmag_ir::StageCompletionIR>,
+}
+
+fn deserialize_completed_worker_receipt_v4_schema<'de, D>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let version = String::deserialize(deserializer)?;
+    if version != "fullmag.accepted_worker_execution.v4" {
+        return Err(serde::de::Error::custom("expected completed worker receipt v4"));
+    }
+    Ok(version)
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum WorkerExecutionCompletedReceiptWire {
+    V4(WorkerExecutionCompletedReceiptV4),
     V3(WorkerExecutionCompletedReceiptV3),
     V1(WorkerExecutionCompletedReceipt),
     V2(WorkerExecutionCompletedReceiptV2),
@@ -997,6 +1032,7 @@ struct RecoveredWorkerExecutionReceipt {
     accepted_state_ref: Option<AcceptedStateRef>,
     observation_source: Option<WorkerObservationSourceReference>,
     terminal_stats: Option<fullmag_runner::StepStats>,
+    completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 /// Reserve one private runner output directory for the exact active task
@@ -1921,9 +1957,10 @@ fn persist_completed_worker_execution(
     accepted_state_ref: Option<&AcceptedStateRef>,
     observation_source: Option<&ObservationSourcePayload>,
     terminal_stats: Option<&fullmag_runner::StepStats>,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
 ) -> Result<()> {
     persist_completed_worker_execution_with_terminal(store,attempt_output_dir,identity,declared_outputs,
-        status,completed_step_count,outputs,accepted_state_ref,observation_source,None,terminal_stats)
+        status,completed_step_count,outputs,accepted_state_ref,observation_source,None,terminal_stats,completion)
 }
 
 fn persist_completed_worker_execution_with_terminal(
@@ -1938,6 +1975,7 @@ fn persist_completed_worker_execution_with_terminal(
     observation_source: Option<&ObservationSourcePayload>,
     terminal_publication: Option<&fullmag_runtime_control::PreparedTerminalPublicationV4>,
     terminal_stats: Option<&fullmag_runner::StepStats>,
+    completion: Option<&fullmag_ir::StageCompletionIR>,
 ) -> Result<()> {
     let mut declared = BTreeMap::new();
     for port in declared_outputs {
@@ -2052,54 +2090,24 @@ fn persist_completed_worker_execution_with_terminal(
             || accepted_state_ref != Some(&terminal.manifest.accepted_state_ref) {
             bail!("terminal completed receipt has incompatible legacy observation fields");
         }
-        if let Some(stats) = terminal_stats {
-            let receipt = WorkerExecutionCompletedReceiptV3 {
-                schema_version: "fullmag.accepted_worker_execution.v3".into(),
-                identity: identity.clone(), status, completed_step_count, outputs: output_refs,
-                accepted_state_ref: accepted_state_ref.cloned(), observation_source,
-                terminal_publication: Some(terminal.clone()), terminal_stats: Some(stats.clone()),
-            };
-            if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
-                bail!("terminal completed receipt exceeds the existing bounded metadata owner");
-            }
-            return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
-        }
-        let receipt = WorkerExecutionCompletedReceiptV2 {
-            schema_version: "fullmag.accepted_worker_execution.v2".into(), identity: identity.clone(), status,
-            completed_step_count, outputs: output_refs,
-            accepted_state_ref: terminal.manifest.accepted_state_ref.clone(), terminal_publication: terminal.clone(),
-        };
-        if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
-            bail!("terminal completed receipt exceeds the existing bounded metadata owner");
-        }
-        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
     }
-    if let Some(stats) = terminal_stats {
-        let receipt = WorkerExecutionCompletedReceiptV3 {
-            schema_version: "fullmag.accepted_worker_execution.v3".into(),
-            identity: identity.clone(), status, completed_step_count, outputs: output_refs,
-            accepted_state_ref: accepted_state_ref.cloned(), observation_source,
-            terminal_publication: None, terminal_stats: Some(stats.clone()),
-        };
-        if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
-            bail!("completed worker receipt exceeds the existing bounded metadata owner");
+    if let Some(completion) = completion {
+        crate::accepted_field_materialization_worker::validate_completion(completion)?;
+        if status != RunStatus::Completed || accepted_state_ref.is_none() {
+            bail!("completion evidence requires a completed exact accepted state");
         }
-        return write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt);
     }
-    let receipt = WorkerExecutionCompletedReceipt {
-        schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(),
-        identity: identity.clone(),
-        status,
-        completed_step_count,
-        outputs: output_refs,
-        accepted_state_ref: accepted_state_ref.cloned(),
-        observation_source,
+    let receipt = WorkerExecutionCompletedReceiptV4 {
+        schema_version: "fullmag.accepted_worker_execution.v4".into(),
+        identity: identity.clone(), status, completed_step_count, outputs: output_refs,
+        accepted_state_ref: accepted_state_ref.cloned(), observation_source,
+        terminal_publication: terminal_publication.cloned(), terminal_stats: terminal_stats.cloned(),
+        completion: completion.cloned(),
     };
-    write_immutable_attempt_receipt(
-        attempt_output_dir,
-        WORKER_EXECUTION_COMPLETED_RECEIPT,
-        &receipt,
-    )
+    if serde_json::to_vec_pretty(&receipt)?.len() as u64 > fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES {
+        bail!("completed worker receipt exceeds the existing bounded metadata owner");
+    }
+    write_immutable_attempt_receipt(attempt_output_dir, WORKER_EXECUTION_COMPLETED_RECEIPT, &receipt)
 }
 
 fn validate_terminal_stats_binding(
@@ -2211,7 +2219,7 @@ fn recover_completed_worker_execution(
                 schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
                 completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
                 accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
-                terminal_stats: None,
+                terminal_stats: None, completion: None,
             },
             None,
         ),
@@ -2220,7 +2228,7 @@ fn recover_completed_worker_execution(
                 schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
                 completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
                 accepted_state_ref: Some(receipt.accepted_state_ref), observation_source: None,
-                terminal_stats: None,
+                terminal_stats: None, completion: None,
             },
             Some(receipt.terminal_publication),
         ),
@@ -2229,7 +2237,16 @@ fn recover_completed_worker_execution(
                 schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
                 completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
                 accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
-                terminal_stats: receipt.terminal_stats,
+                terminal_stats: receipt.terminal_stats, completion: None,
+            },
+            receipt.terminal_publication,
+        ),
+        WorkerExecutionCompletedReceiptWire::V4(receipt) => (
+            RecoveredWorkerExecutionReceipt {
+                schema_version: receipt.schema_version, identity: receipt.identity, status: receipt.status,
+                completed_step_count: receipt.completed_step_count, outputs: receipt.outputs,
+                accepted_state_ref: receipt.accepted_state_ref, observation_source: receipt.observation_source,
+                terminal_stats: receipt.terminal_stats, completion: receipt.completion,
             },
             receipt.terminal_publication,
         ),
@@ -2237,12 +2254,12 @@ fn recover_completed_worker_execution(
     let terminal_receipt = terminal_publication.as_ref();
     let version_valid = match terminal_receipt {
         Some(terminal) => matches!(completed.schema_version.as_str(),
-                "fullmag.accepted_worker_execution.v2" | "fullmag.accepted_worker_execution.v3")
+                "fullmag.accepted_worker_execution.v2" | "fullmag.accepted_worker_execution.v3" | "fullmag.accepted_worker_execution.v4")
             && completed.observation_source.is_none() && expected_observation_grid.is_none()
             && expected_accepted_state_ref.is_none()
             && completed.accepted_state_ref.as_ref() == Some(&terminal.manifest.accepted_state_ref),
         None => matches!(completed.schema_version.as_str(),
-                WORKER_EXECUTION_RECEIPT_SCHEMA | "fullmag.accepted_worker_execution.v3")
+                WORKER_EXECUTION_RECEIPT_SCHEMA | "fullmag.accepted_worker_execution.v3" | "fullmag.accepted_worker_execution.v4")
             && completed.accepted_state_ref.as_ref() == expected_accepted_state_ref,
     };
     if !version_valid
@@ -2251,6 +2268,10 @@ fn recover_completed_worker_execution(
         || completed.completed_step_count == 0
     {
         bail!("completed worker receipt is invalid for the current accepted Start");
+    }
+    if let Some(completion) = completed.completion.as_ref() {
+        crate::accepted_field_materialization_worker::validate_completion(completion)?;
+        if completed.accepted_state_ref.is_none() { bail!("completion receipt has no accepted state"); }
     }
     if let Some(stats) = completed.terminal_stats.as_ref() {
         let reference = completed.accepted_state_ref.as_ref()
@@ -2440,6 +2461,7 @@ fn recover_completed_worker_execution(
         accepted_state_ref: completed.accepted_state_ref,
         observation_source,
         terminal_stats: completed.terminal_stats,
+        completion: completed.completion,
     })
 }
 
@@ -2756,6 +2778,14 @@ fn execute_accepted_worker_start_with_snapshot(
     // Keep the authored runtime selection intact. The managed lease is an
     // effective runtime override, recorded separately for provenance.
     let mut problem = accepted_step.problem.clone();
+    problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
+        serde_json::json!({
+            "run_id": accepted_step.claim.run_id.as_str(),
+            "task_id": accepted_step.claim.task_id.as_str(),
+            "step_id": accepted_step.step_id,
+            "attempt_id": accepted_step.claim.attempt_id.as_str(),
+            "ownership_epoch": accepted_step.claim.ownership_epoch.value(),
+        }));
     problem
         .problem_meta
         .runtime_metadata
@@ -2882,7 +2912,7 @@ fn execute_accepted_worker_start_with_snapshot(
                 recovered_from_receipt: false,
                 accepted_state_ref: None,
                 observation_source: None,
-                terminal_stats: None,
+                terminal_stats: None, completion: None,
             });
         }
         if result.status != RunStatus::Completed {
@@ -2938,6 +2968,7 @@ fn execute_accepted_worker_start_with_snapshot(
             observation_source.as_ref(),
             terminal_publication.as_ref(),
             terminal_stats.as_ref(),
+            result.completion.as_ref(),
         )
         .context("persist immutable completed worker output receipt")?;
 
@@ -2951,6 +2982,7 @@ fn execute_accepted_worker_start_with_snapshot(
             accepted_state_ref,
             observation_source,
             terminal_stats,
+            completion: result.completion,
         })
     })();
     if let Some(storage) = &mut storage {
@@ -3120,7 +3152,7 @@ fn execute_accepted_closed_loop_worker_start(
         let artifacts=match result {
             Ok(artifacts)=>artifacts,
             Err(_error) if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire))=>return Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None}),
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None,completion:None}),
             Err(error)=>return Err(anyhow::Error::new(error)).context("execute canonical full-volume inspection"),
         };
         let manifest_path=format!("antenna/field_solutions/{output_id}/manifest.v2.json");
@@ -3138,7 +3170,7 @@ fn execute_accepted_closed_loop_worker_start(
         fullmag_runtime_control::study_inspection::validate_accepted_inspection_bytes(&accepted_step.problem,study_step,&bytes,maximum)?;
         if interrupt_requested.is_some_and(|flag|flag.load(Ordering::Acquire)) {
             return Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None});
+        terminal_publication: None,status:RunStatus::Cancelled,completed_step_count:0,outputs:vec![],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None,completion:None});
         }
         observer(fullmag_runner::AntennaOperationProgress {
             phase: fullmag_runner::AntennaOperationPhase::PublishingResult,
@@ -3155,9 +3187,9 @@ fn execute_accepted_closed_loop_worker_start(
         #[cfg(unix)]
         std::fs::File::open(root)?.sync_all()?;
         if let Some(storage)=&mut storage { storage.finish(true,&attempt)?; }
-        persist_completed_worker_execution(store,&attempt,&identity,&study_step.outputs,RunStatus::Completed,1,std::slice::from_ref(&output),None,None,None)?;
+        persist_completed_worker_execution(store,&attempt,&identity,&study_step.outputs,RunStatus::Completed,1,std::slice::from_ref(&output),None,None,None,None)?;
         Ok(AcceptedRunnerExecution {
-        terminal_publication: None,status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None})
+        terminal_publication: None,status:RunStatus::Completed,completed_step_count:1,outputs:vec![output],attempt_output_dir:attempt.clone(),recovered_from_receipt:false,accepted_state_ref:None,observation_source:None,terminal_stats:None,completion:None})
     });
     if let Some(storage)=&mut storage {
         match &execution { Ok(result) if result.status==RunStatus::Cancelled=>storage.note_outcome("cancelled",None),Err(error)=>storage.note_outcome("failed",Some(format!("{error:#}"))),_=>{} }
@@ -3280,7 +3312,7 @@ fn execute_accepted_fem_worker_start(
                 recovered_from_receipt: false,
                 accepted_state_ref: None,
                 observation_source: None,
-                terminal_stats: None,
+                terminal_stats: None, completion: None,
             }),
             crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(
                 execution,
@@ -3302,6 +3334,7 @@ fn execute_accepted_fem_worker_start(
                     Some(&execution.accepted_state_ref),
                     None,
                     terminal_stats.as_ref(),
+                    execution.completion.as_ref(),
                 )
                 .context("persist immutable completed FEM worker output receipt")?;
                 Ok(AcceptedRunnerExecution {
@@ -3314,6 +3347,7 @@ fn execute_accepted_fem_worker_start(
                     accepted_state_ref: Some(execution.accepted_state_ref),
                     observation_source: None,
                     terminal_stats,
+                    completion: execution.completion,
                 })
             }
         }
@@ -3455,6 +3489,7 @@ fn execute_accepted_antenna_worker_start(
                 None,
                 None,
                 None,
+                None,
             )?;
         }
         Ok(AcceptedRunnerExecution {
@@ -3466,7 +3501,7 @@ fn execute_accepted_antenna_worker_start(
             recovered_from_receipt: false,
             accepted_state_ref: None,
             observation_source: None,
-            terminal_stats: None,
+            terminal_stats: None, completion: None,
         })
     })();
     if let Some(storage) = &mut storage {
@@ -3882,6 +3917,7 @@ fn apply_accepted_start_effect(
         || durable_execution.outputs != execution.outputs
         || durable_execution.accepted_state_ref != execution.accepted_state_ref
         || durable_execution.terminal_publication != execution.terminal_publication
+        || durable_execution.completion != execution.completion
         || terminal_stats_identity(durable_execution.terminal_stats.as_ref())?
             != terminal_stats_identity(execution.terminal_stats.as_ref())?
     {
@@ -5196,6 +5232,77 @@ mod native_failure_protocol_tests {
             assert_eq!(coordinator.task().lifecycle, TaskLifecycle::Cancelled);
             assert!(coordinator.accept_event(event(&coordinator, next + 1,
                 WorkerEvent::Failed { retryable: false, reason: "late native failure".into() })).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod completion_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn v4_completion_survives_recovery_and_legacy_receipts_remain_unknown() {
+        use fullmag_application::{ResourceBudget, ResourceKind, ResourceLease, RunId, TaskRecord};
+        use crate::accepted_field_materialization_worker::completion_tests::fixture;
+        for (reason, converged) in [(fullmag_ir::StageStopReason::Torque, true),
+            (fullmag_ir::StageStopReason::Energy, true), (fullmag_ir::StageStopReason::MaxSteps, false)] {
+            let directory = tempfile::tempdir().unwrap();
+            let store = SessionStore::open(directory.path().join("store")).unwrap();
+            let mut task = TaskRecord::new(RunId::parse("run-completion").unwrap(), "a".repeat(64)).unwrap();
+            task.queue().unwrap();
+            let claim = task.claim(ResourceLease::new("cpu-completion", ResourceKind::Cpu,
+                ResourceBudget { cpu_millis: 1000, memory_bytes: 1024 * 1024,
+                    gpu_memory_bytes: 0, storage_bytes: 1024 * 1024 }).unwrap()).unwrap();
+            let identity = WorkerExecutionReceiptIdentity {
+                schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(), claim,
+                start_message_id: "start".into(), start_sequence: 1,
+                case_id: "case".into(), plan_fingerprint: "c".repeat(64),
+            };
+            let (record, _) = fixture(reason, converged);
+            for legacy in [false, true] {
+                let attempt = directory.path().join(if legacy { "legacy" } else { "v4" });
+                std::fs::create_dir(&attempt).unwrap();
+                write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_STARTED_RECEIPT,
+                    &WorkerExecutionStartedReceipt { identity: identity.clone() }).unwrap();
+                if legacy {
+                    write_immutable_attempt_receipt(&attempt, WORKER_EXECUTION_COMPLETED_RECEIPT,
+                        &WorkerExecutionCompletedReceipt {
+                            schema_version: WORKER_EXECUTION_RECEIPT_SCHEMA.into(), identity: identity.clone(),
+                            status: RunStatus::Completed, completed_step_count: 7, outputs: vec![],
+                            accepted_state_ref: Some(record.source.clone()), observation_source: None,
+                        }).unwrap();
+                } else {
+                    persist_completed_worker_execution(&store, &attempt, &identity, &[],
+                        RunStatus::Completed, 7, &[], Some(&record.source), None, None,
+                        Some(&record.completion)).unwrap();
+                }
+                let recovered = recover_completed_worker_execution(&store, &attempt, &identity, &[],
+                    1024 * 1024, Some(&record.source), None).unwrap();
+                assert!(recovered.recovered_from_receipt);
+                assert_eq!(recovered.completion, (!legacy).then(|| record.completion.clone()));
+                if !legacy {
+                    // The prepublication fence must distinguish every original
+                    // completion field, including absence, after durable recovery.
+                    assert_ne!(recovered.completion, None);
+                    for change in 0..7 {
+                        let mut different = record.completion.clone();
+                        match change {
+                            0 => different.status = "failed".into(),
+                            1 => different.converged = !different.converged,
+                            2 => different.reason = None,
+                            3 => different.metric = None,
+                            4 => different.metric_name = None,
+                            5 => different.metric_value = None,
+                            _ => different.threshold = None,
+                        }
+                        assert_ne!(recovered.completion, Some(different));
+                    }
+                }
+                let mut foreign = identity.clone();
+                foreign.start_message_id = "another-start".into();
+                assert!(recover_completed_worker_execution(&store, &attempt, &foreign, &[],
+                    1024 * 1024, Some(&record.source), None).is_err());
+            }
         }
     }
 }

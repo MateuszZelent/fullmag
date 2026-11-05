@@ -38,6 +38,39 @@ i obrazy helperów. Osobne `just docker-dev-toolchain` jest opcjonalne: pozwala
 przygotować zależności wcześniej albo diagnozować ten etap bez startu aplikacji.
 Nie kompiluje aplikacji; ta buduje się w stałym `backend`.
 
+### Konsola interaktywna
+
+`just fullmag master examples/model.py` uruchamia tryb GUI: zarządzana grupa
+Compose buduje i uruchamia backend oraz frontend, a terminal pokazuje logi
+budowania i obliczeń. Terminal pozostaje aktywny po zakończeniu obliczeń aż do
+Ctrl+C. Jawny tryb GUI ma postać `just fullmag gui master examples/model.py`;
+`just fullmag headless master examples/model.py` uruchamia tylko backend.
+
+Selektorem źródeł może być `master` (główny zarejestrowany checkout), ścieżka
+do zarejestrowanego checkoutu albo nazwa brancha. Dwuelementowa forma domyślna
+korzysta też z domyślnego portu i `gpu_access=auto`. Aby ustawić port lub dostęp
+do GPU (`auto`, `required`, `disabled`), użyj jawnego `gui` albo `headless`, np.:
+`just fullmag gui master examples/model.py 3197 required`. Gdy podajesz tylko GPU,
+przekaż pusty port: `just fullmag headless master examples/model.py "" disabled`.
+
+Przykład dla warstwy z bimeronem i górnego walca:
+
+```sh
+just fullmag master examples/bimeron-cylinder-relax/relax.py
+just fullmag headless master examples/bimeron-cylinder-relax/relax.py
+```
+
+Nowa konsola wymaga zatrzymanej grupy; aktywnej grupy nie przejmuje. Do ponownego
+wykonania skryptu w świadomie pozostawionej działającej grupie służy dotychczasowe
+`fullmag-dev-container`. Tryb headless wymaga skryptu uruchamiającego Solve;
+`study.wait_for_solve(True)` zachowuje swoje oczekiwanie na osobne Compute.
+
+Ctrl+C prosi o zatrzymanie dokładnie zaakceptowanego uruchomienia, a potem
+łagodnie zatrzymuje tylko zweryfikowane kontenery tej grupy; wyniki i wolumeny
+pozostają zachowane. Przy zmienionej tożsamości lub nieznanym wyniku mutacji
+launcher zgłasza stan wymagający recovery zamiast wykonywać niepotwierdzone
+sprzątanie.
+
 `just docker-dev` obsługuje również grupę istniejącą dla wybranego checkoutu.
 Działający backend z pasującymi wejściami jest używany ponownie. Zmiana źródeł
 uruchamia kontrolowany restart bez aktywnych obliczeń; backend sprawdza istniejący
@@ -256,7 +289,14 @@ Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
 Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
 próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
 `operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
-kontrolnego i checkoutu tej grupy. Dowody są ponownie sprawdzane przed publikacją.
+kontrolnego i checkoutu tej grupy. Dla początkowej próby WSL ext4 punktem
+odniesienia jest marker hosta w przypiętym bindzie `/state` z Compose. Alias
+WSL wymaga zgodności korzenia montowania i inode. Montowanie Windows wymaga
+dowodu natywnego Windows i mapowania DrvFs. Brakującą ścieżkę można
+zakwalifikować wyłącznie dla kontenera w stanie `exited` z PID 0. Junction
+wychodzący poza montowany katalog wymaga zgodnego odsyłacza w DrvFs i pełnego
+dowodu dla jego celu. Zagnieżdżone zewnętrzne junctiony kończą się odmową.
+Dowody i stan kontenerów są ponownie sprawdzane przed publikacją.
 Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
 wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
 BuildKit zachowują własne, globalne kontrole.
@@ -471,6 +511,40 @@ Nie ponawia skryptu i nie zmienia danych sesji. Inny błąd, uruchomiony backend
 lub zaakceptowany run pozostawiają kwarantannę. Trasa na żywej grupie:
 **NOT VERIFIED**.
 
+Przepełnienie wyjścia helpera podczas odczytu flag startupu ma osobną,
+ograniczoną trasę zachowującą historię terminalnych runów:
+
+```bash
+just docker-dev-reconcile-helper-output "<checkout>" <activation-attempt>
+just docker-dev-reconcile-helper-output "<checkout>" <activation-attempt> true <plan-sha256>
+```
+
+Domyślny preview niczego nie zatrzymuje. Apply wymaga niezmienionego planu,
+dokładnego zapisanego HTTP 500 dla limitu 1048576 bajtów, pustej aktywnej sesji,
+terminalnych katalogów zadań, zwolnionych lease i dowodu braku `RunIntent`
+tego żądania we wszystkich zachowanych runach. Ta trasa nie zmienia warunków
+starszego `docker-dev-release-unknown-activation`.
+
+Operator zapisuje trwały intent przed SIGTERM. Nie wysyła SIGKILL; po przerwanej
+obserwacji wznowienie wymaga tego samego planu i tej samej inkarnacji backendu.
+Jeżeli backend nadal działa, ponownie sprawdza brak aktywnej sesji przed sygnałem.
+Po zatrzymaniu wymaga `Exited (0)`, native `drained`, ponownego sprawdzenia
+magazynu i niezmienionej historii. Dopiero wtedy publikuje dowód
+`terminal-history-output-proof.json` i pozwala oryginalnemu helperowi zwolnić
+jego techniczny lease. Oryginalny marker `started`, receipt i wszystkie wyniki
+pozostają zachowane; żądania startupu nie wolno ponawiać. Następny zarządzany
+`docker-dev` może wznowić zatrzymaną grupę z zachowanym storage, bez fresh-state.
+Przypadek z 14 historycznymi terminalnymi runami zweryfikowano w runtime;
+pozostałe stany nadal podlegają opisanym odmowom i testom fail-closed.
+
+Startup odczytuje teraz tylko `interactive_session_requested` i `wait_for_solve`
+przez wewnętrzne `export-run-config --runtime-flags-only`. Dokument sceny nadal
+przenosi odwołania do plikowych stanów magnetyzacji. Pełne wektory nie trafiają
+do wyjścia helpera służącego wyłącznie odczytowi tych flag; limit 1 MiB i limit
+czasu pozostają bez zmian. Lekki test regresji obejmuje 18528 wektorów i
+nieprawidłowy kontener metadanych; odbiór tej zmiany przez przebudowane API
+wymaga osobnego dowodu managed runtime.
+
 Każde jawne wywołanie otrzymuje nowy domyślny `request_id` w postaci
 `docker-volume-<uuid>`, zapisany w receipcie przed wysłaniem żądania. Dzięki temu
 ten sam plik może posłużyć do kolejnej symulacji. Jawny `request_id` pozostaje
@@ -589,6 +663,56 @@ Nierozstrzygnięty wcześniejszy intent blokuje następne zwiększenie, zamiast
 automatycznie ponawiać `docker update`. Limit 200 GiB wymaga VM większej niż
 200 GiB z zapasem dla innych usług; komenda nie restartuje Docker/WSL ani innych grup.
 Odbiór uruchomienia API, meshu i solvera jest osobnym dowodem.
+
+## Przywrócenie zapisanego budżetu po odmowie cold startu
+
+Wariant `cold-memory-increase-restore-stored-budget` dotyczy jednej grupy DEV,
+w której nowy start utworzył wyłącznie diagnostyczne API, ponieważ konfiguracja
+żąda większego RAM niż zachowana polityka group ledgeru. CPU, GPU, storage,
+host, topology, revision i epoch muszą być identyczne. Historyczny runtime musi
+mieć uwierzytelniony idle-drain; same wpisy `released` ani brak PID nie stanowią
+wystarczającego dowodu. Gotowość rzeczywistego odtworzenia pozostaje
+**NOT VERIFIED** do zakończenia operacji i kontroli nowego API.
+
+Podgląd używa aktualnej failed-development próby, jej konfiguracji, kontenera,
+obrazu oraz osobnego historycznego idle-drain:
+
+```bash
+python3 -B scripts/docker_dev.py --repo-root <source> stop-preowner-policy-volume \
+  --variant cold-memory-increase-restore-stored-budget \
+  --source-root <source> --attempt <failed-development-uuid> \
+  --config-sha256 <compose-sha256> --backend-container-id <full-container-id> \
+  --image-id <sha256:image-id> --drain-attempt <successful-idle-drain-uuid>
+```
+
+Apply wymaga tych samych pinów, `--apply` oraz
+`--expected-plan-sha256 <preview-sha256>`. Kontrola ponownie uwierzytelnia
+historyczny native drain, bieżący failure fence i incarnation, release proofs,
+wszystkie lokalne lease, terminalne katalogi runów, wolny OWNER.lock i inventory.
+Read-only mount ledgeru zachowuje rzeczywisty volume subpath z HostConfig.
+Nieznany lub aktywny konsument blokuje mutację.
+
+Operacja zatrzymuje bieżący backend diagnostyczny przez SIGTERM i ograniczoną
+obserwację bez SIGKILL. Frontend pozostaje uruchomiony. Zachowuje oryginalny
+native drain, ledger, rezerwacje, lease, sesje i wyniki; nie wykonuje Solve.
+Nowy typed journal wiąże intent, plan i terminal operacji. Przerwanej operacji
+nie zastępuje nowy Stop ani usunięcie markerów: wymaga kontynuacji dokładnego
+intentu, bez ponownego sygnału i z idempotentną publikacją. Kontynuacja używa
+tej samej komendy i wszystkich pierwotnych pinów oraz `--apply`,
+`--expected-plan-sha256 <preview-sha256>` i
+`--continue-intent-sha256 <intent-sha256>`. Obserwuje ten sam backend;
+nie wysyła ponownego sygnału. Nieznany wynik nadal zachowuje blokadę i dowody.
+
+Istniejące `recreate-volume` konsumuje uwierzytelniony journal i przywraca
+budżet wynikający z zapisanej polityki oraz historycznego Compose. Dotyczy to
+tej grupy; globalny `.env` pozostaje bez zmian. Uwierzytelniony pin ma pierwszeństwo przed globalnymi ustawieniami
+backendu i saved-budget. Pojemność sprawdza się dla efektywnego budżetu
+przed końcowym hashem Compose. Jego pochodzenie jest
+zapisane w receipcie i ponownie uwierzytelniane podczas kolejnego retained startu.
+Nie powstaje fikcyjny receipt zwiększenia zasobów ani nowy ledger. Wymagany
+native contract, explicit untracked inputs i brak startup Solve pozostają
+przypięte. Zdrowe API, bieżący native owner i fizyczne wykonanie solvera są
+oddzielnymi bramkami; pozytywny preview nie dowodzi ich ukończenia.
 
 ## Zatrzymanie zbędnej kontroli rollbacków przed API
 
@@ -868,3 +992,26 @@ CAS. Każdy ponowny odczyt zatrzymanej pary sprawdza identyfikator, obraz,
 fingerprint, `StartedAt` oraz poprawne zakończenie kontenera. Dotychczasowe
 bramki natywnego admission, ledgeru i magazynu wszystkich runów nadal obowiązują.
 Opcje nie są dostępne dla zwykłego readmission ani udanego terminala.
+
+## Zatrzymanie Linux DEV po OOM procesu API
+
+Gdy proces API został zabity przez OOM, a native owner pozostaje READY,
+`scripts/docker_volume_stop_failed.py` może zamknąć dokładnie przypiętą grupę.
+Wymaga pełnych ID kontenera i obrazu, SHA256 process-tree oraz jednoznacznej
+tożsamości źródeł, storage i prywatnego ledgeru. Pod istniejącymi blokadami
+weryfikuje brak API/listenera, terminalność wszystkich katalogów zadań,
+zwolnienie lease/rezerwacji i nieobecność pending transactions.
+
+Dwie obserwacje muszą potwierdzić ten sam stan przyjęcia pracy. Porównanie
+zachowuje schemat, politykę i historię, node policy, reservations, readiness,
+katalogi, lease oraz release proofs. Pomija wyłącznie wskaźnik
+`runtime_state.snapshot_sha256`, który zmienia sampler statystyk. Pełne surowe
+hashe i obie obserwacje pozostają w receipcie operacji do diagnozy; ich zmiana
+nie udaje zmiany stanu zadań. Zmiana readiness, rezerwacji lub dowolnego
+innego pola nadal odmawia stopu.
+
+SIGTERM jest wysyłany raz, bez wymuszonego SIGKILL. Sukces wymaga
+uwierzytelnionego native drainu, zgodnych inkarnacji i zamkniętych procesów.
+`--stop-frontend` zamyka następnie wyłącznie frontend tej samej grupy.
+Nie zmienia stanów tasków, nie usuwa wyników ani nie ponawia Solve.
+Niepotwierdzony efekt zachowuje lease i dowody do recovery.

@@ -27874,6 +27874,17 @@
           "non_injective": {
             "type": "boolean"
           },
+          "observation_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedObservationFrameRef",
+                "description": "Accepted source observation, when the exact selected carrier proves it.\nNull means cross-quantity temporal coherence cannot be established."
+              }
+            ]
+          },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
           },
@@ -28030,6 +28041,56 @@
           "partial",
           "empty",
           "occupied_measure"
+        ],
+        "type": "object"
+      },
+      "PlanarFieldOverlayState": {
+        "additionalProperties": false,
+        "description": "Presentation of an additional field on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
+        "properties": {
+          "colormap": {
+            "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/PlanarFieldComponent"
+          },
+          "id": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/PlanarColorRangeState"
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "raster_visible": {
+            "type": "boolean"
+          },
+          "vector_style": {
+            "$ref": "#/components/schemas/PlanarVectorStyleState"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "view_scope": {
+            "$ref": "#/components/schemas/PlanarViewScopeState"
+          }
+        },
+        "required": [
+          "id",
+          "quantity_id",
+          "component",
+          "view_scope",
+          "colormap",
+          "range",
+          "raster_opacity",
+          "raster_visible",
+          "vectors_visible",
+          "vector_style"
         ],
         "type": "object"
       },
@@ -29093,6 +29154,25 @@
             "type": "object"
           },
           {
+            "description": "Canonical scene object identity, intersected with the selected source.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "enum": [
@@ -29200,6 +29280,16 @@
           "display_unit": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "field_overlays": {
+            "description": "Omitted preserves the list; a supplied list replaces it atomically.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -29367,6 +29457,13 @@
               "string",
               "null"
             ]
+          },
+          "field_overlays": {
+            "description": "Additional quantities in the same physical planar view.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": "array"
           },
           "interaction": {
             "$ref": "#/components/schemas/PlanarInteractionState"
@@ -33707,6 +33804,209 @@
         "required": [
           "path",
           "kind"
+        ],
+        "type": "object"
+      },
+      "RunPerformancePointResource": {
+        "description": "Bounded automatic run telemetry. GPU samples describe the whole device.",
+        "properties": {
+          "cpu_percent": {
+            "description": "Process CPU utilization; can exceed 100 percent for multiple cores.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_percent": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "gpu_power_watts": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rss_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "elapsed_monotonic_ns"
+        ],
+        "type": "object"
+      },
+      "RunPerformanceResource": {
+        "properties": {
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collection_overhead_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "elapsed_monotonic_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gpu_scope": {
+            "type": "string"
+          },
+          "gpu_unavailable_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_evaluate_host_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_rejected_attempts": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_step_wall_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/RunPerformancePointResource"
+            },
+            "maxItems": 120,
+            "type": "array"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "rows_dropped": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_sequence": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unique_step_callback_records": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "state",
+          "sample_sequence",
+          "elapsed_monotonic_ns",
+          "unique_step_callback_records",
+          "rows_dropped",
+          "gpu_scope",
+          "points"
         ],
         "type": "object"
       },
@@ -56189,6 +56489,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56416,6 +56726,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56649,6 +56969,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56889,6 +57219,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -57110,6 +57460,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57366,6 +57736,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57590,6 +57970,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57820,6 +58210,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58061,6 +58461,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58299,6 +58709,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58534,6 +58954,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58782,6 +59212,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -59011,6 +59461,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59275,6 +59745,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59507,6 +59987,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59745,6 +60235,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -63317,6 +63817,40 @@
               }
             },
             "description": "GPU telemetry or degraded unavailable response"
+          }
+        },
+        "tags": [
+          "diagnostics"
+        ]
+      }
+    },
+    "/v2/sessions/current/diagnostics/performance": {
+      "get": {
+        "operationId": "diagnostics_get_sessions_current_diagnostics_performance",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPerformanceResource"
+                }
+              }
+            },
+            "description": "Bounded automatic telemetry for the verified current run attempt"
+          },
+          "304": {
+            "description": "Performance snapshot not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "409": {
+            "description": "Retryable performance observation conflict"
           }
         },
         "tags": [

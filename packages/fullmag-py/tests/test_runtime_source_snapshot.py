@@ -132,6 +132,32 @@ class RuntimeSourceSnapshotTests(unittest.TestCase):
                     str(Path(temporary) / "missing.py"),
                 ])
 
+    def test_scene_export_rejects_a_pinned_mesh_outside_the_script_directory(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script_dir = root / "scripts"
+            script_dir.mkdir()
+            (script_dir / "origin.txt").write_text("origin", encoding="utf-8")
+            source = script_dir / "workspace.py"
+            reference = {
+                "source": str(root / "outside.fullmag-mesh"),
+                "sha256": "a" * 64,
+                "build_requested": False,
+            }
+            source.write_text(
+                SCRIPT_TEMPLATE.replace('study.engine("fdm")', 'study.engine("fem")')
+                + f"fm.runtime_metadata('fem_domain_mesh', {reference!r})\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output), redirect_stderr(StringIO()):
+                status = _run_cli(["export-scene-document", "--script", str(source)])
+        self.assertEqual(status, 2)
+        rejection = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(rejection["schema"], "fullmag.script-load-rejection.v1")
+        self.assertEqual(rejection["error_type"], "PinnedFemMeshSourceOutsideRoot")
+        self.assertIn("source script's directory", rejection["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

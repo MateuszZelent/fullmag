@@ -257,6 +257,64 @@ fn endpoint_cache_flag(label: &str, value: u32) -> Result<bool, RunError> {
 }
 
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+fn cpu_fixed_coupling_from_ffi(
+    raw: &ffi::fullmag_fem_cpu_fixed_coupling_v1,
+) -> Result<Option<crate::types::CpuFixedCouplingTelemetry>, RunError> {
+    if raw.abi_version != ffi::FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION
+        || raw.struct_size as usize != std::mem::size_of::<ffi::fullmag_fem_cpu_fixed_coupling_v1>()
+    {
+        return Err(RunError {
+            message: "native FEM returned an incompatible CPU fixed coupling ABI v1 record".into(),
+        });
+    }
+    if !endpoint_cache_flag("CPU fixed coupling available", raw.available)? {
+        if raw.rhs != ffi::fullmag_fem_cpu_transfer_diagnostics_v1::default()
+            || raw.recovery != ffi::fullmag_fem_cpu_transfer_diagnostics_v1::default()
+        {
+            return Err(RunError {
+                message: "unavailable CPU fixed coupling snapshot contains workspace counters".into(),
+            });
+        }
+        return Ok(None);
+    }
+    fn convert(
+        raw: &ffi::fullmag_fem_cpu_transfer_diagnostics_v1,
+    ) -> Result<crate::types::CpuFixedTransferDiagnostics, RunError> {
+        let state = match raw.state {
+            0 => "not-built",
+            1 => "ready",
+            2 => "quadrature",
+            value => return Err(RunError {
+                message: format!("native FEM returned unknown CPU transfer state {value}"),
+            }),
+        };
+        let bytes = raw.reason.iter().map(|value| *value as u8).collect::<Vec<_>>();
+        let reason = std::ffi::CStr::from_bytes_until_nul(&bytes)
+            .map_err(|_| RunError { message: "unterminated native CPU transfer reason".into() })?
+            .to_str()
+            .map_err(|_| RunError { message: "non-UTF8 native CPU transfer reason".into() })?
+            .to_owned();
+        Ok(crate::types::CpuFixedTransferDiagnostics {
+            state: state.into(),
+            reason,
+            build_count: raw.build_count,
+            reuse_count: raw.reuse_count,
+            nnz: raw.nnz,
+            persistent_bytes: raw.persistent_bytes,
+            setup_wall_time_ns: raw.setup_wall_time_ns,
+            setup_rss_baseline_bytes: raw.setup_rss_baseline_bytes,
+            setup_observed_peak_rss_bytes: raw.setup_observed_peak_rss_bytes,
+            setup_observed_peak_delta_bytes: raw.setup_observed_peak_delta_bytes,
+            setup_estimated_peak_delta_bytes: raw.setup_estimated_peak_delta_bytes,
+        })
+    }
+    Ok(Some(crate::types::CpuFixedCouplingTelemetry {
+        rhs: convert(&raw.rhs)?,
+        recovery: convert(&raw.recovery)?,
+    }))
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn endpoint_cache_telemetry_from_ffi(
     raw: &ffi::fullmag_fem_endpoint_cache_telemetry_v1,
 ) -> Result<Option<fullmag_quantities::EndpointCacheTelemetry>, RunError> {
@@ -4379,6 +4437,7 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         copy_demag_diagnostics(&mut step_stats, &stats);
+        step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
@@ -4567,6 +4626,20 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM native endpoint cache telemetry snapshot failed"));
         }
         endpoint_cache_telemetry_from_ffi(&raw)
+    }
+
+    /// Read counters only. This query never refreshes fields or advances the solver.
+    pub(crate) fn cpu_fixed_coupling_telemetry(
+        &self,
+    ) -> Result<Option<crate::types::CpuFixedCouplingTelemetry>, RunError> {
+        let mut raw = ffi::fullmag_fem_cpu_fixed_coupling_v1::default();
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(self.handle, &mut raw)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM CPU fixed coupling telemetry snapshot failed"));
+        }
+        cpu_fixed_coupling_from_ffi(&raw)
     }
 
     pub fn invalidate_fsal(&mut self) -> Result<(), RunError> {
@@ -4823,6 +4896,7 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         copy_demag_diagnostics(&mut step_stats, &stats);
+        step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
@@ -5175,6 +5249,7 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         copy_demag_diagnostics(&mut step_stats, &stats);
+        step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
@@ -6370,6 +6445,57 @@ fn last_global_error_or(fallback: &str) -> String {
         }
     }
     fallback.to_string()
+}
+
+#[cfg(all(test, any(feature = "fem-gpu", feature = "fem-native")))]
+mod cpu_fixed_coupling_tests {
+    use super::*;
+
+    #[test]
+    fn versioned_cpu_transfer_snapshot_preserves_counts_and_refusal_reason() {
+        let mut raw = ffi::fullmag_fem_cpu_fixed_coupling_v1::default();
+        raw.abi_version = ffi::FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION;
+        raw.struct_size = std::mem::size_of_val(&raw) as u32;
+        assert!(cpu_fixed_coupling_from_ffi(&raw).unwrap().is_none());
+        raw.available = 1;
+        raw.rhs.state = 1;
+        raw.rhs.build_count = 1;
+        raw.rhs.reuse_count = 77;
+        raw.rhs.nnz = 99;
+        raw.rhs.persistent_bytes = 4096;
+        raw.rhs.setup_wall_time_ns = 12345;
+        raw.rhs.setup_rss_baseline_bytes = 1000;
+        raw.rhs.setup_observed_peak_rss_bytes = 1900;
+        raw.rhs.setup_observed_peak_delta_bytes = 900;
+        raw.rhs.setup_estimated_peak_delta_bytes = 1500;
+        raw.recovery.state = 2;
+        for (target, byte) in raw.recovery.reason.iter_mut().zip(b"budget refused") {
+            *target = *byte as std::ffi::c_char;
+        }
+        let telemetry = cpu_fixed_coupling_from_ffi(&raw).unwrap().unwrap();
+        assert_eq!(telemetry.rhs.state, "ready");
+        assert_eq!(telemetry.rhs.build_count, 1);
+        assert_eq!(telemetry.rhs.reuse_count, 77);
+        assert_eq!(telemetry.rhs.nnz, 99);
+        assert_eq!(telemetry.rhs.persistent_bytes, 4096);
+        assert_eq!(telemetry.rhs.setup_wall_time_ns, 12345);
+        assert_eq!(telemetry.rhs.setup_rss_baseline_bytes, 1000);
+        assert_eq!(telemetry.rhs.setup_observed_peak_rss_bytes, 1900);
+        assert_eq!(telemetry.rhs.setup_observed_peak_delta_bytes, 900);
+        assert_eq!(telemetry.rhs.setup_estimated_peak_delta_bytes, 1500);
+        assert_eq!(telemetry.recovery.state, "quadrature");
+        assert_eq!(telemetry.recovery.reason, "budget refused");
+        raw.available = 0;
+        assert!(cpu_fixed_coupling_from_ffi(&raw).is_err());
+        raw.available = 1;
+        raw.rhs.state = 99;
+        assert!(cpu_fixed_coupling_from_ffi(&raw).is_err());
+        raw.rhs.state = 1;
+        raw.recovery.reason.fill(1);
+        assert!(cpu_fixed_coupling_from_ffi(&raw).is_err());
+        raw.abi_version = 99;
+        assert!(cpu_fixed_coupling_from_ffi(&raw).is_err());
+    }
 }
 
 #[cfg(all(test, feature = "fem-gpu"))]

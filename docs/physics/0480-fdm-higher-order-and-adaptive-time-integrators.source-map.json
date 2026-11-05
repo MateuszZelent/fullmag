@@ -1,0 +1,868 @@
+{
+  "document": {
+    "path": "docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Separate MFEM time-integrator realization in notes 0490 and 0960; this FDM alias change adds no FEM qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Separate MFEM/CUDA realization in notes 0490 and 0960; no device execution evidence is asserted by this page."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-rk-llg",
+      "symbols": [
+        "m",
+        "t",
+        "gamma",
+        "alpha",
+        "H",
+        "f"
+      ],
+      "sources": [
+        "llg"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-effective-field",
+      "symbols": [
+        "H",
+        "Hex",
+        "Hd",
+        "Hdmi",
+        "Hext"
+      ],
+      "sources": [
+        "llg"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-tangent",
+      "symbols": [
+        "m",
+        "f",
+        "t"
+      ],
+      "sources": [
+        "llg"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-ode",
+      "symbols": [
+        "y",
+        "F",
+        "t",
+        "N"
+      ],
+      "sources": [
+        "llg"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-stage",
+      "symbols": [
+        "Y",
+        "yn",
+        "dt",
+        "s",
+        "j",
+        "ell",
+        "a",
+        "K",
+        "F",
+        "c",
+        "t",
+        "n"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-accepted",
+      "symbols": [
+        "ynext",
+        "yn",
+        "dt",
+        "s",
+        "j",
+        "b",
+        "K"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-embedded",
+      "symbols": [
+        "ylow",
+        "yn",
+        "dt",
+        "s",
+        "j",
+        "blow",
+        "K"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-error",
+      "symbols": [
+        "e",
+        "ynext",
+        "ylow"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-normalize",
+      "symbols": [
+        "mi",
+        "normal"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-cell-error",
+      "symbols": [
+        "etai",
+        "ei",
+        "atol",
+        "rtol",
+        "mn",
+        "mstage",
+        "epsilon"
+      ],
+      "sources": [
+        "cpu-error",
+        "cpu-rk23"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-error-norm",
+      "symbols": [
+        "eta",
+        "etai",
+        "i"
+      ],
+      "sources": [
+        "cpu-error",
+        "cpu-rk23"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-accept",
+      "symbols": [
+        "eta"
+      ],
+      "sources": [
+        "cpu-error",
+        "cpu-rk23"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-controller-proposal",
+      "symbols": [
+        "dtnew",
+        "safety",
+        "dt",
+        "eta",
+        "q"
+      ],
+      "sources": [
+        "research"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-clamp-proposal",
+      "symbols": [
+        "dtnew",
+        "dt"
+      ],
+      "sources": [
+        "research"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-bs23",
+      "symbols": [
+        "normal",
+        "mi",
+        "dt",
+        "k",
+        "n"
+      ],
+      "sources": [
+        "cpu-rk23",
+        "cuda-rk23",
+        "cuda-multi"
+      ]
+    },
+    {
+      "id": "eq-fdm-rk-initial-dt-proposal",
+      "symbols": [
+        "dt",
+        "gamma",
+        "H"
+      ],
+      "sources": [
+        "research"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "m",
+      "meaning": "reduced magnetization",
+      "si_unit": "1"
+    },
+    {
+      "id": "mi",
+      "latex": "m_i",
+      "meaning": "reduced magnetization of cell i",
+      "si_unit": "1"
+    },
+    {
+      "id": "H",
+      "latex": "H_{\\mathrm{eff}}",
+      "meaning": "effective field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Hex",
+      "latex": "H_{\\mathrm{ex}}",
+      "meaning": "exchange field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Hd",
+      "latex": "H_{\\mathrm{demag}}",
+      "meaning": "demagnetizing field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Hdmi",
+      "latex": "H_{\\mathrm{DMI}}",
+      "meaning": "DMI field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "Hext",
+      "latex": "H_{\\mathrm{ext}}",
+      "meaning": "external field",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "gamma",
+      "latex": "\\gamma",
+      "meaning": "gyromagnetic ratio",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    },
+    {
+      "id": "alpha",
+      "latex": "\\alpha",
+      "meaning": "Gilbert damping",
+      "si_unit": "1"
+    },
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "physical time",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "dt",
+      "latex": "dt",
+      "meaning": "attempt timestep",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "dtnew",
+      "latex": "dt_{\\mathrm{new}}",
+      "meaning": "proposed next timestep",
+      "si_unit": "\\mathrm{s}"
+    },
+    {
+      "id": "f",
+      "latex": "f",
+      "meaning": "cell LLG right-hand side",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "F",
+      "latex": "F",
+      "meaning": "semi-discrete LLG right-hand side",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "y",
+      "latex": "y",
+      "meaning": "concatenated reduced state",
+      "si_unit": "1"
+    },
+    {
+      "id": "yn",
+      "latex": "y_n",
+      "meaning": "accepted reduced state",
+      "si_unit": "1"
+    },
+    {
+      "id": "ynext",
+      "latex": "y_{n+1}",
+      "meaning": "high-order candidate",
+      "si_unit": "1"
+    },
+    {
+      "id": "ylow",
+      "latex": "\\tilde y_{n+1}",
+      "meaning": "embedded low-order candidate",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "number of active cells",
+      "si_unit": "1"
+    },
+    {
+      "id": "i",
+      "latex": "i",
+      "meaning": "active-cell index",
+      "si_unit": "1"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "accepted-step index",
+      "si_unit": "1"
+    },
+    {
+      "id": "s",
+      "latex": "s",
+      "meaning": "number of RK stages",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "RK stage index",
+      "si_unit": "1"
+    },
+    {
+      "id": "ell",
+      "latex": "\\ell",
+      "meaning": "previous RK stage index",
+      "si_unit": "1"
+    },
+    {
+      "id": "Y",
+      "latex": "Y^{(j)}",
+      "meaning": "unprojected RK stage state",
+      "si_unit": "1"
+    },
+    {
+      "id": "K",
+      "latex": "K^{(j)}",
+      "meaning": "RK stage right-hand side",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "a",
+      "latex": "a_{j\\ell}",
+      "meaning": "RK tableau stage weights",
+      "si_unit": "1"
+    },
+    {
+      "id": "b",
+      "latex": "b_j",
+      "meaning": "high-order RK weights",
+      "si_unit": "1"
+    },
+    {
+      "id": "blow",
+      "latex": "\\tilde b_j",
+      "meaning": "embedded RK weights",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c_j",
+      "meaning": "RK stage time fraction",
+      "si_unit": "1"
+    },
+    {
+      "id": "e",
+      "latex": "e_{n+1}",
+      "meaning": "embedded state difference",
+      "si_unit": "1"
+    },
+    {
+      "id": "ei",
+      "latex": "e_i",
+      "meaning": "cell embedded state difference",
+      "si_unit": "1"
+    },
+    {
+      "id": "mhi",
+      "latex": "m_i^{hi}",
+      "meaning": "high-order cell state",
+      "si_unit": "1"
+    },
+    {
+      "id": "atol",
+      "latex": "\\mathrm{atol}",
+      "meaning": "absolute reduced-state tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "rtol",
+      "latex": "\\mathrm{rtol}",
+      "meaning": "relative reduced-state tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "etai",
+      "latex": "\\eta_i",
+      "meaning": "normalized cell error",
+      "si_unit": "1"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta",
+      "meaning": "global normalized error",
+      "si_unit": "1"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "error-estimator controller exponent denominator",
+      "si_unit": "1"
+    },
+    {
+      "id": "safety",
+      "latex": "\\mathrm{safety}",
+      "meaning": "controller safety factor",
+      "si_unit": "1"
+    },
+    {
+      "id": "normal",
+      "latex": "\\mathcal{N}",
+      "meaning": "cellwise unit-vector projection",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "k_1,k_2,k_3",
+      "meaning": "Bogacki-Shampine stage derivatives",
+      "si_unit": "\\mathrm{s^{-1}}"
+    },
+    {
+      "id": "mn",
+      "latex": "m_i^n",
+      "meaning": "accepted cell state used for error scaling",
+      "si_unit": "1"
+    },
+    {
+      "id": "mstage",
+      "latex": "m_i^{stage}",
+      "meaning": "current cell stage state used for error scaling",
+      "si_unit": "1"
+    },
+    {
+      "id": "epsilon",
+      "latex": "\\epsilon",
+      "meaning": "positive floor of error scale",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-model",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class LLG",
+      "responsibility": "Canonical alias validation and Python model serialization."
+    },
+    {
+      "id": "python-adaptive",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class AdaptiveTimestep",
+      "responsibility": "Actual parameter defaults, validation and adaptive IR."
+    },
+    {
+      "id": "python-refresh",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class FieldRefreshPolicy",
+      "responsibility": "Optional field-refresh controls."
+    },
+    {
+      "id": "python-absolute",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "_from_max_error",
+      "responsibility": "Absolute max_err tolerance-mode normalization."
+    },
+    {
+      "id": "python-solver",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "StudyBuilder.solver convenience policy authoring (delegates to module solver)."
+    },
+    {
+      "id": "python-relax",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_build_relax_llg_dynamics",
+      "responsibility": "Relaxation integrator and separate clock lowering."
+    },
+    {
+      "id": "ir-method",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "IntegratorChoice",
+      "responsibility": "Canonical FDM method tokens."
+    },
+    {
+      "id": "ir-projection",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "FdmProjectionPolicyIR",
+      "responsibility": "Resolved unit-sphere stage policy."
+    },
+    {
+      "id": "ir-adaptive",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "AdaptiveTimeStepIR",
+      "responsibility": "Typed adaptive time policy."
+    },
+    {
+      "id": "planner-single",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "Single-grid FDM execution resolution."
+    },
+    {
+      "id": "planner-multi",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Multilayer method/adaptive legality."
+    },
+    {
+      "id": "runner-multi",
+      "path": "crates/fullmag-runner/src/fdm/mod.rs",
+      "symbol": "reject_adaptive_multilayer_plan",
+      "responsibility": "Fail-closed runtime admission, separate BB policy."
+    },
+    {
+      "id": "llg",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "llg_rhs_from_field",
+      "responsibility": "Cell LLG field right-hand side."
+    },
+    {
+      "id": "cpu-rk23",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk23_step_buf",
+      "responsibility": "CPU projected Bogacki-Shampine stages."
+    },
+    {
+      "id": "cpu-rk4",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk4_step_buf",
+      "responsibility": "CPU RK4 stages."
+    },
+    {
+      "id": "cpu-rk45",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "rk45_step_buf",
+      "responsibility": "CPU Dormand-Prince stages and FSAL."
+    },
+    {
+      "id": "cpu-error",
+      "path": "crates/fullmag-engine/src/fdm/cpu/integrators.rs",
+      "symbol": "max_error_norm_buf",
+      "responsibility": "Actual CPU embedded-error reduction."
+    },
+    {
+      "id": "cuda-rk23",
+      "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu",
+      "symbol": "launch_rk23_step_fp64",
+      "responsibility": "Native CUDA FP64 single-grid RK23 realization."
+    },
+    {
+      "id": "cuda-multi",
+      "path": "backends/fdm/gpu/cuda/integrators/multilayer_explicit_rk.cu",
+      "symbol": "launch_multilayer_rk23_step_fp64",
+      "responsibility": "Fixed staged CUDA FP64 RK23 realization."
+    },
+    {
+      "id": "alias-test",
+      "path": "packages/fullmag-py/tests/test_rk32_alias.py",
+      "symbol": "class Rk32AliasTests",
+      "responsibility": "Executable runtime-independent normalization and mutual-exclusion tests."
+    },
+    {
+      "id": "research",
+      "path": "docs/physics/0480-fdm-higher-order-and-adaptive-time-integrators.md",
+      "symbol": "DOC-ANCHOR:fdm-rk-research-proposals",
+      "responsibility": "Historical proposed controller/RK families, not executable support evidence.",
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.LLG.gamma",
+        "type": "float",
+        "default": "2.211e5",
+        "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}",
+        "validation": "positive finite",
+        "meaning": "LLG gyromagnetic coefficient",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.gyromagnetic_ratio"
+      },
+      {
+        "python": "fm.LLG.integrator",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "1",
+        "validation": "supported token; rk32 and bs23 normalize to rk23; dp54 to rk45",
+        "meaning": "requested method family",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.integrator"
+      },
+      {
+        "python": "fm.LLG.fixed_timestep",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite; excludes adaptive_timestep",
+        "meaning": "fixed physical step",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.fixed_timestep"
+      },
+      {
+        "python": "fm.LLG.adaptive_timestep",
+        "type": "AdaptiveTimestep | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "adaptive method or auto; excludes fixed_timestep",
+        "meaning": "embedded controller configuration",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep"
+      },
+      {
+        "python": "fm.LLG.field_refresh",
+        "type": "FieldRefreshPolicy | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "validated optional field-refresh policy",
+        "meaning": "expensive operator cadence",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.field_refresh"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.atol",
+        "type": "float",
+        "default": "1e-6",
+        "si_unit": "1",
+        "validation": "nonnegative finite; atol and rtol not both zero",
+        "meaning": "absolute reduced-state error tolerance",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.atol"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.rtol",
+        "type": "float",
+        "default": "1e-3",
+        "si_unit": "1",
+        "validation": "nonnegative finite; atol and rtol not both zero",
+        "meaning": "relative reduced-state error tolerance",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.rtol"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.dt_initial",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite or None; within dt_min and dt_max",
+        "meaning": "requested first attempt; None preserved",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_initial"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.dt_min",
+        "type": "float",
+        "default": "1e-15",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite",
+        "meaning": "minimum permitted attempt",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_min"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.dt_max",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite or None; not below dt_min",
+        "meaning": "maximum permitted attempt",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_max"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.safety",
+        "type": "float",
+        "default": "0.9",
+        "si_unit": "1",
+        "validation": "0 < safety <= 1",
+        "meaning": "controller safety factor",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.safety"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.growth_limit",
+        "type": "float",
+        "default": "2.0",
+        "si_unit": "1",
+        "validation": "finite > 1",
+        "meaning": "maximum timestep growth ratio",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.growth_limit"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.shrink_limit",
+        "type": "float",
+        "default": "0.2",
+        "si_unit": "1",
+        "validation": "0 < shrink_limit < 1",
+        "meaning": "minimum timestep ratio",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.shrink_limit"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.max_spin_rotation",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "positive finite or None",
+        "meaning": "optional maximum spin rotation",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.max_spin_rotation"
+      },
+      {
+        "python": "fm.AdaptiveTimestep.norm_tolerance",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive finite or None",
+        "meaning": "optional norm-defect threshold",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.norm_tolerance"
+      },
+      {
+        "python": "fm.FieldRefreshPolicy.demag_interval_s",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "positive finite or None",
+        "meaning": "demag refresh interval",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.field_refresh.demag_interval_s"
+      },
+      {
+        "python": "study.solver.integrator",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "method with canonical alias normalization",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.integrator"
+      },
+      {
+        "python": "study.solver.fix_dt",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "fixed step excluding adaptive controls",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.fixed_timestep"
+      },
+      {
+        "python": "study.solver.dt_initial",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "first adaptive attempt; omission retained",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_initial"
+      },
+      {
+        "python": "study.solver.dt_min",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "minimum adaptive attempt",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_min"
+      },
+      {
+        "python": "study.solver.dt_max",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{s}",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "maximum adaptive attempt",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.dt_max"
+      },
+      {
+        "python": "study.solver.max_err",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "validated by study.solver; fixed/adaptive controls mutually exclusive",
+        "meaning": "absolute reduced-magnetization error; rtol zero",
+        "backend_support": "FDM CPU/CUDA single-grid; staged multilayer adaptive rejected; FEM governed by 0490/0960",
+        "problem_ir": "study.dynamics.adaptive_timestep.atol"
+      }
+    ]
+  }
+}

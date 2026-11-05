@@ -619,6 +619,7 @@ fn validate_direct_minimizer_realization(
 ) -> std::io::Result<()> {
     let relaxation = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => fdm.relaxation.as_ref(),
+        BackendPlanIR::FdmMultilayer(fdm) => fdm.relaxation.as_ref(),
         BackendPlanIR::Fem(fem) => fem.relaxation.as_ref(),
         _ => None,
     };
@@ -649,6 +650,14 @@ fn validate_direct_minimizer_realization(
     }
 
     let expected_realization = match &plan.backend_plan {
+        BackendPlanIR::FdmMultilayer(_) if resolved_device == "cpu"
+            && control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+            Some("cpu_reference_multilayer_projected_gradient_bb")
+        }
+        BackendPlanIR::FdmMultilayer(_) if resolved_device == "gpu"
+            && control.algorithm == fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb => {
+            crate::relaxation::native_direct_minimizer_realization(control.algorithm, true)
+        }
         BackendPlanIR::Fdm(_) if resolved_device == "cpu" => {
             Some(crate::relaxation::expected_cpu_direct_minimizer_realization(
                 provenance.fdm_cpu_state_layout.as_ref(),
@@ -1243,7 +1252,7 @@ fn demag_runtime_metadata(
                 (None, None)
             };
 
-            serde_json::json!({
+            let mut metadata = serde_json::json!({
                 "model": resolved_demag.model_name(),
                 "magnetostatic_boundary_model": magnetostatic_boundary_model,
                 "boundary_variant": boundary_variant,
@@ -1298,7 +1307,15 @@ fn demag_runtime_metadata(
                     .air_box_config
                     .as_ref()
                     .and_then(|cfg| cfg.robin_beta_factor),
-            })
+            });
+            if provenance.execution_engine == "fem_cpu_native" {
+                if let Some(coupling) = provenance.cpu_fixed_coupling.as_ref()
+                    .or_else(|| last.and_then(|stats| stats.cpu_fixed_coupling.as_ref()))
+                {
+                    metadata["cpu_fixed_coupling"] = serde_json::json!(coupling);
+                }
+            }
+            metadata
         }
         _ => serde_json::Value::Null,
     }
@@ -6258,6 +6275,54 @@ mod tests {
     }
 
     #[test]
+    fn cpu_fixed_coupling_metadata_prefers_final_counters_and_handles_zero_steps() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else { panic!("FEM fixture"); };
+        fem.enable_demag = true;
+        let telemetry = crate::types::CpuFixedCouplingTelemetry {
+            rhs: crate::types::CpuFixedTransferDiagnostics {
+                state: "ready".into(), build_count: 1, reuse_count: 19, nnz: 31,
+                persistent_bytes: 4096, setup_wall_time_ns: 77, reason: String::new(),
+                setup_rss_baseline_bytes: 1000,
+                setup_observed_peak_rss_bytes: 1900,
+                setup_observed_peak_delta_bytes: 900,
+                setup_estimated_peak_delta_bytes: 1500,
+            },
+            recovery: crate::types::CpuFixedTransferDiagnostics {
+                state: "quadrature".into(), reason: "persistent cache budget exceeded".into(),
+                ..Default::default()
+            },
+        };
+        let mut stale = telemetry.clone();
+        stale.rhs.reuse_count = 17;
+        let steps = vec![StepStats {
+            step: 2, time: 2.0e-14, cpu_fixed_coupling: Some(stale), ..Default::default()
+        }];
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".into(),
+            cpu_fixed_coupling: Some(telemetry.clone()),
+            ..Default::default()
+        };
+        let metadata = demag_runtime_metadata(&plan, &provenance, &steps);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["reuse_count"], 19);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_rss_baseline_bytes"], 1000);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_observed_peak_rss_bytes"], 1900);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_observed_peak_delta_bytes"], 900);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_estimated_peak_delta_bytes"], 1500);
+        assert_eq!(metadata["cpu_fixed_coupling"]["recovery"]["reason"], telemetry.recovery.reason);
+        let zero_steps = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(zero_steps["cpu_fixed_coupling"], serde_json::json!(telemetry));
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step, 2);
+        assert_eq!(steps[0].time, 2.0e-14);
+        provenance.cpu_fixed_coupling = None;
+        assert!(demag_runtime_metadata(&plan, &provenance, &[]).get("cpu_fixed_coupling").is_none());
+        provenance.execution_engine = "fem_native_gpu".into();
+        provenance.cpu_fixed_coupling = Some(telemetry);
+        assert!(demag_runtime_metadata(&plan, &provenance, &steps).get("cpu_fixed_coupling").is_none());
+    }
+
+    #[test]
     fn gpu_demag_runtime_metadata_keeps_loaded_hypre_identity_and_provider_labels() {
         let mut plan = test_fem_execution_plan();
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
@@ -6956,6 +7021,7 @@ mod tests {
                 resolved_periodic_images: None,
                 layers: vec![
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "bottom".to_string(),
                         layer_id: "layer:bottom".to_string(),
                         object_id: "bottom".to_string(),
@@ -6973,6 +7039,7 @@ mod tests {
                         transfer_kind: "identity".to_string(),
                     },
                     FdmLayerPlanIR {
+                        rotated_interfacial_dmi: None,
                         magnet_name: "top".to_string(),
                         layer_id: "layer:top".to_string(),
                         object_id: "top".to_string(),
@@ -9007,6 +9074,35 @@ mod tests {
             resolution["fallback_reason"],
             "fem_gpu_relaxation_algorithm_cpu_only"
         );
+    }
+
+    #[test]
+    fn multilayer_bb_metadata_validates_algorithm_and_realization() {
+        let mut plan = test_multilayer_execution_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer test plan");
+        };
+        multilayer.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-3), energy_tolerance_j: None,
+                max_steps: Some(1), max_relaxation_time_s: None,
+            },
+        });
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "cpu_reference_multilayer".into(),
+            requested_energy_minimizer: Some("projected_gradient_bb".into()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".into()),
+            energy_minimizer_realization: Some("cpu_reference_multilayer_projected_gradient_bb".into()),
+            ..ExecutionProvenance::default()
+        };
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "cpu").is_ok());
+        provenance.energy_minimizer_realization = Some("native_cuda_pgbb".into());
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "cpu").is_err());
+        provenance.execution_engine = "cuda_native_multilayer_convolution".into();
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "gpu").is_ok());
+        provenance.requested_energy_minimizer = Some("nonlinear_cg".into());
+        assert!(validate_direct_minimizer_realization(&plan, &provenance, "gpu").is_err());
     }
 
     #[test]
@@ -11270,6 +11366,7 @@ mod tests {
             fdm_gpu_step_transaction_telemetry: None,
             fdm_gpu_observation_policy: None,
             fdm_gpu_endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fdm_cpu_step_transaction_telemetry: None,
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
@@ -12179,6 +12276,7 @@ mod tests {
             fdm_gpu_step_transaction_telemetry: None,
             fdm_gpu_observation_policy: None,
             fdm_gpu_endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fdm_cpu_step_transaction_telemetry: None,
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,

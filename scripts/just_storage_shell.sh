@@ -340,6 +340,21 @@ case "${recipe}" in
     if [[ -n "${BASH_REMATCH[5]:-}" ]]; then readmission_args+=(--apply); fi
     exec "${python_cmd}" -B "${script_dir}/docker_linux_native_readmission.py" "${readmission_args[@]}"
     ;;
+  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)
+    frontend_completion_prepare_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_frontend_refresh_reconcile.py\" --prepare --attempt '([0-9a-f]{32})' --base-attempt '([0-9a-f]{32})' --source-root '(/[^']+)' --port '([0-9]{4,5})'[[:space:]]*$"
+    frontend_completion_apply_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_frontend_refresh_reconcile.py\" --apply --request '(verification/frontend-refresh-completion/[0-9a-f]{64}/request.json)' --request-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)'[[:space:]]*$"
+    if [[ "${recipe}" =~ ${frontend_completion_prepare_pattern} ]]; then
+      frontend_completion_args=(--prepare --attempt "${BASH_REMATCH[1]}" --base-attempt "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")
+    elif [[ "${recipe}" =~ ${frontend_completion_apply_pattern} ]]; then
+      frontend_completion_args=(--apply --request "${BASH_REMATCH[1]}" --request-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}")
+    else
+      echo "[fullmag just] invalid frontend refresh completion recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_volume_frontend_refresh_reconcile.py" "${frontend_completion_args[@]}"
+    ;;
   *"scripts/docker_volume_development_interrupted.py"*)
     development_reconcile_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_development_interrupted.py\" --request '([a-zA-Z0-9_./-]+)' --request-sha256 '([0-9a-f]{64})' --source-root '([^']+)'( --apply)?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${development_reconcile_pattern} ]]; then
@@ -389,7 +404,7 @@ case "${recipe}" in
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/docker_volume_checks.py"*)
-    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-visualization|frontend-tools|field-only)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
     volume_offline_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)' --offline --modules '(test_[A-Za-z0-9_]+)'[[:space:]]*$"
     if [[ "${recipe}" =~ ${volume_offline_checks_pattern} ]]; then
       volume_checks_args=(--source-root "${BASH_REMATCH[1]}" --offline --modules "${BASH_REMATCH[2]}")
@@ -471,6 +486,20 @@ case "${recipe}" in
       --source-sha256 "${BASH_REMATCH[9]}" --request-id "${BASH_REMATCH[10]}" \
       --session-id "${BASH_REMATCH[11]}"
     ;;
+  *"scripts/fullmag_console.py"*)
+    fullmag_console_pattern="^[^[:space:]]+ \"[^\"]+/scripts/fullmag_console.py\" --repo-root \"[^\"]+\" --mode-or-source '([^']+)' --source-or-script '([^']+)' --script '([^']*)'( --port '([^']+)')? --gpu-access '(auto|required|disabled)'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${fullmag_console_pattern} ]]; then
+      echo "[fullmag just] invalid fullmag console recipe" >&2
+      exit 2
+    fi
+    fullmag_console_args=(--repo-root "${repo_root}" --mode-or-source "${BASH_REMATCH[1]}"
+      --source-or-script "${BASH_REMATCH[2]}" --script "${BASH_REMATCH[3]}")
+    if [[ -n "${BASH_REMATCH[5]:-}" ]]; then
+      fullmag_console_args+=(--port "${BASH_REMATCH[5]}")
+    fi
+    fullmag_console_args+=(--gpu-access "${BASH_REMATCH[6]}")
+    exec "${python_cmd}" -B "${script_dir}/fullmag_console.py" "${fullmag_console_args[@]}"
+    ;;
   *"scripts/docker_dev.py"*)
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?[[:space:]]*$"
@@ -487,8 +516,36 @@ case "${recipe}" in
     docker_dev_frontend_refresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" refresh-frontend-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --frontend-frozen-resume '([0-9a-f]{32})' --frontend-frozen-resume-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --saved-authoring-checkpoint '([a-zA-Z0-9_./-]+)' --saved-authoring-checkpoint-sha256 '([0-9a-f]{64})')?( --stop-only)?( --allow-prepared-session)?[[:space:]]*$"
     docker_dev_cache_maintenance_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" maintain-cache --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)'[[:space:]]*$"
+    docker_dev_interrupted_fresh_archive_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-interrupted-fresh-archive --prior-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)' --recreation-attempt '([0-9a-f]{32})' --unknown-receipt-sha256 '([0-9a-f]{64})' --helper-container-id '([0-9a-f]{64})' --helper-image '([^[:space:]']+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})' --engine-id '([^']{1,256})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    docker_dev_cold_quarantine_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" quarantine-failed-bootstrap --source-root '([^']+)' --operation-attempt '([0-9a-f]{32})' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    docker_dev_retire_stopped_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --retire-only[[:space:]]*$"
+    docker_dev_completed_cache_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" reconcile-completed-cache --registry '([^']+)' --volume '(fullmag-backend-v2-[0-9a-f]{24}-package)' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_args=(--repo-root "${repo_root}")
-    if [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
+    if [[ "${recipe}" =~ ${docker_dev_completed_cache_pattern} ]]; then
+      docker_dev_args+=(reconcile-completed-cache --registry "${BASH_REMATCH[1]}"
+        --volume "${BASH_REMATCH[2]}" --recovery-id "${BASH_REMATCH[3]}")
+      if [[ -n "${BASH_REMATCH[4]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[5]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_cold_quarantine_pattern} ]]; then
+      docker_dev_args+=(quarantine-failed-bootstrap --source-root "${BASH_REMATCH[1]}"
+        --operation-attempt "${BASH_REMATCH[2]}" --recovery-id "${BASH_REMATCH[3]}")
+      if [[ -n "${BASH_REMATCH[4]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[5]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_retire_stopped_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --fresh-state --retire-only)
+    elif [[ "${recipe}" =~ ${docker_dev_interrupted_fresh_archive_pattern} ]]; then
+      docker_dev_args+=(resume-interrupted-fresh-archive --prior-attempt "${BASH_REMATCH[1]}"
+        --config-sha256 "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}"
+        --recreation-attempt "${BASH_REMATCH[4]}" --unknown-receipt-sha256 "${BASH_REMATCH[5]}"
+        --helper-container-id "${BASH_REMATCH[6]}" --helper-image "${BASH_REMATCH[7]}"
+        --engine-id "${BASH_REMATCH[8]}")
+      if [[ -n "${BASH_REMATCH[9]:-}" ]]; then
+        docker_dev_args+=(--apply --expected-plan-sha256 "${BASH_REMATCH[10]}")
+      fi
+    elif [[ "${recipe}" =~ ${docker_dev_codegen_pattern} ]]; then
       docker_dev_args+=(codegen-openapi)
       if [[ -n "${BASH_REMATCH[2]:-}" ]]; then
         docker_dev_args+=(--source-root "${BASH_REMATCH[2]}")

@@ -42,6 +42,7 @@ mod accepted_antenna_inspection_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_study_worker;
 mod accepted_live_demand;
+mod accepted_run_performance;
 mod accepted_observation_spool;
 mod live_field_demand;
 mod accepted_field_binary;
@@ -723,7 +724,7 @@ fn current_live_realtime_change_revision_changed(
         RealtimeResourceName::Artifacts => previous.artifacts_revision != change.revision,
         RealtimeResourceName::Logs => previous.engine_log_revision != change.revision,
         RealtimeResourceName::Diagnostics => match change.resource_id.as_deref() {
-            Some("cpu" | "gpu") => true,
+            Some("cpu" | "gpu" | "performance") => true,
             _ => previous.solver_profile_revision != change.revision,
         },
         RealtimeResourceName::Mesh => {
@@ -2445,7 +2446,7 @@ fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
     }
 
     if matches!(change.resource, RealtimeResourceName::Diagnostics)
-        && matches!(change.resource_id.as_deref(), Some("cpu" | "gpu"))
+        && matches!(change.resource_id.as_deref(), Some("cpu" | "gpu" | "performance"))
     {
         return RealtimeQosLane::DiagnosticsSummary;
     }
@@ -6493,7 +6494,7 @@ fn detect_preset_texture_changes(
 }
 
 fn scene_mesh_signature(scene: &SceneDocument) -> Value {
-    json!({
+    let mut signature = json!({
         "universe": scene.universe,
         "study_universe_mesh": scene.study.universe_mesh,
         "shared_domain_mesh": scene.study.shared_domain_mesh,
@@ -6524,7 +6525,11 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
+        signature["fem_domain_mesh"] = json!(reference);
+    }
+    signature
 }
 
 async fn list_physics_docs(

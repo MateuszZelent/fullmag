@@ -1,0 +1,3 @@
+Ms	400 [kA/m]	4E5 A/m	saturation mag
+A	8[pJ/m]	8E-12 J/m	Stała wymiany
+średnica 5 [um]

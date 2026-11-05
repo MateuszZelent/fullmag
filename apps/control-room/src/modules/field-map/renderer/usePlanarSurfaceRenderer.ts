@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   planarRasterChecksum,
+  planarModelRenderKey,
   type PlanarRasterEvidence,
   type PlanarRenderEvidence,
 } from "../model/fieldMapEvidence";
@@ -34,6 +35,7 @@ export function usePlanarSurfaceRenderer(
   // re-renders (pending patches, overlay styles) rebuild the model with equal
   // values; they must not post the same raster to the worker again (D2D-12).
   const lastColorizeRef = useRef<{
+    contours: readonly ContourSegment[];
     inputs: readonly unknown[];
     raster: PlanarRasterEvidence | null;
   } | null>(null);
@@ -47,12 +49,36 @@ export function usePlanarSurfaceRenderer(
   }>({ axisPointer: null, contours: [], glyphCount: 0, mesh: null });
   const streamlinesRef = useRef<PlanarStreamlines | null>(null);
   const [plotSize, setPlotSize] = useState({ height: 0, width: 0 });
+  const renderKey = planarModelRenderKey(model);
+  const renderKeyRef = useRef(renderKey);
+  const evidenceCallbackRef = useRef(onRenderEvidence);
+  const completedEvidenceRef = useRef<PlanarRenderEvidence | null>(null);
+  const workerInputRef = useRef<{ model: FieldMapRenderModel; renderKey: string } | null>(null);
+  const replayCompletedEvidence = useCallback(() => {
+    const evidence = completedEvidenceRef.current;
+    const size = observedSizeRef.current;
+    if (evidence?.renderKey === renderKeyRef.current && size.width > 0 && size.height > 0) {
+      evidenceCallbackRef.current?.(evidence);
+    }
+  }, []);
+  const reportEvidence = useCallback((evidence: PlanarRenderEvidence) => {
+    completedEvidenceRef.current = evidence;
+    replayCompletedEvidence();
+  }, [replayCompletedEvidence]);
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
 
-  useEffect(() => {
+  // Invalidate obsolete worker replies at commit, before passive effects can
+  // dispatch the next presentation. Replies must acknowledge completed inputs.
+  useLayoutEffect(() => {
     modelRef.current = model;
-  }, [model]);
+    evidenceCallbackRef.current = onRenderEvidence;
+    if (renderKeyRef.current !== renderKey) {
+      renderKeyRef.current = renderKey;
+      completedEvidenceRef.current = null;
+      colorizerRef.current?.invalidate();
+    }
+  }, [model, onRenderEvidence, renderKey]);
 
   usePlanarStreamlines(model, useCallback((result: PlanarStreamlines | null) => {
     streamlinesRef.current = result;
@@ -92,6 +118,7 @@ export function usePlanarSurfaceRenderer(
       overlayCanvas.width = canvas.width;
       overlayCanvas.height = canvas.height;
       drawOverlayRef.current();
+      replayCompletedEvidence();
     });
     observer.observe(canvas);
     return () => {
@@ -105,7 +132,7 @@ export function usePlanarSurfaceRenderer(
       valuesRef.current = null;
       maskRef.current = null;
     };
-  }, []);
+  }, [replayCompletedEvidence]);
 
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -173,6 +200,7 @@ export function usePlanarSurfaceRenderer(
       : { min: rangeMin, max: rangeMax };
     const needsColorizer = range !== null && (model.layers.raster || model.layers.contours);
     if (!model.layers.raster || !needsColorizer) renderer.clearBase();
+    renderer.setViewport(model.bounds, model.viewport);
     const colorizeInputs = needsColorizer
       ? [
           model.scalar, model.mask, model.directionVectors, range.min, range.max,
@@ -188,10 +216,10 @@ export function usePlanarSurfaceRenderer(
       sameColorizeInputs(colorizeInputs, lastColorize.inputs)
     ) {
       // Same raster: redraw overlays only and keep the evidence current.
-      drawOverlayRef.current();
+      drawOverlayRef.current(lastColorize.contours);
       const current = modelRef.current;
       const state = renderStateRef.current;
-      onRenderEvidence?.({
+      reportEvidence({
         glyphCount: state.glyphCount,
         overlayCounts: {
           boundsSegments: current.layers.bounds ? 4 : 0,
@@ -199,8 +227,9 @@ export function usePlanarSurfaceRenderer(
           meshSegments: state.mesh?.segmentCount ?? 0,
           pointMarkers: current.samplePoints.length,
         },
-        raster: lastColorize.raster,
+        raster: current.layers.raster ? lastColorize.raster : null,
         sampleIdentity: current.sampleIdentity,
+        renderKey: renderKeyRef.current,
       });
       return;
     }
@@ -208,21 +237,26 @@ export function usePlanarSurfaceRenderer(
       colorizerRef.current ??= createPlanarColorizer(
         new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
         ({ contours, pixels }) => {
-          const current = modelRef.current;
+          const completed = workerInputRef.current;
+          if (!completed || completed.renderKey !== renderKeyRef.current) return;
+          const current = completed.model;
           const state = renderStateRef.current;
           if (current.layers.raster) {
             rendererRef.current?.draw(pixels, current.resolution[0], current.resolution[1]);
           }
           drawOverlayRef.current(contours);
-          if (!current.layers.raster || !current.range) return;
+          if (!current.range) return;
           const rasterEvidence: PlanarRasterEvidence = {
             checksum: planarRasterChecksum(pixels),
             max: current.range.max,
             min: current.range.min,
             sampleCount: current.scalar.length,
           };
-          if (lastColorizeRef.current) lastColorizeRef.current.raster = rasterEvidence;
-          onRenderEvidence?.({
+          if (lastColorizeRef.current) {
+            lastColorizeRef.current.raster = rasterEvidence;
+            lastColorizeRef.current.contours = contours;
+          }
+          reportEvidence({
             glyphCount: state.glyphCount,
             overlayCounts: {
               boundsSegments: current.layers.bounds ? 4 : 0,
@@ -230,12 +264,14 @@ export function usePlanarSurfaceRenderer(
               meshSegments: state.mesh?.segmentCount ?? 0,
               pointMarkers: current.samplePoints.length,
             },
-            raster: rasterEvidence,
+            raster: current.layers.raster ? rasterEvidence : null,
             sampleIdentity: current.sampleIdentity,
+            renderKey: completed.renderKey,
           });
         },
       );
-      lastColorizeRef.current = { inputs: colorizeInputs!, raster: null };
+      lastColorizeRef.current = { contours: [], inputs: colorizeInputs!, raster: null };
+      workerInputRef.current = { model: modelRef.current, renderKey: renderKeyRef.current };
       colorizerRef.current.colorize(model.scalar, range, model.mask ?? undefined, {
         colormap: model.colormap,
         contours: model.layers.contours,
@@ -252,11 +288,8 @@ export function usePlanarSurfaceRenderer(
       drawOverlayRef.current();
       const current = modelRef.current;
       const state = renderStateRef.current;
-      if (
-        current.layers.mesh || current.layers.boundaries || current.layers.bounds ||
-        current.layers.points || current.layers.vectors
-      ) {
-        onRenderEvidence?.({
+      {
+        reportEvidence({
           glyphCount: state.glyphCount,
           overlayCounts: {
             boundsSegments: current.layers.bounds ? 4 : 0,
@@ -266,10 +299,15 @@ export function usePlanarSurfaceRenderer(
           },
           raster: null,
           sampleIdentity: current.sampleIdentity,
+          renderKey: renderKeyRef.current,
         });
       }
     }
   }, [
+    renderKey,
+    reportEvidence,
+    model.bounds,
+    model.viewport,
     model.colormap,
     model.directionVectors,
     model.layers.boundaries,
@@ -307,6 +345,7 @@ export function usePlanarSurfaceRenderer(
   }, [model.bounds, model.viewport]);
 
   return {
+    replayCompletedEvidence,
     canvasRef,
     drawOverlayRef,
     maskRef,

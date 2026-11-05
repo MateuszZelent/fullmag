@@ -82,7 +82,56 @@ const layout = {
   },
 } satisfies FdmMultilayerLayoutResource;
 
+const authoredUniverseBounds = {
+  center: [0, 0, 27.5e-9] as [number, number, number],
+  radius: Math.hypot(600e-9, 600e-9, 65e-9) / 2,
+  size: [600e-9, 600e-9, 65e-9] as [number, number, number],
+};
+
 describe("FDM multilayer viewport domain adapter", () => {
+  it("renders a 240x240x4 native film at full stride and bounds larger layers", () => {
+    const filmLayer = {
+      ...layout.layers[0],
+      active_cell_count: 230_400,
+      inactive_cell_count: 0,
+      native_grid: [240, 240, 4] as [number, number, number],
+      native_grid_fingerprint:
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    };
+    const [film] = adaptFdmMultilayerNativeLayerDomains({
+      ...layout,
+      layers: [filmLayer],
+    });
+
+    expect(film).toMatchObject({
+      displayCellBudget: 250_000,
+      displayCellCount: 230_400,
+      shape: [240, 240, 4],
+      stride: 1,
+      totalCells: 230_400,
+    });
+
+    const largeLayer = {
+      ...filmLayer,
+      active_cell_count: 1_000_000,
+      native_grid: [500, 500, 4] as [number, number, number],
+      native_grid_fingerprint:
+        "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    };
+    const [large] = adaptFdmMultilayerNativeLayerDomains({
+      ...layout,
+      layers: [largeLayer],
+    });
+
+    expect(large).toMatchObject({
+      displayCellBudget: 250_000,
+      displayCellCount: 250_000,
+      shape: [500, 500, 4],
+      stride: 4,
+      totalCells: 1_000_000,
+    });
+  });
+
   it("renders each native layer as a separate physical carrier", () => {
     const domains = adaptFdmMultilayerNativeLayerDomains(layout, 10_000);
     expect(domains).toHaveLength(2);
@@ -211,11 +260,13 @@ describe("FDM multilayer viewport domain adapter", () => {
         },
       },
       10_000,
+      authoredUniverseBounds,
     );
 
     expect(targetOnly).toMatchObject({
       carrierFingerprint:
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      geometryOnly: false,
       kind: "fdm-multilayer-airbox",
       origin: [-4e-9, -6e-9, -8e-9],
       shape: [5, 4, 3],
@@ -299,4 +350,131 @@ describe("FDM multilayer viewport domain adapter", () => {
       ).toBeNull();
     },
   );
+
+  it("derives bounded geometry-only Airbox preview from authored physical Universe bounds", () => {
+    const preview = adaptFdmMultilayerAirboxDomain(
+      {
+        ...layout,
+        layers: layout.layers.map((layer) => ({
+          ...layer,
+          convolution_cell_size: [2.5e-9, 2.5e-9, 2.5e-9],
+        })),
+      },
+      1_000_000,
+      authoredUniverseBounds,
+    );
+
+    expect(preview).toMatchObject({
+      carrierFingerprint: null,
+      geometryOnly: true,
+      kind: "fdm-multilayer-airbox",
+      shape: [240, 240, 26],
+      spacing: [2.5e-9, 2.5e-9, 2.5e-9],
+      totalCells: 1_497_600,
+      displayCellBudget: 150_000,
+    });
+    expect(preview?.origin).toEqual([
+      expect.closeTo(-300e-9, 21),
+      expect.closeTo(-300e-9, 21),
+      expect.closeTo(-5e-9, 21),
+    ]);
+    expect(preview?.geometryRevision).toContain("geometry-only");
+    expect(preview?.displayCellCount).toBeLessThanOrEqual(150_000);
+    expect(preview?.shape).not.toEqual(layout.common_transform_layout.shape);
+    expect(preview?.shape).not.toEqual([240, 240, 20]);
+    const publishedCarrier = adaptFdmMultilayerAirboxDomain(
+      {
+        ...layout,
+        airbox: {
+          carrier_available: true,
+          carrier_fingerprint:
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          cell_size_m: [1e-9, 1e-9, 1e-9],
+          cells: [2, 2, 2],
+          h_demag_available: true,
+          h_eff_available: false,
+          origin_m: [0, 0, 0],
+          sample_count: 8,
+          target_only: true,
+          value_count: 24,
+        },
+      },
+      150_000,
+      authoredUniverseBounds,
+    );
+    expect(publishedCarrier?.geometryOnly).toBe(false);
+    expect(publishedCarrier?.geometryRevision).not.toBe(preview?.geometryRevision);
+  });
+
+  it.each([
+    ["missing authored Universe bounds", null, layout],
+    [
+      "heterogeneous resolved convolution spacing",
+      authoredUniverseBounds,
+      {
+        ...layout,
+        layers: layout.layers.map((layer, index) =>
+          index === 1
+            ? { ...layer, convolution_cell_size: [2.5e-9, 2.5e-9, 5e-9] }
+            : layer,
+        ),
+      },
+    ],
+    [
+      "non-aligned authored extent",
+      {
+        ...authoredUniverseBounds,
+        size: [600.1e-9, 600e-9, 65e-9],
+      },
+      layout,
+    ],
+    [
+      "missing resolved spacing",
+      authoredUniverseBounds,
+      {
+        ...layout,
+        layers: layout.layers.map((layer, index) =>
+          index === 0 ? { ...layer, convolution_cell_size: null } : layer,
+        ),
+      },
+    ],
+    [
+      "invalid resolved spacing",
+      authoredUniverseBounds,
+      {
+        ...layout,
+        layers: layout.layers.map((layer) => ({
+          ...layer,
+          convolution_cell_size: [0, 2.5e-9, 2.5e-9],
+        })),
+      },
+    ],
+    [
+      "invalid authored center",
+      { ...authoredUniverseBounds, center: [0, Number.NaN, 0] },
+      layout,
+    ],
+    [
+      "excessive physical grid cost",
+      authoredUniverseBounds,
+      {
+        ...layout,
+        layers: layout.layers.map((layer) => ({
+          ...layer,
+          convolution_cell_size: [1e-12, 1e-12, 1e-12],
+        })),
+      },
+    ],
+  ] as const)("fails closed for %s", (_label, bounds, candidate) => {
+    expect(
+      adaptFdmMultilayerAirboxDomain(
+        {
+          ...candidate,
+          airbox: { ...candidate.airbox, carrier_available: false },
+        } as FdmMultilayerLayoutResource,
+        150_000,
+        bounds,
+      ),
+    ).toBeNull();
+  });
 });

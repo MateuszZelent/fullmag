@@ -4,6 +4,7 @@ import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 
 export interface ChartPoint {
   branchId?: string | null;
+  breakBefore?: boolean;
   itemId?: string | null;
   label?: string | null;
   linewidthHz?: number | null;
@@ -36,6 +37,8 @@ export interface ChartSeries {
   label: string;
   points: readonly ChartPoint[];
   quantity: string;
+  /** Disable point picking when a series has no semantic selection owner. */
+  selectable?: boolean;
   reduction?: string | null;
   scope?: string;
   source: AnalysisChartResourceRef;

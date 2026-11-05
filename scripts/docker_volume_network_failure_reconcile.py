@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 import json
-from pathlib import Path, PurePosixPath
+import os
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import stat
 import time
 
 from docker_build_control import (
@@ -23,7 +25,11 @@ from docker_build_control import (
     docker_capture,
     toolchain_configuration,
 )
+import docker_windows_absent_bind_isolation as absent_windows
+import docker_windows_bind_isolation as windows
 from docker_compose_identity import source_labels
+from docker_foreign_bind_identity import WSL_ALIAS
+from docker_linux_native_readmission import live_bind_path
 from docker_volume_activation_reconcile import (
     _probe_helper_absence,
     _validate_helper,
@@ -36,6 +42,7 @@ TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONTAINERS = 4096
 MAX_INSPECT_BATCH = 64
+WINDOWS_BIND = re.compile(r"^(?:[A-Za-z]:|/(?:run/desktop/mnt/host|host_mnt|mnt/host)/[A-Za-z](?:/|$))")
 POOL_ERROR = "all predefined address pools have been fully subnetted"
 
 
@@ -143,10 +150,11 @@ def validate_container_inventory(
     network_name: str,
     identity: dict[str, str],
     control_volume: str,
-) -> list[dict[str, str]]:
+    qualify_desktop_bind=None,
+) -> list[dict[str, object]]:
     """Require the exact live helper to be the sole selected-group consumer."""
     labels_expected = source_labels(identity)
-    observed: list[dict[str, str]] = []
+    observed: list[dict[str, object]] = []
     helper_matches = 0
     for document in documents:
         identifier = document.get("Id")
@@ -194,7 +202,16 @@ def validate_container_inventory(
                 if mount.get("Type") != "bind":
                     return False
                 source = mount.get("Source")
+                if isinstance(source, str) and (WINDOWS_BIND.match(source) or source.startswith(WSL_ALIAS)):
+                    require(qualify_desktop_bind is not None,
+                            "Foreign Desktop bind requires initial recovery isolation evidence")
+                    source, evidence = qualify_desktop_bind(document, source)
+                    observed.append(evidence)
+                    if source is None:
+                        return False
                 require(isinstance(source, str) and source.startswith("/")
+                        and not source.startswith("//") and chr(92) not in source
+                        and str(PurePosixPath(source)) == source
                         and ".." not in PurePosixPath(source).parts,
                         "Foreign bind mount source is not canonical")
                 path = PurePosixPath(source)
@@ -203,7 +220,7 @@ def validate_container_inventory(
             require(not any(m.get("Name") == control_volume or overlaps_checkout(m) for m in mounts),
                     "A foreign container consumes this group's control volume or checkout")
     require(helper_matches == 1, "The exact BuildControl helper is not the sole selected-group container")
-    return observed
+    return sorted(observed, key=canonical)
 
 
 def validate_initial_artifacts(attempts: list[tuple[str, str]], attempt: str) -> None:
@@ -234,6 +251,18 @@ def _attempt_inventory_script(control: BuildControl) -> str:
 
 
 def _container_inventory() -> list[dict[str, object]]:
+    for retry in range(3):
+        try:
+            return _inspect_inventory_snapshot()
+        except BuildControlError as error:
+            # A short-lived foreign helper may disappear between ps and inspect.
+            # Retry the full snapshot, including previously inspected batches.
+            if retry == 2 or not re.fullmatch(r"error: no such object: [0-9a-f]{64}", str(error)):
+                raise
+    raise AssertionError("Container inventory retry exhausted")
+
+
+def _inspect_inventory_snapshot() -> list[dict[str, object]]:
     listed = docker_capture("ps", "--all", "--no-trunc", "--format", "{{.ID}} {{.Names}}")
     rows = listed.stdout.decode("utf-8", "strict").splitlines()
     require(len(rows) <= MAX_CONTAINERS, "Full Docker container inventory exceeded its bound")
@@ -255,8 +284,142 @@ def _container_inventory() -> list[dict[str, object]]:
         require(isinstance(rows, list) and len(rows) == len(batch)
                 and all(isinstance(item, dict) for item in rows),
                 "Full Docker container inspection is incomplete")
+        require(sorted(str(item.get("Id")) for item in rows) == sorted(batch),
+                "Full Docker inspection returned different container IDs")
         documents.extend(rows)
     return documents
+
+
+def _observe_present_windows_bind(source, distro, root_device):
+    mapping = windows._mapping(source)
+    native = windows._native(source, distro, allow_external_junctions=True)
+    kind = native["candidate"]["kind"]
+    require((kind == "file" and stat.S_ISREG(mapping["mode"]))
+            or (kind == "directory" and stat.S_ISDIR(mapping["mode"])),
+            "Windows and WSL candidate object types differ")
+    require(mapping["device"] != root_device, "Foreign Windows bind aliases the protected ext4 filesystem")
+
+    native_root = PureWindowsPath(native["candidate"]["path"])
+    root = Path(mapping["path"])
+    external = {}
+    for _, relative, link in windows._link_paths(native):
+        if link["tag"] != "0xa0000003":
+            continue
+        target = PureWindowsPath(link["target"])
+        if target == native_root or native_root in target.parents:
+            continue
+        path = root / relative
+        windows._link_parent_directories(root, path, mapping["device"])
+        link_identity = windows._file_identity(path)
+        require(stat.S_ISLNK(link_identity["mode"]) and link_identity["device"] == mapping["device"],
+                "External Windows junction is not the exact DrvFs link")
+        target_mapping = windows._mapping(str(target))
+        require(os.readlink(path) == target_mapping["path"]
+                and target_mapping["device"] != root_device
+                and stat.S_ISDIR(target_mapping["mode"]),
+                "External Windows junction target is not the exact disjoint DrvFs directory")
+        # An external target gets the full existing proof. Nested external
+        # junctions fail closed, keeping this initial recovery traversal bounded.
+        target_native = windows._native(str(target), distro)
+        require(target_native["candidate"]["kind"] == "directory",
+                "External Windows junction target is not an ordinary directory")
+        links = windows._qualify_links(target_mapping, target_native)
+        windows._link_parent_directories(root, path, mapping["device"])
+        require(windows._file_identity(path) == link_identity and os.readlink(path) == target_mapping["path"],
+                "External Windows junction changed during isolation proof")
+        external[relative] = {"link": link_identity, "mapping": target_mapping,
+                              "native": target_native, "contained_links": links}
+
+    return {"native": native, "mapping": mapping, "kind": "present",
+            "external_junctions": external,
+            "contained_links": windows._qualify_links(mapping, native, external_junctions=external)}
+
+
+def _wsl_kernel_bind_identity(source):
+    path = live_bind_path(source)
+    require(path is not None and path.resolve(strict=True) == path, "Foreign WSL source is not canonical")
+    return {"canonical_source": str(path), **windows._file_identity(path)}
+
+
+def _observe_windows_source(source, native_source, context, pin):
+    translated = windows._capture(["wslpath", "-u", native_source]).decode("utf-8", "strict").strip()
+    try:
+        Path(translated).lstat()
+    except FileNotFoundError:
+        absent_windows._stopped(pin)
+        native = absent_windows._native(source)
+        mapping = absent_windows._mapping(source, native)
+        require(mapping["device"] != context["linux"]["root_device"],
+                "Absent Windows bind aliases the protected ext4 filesystem")
+        return {"native": native, "mapping": mapping, "kind": "absent-stopped"}
+    return _observe_present_windows_bind(source, context["distro"], context["linux"]["root_device"])
+
+
+def _initial_desktop_qualifier(identity, compose, engine_id):
+    """Collect read-only evidence for the authenticated pre-backend attempt."""
+    context = None
+    by_source = {}
+    pins = {}
+    wsl_sources = {}
+
+    def observe(container, source):
+        nonlocal context
+        pin = windows._container_pin(container)
+        pins[pin["id"]] = pin
+        if source.startswith(WSL_ALIAS):
+            evidence = _wsl_kernel_bind_identity(source)
+            wsl_sources[source] = evidence
+            return evidence["canonical_source"], {
+                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
+                "mapping": evidence, "kind": "wsl-kernel",
+            }
+        native_source = windows._windows_source_path(source)
+        if context is None:
+            mounts = compose["services"]["backend"].get("volumes")
+            require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
+                    "Initial Compose backend mount inventory is incomplete")
+            roots = [m for m in mounts if m.get("target") == "/state"]
+            require(len(roots) == 1 and roots[0].get("type") == "bind"
+                    and isinstance(roots[0].get("source"), str),
+                    "Initial Compose has no exact native /state bind")
+            distro = os.environ.get("WSL_DISTRO_NAME", "")
+            require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", distro)
+                    and distro != "docker-desktop", "Current WSL distro identity is unavailable")
+            linux = windows._linux_identity(identity["source_root"], roots[0]["source"])
+            engine = windows._engine()
+            require(engine["ID"] == linux["engine_id"] == engine_id,
+                    "Initial native admission does not match the pinned Docker engine")
+            context = {"linux": linux, "engine": engine, "distro": distro}
+        if source not in by_source:
+            by_source[source] = (_observe_windows_source(source, native_source, context, pin), pin)
+        evidence, _ = by_source[source]
+        if evidence["kind"] == "absent-stopped":
+            absent_windows._stopped(pin)
+        return None, {"schema": "fullmag.initial-network-failure-windows-bind.v1",
+                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
+                "context_sha256": digest(canonical(context)),
+                "evidence_sha256": digest(canonical(evidence)), "kind": evidence["kind"]}
+
+    def verify(*, refresh_windows=False):
+        if refresh_windows:
+            # Recheck early sources last so the oldest Windows evidence is
+            # refreshed closest to the failure publication boundary.
+            for source, (evidence, pin) in reversed(by_source.items()):
+                require(_observe_windows_source(source, windows._windows_source_path(source), context, pin) == evidence,
+                        "Foreign Windows bind changed before failure publication")
+        for identifier, pin in pins.items():
+            require(windows._container_pin(windows._inspect(identifier)) == pin,
+                    "Foreign container changed during initial Desktop bind isolation")
+        for source, evidence in wsl_sources.items():
+            require(_wsl_kernel_bind_identity(source) == evidence, "Foreign WSL kernel mapping changed")
+        if context is None:
+            return
+        linux = context["linux"]
+        require(windows._engine() == context["engine"]
+                and windows._linux_identity(linux["source_root"], linux["reference_root"]) == linux,
+                "Initial Windows isolation context changed")
+
+    return observe, verify
 
 
 def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Namespace,
@@ -334,10 +497,13 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
     network_error = validate_network_absence(
         network_result.returncode, network_result.stdout, network_result.stderr, network_name)
     containers = _container_inventory()
+    qualify_desktop_bind, verify_desktop_binds = _initial_desktop_qualifier(identity, compose, args.engine_id)
     inventory = validate_container_inventory(
         containers, helper_id=helper_id, helper_name=helper_name, project=control.project,
         network_name=network_name, identity=identity, control_volume=control.volume,
+        qualify_desktop_bind=qualify_desktop_bind,
     )
+    verify_desktop_binds(refresh_windows=allowed_archive is not None)
     # This failure-only transaction is group-local (ADR 0067). The authenticated
     # original helper has closed its log input and still holds operation.lock;
     # a new managed producer cannot enter this group before its terminal receipt.

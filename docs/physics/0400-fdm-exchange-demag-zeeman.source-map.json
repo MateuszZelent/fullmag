@@ -177,7 +177,7 @@
       "id": "cuda_energy_density_materialization",
       "path": "backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu",
       "symbol": "launch_energy_density_observable",
-      "responsibility": "CUDA per-cell energy-density materialization aligned with external-field sources and the current partial-cell volume contract"
+      "responsibility": "CUDA per-cell energy-density materialization aligned with external-field sources and the current partial-cell volume contract; on T0/T1 the exchange density is weighted by phi_eff like the scalar exchange energy"
     },
     {
       "id": "state_observables",

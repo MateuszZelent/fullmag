@@ -326,6 +326,8 @@ def _materialize_preset_texture_initial_conditions(
     magnets_ir: list[dict[str, Any]],
     magnets: Sequence["Ferromagnet"],
     geometry_assets: dict[str, Any] | None,
+    *,
+    preserve_fdm_multilayer_presets: bool = False,
 ) -> list[dict[str, Any]]:
     if not geometry_assets:
         return magnets_ir
@@ -387,6 +389,12 @@ def _materialize_preset_texture_initial_conditions(
             # fragile full-domain array here.
             continue
         elif geometry_name in fdm_assets:
+            if preserve_fdm_multilayer_presets:
+                # The FDM multilayer planner samples analytic presets after it
+                # resolves each object's native grid and active mask. Sampling
+                # here would instead bind the texture to the padded study-wide
+                # asset grid, which may have a different cell count.
+                continue
             asset = fdm_assets[geometry_name]
             sample_points = _fdm_cell_centers_from_asset(asset)
             sampled = prepare_initial_magnetization(
@@ -1224,7 +1232,10 @@ def build_geometry_assets_for_request(
                 )
 
                 if source_suffix == ".fullmag-mesh":
-                    artifact = load_mesh_artifact(explicit_domain_mesh_source)
+                    artifact = load_mesh_artifact(
+                        explicit_domain_mesh_source,
+                        expected_sha256=(mesh_workflow or {}).get("domain_mesh_sha256"),
+                    )
                 elif source_suffix == ".mphtxt":
                     artifact = import_comsol_mesh(explicit_domain_mesh_source)
                 else:
@@ -2923,6 +2934,19 @@ class Problem:
             ],
             "object_ids",
         )
+        magnetic_object_ids = {
+            magnet.object_id if magnet.object_id is not None else magnet.name
+            for magnet in self.magnets
+        }
+        for term in self.energy:
+            if not isinstance(term, RotatedInterfacialDMI) or term.object_ids is None:
+                continue
+            unknown_dmi_object_ids = sorted(set(term.object_ids) - magnetic_object_ids)
+            if unknown_dmi_object_ids:
+                raise ValueError(
+                    "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+                    + ", ".join(unknown_dmi_object_ids)
+                )
         self._validate_magnetization_constraints()
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
@@ -3256,10 +3280,24 @@ class Problem:
                 _copy_cached_assets=_copy_cached_geometry_assets,
             )
         magnets_ir = [magnet.to_ir() for magnet in self.magnets]
+        fdm_hints = discretization.fdm if discretization is not None else None
+        demag_strategy = (
+            fdm_hints.demag.strategy
+            if fdm_hints is not None and fdm_hints.demag is not None
+            else "auto"
+        )
+        preserve_fdm_multilayer_presets = (
+            runtime.backend_target == BackendTarget.FDM
+            and (
+                demag_strategy == "multilayer_convolution"
+                or (len(self.magnets) > 1 and demag_strategy == "auto")
+            )
+        )
         magnets_ir = _materialize_preset_texture_initial_conditions(
             magnets_ir,
             self.magnets,
             geometry_assets,
+            preserve_fdm_multilayer_presets=preserve_fdm_multilayer_presets,
         )
 
         spin_torque_payload: dict[str, object] = {}

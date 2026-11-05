@@ -61,6 +61,7 @@ __global__ void energy_density_kernel(
     int nz,
     int has_active_mask,
     int has_volume_fraction,
+    double exchange_phi_floor,
     int include_exchange,
     int include_demag,
     int include_external,
@@ -138,13 +139,17 @@ __global__ void energy_density_kernel(
     const double mmy = static_cast<double>(my[index]);
     const double mmz = static_cast<double>(mz[index]);
     const double phi_i = has_volume_fraction ? volume_fraction[index] : 1.0;
+    // T0/T1 exchange fields carry 1/phi_eff, so the exchange density takes
+    // phi_eff like the scalar exchange energy (note 0400 §3.1.2).
+    const double phi_exchange = has_volume_fraction ? fmax(phi_i, exchange_phi_floor) : 1.0;
     const double ms = ms_field ? ms_field[index] : ms_scalar;
     double density = 0.0;
+    double exchange_density = 0.0;
     double dmi_density = 0.0;
 
     const bool wants_total = kind == FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_EX) && include_exchange) {
-        density += -0.5 * MU0 * ms * (
+        exchange_density = -0.5 * MU0 * ms * (
             mmx * static_cast<double>(h_ex_x[index]) +
             mmy * static_cast<double>(h_ex_y[index]) +
             mmz * static_cast<double>(h_ex_z[index]));
@@ -303,7 +308,8 @@ __global__ void energy_density_kernel(
 
     // Scalar DMI reduction currently uses full cell volume; preserve that
     // measure while applying partial-cell volume to the other energy terms.
-    out[index] = static_cast<Scalar>(phi_i * density + dmi_density);
+    out[index] = static_cast<Scalar>(
+        phi_exchange * exchange_density + phi_i * density + dmi_density);
 }
 
 bool is_energy_density_observable(fullmag_fdm_observable observable) {
@@ -367,6 +373,7 @@ bool launch_energy_density_observable(
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
             has_volume_fraction,
+            ctx.phi_floor,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
             include_external,
@@ -437,6 +444,7 @@ bool launch_energy_density_observable(
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
             has_volume_fraction,
+            ctx.phi_floor,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
             include_external,

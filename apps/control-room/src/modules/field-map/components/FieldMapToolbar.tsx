@@ -136,6 +136,39 @@ export function FieldMapToolbar({
       ) : (
         <span className="fm-field-map__control-label">Scalar field</span>
       )}
+      <div className="fm-field-map__control">
+        <span className="fm-field-map__control-label" id="fm-field-map-scope-label">Scope</span>
+        <Select
+          value={planar.view_scope.kind}
+          onValueChange={(value) => {
+            if (value === "monitor_target" || value === "airbox") {
+              onPatch({ view_scope: { kind: value } });
+            }
+          }}
+        >
+          <SelectTrigger
+            aria-labelledby="fm-field-map-scope-label"
+            className="fm-field-map__quantity-trigger"
+            density="compact"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="monitor_target">Monitor target</SelectItem>
+            <SelectItem value="airbox">Universe / Airbox</SelectItem>
+            {planar.view_scope.kind === "object" ? <SelectItem value="object">Current object</SelectItem> : null}
+            {planar.view_scope.kind === "mesh_part" ? (
+              <SelectItem value="mesh_part">Current mesh part</SelectItem>
+            ) : null}
+            {planar.view_scope.kind === "layer" ? (
+              <SelectItem value="layer">Current layer</SelectItem>
+            ) : null}
+            {planar.view_scope.kind === "region" ? (
+              <SelectItem value="region">Current region</SelectItem>
+            ) : null}
+          </SelectContent>
+        </Select>
+      </div>
       {sectionStrip}
       <div className="fm-field-map__toggles">
         <Button
@@ -173,8 +206,9 @@ export function FieldMapToolbar({
         {planar.source?.kind === "default" ? (
           <Button
             aria-pressed={planar.multislice?.enabled ?? false}
+            disabled={Boolean(planar.field_overlays?.length)}
             size="sm"
-            title="Panels of the default slice at several positions along the normal"
+            title={planar.field_overlays?.length ? "Combined object fields use one shared section" : "Panels of the default slice at several positions along the normal"}
             type="button"
             variant={planar.multislice?.enabled ? "primary" : "ghost"}
             onClick={() => onPatch({

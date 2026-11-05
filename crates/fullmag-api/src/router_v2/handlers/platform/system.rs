@@ -325,3 +325,48 @@ mod tests {
         assert!(resolve_runtime_root(&repo_root, Some(&package_root)).is_err());
     }
 }
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/diagnostics/performance",
+    responses(
+        (status = 200, description = "Bounded automatic telemetry for the verified current run attempt", body = crate::schemas::diagnostics::RunPerformanceResource),
+        (status = 304, description = "Performance snapshot not modified for the supplied ETag"),
+        (status = 409, description = "Retryable performance observation conflict"),
+        (status = 404, description = "No active workspace"),
+    ),
+    tag = "diagnostics"
+)]
+pub async fn get_run_performance(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let context = crate::capture_current_live_read_context(&state).await?;
+    let (run_id, stage_ids) = {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(snapshot, &context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+        (snapshot.run.as_ref().map(|run| run.run_id.clone()),
+            snapshot.stage_execution.as_ref().map(|execution| execution.stages.iter()
+                .filter_map(|stage| stage.stage_id.clone()).collect::<Vec<_>>()).unwrap_or_default())
+    };
+    let body = match (state.submit_store_root.clone(), run_id.clone()) {
+        (Some(root), Some(run_id)) => tokio::task::spawn_blocking(move ||
+            crate::accepted_run_performance::load(&root, &run_id, &stage_ids))
+            .await.map_err(|error| ApiError::internal(format!("read automatic performance: {error}")))?
+            .map_err(|_| ApiError::conflict_with_code("performance_observation_busy",
+                "Performance store has an active writer; retry this read after publication"))?,
+        _ => crate::accepted_run_performance::unavailable(run_id.clone(), "No current accepted run"),
+    };
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard.as_ref().ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::ensure_current_live_request_context(snapshot, &context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    if snapshot.run.as_ref().map(|run| &run.run_id) != run_id.as_ref() {
+        return Err(ApiError::conflict("current performance run changed during read"));
+    }
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "run-performance:{}:{}:{}", context.session_id, context.session_epoch, body.revision));
+    Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
+}

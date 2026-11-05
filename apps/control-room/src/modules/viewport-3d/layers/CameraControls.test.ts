@@ -1,9 +1,14 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { PerspectiveCamera, Vector3 } from "three";
+import { clearOrientationCameraMomentum } from "../orientation/orientationCameraGesture";
+import { snapCameraToDirection, type Direction3 } from "../orientation/cameraOrientation";
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
   commitOrbitCameraEnd,
+  installScaleAwareOrbitChange,
   normalizeViewport3DOrbitDebugAngles,
   resolveViewport3DOrbitDebugControlDeltas,
   resolveViewport3DOrbitDebugStep,
@@ -746,5 +751,89 @@ describe("CameraControls", () => {
     expect(commitFunctionBlock).not.toContain("cameraUp");
     expect(orbitDebugCommitBlock).not.toContain("cameraUp");
     expect(pointerCommitBlock).not.toContain("cameraUp");
+  });
+});
+
+// Resolve the exact transitive implementation used by Drei rather than the
+// newer Three addon, whose dolly event semantics differ.
+const requireDrei = createRequire(createRequire(import.meta.url).resolve("@react-three/drei"));
+const { OrbitControls: NativeOrbitControls } = requireDrei("three-stdlib") as {
+  OrbitControls: new (camera: PerspectiveCamera) => Parameters<typeof installScaleAwareOrbitChange>[0] & {
+    dollyOut: (scale: number) => void;
+    dispose: () => void;
+  };
+};
+
+describe("SI-scale OrbitControls notifications", () => {
+  it("reports nanometre dolly and pan, preserves native events, and restores update on cleanup", () => {
+    const camera = new PerspectiveCamera();
+    camera.position.set(0, 0, 100e-9);
+    const controls = new NativeOrbitControls(camera);
+    const change = vi.fn();
+    controls.addEventListener("change", change);
+    const radius = camera.position.length();
+    controls.dollyOut(0.9);
+    expect(camera.position.length()).toBeGreaterThan(radius);
+    expect(change).not.toHaveBeenCalled(); // Reproduces the native SI-scale bug.
+
+    const originalUpdate = controls.update;
+    let active = true;
+    const cleanup = installScaleAwareOrbitChange(controls, 100e-9, () => active);
+    controls.dollyOut(0.9);
+    expect(change).toHaveBeenCalledTimes(1);
+    camera.position.x += 10e-9;
+    controls.target.x += 10e-9;
+    controls.update();
+    expect(change).toHaveBeenCalledTimes(2);
+    for (let index = 0; index < 20; index++) controls.update();
+    expect(change).toHaveBeenCalledTimes(2); // Idle never starts a render loop.
+
+    camera.position.set(100e-9, 0, 0);
+    controls.update(); // Angular native change must not be duplicated.
+    expect(change).toHaveBeenCalledTimes(3);
+    active = false;
+    controls.dollyOut(0.9);
+    expect(change).toHaveBeenCalledTimes(3);
+    cleanup();
+    expect(controls.update).toBe(originalUpdate);
+    controls.dispose();
+  });
+});
+
+describe("orientation snaps after a damped orbit", () => {
+  it.each<Direction3>([
+    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+  ])("holds the requested axis %j after the previous orbit", (...direction) => {
+    const camera = new PerspectiveCamera();
+    camera.up.set(0, 0, 1);
+    camera.position.set(100e-9, 200e-9, 300e-9);
+    const controls = new NativeOrbitControls(camera);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.setAzimuthalAngle(controls.getAzimuthalAngle() + 1);
+    const next = snapCameraToDirection({
+      position: camera.position.toArray(), target: controls.target.toArray(), up: [0, 0, 1],
+    }, direction);
+    clearOrientationCameraMomentum(controls);
+    camera.position.set(...next.position);
+    controls.target.set(...next.target);
+    camera.lookAt(...next.target);
+    controls.update();
+    const applied = camera.position.clone();
+    const radius = applied.distanceTo(controls.target);
+    const actualDirection = applied.clone().sub(controls.target).normalize();
+    // OrbitControls makes pole angles safe by 1e-6 rad; that tiny correction
+    // must not turn into a continuing rotation away from the requested axis.
+    expect(actualDirection.distanceTo(new Vector3(...direction))).toBeLessThan(2e-6);
+    for (let index = 0; index < 120; index++) controls.update();
+    expect(camera.position.distanceTo(applied) / radius).toBeLessThan(1e-8);
+    expect(controls.enableDamping).toBe(true);
+    controls.dispose();
+  });
+
+  it("restores damping when the controls update throws", () => {
+    const controls = { enableDamping: true, update: () => { throw new Error("update failed"); } };
+    expect(() => clearOrientationCameraMomentum(controls)).toThrow("update failed");
+    expect(controls.enableDamping).toBe(true);
   });
 });

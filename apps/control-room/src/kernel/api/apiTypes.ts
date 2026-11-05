@@ -190,6 +190,8 @@ export interface PlanarFieldQuery {
   include_mesh?: boolean;
   /** Default source only: multislice panel position along the plane normal (note 0970). */
   position_fraction?: number;
+  /** Exact physical default-plane coordinate in metres; mutually exclusive with fraction. */
+  position_m?: number;
   quality?: string;
   resolution_x?: number;
   resolution_y?: number;
@@ -212,6 +214,8 @@ export interface PlanarFieldProbeQuery
     | "expected_monitor_revision"
     | "expected_source_revision"
     | "expected_scene_revision"
+    | "position_fraction"
+    | "position_m"
     | "quality"
     | "resolution_x"
     | "resolution_y"
@@ -374,6 +378,8 @@ export type RealtimeCommunicationPolicyPatch =
   components["schemas"]["RealtimeCommunicationPolicyPatch"];
 export type RealtimeCommunicationPolicyResource =
   components["schemas"]["RealtimeCommunicationPolicyResource"];
+export type RunPerformanceResource =
+  components["schemas"]["RunPerformanceResource"];
 export type SolverProfileResource =
   components["schemas"]["SolverProfileResource"];
 export type MaterialPatchRequest =
@@ -1033,7 +1039,11 @@ type VisualizationTargets = Omit<components["schemas"]["VisualizationTargetRegis
   parts: VisualizationTargetEntry[];
 };
 type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | import("./tensorFieldProjection").TensorProjectionToken;
-type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component"> & {
+export type PlanarFieldOverlayState = Omit<components["schemas"]["PlanarFieldOverlayState"], "component"> & {
+  component: PlanarFieldComponent;
+};
+type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component" | "field_overlays"> & {
+  field_overlays?: PlanarFieldOverlayState[] | null;
   component?: PlanarFieldComponent | null;
 };
 export type VisualizationStatePatch = Omit<components["schemas"]["VisualizationStatePatch"], "overrides" | "planar"> & {
@@ -1044,7 +1054,10 @@ export type DisplaySelection = components["schemas"]["DisplaySelection"];
 export type VisualizationStateResource = Omit<components["schemas"]["VisualizationStateResource"], "overrides" | "targets" | "planar"> & {
   overrides: VisualizationOverride[];
   targets?: VisualizationTargets;
-  planar?: Omit<components["schemas"]["PlanarVisualizationState"], "component"> & { component: PlanarFieldComponent };
+  planar?: Omit<components["schemas"]["PlanarVisualizationState"], "component" | "field_overlays"> & {
+    component: PlanarFieldComponent;
+    field_overlays?: PlanarFieldOverlayState[];
+  };
 };
 export type ModeCompositionDatasetPatch =
   components["schemas"]["ModeCompositionDatasetPatch"];

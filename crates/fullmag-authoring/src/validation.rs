@@ -172,6 +172,35 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if let Some(reference) = &scene.study.fem_domain_mesh {
+        if scene.study.requested_backend.eq_ignore_ascii_case("fdm") {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh requires a FEM execution request",
+            ));
+        }
+        if reference.source.trim() != reference.source
+            || !reference.source.ends_with(".fullmag-mesh")
+            || reference.source.contains(['\\', ':', '\0'])
+            || reference
+                .source
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh.source must be a relative .fullmag-mesh asset path",
+            ));
+        }
+        if reference.sha256.len() != 64
+            || !reference
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_domain_mesh.sha256 must be a lowercase SHA-256 digest",
+            ));
+        }
+    }
     validate_dmi_scope_exclusivity(scene)?;
     if !matches!(
         scene.study.requested_mode.as_str(),
@@ -374,6 +403,17 @@ fn validate_dmi_scope_exclusivity(
         return Err(SceneDocumentValidationError::new(
             "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition",
         ));
+    }
+    if let Some(ids) = &scene.study.rotated_interfacial_dmi_object_ids {
+        let mut seen = BTreeSet::new();
+        if scene.study.rotated_interfacial_dmi.is_none() || ids.is_empty() {
+            return Err(SceneDocumentValidationError::new("rotated_interfacial_dmi_object_ids requires a D coefficient and nonempty scope"));
+        }
+        for id in ids {
+            if id.trim().is_empty() || !seen.insert(id) || !crate::scene_solve_objects(scene).any(|object| object.id == *id) {
+                return Err(SceneDocumentValidationError::new("rotated_interfacial_dmi_object_ids must reference unique existing objects"));
+            }
+        }
     }
     let mut conflicts = BTreeSet::new();
     for object in &scene.objects {

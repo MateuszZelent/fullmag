@@ -63,6 +63,7 @@ pub fn classify_region_realization_impact(
     if before.universe != after.universe
         || before.study.universe_mesh != after.study.universe_mesh
         || before.study.shared_domain_mesh != after.study.shared_domain_mesh
+        || before.study.fem_domain_mesh != after.study.fem_domain_mesh
         || before.study.mesh_defaults != after.study.mesh_defaults
         || before.study.mesh_interfaces != after.study.mesh_interfaces
     {
@@ -250,6 +251,25 @@ mod tests {
         let mut region_name = scene();
         region_name.objects[0].regions[0].name = "Renamed core".to_string();
         assert!(classify_region_realization_impact(&scene(), &region_name).is_empty());
+    }
+
+    #[test]
+    fn replacing_native_mesh_archive_advances_topology_only() {
+        let mut before = scene();
+        before.study.fem_domain_mesh = Some(crate::SceneFemDomainMeshReference {
+            source: "film.fullmag-mesh".into(),
+            sha256: "a".repeat(64),
+            build_requested: true,
+        });
+        let mut after = before.clone();
+        after.study.fem_domain_mesh.as_mut().unwrap().sha256 = "b".repeat(64);
+        assert_eq!(
+            classify_region_realization_impact(&before, &after),
+            RegionRealizationImpact {
+                topology: true,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]

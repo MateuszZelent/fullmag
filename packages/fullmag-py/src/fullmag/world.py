@@ -5636,14 +5636,38 @@ class StudyMeshHandle:
         )
         return saved
 
-    def load(self, path: str | Path) -> MeshPersistenceResult:
+    def load(
+        self,
+        path: str | Path,
+        *,
+        expected_sha256: str | None = None,
+        build_requested: bool | None = None,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import load_mesh_artifact
 
+        if build_requested is not None:
+            if not isinstance(build_requested, bool):
+                raise TypeError("build_requested must be a bool when provided")
+        previous_build_requested = _state._default_mesh_spec.build_requested
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        try:
+            expected_authoring_document = _current_mesh_authoring_document()
+        finally:
+            _state._default_mesh_spec.build_requested = previous_build_requested
         artifact = load_mesh_artifact(
             path,
-            expected_authoring_document=_current_mesh_authoring_document(),
+            expected_authoring_document=expected_authoring_document,
+            expected_sha256=expected_sha256,
+            _include_source_sha256=expected_sha256 is not None,
         )
-        _bind_mesh_artifact(artifact, Path(path))
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        _bind_mesh_artifact(
+            artifact,
+            Path(path),
+            canonical_scene_reference=expected_sha256 is not None,
+        )
         return MeshPersistenceResult(
             action="loaded",
             path=Path(path),
@@ -5651,7 +5675,10 @@ class StudyMeshHandle:
             authoring_fingerprint=artifact.authoring_fingerprint,
         )
 
-    def save_or_load(self, path: str | Path) -> MeshPersistenceResult:
+    def save_or_load(
+        self,
+        path: str | Path,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import (
             MeshConfigurationMismatch,
             load_mesh_artifact,
@@ -8463,6 +8490,15 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        reference = _state._extra_runtime_metadata.get("fem_domain_mesh")
+        if (
+            isinstance(reference, Mapping)
+            and Path(str(reference.get("source", ""))).resolve()
+            == Path(_state._domain_mesh_source).resolve()
+            and isinstance(reference.get("sha256"), str)
+            and _is_sha256_hex(reference["sha256"])
+        ):
+            mesh_workflow["domain_mesh_sha256"] = reference["sha256"]
         if _state._domain_object_region_markers is not None:
             mesh_workflow["domain_object_region_markers"] = list(
                 _state._domain_object_region_markers
@@ -8541,19 +8577,41 @@ def _boundary_semantic_map(mesh: object) -> dict[str, int]:
     return result
 
 
-def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+def _bind_mesh_artifact(
+    artifact: object,
+    source: Path,
+    *,
+    canonical_scene_reference: bool = False,
+) -> None:
+    source_path = source.expanduser()
     _state._active_mesh_artifact = artifact
-    _state._domain_mesh_source = str(source)
+    _state._domain_mesh_source = str(source_path)
     _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
     _state._domain_object_region_markers = [
         dict(entry) for entry in artifact.object_region_markers
     ]
     _state._extra_runtime_metadata["mesh_persistence"] = {
-        "source": str(source),
+        "source": str(source_path),
         "origin": (artifact.provenance or {}).get("origin", "native_load"),
         "topology_fingerprint": artifact.topology_fingerprint,
         "authoring_fingerprint": artifact.authoring_fingerprint,
     }
+    source_sha256 = getattr(artifact, "source_sha256", None)
+    if (
+        canonical_scene_reference
+        and source_path.suffix == ".fullmag-mesh"
+        and isinstance(source_sha256, str)
+        and _is_sha256_hex(source_sha256)
+    ):
+        reference = {
+            "source": str(source_path.resolve()),
+            "sha256": source_sha256,
+            "build_requested": bool(_state._default_mesh_spec.build_requested),
+        }
+        _state._extra_runtime_metadata["fem_domain_mesh"] = reference
+        _state._extra_runtime_metadata["mesh_persistence"]["sha256"] = source_sha256
+    else:
+        _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
 
 
 def _clear_bound_mesh_artifact() -> None:
@@ -8562,6 +8620,15 @@ def _clear_bound_mesh_artifact() -> None:
     _state._domain_region_markers = None
     _state._domain_object_region_markers = None
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
+    _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _build_explicit_mesh_assets(
@@ -9733,6 +9800,8 @@ def _build_problem(
     if not s._magnets and study_kind != "antenna_field_solve" and not (field_only and s._auxiliary_geometries):
         raise ValueError("No magnets defined — call fm.geometry(...) first")
 
+    dind = _uniform_material_dmi_coefficient(s._magnets, "Dind")
+    dbulk = _uniform_material_dmi_coefficient(s._magnets, "Dbulk")
     # Convert handles to Ferromagnet objects
     magnets = [h._to_ferromagnet() for h in s._magnets]
 
@@ -9743,15 +9812,12 @@ def _build_problem(
         energy.append(Exchange())
     if s._magnets and s._demag_enabled:
         energy.append(Demag(realization=s._demag_realization))
-    # Check if any magnet has DMI
-    for h in s._magnets:
-        if h.Dind is not None:
-            energy.append(InterfacialDMI(D=h.Dind))
-            break
-    for h in s._magnets:
-        if h.Dbulk is not None:
-            energy.append(BulkDMI(D=h.Dbulk))
-            break
+    # The legacy study surface lowers uniform material DMI to one explicit
+    # global term. Mixed per-object values cannot be represented that way.
+    if dind is not None:
+        energy.append(InterfacialDMI(D=dind))
+    if dbulk is not None:
+        energy.append(BulkDMI(D=dbulk))
     energy.extend(s._explicit_energy_terms)
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
@@ -10029,6 +10095,29 @@ def _build_problem(
         pbc=s._pbc,
         parameters=s._parameters if s._parameters.names else None,
     )
+
+
+def _uniform_material_dmi_coefficient(
+    magnets: Sequence[MagnetHandle],
+    parameter: str,
+) -> float | None:
+    """Return a legacy global DMI coefficient only when all objects agree."""
+    if not magnets:
+        return None
+    values = [getattr(magnet, parameter) for magnet in magnets]
+    effective_values = [0.0 if value is None else value for value in values]
+    if any(value != effective_values[0] for value in effective_values[1:]):
+        details = ", ".join(
+            f"{magnet._object_id or magnet._name}={getattr(magnet, parameter)!r}"
+            for magnet in magnets
+        )
+        raise ValueError(
+            f"legacy study-level {parameter} lowering requires the same value for every "
+            f"magnetic object; per-object values: {details}"
+        )
+    if all(value is None for value in values):
+        return None
+    return effective_values[0]
 
 
 # ---------------------------------------------------------------------------

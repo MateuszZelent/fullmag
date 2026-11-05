@@ -12,6 +12,7 @@ import { runViewportLayoutBrowserQa } from "./lib/viewport-layout-browser-qa.mjs
 import { runViewportQaFixtureBrowser } from "./lib/viewport-qa-fixture-browser.mjs";
 import { runViewportCameraBrowserQa } from "./lib/viewport-camera-browser-qa.mjs";
 import { runTerminalFooterTelemetryBrowserQa } from "./docker-dev-terminal-telemetry.mjs";
+import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json");
@@ -29,6 +30,7 @@ const scratchSourcePath = fileURLToPath(new URL("./lib/scratch-authoring-browser
 const fixtureDataPath = fileURLToPath(new URL("./fixtures/scratch-authoring/fdm.v1.json", import.meta.url));
 const cameraSourcePath = fileURLToPath(new URL("./lib/viewport-camera-browser-qa.mjs", import.meta.url));
 const terminalTelemetrySourcePath = fileURLToPath(new URL("./docker-dev-terminal-telemetry.mjs", import.meta.url));
+const planarFieldEvidenceSourcePath = fileURLToPath(new URL("./lib/planar-field-evidence.mjs", import.meta.url));
 const expectedVersion = process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION ?? "1.62.1";
 // Leave room for bounded UI restoration and result publication before the
 // managed outer runtime deadline expires.
@@ -51,6 +53,10 @@ const expectAmbiguousComputeFieldsSetting =
 const expectAmbiguousComputeFields = expectAmbiguousComputeFieldsSetting === "1";
 const expectTerminalTelemetrySetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY;
 const expectTerminalTelemetry = expectTerminalTelemetrySetting === "1";
+const expectRunPerformanceSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE;
+const expectRunPerformance = expectRunPerformanceSetting === "1";
+const expectPlanarAirboxSetting = process.env.CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX ?? "0";
+const expectPlanarAirbox = expectPlanarAirboxSetting === "1";
 const maxCanvasScreenshotBytes = 512 * 1024;
 const canvasOnlySkippedAreas = [
   "viewport appearance and color-profile checks",
@@ -62,6 +68,11 @@ const canvasOnlySkippedAreas = [
   "scene/model adoption readiness endpoint",
   "viewport performance instrumentation",
 ];
+const performanceOnlyViewportDomSkippedArea =
+  "viewport DOM/model-adoption observations (performance-only scope)";
+const performanceOnlyViewportDomOmissionReason =
+  "The performance-only scope proves the viewport canvas and footer performance panel; it does not inspect model-adoption or quantity-label DOM.";
+const runPerformanceQaScope = "canvas-engine-run-performance";
 const viewportDomObservationNote = "Viewport dataset and quantity label attributes are DOM observations only; they do not prove field payload presence or values.";
 const liveFieldObservationNote = "Quantity label data-ready and viewport datasets are DOM readiness observations only; they do not prove field payload presence or values.";
 const simulationCommandsPath = "/v2/sessions/current/simulation/commands";
@@ -76,6 +87,10 @@ const expectedResponseDrops = [];
 const intentionalResponseDropRequests = new WeakSet();
 const resourceResponses = [];
 const femAirboxVectorResponses = [];
+const planarAirboxMetaResponses = [];
+const fieldTransportLifecycle = [];
+const fieldTransportLifecycleByRequest = new WeakMap();
+const fieldTransportLifecycleStartedAt = new WeakMap();
 const blockedMutations = [];
 let visualizationClientAckRequestCount = 0;
 let displayPatchRequestCount = 0;
@@ -84,9 +99,60 @@ let harnessSourceHashes = null;
 let failurePageState = null;
 let browserRoute = null;
 let partialProof = {};
+let cleanupStarted = false;
 const bounded = (value) => String(value).slice(0, 2048);
 const collect = (target, value) => {
   if (target.length < 32) target.push(bounded(value));
+};
+
+const fieldTransportPathPattern = /^\/v2\/sessions\/current\/data\/fields\/[^/]+\/samples\/vector$/;
+const recordFieldTransportRequest = (request) => {
+  let url;
+  try {
+    url = new URL(request.url());
+  } catch {
+    return null;
+  }
+  if (!fieldTransportPathPattern.test(url.pathname)) return null;
+  const existing = fieldTransportLifecycleByRequest.get(request);
+  if (existing) return existing;
+  if (fieldTransportLifecycle.length >= 16) return null;
+  const relativePath = `${url.pathname}${url.search}`;
+  const record = {
+    method: request.method(),
+    path: relativePath.slice(0, 2048),
+    ...(relativePath.length > 2048 ? { path_truncated: true } : {}),
+    cleanupStarted,
+    events: [],
+  };
+  fieldTransportLifecycleByRequest.set(request, record);
+  fieldTransportLifecycleStartedAt.set(request, Date.now());
+  fieldTransportLifecycle.push(record);
+  return record;
+};
+const recordFieldTransportEvent = (request, event, details = {}) => {
+  const record = fieldTransportLifecycleByRequest.get(request);
+  if (!record || record.events.length >= 3) return;
+  const startedAt = fieldTransportLifecycleStartedAt.get(request) ?? Date.now();
+  record.events.push({
+    event,
+    ...details,
+    elapsed_ms: Math.max(0, Date.now() - startedAt),
+    cleanupStarted,
+  });
+};
+const installFieldTransportLifecycleObserver = (page) => {
+  page.on("request", (request) => recordFieldTransportRequest(request));
+  page.on("response", (response) => recordFieldTransportEvent(
+    response.request(), "response", { status: response.status() },
+  ));
+  page.on("requestfinished", (request) =>
+    recordFieldTransportEvent(request, "requestfinished"));
+  page.on("requestfailed", (request) => recordFieldTransportEvent(
+    request,
+    "requestfailed",
+    { error: bounded(request.failure()?.errorText ?? "failed") },
+  ));
 };
 
 const sha256File = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
@@ -106,6 +172,9 @@ const readHarnessSourceHashes = async () => {
   };
   if (expectTerminalTelemetry) {
     hashes.terminal_telemetry_helper = await sha256File(terminalTelemetrySourcePath);
+  }
+  if (expectPlanarAirbox) {
+    hashes.planar_field_evidence = await sha256File(planarFieldEvidenceSourcePath);
   }
   return hashes;
 };
@@ -274,6 +343,408 @@ const waitForLiveField = async (page, quantityId, requireAirboxVectors) => {
     throw new Error("FDM-only airbox-vector gate unavailable: viewport exposes no FDM domain/model dataset; FEM has no corresponding airbox-vector dataset");
   }
   return observed;
+};
+
+const currentSessionRunIdentity = async (page) => {
+  const status = await page.request.get(
+    new URL("/v2/sessions/current/status", page.url()).toString(), { timeout },
+  );
+  if (status.status() !== 200) {
+    throw new Error(`GET /v2/sessions/current/status returned ${status.status()}`);
+  }
+  const body = await status.json();
+  const identity = {
+    session_id: body?.session?.session_id,
+    session_epoch: body?.session?.session_epoch,
+    request_scope_epoch: body?.session?.request_scope_epoch,
+    run_id: body?.run?.run_id,
+  };
+  if (Object.values(identity).some((value) => typeof value !== "string" || value.trim() === "")) {
+    throw new Error("Planar Airbox proof requires a current session, run, and request-scope identity");
+  }
+  return identity;
+};
+
+const canonicalizeJsonValue = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalizeJsonValue);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalizeJsonValue(value[key])]));
+};
+
+const sameCanonicalJsonValue = (left, right) =>
+  JSON.stringify(canonicalizeJsonValue(left)) === JSON.stringify(canonicalizeJsonValue(right));
+
+const planarProfileRangeIsRestorable = (range) =>
+  (range?.mode === "auto" && range.min === null && range.max === null) ||
+  (range?.mode === "manual" && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min < range.max);
+
+const expectedAirboxDefaultFrame = (layout, planar) => {
+  const airbox = layout?.airbox;
+  const cells = airbox?.cells;
+  const origin = airbox?.origin_m;
+  const spacing = airbox?.cell_size_m;
+  if (!Array.isArray(cells) || cells.length !== 3 || cells.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+      !Array.isArray(origin) || origin.length !== 3 || origin.some((value) => !Number.isFinite(value)) ||
+      !Array.isArray(spacing) || spacing.length !== 3 || spacing.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error("fdm-multilayer-layout.airbox does not expose a physical target grid");
+  }
+  const bounds = {
+    min: [...origin],
+    max: origin.map((value, axis) => value + cells[axis] * spacing[axis]),
+  };
+  const defaultSlice = planar?.default_slice;
+  const plane = defaultSlice?.plane;
+  const positionFraction = defaultSlice?.position_fraction;
+  const operatorKind = defaultSlice?.operator?.kind;
+  if (!(["xy", "xz", "yz"].includes(plane)) || !Number.isFinite(positionFraction) ||
+      positionFraction < 0 || positionFraction > 1 || !["plane_sample", "slab_average"].includes(operatorKind)) {
+    throw new Error("Current default planar slice presentation is not a supported axis-aligned slice");
+  }
+  const [normalAxis, uAxis, vAxis] = {
+    xy: [2, 0, 1], xz: [1, 0, 2], yz: [0, 1, 2],
+  }[plane];
+  const lengths = bounds.max.map((value, axis) => value - bounds.min[axis]);
+  const frameOrigin = bounds.min.map((value, axis) => (value + bounds.max[axis]) * 0.5);
+  const requestedCoordinate = bounds.min[normalAxis] + positionFraction * lengths[normalAxis];
+  let resolvedCoordinateM = requestedCoordinate;
+  if (operatorKind === "plane_sample") {
+    const count = cells[normalAxis];
+    const scaled = positionFraction * count;
+    const index = Math.min(Math.max(scaled <= 0 ? 0 : Math.ceil(scaled) - 1, 0), count - 1);
+    resolvedCoordinateM = origin[normalAxis] + (index + 0.5) * spacing[normalAxis];
+  }
+  frameOrigin[normalAxis] = resolvedCoordinateM;
+  const axes = {
+    xy: { normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+    xz: { normal: [0, -1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+    yz: { normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
+  }[plane];
+  return {
+    plane,
+    positionFraction,
+    operatorKind,
+    resolvedCoordinateM,
+    originM: frameOrigin,
+    uAxis: axes.u,
+    vAxis: axes.v,
+    normal: axes.normal,
+    boundsUvM: [-0.5 * lengths[uAxis], 0.5 * lengths[uAxis], -0.5 * lengths[vAxis], 0.5 * lengths[vAxis]],
+    bounds,
+  };
+};
+
+const assertPlanarFrameMatchesAirbox = (meta, expected) => {
+  if (meta?.source?.kind !== "default" || meta?.scope_kind !== "airbox" ||
+      meta?.operator?.kind !== expected.operatorKind) {
+    throw new Error("Planar metadata does not describe the default Airbox field slice");
+  }
+  const close = (left, right) => Number.isFinite(left) && Number.isFinite(right) &&
+    Math.abs(left - right) <= Math.max(Math.abs(right) * 1e-10, 1e-18);
+  const frame = meta.frame;
+  for (const [key, expectedValues] of [
+    ["origin_m", expected.originM], ["bounds_uv_m", expected.boundsUvM],
+    ["u_axis", expected.uAxis], ["v_axis", expected.vAxis], ["normal", expected.normal],
+  ]) {
+    const actual = frame?.[key];
+    if (!Array.isArray(actual) || actual.length !== expectedValues.length ||
+        actual.some((value, index) => !close(value, expectedValues[index]))) {
+      throw new Error(`Planar metadata ${key} differs from fdm-multilayer-layout.airbox: ${JSON.stringify({ actual, expected: expectedValues })}`);
+    }
+  }
+  return frame;
+};
+
+const readPlanarAirboxJson = async (page, path, label) => {
+  const response = await page.request.get(new URL(path, page.url()).toString(), { timeout });
+  if (response.status() !== 200) throw new Error(`${label} returned ${response.status()}`);
+  return response.json();
+};
+
+const waitForPlanarAirboxMeta = async (firstIndex) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const isCurrentAirboxMeta = (entry) =>
+      entry.method === "GET" && entry.path === "/v2/sessions/current/data/fields/H_demag/planar-default/meta" &&
+      entry.scope_kind === "airbox" && entry.scope_id_present === false && entry.status === 200 && entry.payload;
+    const match = [...planarAirboxMetaResponses.slice(firstIndex)].reverse().find(isCurrentAirboxMeta) ??
+      [...planarAirboxMetaResponses].reverse().find(isCurrentAirboxMeta);
+    if (match) return match;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("The browser did not load planar-default metadata for scope_kind=airbox without scope_id");
+};
+
+const assertPlanarFieldMapCanvas = async (page) => {
+  const canvas = page.locator(".fm-field-map__canvas[aria-label='Planar scalar field']:visible").first();
+  await canvas.waitFor({ state: "visible", timeout });
+  await page.waitForFunction(() => {
+    const node = [...document.querySelectorAll(".fm-field-map__canvas[aria-label='Planar scalar field']")]
+      .find((candidate) => getComputedStyle(candidate).visibility !== "hidden");
+    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return false;
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return false;
+    const context = node.getContext("2d");
+    if (!context) return false;
+    const pixels = context.getImageData(0, 0, node.width, node.height).data;
+    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] !== 0) return true;
+    return false;
+  }, null, { timeout });
+  return canvas.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { visible: rect.width > 0 && rect.height > 0, width: node.width, height: node.height, non_transparent: true };
+  });
+};
+
+const capturePlanarFieldMapScreenshot = async (page) => {
+  const png = await page.locator(".fm-field-map__canvas-stack:visible").first().screenshot({ type: "png", timeout });
+  if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error("Planar Airbox screenshot was not a PNG");
+  }
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (png.length > maxCanvasScreenshotBytes || width <= 0 || height <= 0) {
+    throw new Error(`Planar Airbox screenshot exceeds its bounded PNG limits: ${png.length} bytes`);
+  }
+  return {
+    state: "captured", image_proof: true, media_type: "image/png", width, height,
+    byte_length: png.length, png_base64: png.toString("base64"),
+  };
+};
+
+const selectToolbarOption = async (page, trigger, label, description) => {
+  await trigger.click();
+  const option = page.getByRole("option", { name: label, exact: true });
+  await option.waitFor({ state: "visible", timeout });
+  if ((await option.getAttribute("aria-disabled")) === "true") {
+    throw new Error(`${description} is disabled in the current field catalog`);
+  }
+  if ((await option.getAttribute("aria-selected")) === "true") {
+    await page.keyboard.press("Escape");
+    return false;
+  }
+  const acknowledgement = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "PATCH" && url.pathname === "/v2/sessions/current/visualization/state";
+  }, { timeout });
+  await option.click();
+  const response = await acknowledgement;
+  if (response.status() < 200 || response.status() >= 300) {
+    throw new Error(`${description} display-state acknowledgement returned ${response.status()}`);
+  }
+  return true;
+};
+
+const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
+  const sessionBefore = await currentSessionRunIdentity(page);
+  for (const key of ["session_id", "session_epoch", "request_scope_epoch"]) {
+    if (sessionBefore[key] !== expectedSession[key]) throw new Error(`Planar Airbox initial ${key} differs from the active browser session`);
+  }
+  const originalState = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/visualization/state", "Visualization state",
+  );
+  const planar = originalState?.planar;
+  if (planar?.source?.kind !== "default") {
+    throw new Error("Planar Airbox QA requires the loaded session's existing default field source");
+  }
+  const originalScopeKind = planar.view_scope?.kind;
+  if (!["monitor_target", "airbox"].includes(originalScopeKind)) {
+    throw new Error(`Planar Airbox QA cannot safely restore the existing ${String(originalScopeKind)} scope`);
+  }
+  if (!["m", "H_demag"].includes(planar.quantity_id) || planar.component !== "magnitude") {
+    throw new Error("Planar Airbox QA supports only restorable m or H_demag magnitude profiles");
+  }
+  if (planar.quantity_id === "m" && originalScopeKind !== "monitor_target") {
+    throw new Error("Planar Airbox QA requires an m field to start in Monitor target scope");
+  }
+  if (planar.quantity_id === "m" &&
+      (!["viridis", "hsl_direction"].includes(planar.colormap) || !planarProfileRangeIsRestorable(planar.range))) {
+    throw new Error("Planar Airbox QA cannot safely restore the existing m palette and color range");
+  }
+  const layout = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/data/domain/fdm-multilayer-layout", "FDM multilayer layout",
+  );
+  const airbox = layout?.airbox;
+  if (layout?.schema_version !== "fdm-multilayer-layout.v1" || layout.available !== true ||
+      layout.backend !== "fdm_multilayer" || airbox?.carrier_available !== true ||
+      airbox?.h_demag_available !== true || airbox?.target_only !== true) {
+    throw new Error("Current session has no authoritative materialized FDM multilayer Airbox H_demag carrier");
+  }
+  const expectedFrame = expectedAirboxDefaultFrame(layout, planar);
+  const open2d = page.getByRole("tab", { name: "2D View", exact: true });
+  const originalViewWas2d = (await open2d.getAttribute("aria-selected")) === "true";
+  if (!originalViewWas2d) await open2d.click();
+  const toolbar = page.getByRole("toolbar", { name: "2D view controls", exact: true });
+  await toolbar.waitFor({ state: "visible", timeout });
+  const quantity = toolbar.getByRole("combobox", { name: "Quantity", exact: true });
+  const scope = toolbar.getByRole("combobox", { name: "Scope", exact: true });
+  if (await quantity.count() !== 1 || await scope.count() !== 1) {
+    throw new Error("2D Field Map did not expose one Quantity and one Scope selector");
+  }
+  const originalQuantityLabel = (await quantity.innerText()).trim();
+  const originalScopeLabel = (await scope.innerText()).trim();
+  const metadataStart = planarAirboxMetaResponses.length;
+  const patchStart = displayPatchRequestCount;
+  const catalog = await readPlanarAirboxJson(
+    page, "/v2/sessions/current/data/fields", "Field catalog",
+  );
+  const demagEntries = Array.isArray(catalog?.quantities)
+    ? catalog.quantities.filter((entry) => entry.quantity_id === "H_demag") : [];
+  if (demagEntries.length !== 1 || demagEntries[0].available !== true) {
+    throw new Error("The live field catalog did not expose one available H_demag quantity");
+  }
+  const demagLabel = `${demagEntries[0].label}${demagEntries[0].unit ? ` (${demagEntries[0].unit})` : ""}`;
+  let presentationRestored = false;
+  let originalViewRestored = originalViewWas2d;
+  let observation = null;
+  try {
+    await selectToolbarOption(page, quantity, demagLabel, "H_demag quantity");
+    await selectToolbarOption(page, scope, "Universe / Airbox", "Universe / Airbox scope");
+    const metaRequest = await waitForPlanarAirboxMeta(metadataStart);
+    const meta = metaRequest.payload;
+    const evidenceHandle = await page.waitForFunction((expected) => {
+      const raw = document.querySelector("[aria-label='Planar field evidence']")?.getAttribute("data-planar-evidence");
+      if (!raw) return null;
+      try {
+        const evidence = JSON.parse(raw);
+        return evidence.status === "ready" && evidence.quantityId === "H_demag" &&
+          evidence.sourceKind === "default" && evidence.sourceId === "default" &&
+          evidence.component === "magnitude" && evidence.metaIdentity === expected.etag &&
+          evidence.sampleToken === expected.sample_token ? evidence : null;
+      } catch {
+        return null;
+      }
+    }, { etag: meta.etag, sample_token: meta.sample_token }, { timeout });
+    const evidence = await evidenceHandle.jsonValue();
+    assertPlanarEvidenceReady(evidence, {
+      component: "magnitude",
+      sourceKind: "default",
+      sourceId: "default",
+      operatorKind: expectedFrame.operatorKind,
+      quantityId: "H_demag",
+      defaultPlane: expectedFrame.plane,
+      positionFraction: expectedFrame.positionFraction,
+      resolvedCoordinateM: expectedFrame.resolvedCoordinateM,
+    }, meta);
+    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, expectedFrame);
+    if (evidence.domainGenerationId !== layout.domain_generation_id ||
+        !evidence.sampleToken || evidence.sampleToken !== meta.sample_token ||
+        !evidence.raster?.checksum || evidence.raster.sampleCount <= 0) {
+      throw new Error("Planar Airbox raster evidence is not bound to the current metadata/layout identities");
+    }
+    const canvas = await assertPlanarFieldMapCanvas(page);
+    const requestedLayers = (planar.field_overlays ?? [])
+      .filter((layer) => layer.raster_visible || layer.vectors_visible)
+      .map((layer) => ({ id: layer.id, quantity_id: layer.quantity_id }));
+    let composition = null;
+    if (requestedLayers.length) {
+      const handle = await page.waitForFunction((expected) => {
+        const buffers = document.querySelector("[data-planar-composition-state]");
+        if (!buffers || !["verified", "unverified"].includes(buffers.getAttribute("data-planar-composition-state"))) return null;
+        const slot = buffers.querySelector('[data-planar-composition-slot][aria-hidden="false"]');
+        if (!slot) return null;
+        const layers = expected.map((profile) => {
+          const node = [...slot.querySelectorAll("canvas[data-planar-overlay-layer='raster']")]
+            .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === profile.id);
+          if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0 ||
+              node.getAttribute("data-planar-overlay-quantity") !== profile.quantity_id ||
+              node.getAttribute("data-planar-overlay-rendered-current") !== "true") return null;
+          const evidence = JSON.parse(node.getAttribute("data-planar-overlay-rendered-evidence") ?? "null");
+          return evidence ? { ...profile, width: node.width, height: node.height, evidence } : null;
+        });
+        return layers.every(Boolean) ? { state: buffers.getAttribute("data-planar-composition-state"), layers } : null;
+      }, requestedLayers, { timeout });
+      composition = await handle.jsonValue();
+    }
+    const screenshot = await capturePlanarFieldMapScreenshot(page);
+    observation = {
+      schema: "fullmag.docker-dev-planar-airbox-browser-proof.v1",
+      state: "passed",
+      quantity_id: "H_demag",
+      source_kind: "default",
+      source_id: "default",
+      scope_kind: "airbox",
+      scope_id: null,
+      session_before: sessionBefore,
+      session_after: null,
+      meta_request: {
+        method: metaRequest.method,
+        path: metaRequest.path,
+        scope_kind: metaRequest.scope_kind,
+        scope_id_present: metaRequest.scope_id_present,
+        status: metaRequest.status,
+      },
+      meta,
+      evidence,
+      domain_layout: {
+        schema_version: layout.schema_version,
+        available: layout.available,
+        backend: layout.backend,
+        domain_generation_id: layout.domain_generation_id,
+        layout_fingerprint: layout.layout_fingerprint,
+        airbox: {
+          carrier_available: airbox.carrier_available,
+          h_demag_available: airbox.h_demag_available,
+          target_only: airbox.target_only,
+          cells: airbox.cells,
+          origin_m: airbox.origin_m,
+          cell_size_m: airbox.cell_size_m,
+        },
+      },
+      expected_frame: expectedFrame,
+      matched_frame: matchedFrame,
+      canvas,
+      composition,
+      screenshot,
+      display_state_patch_count: displayPatchRequestCount - patchStart,
+      visualization_client_ack_request_count: visualizationClientAckRequestCount,
+      blocked_mutation_count: blockedMutations.length,
+      no_computation_or_monitor_mutations: blockedMutations.length === 0,
+      presentation_restored: false,
+    };
+  } finally {
+    const currentScopeLabel = (await scope.innerText().catch(() => "")).trim();
+    if (currentScopeLabel !== originalScopeLabel) {
+      await selectToolbarOption(page, scope, originalScopeLabel, "Original scope restoration");
+    }
+    const restoredScopeState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Restored planar scope",
+    );
+    if (!sameCanonicalJsonValue(restoredScopeState?.planar?.view_scope, planar.view_scope)) {
+      throw new Error("Planar Airbox QA could not restore the original scope before restoring quantity");
+    }
+    const currentQuantityLabel = (await quantity.innerText().catch(() => "")).trim();
+    if (currentQuantityLabel !== originalQuantityLabel) {
+      await selectToolbarOption(page, quantity, originalQuantityLabel, "Original quantity restoration");
+    }
+    const restoredState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Restored visualization state",
+    );
+    presentationRestored = sameCanonicalJsonValue(planar, restoredState?.planar);
+    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original default-source presentation");
+    if (!originalViewWas2d) {
+      await page.getByRole("tab", { name: "3D Viewport", exact: true }).click();
+    }
+    originalViewRestored =
+      (await page.getByRole("tab", { name: originalViewWas2d ? "2D View" : "3D Viewport", exact: true })
+        .getAttribute("aria-selected")) === "true";
+    presentationRestored = presentationRestored && originalViewRestored;
+    const sessionAfter = await currentSessionRunIdentity(page);
+    if (JSON.stringify(sessionBefore) !== JSON.stringify(sessionAfter)) {
+      throw new Error("Planar Airbox presentation changed session/run identity");
+    }
+    if (observation) {
+      observation.session_after = sessionAfter;
+      observation.presentation_restored = presentationRestored;
+      observation.display_state_patch_count = displayPatchRequestCount - patchStart;
+      observation.blocked_mutation_count = blockedMutations.length;
+      observation.no_computation_or_monitor_mutations = blockedMutations.length === 0;
+    }
+  }
+  if (!observation || !presentationRestored || observation.blocked_mutation_count !== 0) {
+    throw new Error("Planar Airbox browser proof did not complete its presentation-only round trip");
+  }
+  return observation;
 };
 
 const readFemAirboxDebugDom = () => {
@@ -897,6 +1368,398 @@ const observeAmbiguousComputeFieldsSubmission = async (page, expectedSession) =>
   }
 };
 
+const RUN_PERFORMANCE_PATH = "/v2/sessions/current/diagnostics/performance";
+
+const requireRunPerformanceText = (value, label) => {
+  if (typeof value !== "string" || value.trim() === "" || value.length > 512) {
+    throw new Error(`Run performance API omitted ${label}`);
+  }
+  return value;
+};
+
+const requireRunPerformanceInteger = (value, label) => {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Run performance API returned an invalid ${label}`);
+  }
+  return value;
+};
+
+const RUN_PERFORMANCE_MAX_SNAPSHOTS = 8;
+const RUN_PERFORMANCE_MAX_OBSERVATION_MS = 20_000;
+const RUN_PERFORMANCE_REQUEST_TIMEOUT_MS = 1_000;
+
+const readRunPerformanceApiContext = async (page, expectedSession) => {
+  const sessionScope = expectedSessionScopeHeader(expectedSession);
+  const statusPath = "/v2/sessions/current/status";
+  const statusResponse = await page.request.get(new URL(statusPath, page.url()).toString(), {
+    timeout: Math.min(timeout, RUN_PERFORMANCE_REQUEST_TIMEOUT_MS),
+    headers: { "x-fullmag-session-scope": sessionScope },
+  });
+  if (statusResponse.status() !== 200) {
+    throw new Error(`GET ${statusPath} returned ${statusResponse.status()}`);
+  }
+  const apiInstanceId = statusResponse.headers()["x-fullmag-api-instance"] ?? "";
+  if (!isApiInstanceId(apiInstanceId)) {
+    throw new Error(`GET ${statusPath} omitted a valid API instance identity`);
+  }
+  const statusBody = await statusResponse.json();
+  const statusSession = statusBody?.session;
+  if (statusBody?.lifecycle?.session_resource !== "active" ||
+      statusSession?.session_id !== expectedSession.session_id ||
+      statusSession?.session_epoch !== expectedSession.session_epoch ||
+      statusSession?.request_scope_epoch !== expectedSession.request_scope_epoch) {
+    throw new Error("Run performance status probe changed or omitted the active session identity");
+  }
+  const requestEvidence = (path, response, apiInstanceIdSent, errorCode = null) => ({
+    api_instance_header_sent: apiInstanceIdSent,
+    api_instance_id: response.headers()["x-fullmag-api-instance"] ?? null,
+    ...(errorCode ? { error_code: errorCode } : {}),
+    method: "GET",
+    path,
+    session_scope_header_sent: sessionScope,
+    status: response.status(),
+  });
+  return {
+    apiInstanceId,
+    requests: [requestEvidence(statusPath, statusResponse, null)],
+    requestEvidence,
+    sessionScope,
+    statusRunId: requireRunPerformanceText(statusBody?.run?.run_id, "status.run.run_id"),
+  };
+};
+
+const readRunPerformanceApiSnapshot = async (page, expectedSession, context) => {
+  const performanceResponse = await page.request.get(
+    new URL(RUN_PERFORMANCE_PATH, page.url()).toString(),
+    {
+      timeout: Math.min(timeout, RUN_PERFORMANCE_REQUEST_TIMEOUT_MS),
+      headers: {
+        "x-fullmag-api-instance": context.apiInstanceId,
+        "x-fullmag-session-scope": context.sessionScope,
+      },
+    },
+  );
+  if (performanceResponse.status() === 409) {
+    const body = await performanceResponse.json().catch(() => null);
+    const errorCode = body?.code ?? body?.error?.code ?? null;
+    context.requests.push(context.requestEvidence(
+      RUN_PERFORMANCE_PATH, performanceResponse, context.apiInstanceId, errorCode,
+    ));
+    if (errorCode === "performance_observation_busy") return { busy: true };
+    throw new Error(`GET ${RUN_PERFORMANCE_PATH} returned unexpected 409: ${String(errorCode)}`);
+  }
+  if (performanceResponse.status() !== 200) {
+    throw new Error(`GET ${RUN_PERFORMANCE_PATH} returned ${performanceResponse.status()}`);
+  }
+  context.requests.push(context.requestEvidence(
+    RUN_PERFORMANCE_PATH, performanceResponse, context.apiInstanceId,
+  ));
+  const performanceApiInstanceId = performanceResponse.headers()["x-fullmag-api-instance"] ?? "";
+  if (performanceApiInstanceId !== context.apiInstanceId) {
+    throw new Error("Run performance resource changed the pinned API instance");
+  }
+  const resource = await performanceResponse.json();
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
+    throw new Error("Run performance API returned a non-object resource");
+  }
+  const runId = requireRunPerformanceText(resource.run_id, "run_id");
+  const taskId = requireRunPerformanceText(resource.task_id, "task_id");
+  const stepId = requireRunPerformanceText(resource.step_id, "step_id");
+  const attemptId = requireRunPerformanceText(resource.attempt_id, "attempt_id");
+  const ownershipEpoch = requireRunPerformanceInteger(resource.ownership_epoch, "ownership_epoch");
+  const firstStepIndex = requireRunPerformanceInteger(resource.first_step_index, "first_step_index");
+  const stepIndex = requireRunPerformanceInteger(resource.step_index, "step_index");
+  const sampleSequence = requireRunPerformanceInteger(resource.sample_sequence, "sample_sequence");
+  const elapsedMonotonicNs = requireRunPerformanceInteger(
+    resource.elapsed_monotonic_ns,
+    "elapsed_monotonic_ns",
+  );
+  if (resource.state === "unavailable" || runId !== context.statusRunId || elapsedMonotonicNs <= 0 ||
+      stepIndex < firstStepIndex || typeof resource.revision !== "string" || !resource.revision ||
+      !Array.isArray(resource.points) || resource.points.length < 1 || resource.points.length > 120) {
+    throw new Error("Run performance API resource is unavailable, incomplete, or outside the active run");
+  }
+  const latest = resource.points.at(-1);
+  if (!latest || (latest.step_index != null && latest.step_index !== stepIndex)) {
+    throw new Error("Run performance API latest sample does not match its step index");
+  }
+  const cpuPercent = latest.cpu_percent;
+  const gpuPercent = latest.gpu_percent;
+  for (const [label, value] of [["cpu_percent", cpuPercent], ["gpu_percent", gpuPercent]]) {
+    if (value !== null && value !== undefined &&
+        (typeof value !== "number" || !Number.isFinite(value) || value < 0)) {
+      throw new Error(`Run performance API returned an invalid ${label}`);
+    }
+  }
+  if (cpuPercent == null && gpuPercent == null) {
+    throw new Error("Run performance API did not publish a measured CPU or GPU value");
+  }
+  const stageRate = (stepIndex - firstStepIndex) / (elapsedMonotonicNs / 1_000_000_000);
+  return {
+    api: {
+      api_instance_id: context.apiInstanceId,
+      attempt_id: attemptId,
+      cpu_percent: cpuPercent ?? null,
+      elapsed_monotonic_ns: elapsedMonotonicNs,
+      first_step_index: firstStepIndex,
+      gpu_percent: gpuPercent ?? null,
+      ownership_epoch: ownershipEpoch,
+      point_count: resource.points.length,
+      revision: resource.revision,
+      run_id: runId,
+      sample_sequence: sampleSequence,
+      session_epoch: expectedSession.session_epoch,
+      session_id: expectedSession.session_id,
+      request_scope_epoch: expectedSession.request_scope_epoch,
+      state: resource.state,
+      status_run_id: context.statusRunId,
+      step_id: stepId,
+      step_index: stepIndex,
+      stage_rate_steps_per_s: stageRate,
+      task_id: taskId,
+    },
+    latest,
+  };
+};
+
+const formatRunPerformanceDecimal = (value) =>
+  value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+const formatRunPerformancePercent = (value) =>
+  value == null ? "N/A" : `${formatRunPerformanceDecimal(value)}%`;
+
+const formatRunPerformanceElapsed = (nanoseconds) => {
+  if (nanoseconds >= 1_000_000_000) {
+    return `${formatRunPerformanceDecimal(nanoseconds / 1_000_000_000)} s`;
+  }
+  if (nanoseconds >= 1_000_000) {
+    return `${formatRunPerformanceDecimal(nanoseconds / 1_000_000)} ms`;
+  }
+  return `${Math.round(nanoseconds).toLocaleString()} ns`;
+};
+
+const formatRunPerformancePanelValues = (api) => ({
+  cpu: formatRunPerformancePercent(api.cpu_percent),
+  elapsed: formatRunPerformanceElapsed(api.elapsed_monotonic_ns),
+  gpu: formatRunPerformancePercent(api.gpu_percent),
+  identity: [
+    `Run ${api.run_id}`,
+    `Task ${api.task_id}`,
+    `Step ${api.step_id}`,
+    `Attempt ${api.attempt_id}`,
+    `Epoch ${api.ownership_epoch}`,
+  ].join(" · "),
+  stage_rate: `${formatRunPerformanceDecimal(api.stage_rate_steps_per_s)} steps/s`,
+});
+
+const observeRunPerformancePanel = (panel) => panel.evaluate((node) => {
+  const valueFor = (label) => {
+    const stat = [...node.querySelectorAll(".fm-auto-performance__stat")]
+      .find((item) => item.querySelector("dt")?.textContent?.trim() === label);
+    return stat?.querySelector("dd")?.textContent?.trim() ?? null;
+  };
+  const rect = node.getBoundingClientRect();
+  const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2));
+  const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2));
+  const hit = document.elementFromPoint(x, y);
+  const style = getComputedStyle(node);
+  const chart = node.querySelector(".fm-auto-performance__chart .fm-analysis-plots__echarts");
+  const canvases = chart ? [...chart.querySelectorAll("canvas")] : [];
+  const canvas = canvases.find((item) => item.width > 0 && item.height > 0);
+  const canvasRect = canvas?.getBoundingClientRect();
+  const chartRect = chart?.getBoundingClientRect();
+  const scopeNotes = [...node.querySelectorAll(".fm-auto-performance__scope-note")]
+    .map((note) => note.textContent?.trim() ?? "");
+  return {
+    chart: {
+      canvas_count: canvases.length,
+      canvas_height: canvas?.height ?? 0,
+      canvas_width: canvas?.width ?? 0,
+      css_height: canvasRect?.height ?? 0,
+      css_width: canvasRect?.width ?? 0,
+      visible: Boolean(chartRect?.width > 0 && chartRect?.height > 0 &&
+        canvasRect?.width > 0 && canvasRect?.height > 0),
+    },
+    cpu: valueFor("CPU/core"),
+    elapsed: valueFor("Elapsed"),
+    gpu: valueFor("GPU/device"),
+    gpu_scope_note: scopeNotes.at(-1) ?? "",
+    identity: node.querySelector(".fm-auto-performance__identity")?.textContent?.trim() ?? "",
+    stage_rate: valueFor("Stage rate"),
+    status: node.querySelector(".fm-footer-diagnostics__meta")?.textContent?.trim() ?? "",
+    visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 &&
+      rect.height > 0 && rect.right > 0 && rect.left < window.innerWidth &&
+      rect.bottom > 0 && rect.top < window.innerHeight && hit && node.contains(hit),
+  };
+});
+
+const runPerformancePanelMatches = (api, panel) => {
+  const expected = formatRunPerformancePanelValues(api);
+  return panel.visible === true && panel.identity === expected.identity &&
+    panel.elapsed === expected.elapsed && panel.stage_rate === expected.stage_rate &&
+    panel.cpu === expected.cpu && panel.gpu === expected.gpu;
+};
+
+const captureRunPerformanceScreenshot = async (panel) => {
+  const png = await panel.screenshot({ type: "png", timeout, animations: "disabled" });
+  if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error("Automatic performance panel screenshot was not a PNG");
+  }
+  if (png.length > maxCanvasScreenshotBytes) {
+    throw new Error("Automatic performance panel screenshot exceeds its bounded size");
+  }
+  return {
+    byte_length: png.length,
+    height: png.readUInt32BE(20),
+    image_proof: true,
+    media_type: "image/png",
+    png_base64: png.toString("base64"),
+    state: "captured",
+    width: png.readUInt32BE(16),
+  };
+};
+
+const runAutomaticPerformanceBrowserQa = async (page, expectedSession) => {
+  const engineTab = page.getByRole("tab", { name: "Engine", exact: true });
+  await engineTab.waitFor({ state: "visible", timeout });
+  if (await engineTab.getAttribute("aria-selected") !== "true") await engineTab.click();
+  const panel = page.getByRole("region", { name: "Automatic performance", exact: true });
+  await panel.waitFor({ state: "visible", timeout });
+  const apiContext = await readRunPerformanceApiContext(page, expectedSession);
+  const apiSnapshots = [];
+  const panelMatches = [];
+  const deadline = Date.now() + RUN_PERFORMANCE_MAX_OBSERVATION_MS;
+  let selectedMetric = null;
+  let initialIdentity = null;
+  let stateWasRunning = false;
+  for (let attempt = 0; attempt < RUN_PERFORMANCE_MAX_SNAPSHOTS && Date.now() < deadline; attempt += 1) {
+    const snapshot = await readRunPerformanceApiSnapshot(page, expectedSession, apiContext);
+    if (!snapshot.busy) {
+      const { api } = snapshot;
+      const identity = [api.api_instance_id, api.session_id, api.session_epoch,
+        api.request_scope_epoch, api.run_id, api.task_id, api.step_id, api.attempt_id,
+        api.ownership_epoch].join("\u0000");
+      if (initialIdentity === null) {
+        initialIdentity = identity;
+        selectedMetric = api.cpu_percent == null
+          ? "GPU whole device (%)"
+          : "CPU per core (%)";
+        if (selectedMetric.startsWith("GPU")) {
+          const metricSelect = panel.getByRole("combobox");
+          await metricSelect.click();
+          await page.getByRole("option", { name: selectedMetric, exact: true }).click();
+        }
+      } else if (identity !== initialIdentity) {
+        throw new Error("Run performance API changed run/task/attempt/session/API identity during bounded observation");
+      }
+      stateWasRunning ||= api.state === "running";
+      apiSnapshots.push(api);
+      const panelObservation = await observeRunPerformancePanel(panel);
+      const matchingApi = [...apiSnapshots].reverse().find((candidate) =>
+        runPerformancePanelMatches(candidate, panelObservation));
+      const observation = {
+        api: matchingApi ?? api,
+        matched: matchingApi !== undefined,
+        panel: panelObservation,
+      };
+      if (observation.matched &&
+          !panelMatches.some(({ api: matched }) => matched.sample_sequence === matchingApi.sample_sequence)) {
+        panelMatches.push(observation);
+      }
+      const latestMatch = panelMatches.at(-1);
+      const hasVisibleChart = latestMatch?.panel.chart.visible === true &&
+        latestMatch.panel.chart.canvas_width > 0 && latestMatch.panel.chart.canvas_height > 0;
+      if (stateWasRunning) {
+        const refreshed = panelMatches.some((first, index) => panelMatches.slice(index + 1).some((second) =>
+          first.api.state === "running" && second.api.state === "running" &&
+          first.api.revision !== second.api.revision &&
+          first.api.sample_sequence < second.api.sample_sequence &&
+          first.api.elapsed_monotonic_ns < second.api.elapsed_monotonic_ns &&
+          first.panel.elapsed !== second.panel.elapsed));
+        if (refreshed && hasVisibleChart) break;
+      } else if (panelMatches.length > 0 && hasVisibleChart) {
+        break;
+      }
+    }
+    if (attempt + 1 < RUN_PERFORMANCE_MAX_SNAPSHOTS && Date.now() + 750 < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+  if (!selectedMetric || panelMatches.length === 0) {
+    throw new Error(`Automatic performance panel did not match any scoped API snapshot within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms`);
+  }
+  const refreshedPair = panelMatches.find((first, index) => panelMatches.slice(index + 1).some((second) =>
+    first.api.state === "running" && second.api.state === "running" &&
+    first.api.revision !== second.api.revision &&
+    first.api.sample_sequence < second.api.sample_sequence &&
+    first.api.elapsed_monotonic_ns < second.api.elapsed_monotonic_ns &&
+    first.panel.elapsed !== second.panel.elapsed));
+  if (stateWasRunning && !refreshedPair) {
+    throw new Error(`Running performance panel did not match two distinct revisions/sequences within ${RUN_PERFORMANCE_MAX_OBSERVATION_MS} ms; matches=${panelMatches.length}, snapshots=${apiSnapshots.length}`);
+  }
+  const matchedObservation = panelMatches.at(-1);
+  const panelObservation = matchedObservation.panel;
+  const chartObservation = panelObservation.chart;
+  const visiblePanel = panelObservation.visible;
+  if (!visiblePanel) throw new Error("Automatic performance panel is not visibly rendered in the Engine footer");
+  if (!chartObservation.visible || chartObservation.canvas_width <= 0 || chartObservation.canvas_height <= 0) {
+    throw new Error("Automatic performance chart did not render on a nonzero canvas");
+  }
+  if (blockedMutations.length > 0) {
+    throw new Error(`Run performance QA blocked unexpected non-read-only requests: ${JSON.stringify(blockedMutations)}`);
+  }
+  const api = matchedObservation.api;
+  const metricValue = selectedMetric.startsWith("GPU") ? api.gpu_percent : api.cpu_percent;
+  const liveRefresh = stateWasRunning
+    ? {
+      state: "verified",
+      matched_revision_count: new Set(panelMatches.map(({ api: matched }) => matched.revision)).size,
+      matched_sample_sequence_count: new Set(panelMatches.map(({ api: matched }) => matched.sample_sequence)).size,
+      observations: panelMatches.map(({ api: matched, panel: matchedPanel }) => ({
+        elapsed: matchedPanel.elapsed,
+        elapsed_monotonic_ns: matched.elapsed_monotonic_ns,
+        revision: matched.revision,
+        sample_sequence: matched.sample_sequence,
+        step_index: matched.step_index,
+      })),
+      window_ms: Math.min(RUN_PERFORMANCE_MAX_OBSERVATION_MS, Date.now() - (deadline - RUN_PERFORMANCE_MAX_OBSERVATION_MS)),
+    }
+    : {
+      state: "terminal-single-snapshot",
+      matched_revision_count: new Set(panelMatches.map(({ api: matched }) => matched.revision)).size,
+      matched_sample_sequence_count: new Set(panelMatches.map(({ api: matched }) => matched.sample_sequence)).size,
+      observations: panelMatches.slice(-1).map(({ api: matched, panel: matchedPanel }) => ({
+        elapsed: matchedPanel.elapsed,
+        elapsed_monotonic_ns: matched.elapsed_monotonic_ns,
+        revision: matched.revision,
+        sample_sequence: matched.sample_sequence,
+        step_index: matched.step_index,
+      })),
+      window_ms: Math.min(RUN_PERFORMANCE_MAX_OBSERVATION_MS, Date.now() - (deadline - RUN_PERFORMANCE_MAX_OBSERVATION_MS)),
+    };
+  const screenshot = await captureRunPerformanceScreenshot(panel);
+  return {
+    api,
+    api_requests: apiContext.requests,
+    api_snapshots: apiSnapshots,
+    blocked_mutation_count: blockedMutations.length,
+    chart: chartObservation,
+    engine_tab_clicked: true,
+    live_refresh: liveRefresh,
+    no_non_read_only_requests: true,
+    panel: {
+      ...panelObservation,
+      metric_label: selectedMetric.startsWith("GPU") ? "GPU whole device" : "CPU per core",
+      metric_value: formatRunPerformancePercent(metricValue),
+      visible: visiblePanel,
+    },
+    panel_matches: panelMatches,
+    schema: "fullmag.docker-dev-run-performance-browser-proof.v1",
+    screenshot,
+    state: "passed",
+  };
+};
+
 const main = async () => {
   if (!["0", "1"].includes(canvasOnlySetting)) {
     throw new Error("CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY must be exactly 0 or 1");
@@ -927,8 +1790,28 @@ const main = async () => {
   if (!expectFemAirboxVectors && scenarioSetting === "fem-airbox-vectors") {
     throw new Error("FEM Airbox vector scenario is missing its explicit observation flag");
   }
+  if (!(["0", "1"].includes(expectPlanarAirboxSetting))) {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_PLANAR_AIRBOX must be exactly 0 or 1");
+  }
+  if (expectPlanarAirbox && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || expectTerminalTelemetry ||
+      expectRunPerformance || scenarioSetting !== "planar-airbox" ||
+      process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("Planar Airbox QA requires its canvas-only primary-m scenario and excludes other browser mutations");
+  }
+  if (!expectPlanarAirbox && scenarioSetting === "planar-airbox") {
+    throw new Error("Planar Airbox scenario is missing its explicit observation flag");
+  }
   if (expectTerminalTelemetrySetting !== undefined && expectTerminalTelemetrySetting !== "1") {
     throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY must be absent or exactly 1");
+  }
+  if (expectRunPerformanceSetting !== undefined && expectRunPerformanceSetting !== "1") {
+    throw new Error("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE must be absent or exactly 1");
+  }
+  if (expectRunPerformance && (!canvasOnly || expectedLiveField || expectAirboxVectors ||
+      expectFemAirboxVectors || expectAmbiguousComputeFields || expectTerminalTelemetry ||
+      scenarioSetting !== "standard" || process.env.CONTROL_ROOM_PREPARE_VIEWPORT_FIXTURE === "1")) {
+    throw new Error("Run performance QA requires standalone canvas-only scope and excludes other scenarios");
   }
   if (expectTerminalTelemetry && (!canvasOnly || expectedLiveField !== "m" || expectAirboxVectors ||
       expectFemAirboxVectors || expectAmbiguousComputeFields || scenarioSetting !== "standard" ||
@@ -973,7 +1856,8 @@ const main = async () => {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
     page = await context.newPage();
     page.setDefaultTimeout(timeout);
-    if (expectFemAirboxVectors) {
+    installFieldTransportLifecycleObserver(page);
+    if (expectFemAirboxVectors || expectPlanarAirbox) {
       await page.route("**/v2/**", async (route) => {
         const request = route.request();
         const method = request.method();
@@ -983,8 +1867,7 @@ const main = async () => {
             url.pathname === "/v2/sessions/current/visualization/state") {
           return route.continue();
         }
-        // The viewport acknowledges display adoption through this resource;
-        // its handler records client diagnostics and cannot start computation.
+        // This resource records presentation adoption and cannot start computation.
         if (method === "POST" && url.origin === loopbackProxy.origin &&
             url.pathname === "/v2/sessions/current/visualization/client-acks") {
           visualizationClientAckRequestCount += 1;
@@ -998,6 +1881,22 @@ const main = async () => {
         if (new URL(request.url()).pathname === "/v2/sessions/current/visualization/state") {
           displayPatchRequestCount += 1;
         }
+      });
+    }
+    if (expectRunPerformance) {
+      await page.route("**/v2/**", async (route) => {
+        const request = route.request();
+        if (["GET", "HEAD", "OPTIONS"].includes(request.method())) return route.continue();
+        const url = new URL(request.url());
+        if (request.method() === "POST" && url.origin === loopbackProxy.origin &&
+            url.pathname === "/v2/sessions/current/visualization/client-acks") {
+          visualizationClientAckRequestCount += 1;
+          return route.continue();
+        }
+        if (blockedMutations.length < 16) {
+          blockedMutations.push({ method: request.method(), path: url.pathname });
+        }
+        return route.abort("blockedbyclient");
       });
     }
     if (!canvasOnly) await installViewportPerformanceProbe(page);
@@ -1041,6 +1940,25 @@ const main = async () => {
     });
     page.on("response", (response) => {
       const url = new URL(response.url());
+      const planarMetaMatch = url.pathname.match(
+        /^\/v2\/sessions\/current\/data\/fields\/H_demag\/planar-default\/meta$/,
+      );
+      if (expectPlanarAirbox && planarMetaMatch && planarAirboxMetaResponses.length < 16) {
+        const record = {
+          method: response.request().method(),
+          path: url.pathname,
+          scope_kind: url.searchParams.get("scope_kind"),
+          scope_id_present: url.searchParams.has("scope_id"),
+          status: response.status(),
+          payload: null,
+        };
+        if (response.status() === 200) {
+          response.json().then((payload) => { record.payload = payload; }).catch((error) => {
+            collect(pageErrors, `Planar Airbox metadata inspection failed: ${String(error)}`);
+          });
+        }
+        planarAirboxMetaResponses.push(record);
+      }
       if (url.pathname === "/v2/sessions/current/data/fields/H_demag/samples/vector" &&
           femAirboxVectorResponses.length < 16) {
         femAirboxVectorResponses.push({
@@ -1156,6 +2074,7 @@ const main = async () => {
       try {
         page = await highDprContext.newPage();
         page.setDefaultTimeout(timeout);
+        installFieldTransportLifecycleObserver(page);
         await installViewportPerformanceProbe(page);
         page.on("pageerror", (error) => collect(pageErrors, error));
         page.on("console", (message) => {
@@ -1201,13 +2120,34 @@ const main = async () => {
       partialProof.viewport_lifecycle = lifecycleQa;
     }
     const before = await assertCanvas(page, "before Home");
-    const viewportDomBefore = await viewportDomObservation(page);
-    const viewportDomObservations = {
-      before_home: viewportDomBefore,
-      after_home: null,
-      field_data_proven: false,
-      note: viewportDomObservationNote,
-    };
+    partialProof.canvas_before = before;
+    let runPerformanceProof = null;
+    if (expectRunPerformance) {
+      try {
+        runPerformanceProof = await runAutomaticPerformanceBrowserQa(page, sessionBefore);
+        partialProof.run_performance = runPerformanceProof;
+      } catch (error) {
+        if (error?.partialProof) partialProof.run_performance = error.partialProof;
+        throw error;
+      }
+    }
+    if (canvasOnly && expectedLiveField) {
+      partialProof.canvas_before_screenshot = await captureCanvasScreenshot(page, before);
+    }
+    const viewportDomObservations = expectRunPerformance && canvasOnly
+      ? {
+        field_data_proven: false,
+        note: viewportDomObservationNote,
+        reason: performanceOnlyViewportDomOmissionReason,
+        scope: runPerformanceQaScope,
+        state: "omitted",
+      }
+      : {
+        before_home: await viewportDomObservation(page),
+        after_home: null,
+        field_data_proven: false,
+        note: viewportDomObservationNote,
+      };
     partialProof.viewport_dom_observations = viewportDomObservations;
     let liveFieldBefore = null;
     let liveFieldAfter = null;
@@ -1238,6 +2178,16 @@ const main = async () => {
         after_home: null,
       };
     }
+    let planarAirboxObservation = null;
+    if (expectPlanarAirbox) {
+      try {
+        planarAirboxObservation = await runPlanarAirboxBrowserQa(page, sessionBefore);
+        partialProof.planar_airbox_observation = planarAirboxObservation;
+      } catch (error) {
+        if (error?.partialProof) partialProof.planar_airbox_observation = error.partialProof;
+        throw error;
+      }
+    }
     const canvasHandle = await page.locator(".fm-viewport-3d canvas").first().elementHandle();
     if (!canvasHandle) throw new Error("before Home: could not retain the workspace canvas element");
 
@@ -1257,8 +2207,10 @@ const main = async () => {
     const canvasDomStable = await canvasHandle.evaluate((canvas) => canvas === document.querySelector(".fm-viewport-3d canvas") && document.contains(canvas));
     if (!canvasDomStable) throw new Error("Home unmounted or replaced the workspace canvas");
     const after = await assertCanvas(page, "after Home");
-    const viewportDomAfter = await viewportDomObservation(page);
-    viewportDomObservations.after_home = viewportDomAfter;
+    partialProof.canvas_after = after;
+    if (!(expectRunPerformance && canvasOnly)) {
+      viewportDomObservations.after_home = await viewportDomObservation(page);
+    }
     if (expectedLiveField) {
       try {
         liveFieldAfter = await waitForLiveField(page, expectedLiveField, expectAirboxVectors);
@@ -1320,15 +2272,20 @@ const main = async () => {
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
+    partialProof.field_transport_lifecycle = fieldTransportLifecycle;
 
     const result = {
       schema: resultSchema,
       state: "passed",
-      qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+      qa_scope: expectRunPerformance ? runPerformanceQaScope :
+        expectPlanarAirbox ? "canvas-home-planar-airbox" :
+        expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
         expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
         expectAirboxVectors ? "canvas-home-live-field-airbox" :
         expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",
-      skipped_areas: canvasOnly ? canvasOnlySkippedAreas : [],
+      skipped_areas: expectRunPerformance && canvasOnly
+        ? [...canvasOnlySkippedAreas, performanceOnlyViewportDomSkippedArea]
+        : canvasOnly ? canvasOnlySkippedAreas : [],
       public_url: publicUrl,
       probe_url: probeUrl,
       final_url: page.url(),
@@ -1337,11 +2294,16 @@ const main = async () => {
       canvas_only: canvasOnly,
       expect_live_field: expectedLiveField,
       expect_airbox_vectors: expectAirboxVectors,
+      expect_planar_airbox: expectPlanarAirbox,
       expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
       ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
       ...(expectTerminalTelemetry ? {
         expect_terminal_telemetry: true,
         terminal_telemetry: terminalTelemetry,
+      } : {}),
+      ...(expectRunPerformance ? {
+        expect_run_performance: true,
+        run_performance: runPerformanceProof,
       } : {}),
       home_round_trip: true,
       home: { section: "home", visible: true, session_label: homeText.match(/Simulation open:[^\n]*/)?.[0] ?? "Simulation open:" },
@@ -1361,11 +2323,13 @@ const main = async () => {
         },
         canvas_screenshot: await captureCanvasScreenshot(page, after),
       } : {}),
+      ...(expectPlanarAirbox ? { planar_airbox_observation: planarAirboxObservation } : {}),
       ...(expectFemAirboxVectors ? { fem_airbox_observation: femAirboxObservation } : {}),
       ...(expectAmbiguousComputeFields ? {
         ambiguous_command_submission: ambiguousCommandSubmission,
         canvas_after_compute_fields: canvasAfterComputeFields,
       } : { ambiguous_command_submission: null }),
+      ...(canvasOnly && (expectedLiveField || expectRunPerformance) ? { partial_proof: partialProof } : {}),
       page_errors: pageErrors.length,
       console_errors: consoleErrors.length,
       expected_console_errors: expectedConsoleErrors,
@@ -1389,6 +2353,7 @@ const main = async () => {
     };
   } catch (error) {
     if (error?.partialProof) partialProof.failed_step = error.partialProof;
+    partialProof.field_transport_lifecycle = fieldTransportLifecycle;
     if (page) {
       failurePageState = {
         url: page.url(),
@@ -1404,6 +2369,8 @@ const main = async () => {
     }
     throw error;
   } finally {
+    cleanupStarted = true;
+    partialProof.cleanupStarted = cleanupStarted;
     try {
       await browser?.close();
     } finally {
@@ -1441,6 +2408,10 @@ const main = async () => {
           terminal_telemetry_helper_before: sourceHashesBefore.terminal_telemetry_helper,
           terminal_telemetry_helper_after: sourceHashesAfter.terminal_telemetry_helper,
         } : {}),
+        ...(expectPlanarAirbox ? {
+          planar_field_evidence_before: sourceHashesBefore.planar_field_evidence,
+          planar_field_evidence_after: sourceHashesAfter.planar_field_evidence,
+        } : {}),
         unchanged,
       };
       if (!unchanged) throw new Error("Browser QA harness source changed during the run");
@@ -1455,16 +2426,22 @@ try {
   payload.browser_route = browserRoute;
   console.log(JSON.stringify(payload));
 } catch (error) {
+  partialProof.field_transport_lifecycle = fieldTransportLifecycle;
+  partialProof.cleanupStarted = cleanupStarted;
   console.log(JSON.stringify({
     schema: resultSchema,
     state: "failed",
     canvas_only: canvasOnly,
     expect_live_field: expectedLiveField,
     expect_airbox_vectors: expectAirboxVectors,
+    expect_planar_airbox: expectPlanarAirbox,
     expect_ambiguous_compute_fields: expectAmbiguousComputeFields,
     ...(expectFemAirboxVectors ? { expect_fem_airbox_vectors: true } : {}),
     ...(expectTerminalTelemetry ? { expect_terminal_telemetry: true } : {}),
-    qa_scope: expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
+    ...(expectRunPerformance ? { expect_run_performance: true } : {}),
+    qa_scope: expectRunPerformance ? "canvas-engine-run-performance" :
+      expectPlanarAirbox ? "canvas-home-planar-airbox" :
+      expectAmbiguousComputeFields ? "canvas-home-ambiguous-compute-fields" :
       expectFemAirboxVectors ? "canvas-home-fem-airbox-vectors" :
       expectAirboxVectors ? "canvas-home-live-field-airbox" :
       expectedLiveField ? "canvas-home-live-field" : canvasOnly ? "canvas-home-only" : "full-browser-qa",

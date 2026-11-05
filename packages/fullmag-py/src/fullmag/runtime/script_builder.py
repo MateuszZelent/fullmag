@@ -105,11 +105,19 @@ from fullmag.model.study import (
     TableAutosave,
     TimeEvolution,
 )
+from fullmag.runtime.fem_demag_accuracy import (
+    validate_authored_fem_demag_accuracy_contract,
+    validate_fem_demag_accuracy_contract,
+)
 from fullmag.runtime.loader import LoadedProblem, LoadedStage, load_problem_from_script
 
 
 DEFAULT_ADAPTIVE_DT_MIN = 1e-15
 DEFAULT_ADAPTIVE_ATOL = 1e-6
+
+
+class PinnedFemMeshSourceOutsideRoot(ValueError):
+    """A pinned domain mesh cannot be carried by this source script."""
 
 
 def _is_exact_max_err_policy(policy: AdaptiveTimestep) -> bool:
@@ -275,11 +283,18 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "parallel_execution": base_problem.runtime.parallel_execution.to_ir(),
         "pbc": pbc_ir,
         "fem_demag_solver_policy": _export_fem_demag_solver_policy(base_problem),
+        "fem_demag_accuracy_contract": validate_authored_fem_demag_accuracy_contract(
+            base_problem.runtime_metadata,
+            context="runtime_metadata.fem_demag_accuracy_contract",
+        ),
         "exchange_enabled": _problem_has_exchange(base_problem),
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
         "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
+        "rotated_interfacial_dmi_object_ids": (
+            _problem_rotated_interfacial_dmi_object_ids(base_problem)
+        ),
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
@@ -396,6 +411,12 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    fem_domain_mesh = _export_fem_domain_mesh_reference(
+        base_problem,
+        source_root=source_root,
+    )
+    if fem_domain_mesh is not None:
+        draft["fem_domain_mesh"] = fem_domain_mesh
     fdm_draft = _export_fdm(base_problem)
     if fdm_draft is not None:
         draft["fdm"] = fdm_draft
@@ -716,6 +737,7 @@ def render_scene_document_as_script(
     *,
     include_authored_stages: bool = True,
     include_legacy_relax_stages: bool = True,
+    _source_root: str | Path | None = None,
 ) -> str:
     """Render a canonical Python script directly from a SceneDocument.
 
@@ -766,6 +788,20 @@ def render_scene_document_as_script(
                 if actual != builder[collection]:
                     raise ValueError(f"{collection} did not round-trip through the public antenna DSL")
         overrides = builder_overrides_from_scene_document(scene_for_render)
+        persisted_mesh = overrides.get("fem_domain_mesh")
+        if _source_root is not None and isinstance(persisted_mesh, Mapping):
+            stable_root = Path(_source_root).resolve()
+            resolved_mesh = (stable_root / str(persisted_mesh["source"])).resolve()
+            try:
+                resolved_mesh.relative_to(stable_root)
+            except ValueError as exc:
+                raise ValueError(
+                    "SceneDocument.study.fem_domain_mesh.source must resolve beneath source_root"
+                ) from exc
+            overrides["fem_domain_mesh"] = {
+                **dict(persisted_mesh),
+                "source": resolved_mesh.as_posix(),
+            }
         _omit_scene_mesh_editor_defaults(overrides)
         return render_loaded_problem_as_script(
             loaded,
@@ -1059,10 +1095,16 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
         "optimize_iterations": 1,
     }
 
-    def omit(config: object) -> None:
+    preserve_pinned_object_algorithm = isinstance(
+        overrides.get("fem_domain_mesh"), Mapping
+    )
+
+    def omit(config: object, *, preserve_algorithm_3d: bool = False) -> None:
         if not isinstance(config, dict):
             return
         for key, default in defaults.items():
+            if preserve_algorithm_3d and key == "algorithm_3d":
+                continue
             value = config.get(key)
             if isinstance(value, bool) != isinstance(default, bool):
                 continue
@@ -1074,7 +1116,10 @@ def _omit_scene_mesh_editor_defaults(overrides: dict[str, object]) -> None:
     if isinstance(geometries, list):
         for geometry in geometries:
             if isinstance(geometry, dict):
-                omit(geometry.get("mesh"))
+                omit(
+                    geometry.get("mesh"),
+                    preserve_algorithm_3d=preserve_pinned_object_algorithm,
+                )
 
 
 def _inherit_scene_stage_timestep(
@@ -1091,7 +1136,8 @@ def _inherit_scene_stage_timestep(
     if not isinstance(study, dict) or not isinstance(study.get("stages"), list):
         return
     for stage in study["stages"]:
-        if isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax":
+        if (isinstance(stage, dict) and str(stage.get("kind") or "relax") == "relax"
+                and _scene_relax_uses_llg(stage)):
             stage.setdefault("fixed_timestep", fixed_timestep)
 
 
@@ -2334,6 +2380,10 @@ def _without_default_hysteresis_sampling(
     return stage
 
 
+def _scene_relax_uses_llg(stage: Mapping[str, object]) -> bool:
+    return (stage.get("algorithm") or stage.get("relax_algorithm") or "llg_overdamped") == "llg_overdamped"
+
+
 def _scene_relax_stage_kwargs(
     stage: Mapping[str, object],
     *,
@@ -2358,7 +2408,9 @@ def _scene_relax_stage_kwargs(
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
-    kwargs.update(_relax_stage_timestep_kwargs(stage, solver))
+    # Global integration settings apply to LLG, not to direct minimization.
+    # Explicit stage controls still reach the public DSL's strict validator.
+    kwargs.update(_relax_stage_timestep_kwargs(stage, solver if _scene_relax_uses_llg(stage) else {}))
     return kwargs
 
 
@@ -3497,6 +3549,17 @@ def _render_runtime(
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface=surface))
 
+    demag_accuracy_contract = _fem_demag_accuracy_contract_with_overrides(
+        problem,
+        overrides=overrides,
+        runtime_override=runtime_override,
+    )
+    if demag_accuracy_contract is not None:
+        lines.append(
+            "fm.runtime_metadata('fem_demag_accuracy_contract', "
+            f"{_py_literal(demag_accuracy_contract)})"
+        )
+
     fdm = _fdm_from_overrides(problem, overrides)
     if isinstance(fdm, FDM):
         # ``study.objects.mesh.defaults(cell_size=...)`` cannot be combined with
@@ -3753,6 +3816,28 @@ def _fem_demag_solver_policy_with_overrides(
     if isinstance(fem, FEM):
         return fem.demag_solver_policy
     return None
+
+
+def _fem_demag_accuracy_contract_with_overrides(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    runtime_override: Mapping[str, object],
+) -> dict[str, object] | None:
+    """Return the explicit Scene override, else the loaded runtime contract."""
+
+    if "fem_demag_accuracy_contract" in runtime_override:
+        value = runtime_override["fem_demag_accuracy_contract"]
+        context = "overrides.runtime_selection.fem_demag_accuracy_contract"
+    elif "fem_demag_accuracy_contract" in overrides:
+        value = overrides["fem_demag_accuracy_contract"]
+        context = "overrides.fem_demag_accuracy_contract"
+    else:
+        return validate_authored_fem_demag_accuracy_contract(
+            problem.runtime_metadata,
+            context="runtime_metadata.fem_demag_accuracy_contract",
+        )
+    return validate_fem_demag_accuracy_contract(value, context=context)
 
 
 def _render_fem_demag_solver_call(policy: FemLinearSolverPolicy, *, surface: str) -> str:
@@ -7609,6 +7694,25 @@ def _render_study_mesh_workflow(
     elif global_build_requested:
         lines.append(_mesh_build_call("study", global_mesh))
 
+    persisted_mesh = overrides.get("fem_domain_mesh")
+    if isinstance(persisted_mesh, Mapping):
+        source = str(persisted_mesh["source"])
+        source_path = Path(source)
+        if source_path.is_absolute():
+            source_expression = _python_literal(source)
+        else:
+            lines.append("from pathlib import Path")
+            source_expression = (
+                f"(Path(__file__).resolve().parent / {_py_repr(source)})"
+            )
+        lines.append(
+            "study.mesh.load("
+            f"{source_expression}, "
+            f"expected_sha256={_py_repr(str(persisted_mesh['sha256']))}, "
+            f"build_requested={_python_literal(persisted_mesh['build_requested'])}"
+            ")"
+        )
+
     if not lines:
         return []
     return ["# Mesh", *lines]
@@ -8449,6 +8553,46 @@ def _render_stages(
         if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
             if stage_dynamics is not None:
                 stage_solver_override = dict(solver_override)
+                timestep_policy_keys = (
+                    "fixed_timestep",
+                    "adaptive_timestep",
+                    "dt_initial",
+                    "dt_min",
+                    "dt_max",
+                    "max_err",
+                )
+                has_stage_fixed_policy = (
+                    _number_or_none(stage_override.get("fixed_timestep"))
+                    is not None
+                )
+                has_stage_adaptive_policy = isinstance(
+                    stage_override.get("adaptive_timestep"), dict
+                )
+                has_stage_convenience_policy = any(
+                    _number_or_none(stage_override.get(key)) is not None
+                    for key in ("dt_initial", "dt_min", "dt_max", "max_err")
+                )
+                # A stage policy replaces the inherited study policy as one
+                # choice. Keep conflicting stage-authored choices intact so
+                # _render_solver_call still rejects them as ambiguous.
+                if has_stage_fixed_policy and not (
+                    has_stage_adaptive_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "fixed_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_adaptive_policy and not (
+                    has_stage_fixed_policy or has_stage_convenience_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key != "adaptive_timestep":
+                            stage_solver_override.pop(key, None)
+                elif has_stage_convenience_policy and not (
+                    has_stage_fixed_policy or has_stage_adaptive_policy
+                ):
+                    for key in timestep_policy_keys:
+                        if key not in {"dt_initial", "dt_min", "dt_max", "max_err"}:
+                            stage_solver_override.pop(key, None)
                 for key in (
                     "integrator",
                     "fixed_timestep",
@@ -9978,6 +10122,57 @@ def _export_initial_state(problem: Problem) -> dict[str, object] | None:
     }
 
 
+def _export_fem_domain_mesh_reference(
+    problem: Problem,
+    *,
+    source_root: Path,
+) -> dict[str, object] | None:
+    runtime_metadata = _normalize_mapping(problem.runtime_metadata)
+    raw_reference = runtime_metadata.get("fem_domain_mesh")
+    if raw_reference is None:
+        return None
+    if not isinstance(raw_reference, Mapping):
+        raise ValueError("runtime_metadata.fem_domain_mesh must be an object")
+    if set(raw_reference) != {"source", "sha256", "build_requested"}:
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh requires source, sha256, and build_requested"
+        )
+
+    raw_source = raw_reference.get("source")
+    if not isinstance(raw_source, str) or not raw_source.strip():
+        raise ValueError("runtime_metadata.fem_domain_mesh.source must be a path")
+    source = Path(raw_source).expanduser()
+    if not source.is_absolute():
+        source = source_root / source
+    resolved_source = source.resolve()
+    if resolved_source.suffix != ".fullmag-mesh":
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.source must name a .fullmag-mesh artifact"
+        )
+    try:
+        relative_source = resolved_source.relative_to(source_root.resolve())
+    except ValueError as exc:
+        raise PinnedFemMeshSourceOutsideRoot(
+            "Pinned FEM domain mesh must resolve beneath the source script's directory"
+        ) from exc
+
+    digest = raw_reference.get("sha256")
+    if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.sha256 must be 64 lowercase hexadecimal characters"
+        )
+    build_requested = raw_reference.get("build_requested")
+    if not isinstance(build_requested, bool):
+        raise ValueError(
+            "runtime_metadata.fem_domain_mesh.build_requested must be a bool"
+        )
+    return {
+        "source": relative_source.as_posix(),
+        "sha256": digest,
+        "build_requested": build_requested,
+    }
+
+
 def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     adaptive_mesh = _normalize_mapping(runtime_metadata.get("adaptive_mesh"))
@@ -10922,7 +11117,9 @@ def _script_api_surface(
     # instead of rendering an invalid ``fm.terms`` call (or dropping it).
     has_rotated_dmi = any(
         isinstance(term, RotatedInterfacialDMI) for term in problem.energy
-    ) or _number_or_none(rotated_dmi_override) is not None
+    ) or _number_or_none(rotated_dmi_override) is not None or (
+        overrides.get("rotated_interfacial_dmi_object_ids") is not None
+    )
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
     ) or problem.monitors or (
@@ -11028,11 +11225,27 @@ def _problem_external_field(problem: Problem) -> list[float] | None:
     return None
 
 
-def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+def _problem_rotated_interfacial_dmi_term(
+    problem: Problem,
+) -> RotatedInterfacialDMI | None:
     for term in problem.energy:
         if isinstance(term, RotatedInterfacialDMI):
-            return term.D
+            return term
     return None
+
+
+def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    return term.D if term is not None else None
+
+
+def _problem_rotated_interfacial_dmi_object_ids(
+    problem: Problem,
+) -> list[str] | None:
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if term is None or term.object_ids is None:
+        return None
+    return list(term.object_ids)
 
 
 def _render_rotated_interfacial_dmi(
@@ -11041,15 +11254,43 @@ def _render_rotated_interfacial_dmi(
     overrides: Mapping[str, object],
     surface: str,
 ) -> list[str]:
-    value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
-    if "rotated_interfacial_dmi" not in overrides:
-        value = _problem_rotated_interfacial_dmi(problem)
+    term = _problem_rotated_interfacial_dmi_term(problem)
+    if "rotated_interfacial_dmi" in overrides:
+        value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+    else:
+        value = term.D if term is not None else None
+    if "rotated_interfacial_dmi_object_ids" in overrides:
+        object_ids: object = overrides.get("rotated_interfacial_dmi_object_ids")
+    else:
+        object_ids = term.object_ids if term is not None else None
     if value is None:
+        if object_ids is not None:
+            raise ValueError(
+                "rotated_interfacial_dmi_object_ids requires a rotated_interfacial_dmi value"
+            )
         return []
     if surface != "study":
         raise ValueError("rotated interfacial DMI requires the canonical study API surface")
+    normalized = RotatedInterfacialDMI(D=value, object_ids=object_ids)
+    if normalized.object_ids is not None:
+        magnetic_object_ids = {
+            magnet.object_id if magnet.object_id is not None else magnet.name
+            for magnet in problem.magnets
+        }
+        unknown_object_ids = sorted(set(normalized.object_ids) - magnetic_object_ids)
+        if unknown_object_ids:
+            raise ValueError(
+                "rotated_interfacial_dmi references unknown magnetic object_id(s): "
+                + ", ".join(unknown_object_ids)
+            )
+    object_ids_arg = (
+        f", object_ids={_py_literal(normalized.object_ids)}"
+        if normalized.object_ids is not None
+        else ""
+    )
     return [
-        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_float_roundtrip(value)}))"
+        "study.terms.add(fm.RotatedInterfacialDMI("
+        f"D={_py_float_roundtrip(value)}{object_ids_arg}))"
     ]
 
 
@@ -11574,7 +11815,12 @@ def _py_literal(value: object) -> str:
     if isinstance(value, str):
         return _py_repr(value)
     if isinstance(value, tuple):
-        return "(" + ", ".join(_py_literal(item) for item in value) + ")"
+        return (
+            "("
+            + ", ".join(_py_literal(item) for item in value)
+            + ("," if len(value) == 1 else "")
+            + ")"
+        )
     if isinstance(value, list):
         return "[" + ", ".join(_py_literal(item) for item in value) + "]"
     if isinstance(value, dict):

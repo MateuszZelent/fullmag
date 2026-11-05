@@ -168,6 +168,7 @@ struct VerifiedOutput {
     data_kind: String,
     accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
     decoded: fullmag_application::DecodedStudyArtifact,
+    completion: Option<fullmag_ir::StageCompletionIR>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,11 +214,17 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         let mut study_cache: Option<Arc<fullmag_runtime_control::AcceptedStudySnapshot>> = None;
         // Last live quantity demand published beside a run (run id, quantities).
         let mut published_demand: Option<(String, Vec<String>)> = None;
+        let mut performance = crate::accepted_run_performance::InvalidationCursor::default();
         // The poll repeats every interval; report each distinct deferral once.
         let mut last_deferral: Option<String> = None;
         let mut repeated_deferrals: u32 = 0;
         loop {
             interval.tick().await;
+            // The recorder advances independently of solver callbacks. Reuse
+            // this bounded tick without rebuilding physics/read-model state.
+            if let Err(error) = crate::accepted_run_performance::publish_if_changed(&state, &mut performance).await {
+                tracing::debug!(error = %error, "automatic performance invalidation deferred");
+            }
             match poll_once(&state, &mut cursor, &mut study_cache, &mut published_demand).await {
                 Ok(()) => {
                     last_deferral = None;
@@ -1269,6 +1276,16 @@ fn build_stage_execution(
             .max_by(|left, right| compare_magnetization_outputs(left, right))
         {
             if let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = &output.decoded {
+                if stage_status == crate::types::StageLifecycleState::Completed {
+                    if let Some(completion) = &output.completion {
+                        record.reason = completion.reason;
+                        record.converged = completion.converged;
+                        record.metric = completion.metric;
+                        record.metric_name = completion.metric_name.clone();
+                        record.metric_value = completion.metric_value;
+                        record.threshold = completion.threshold;
+                    }
+                }
                 record.completed_step = Some(state.step);
                 record.applied_step = Some(state.step);
                 if state.time_s.is_finite() && state.time_s >= 0.0 {
@@ -1325,6 +1342,104 @@ fn refresh_live_stage_progress(
     apply_observation_stage_progress(stage, observation);
 }
 
+fn refresh_current_scalar_source_state(
+    source_state: &mut Option<crate::types::CurrentScalarSourceState>,
+    active_live_identity: Option<crate::types::AcceptedLiveScalarIdentity>,
+    session_id: &str,
+    run_id: &str,
+    request_scope_epoch: &str,
+    terminal: bool,
+) -> bool {
+    if source_state.is_none() && active_live_identity.is_none() {
+        return false;
+    }
+    let mut current = source_state.clone().unwrap_or_default();
+    let mut changed = false;
+    if current.active_live_identity != active_live_identity {
+        current.active_live_identity = active_live_identity.clone();
+        changed = true;
+    }
+    let source_context_changed = current.public_source.as_ref().is_some_and(|source| {
+        source.session_id != session_id
+            || source.run_id != run_id
+            || source.request_scope_epoch != request_scope_epoch
+    });
+    let accepted_identity_changed = current.accepted_live_identity.as_ref()
+        .is_some_and(|identity| Some(identity) != active_live_identity.as_ref());
+    let unqualified_public_pin_became_active = active_live_identity.is_some()
+        && current.public_source.is_some()
+        && current.accepted_live_identity.as_ref() != active_live_identity.as_ref();
+    let active_observation_is_absent = !terminal
+        && active_live_identity.is_none()
+        && (current.public_source.is_some() || current.accepted_live_identity.is_some());
+    if source_context_changed
+        || accepted_identity_changed
+        || unqualified_public_pin_became_active
+        || active_observation_is_absent
+    {
+        current.public_source = None;
+        current.accepted_live_identity = None;
+        changed = true;
+    }
+    if current.public_source.is_none()
+        && current.accepted_live_identity.is_none()
+        && current.active_live_identity.is_none()
+    {
+        *source_state = None;
+    } else {
+        *source_state = Some(current);
+    }
+    changed
+}
+
+fn accepted_scalar_row_already_projected(
+    previous_row: Option<&crate::types::ScalarRow>,
+    row: &crate::types::ScalarRow,
+    source_state: Option<&crate::types::CurrentScalarSourceState>,
+    active_live_identity: Option<&crate::types::AcceptedLiveScalarIdentity>,
+    scalar_revision: u64,
+    session_id: &str,
+    run_id: &str,
+    request_scope_epoch: &str,
+    terminal: bool,
+) -> bool {
+    let Some(previous_row) = previous_row else {
+        return false;
+    };
+    let same_physical_row = previous_row.step == row.step
+        && previous_row.time.to_bits() == row.time.to_bits()
+        && previous_row.e_total.to_bits() == row.e_total.to_bits()
+        && previous_row.mx.to_bits() == row.mx.to_bits()
+        && previous_row.my.to_bits() == row.my.to_bits()
+        && previous_row.mz.to_bits() == row.mz.to_bits();
+    if !same_physical_row {
+        return false;
+    }
+    let Some(source_state) = source_state else {
+        return false;
+    };
+    let Some(source) = source_state.public_source.as_ref() else {
+        return false;
+    };
+    if source.session_id != session_id
+        || source.run_id != run_id
+        || source.request_scope_epoch != request_scope_epoch
+        || source.scalar_revision != scalar_revision
+        || source.source_step != row.step
+    {
+        return false;
+    }
+    if terminal {
+        source_state.active_live_identity.is_none()
+            && source_state.accepted_live_identity.is_none()
+            && active_live_identity.is_none()
+    } else {
+        active_live_identity.is_some()
+            && source_state.active_live_identity.as_ref() == active_live_identity
+            && source_state.accepted_live_identity.as_ref() == active_live_identity
+    }
+}
+
 fn apply_observation_stage_progress(
     stage: &mut crate::types::StageExecutionRecord,
     observation: &crate::accepted_study_worker::AcceptedLiveObservation,
@@ -1354,6 +1469,228 @@ fn apply_observation_stage_progress(
                 stats.step, stats.time, stats.dt));
             stage.last_progress_unix_ms = Some(observation.header.written_at_unix_ms);
         }
+    }
+}
+
+#[cfg(test)]
+mod current_scalar_source_identity_tests {
+    use super::{
+        accepted_scalar_row_already_projected, refresh_current_scalar_source_state,
+    };
+    use crate::types::{
+        AcceptedLiveScalarIdentity, CurrentScalarSourceState, ScalarRow,
+    };
+
+    fn header(
+        task_id: &str,
+        step_id: &str,
+        attempt_id: &str,
+        ownership_epoch: u64,
+        sequence: u64,
+    ) -> crate::accepted_study_worker::AcceptedLiveObservationHeader {
+        crate::accepted_study_worker::AcceptedLiveObservationHeader {
+            schema_version: crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_SCHEMA.into(),
+            run_id: "run".into(),
+            task_id: task_id.into(),
+            step_id: step_id.into(),
+            attempt_id: attempt_id.into(),
+            ownership_epoch,
+            realization: "fem_gpu".into(),
+            sequence,
+            written_at_unix_ms: 10_000 + sequence,
+            stats: None,
+            operation_progress: None,
+            magnetization: None,
+        }
+    }
+
+    fn scalar_row() -> ScalarRow {
+        serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": 0,
+            "time": 0.0,
+            "solver_dt": 1.0e-15,
+            "mx": 0.1,
+            "my": 0.2,
+            "mz": 0.3,
+            "e_ex": 1.0,
+            "e_demag": 2.0,
+            "e_ext": 3.0,
+            "e_total": 6.0,
+            "max_dm_dt": 4.0,
+            "max_h_eff": 5.0,
+            "max_h_demag": 6.0
+        }))
+        .expect("physical scalar row fixture")
+    }
+
+    fn pinned_source(identity: AcceptedLiveScalarIdentity, revision: u64) -> CurrentScalarSourceState {
+        CurrentScalarSourceState {
+            public_source: Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_scope_epoch: "instance:7".into(),
+                source_step: 0,
+                scalar_revision: revision,
+            }),
+            accepted_live_identity: Some(identity.clone()),
+            active_live_identity: Some(identity),
+        }
+    }
+
+    fn source_matches(
+        previous: &ScalarRow,
+        row: &ScalarRow,
+        state: Option<&CurrentScalarSourceState>,
+        identity: Option<&AcceptedLiveScalarIdentity>,
+        revision: u64,
+        terminal: bool,
+    ) -> bool {
+        accepted_scalar_row_already_projected(
+            Some(previous), row, state, identity, revision,
+            "session", "run", "instance:7", terminal,
+        )
+    }
+
+    #[test]
+    fn identical_clock_and_values_from_new_stage_or_attempt_are_not_deduplicated() {
+        let previous_row = scalar_row();
+        let new_row = scalar_row();
+        let old_identity = AcceptedLiveScalarIdentity::from_header(
+            &header("task-a", "stage-a", "attempt-a", 3, 8),
+        );
+        let changed_identities = [
+            AcceptedLiveScalarIdentity::from_header(
+                &header("task-b", "stage-a", "attempt-a", 3, 1),
+            ),
+            AcceptedLiveScalarIdentity::from_header(
+                &header("task-a", "stage-b", "attempt-a", 3, 1),
+            ),
+            AcceptedLiveScalarIdentity::from_header(
+                &header("task-a", "stage-a", "attempt-b", 3, 1),
+            ),
+            AcceptedLiveScalarIdentity::from_header(
+                &header("task-a", "stage-a", "attempt-a", 4, 1),
+            ),
+        ];
+
+        for new_identity in changed_identities {
+            let mut source = Some(pinned_source(old_identity.clone(), 11));
+            assert!(refresh_current_scalar_source_state(
+                &mut source, Some(new_identity.clone()), "session", "run", "instance:7", false,
+            ));
+            let refreshed = source.as_ref().expect("new active identity retained");
+            assert_eq!(refreshed.active_live_identity.as_ref(), Some(&new_identity));
+            assert!(refreshed.public_source.is_none());
+            assert!(refreshed.accepted_live_identity.is_none());
+            assert!(
+                !source_matches(
+                    &previous_row, &new_row, source.as_ref(), Some(&new_identity), 11, false,
+                ),
+                "same step/time/value from a different stage attempt must reach normal scalar upsert"
+            );
+            let mut rows = vec![previous_row.clone()];
+            assert!(
+                crate::session::upsert_scalar_row(&mut rows, new_row.clone()),
+                "the existing equal-step upsert replaces the current physical row and advances its revision"
+            );
+
+            let updated_pin = pinned_source(new_identity.clone(), 12);
+            assert!(source_matches(
+                &new_row, &new_row, Some(&updated_pin), Some(&new_identity), 12, false,
+            ));
+        }
+    }
+
+    #[test]
+    fn worker_sequence_tick_does_not_change_attempt_scalar_identity() {
+        let first = AcceptedLiveScalarIdentity::from_header(
+            &header("task-a", "stage-a", "attempt-a", 3, 8),
+        );
+        let next_sequence = AcceptedLiveScalarIdentity::from_header(
+            &header("task-a", "stage-a", "attempt-a", 3, 9),
+        );
+        assert_eq!(first, next_sequence);
+
+        let row = scalar_row();
+        let source = pinned_source(first.clone(), 11);
+        let mut state = Some(source);
+        assert!(!refresh_current_scalar_source_state(
+            &mut state, Some(next_sequence.clone()), "session", "run", "instance:7", false,
+        ));
+        assert!(source_matches(&row, &row, state.as_ref(), Some(&next_sequence), 11, false));
+    }
+
+    #[test]
+    fn missing_active_header_invalidates_prior_live_source_without_a_new_row() {
+        let old_identity = AcceptedLiveScalarIdentity::from_header(
+            &header("task-a", "stage-a", "attempt-a", 3, 8),
+        );
+        let row = scalar_row();
+        let mut state = Some(pinned_source(old_identity, 11));
+
+        assert!(refresh_current_scalar_source_state(
+            &mut state, None, "session", "run", "instance:7", false,
+        ));
+        assert!(state.is_none());
+        assert!(!source_matches(&row, &row, state.as_ref(), None, 11, false));
+    }
+
+    #[test]
+    fn active_runtime_without_a_live_header_clears_a_terminal_only_pin() {
+        let row = scalar_row();
+        let mut state = Some(CurrentScalarSourceState {
+            public_source: Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_scope_epoch: "instance:7".into(),
+                source_step: 0,
+                scalar_revision: 11,
+            }),
+            accepted_live_identity: None,
+            active_live_identity: None,
+        });
+
+        assert!(refresh_current_scalar_source_state(
+            &mut state, None, "session", "run", "instance:7", false,
+        ));
+        assert!(state.is_none());
+        assert!(!source_matches(&row, &row, state.as_ref(), None, 11, false));
+    }
+
+    #[test]
+    fn private_attempt_identity_does_not_change_public_scalar_source_wire_shape() {
+        let identity = AcceptedLiveScalarIdentity::from_header(
+            &header("task-a", "stage-a", "attempt-a", 3, 8),
+        );
+        let source = pinned_source(identity, 11);
+        assert_eq!(
+            serde_json::to_value(source.public_source.expect("public source")).unwrap(),
+            serde_json::json!({
+                "session_id": "session",
+                "run_id": "run",
+                "request_scope_epoch": "instance:7",
+                "source_step": 0,
+                "scalar_revision": 11
+            })
+        );
+    }
+
+    #[test]
+    fn terminal_scalar_pin_keeps_non_live_dedup_semantics() {
+        let row = scalar_row();
+        let source = CurrentScalarSourceState {
+            public_source: Some(crate::schemas::scalars::ScalarObservationSource {
+                session_id: "session".into(),
+                run_id: "run".into(),
+                request_scope_epoch: "instance:7".into(),
+                source_step: 0,
+                scalar_revision: 11,
+            }),
+            accepted_live_identity: None,
+            active_live_identity: None,
+        };
+        assert!(source_matches(&row, &row, Some(&source), None, 11, true));
     }
 }
 
@@ -1926,8 +2263,15 @@ fn load_verified_outputs(
                 data_kind: output.data_kind,
                 accepted_state_ref: accepted_state_ref.clone(),
                 decoded,
+                completion: None,
             });
         }
+    }
+    for output in &mut outputs {
+        let fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state) =
+            &output.decoded else { continue; };
+        output.completion = terminal_completion_from_pinned_artifact(
+            store, run_catalog, artifact_catalog, &task_order, output, final_state);
     }
     Ok(outputs)
 }
@@ -1998,6 +2342,77 @@ fn terminal_stats_from_pinned_artifact(
         return None;
     }
     Some(stats.stats)
+}
+
+fn terminal_completion_from_pinned_artifact(
+    store: &fullmag_session::SessionStore,
+    run_catalog: &fullmag_session::FmsRunCatalog,
+    artifact_catalog: &fullmag_session::FmsArtifactCatalog,
+    task_order: &std::collections::BTreeMap<String, usize>,
+    output: &VerifiedOutput,
+    final_state: &fullmag_application::MagnetizationStateArtifact,
+) -> Option<fullmag_ir::StageCompletionIR> {
+    if artifact_catalog.run_id != run_catalog.run_id { return None; }
+    let accepted_state_ref = output.accepted_state_ref.as_ref()?;
+    let task = run_catalog.tasks.iter().find(|task| {
+        task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
+            && task_order.get(&task.task_id) == Some(&output.task_order)
+    })?;
+    let attempt_id = task.attempt_id.as_deref()?;
+    let ownership_epoch = task.ownership_epoch?;
+    if accepted_state_ref.id.run_id != run_catalog.run_id
+        || accepted_state_ref.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || accepted_state_ref.generation.runtime_epoch != ownership_epoch
+        || accepted_state_ref.id.accepted_step != final_state.step
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact source does not match the final accepted state identity");
+        return None;
+    }
+    let mut matches = artifact_catalog.entries.iter().filter(|entry| {
+        task.artifact_ids.contains(&entry.artifact_id)
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
+            && entry.status == fullmag_session::FmsArtifactStatus::Published
+    });
+    let Some(entry) = matches.next() else { return None; };
+    if matches.next().is_some() {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact pin is ambiguous; stage completion remains unknown");
+        return None;
+    }
+    let stats = match crate::accepted_field_materialization_worker::read_terminal_completion(store, entry) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id = %task.task_id, error = %error,
+                "terminal completion artifact is invalid; stage completion remains unknown");
+            return None;
+        }
+    };
+    if stats.source != *accepted_state_ref
+        || stats.source.id.run_id != run_catalog.run_id
+        || stats.source.id.stage_id.as_deref() != Some(output.step_id.as_str())
+        || stats.source.generation.runtime_epoch != ownership_epoch
+        || stats.state_object_ref != output.object_ref
+        || stats.input_fingerprint != task.input_fingerprint
+        || stats.resolved_input_fingerprint != task.resolved_input_fingerprint
+        || stats.run_id != run_catalog.run_id
+        || stats.task_id != task.task_id
+        || stats.step_id != output.step_id
+        || stats.attempt_id != attempt_id
+        || stats.ownership_epoch != ownership_epoch
+        || stats.clock.accepted_step != final_state.step
+        || stats.clock.time_seconds.to_bits() != final_state.time_s.to_bits()
+        || stats.solver_dt_s.to_bits() != final_state.solver_dt_s.to_bits()
+        || crate::accepted_field_materialization_worker::validate_completion(&stats.completion).is_err()
+    {
+        tracing::warn!(task_id = %task.task_id,
+            "terminal completion artifact does not match the pinned final state; stage completion remains unknown");
+        return None;
+    }
+    Some(stats.completion)
 }
 
 #[derive(Debug, Clone)]
@@ -2760,6 +3175,25 @@ async fn apply_projection(
             }
         }
     }
+    let active_live_scalar_identity = if terminal {
+        None
+    } else {
+        projection.live_observation.as_ref().map(|(_, observation)| {
+            crate::types::AcceptedLiveScalarIdentity::from_header(&observation.header)
+        })
+    };
+    let request_scope_epoch = format!("{}:{}", context.api_instance_id, context.session_epoch);
+    if refresh_current_scalar_source_state(
+        &mut next.latest_scalar_source,
+        active_live_scalar_identity.clone(),
+        &context.session_id,
+        &context.run_id,
+        &request_scope_epoch,
+        terminal,
+    ) {
+        changed = true;
+    }
+
     let scalar_stats = if matches!(projection.status, "completed" | "failed" | "cancelled") {
         projection.terminal_stats.as_ref()
     } else {
@@ -2798,16 +3232,20 @@ async fn apply_projection(
                 per_object_scalars: stats.per_object_scalars.clone(),
                 table_expressions: Vec::new(),
             };
-            // A worker header may repeat its latest physical stats across steps
-            // whose diagnostics were not observed; the same sample is no change.
-            let already_projected = next.scalar_rows.last().is_some_and(|last| {
-                last.step == row.step
-                    && last.time.to_bits() == row.time.to_bits()
-                    && last.e_total.to_bits() == row.e_total.to_bits()
-                    && last.mx.to_bits() == row.mx.to_bits()
-                    && last.my.to_bits() == row.my.to_bits()
-                    && last.mz.to_bits() == row.mz.to_bits()
-            });
+            // Repeated headers may retain the same physical row. Deduplicate
+            // only for the same accepted attempt identity; equal clocks and
+            // values from a changed task/attempt must refresh the current pin.
+            let already_projected = accepted_scalar_row_already_projected(
+                next.scalar_rows.last(),
+                &row,
+                next.latest_scalar_source.as_ref(),
+                active_live_scalar_identity.as_ref(),
+                next.scalar_revision,
+                &context.session_id,
+                &context.run_id,
+                &request_scope_epoch,
+                terminal,
+            );
             if row.is_physical_observation() && !already_projected {
                 let scalar_revision = next.scalar_revision;
                 // A run's latest durable row never moves backwards, so an
@@ -2826,13 +3264,21 @@ async fn apply_projection(
                     },
                 )?;
                 if next.scalar_revision != scalar_revision {
-                    next.latest_scalar_source = Some(crate::schemas::scalars::ScalarObservationSource {
+                    let source_state = next.latest_scalar_source
+                        .get_or_insert_with(crate::types::CurrentScalarSourceState::default);
+                    source_state.public_source = Some(crate::schemas::scalars::ScalarObservationSource {
                         session_id: context.session_id.clone(),
                         run_id: context.run_id.clone(),
-                        request_scope_epoch: format!("{}:{}", context.api_instance_id, context.session_epoch),
+                        request_scope_epoch: request_scope_epoch.clone(),
                         source_step: stats.step,
                         scalar_revision: next.scalar_revision,
                     });
+                    source_state.accepted_live_identity = if terminal {
+                        None
+                    } else {
+                        active_live_scalar_identity.clone()
+                    };
+                    source_state.active_live_identity = active_live_scalar_identity.clone();
                     changed = true;
                     scalar_sample_advanced = true;
                 }
@@ -3290,6 +3736,63 @@ mod tests {
             resource_id: None,
             coordinator_watermark: None,
             coordinator_genesis: None,
+        }
+    }
+
+    #[test]
+    fn terminal_completion_requires_one_exact_successful_attempt_and_state() {
+        use crate::accepted_field_materialization_worker::completion_tests::fixture;
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+        for (reason, converged) in [(fullmag_ir::StageStopReason::Torque, true),
+            (fullmag_ir::StageStopReason::Energy, true), (fullmag_ir::StageStopReason::MaxSteps, false)] {
+            let (record, entry) = fixture(reason, converged);
+            store.cas().put(&serde_json::to_vec(&record).unwrap()).unwrap();
+            let mut producer = task(fullmag_session::FmsTaskLifecycle::Succeeded);
+            producer.attempt_id = Some(record.attempt_id.clone());
+            producer.ownership_epoch = Some(record.ownership_epoch);
+            producer.resolved_input_fingerprint = record.resolved_input_fingerprint.clone();
+            producer.artifact_ids = vec![entry.artifact_id.clone()];
+            let run = fullmag_session::FmsRunCatalog {
+                schema_version: "fms.run_catalog.v1".into(), run_id: record.run_id.clone(),
+                revision: 1, updated_at: chrono::Utc::now(), tasks: vec![producer],
+            };
+            let catalog = fullmag_session::FmsArtifactCatalog {
+                schema_version: "fms.artifact_catalog.v1".into(), run_id: record.run_id.clone(),
+                revision: 1, updated_at: chrono::Utc::now(), entries: vec![entry],
+            };
+            let final_state = fullmag_application::MagnetizationStateArtifact {
+                step: 7, time_s: 0.0, solver_dt_s: 0.0, space_fingerprint: "layout".into(),
+                layout: json!({"grid_cells": [1,1,1]}), provenance: json!({}),
+                values: vec![[0.0,0.0,1.0]], native_state_snapshot: None, native_node_map: None,
+            };
+            let output = VerifiedOutput {
+                task_order: 0, step_id: record.step_id.clone(), object_ref: record.state_object_ref.clone(),
+                data_kind: "state".into(), accepted_state_ref: Some(record.source.clone()),
+                decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state.clone()), completion: None,
+            };
+            let order = std::collections::BTreeMap::from([("task".into(), 0)]);
+            assert_eq!(terminal_completion_from_pinned_artifact(&store, &run, &catalog, &order,
+                &output, &final_state), Some(record.completion));
+            for change in 0..10 {
+                let mut run = run.clone();
+                let mut catalog = catalog.clone();
+                let mut output = output.clone();
+                match change {
+                    0 => catalog.entries.clear(), // legacy absence
+                    1 => catalog.entries.push(catalog.entries[0].clone()), // ambiguous
+                    2 => run.tasks[0].attempt_id = Some("foreign".into()),
+                    3 => run.tasks[0].ownership_epoch = Some(2),
+                    4 => output.object_ref = "f".repeat(64),
+                    5 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Running,
+                    6 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Cancelled,
+                    7 => run.tasks[0].lifecycle = fullmag_session::FmsTaskLifecycle::Failed,
+                    8 => run.tasks[0].resolved_input_fingerprint = Some("f".repeat(64)),
+                    _ => output.accepted_state_ref.as_mut().unwrap().id.clock_digest = format!("sha256:{}", "f".repeat(64)),
+                }
+                assert!(terminal_completion_from_pinned_artifact(&store, &run, &catalog, &order,
+                    &output, &final_state).is_none(), "change {change} must fail closed");
+            }
         }
     }
 
@@ -4288,6 +4791,7 @@ mod tests {
                 object_ref: object_ref.into(),
                 data_kind: "state".into(),
                 accepted_state_ref: None,
+                completion: None,
                 decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(
                     fullmag_application::MagnetizationStateArtifact {
                         step,

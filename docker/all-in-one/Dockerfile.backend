@@ -15,6 +15,7 @@ USER root
 ARG FULLMAG_DOCKER_HELPERS=""
 
 COPY ${FULLMAG_DOCKER_HELPERS}backend_dev.py /opt/fullmag/backend_dev.py
+COPY ${FULLMAG_DOCKER_HELPERS}backend_native_contracts.py /opt/fullmag/backend_native_contracts.py
 # The source extractor is supplied by the image-runtime integration worker.
 # Keep it image-owned and immutable; backend_dev.py remains the command
 # boundary and never executes source-controlled commands.

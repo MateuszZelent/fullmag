@@ -1,0 +1,216 @@
+{
+  "document": {
+    "path": "docs/physics/0910-table-autosave-observables.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source_mapped_runtime_qualification_not_run"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-table-time-cadence",
+      "symbols": ["t", "epsilon", "t_next"],
+      "sources": ["table-store", "stage-autosave-append", "native-fem-origin-limit", "native-fem-initial-field", "origin-requirement", "native-fem-stage-table-origin", "stage-table-origin-artifact-job"]
+    },
+    {
+      "id": "eq-table-accepted-step-cadence",
+      "symbols": ["accepted-step", "every-steps", "final-step"],
+      "sources": ["table-store", "table-final-step"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "physical simulation time, only for time evolution",
+      "si_unit": "s"
+    },
+    {
+      "id": "epsilon",
+      "latex": "\\epsilon",
+      "meaning": "cadence comparison tolerance, equal to `1e-9` times the sample period",
+      "si_unit": "s"
+    },
+    {
+      "id": "t_next",
+      "latex": "t_{\\mathrm{next}}",
+      "meaning": "next requested physical-time sample",
+      "si_unit": "s"
+    },
+    {
+      "id": "accepted-step",
+      "latex": "k",
+      "meaning": "accepted solver-step index",
+      "si_unit": "1"
+    },
+    {
+      "id": "every-steps",
+      "latex": "n",
+      "meaning": "accepted-step cadence `every_steps`",
+      "si_unit": "1"
+    },
+    {
+      "id": "final-step",
+      "latex": "k_{\\mathrm{final}}",
+      "meaning": "terminal accepted solver-step index",
+      "si_unit": "1"
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  },
+  "sources": [
+    {
+      "id": "table-api",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class TableAutosave",
+      "responsibility": "Validate the public table cadence and lower it into table-autosave IR."
+    },
+    {
+      "id": "table-time-api-test",
+      "path": "packages/fullmag-py/tests/test_table_autosave.py",
+      "symbol": "test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir",
+      "responsibility": "Verify physical-time table cadence and default quantities lower to SamplingIR."
+    },
+    {
+      "id": "table-step-api-test",
+      "path": "packages/fullmag-py/tests/test_table_autosave.py",
+      "symbol": "test_relaxation_table_autosave_lowers_accepted_step_cadence",
+      "responsibility": "Verify accepted-step table cadence lowers to SamplingIR."
+    },
+    {
+      "id": "table-ir",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "TableAutosaveIR",
+      "responsibility": "Store table cadence, quantities, and expression requests in ProblemIR."
+    },
+    {
+      "id": "global-moment-average",
+      "path": "crates/fullmag-runner/src/scalar_metrics.rs",
+      "symbol": "moment_weighted_average_magnetization",
+      "responsibility": "Compute global magnetization components weighted by active magnetic moment."
+    },
+    {
+      "id": "table-store",
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "append_if_due",
+      "responsibility": "Apply physical-time due checks with tolerance/coalescing and accepted-step cadence."
+    },
+    {
+      "id": "table-final-step",
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "append_final_if_needed",
+      "responsibility": "Append the terminal accepted relaxation state once when it is off cadence."
+    },
+    {
+      "id": "stage-autosave-append",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "append_scalar",
+      "responsibility": "Append a StageAutosave scalar row when the artifact pipeline receives scalar stats."
+    },
+    {
+      "id": "table-time-store-test",
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "table_store_appends_on_simulation_time_cadence",
+      "responsibility": "Verify the initial physical-time row and coalescing after a cadence overshoot."
+    },
+    {
+      "id": "table-step-store-test",
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "table_store_appends_initial_periodic_and_final_accepted_steps",
+      "responsibility": "Verify accepted-step rows at the initial, periodic, and terminal states."
+    },
+    {
+      "id": "native-fem-origin-limit",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_requires_initial_snapshot",
+      "responsibility": "Admit initialized native FEM snapshots for live, minimizer, field, and physical-time StageAutosave table consumers."
+    },
+    {
+      "id": "native-fem-initial-field",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "record_native_fem_initial_field_snapshots",
+      "responsibility": "Emit scheduled initial field snapshots from step-zero stats without implying an initial scalar table row."
+    },
+    {
+      "id": "native-fem-origin-limit-test",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_initial_snapshot_is_lazy_for_headless_time_domain",
+      "responsibility": "Verify initial snapshot admission including physical-time StageAutosave tables."
+    },
+    {
+      "id": "origin-requirement",
+      "path": "docs/physics/0910-table-autosave-observables.md",
+      "symbol": "DOC-ANCHOR:table-time-origin-contract",
+      "responsibility": "Specify physical-time origin sampling and the native FEM source and qualification scope.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "native-fem-stage-table-origin",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_should_initialize_stage_autosave_table",
+      "responsibility": "Admit the initialized scalar event for a fresh native FEM LLG stage at physical time zero."
+    },
+    {
+      "id": "stage-table-origin-artifact-job",
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "record_stage_autosave_scalar",
+      "responsibility": "Queue the initialized scalar state for StageAutosave table output."
+    }
+  ],
+  "tests": [
+    {
+      "path": "packages/fullmag-py/tests/test_table_autosave.py",
+      "symbol": "test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir",
+      "scope": "Python authoring to ProblemIR cadence lowering."
+    },
+    {
+      "path": "packages/fullmag-py/tests/test_table_autosave.py",
+      "symbol": "test_relaxation_table_autosave_lowers_accepted_step_cadence",
+      "scope": "Accepted-step cadence authoring and lowering."
+    },
+    {
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "table_store_appends_on_simulation_time_cadence",
+      "scope": "TableStore physical-time due checks, including step-zero stats."
+    },
+    {
+      "path": "crates/fullmag-runner/src/table_autosave.rs",
+      "symbol": "table_store_appends_initial_periodic_and_final_accepted_steps",
+      "scope": "Accepted-step cadence and final-state insertion."
+    },
+    {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_initial_snapshot_is_lazy_for_headless_time_domain",
+      "scope": "Initial native FEM snapshot admission for table-only and field consumers."
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
+      "symbol": "initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace",
+      "scope": "Write an origin row through the artifact pipeline while preserving accepted-step legacy trace counts."
+    },
+    {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer",
+      "scope": "Qualify source admission at physical time zero with explicit direct-minimizer and nonzero-start exclusions."
+    }
+  ]
+}

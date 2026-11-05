@@ -48,6 +48,7 @@ import {
 } from "./viewCubeModel";
 
 export type ViewportCameraControlsHandle = {
+  enableDamping?: boolean;
   enabled?: boolean;
   getTarget?: (out: Vector3, receiveEndValue?: boolean) => Vector3;
   setLookAt?: (

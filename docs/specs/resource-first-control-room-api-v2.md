@@ -752,6 +752,14 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+  Ścieżka accepted przenosi oryginalny `RunResult.completion` przez receipt
+  `fullmag.accepted_worker_execution.v4` i osobny, wersjonowany dowód CAS
+  `accepted_terminal_completion.v1`. Projekcja przyjmuje go wyłącznie dla
+  zakończonego zadania `Succeeded`, po weryfikacji run/task/step/attempt/epoch,
+  referencji accepted state, digestu końcowego stanu oraz jego zegara.
+  Ten jawny dowód przenosi istniejący wynik solvera; nie wyprowadza zbieżności
+  ze statusu zadania, tabeli ani ostatniego torque. Odczyt starszych receiptów
+  V1–V3 pozostaje dozwolony, ale brak dowodu nie promuje `converged=true`.
 - `time_to_tolerance_seconds` uses stage start/completion timestamps only
   when `status=completed`, `converged=true`, the reason and canonical metric
   kind/name form a coherent torque or energy tolerance, both value and
@@ -990,6 +998,45 @@ ID and is resolved through the model resource. Public v9 patches validate a
 finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
 legacy v8 persistence input is migrated privately and is never dual-written
 as `active_monitor_id`.
+
+`visualization/state.planar.field_overlays` is an additive presentation list
+(default `[]` for persisted documents without the property), with at most four
+entries and unique non-empty `id` values. Each entry owns `quantity_id`,
+`component`, `view_scope`, `colormap`, `range`, `raster_opacity`,
+`raster_visible`, `vectors_visible`, and `vector_style`, using the existing
+planar types and validation. `view_scope: {"kind":"object","scope_id":"<object_id>"}`
+selects a canonical scene object for FDM or FEM, intersected with the source
+target. Object ids are validated against the current visualization target
+registry; membership is resolved by the existing object-target machinery.
+An omitted PATCH property preserves the list; a
+supplied list replaces it atomically, including `[]` to clear it. Source,
+default slice/operator, resolution, quality, and camera/interaction remain
+shared by the single planar view. Profiles do not modify the scene, Python,
+ProblemIR, or solver fields.
+
+Default-source planar reads accept either `position_fraction` (existing
+carrier-relative layer/node snapping) or `position_m` (finite SI world
+coordinate on the selected plane's normal axis), never both. `position_m`
+samples the exact physical plane without per-carrier FDM/FEM snapping; the
+other two frame coordinates retain the source's origin. The request is not
+clamped to a carrier's extent: occupancy describes missing intersections.
+Section metadata publishes the exact requested/resolved coordinate and its
+carrier-relative fraction (which may lie outside `[0,1]`). Absolute position
+is part of source/sample identity and is preserved in scalar, vector, mask,
+mesh, probe, profile and PNG request replay. Probe and profile queries also
+preserve fractional position overrides. Authored-monitor reads reject either
+override and retain their authored physical frame. Composition clients align
+samples using physical frames and verify shared plane/operator and resource
+revisions; equal pixel indices or equal fractions across scopes are insufficient.
+
+Planar metadata exposes nullable `observation_frame` using the existing
+`AcceptedObservationFrameRef`. Two quantities prove temporal coherence when
+both references are present and `observation_frame_id` matches. Quantity and
+carrier revisions are local identities and need not match across quantities.
+The reference comes from the exact selected publication; accepted target-only
+Airbox layouts inherit their publication's frame. Historical Airbox artifacts
+and persisted snapshots without this proof publish null. Clients must report
+unknown coherence instead of substituting the current session step.
 
 Default-source target resolution is quantity-domain aware: `magnetic_only`
 quantities such as `m` select `magnetic_domain`, while full-domain quantities

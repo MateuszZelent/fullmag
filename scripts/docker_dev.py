@@ -79,6 +79,7 @@ RUNTIME_IMAGE_CONTEXT_FILES = (
     ("Dockerfile.backend", "docker/all-in-one/Dockerfile.backend"),
     ("Dockerfile.backend.dockerignore", "docker/all-in-one/Dockerfile.backend.dockerignore"),
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_shared_store.py", "docker/all-in-one/backend_shared_store.py"),
     ("backend_shared_recovery.py", "docker/all-in-one/backend_shared_recovery.py"),
@@ -2524,6 +2525,24 @@ def _parser() -> argparse.ArgumentParser:
     empty_quarantine.add_argument("--activation", required=True)
     empty_quarantine.add_argument("--recovery-id", required=True)
     empty_quarantine.add_argument("--apply", action="store_true", help="commit after exact stopped-namespace and empty-store proofs; default is dry-run")
+    cold_quarantine = subparsers.add_parser(
+        "quarantine-failed-bootstrap",
+        help="cold quarantine a stopped terminal snapshot; preserve old owner, leases and active marker",
+    )
+    cold_quarantine.add_argument("--source-root", type=Path, required=True)
+    cold_quarantine.add_argument("--operation-attempt", required=True)
+    cold_quarantine.add_argument("--recovery-id", required=True)
+    cold_quarantine.add_argument("--apply", action="store_true")
+    cold_quarantine.add_argument("--expected-plan-sha256")
+    completed_cache = subparsers.add_parser(
+        "reconcile-completed-cache",
+        help="reconcile one omitted private package volume after completed worktree retirement",
+    )
+    completed_cache.add_argument("--registry", type=Path, required=True)
+    completed_cache.add_argument("--volume", required=True)
+    completed_cache.add_argument("--recovery-id", required=True)
+    completed_cache.add_argument("--apply", action="store_true")
+    completed_cache.add_argument("--expected-plan-sha256")
     offline_reconcile = subparsers.add_parser(
         "reconcile-offline-volume",
         help="repair one stopped terminal-owner control lease while preserving sessions and unknown activation evidence",
@@ -2582,6 +2601,10 @@ def _parser() -> argparse.ArgumentParser:
         help="optional frontend port override; conflicting defaults fail closed",
     )
     script_parser.add_argument("--request-id", help="optional stable request fence")
+    script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
     frontend_refresh = subparsers.add_parser("refresh-frontend-volume", help="Replace only the pinned frontend metadata generation")
     frontend_refresh.add_argument("--attempt", required=True)
     frontend_refresh.add_argument("--config-sha256", required=True)
@@ -2599,6 +2622,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--request-id")
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
+    run_script_parser.add_argument(
+        "--headless", action="store_true",
+        help="require the retained explicit headless group with its frontend stopped",
+    )
     run_script_parser.add_argument(
         "--timeout-seconds", type=float, default=None,
         help="optional observation deadline; expiration does not cancel or replay the script",
@@ -2718,6 +2745,12 @@ def _parser() -> argparse.ArgumentParser:
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
     cancelled_activation.add_argument("--port", type=int, required=True)
+    cancelled_activation.add_argument(
+        "--preparation-kind",
+        choices=("failed-external", "in-process-fdm"),
+        default="failed-external",
+        help="select the exact preparation evidence contract; defaults to the legacy failed-external path",
+    )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
     preowner_policy = subparsers.add_parser(
@@ -2728,6 +2761,10 @@ def _parser() -> argparse.ArgumentParser:
         preowner_policy.add_argument("--" + option, required=True)
     preowner_policy.add_argument("--apply", action="store_true")
     preowner_policy.add_argument("--expected-plan-sha256")
+    preowner_policy.add_argument(
+        "--variant", choices=("legacy", "cold-memory-increase-restore-stored-budget"), default="legacy")
+    preowner_policy.add_argument("--drain-attempt", help="exact historical successful idle-drain iteration")
+    preowner_policy.add_argument("--continue-intent-sha256", help="observe and finalize this exact interrupted intent without signalling again")
     preowner_policy.add_argument("--terminal-observation-proof", dest="proof_path")
     preowner_policy.add_argument("--terminal-observation-proof-sha256", dest="proof_sha256")
     stop_bootstrap = subparsers.add_parser(
@@ -2740,10 +2777,14 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
+    recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument("--native-contract", action="append", default=None,
+                                 choices=("fem-demag-poisson",),
+                                 help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
         help="durable clean infrastructure checkout used only for managed runtime helpers",
@@ -2790,6 +2831,21 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
+
+    interrupted_archive = subparsers.add_parser(
+        "resume-interrupted-fresh-archive",
+        help="finish one exact outcome-unknown fresh-state archive without stopping or starting services",
+    )
+    interrupted_archive.add_argument("--prior-attempt", required=True)
+    interrupted_archive.add_argument("--config-sha256", required=True)
+    interrupted_archive.add_argument("--source-root", type=Path, required=True)
+    interrupted_archive.add_argument("--recreation-attempt", required=True)
+    interrupted_archive.add_argument("--unknown-receipt-sha256", required=True)
+    interrupted_archive.add_argument("--helper-container-id", required=True)
+    interrupted_archive.add_argument("--helper-image", required=True)
+    interrupted_archive.add_argument("--engine-id", required=True)
+    interrupted_archive.add_argument("--expected-plan-sha256")
+    interrupted_archive.add_argument("--apply", action="store_true")
 
     cancel_unclaimed = subparsers.add_parser(
         "cancel-unclaimed-volume",
@@ -2874,6 +2930,9 @@ def _parser() -> argparse.ArgumentParser:
         ))
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
+        command.add_argument("--native-contract", action="append", default=None,
+                             choices=("fem-demag-poisson",),
+                             help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
             default=DEFAULT_BUILD_PROFILE,
@@ -2901,6 +2960,11 @@ def _parser() -> argparse.ArgumentParser:
                              help="loopback frontend port (up only)")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
+        if name == "up":
+            command.add_argument(
+                "--headless", action="store_true",
+                help="start the backend without starting the retained frontend service",
+            )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
             help="explicitly migrate quiescent shared host capacity when rendering new services",
@@ -3022,7 +3086,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-preowner-policy-volume":
             if bool(args.proof_path) != bool(args.proof_sha256):
                 raise _fail("Terminal observation successor requires paired proof path and digest")
-            if args.proof_path:
+            if args.variant == "cold-memory-increase-restore-stored-budget":
+                if args.proof_path or not args.drain_attempt:
+                    raise _fail("Cold stored-budget restore requires drain attempt without terminal observation proof")
+                from docker_volume_cold_budget_restore import stop
+            elif args.drain_attempt or args.continue_intent_sha256:
+                raise _fail("Drain attempt and intent continuation are supported only by cold stored-budget restore")
+            elif args.proof_path:
                 from docker_volume_preowner_drained import stop
             else:
                 from docker_volume_stop_preowner_policy import stop
@@ -3037,6 +3107,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise _fail("Apply acknowledgement and plan digest require --apply")
                 result = plan(inspect_retirement(args))
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "quarantine-failed-bootstrap":
+            from docker_volume_failed_bootstrap_quarantine import run
+            print(json.dumps(run(args), ensure_ascii=False, sort_keys=True))
+        elif args.action == "reconcile-completed-cache":
+            from docker_completed_cache_reconcile import run, CompletedCacheReconcileError
+            if not args.apply and args.expected_plan_sha256 is not None:
+                raise _fail("A completed-cache plan digest requires --apply")
+            try:
+                result = run(argparse.Namespace(**{
+                    **vars(args), "repo_root": str(args.repo_root), "registry": str(args.registry),
+                }))
+            except CompletedCacheReconcileError as error:
+                raise _fail(str(error)) from error
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "reconcile-offline-volume":
             from docker_volume_offline_reconcile import apply, collect
             if not args.apply and args.expected_plan_sha256 is not None:
@@ -3047,6 +3131,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_cancelled_activation import run as recover_cancelled_activation
             result = recover_cancelled_activation(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "resume-interrupted-fresh-archive":
+            from docker_volume_interrupted_fresh_archive import run as resume_interrupted_archive
+            return resume_interrupted_archive(args)
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
@@ -3069,7 +3156,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _fail(str(error)) from error
             if args.recovery_authorization is not None and helper_pair is not None:
                 raise _fail("helper-source pins are unsupported with --recovery-authorization")
-            if args.resume_recreation is not None:
+            if args.retire_only:
+                if not args.fresh_state or args.recovery_authorization or args.resume_recreation or args.completed_recreation_attempt:
+                    raise _fail("retire-only requires fresh-state and cannot combine recovery or continuation")
+                from docker_volume_dev import retire_stopped
+                retire_stopped(args)
+            elif args.resume_recreation is not None:
                 from docker_volume_dev import resume_recreation
                 resume_recreation(args)
             elif args.recovery_authorization is not None:
@@ -3108,6 +3200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=getattr(args, "timeout_seconds", None),
                 attempt=getattr(args, "attempt", None),
                 config_sha256=getattr(args, "config_sha256", None),
+                headless=bool(getattr(args, "headless", False)),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

@@ -10,6 +10,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import re
 import shlex
 import time
@@ -64,6 +65,9 @@ MAX_RECORD_BYTES = 8 * 1024 * 1024
 MAX_PROCESS_RECEIPT_BYTES = 512 * 1024
 MAX_SCOPE_OUTPUT_BYTES = 1024 * 1024
 RECOVERY_CURRENT = "cancelled-activation-recovery/current.json"
+INPROCESS_FDM_PREPARATION_KIND = "in-process-fdm"
+FAILED_EXTERNAL_PREPARATION_KIND = "failed-external"
+COOPERATIVE_SIGTERM_OBSERVATION_SECONDS = 120
 
 
 class CancelledActivationRecoveryError(BuildControlError):
@@ -929,23 +933,44 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         raise _fail("live accepted run differs from the retained startup retirement scope")
     if expected_session is not None and scope.get("session_id") != expected_session:
         raise _fail("live session differs from the retained startup retirement scope")
-    probe = _failed_preparation_store_probe(
-        backend_id,
-        run_id=str(scope["run_id"]),
-        task_id=str(scope["task_id"]),
-        request_id=request_id,
-        source_sha256=source_sha256,
-        marker_path=marker_path,
-        expected_scene_revision=int(scope["scene_revision"]),
-        environment=environment,
-    )
-    cancellation = _validate_failed_preparation_probe(
-        probe,
-        request_id=request_id,
-        source_sha256=source_sha256,
-        expected_run_id=str(scope["run_id"]),
-        expected_session_id=str(scope["session_id"]),
-    )
+    preparation_kind = getattr(args, "preparation_kind", "failed-external")
+    if preparation_kind == "in-process-fdm":
+        from docker_volume_inprocess_fdm_cancel_probe import probe_and_validate
+
+        probe, cancellation = probe_and_validate(
+            backend_id,
+            run_id=str(scope["run_id"]),
+            task_id=str(scope["task_id"]),
+            request_id=request_id,
+            source_sha256=source_sha256,
+            marker_path=marker_path,
+            expected_scene_revision=int(scope["scene_revision"]),
+            expected_session_id=str(scope["session_id"]),
+            expected_api_instance_id=str(scope["api_instance_id"]),
+            environment=environment,
+        )
+        if cancellation.get("task_id") != scope["task_id"]:
+            raise _fail("in-process FDM task differs from current run discovery")
+    elif preparation_kind == "failed-external":
+        probe = _failed_preparation_store_probe(
+            backend_id,
+            run_id=str(scope["run_id"]),
+            task_id=str(scope["task_id"]),
+            request_id=request_id,
+            source_sha256=source_sha256,
+            marker_path=marker_path,
+            expected_scene_revision=int(scope["scene_revision"]),
+            environment=environment,
+        )
+        cancellation = _validate_failed_preparation_probe(
+            probe,
+            request_id=request_id,
+            source_sha256=source_sha256,
+            expected_run_id=str(scope["run_id"]),
+            expected_session_id=str(scope["session_id"]),
+        )
+    else:
+        raise _fail("preparation kind is unsupported")
     if cancellation.get("live_api_instance_id") != scope["api_instance_id"]:
         raise _fail("run discovery and locked cancellation probe observed different API instances")
     if cancellation.get("activation_marker_sha256") != probe.get("activation_marker_sha256"):
@@ -991,6 +1016,8 @@ def _plan(proof: Mapping[str, object]) -> dict[str, object]:
     cancellation = proof.get("cancellation")
     if not isinstance(cancellation, Mapping):
         raise _fail("cancelled preparation proof is missing")
+    preparation_kind = _preparation_kind(cancellation)
+    stop_policy = _stop_policy(preparation_kind, str(proof["backend"]["Id"]))
     body: dict[str, object] = {
         "schema": PLAN_SCHEMA,
         "state": "ready-for-explicit-apply",
@@ -1023,10 +1050,7 @@ def _plan(proof: Mapping[str, object]) -> dict[str, object]:
             "task_id": cancellation["task_id"],
         },
         "cancellation_proof": dict(cancellation),
-        "stop": {
-            "command": ["docker", "stop", "--time", "60", str(proof["backend"]["Id"])],
-            "scope": "the exact pinned backend container only",
-        },
+        "stop": stop_policy,
         "post_stop": [
             "require the same container ID, image, and StartedAt with Running=false, OOMKilled=false, and exit code 0",
             "authenticate the image-owned terminal process receipt as drained",
@@ -1052,6 +1076,38 @@ def _plan(proof: Mapping[str, object]) -> dict[str, object]:
         },
     }
     return {**body, "plan_sha256": _sha256(canonical(body))}
+
+
+def _preparation_kind(cancellation: Mapping[str, object]) -> str:
+    value = cancellation.get("preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND)
+    if value not in {FAILED_EXTERNAL_PREPARATION_KIND, INPROCESS_FDM_PREPARATION_KIND}:
+        raise _fail("cancelled preparation kind is unsupported")
+    if value == INPROCESS_FDM_PREPARATION_KIND:
+        summary = cancellation.get("in_process_fdm")
+        if ("failed_preparation" in cancellation
+                or not isinstance(summary, Mapping)
+                or summary.get("schema_version") != "fullmag.inprocess-fdm-preparation-evidence.v1"):
+            raise _fail("in-process FDM source proof is incomplete or mislabeled")
+    return str(value)
+
+
+def _stop_policy(preparation_kind: str, backend_container: str) -> dict[str, object]:
+    if preparation_kind == INPROCESS_FDM_PREPARATION_KIND:
+        return {
+            "protocol": "cooperative-sigterm-v1",
+            "command": ["docker", "kill", "--signal=TERM", backend_container],
+            "signal": "SIGTERM",
+            "observation_timeout_seconds": COOPERATIVE_SIGTERM_OBSERVATION_SECONDS,
+            "on_timeout": "retain-journal-no-escalation-or-resignal",
+            "scope": "the exact pinned backend container only",
+        }
+    if preparation_kind != FAILED_EXTERNAL_PREPARATION_KIND:
+        raise _fail("cancelled preparation kind has no stop protocol")
+    # Preserve the legacy external-preparer recovery contract and reviewed plan.
+    return {
+        "command": ["docker", "stop", "--time", "60", backend_container],
+        "scope": "the exact pinned backend container only",
+    }
 
 
 def _plan_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
@@ -1217,9 +1273,11 @@ def _preserve_original_records(
         raise ControlOutcomeUnknown("original activation terminal differs from its recovery-published bytes")
 
 
-def _inspect_exact_backend(proof: Mapping[str, object]) -> dict[str, Any]:
+def _inspect_exact_backend(
+    proof: Mapping[str, object], *, timeout: float = 60,
+) -> dict[str, Any]:
     identifier = str(proof["backend_container"])
-    result = docker_capture("inspect", identifier, timeout=60)
+    result = docker_capture("inspect", identifier, timeout=timeout)
     try:
         rows = json.loads(result.stdout)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -1531,6 +1589,15 @@ def _initial_journal(
     control: BuildControl,
 ) -> dict[str, object]:
     target = reviewed_plan["target"]
+    cancellation = reviewed_plan["cancellation_proof"]
+    if not isinstance(cancellation, Mapping):
+        raise _fail("reviewed plan cancellation proof is missing")
+    preparation_kind = _preparation_kind(cancellation)
+    if getattr(args, "preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND) != preparation_kind:
+        raise _fail("requested preparation kind differs from the reviewed source proof")
+    stop_policy = reviewed_plan.get("stop")
+    if not isinstance(stop_policy, Mapping):
+        raise _fail("reviewed plan stop policy is missing")
     return {
         "schema": JOURNAL_SCHEMA,
         "state": "prepared",
@@ -1550,7 +1617,9 @@ def _initial_journal(
         ),
         "original_activation_current_b64": base64.b64encode(proof["current_raw"]).decode("ascii"),
         "journal_started_at": time.time(),
-        "stop_command": ["docker", "stop", "--time", "60", str(proof["backend"]["Id"])],
+        "preparation_kind": preparation_kind,
+        "stop_policy": dict(stop_policy),
+        "stop_command": list(stop_policy["command"]),
         "stop_response": "not-issued",
         "execution_state": "not-started",
         "archive_present": False,
@@ -1568,6 +1637,39 @@ def _validate_journal_pins(
             or journal.get("plan_sha256") != reviewed_plan["plan_sha256"]
             or journal.get("plan") != dict(reviewed_plan)):
         raise _fail("existing cancelled activation journal differs from the reviewed plan")
+    cancellation = reviewed_plan.get("cancellation_proof")
+    if not isinstance(cancellation, Mapping):
+        raise _fail("reviewed plan cancellation proof is missing")
+    preparation_kind = _preparation_kind(cancellation)
+    if getattr(args, "preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND) != preparation_kind:
+        raise _fail("resume preparation kind differs from the retained source proof")
+    stop_policy = reviewed_plan.get("stop")
+    if not isinstance(stop_policy, Mapping):
+        raise _fail("reviewed plan stop policy is missing")
+    if journal.get("preparation_kind", preparation_kind) != preparation_kind:
+        raise _fail("existing cancelled activation journal preparation kind differs")
+    if journal.get("stop_command", stop_policy.get("command")) != stop_policy.get("command"):
+        raise _fail("existing cancelled activation journal stop command differs")
+    saved_stop_policy = journal.get("stop_policy")
+    if preparation_kind == INPROCESS_FDM_PREPARATION_KIND:
+        if saved_stop_policy != dict(stop_policy):
+            raise _fail("in-process FDM journal does not bind the reviewed cooperative stop policy")
+        state = journal.get("state")
+        if state in {"stop-issued", "stop-command-confirmed", "drain-confirmed"}:
+            issued_at = journal.get("stop_issued_at")
+            deadline = journal.get("stop_observation_deadline_at")
+            timeout = stop_policy.get("observation_timeout_seconds")
+            if (isinstance(issued_at, bool) or not isinstance(issued_at, (int, float))
+                    or not math.isfinite(issued_at)
+                    or isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                    or not math.isfinite(deadline)
+                    or type(timeout) is not int or timeout <= 0
+                    or not math.isclose(deadline - issued_at, timeout, rel_tol=0.0, abs_tol=1e-6)):
+                raise _fail("in-process FDM journal observation deadline differs from its stop policy")
+        elif "stop_issued_at" in journal or "stop_observation_deadline_at" in journal:
+            raise _fail("prepared in-process FDM journal already has a stop observation deadline")
+    elif saved_stop_policy is not None and saved_stop_policy != dict(stop_policy):
+        raise _fail("legacy cancelled activation journal stop policy differs")
     target = journal.get("target")
     if not isinstance(target, Mapping) or target != reviewed_plan["target"]:
         raise _fail("existing cancelled activation journal target pins changed")
@@ -1665,23 +1767,41 @@ def _issue_backend_stop(
 ) -> tuple[dict[str, Any], bytes]:
     if journal.get("state") != "prepared":
         raise _fail("backend stop can only be issued from a fresh prepared journal")
+    preparation_kind = journal.get("preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND)
+    cancellation = proof.get("cancellation")
+    if not isinstance(cancellation, Mapping) or _preparation_kind(cancellation) != preparation_kind:
+        raise _fail("stop preparation kind differs from its source proof")
+    stop_policy = journal.get("stop_policy")
+    expected_policy = _stop_policy(preparation_kind, str(proof["backend_container"]))
+    if (journal.get("stop_policy", expected_policy) != expected_policy
+            or journal.get("stop_command", expected_policy["command"]) != expected_policy["command"]):
+        raise _fail("journal stop policy differs from the source-bound protocol")
+    issued_at = time.time()
     issued = dict(
         journal,
         state="stop-issued",
         stop_response="pending",
-        stop_issued_at=time.time(),
+        stop_issued_at=issued_at,
+        **({
+            "stop_observation_deadline_at": issued_at + COOPERATIVE_SIGTERM_OBSERVATION_SECONDS,
+        } if preparation_kind == INPROCESS_FDM_PREPARATION_KIND else {}),
     )
     journal_raw = _publish_cas(
         control, _journal_path(args.activation_attempt), issued, expected_raw=journal_raw,
     )
-    # No further observation is inserted between the durable stop-issued
-    # generation and this one exact Docker stop. Any response loss leaves a
-    # state that can only be inspected, never stopped again.
+    # No observation is inserted between durable stop intent and its one exact
+    # command. In-process FDM uses one SIGTERM and never escalates or replays it.
     try:
-        command = docker_capture(
-            "stop", "--time", "60", str(proof["backend_container"]),
-            timeout=90, allow_failure=True,
-        )
+        if preparation_kind == INPROCESS_FDM_PREPARATION_KIND:
+            command = docker_capture(
+                "kill", "--signal=TERM", str(proof["backend_container"]),
+                timeout=30, allow_failure=True,
+            )
+        else:
+            command = docker_capture(
+                "stop", "--time", "60", str(proof["backend_container"]),
+                timeout=90, allow_failure=True,
+            )
     except Exception as error:
         raise ControlOutcomeUnknown(
             "backend stop response was lost; the durable stop-issued journal prevents replay"
@@ -1699,7 +1819,73 @@ def _issue_backend_stop(
     journal_raw = _publish_cas(
         control, _journal_path(args.activation_attempt), confirmed, expected_raw=journal_raw,
     )
+    if preparation_kind == INPROCESS_FDM_PREPARATION_KIND:
+        _wait_for_cooperative_sigterm(proof, confirmed)
     return confirmed, journal_raw
+
+
+def _wait_for_cooperative_sigterm(
+    proof: Mapping[str, object],
+    journal: Mapping[str, object],
+) -> dict[str, Any]:
+    """Observe one journaled SIGTERM until stopped or its deadline, without resending."""
+    cancellation = proof.get("cancellation")
+    if not isinstance(cancellation, Mapping):
+        raise _fail("cooperative stop source proof is missing")
+    if _preparation_kind(cancellation) != INPROCESS_FDM_PREPARATION_KIND:
+        raise _fail("cooperative SIGTERM is not bound to an in-process FDM proof")
+    stop_policy = journal.get("stop_policy")
+    expected_policy = _stop_policy(
+        INPROCESS_FDM_PREPARATION_KIND, str(proof["backend_container"]),
+    )
+    if stop_policy != expected_policy:
+        raise _fail("cooperative SIGTERM journal policy differs from the reviewed plan")
+    if (journal.get("stop_command") != expected_policy["command"]
+            or journal.get("state") not in {"stop-issued", "stop-command-confirmed"}):
+        raise _fail("cooperative SIGTERM journal command or state differs")
+    issued_at = journal.get("stop_issued_at")
+    deadline = journal.get("stop_observation_deadline_at")
+    if (isinstance(issued_at, bool) or not isinstance(issued_at, (int, float))
+            or not math.isfinite(issued_at)
+            or isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)
+            or not math.isclose(
+                deadline - issued_at,
+                COOPERATIVE_SIGTERM_OBSERVATION_SECONDS,
+                rel_tol=0.0,
+                abs_tol=1e-6,
+            )):
+        raise _fail("cooperative SIGTERM observation deadline is invalid")
+
+    while True:
+        remaining = deadline - time.time()
+        if remaining > COOPERATIVE_SIGTERM_OBSERVATION_SECONDS + 1:
+            raise _fail("cooperative SIGTERM observation deadline exceeds its reviewed bound")
+        inspect_timeout = max(1, min(5, math.ceil(max(0.0, remaining))))
+        try:
+            actual = _inspect_exact_backend(proof, timeout=inspect_timeout)
+        except Exception as error:
+            raise ControlOutcomeUnknown(
+                "cooperative SIGTERM state cannot be observed; journal and resources are retained"
+            ) from error
+        state = actual.get("State")
+        if (actual.get("Id") != proof.get("backend_container")
+                or actual.get("Image") != proof.get("image_id")
+                or not isinstance(state, Mapping)
+                or state.get("StartedAt") != proof.get("backend_started_at")):
+            raise _fail("backend incarnation changed while observing cooperative SIGTERM")
+        if state.get("Running") is False:
+            return actual
+        if state.get("Running") is not True:
+            raise ControlOutcomeUnknown(
+                "cooperative SIGTERM running state is not definitive; journal and resources are retained"
+            )
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise ControlOutcomeUnknown(
+                "cooperative SIGTERM observation deadline expired; journal and resources are retained"
+            )
+        time.sleep(min(1.0, remaining))
 
 
 def preview(args: argparse.Namespace) -> dict[str, object]:
@@ -1755,9 +1941,18 @@ def _apply(args: argparse.Namespace) -> dict[str, object]:
             proof = fresh_proof
         else:
             if state.get("Running") is True:
-                raise ControlOutcomeUnknown(
-                    "backend remains running after a durable stop-issued intent; stop will not be replayed"
-                )
+                cancellation = saved_plan.get("cancellation_proof")
+                if not isinstance(cancellation, Mapping):
+                    raise _fail("saved stop plan has no cancellation source proof")
+                if _preparation_kind(cancellation) == INPROCESS_FDM_PREPARATION_KIND:
+                    # The signal may have been delivered even if its response
+                    # was lost. Resume only observes the retained deadline.
+                    actual = _wait_for_cooperative_sigterm(proof, journal)
+                    state = actual["State"]
+                else:
+                    raise ControlOutcomeUnknown(
+                        "backend remains running after a durable stop-issued intent; stop will not be replayed"
+                    )
             if state.get("Running") is not False:
                 raise ControlOutcomeUnknown("journaled backend running state is not definitive")
             _verify_frontend_unchanged(proof, require_running=True)

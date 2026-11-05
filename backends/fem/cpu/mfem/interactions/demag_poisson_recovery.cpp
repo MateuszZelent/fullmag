@@ -11,6 +11,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "fem_common.hpp"
+#include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -76,7 +77,103 @@ struct DemagRecoveryWorkspace {
     Scratch serial_scratch;
     std::vector<std::unique_ptr<Scratch>> thread_scratch;
     mfem::Vector robin_boundary_tmp;
+    std::array<std::unique_ptr<mfem::SparseMatrix>, 6> transfer;
+    std::vector<double> fixed_node_weight;
+    std::vector<double> fixed_visual_node_weight;
+    std::unique_ptr<mfem::Vector> transfer_product;
 };
+
+static void build_recovery_transfer(Context &ctx, DemagRecoveryWorkspace &workspace,
+                                    mfem::FiniteElementSpace &state_fes)
+{
+    auto &potential_fes = *workspace.fes;
+    auto &diagnostics = ctx.poisson_demag.recovery_transfer;
+    cpu_transfer_begin(ctx, state_fes, potential_fes, diagnostics);
+    auto *mesh = potential_fes.GetMesh();
+    const int node_count = state_fes.GetNDofs();
+    const uint64_t scratch_bytes = static_cast<uint64_t>(node_count) * 3u * sizeof(double);
+    cpu_transfer_check_budget(ctx, diagnostics, 0, scratch_bytes);
+    uint64_t pairs = 0;
+    for (int element = 0; element < mesh->GetNE(); ++element) {
+        pairs += static_cast<uint64_t>(state_fes.GetFE(element)->GetDof()) *
+            potential_fes.GetFE(element)->GetDof();
+    }
+    std::array<std::unique_ptr<mfem::SparseMatrix>, 6> staged;
+    std::vector<double> physical_weight(static_cast<size_t>(node_count), 0.0);
+    std::vector<double> visual_weight(static_cast<size_t>(node_count), 0.0);
+    uint64_t bytes = 0, nnz = 0;
+    for (int family = 0; family < 2; ++family) {
+        for (int component = 0; component < 3; ++component) {
+            cpu_transfer_check_matrix_bound(ctx, diagnostics, bytes, scratch_bytes, pairs, node_count);
+            auto matrix = std::make_unique<CpuTransferMatrix>(node_count, potential_fes.GetNDofs());
+            mfem::Array<int> state_dofs, potential_dofs;
+            mfem::Vector shape;
+            mfem::DenseMatrix dshape;
+            for (int element = 0; element < mesh->GetNE(); ++element) {
+                if ((element & 255) == 0) cpu_transfer_check_budget(ctx, diagnostics, bytes, scratch_bytes);
+                const bool magnetic = ctx.mesh.magnetic_element_mask.empty() ||
+                    ctx.mesh.magnetic_element_mask[static_cast<size_t>(element)] != 0u;
+                if (family == 0 && !magnetic) continue;
+                cpu_transfer_element_dofs(state_fes, element, state_dofs);
+                cpu_transfer_element_dofs(potential_fes, element, potential_dofs);
+                const auto *state_fe = state_fes.GetFE(element);
+                const auto *potential_fe = potential_fes.GetFE(element);
+                auto *transformation = mesh->GetElementTransformation(element);
+                shape.SetSize(state_dofs.Size());
+                dshape.SetSize(potential_dofs.Size(), 3);
+                const bool center_tetra = potential_fe->GetOrder() == 1 &&
+                    potential_fe->GetGeomType() == mfem::Geometry::TETRAHEDRON;
+                const auto &rule = mfem::IntRules.Get(potential_fe->GetGeomType(),
+                                                     2 * potential_fe->GetOrder());
+                const int point_count = center_tetra ? 1 : rule.GetNPoints();
+                for (int q = 0; q < point_count; ++q) {
+                    const auto &point = center_tetra
+                        ? mfem::Geometries.GetCenter(potential_fe->GetGeomType()) : rule.IntPoint(q);
+                    transformation->SetIntPoint(&point);
+                    const double jacobian = transformation->Weight();
+                    if (!std::isfinite(jacobian) || jacobian <= 0.0) {
+                        throw std::runtime_error("Poisson demag recovery requires finite positive Jacobian weights");
+                    }
+                    potential_fe->CalcPhysDShape(*transformation, dshape);
+                    if (!center_tetra) state_fe->CalcShape(point, shape);
+                    for (int j = 0; j < state_dofs.Size(); ++j) {
+                        const int node = transfer_dof_index(state_dofs[j]);
+                        const double weight = center_tetra
+                            ? jacobian / 6.0 / state_dofs.Size()
+                            : point.weight * jacobian * shape(j);
+                        if (!std::isfinite(weight)) {
+                            throw std::runtime_error("Poisson demag recovery requires finite combined quadrature weights");
+                        }
+                        if (component == 0) {
+                            (family == 0 ? physical_weight : visual_weight)[static_cast<size_t>(node)] += weight;
+                        }
+                        for (int i = 0; i < potential_dofs.Size(); ++i) {
+                            cpu_transfer_add(*matrix, node, transfer_dof_index(potential_dofs[i]),
+                                -weight * dshape(i, component) * transfer_dof_sign(potential_dofs[i]));
+                        }
+                    }
+                }
+            }
+            cpu_transfer_finalize(*matrix);
+            bytes += cpu_transfer_matrix_bytes(*matrix);
+            nnz += static_cast<uint64_t>(matrix->NumNonZeroElems());
+            staged[family * 3 + component] = std::move(matrix);
+            cpu_transfer_check_budget(ctx, diagnostics, bytes, scratch_bytes);
+            cpu_transfer_setup_checkpoint(ctx, static_cast<uint32_t>(family * 3 + component + 1));
+        }
+    }
+    // Allocate every fallible buffer before publishing the immutable matrices.
+    auto product = std::make_unique<mfem::Vector>(node_count);
+    cpu_transfer_check_budget(ctx, diagnostics, bytes, scratch_bytes);
+    workspace.transfer_product = std::move(product);
+    workspace.fixed_node_weight = std::move(physical_weight);
+    workspace.fixed_visual_node_weight = std::move(visual_weight);
+    workspace.transfer = std::move(staged);
+    diagnostics.persistent_bytes = bytes + scratch_bytes;
+    diagnostics.nnz = nnz;
+    diagnostics.state = "ready";
+    ++diagnostics.build_count;
+}
 
 namespace {
 
@@ -123,11 +220,12 @@ void destroy_demag_poisson_recovery_workspace(Context &ctx)
 {
     delete static_cast<DemagRecoveryWorkspace *>(ctx.poisson_demag.recovery_workspace);
     ctx.poisson_demag.recovery_workspace = nullptr;
+    ctx.poisson_demag.recovery_transfer = {};
 }
 
 /// Recover H_demag = -grad(u) from the scalar potential solution.
 /// Computes element-wise gradient, then distributes it to nodes with shape weights.
-bool recover_demag_poisson_field(
+static bool recover_demag_poisson_field_impl(
     Context &ctx,
     const mfem::Vector &potential,
     std::vector<double> &h_demag_xyz,
@@ -135,7 +233,8 @@ bool recover_demag_poisson_field(
     const std::vector<double> &m_xyz,
     uint64_t *energy_wall_time_ns,
     std::string &error,
-    const mfem::Vector *assembled_rhs)
+    const mfem::Vector *assembled_rhs,
+    bool use_fixed_transfer)
 {
     auto *mesh = static_cast<mfem::Mesh *>(ctx.mfem_context.mesh);
     auto *demag_recovery_workspace =
@@ -376,7 +475,37 @@ bool recover_demag_poisson_field(
     std::vector<double> &visual_node_weight =
         demag_recovery_workspace->visual_node_weight;
 
-    if (parallel_recover) {
+    auto &transfer_diagnostics = ctx.poisson_demag.recovery_transfer;
+    if (use_fixed_transfer && transfer_diagnostics.state == "not-built") {
+        const auto started = FemSteadyClock::now();
+        try {
+            build_recovery_transfer(ctx, *demag_recovery_workspace, *state_fes);
+        } catch (const CpuTransferUnavailable &refusal) {
+            cpu_transfer_refused(ctx, transfer_diagnostics, refusal.what());
+        } catch (const std::bad_alloc &) {
+            cpu_transfer_refused(ctx, transfer_diagnostics, "cache allocation refused");
+        } catch (const std::exception &failure) {
+            error = failure.what();
+            return false;
+        }
+        transfer_diagnostics.setup_wall_time_ns = elapsed_ns(started);
+        cpu_transfer_note("recovery", transfer_diagnostics);
+    }
+    if (use_fixed_transfer && transfer_diagnostics.state == "ready") {
+        node_weight = demag_recovery_workspace->fixed_node_weight;
+        visual_node_weight = demag_recovery_workspace->fixed_visual_node_weight;
+        for (int family = 0; family < 2; ++family) {
+            auto &field = family == 0 ? h_demag_xyz : ctx.demag.h_visual_xyz;
+            for (int component = 0; component < 3; ++component) {
+                demag_recovery_workspace->transfer[family * 3 + component]->Mult(
+                    gf_u, *demag_recovery_workspace->transfer_product);
+                for (size_t node = 0; node < node_count; ++node) {
+                    field[node * 3u + component] = (*demag_recovery_workspace->transfer_product)[static_cast<int>(node)];
+                }
+            }
+        }
+        cpu_transfer_reused("recovery", transfer_diagnostics);
+    } else if (parallel_recover) {
 #ifdef _OPENMP
 #pragma omp parallel num_threads(recover_threads)
         {
@@ -575,6 +704,24 @@ bool recover_demag_poisson_field(
     }
 
     return true;
+}
+
+bool recover_demag_poisson_field(
+    Context &ctx, const mfem::Vector &potential, std::vector<double> &h_demag_xyz,
+    double &demag_energy, const std::vector<double> &m_xyz,
+    uint64_t *energy_wall_time_ns, std::string &error, const mfem::Vector *assembled_rhs)
+{
+    return recover_demag_poisson_field_impl(ctx, potential, h_demag_xyz, demag_energy,
+        m_xyz, energy_wall_time_ns, error, assembled_rhs, true);
+}
+
+bool recover_demag_poisson_field_quadrature(
+    Context &ctx, const mfem::Vector &potential, std::vector<double> &h_demag_xyz,
+    double &demag_energy, const std::vector<double> &m_xyz,
+    uint64_t *energy_wall_time_ns, std::string &error, const mfem::Vector *assembled_rhs)
+{
+    return recover_demag_poisson_field_impl(ctx, potential, h_demag_xyz, demag_energy,
+        m_xyz, energy_wall_time_ns, error, assembled_rhs, false);
 }
 #endif
 
