@@ -1921,6 +1921,10 @@ fn stage_journal_details_for_task(
         }
     }
     details.reason = match task.lifecycle {
+        Life::Interrupted if matches!(&task.readiness,
+            fullmag_session::FmsTaskReadiness::Blocked { reason }
+                if reason == fullmag_session::host_resource_ledger::CLAIMED_WORKER_INTERRUPTION_REASON) =>
+            Some(fullmag_session::host_resource_ledger::CLAIMED_WORKER_INTERRUPTION_REASON.into()),
         Life::Failed | Life::Interrupted => failure_reason,
         Life::Cancelled => stop_reason,
         _ => None,

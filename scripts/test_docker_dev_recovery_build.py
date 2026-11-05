@@ -79,7 +79,7 @@ class RecoveryBuildTests(unittest.TestCase):
         # Execute the actual guard functions, with only image-specific observations replaced.
         tree = ast.parse(repair.RUNTIME)
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name in {'runtime_locks', 'guard', 'retained_unknown'}]
+                     and node.name in {'runtime_locks', 'claimed_build_locks', 'guard', 'retained_unknown'}]
         exec(compile(ast.Module(body=functions, type_ignores=[]), '<repair-guard>', 'exec'), namespace)
         return namespace['guard']
 
@@ -150,7 +150,7 @@ class RecoveryBuildTests(unittest.TestCase):
         inside = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'inside')
         called = {node.func.attr for node in ast.walk(inside)
                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
-        self.assertIn('_prepare_locked', called)
+        self.assertIn('_prepare_with_shared_package', called)
         self.assertIn('_write_candidate_marker', called)
         self.assertFalse(called & {'_serve', '_rotate_package', '_publish_runtime_provenance',
                                    '_recover_pending_package_rotation', '_reject_partial_package_candidates'})
@@ -240,7 +240,7 @@ class FailedMakeAcknowledgementTests(unittest.TestCase):
             def prepare(*args):
                 (attempt/'attempt.json').write_bytes(b'waitpid Make exit 2')
                 raise BackendBuildError('Canonical Make failed with exit 2')
-            backend._prepare_locked=prepare
+            backend._prepare_with_shared_package=prepare
             backend._read_failed_make_attempt=lambda *args:({'state':'failed','exit_code':2,
                 'log_sha256':'a'*64,'log_size':17},attempt,attempt/'log')
             scope.update(argparse=argparse,tempfile=tempfile,ctypes=__import__('ctypes'),
@@ -302,7 +302,7 @@ class RecoveryPromotionTests(unittest.TestCase):
             patches.enter_context(patch.object(backend, '_capture_start_manifest', return_value=root/'manifest'))
             patches.enter_context(patch.object(backend, '_toolchain_identity', return_value=(None, receipt['toolchain'])))
             compatible = patches.enter_context(patch.object(backend, '_package_matches_fresh_live_manifest', return_value=True))
-            prepare = patches.enter_context(patch.object(backend, '_prepare_locked', side_effect=AssertionError('No Make')))
+            prepare = patches.enter_context(patch.object(backend, '_prepare_with_shared_package', side_effect=AssertionError('No Make')))
             serve = patches.enter_context(patch.object(backend, '_serve', side_effect=AssertionError('No serve')))
             status = {'mutated': False}
             yield SimpleNamespace(backend=backend, publish=lambda: namespace['publish_candidate'](request, None, original, status),
@@ -486,6 +486,7 @@ class DiagnosticBuildOnlyTests(unittest.TestCase):
     def fixture(self):
         ready = {'schema_version': 'runtime_service_owner.v1', 'state': 'ready',
                  'pid': 102, 'owner_token': 'owner', 'heartbeat_at': 'before',
+                 'build_commit':'d'*40, 'build_snapshot':'e'*64,
                  'children': [{'role': 'compute', 'pid': 103, 'status': 'running'},
                               {'role': 'preparation', 'pid': 104, 'status': 'running'}]}
         owner = dict(ready, state='unknown', heartbeat_at='after', children=[
@@ -549,8 +550,70 @@ class DiagnosticBuildOnlyTests(unittest.TestCase):
             exec(compile(ast.Module(body=[function], type_ignores=[]), '<diagnostic-build>', 'exec'), namespace)
             process, owner = self.fixture(); process['api_failure_fence'] = str(fence)
             with patch.dict(os.environ, FULLMAG_HOST_LEDGER_ROOT=str(ledger)), patch.object(urllib.request, 'urlopen', return_value=response):
-                yield SimpleNamespace(check=lambda:namespace['diagnostic_api_evidence'](process,owner,None),
-                    proc=proc, health=health, fence=fence, ledger=ledger, api=api)
+                yield SimpleNamespace(check=lambda pin=None:namespace['diagnostic_api_evidence'](process,owner,None,pin),
+                    namespace=namespace, process=process, proc=proc, health=health, fence=fence, ledger=ledger, api=api)
+
+    def test_exact_running_rollback_survives_pending_and_finalized_rotation(self):
+        backend = package_tests.backend
+        for finalized in (False, True):
+            with self.subTest(finalized=finalized), self.observations() as f, tempfile.TemporaryDirectory() as directory:
+                package, build, control, candidate, previous, raw = package_tests.BackendPackageTests()._ready_rotation_fixture(
+                    Path(directory), '.backend-package-candidate-api')
+                old = json.loads(previous[1])
+                old['source'] = {'resolved_commit':'d'*40,'source_snapshot_sha256':'e'*64}
+                backend._write_json(package/'backend-build-receipt.json', old, 'bound old source')
+                previous = backend._validated_package(package, 'bound previous', exclude_development_control=True)
+                rotation = backend._rotate_package(package, candidate, control, previous[2], previous[1], raw)
+                f.namespace['backend'] = backend
+                f.namespace['claimed_build_evidence'] = lambda *_: {}
+                f.api.joinpath('exe').unlink()
+                f.api.joinpath('exe').symlink_to(Path(rotation['backup'])/'bin/fullmag-api')
+                if finalized:
+                    backend._finalize_published_candidate(candidate, rotation)
+                    backend._clear_rotation_journal(rotation)
+                with patch.object(backend, 'PACKAGE_ROOT', package):
+                    self.assertEqual(len(f.check({})), 2)
+                    with self.assertRaisesRegex(ValueError, 'executable differs'):
+                        f.check()
+                    backup = Path(rotation['backup'])
+                    metadata = json.loads((backup/'rotation.json').read_bytes())
+                    metadata['new_receipt_sha256'] = '0'*64
+                    (backup/'rotation.json').write_text(json.dumps(metadata))
+                    with self.assertRaises(ValueError):
+                        f.check({})
+
+    def test_rollback_other_path_and_changed_artifact_refuse(self):
+        backend = package_tests.backend
+        for drift in ('path', 'artifact', 'identity', 'source'):
+            with self.subTest(drift=drift), self.observations() as f, tempfile.TemporaryDirectory() as directory:
+                package, build, control, candidate, previous, raw = package_tests.BackendPackageTests()._ready_rotation_fixture(
+                    Path(directory), '.backend-package-candidate-api')
+                old = json.loads(previous[1])
+                old['source'] = {'resolved_commit':'d'*40,'source_snapshot_sha256':'e'*64}
+                backend._write_json(package/'backend-build-receipt.json', old, 'bound old source')
+                previous = backend._validated_package(package, 'bound previous', exclude_development_control=True)
+                rotation = backend._rotate_package(package, candidate, control, previous[2], previous[1], raw)
+                f.namespace['backend'] = backend
+                f.namespace['claimed_build_evidence'] = lambda *_: {}
+                executable = Path(rotation['backup'])/'bin/fullmag-api'
+                if drift == 'artifact':
+                    executable.write_bytes(b'changed')
+                elif drift == 'identity':
+                    binary = executable.parent
+                    binary.rename(binary.with_name('old-bin'))
+                    binary.mkdir()
+                    import shutil
+                    for source in binary.with_name('old-bin').iterdir():
+                        shutil.copy2(source, binary/source.name)
+                    shutil.rmtree(binary.with_name('old-bin'))
+                elif drift == 'source':
+                    f.process['service_owner']['build_commit'] = 'f'*40
+                elif drift == 'path':
+                    executable = f.api/'other-api'
+                    executable.touch()
+                f.api.joinpath('exe').unlink(); f.api.joinpath('exe').symlink_to(executable)
+                with patch.object(backend, 'PACKAGE_ROOT', package), self.assertRaises((ValueError,backend.BackendBuildError)):
+                    f.check({})
 
     def test_live_process_lease_and_wrong_api_each_refuse_actual_probe(self):
         with self.observations() as f:
@@ -576,8 +639,46 @@ class DiagnosticBuildOnlyTests(unittest.TestCase):
         tree = ast.parse(repair.RUNTIME)
         function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'inside_promote')
         exec(compile(ast.Module(body=[function], type_ignores=[]), '<diagnostic-promote>', 'exec'), namespace)
-        with self.assertRaisesRegex(ValueError, 'cannot promote'):
+        with self.assertRaisesRegex(ValueError, 'requires the exact dead consumed claim authority'):
             namespace['inside_promote']({'diagnostic_api_only': True})
+
+    def test_exact_dead_claim_promotion_checks_both_guards_before_publication(self):
+        from test_docker_claimed_build import fixture
+        pin, ledger, observed = fixture()
+        trace = []
+        @contextlib.contextmanager
+        def runtime_locks():
+            trace.append('runtime-lock')
+            yield object()
+        @contextlib.contextmanager
+        def claimed_locks(request, paths):
+            repair.validate_claimed_build_snapshot(request['claimed_interruption_build'], ledger, observed)
+            trace.append('claimed-lock')
+            yield
+        def evidence(request, paths):
+            self.assertEqual(trace, ['runtime-lock', 'claimed-lock'])
+            trace.append('evidence')
+            return {'immutable': 'before'}
+        def publish(request, paths, before, status):
+            self.assertEqual(trace[-1], 'evidence')
+            trace.append('publish')
+            return {'state': 'promoted'}
+        namespace = dict(require=repair.require, os=os, json=json,
+                         runtime_locks=runtime_locks, claimed_build_locks=claimed_locks,
+                         pinned_evidence=evidence, publish_candidate=publish)
+        node = next(n for n in ast.parse(repair.RUNTIME).body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'inside_promote')
+        exec(compile(ast.Module(body=[node], type_ignores=[]), '<claimed-promote>', 'exec'), namespace)
+        request = dict(diagnostic_api_only=True, claimed_interruption_build=pin,
+                       compose_project='own', source_root='/own')
+        with patch.dict(os.environ, FULLMAG_COMPOSE_PROJECT='own', FULLMAG_SOURCE_HOST_ROOT='/own'):
+            namespace['inside_promote'](request)
+        self.assertEqual(trace, ['runtime-lock', 'claimed-lock', 'evidence', 'publish'])
+        trace.clear()
+        ledger['reservations'][0]['worker_launch_gate']['token'] = 'foreign'
+        with patch.dict(os.environ, FULLMAG_COMPOSE_PROJECT='own', FULLMAG_SOURCE_HOST_ROOT='/own'), self.assertRaises(SystemExit):
+            namespace['inside_promote'](request)
+        self.assertNotIn('publish', trace)
 
 
 

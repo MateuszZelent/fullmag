@@ -1,0 +1,89 @@
+{
+  "activation": {
+    "activation_receipt_key": "6334c99acc54f74d16eaaa0c49b175400f8859ecfeeebc6d83d131db85a36704",
+    "activation_receipt_path": "/opt/fullmag/control/backend/script-activation-6334c99acc54f74d16eaaa0c49b175400f8859ecfeeebc6d83d131db85a36704/activation.json",
+    "activation_state": "activated",
+    "attempt": "751bb5d613724ce2a43c857faafa1a64",
+    "attempt_limit": 64,
+    "backend_container": "acf27f88815492713042a3aa7e244140b684563b6bb27523375f864b4d9af9b3",
+    "build_data_qualification": "NOT VERIFIED",
+    "compose_project": "fullmag-master",
+    "config_sha256": "ed81ab29e73b7c561ea8d603bc1658b71e45bd739057ef83b2b24dea2874de2d",
+    "control_volume": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+    "development_attempt": "ce6502ecea824a559b56ced56aee3ee6",
+    "filesystem_after": {
+      "available_bytes": 287740547072,
+      "capacity_bytes": 1081101176832,
+      "minimum_free_bytes": 34359738368,
+      "scope": "Docker VM filesystem; not a per-volume quota or Windows VHDX allocation",
+      "used_bytes": 738368274432
+    },
+    "filesystem_before": {
+      "available_bytes": 287740846080,
+      "capacity_bytes": 1081101176832,
+      "minimum_free_bytes": 34359738368,
+      "scope": "Docker VM filesystem; not a per-volume quota or Windows VHDX allocation",
+      "used_bytes": 738367975424
+    },
+    "finished_at": 1793892059.9877036,
+    "helper_container": "fullmag-control-751bb5d613724ce2a43c857faafa1a64",
+    "helper_sha256": "b7142663e97e691de2d41135930e59cc024c4ee4a1a1f919a768d1e2e08af944",
+    "image_id": "sha256:76544d329ae46323bd66b67081661d62f5db957ede35dd2d47501b315e4df6a3",
+    "inputs": {
+      "activation_receipt_key": "6334c99acc54f74d16eaaa0c49b175400f8859ecfeeebc6d83d131db85a36704",
+      "activation_receipt_path": "/opt/fullmag/control/backend/script-activation-6334c99acc54f74d16eaaa0c49b175400f8859ecfeeebc6d83d131db85a36704/activation.json",
+      "backend_container": "acf27f88815492713042a3aa7e244140b684563b6bb27523375f864b4d9af9b3",
+      "config_sha256": "ed81ab29e73b7c561ea8d603bc1658b71e45bd739057ef83b2b24dea2874de2d",
+      "development_attempt": "ce6502ecea824a559b56ced56aee3ee6",
+      "image_id": "sha256:76544d329ae46323bd66b67081661d62f5db957ede35dd2d47501b315e4df6a3",
+      "provenance_sha256": "c1e7148aea1a20ef359ba186da3edf6365873cbdcd8eaa4590127bf15ec66d46",
+      "request_id": "1c2e5ebe-d520-43ba-9297-30993ca41ecd",
+      "source_relative": "examples/bimeron-cylinder-relax/scenario-matrix/cases/material_rdmi_current__film_bimeron__cylinder_plus_x.py",
+      "source_root": "/home/kkingstoun/git/fullmag/fullmag",
+      "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b"
+    },
+    "log_byte_limit": 33554432,
+    "minimum_free_bytes": 34359738368,
+    "phase": "activation",
+    "provenance_path": "/opt/fullmag/control/activation/attempts/751bb5d613724ce2a43c857faafa1a64/startup-provenance.json",
+    "provenance_sha256": "c1e7148aea1a20ef359ba186da3edf6365873cbdcd8eaa4590127bf15ec66d46",
+    "request_id": "1c2e5ebe-d520-43ba-9297-30993ca41ecd",
+    "retirement_inputs_sha256": "005a06945971a270501c324b655920adb4a8f983292c13ab541d9be903ecec9f",
+    "retirement_phase": "startup",
+    "retirement_result": {
+      "retirement": null,
+      "state": "retirement-only"
+    },
+    "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+    "schema": "fullmag.docker-build-operation.v1",
+    "session_id": "docker-startup-5de2bccc7a2f2bae0300f50a2a6d40813149f284b238e5f6a9f49c29704d7b8a",
+    "source_relative": "examples/bimeron-cylinder-relax/scenario-matrix/cases/material_rdmi_current__film_bimeron__cylinder_plus_x.py",
+    "source_root": "/home/kkingstoun/git/fullmag/fullmag",
+    "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+    "started_at": 1793892039.687555,
+    "state": "succeeded"
+  },
+  "activation_raw_sha256": "508059b597aafac3a24fdf655ee600d62670130d5c9518512c76a6346df635ef",
+  "activation_replayed": false,
+  "first_exact_observation": {
+    "api_instance_id": "2c4086ed-11bd-4f22-9f4a-e2bb5fec4138",
+    "cancellation_submitted": false,
+    "logs": [],
+    "logs_next_offset": 0,
+    "logs_total": 0,
+    "logs_unavailable": false,
+    "progress": {
+      "solver_steps": 1037,
+      "solver_time": 0.0,
+      "stage_label": ""
+    },
+    "request_scope_epoch": "2c4086ed-11bd-4f22-9f4a-e2bb5fec4138:1",
+    "run_error": null,
+    "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+    "run_status": "completed",
+    "schema": "fullmag.docker-dev-run-observation.v1",
+    "session_epoch": "docker-startup-5de2bccc7a2f2bae0300f50a2a6d40813149f284b238e5f6a9f49c29704d7b8a@1793892049786",
+    "session_id": "docker-startup-5de2bccc7a2f2bae0300f50a2a6d40813149f284b238e5f6a9f49c29704d7b8a",
+    "state": "observed"
+  }
+}
