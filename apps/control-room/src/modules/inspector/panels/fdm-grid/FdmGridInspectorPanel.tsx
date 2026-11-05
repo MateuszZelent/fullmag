@@ -19,6 +19,7 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../../primitives/InspectorMetricStrip";
 import {
   ObjectVisualizationPanel,
   VisualizationTargetInspectorPanel,
@@ -87,6 +88,12 @@ function FdmMultilayerInspectorPanelView({
 }) {
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-fdm-multilayer-status={model.status}>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Layer view", value: model.title },
+          { label: "State", value: model.status },
+        ]}
+      />
       {model.notice ? (
         <FeedbackBanner
           kind="warning"
@@ -139,6 +146,12 @@ export function FdmGridInspectorPanelView({
           ? "Unknown until the membership resource is available"
           : "Not applicable";
 
+  const isDescriptorRoot =
+    detail.scope === "descriptor" ||
+    detail.scope === "grid" ||
+    detail.scope === "mask" ||
+    detail.scope === "provenance";
+
   const cellRows = (cell: FdmGridSelectionCell) => (
     <>
       <FieldRow label="Cell ordinal" value={cell.cellOrdinal} mono />
@@ -160,6 +173,15 @@ export function FdmGridInspectorPanelView({
       data-fdm-grid-status={model.status}
       data-fdm-selection-status={detail.status}
     >
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Scope", value: detail.scope },
+          { label: "Grid shape", value: formatShape(model.shape) },
+          { label: "Total cells", value: formatCount(model.totalCells) },
+          { label: "State", value: model.statusLabel },
+        ]}
+      />
+
       {bannerKind && model.notice ? (
         <FeedbackBanner kind={bannerKind} message={model.notice} />
       ) : null}
@@ -239,7 +261,12 @@ export function FdmGridInspectorPanelView({
         </InspectorGroup>
       ) : null}
 
-      <InspectorGroup title="Structured Grid" badge={model.statusLabel}>
+      <InspectorGroup
+        collapsible={!isDescriptorRoot}
+        defaultOpen={isDescriptorRoot}
+        title="Structured Grid"
+        badge={model.statusLabel}
+      >
         <FieldRow label="Domain" value={model.domainId ?? "not available"} mono />
         <FieldRow label="Generation" value={model.generationId ?? "not available"} mono />
         <FieldRow label="Shape" value={formatShape(model.shape)} />
@@ -265,6 +292,8 @@ export function FdmGridInspectorPanelView({
       </InspectorGroup>
 
       <InspectorGroup
+        collapsible={!isDescriptorRoot}
+        defaultOpen={isDescriptorRoot}
         title="Cell Membership"
         badge={model.membership ? model.membership.freshness : "not materialized"}
         description="Cell classification is never inferred without a canonical FDM membership resource."

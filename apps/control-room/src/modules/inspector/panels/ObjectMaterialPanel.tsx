@@ -44,6 +44,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { Vector3Field } from "../primitives/Vector3Field";
 import { ObjectAbsorbingBoundaryPanel } from "./ObjectAbsorbingBoundaryPanel";
 import { ObjectMaterialPanelEditSessionBridge } from "./ObjectMaterialPanelEditSessionBridge";
@@ -1259,7 +1260,7 @@ type ObjectMaterialPanelState = ReturnType<typeof useObjectMaterialPanelState>;
 function materialInspectorSections(selectionKind: string | null): string[] {
   switch (selectionKind) {
     case "object.material":
-      return ["parameters", "material-parameters", "absorbing-boundary", "actions"];
+      return ["material-parameters", "actions"];
     case "object.magnetic-parameters":
       return ["parameters", "assignment", "uniaxial-anisotropy", "absorbing-boundary", "actions"];
     default:
@@ -1532,6 +1533,14 @@ function ObjectMaterialPanelView({
         mutationScopeKey={mutationScopeKey}
       />
       <div className="grid min-w-0 gap-fm-inspector-group">
+          <InspectorMetricStrip
+            metrics={[
+              { label: "Material", value: materialData?.name ?? materialId ?? "unassigned" },
+              { label: "Ms", value: draft.ms ? `${draft.ms} A/m` : "unset" },
+              { label: "Aex", value: draft.aex ? `${draft.aex} J/m` : "unset" },
+              { label: "alpha", value: draft.alpha || "0.01" },
+            ]}
+          />
           {showSection("parameters") ? (
             <InspectorGroup title="Magnetic Parameters" collapsible defaultOpen>
               <FieldRow label="Object ID" value={object.objectId} />
@@ -1780,6 +1789,69 @@ function ObjectMaterialPanelView({
                   updateAnisotropyDraft({ [fields[index]]: value });
                 }}
               />
+              <div className="fm-inspector-toolbar">
+                <Button
+                  disabled={!anisotropyDraft.present}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => updateAnisotropyDraft({ axisX: "1", axisY: "0", axisZ: "0" })}
+                >
+                  +X (1,0,0)
+                </Button>
+                <Button
+                  disabled={!anisotropyDraft.present}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => updateAnisotropyDraft({ axisX: "0", axisY: "1", axisZ: "0" })}
+                >
+                  +Y (0,1,0)
+                </Button>
+                <Button
+                  disabled={!anisotropyDraft.present}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => updateAnisotropyDraft({ axisX: "0", axisY: "0", axisZ: "1" })}
+                >
+                  +Z / PMA (0,0,1)
+                </Button>
+                <Button
+                  disabled={!anisotropyDraft.present}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    const ax = Number(anisotropyDraft.axisX);
+                    const ay = Number(anisotropyDraft.axisY);
+                    const az = Number(anisotropyDraft.axisZ);
+                    const norm = Math.hypot(ax, ay, az);
+                    if (Number.isFinite(norm) && norm > 0) {
+                      updateAnisotropyDraft({
+                        axisX: String(Number((ax / norm).toPrecision(6))),
+                        axisY: String(Number((ay / norm).toPrecision(6))),
+                        axisZ: String(Number((az / norm).toPrecision(6))),
+                      });
+                    }
+                  }}
+                >
+                  Normalize |u|=1
+                </Button>
+              </div>
+              {(() => {
+                const ku1Val = Number(anisotropyDraft.ku1);
+                const msVal = Number(draft.ms);
+                const bkText =
+                  anisotropyDraft.present &&
+                  anisotropyDraft.ku1.trim() !== "" &&
+                  Number.isFinite(ku1Val) &&
+                  Number.isFinite(msVal) &&
+                  msVal > 0
+                    ? `${((2 * ku1Val) / msVal).toPrecision(4)} T`
+                    : "n/a (requires active Ku1 and Ms > 0)";
+                return <FieldRow label="Anisotropy field (Bk = 2·Ku1/Ms)" value={bkText} />;
+              })()}
             </InspectorGroup>
           ) : null}
       </div>

@@ -1225,6 +1225,10 @@ impl NativeFdmBackend {
             .map(|layer| layer.convolution_cell_size)
             .unwrap_or([1.0, 1.0, 1.0]);
 
+        let periodic_images = plan.resolved_periodic_images.as_ref().map(|policy| {
+            let [ix, iy, _] = policy.resolved_image_counts;
+            [ix, iy]
+        });
         let mut kernel_payloads = Vec::new();
         let mut kernel_descs = Vec::new();
         if plan.enable_demag {
@@ -1232,7 +1236,19 @@ impl NativeFdmBackend {
             for (src_index, src_layer) in plan.layers.iter().enumerate() {
                 for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
                     let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
-                    let kernel = if src_index == dst_index {
+                    let kernel = if let Some(images) = periodic_images {
+                        fullmag_fdm_demag::try_compute_periodic_xy_kernel(
+                            conv_grid,
+                            conv_cell_size,
+                            z_shift,
+                            images,
+                        )
+                        .map_err(|error| RunError {
+                            message: format!(
+                                "CUDA FDM periodic kernel for layer {src_index} → {dst_index}: {error}"
+                            ),
+                        })?
+                    } else if src_index == dst_index {
                         fullmag_fdm_demag::compute_exact_self_kernel(
                             conv_grid[0],
                             conv_grid[1],
@@ -1332,6 +1348,22 @@ impl NativeFdmBackend {
             {
                 unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
                 return Err(RunError { message: msg });
+            }
+        }
+
+        if periodic_images.is_some() {
+            let status = unsafe { ffi::fullmag_fdm_backend_set_multilayer_xy_periodic_v1(handle) };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let error = ffi::fullmag_fdm_backend_last_error(handle);
+                    if error.is_null() {
+                        "CUDA FDM multilayer failed to configure XY periodicity".to_string()
+                    } else {
+                        CStr::from_ptr(error).to_string_lossy().into_owned()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
             }
         }
 

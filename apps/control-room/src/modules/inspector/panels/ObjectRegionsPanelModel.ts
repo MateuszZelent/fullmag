@@ -53,7 +53,13 @@ export interface RegionShapeDraft {
   size: [number, number, number];
 }
 
-export type RegionMaterialParameter = "aex" | "ms" | "alpha" | "ku1";
+export type RegionMaterialParameter =
+  | "aex"
+  | "ms"
+  | "alpha"
+  | "ku1"
+  | "ku2"
+  | "anisotropy_axis";
 export type RegionMaterialConflictPolicy = "error" | "higher_priority_wins";
 
 export interface RegionMaterialOverrideDraft {
@@ -64,6 +70,7 @@ export interface RegionMaterialOverrideDraft {
   priority: number;
   unit: string;
   value: number;
+  vectorValue?: [number, number, number];
 }
 
 export interface ObjectRegionDiagnosticItem {
@@ -445,6 +452,8 @@ function normalizeMaterialParameter(value: string | null): RegionMaterialParamet
   if (lc === "aex") return "aex";
   if (lc === "alpha") return "alpha";
   if (lc === "ku1") return "ku1";
+  if (lc === "ku2") return "ku2";
+  if (lc === "anisotropy_axis" || lc === "anisu") return "anisotropy_axis";
   return "ms";
 }
 
@@ -503,20 +512,40 @@ function resolveMaterialOverrideDrafts(
   return (region?.material_overrides ?? []).map((override) => {
     const field = override.value;
     const parameter = String(override.parameter).toLowerCase();
-    const editable = ["ms", "aex", "alpha", "ku1"].includes(parameter)
-      && field?.kind === "constant"
-      && typeof field.value === "number"
-      && Number.isFinite(field.value)
-      && [undefined, null, "error", "higher_priority_wins"].includes(override.conflict_policy);
+    const isVectorAxis =
+      (parameter === "anisotropy_axis" || parameter === "anisu") &&
+      field?.kind === "constant" &&
+      Array.isArray(field.value) &&
+      field.value.length === 3 &&
+      field.value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+    const isScalar =
+      ["ms", "aex", "alpha", "ku1", "ku2"].includes(parameter) &&
+      field?.kind === "constant" &&
+      typeof field.value === "number" &&
+      Number.isFinite(field.value);
+    const editable =
+      (isScalar || isVectorAxis) &&
+      [undefined, null, "error", "higher_priority_wins"].includes(override.conflict_policy);
     const value = field?.kind === "constant" && typeof field.value === "number" ? field.value : undefined;
     const unit = field?.kind === "constant" ? (field.unit ?? "") : "";
+    const normalizedParam = normalizeMaterialParameter(override.parameter as string);
+    const vectorValue: [number, number, number] | undefined = isVectorAxis
+      ? [
+          (field.value as number[])[0] ?? 0,
+          (field.value as number[])[1] ?? 0,
+          (field.value as number[])[2] ?? 1,
+        ]
+      : normalizedParam === "anisotropy_axis"
+        ? [0, 0, 1]
+        : undefined;
     return {
       ...(editable ? {} : { preservedOverride: structuredClone(override) }),
       conflictPolicy: normalizeConflictPolicy(override.conflict_policy ?? null),
-      parameter: normalizeMaterialParameter(override.parameter as string),
+      parameter: normalizedParam,
       priority: Math.round(override.priority ?? region?.priority ?? 0),
-      unit: unit || defaultMaterialOverrideUnit(override.parameter as RegionMaterialParameter),
-      value: value ?? defaultMaterialOverrideValue(override.parameter as RegionMaterialParameter),
+      unit: unit || defaultMaterialOverrideUnit(normalizedParam),
+      value: value ?? defaultMaterialOverrideValue(normalizedParam),
+      ...(vectorValue ? { vectorValue } : {}),
     };
   });
 }
@@ -531,8 +560,8 @@ export function defaultMaterialOverrideUnit(
   parameter: RegionMaterialParameter,
 ): string {
   if (parameter === "aex") return "J/m";
-  if (parameter === "alpha") return "";
-  if (parameter === "ku1") return "J/m^3";
+  if (parameter === "alpha" || parameter === "anisotropy_axis") return "";
+  if (parameter === "ku1" || parameter === "ku2") return "J/m^3";
   return "A/m";
 }
 
@@ -541,7 +570,7 @@ export function defaultMaterialOverrideValue(
 ): number {
   if (parameter === "aex") return 1e-11;
   if (parameter === "alpha") return 0.1;
-  if (parameter === "ku1") return 0;
+  if (parameter === "ku1" || parameter === "ku2" || parameter === "anisotropy_axis") return 0;
   return 800e3;
 }
 
@@ -760,7 +789,12 @@ export function objectRegionDraftFromModel(
   return {
     enabled: model.enabled,
     frame: model.frame,
-    materialOverrides: model.materialOverrides.map((override) => ({ ...override })),
+    materialOverrides: model.materialOverrides.map((override) => ({
+      ...override,
+      ...(override.vectorValue
+        ? { vectorValue: [...override.vectorValue] as [number, number, number] }
+        : {}),
+    })),
     meshPolicy: { ...model.meshPolicy },
     name: model.regionName === "unassigned" ? "" : model.regionName,
     ownerBounds: model.ownerBounds,
@@ -792,6 +826,7 @@ export function objectRegionDraftKey(model: ObjectRegionPanelModel): string {
         [
           override.parameter,
           override.value,
+          override.vectorValue ? override.vectorValue.join(",") : "",
           override.unit,
           override.priority,
           override.conflictPolicy,
@@ -891,6 +926,15 @@ export function validateObjectRegionDraft(
     if (!Number.isFinite(override.priority) || !Number.isInteger(override.priority)) {
       errors.push(`${override.parameter} override priority must be an integer.`);
     }
+    if (override.parameter === "anisotropy_axis") {
+      const axis = override.vectorValue ?? [0, 0, 1];
+      if (!axis.every(Number.isFinite)) {
+        errors.push("anisotropy_axis override must contain finite values.");
+      } else if (axis.every((component) => component === 0)) {
+        errors.push("anisotropy_axis override must not be the zero vector.");
+      }
+      continue;
+    }
     if (!Number.isFinite(override.value)) {
       errors.push(`${override.parameter} override value must be finite.`);
     }
@@ -951,11 +995,17 @@ export function buildObjectRegionPatch(
     : null;
   const materialOverrides: components["schemas"]["SceneRegionMaterialOverride"][] = draft.materialOverrides.map((override) => {
     if (override.preservedOverride) return structuredClone(override.preservedOverride);
-    const value: components["schemas"]["SceneMaterialParameterField"] = {
-      kind: "constant",
-      value: override.value,
-    };
-    if (override.unit.trim().length > 0) {
+    const value: components["schemas"]["SceneMaterialParameterField"] =
+      override.parameter === "anisotropy_axis"
+        ? {
+            kind: "constant",
+            value: override.vectorValue ?? [0, 0, 1],
+          }
+        : {
+            kind: "constant",
+            value: override.value,
+          };
+    if (override.parameter !== "anisotropy_axis" && override.unit.trim().length > 0) {
       value.unit = override.unit.trim();
     }
     const conflictPolicy = String(override.conflictPolicy);

@@ -244,6 +244,11 @@ jobs:
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
+      - name: Run periodic XY multilayer PG-BB contracts
+        run: |
+          cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
+          cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
+
       - name: Run local material coefficient regressions
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
