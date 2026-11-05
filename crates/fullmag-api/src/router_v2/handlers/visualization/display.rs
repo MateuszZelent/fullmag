@@ -2500,6 +2500,13 @@ fn observation_quantities_for_visualization_state(
     if planar_requests_spatial_observation(&visualization.planar) {
         candidates.push(visualization.planar.quantity_id.clone());
     }
+    if visualization.planar.visible {
+        for overlay in &visualization.planar.field_overlays {
+            if overlay.raster_visible || overlay.vectors_visible {
+                candidates.push(overlay.quantity_id.clone());
+            }
+        }
+    }
 
     let mut canonical = CurrentDisplaySelection::default();
     canonical.observation_quantities = candidates;

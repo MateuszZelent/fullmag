@@ -12033,6 +12033,23 @@ export interface components {
             /** Format: int32 */
             partial: number;
         };
+        /**
+         * @description Presentation of an additional field on the base source's physical plane.
+         *     Source, operator, resolution and interaction are shared with the base view.
+         */
+        PlanarFieldOverlayState: {
+            colormap: string;
+            component: components["schemas"]["PlanarFieldComponent"];
+            id: string;
+            quantity_id: string;
+            range: components["schemas"]["PlanarColorRangeState"];
+            /** Format: double */
+            raster_opacity: number;
+            raster_visible: boolean;
+            vector_style: components["schemas"]["PlanarVectorStyleState"];
+            vectors_visible: boolean;
+            view_scope: components["schemas"]["PlanarViewScopeState"];
+        };
         PlanarFieldProbeResource: {
             /** Format: int32 */
             cell_id?: number | null;
@@ -12374,6 +12391,8 @@ export interface components {
             component?: null | components["schemas"]["PlanarFieldComponent"];
             default_slice?: null | components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
+            /** @description Omitted preserves the list; a supplied list replaces it atomically. */
+            field_overlays?: components["schemas"]["PlanarFieldOverlayState"][] | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
             layers?: null | components["schemas"]["PlanarLayerState"];
             multislice?: null | components["schemas"]["PlanarMultisliceState"];
@@ -12397,6 +12416,8 @@ export interface components {
             component: components["schemas"]["PlanarFieldComponent"];
             default_slice: components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
+            /** @description Additional quantities in the same physical planar view. */
+            field_overlays?: components["schemas"]["PlanarFieldOverlayState"][];
             interaction: components["schemas"]["PlanarInteractionState"];
             layers: components["schemas"]["PlanarLayerState"];
             multislice?: components["schemas"]["PlanarMultisliceState"];
@@ -23081,6 +23102,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_empty_mask: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23174,6 +23200,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_mesh_overlay: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23274,6 +23305,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_meta: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23368,6 +23404,13 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_probe: {
         parameters: {
             query: {
+                /** @description Default-source fractional position override. */
+                position_fraction?: number;
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 u_m: number;
                 v_m: number;
                 sample_token?: string;
@@ -23448,6 +23491,13 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_profile: {
         parameters: {
             query: {
+                /** @description Default-source fractional position override. */
+                position_fraction?: number;
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 u0_m: number;
                 v0_m: number;
                 u1_m: number;
@@ -23535,6 +23585,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_render_png: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23621,6 +23676,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_scalar: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23714,6 +23774,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_default_vectors: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23807,6 +23872,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23901,6 +23971,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_mesh_overlay: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -23995,6 +24070,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_meta: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -24090,6 +24170,13 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_probe: {
         parameters: {
             query: {
+                /** @description Default-source fractional position override. */
+                position_fraction?: number;
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 u_m: number;
                 v_m: number;
                 sample_token?: string;
@@ -24171,6 +24258,13 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_profile: {
         parameters: {
             query: {
+                /** @description Default-source fractional position override. */
+                position_fraction?: number;
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 u0_m: number;
                 v0_m: number;
                 u1_m: number;
@@ -24259,6 +24353,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -24346,6 +24445,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_scalar: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
@@ -24440,6 +24544,11 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_vectors: {
         parameters: {
             query?: {
+                /**
+                 * @description Default source only: exact world coordinate in meters along the plane's
+                 *     normal axis, without grid/node snapping. Exclusive with position_fraction.
+                 */
+                position_m?: number;
                 sample_token?: string;
                 component?: string;
                 scope_kind?: string;
