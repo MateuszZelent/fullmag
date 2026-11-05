@@ -2747,8 +2747,11 @@ fn aligned_airbox_cell_offset(
         .max((target_origin / pitch).abs())
         .max(target_cells as f64)
         .max(1.0);
+    // Large absolute coordinates must never turn a fractional cell offset
+    // into an accepted lattice match.
+    let tolerance = (64.0 * f64::EPSILON * scale).min(1e-6);
     if !actual.is_finite() || !scale.is_finite() || offset < 0.0 || offset > last_offset as f64
-        || (actual - offset).abs() > 64.0 * f64::EPSILON * scale
+        || (actual - offset).abs() > tolerance
     {
         return None;
     }
@@ -6763,6 +6766,15 @@ mod tests {
         assert!(periodic_airbox_observation(&invalid, &target, [4, 4, 7]).is_err());
         invalid.periodicity.as_mut().unwrap().axes[2] = AxisBoundary::Periodic;
         assert!(periodic_airbox_observation(&invalid, &target, [4, 4, 7]).is_err());
+    }
+
+    #[test]
+    fn periodic_airbox_does_not_round_fractional_offsets_at_large_origins() {
+        let origin = 1e14;
+        assert_eq!(aligned_airbox_cell_offset(origin, origin, 1.0, 4, 4), Some(0));
+        assert_eq!(aligned_airbox_cell_offset(origin + 2.0, origin, 1.0, 4, 6), Some(2));
+        assert_eq!(aligned_airbox_cell_offset(origin + 0.25, origin, 1.0, 4, 4), None);
+        assert_eq!(aligned_airbox_cell_offset(origin + 2.25, origin, 1.0, 4, 6), None);
     }
 
     #[test]
