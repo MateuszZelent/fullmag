@@ -556,6 +556,9 @@ def _validate_existing_operation_inputs(receipt, expected):
             )
     if actual.get("unclaimed_cancellation") != expected.get("unclaimed_cancellation"):
         raise BuildControlError("Existing development operation input differs: unclaimed_cancellation")
+    if (expected.get("unclaimed_cancellation") is not None
+            and _native_contracts(actual.get("native_contracts")) != _native_contracts(expected.get("native_contracts"))):
+        raise BuildControlError("Existing development operation input differs: native_contracts")
     if actual.get("unclaimed_cancellation_image_transition") != expected.get("unclaimed_cancellation_image_transition"):
         raise BuildControlError("Existing development operation input differs: unclaimed_cancellation_image_transition")
     if "post_build_generation" in expected and actual.get("post_build_generation") != expected.get(
@@ -2100,6 +2103,32 @@ def _retained_native_contracts(previous, document):
     if selected != _native_contracts(previous.get("inputs", {}).get("native_contracts")):
         raise BuildControlError("Retained native contract inputs differ from the Compose command")
     return selected
+
+
+def _retained_prepared_fresh_contracts(previous, document, admission):
+    """Recover legacy missing inputs only from the authenticated fresh admission."""
+    if admission is None:
+        return _retained_native_contracts(previous, document)
+    witness = admission.get("constraints") if isinstance(admission, Mapping) else None
+    inputs = previous.get("inputs", {})
+    if (not isinstance(witness, Mapping)
+            or admission.get("schema") != "fullmag.docker-prepared-cancelled-fresh-admission.v1"
+            or admission.get("cancellation_terminal_sha256") != hashlib.sha256(canonical(previous) + b"\n").hexdigest()
+            or previous.get("state") != "succeeded"
+            or previous.get("unclaimed_cancellation_result", {}).get("state") != "cancelled"
+            or inputs.get("prepared_unclaimed_quarantine") != witness
+            or previous.get("unclaimed_cancellation_preflight", {}).get("prepared_unclaimed_quarantine") != witness):
+        raise BuildControlError("Prepared fresh native contracts have no exact authenticated cancellation witness")
+    expected = _native_contracts(witness.get("retained_native_contracts"))
+    if not expected:
+        raise BuildControlError("Prepared fresh native contract witness is empty")
+    comparison = previous
+    if "native_contracts" not in inputs:
+        comparison = {**previous, "inputs": {**inputs, "native_contracts": list(expected)}}
+    actual = _retained_native_contracts(comparison, document)
+    if actual != expected:
+        raise BuildControlError("Prepared fresh native contracts differ from the authenticated witness")
+    return actual
 
 
 def _pin_native_contract_command(backend, requested):
@@ -7702,7 +7731,15 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
-    retained_contracts = _retained_native_contracts(previous, document)
+    from docker_volume_cancelled_activation_guard import require_fresh_recreation
+    require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
+    from docker_volume_preparation_abort import require_fresh_archive
+    preparation_abort = require_fresh_archive(control, args, previous, document, recreate_services=recreate_services)
+    from docker_volume_linux_supervision_stop import require_prepared_fresh_archive
+    prepared_fresh_archive = require_prepared_fresh_archive(
+        control, args, previous, document, recreate_services=recreate_services,
+        allow_running_frontend=True)
+    retained_contracts = _retained_prepared_fresh_contracts(previous, document, prepared_fresh_archive)
     requested_contracts = getattr(args, "native_contract", None)
     if requested_contracts is None and retained_contracts:
         args.native_contract = list(retained_contracts)
@@ -7710,13 +7747,6 @@ def _retained_operation(
         requested_contracts = _native_contracts(requested_contracts)
         if requested_contracts != retained_contracts and not recreate_services:
             raise BuildControlError("Changing native contracts requires managed service recreation")
-    from docker_volume_cancelled_activation_guard import require_fresh_recreation
-    require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
-    from docker_volume_preparation_abort import require_fresh_archive
-    preparation_abort = require_fresh_archive(control, args, previous, document, recreate_services=recreate_services)
-    from docker_volume_linux_supervision_stop import require_prepared_fresh_archive
-    prepared_fresh_archive = require_prepared_fresh_archive(
-        control, args, previous, document, recreate_services=recreate_services)
     if getattr(args, "build_for_recovery", None) or getattr(args, "build_for_recovery_sha256", None):
         if recreate_services or restart_idle_service or stop_after_drain or refresh_frontend_service or resume_recreation_id is not None:
             raise BuildControlError("Recovery build is supported only by plain retained resume")
@@ -8390,7 +8420,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             )
             if require_prepared_fresh_archive(
                     control, args, previous, document, actual,
-                    recreate_services=recreate_services) != prepared_fresh_archive:
+                    recreate_services=recreate_services, allow_running_frontend=True,
+                    expected_service_pins=(prepared_fresh_archive['maintenance_service_pins']
+                                           if prepared_fresh_archive is not None else None)) != prepared_fresh_archive:
                 raise BuildControlError('Prepared cancellation/fresh archive proof changed under recreation lease')
             if prepared_fresh_archive is not None:
                 operation['receipt']['prepared_cancelled_fresh_admission'] = prepared_fresh_archive
@@ -8681,8 +8713,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             if actual["frontend"]["State"]["Running"]:
                 _revalidate_helper_source_binding(helper_source_binding, selected)
                 docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
+            stopped_actual = {}
             for service, identifier in ids.items():
                 observed = json.loads(docker_text("inspect", identifier))[0]
+                stopped_actual[service] = observed
                 if observed["State"]["Running"]:
                     raise BuildControlError("An owned service is still running; resources retained")
                 if (fresh_state or terminal_observation is not None) and (
@@ -8691,6 +8725,17 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     or observed["State"].get("StartedAt") != actual[service]["State"].get("StartedAt")
                 ):
                     raise BuildControlError("Service restarted during fresh session: " + service)
+            if prepared_fresh_archive is not None:
+                # The running frontend was admitted only for managed stopping.
+                # Reauthenticate the exact stopped pair and native/store proof
+                # before removing either container or archiving its namespace.
+                stopped_admission = require_prepared_fresh_archive(
+                    control, args, previous, document, stopped_actual,
+                    recreate_services=recreate_services,
+                    expected_service_pins=prepared_fresh_archive['maintenance_service_pins'],
+                )
+                if stopped_admission != prepared_fresh_archive:
+                    raise BuildControlError('Prepared cancellation proof changed after managed frontend stop')
             snapshot_record = (control.namespace_registry or {}).get("retirement", {})
             if fresh_state and snapshot_record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
                 from docker_volume_stop_unadmitted import _read_terminal_process_receipt

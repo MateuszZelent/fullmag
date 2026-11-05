@@ -1,4 +1,5 @@
 """Filesystem regressions for retained Linux supervision failure evidence."""
+import ast
 import copy
 import hashlib
 import json
@@ -973,10 +974,19 @@ class PreparedConsumerTests(unittest.TestCase):
         write(old_run / 'run_catalog.json', {'schema_version': 'run_catalog.v1', 'run_id': 'run-cpuoff-original',
               'revision': 2, 'tasks': [{'task_id': 'cpuoff', 'lifecycle': 'succeeded', 'artifact_ids': ['original-zarr']}]})
         attempt = 'c' * 32
-        previous = dict(attempt=attempt, state_root=str(f.runtime.state))
+        previous = dict(attempt=attempt, state_root=str(f.runtime.state),
+            backend_container=f.backend, frontend_container=f.frontend,
+            backend_started_at=f.rows['backend']['State']['StartedAt'],
+            frontend_started_at=f.rows['frontend']['State']['StartedAt'])
+        for service in ('backend', 'frontend'):
+            f.rows[service]['Config']['Labels'] = {'com.docker.compose.project': f.control.project,
+                                                  'com.docker.compose.service': service}
+        f.rows['backend']['State'].update(ExitCode=0, FinishedAt='maintenance-finished')
+        f.rows['frontend']['State'].update(Running=True, Pid=1234)
         f.docs['development/attempts/' + attempt + '/terminal.json'] = subject.canonical(previous)
         request = {'run_id': f.target['run_id'], 'task_id': f.target['task_id'], 'expected_task': old_task}
-        result = {'native_result': {'catalog_revision': 3, 'disposition': 'cancelled'}}
+        result = {'native_result': {'catalog_revision': 3, 'disposition': 'cancelled'},
+                  'backend_finished_at': 'maintenance-finished'}
         validated = (result, b'', b'', request, b'', {'prepared_unclaimed_quarantine': witness}, b'', self.compose, b'')
         args = SimpleNamespace(prepared_quarantine_sha256=self.quarantine_sha, fresh_state=True, script=None, source_root=f.root)
         def snapshot(control, backend, **kwargs):
@@ -984,13 +994,97 @@ class PreparedConsumerTests(unittest.TestCase):
             self.assertEqual({row['run_id'] for row in kwargs['retained_terminal_runs']},
                              {f.target['run_id'], 'run-cpuoff-original'})
             return {'run_records': kwargs['retained_terminal_runs']}
+        before_docs, before_signals = copy.deepcopy(f.docs), list(f.signals)
         with patch('docker_volume_cancelled_recovery._validate_operation', return_value=validated), \
              patch('docker_volume_container_recovery._ledger_and_store_snapshot', side_effect=snapshot) as checked:
             admission = subject.require_prepared_fresh_archive(
-                f.control, args, previous, self.compose, f.rows, recreate_services=True)
-        checked.assert_called_once()
+                f.control, args, previous, self.compose, f.rows, recreate_services=True,
+                allow_running_frontend=True)
+            checked.assert_called_once()
+            with self.assertRaisesRegex(ValueError, 'stopped maintenance pair'):
+                subject.require_prepared_fresh_archive(
+                    f.control, args, previous, self.compose, f.rows, recreate_services=True)
+            for case in ('backend-active', 'backend-exit', 'backend-finished', 'foreign-id',
+                         'foreign-project', 'foreign-image', 'frontend-restarted', 'fingerprint-drift'):
+                changed = copy.deepcopy(f.rows)
+                if case == 'backend-active': changed['backend']['State'].update(Running=True, Pid=4321)
+                if case == 'backend-exit': changed['backend']['State']['ExitCode'] = 1
+                if case == 'backend-finished': changed['backend']['State']['FinishedAt'] = 'other'
+                if case == 'foreign-id': changed['frontend']['Id'] = '0' * 64
+                if case == 'foreign-project': changed['frontend']['Config']['Labels']['com.docker.compose.project'] = 'foreign'
+                if case == 'foreign-image': changed['frontend']['Image'] = 'sha256:' + '0' * 64
+                if case == 'frontend-restarted': changed['frontend']['State']['StartedAt'] = 'later'
+                if case == 'fingerprint-drift': changed['frontend']['HostConfig']['ReadonlyRootfs'] = True
+                with self.subTest(case=case), self.assertRaises((ValueError, BuildControlError)):
+                    subject.require_prepared_fresh_archive(
+                        f.control, args, previous, self.compose, changed, recreate_services=True,
+                        allow_running_frontend=True, expected_service_pins=admission['maintenance_service_pins'])
+            f.rows['frontend']['State'].update(Running=False, Pid=0)
+            stopped_admission = subject.require_prepared_fresh_archive(
+                f.control, args, previous, self.compose, f.rows, recreate_services=True,
+                expected_service_pins=admission['maintenance_service_pins'])
+            self.assertEqual(stopped_admission, admission)
         self.assertEqual(admission['quarantine_sha256'], self.quarantine_sha)
         self.assertEqual(admission['constraints'], witness)
+        self.assertEqual(f.docs, before_docs)
+        self.assertEqual(f.signals, before_signals)
+
+    def test_fresh_consumer_recovers_only_missing_contracts_from_authenticated_witness(self):
+        import docker_volume_dev as dev
+        witness = {'retained_native_contracts': ['fem-demag-poisson']}
+        previous = {'state': 'succeeded', 'inputs': {'prepared_unclaimed_quarantine': witness},
+            'unclaimed_cancellation_preflight': {'prepared_unclaimed_quarantine': witness},
+            'unclaimed_cancellation_result': {'state': 'cancelled'}}
+        document = {'services': {'backend': {'command': ['start', '--native-contract', 'fem-demag-poisson']}}}
+        admission = {'schema': 'fullmag.docker-prepared-cancelled-fresh-admission.v1',
+                     'constraints': witness,
+                     'cancellation_terminal_sha256': subject.sha(subject.canonical(previous) + b'\n')}
+        original = copy.deepcopy(previous)
+        self.assertEqual(dev._retained_prepared_fresh_contracts(previous, document, admission), ('fem-demag-poisson',))
+        self.assertEqual(previous, original)
+        for case in ('no-admission', 'empty-recorded', 'changed-recorded', 'empty-command',
+                     'changed-command', 'empty-witness', 'foreign-terminal'):
+            changed, compose, context = copy.deepcopy(previous), copy.deepcopy(document), copy.deepcopy(admission)
+            if case == 'no-admission': context = None
+            if case == 'empty-recorded': changed['inputs']['native_contracts'] = []
+            if case == 'changed-recorded': changed['inputs']['native_contracts'] = ['foreign']
+            if case == 'empty-command': compose['services']['backend']['command'] = ['start']
+            if case == 'changed-command': compose['services']['backend']['command'][-1] = 'foreign'
+            if case == 'empty-witness': context['constraints']['retained_native_contracts'] = []
+            if case == 'foreign-terminal': context['cancellation_terminal_sha256'] = '0' * 64
+            if context is not None and case != 'foreign-terminal':
+                context['cancellation_terminal_sha256'] = subject.sha(subject.canonical(changed) + b'\n')
+            with self.subTest(case=case), self.assertRaises(BuildControlError):
+                dev._retained_prepared_fresh_contracts(changed, compose, context)
+
+    def test_prepared_recreation_rechecks_stopped_pair_before_remove_and_archive(self):
+        import docker_volume_dev as dev
+        tree = ast.parse(Path(dev.__file__).read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == '_retained_operation')
+        calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name)]
+        guards = sorted((node for node in calls if node.func.id == 'require_prepared_fresh_archive'),
+                        key=lambda node: node.lineno)
+        self.assertEqual(len(guards), 3)
+        for guard in guards[:2]:
+            keywords = {item.arg: item.value for item in guard.keywords}
+            self.assertIsInstance(keywords['allow_running_frontend'], ast.Constant)
+            self.assertIs(keywords['allow_running_frontend'].value, True)
+        strict = guards[-1]
+        self.assertNotIn('allow_running_frontend', {item.arg for item in strict.keywords})
+        self.assertIn('expected_service_pins', {item.arg for item in strict.keywords})
+        stopping = [node.lineno for node in calls if node.func.id == 'docker_capture'
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == 'stop' and guards[1].lineno < node.lineno < strict.lineno]
+        removing = [node.lineno for node in calls if node.func.id == 'docker_capture'
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == 'rm' and node.lineno > strict.lineno]
+        archives = [node.lineno for node in calls if node.func.id == 'archive_runtime_control']
+        self.assertTrue(stopping)
+        self.assertTrue(removing)
+        self.assertLess(strict.lineno, min(removing))
+        self.assertLess(strict.lineno, min(archives))
 
 
 class DispatchTests(unittest.TestCase):

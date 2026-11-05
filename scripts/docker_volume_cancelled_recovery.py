@@ -174,7 +174,8 @@ def _verify_absent_pair(pins: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _retained_run_pins(state: Path, request: Mapping[str, Any], native_result: Mapping[str, Any]) -> list[dict[str, str]]:
+def _retained_run_pins(state: Path, request: Mapping[str, Any], native_result: Mapping[str, Any],
+                       *, terminal_artifacts: bool = False) -> list[dict[str, Any]]:
     """Capture bounded raw run-record pins for the native cancellation validator."""
     import docker_volume_dev as volume_dev
 
@@ -246,11 +247,27 @@ def _retained_run_pins(state: Path, request: Mapping[str, Any], native_result: M
             expected["lifecycle"] = "cancelled"
             if len(tasks) != 1 or dict(tasks[0]) != expected:
                 _fail("Current cancelled task differs from the exact accepted-task snapshot")
-        pins.append({
+        pin = {
             "run_id": run_id,
             "run_intent_sha256": _sha256(records["run_intent.json"]),
             "run_catalog_sha256": _sha256(records["run_catalog.json"]),
-        })
+        }
+        if terminal_artifacts:
+            artifact_path = storage.validate_path(run_root / "artifact_catalog.json", store_root,
+                                                  "retained artifact catalog")
+            try:
+                artifact_raw = host.read_owned_regular(artifact_path, maximum=MAX_RUN_FILE_BYTES)
+            except FileNotFoundError:
+                if artifact_path.is_symlink():
+                    _fail("Retained artifact catalog is a dangling symlink")
+                pin["artifact_catalog_sha256"] = None
+            else:
+                total_bytes += len(artifact_raw)
+                if total_bytes > MAX_RETAINED_RUN_BYTES:
+                    _fail("Retained run records exceed the aggregate byte bound")
+                cancellation._json_object(artifact_raw, "retained artifact catalog", maximum=MAX_RUN_FILE_BYTES)
+                pin["artifact_catalog_sha256"] = _sha256(artifact_raw)
+        pins.append(pin)
     if requested_catalog is None:
         _fail("Cancellation target run is missing from the retained store")
     return pins
@@ -460,6 +477,65 @@ def _read_original_attempt(control: BuildControl, selected: Path, preflight: Map
     return terminal, terminal_raw, compose, compose_raw, original_image, pins
 
 
+def _self_contained_cancellation_archive(control, attempt, terminal, parent, before, before_raw):
+    """Use complete local copies only for the exact prepared budget continuation."""
+    import docker_volume_unclaimed_cancellation as cancellation
+    origin = terminal.get("unclaimed_cancellation_checkpoint_origin")
+    if (not isinstance(origin, Mapping)
+            or set(origin) != {"attempt", "terminal_sha256", "preflight_sha256",
+                               "stopped_sha256", "removed_sha256", "archive_sha256"}
+            or parent.get("error") != cancellation.PREPARED_BUDGET_RESUME_ERROR
+            or any(key in parent for key in ("backend_started_at", "backend_build_receipt_sha256",
+                "unclaimed_cancellation_admission", "unclaimed_cancellation_result",
+                "backend_container", "frontend_container"))):
+        _fail("Self-contained cancellation archive has no exact prepared checkpoint origin")
+    _, source, source_raw = cancellation._prepared_budget_resume_parent(
+        control, parent, before_raw, terminal.get("inputs", {}).get("unclaimed_cancellation")
+    )
+    if (origin.get("attempt") != source["attempt"] or origin.get("terminal_sha256") != _sha256(source_raw)
+            or origin.get("preflight_sha256") != _sha256(before_raw)):
+        _fail("Self-contained cancellation archive origin differs from its pinned history")
+    root = "development/attempts/" + attempt
+    own_before = _read_raw(control, root + "/unclaimed-cancellation-before.json", maximum=256 * 1024)
+    if own_before != before_raw or canonical(before) + b"\n" != own_before:
+        _fail("Self-contained cancellation archive lost its original canonical preflight")
+    archive_hashes = origin.get("archive_sha256")
+    expected_archives = {"prior-runtime-config.json", "prior-runtime-owner.json", "prior-process-tree.json",
+                         "backend-docker-logs.txt", "frontend-docker-logs.txt"}
+    if not isinstance(archive_hashes, Mapping) or set(archive_hashes) != expected_archives:
+        _fail("Self-contained cancellation archive does not pin all original records")
+    archives = {}
+    for name in sorted(expected_archives):
+        expected = _require_sha(archive_hashes[name], "self-contained archive digest")
+        raw = _read_raw(control, root + "/" + name,
+                        maximum=cancellation.MAX_LOG_BYTES if name.endswith("-docker-logs.txt") else MAX_CONTROL_BYTES)
+        if raw is None or _sha256(raw) != expected:
+            _fail("Self-contained cancellation archive record is missing or changed: " + name)
+        archives[name] = raw
+    for name, field in (("prior-runtime-config.json", "prior_runtime_config_sha256"),
+                        ("prior-runtime-owner.json", "prior_owner_sha256"),
+                        ("prior-process-tree.json", "prior_process_receipt_sha256")):
+        if _sha256(archives[name]) != before.get(field):
+            _fail("Self-contained native archive differs from its original preflight: " + name)
+    checkpoints = {}
+    for name, field in (("stopped", "stopped_sha256"), ("removed", "removed_sha256")):
+        raw = _read_raw(control, root + "/unclaimed-cancellation-" + name + ".json")
+        if raw is None or _sha256(raw) != origin.get(field):
+            _fail("Self-contained cancellation checkpoint is missing or changed: " + name)
+        checkpoints[name] = raw
+    old_ids = {service: before.get(service, {}).get("container_id") for service in ("backend", "frontend")}
+    for service, identifier in old_ids.items():
+        _require_container(identifier, "original " + service)
+    cancellation._validated_stop_removal_checkpoints(
+        control, root, terminal, before_raw, before.get("request_id"), before.get("request_sha256"),
+        old_ids, checkpoints["stopped"], checkpoints["removed"],
+    )
+    if (terminal.get("unclaimed_cancellation_stopped") != source.get("unclaimed_cancellation_stopped")
+            or terminal.get("unclaimed_cancellation_removed") != source.get("unclaimed_cancellation_removed")):
+        _fail("Self-contained cancellation checkpoints differ from their original terminal")
+    return attempt
+
+
 def _cancellation_archive_attempt(control, attempt, terminal):
     """Follow only the successful receipt's CAS-pinned pre-start parent."""
     link = terminal.get("unclaimed_cancellation_resume")
@@ -481,7 +557,6 @@ def _cancellation_archive_attempt(control, attempt, terminal):
     if (parent.get("schema") != "fullmag.docker-build-operation.v1"
             or parent.get("phase") != "development" or parent.get("state") != "failed-confirmed"
             or parent.get("attempt") != parent_attempt
-            or parent.get("unclaimed_cancellation_resume") is not None
             or any(parent.get(key) != terminal.get(key) for key in
                    ("compose_project", "control_volume", "control_namespace"))
             or parent.get("compose_project") != control.project
@@ -490,6 +565,10 @@ def _cancellation_archive_attempt(control, attempt, terminal):
             or parent.get("inputs", {}).get("unclaimed_cancellation") != terminal.get("inputs", {}).get("unclaimed_cancellation")
             or parent.get("unclaimed_cancellation_preflight") != before
             or terminal.get("unclaimed_cancellation_preflight") != before):
+        _fail("Cancellation archive parent is foreign or differs from the successful resume")
+    if parent.get("unclaimed_cancellation_resume") is not None:
+        if terminal.get("unclaimed_cancellation_checkpoint_origin") is not None:
+            return _self_contained_cancellation_archive(control, attempt, terminal, parent, before, before_raw)
         _fail("Cancellation archive parent is foreign or differs from the successful resume")
     return parent_attempt
 

@@ -1141,6 +1141,56 @@ def _resume_backend_image_pin(args):
     return value
 
 
+def _validated_stop_removal_checkpoints(control, evidence_root, evidence_owner, before_raw,
+                                       request_id, request_sha256, old_ids,
+                                       stopped_checkpoint, removed_checkpoint):
+    """Authenticate the persisted stop/removal chain and its bounded log archives."""
+    archived_logs = {}
+    stopped = _json_object(stopped_checkpoint, "stopped cancellation checkpoint")
+    removed = _json_object(removed_checkpoint, "removed cancellation checkpoint")
+    expected_ids = {service: old_ids[service] for service in ("backend", "frontend")}
+    if (stopped.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-stopped.v1"
+            or removed.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-removed.v1"
+            or canonical(stopped) + b"\n" != stopped_checkpoint
+            or canonical(removed) + b"\n" != removed_checkpoint
+            or evidence_owner.get("unclaimed_cancellation_stopped") != stopped
+            or evidence_owner.get("unclaimed_cancellation_removed") != removed
+            or stopped.get("request_id") != request_id
+            or removed.get("request_id") != request_id
+            or stopped.get("request_sha256") != request_sha256
+            or removed.get("request_sha256") != request_sha256
+            or stopped.get("preflight_sha256") != _sha256(before_raw)
+            or removed.get("preflight_sha256") != _sha256(before_raw)
+            or stopped.get("container_ids") != expected_ids
+            or removed.get("container_ids") != expected_ids
+            or removed.get("stopped_sha256") != _sha256(stopped_checkpoint)):
+        _fail("Persisted stop/removal checkpoints do not bind the exact original containers")
+    stopped_containers = stopped.get("containers")
+    if not isinstance(stopped_containers, Mapping) or set(stopped_containers) != {"backend", "frontend"}:
+        _fail("Stopped checkpoint has no exact two-service container observations")
+    for service in ("backend", "frontend"):
+        observation = stopped_containers[service]
+        if (not isinstance(observation, Mapping)
+                or observation.get("container_id") != old_ids[service]
+                or observation.get("service") != service
+                or observation.get("project") != control.project
+                or observation.get("running") is not False
+                or observation.get("pid") != 0
+                or not isinstance(observation.get("finished_at"), str)
+                or not observation["finished_at"]):
+            _fail("Stopped checkpoint differs from the exact exited service: " + service)
+    log_hashes = stopped.get("docker_log_sha256")
+    if not isinstance(log_hashes, Mapping) or set(log_hashes) != {"backend", "frontend"}:
+        _fail("Stopped checkpoint has no bounded Docker log digests")
+    for service in ("backend", "frontend"):
+        log_raw = _control_raw(control, evidence_root + "/" + service + "-docker-logs.txt",
+                               maximum=MAX_LOG_BYTES)
+        if log_raw is None or _sha256(log_raw) != log_hashes.get(service):
+            _fail("Bounded Docker log archive differs from stop evidence: " + service)
+        archived_logs[service + "-docker-logs.txt"] = log_raw
+    return stopped, removed, archived_logs
+
+
 def _prepared_budget_resume_parent(control, failed, before_raw, maintenance):
     """Authenticate the single observed path-error -> budget-refusal history hop."""
     link = failed.get("unclaimed_cancellation_resume")
@@ -1429,48 +1479,10 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
     # archives they bind. Legacy pre-start attempts may have neither checkpoint.
     archived_logs = {}
     if stopped_checkpoint is not None:
-        stopped = _json_object(stopped_checkpoint, "stopped cancellation checkpoint")
-        removed = _json_object(removed_checkpoint, "removed cancellation checkpoint")
-        expected_ids = {service: old_ids[service] for service in ("backend", "frontend")}
-        if (stopped.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-stopped.v1"
-                or removed.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-removed.v1"
-                or canonical(stopped) + b"\n" != stopped_checkpoint
-                or canonical(removed) + b"\n" != removed_checkpoint
-                or evidence_owner.get("unclaimed_cancellation_stopped") != stopped
-                or evidence_owner.get("unclaimed_cancellation_removed") != removed
-                or stopped.get("request_id") != args.request_id
-                or removed.get("request_id") != args.request_id
-                or stopped.get("request_sha256") != maintenance["request_sha256"]
-                or removed.get("request_sha256") != maintenance["request_sha256"]
-                or stopped.get("preflight_sha256") != _sha256(before_raw)
-                or removed.get("preflight_sha256") != _sha256(before_raw)
-                or stopped.get("container_ids") != expected_ids
-                or removed.get("container_ids") != expected_ids
-                or removed.get("stopped_sha256") != _sha256(stopped_checkpoint)):
-            _fail("Persisted stop/removal checkpoints do not bind the exact original containers")
-        stopped_containers = stopped.get("containers")
-        if not isinstance(stopped_containers, Mapping) or set(stopped_containers) != {"backend", "frontend"}:
-            _fail("Stopped checkpoint has no exact two-service container observations")
-        for service in ("backend", "frontend"):
-            observation = stopped_containers[service]
-            if (not isinstance(observation, Mapping)
-                    or observation.get("container_id") != old_ids[service]
-                    or observation.get("service") != service
-                    or observation.get("project") != control.project
-                    or observation.get("running") is not False
-                    or observation.get("pid") != 0
-                    or not isinstance(observation.get("finished_at"), str)
-                    or not observation["finished_at"]):
-                _fail("Stopped checkpoint differs from the exact exited service: " + service)
-        log_hashes = stopped.get("docker_log_sha256")
-        if not isinstance(log_hashes, Mapping) or set(log_hashes) != {"backend", "frontend"}:
-            _fail("Stopped checkpoint has no bounded Docker log digests")
-        for service in ("backend", "frontend"):
-            log_raw = _control_raw(control, evidence_root + "/" + service + "-docker-logs.txt",
-                                   maximum=MAX_LOG_BYTES)
-            if log_raw is None or _sha256(log_raw) != log_hashes.get(service):
-                _fail("Bounded Docker log archive differs from stop evidence: " + service)
-            archived_logs[service + "-docker-logs.txt"] = log_raw
+        stopped, removed, archived_logs = _validated_stop_removal_checkpoints(
+            control, evidence_root, evidence_owner, before_raw, args.request_id,
+            maintenance["request_sha256"], old_ids, stopped_checkpoint, removed_checkpoint,
+        )
 
     policy = previous_inputs.get("gpu_access_requested")
     old_access = document.get("services", {}).get("backend", {}).get("environment", {}).get(
@@ -1527,6 +1539,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         }
     if 'prepared_unclaimed_quarantine' in before:
         args.native_contract = list(before['prepared_unclaimed_quarantine']['retained_native_contracts'])
+    operation_inputs["native_contracts"] = list(volume_dev._native_contracts(getattr(args, "native_contract", None)))
     args.profile = "dev"
     args.script = None
     args.image = None
@@ -1964,6 +1977,7 @@ def _resume_native_cancellation_failure(args, selected, layout, identity, helper
     }
     if 'prepared_unclaimed_quarantine' in before:
         args.native_contract = list(before['prepared_unclaimed_quarantine']['retained_native_contracts'])
+    operation_inputs["native_contracts"] = list(volume_dev._native_contracts(getattr(args, "native_contract", None)))
     args.profile = "dev"
     args.script = None
     args.image = None
@@ -2430,6 +2444,7 @@ def cancel_unclaimed(args) -> dict[str, Any]:
     operation_inputs = {
         "source_root": str(selected),
         "image_id": image,
+        "native_contracts": list(volume_dev._native_contracts(getattr(args, "native_contract", None))),
         "source_project_id": identity["project_id"],
         "source_worktree_id": identity["worktree_id"],
         "source_checkout_kind": identity["checkout_kind"],

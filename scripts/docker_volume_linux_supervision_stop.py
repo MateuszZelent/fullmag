@@ -1050,7 +1050,8 @@ def assert_prepared_maintenance_allowed(control, operation, maintenance):
             and request.get('task_id') == record['target']['task_id'], 'maintenance request differs from prepared quarantine task')
 
 
-def require_prepared_fresh_archive(control, args, previous, document, actual=None, *, recreate_services):
+def require_prepared_fresh_archive(control, args, previous, document, actual=None, *, recreate_services,
+                                   allow_running_frontend=False, expected_service_pins=None):
     """Admit the existing fresh archive only after a genuine native Cancelled result."""
     raw = control.read_bytes(PREPARED_QUARANTINE, optional=True)
     if raw is None:
@@ -1075,20 +1076,51 @@ def require_prepared_fresh_archive(control, args, previous, document, actual=Non
             and request.get('run_id') == record['target']['run_id']
             and request.get('task_id') == record['target']['task_id'], 'native cancellation does not consume this prepared quarantine')
     state = Path(previous['state_root'])
-    pins = recovery._retained_run_pins(state, request, result['native_result'])
+    pins = recovery._retained_run_pins(state, request, result['native_result'], terminal_artifacts=True)
     if actual is None:
         from docker_build_control import docker_capture
         actual = {name: json.loads(docker_capture('inspect', previous[name + '_container'], timeout=60).stdout)[0]
                   for name in ('backend', 'frontend')}
-    require(all(row['State'].get('Running') is False and row['State'].get('Pid') == 0 for row in actual.values()),
-            'fresh archive requires the stopped maintenance pair')
+    from docker_volume_reconcile import fingerprint
+    require(document == compose and set(actual) == {'backend', 'frontend'},
+            'fresh archive maintenance Compose/service set differs')
+    service_pins = {}
+    for service in ('backend', 'frontend'):
+        row = actual[service]
+        observed = row.get('State', {})
+        labels = row.get('Config', {}).get('Labels', {})
+        started_at = observed.get('StartedAt')
+        require(row.get('Id') == previous.get(service + '_container')
+                and row.get('Image') == compose['services'][service].get('image')
+                and labels.get('com.docker.compose.project') == control.project
+                and labels.get('com.docker.compose.service') == service
+                and isinstance(started_at, str) and bool(started_at)
+                and started_at == previous.get(service + '_started_at'),
+                'fresh archive maintenance service identity/incarnation differs: ' + service)
+        stopped = observed.get('Running') is False and observed.get('Pid') == 0
+        running_frontend = (service == 'frontend' and allow_running_frontend
+                            and observed.get('Running') is True
+                            and type(observed.get('Pid')) is int and observed['Pid'] > 0
+                            and observed.get('OOMKilled') is False)
+        require(stopped or running_frontend, 'fresh archive requires the stopped maintenance pair')
+        if service == 'backend':
+            require(observed.get('ExitCode') == 0 and observed.get('OOMKilled') is False
+                    and isinstance(result.get('backend_finished_at'), str)
+                    and bool(result['backend_finished_at'])
+                    and observed.get('FinishedAt') == result['backend_finished_at'],
+                    'fresh archive backend differs from the clean native cancellation outcome')
+        service_pins[service] = {'container_id': row['Id'], 'image_id': row['Image'],
+                                 'started_at': started_at, 'container_fingerprint': fingerprint(row)}
+    require(expected_service_pins is None or service_pins == expected_service_pins,
+            'fresh archive maintenance service fingerprint changed under recreation lease')
     import docker_volume_container_recovery as native_recovery
     snapshot = native_recovery._ledger_and_store_snapshot(
         control, actual['backend'], compose=compose, retained_terminal_runs=pins)
     require(snapshot.get('run_records') == pins, 'fresh archive retained store snapshot differs')
     return {'schema': 'fullmag.docker-prepared-cancelled-fresh-admission.v1',
             'quarantine_sha256': sha(raw), 'cancellation_terminal_sha256': sha(terminal_raw),
-            'store_snapshot_sha256': sha(canonical(snapshot)), 'constraints': witness}
+            'store_snapshot_sha256': sha(canonical(snapshot)), 'constraints': witness,
+            'maintenance_service_pins': service_pins}
 
 
 def validate_prepared_render(document, constraints):

@@ -307,6 +307,7 @@ class PreparedPathResumeTests(unittest.TestCase):
         self.control.write_bytes.assert_any_call(path, before_raw)
         self.assertEqual(files[path], before_raw)
         self.assertEqual(operation['receipt']['unclaimed_cancellation_preflight'], self.before)
+        self.assertEqual(operation['receipt']['inputs']['native_contracts'], ['fem-demag-poisson'])
         self.assertNotIn('unclaimed_cancellation_image_transition', operation['receipt']['inputs'])
         link = operation['receipt']['unclaimed_cancellation_resume']
         self.assertEqual(link['failed_attempt'], self.args.resume_maintenance_attempt)
