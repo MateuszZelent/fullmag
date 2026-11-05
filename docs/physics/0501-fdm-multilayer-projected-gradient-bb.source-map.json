@@ -374,6 +374,24 @@
       "path": "crates/fullmag-runner/src/autosave_storage.rs",
       "symbol": "append",
       "responsibility": "Per-quantity payload references; preserved global logical ordinals; managed writer verification pending."
+    },
+    {
+      "id": "periodic-aligned-planner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "fdm_multilayer_cuda_projected_bb_error",
+      "responsibility": "Admit aligned FP64 CUDA PG-BB with finite XY images and open Z."
+    },
+    {
+      "id": "periodic-pair-tensor",
+      "path": "crates/fullmag-fdm-demag/src/newell.rs",
+      "symbol": "try_compute_periodic_xy_newell_kernels",
+      "responsibility": "Fold self and shifted image tensors into the circular XY grid and preserve reflection parity."
+    },
+    {
+      "id": "periodic-device-seams",
+      "path": "backends/fdm/api/c_api.cpp",
+      "symbol": "fullmag_fdm_backend_set_multilayer_xy_periodic_v1",
+      "responsibility": "Validate the XY-periodic FFT shape and wrap local operators only on axes spanned by a native layer."
     }
   ],
   "public_api": {

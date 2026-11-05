@@ -411,19 +411,22 @@ macierzy materiałów, geometrii, obsługi przerwań ani wydania produkcyjnego.
 | crates/fullmag-runner/src/relaxation/direct_minimizer.rs | projected_gradient_step_size_from_products | Shared scalar BB1/BB2 restart policy. |
 | crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb.rs | snapshot_native_multilayer_bb_m | FDM GPU M-only accepted publication preserving resident scalar reductions. |
 | crates/fullmag-runner/src/autosave_storage.rs | append | Per-quantity payload rows with preserved logical stage and target ordinals. |
+| crates/fullmag-plan/src/fdm.rs | fdm_multilayer_cuda_projected_bb_error | Admit aligned FP64 CUDA PG-BB with periodic XY and open Z. |
+| crates/fullmag-fdm-demag/src/newell.rs | try_compute_periodic_xy_newell_kernels | Fold self and shifted image tensors into the circular XY grid. |
+| backends/fdm/api/c_api.cpp | fullmag_fdm_backend_set_multilayer_xy_periodic_v1 | Validate FFT shape and set layer-local seams. |
 
 ### Lateral periodic cells (FP64 CUDA PG-BB)
 
 The aligned three-dimensional solver uses one lateral lattice for every object.
-For common cell counts \(N_x,N_y,N_z\) and cell pitches \(h_x,h_y,h_z\) in metres,
-the periods are \(L_x=N_x h_x\) and \(L_y=N_y h_y\). The Z boundary is open.
+For common cell counts $N_x,N_y,N_z$ and cell pitches $h_x,h_y,h_z$ in metres,
+the periods are $L_x=N_x h_x$ and $L_y=N_y h_y$. The Z boundary is open.
 For each source–destination pair, the dimensionless Newell tensor is summed
-over the finite image rectangle \([-I_x,I_x]\times[-I_y,I_y]\) about the
+over the finite image rectangle $[-I_x,I_x]\times[-I_y,I_y]$ about the
 centred lateral lag. The pair's vertical displacement is retained in every
 image. Beyond 40 times the largest cell pitch, each image uses the shifted
 Newell kernel’s point-dipole approximation. For an even cell count, the two equivalent half-period lags are
 averaged to preserve reflection parity and pair reciprocity. The convolution
-uses \(N_x\times N_y\times 2N_z\) FFT samples. This is a truncated lattice
+uses $N_x\times N_y\times 2N_z$ FFT samples. This is a truncated lattice
 sum, whose image counts are part of the requested and resolved provenance.
 
 The exchange and rDMI stencils wrap on an axis only when the native object
