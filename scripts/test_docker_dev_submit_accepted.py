@@ -77,6 +77,47 @@ class SubmitAcceptedTests(unittest.TestCase):
                 self.submit()
             run.assert_not_called()
 
+    def public_cli_request_limit(self):
+        import re
+        source = (Path(__file__).resolve().parents[1]
+                  / "crates/fullmag-cli/src/accepted_run_transport.rs").read_text()
+        match = re.search(r"^const MAX_SUBMIT_REQUEST_BYTES: u64 = (\d+) \* 1024 \* 1024;$",
+                          source, re.MULTILINE)
+        self.assertIsNotNone(match, "public CLI request bound must remain explicit")
+        return int(match.group(1)) * 1024 * 1024
+
+    def test_request_limit_matches_public_cli(self):
+        self.assertEqual(target.MAX_REQUEST_BYTES, self.public_cli_request_limit())
+
+    def test_canonical_boundary_is_readable_and_one_extra_byte_never_submits(self):
+        maximum = self.public_cli_request_limit()
+        chunk = b" " * (1024 * 1024)
+        with self.path.open("wb") as stream:
+            stream.write(self.raw)
+            remaining = maximum - len(self.raw)
+            while remaining:
+                count = min(remaining, len(chunk))
+                stream.write(chunk[:count])
+                remaining -= count
+        raw = self.path.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        with patch.object(target.subprocess, "run") as run:
+            accepted, run_id, project_id = target._validated_request(
+                self.root, self.relative, digest, "a" * 64)
+            self.assertEqual(len(accepted), maximum)
+            self.assertEqual(hashlib.sha256(accepted).hexdigest(), digest)
+            self.assertEqual((run_id, project_id), ("run-test", "project-test"))
+            del accepted, raw
+            with self.path.open("ab") as stream:
+                stream.write(b" ")
+            oversized_hash = hashlib.sha256()
+            with self.path.open("rb") as stream:
+                while block := stream.read(1024 * 1024):
+                    oversized_hash.update(block)
+            with self.assertRaisesRegex(ValueError, "size or digest"):
+                self.submit(oversized_hash.hexdigest())
+            run.assert_not_called()
+
     def test_symbolic_request_or_parent_is_rejected(self):
         destination = self.root / "payload.json"
         self.path.rename(destination)

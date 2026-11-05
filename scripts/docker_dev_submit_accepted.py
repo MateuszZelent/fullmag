@@ -17,7 +17,8 @@ import urllib.request
 from docker_build_control import BuildControlError, docker_capture
 from docker_dev_defaults import _discover_pins, resolve_defaults
 
-MAX_REQUEST_BYTES = 64 * 1024 * 1024
+# Match the public CLI accepted-request bound; archive bounds are separate.
+MAX_REQUEST_BYTES = 96 * 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
