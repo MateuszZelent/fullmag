@@ -5,6 +5,7 @@ import json
 import math
 import re
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
@@ -511,6 +512,37 @@ def render_loaded_problem_as_script(
     )
 
     base_problem = _builder_base_problem(loaded)
+    if any(stage.magnetization_assignments for stage in stages):
+        # The workspace reflects the last edit. Replaying the pipeline starts
+        # with the first physical stage's texture, before later assignments.
+        first_physical_problem = next(
+            stage.problem for stage in stages
+            if stage.entrypoint_kind in {"flat_run", "flat_relax"} and stage.action is None
+        )
+        initial_magnets = {
+            magnet.object_id or magnet.name: magnet
+            for magnet in first_physical_problem.magnets
+        }
+        magnets = []
+        for magnet in base_problem.magnets:
+            initial = initial_magnets.get(magnet.object_id or magnet.name)
+            if initial is None:
+                magnets.append(magnet)
+                continue
+            initial_textures = {
+                region.region_id: region.texture_override for region in initial.object_regions
+            }
+            magnets.append(
+                replace(
+                    magnet,
+                    m0=initial.m0,
+                    object_regions=tuple(
+                        replace(region, texture_override=initial_textures.get(region.region_id))
+                        for region in magnet.object_regions
+                    ),
+                )
+            )
+        base_problem = replace(base_problem, magnets=magnets)
     surface = _script_api_surface(base_problem, overrides=overrides)
     if any(getattr(loaded.antenna_inventory, name) for name in _ANTENNA_SCENE_COLLECTIONS[1:]):
         surface = "study"
