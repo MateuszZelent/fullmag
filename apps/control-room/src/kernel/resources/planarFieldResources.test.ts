@@ -144,6 +144,30 @@ describe("planar field resources", () => {
     };
   };
 
+  it("preserves exact physical position and object identity in every canonical replay link", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) {
+      meta.links[key] = meta.links[key].replace("scope_kind=monitor_target", "scope_kind=object&scope_id=upper-cylinder") + "&position_m=-8.75e-9";
+    }
+    const parsed = planarFieldQueryFromMeta("m", { kind: "default" }, meta);
+    expect(parsed).toMatchObject({ ok: true, query: { position_m: -8.75e-9, scope_kind: "object", scope_id: "upper-cylinder" } });
+    const first = planarFieldResourceKey("m", { kind: "default" }, { position_m: -8.75e-9 });
+    const second = planarFieldResourceKey("m", { kind: "default" }, { position_m: -1.25e-9 });
+    expect(first).not.toBe(second);
+  });
+
+  it.each(["", "NaN", "Infinity", "-Infinity"])("rejects invalid absolute position %j in metadata links", (value) => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) meta.links[key] += `&position_m=${value}`;
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({ ok: false });
+  });
+
+  it("rejects metadata links with two competing plane positions", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) meta.links[key] += "&position_m=1e-9&position_fraction=0.5";
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({ ok: false });
+  });
+
   it("derives default identity from default-family links and rejects a monitor-family request", () => {
     const meta = defaultMetaIdentity();
     const result = planarFieldQueryFromMeta("m", { kind: "default" }, meta);

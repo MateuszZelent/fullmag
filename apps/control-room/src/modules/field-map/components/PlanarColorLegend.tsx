@@ -6,6 +6,7 @@ import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
 
 interface PlanarColorLegendProps {
+  targetLabel?: string;
   colormap: string;
   component: string;
   legendUnit: string;
@@ -16,6 +17,7 @@ interface PlanarColorLegendProps {
 }
 
 export function PlanarColorLegend({
+  targetLabel,
   colormap,
   component,
   legendUnit,
@@ -25,14 +27,14 @@ export function PlanarColorLegend({
   rangeState,
 }: PlanarColorLegendProps) {
   if (isDirectionColormap(colormap)) {
-    return <PlanarDirectionLegend quantityId={quantityId} />;
+    return <PlanarDirectionLegend quantityId={quantityId} targetLabel={targetLabel} />;
   }
   const rangeLabel = resolvePlanarColorRangeLabel(range, rangeState);
   return (
     <aside aria-label="Scalar color range" className="fm-field-map__colorbar">
       <div className="fm-field-map__colorbar-header">
         <div className="fm-field-map__colorbar-identity">
-          <span className="fm-field-map__colorbar-context">2D field</span>
+          <span className="fm-field-map__colorbar-context">{targetLabel ?? "2D field"}</span>
           <span className="fm-field-map__colorbar-quantity" title={quantityId}>
             {quantityDisplayName(quantityId)}
           </span>
@@ -127,7 +129,7 @@ function DirectionHemisphere({ sign, label }: { sign: 1 | -1; label: string }) {
  * Legend of the mumax3 direction wheel: hue is the in-plane angle in the world
  * XY plane (+X red), lightness the z component (+Z white, -Z black).
  */
-function PlanarDirectionLegend({ quantityId }: { quantityId: string }) {
+function PlanarDirectionLegend({ quantityId, targetLabel }: { quantityId: string; targetLabel?: string }) {
   const name = quantityDisplayName(quantityId);
   return (
     <aside
@@ -136,7 +138,7 @@ function PlanarDirectionLegend({ quantityId }: { quantityId: string }) {
     >
       <div className="fm-field-map__colorbar-header">
         <div className="fm-field-map__colorbar-identity">
-          <span className="fm-field-map__colorbar-context">2D field</span>
+          <span className="fm-field-map__colorbar-context">{targetLabel ?? "2D field"}</span>
           <span className="fm-field-map__colorbar-quantity" title={quantityId}>{name}</span>
           <span className="fm-field-map__colorbar-component">direction</span>
         </div>

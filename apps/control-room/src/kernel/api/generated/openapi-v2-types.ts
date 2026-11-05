@@ -11998,6 +11998,7 @@ export interface components {
             mesh_overlay_descriptor: components["schemas"]["PlanarMeshOverlayDescriptor"];
             mesh_revision: string;
             non_injective: boolean;
+            observation_frame?: null | components["schemas"]["AcceptedObservationFrameRef"];
             occupancy: components["schemas"]["PlanarFieldOccupancyResource"];
             operator: components["schemas"]["PlanarOperatorSchema"];
             /** Format: int32 */
@@ -12369,6 +12370,10 @@ export interface components {
         PlanarViewScopeState: {
             /** @enum {string} */
             kind: "monitor_target";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            scope_id: string;
         } | {
             /** @enum {string} */
             kind: "mesh_part";

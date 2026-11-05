@@ -59,6 +59,7 @@ enum PlanarDataSource {
 }
 
 struct BuiltPlanarField {
+    observation_frame: Option<crate::schemas::common::AcceptedObservationFrameRef>,
     result: Arc<PlanarSampleResult>,
     target: Arc<ResolvedSpatialTarget>,
     request: ResolvedPlanarSampleRequest,
@@ -501,6 +502,9 @@ async fn build_planar_field_from_source(
     if query.position_m.is_some_and(|position| !position.is_finite()) {
         return Err(ApiError::bad_request("invalid_planar_position: position_m must be finite"));
     }
+    // Planar readers are live spatial consumers just like the 3D field routes.
+    // Keep the advisory demand bounded by the existing recent-request policy.
+    crate::live_field_demand::note_live_field_request(quantity_id);
     let request_context = crate::capture_current_live_request_context(state).await?;
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
@@ -715,7 +719,7 @@ async fn build_planar_field_from_source(
     };
     let resolved_field = if matches!(
         query.scope_kind.as_deref().unwrap_or("monitor_target"),
-        "monitor_target" | "region"
+        "monitor_target" | "object" | "region"
     ) {
         match multilayer_composite {
             Ok(Some(composite)) => composite.embed(resolved_field)?,
@@ -724,6 +728,19 @@ async fn build_planar_field_from_source(
         }
     } else {
         resolved_field
+    };
+    // The accepted Airbox layout is attached to the same publication as the
+    // magnetic carrier. Historical artifact manifests do not prove that clock.
+    let observation_frame = if query.snapshot_id.is_some() {
+        None
+    } else if query.scope_kind.as_deref() == Some("airbox") && is_fdm_multilayer_snapshot(snapshot) {
+        snapshot.latest_fields.get(quantity_id)
+            .filter(|raw| crate::session::latest_field_source_is_qualified(snapshot, quantity_id, raw))
+            .filter(|raw| raw.get("accepted_airbox").is_some())
+            .and_then(|raw| raw.get("observation_frame"))
+            .and_then(|frame| serde_json::from_value(frame.clone()).ok())
+    } else {
+        crate::session::resolved_current_field_observation_frame(snapshot, quantity_id, n_comp)
     };
     let field_revision = resolved_field.quantity_revision;
     let source_revision = resolved_source.identity.source_revision;
@@ -739,6 +756,9 @@ async fn build_planar_field_from_source(
     )?;
     let scope = match query.scope_kind.as_deref().unwrap_or("monitor_target") {
         "monitor_target" => ResolvedSpatialScope::MonitorTarget,
+        "object" => ResolvedSpatialScope::Object {
+            object_id: query.scope_id.clone().expect("validated object scope"),
+        },
         "mesh_part" => ResolvedSpatialScope::MeshPart {
             scope_id: query.scope_id.clone().expect("validated mesh-part scope"),
         },
@@ -914,6 +934,7 @@ async fn build_planar_field_from_source(
         .section
         .map(|section| section.with_fem_section_extent(result.section_extent));
     Ok(BuiltPlanarField {
+        observation_frame,
         result,
         target,
         request,
@@ -1343,6 +1364,13 @@ fn validate_scope(
                 ));
             }
         }
+        "object" => {
+            let scope_id = query.scope_id.as_deref().filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| ApiError::bad_request("invalid_planar_scope: object requires scope_id"))?;
+            if !snapshot.scene_document.as_ref().is_some_and(|scene| scene.objects.iter().any(|object| object.id == scope_id)) {
+                return Err(ApiError::conflict(format!("stale_object_scope: object '{scope_id}' is absent from the current scene")));
+            }
+        }
         "mesh_part" => {
             let scope_id = query.scope_id.as_deref().ok_or_else(|| {
                 ApiError::bad_request("invalid_planar_scope: mesh_part requires scope_id")
@@ -1487,6 +1515,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
+        observation_frame: built.observation_frame.clone(),
         schema_version: "planar_sample_meta.v7".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
@@ -1579,7 +1608,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
 
 fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
     built.source_entity_kind == "cell"
-        && matches!(built.scope_kind.as_str(), "monitor_target" | "layer")
+        && matches!(built.scope_kind.as_str(), "monitor_target" | "object" | "layer")
         && !matches!(built.operator, PlanarOperatorIR::SurfaceProjection { .. })
 }
 

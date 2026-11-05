@@ -13,9 +13,10 @@ import json
 import re
 import posixpath
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import textwrap
 import time
+import unicodedata
 from typing import Any, Callable, Mapping
 
 from docker_build_control import MIN_FREE_CONTROL_BYTES, bounded_capture, docker_capture
@@ -38,6 +39,7 @@ PRIVATE_GROUP_RESULT_PATH = "cache-retirement/private-group-cache.json"
 PRIVATE_GROUP_REGISTRY_SCHEMA = "fullmag.private-group-cache-registry.v1"
 PRIVATE_GROUP_CLEANUP_SCHEMA = "fullmag.private-group-cache-retirement.v1"
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_WORKTREE_ID = re.compile(r"^[a-z0-9_][a-z0-9._-]{0,127}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -200,7 +202,7 @@ def _container_inventory(docker: Callable[..., Any] | None) -> list[dict[str, An
 def _identity(control: Any, layout: Mapping[str, Any]) -> dict[str, str]:
     identity = _mapping(getattr(control, "identity", None), "BuildControl identity")
     worktree_id = _text(layout.get("worktree_id"), "worktree_id")
-    if _ID.fullmatch(worktree_id) is None:
+    if _WORKTREE_ID.fullmatch(worktree_id) is None:
         raise CacheRetirementError("worktree_id is not a safe registered identifier")
     if identity.get("checkout_kind") != "worktree" or worktree_id == "master":
         raise CacheRetirementError("Cache retirement is allowed only for a registered non-master worktree")
@@ -911,6 +913,55 @@ def _safe_subpath(cache: Any, document: Mapping[str, Any], mount: Mapping[str, A
         raise CacheRetirementError(f"Shared package consumer subpath is unknown: {error}") from error
 
 
+def _recorded_cache_key(cache: Any, source_root: Any, worktree: Any,
+                        toolchain: Any, cargo_profile: Any) -> dict[str, Any]:
+    """Rebuild a recorded cache identity without consulting the source checkout."""
+
+    if (not isinstance(source_root, str) or not source_root
+            or any(unicodedata.category(character) == "Cc" for character in source_root)):
+        raise CacheRetirementError("Recorded source root is missing or contains control characters")
+
+    if source_root.startswith("/"):
+        if (source_root.startswith("//") or source_root.endswith("/")
+                or "//" in source_root or "\\" in source_root):
+            raise CacheRetirementError("Recorded POSIX source root is not canonical")
+        path = PurePosixPath(source_root)
+        if (not path.is_absolute() or str(path) != source_root
+                or any(part in {".", ".."} for part in path.parts[1:])):
+            raise CacheRetirementError("Recorded POSIX source root is not canonical")
+    elif (len(source_root) >= 3 and source_root[0].isalpha()
+          and source_root[1] == ":" and source_root[2] == "\\"):
+        if "/" in source_root or "\\\\" in source_root or source_root.endswith("\\"):
+            raise CacheRetirementError("Recorded Windows source root is not canonical")
+        path = PureWindowsPath(source_root)
+        if (not path.is_absolute() or str(path) != source_root
+                or path.drive != source_root[:2] or not path.root
+                or any(part in {".", ".."} for part in path.parts[1:])):
+            raise CacheRetirementError("Recorded Windows source root is not canonical")
+    else:
+        raise CacheRetirementError("Recorded source root must be a local absolute POSIX or Windows drive path")
+
+    try:
+        worktree = cache._require_worktree_identifier(worktree)
+        toolchain = cache._require_image_id(toolchain, "toolchain_image")
+    except cache.BackendVolumeCacheError as error:
+        raise CacheRetirementError("Recorded cache identity has an invalid worktree or toolchain") from error
+    if not isinstance(cargo_profile, str) or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES:
+        raise CacheRetirementError("Recorded cache identity has an unsupported cargo profile")
+
+    inputs = {
+        "source_root": source_root,
+        "worktree_id": worktree,
+        "toolchain_image_id": toolchain,
+        "cargo_profile": cargo_profile,
+    }
+    return {
+        "schema": cache.KEY_SCHEMA,
+        "key": cache._sha256({"schema": cache.KEY_SCHEMA, **inputs}),
+        "inputs": inputs,
+    }
+
+
 def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Mapping[str, str],
                                       shared_doc: Mapping[str, Any], retiring_units: set[str]) -> None:
     import docker_backend_volume_cache as cache
@@ -941,7 +992,7 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             or not isinstance(unit, str) or _SHA.fullmatch(unit) is None
             or labels.get(cache.LABEL_OWNER) != unit
             or not isinstance(cache_key, str) or _SHA.fullmatch(cache_key) is None
-            or not isinstance(worktree, str) or _ID.fullmatch(worktree) is None
+            or not isinstance(worktree, str) or _WORKTREE_ID.fullmatch(worktree) is None
             or not isinstance(toolchain, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain) is None
             or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES):
         raise CacheRetirementError("Unknown shared package consumer identity; all shared root consumers must be registered")
@@ -975,8 +1026,8 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
         raise CacheRetirementError("Shared package consumer labels/environment do not form one exact registered identity")
     source_root = environment.get("FULLMAG_SOURCE_HOST_ROOT", environment.get("FULLMAG_SOURCE_ROOT"))
     try:
-        key_document = cache.cache_key(source_root, worktree, toolchain, cargo_profile)
-    except (cache.BackendVolumeCacheError, TypeError) as error:
+        key_document = _recorded_cache_key(cache, source_root, worktree, toolchain, cargo_profile)
+    except (cache.BackendVolumeCacheError, TypeError, ValueError) as error:
         raise CacheRetirementError("Shared package consumer source root cannot be qualified") from error
     storage_profile = environment.get("FULLMAG_PRIVATE_GROUP_STORAGE")
     if storage_profile == "group-volume-v1":

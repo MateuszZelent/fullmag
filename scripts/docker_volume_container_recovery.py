@@ -1017,7 +1017,16 @@ def _ledger_snapshot_mount(control, backend, compose):
                 or not group_ledger.is_group_ledger_backend(service.get("environment", {}))
                 or mounted.get("Driver") != "local" or mounted.get("RW") is not True):
             _fail("group ledger mount differs from its retained Compose volume")
-        return f"type=volume,src={mounted['Name']},dst=/host-ledger,readonly,volume-nocopy", None
+        try:
+            expected_profile = group_ledger.retained_profile(compose, backend["Image"])
+            subpath = group_ledger._validate_expected_storage(expected_profile)
+            if subpath:
+                group_ledger._attest_private_subpath(backend, mounted, expected_profile, subpath,
+                    lambda *args: docker_capture(*args, timeout=30).stdout)
+        except (group_ledger.GroupLedgerError, KeyError, TypeError, ValueError) as error:
+            _fail("group ledger snapshot subpath is not authenticated: " + str(error))
+        suffix = ",volume-subpath=" + subpath if subpath else ""
+        return f"type=volume,src={mounted['Name']},dst=/host-ledger,readonly,volume-nocopy" + suffix, None
     if not isinstance(retained, Mapping) or not isinstance(compose, Mapping):
         _fail("host-ledger volume requires its retained Compose descriptor")
     try:

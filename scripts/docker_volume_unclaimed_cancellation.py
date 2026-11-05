@@ -59,12 +59,19 @@ PRESTART_RESUME_ERROR = (
     "Fullmag project containers include an unadmitted container; "
     "only the exact active build-control helper may be retained"
 )
+PINNED_LAYOUT_RESUME_ERROR = "Single-volume group cannot fall back to legacy volume allocation; resume its pinned layout"
 NATIVE_FAILURE_RESUME_ERROR = "Unclaimed cancellation backend has no clean terminal container outcome"
 NATIVE_FAILURE_LOG_MARKER = "runtime generation differs from the execution pin"
 
 
 def _fail(message: str) -> None:
     raise BuildControlError(message)
+
+
+def _pin_cancellation_layout(control, operation, previous):
+    """Inherit the authenticated original layout before any new allocation."""
+    from docker_volume_dev import _pin_private_group_storage
+    return _pin_private_group_storage(control, operation, new_render=False, previous=previous)
 
 
 def _sha256(raw: bytes) -> str:
@@ -1160,7 +1167,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or (control.namespace and failed.get("control_namespace") != control.namespace)
             or (control.namespace and failed.get("namespace_registry_sha256")
                 != control.namespace_registry_sha256)
-            or failed.get("error") != PRESTART_RESUME_ERROR
+            or failed.get("error") not in {PRESTART_RESUME_ERROR, PINNED_LAYOUT_RESUME_ERROR}
             or not isinstance(maintenance, Mapping)
             or set(maintenance) != {"request_id", "request_sha256", "request_path"}
             or maintenance.get("request_id") != expected_maintenance_shape["request_id"]
@@ -1197,6 +1204,8 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
     )
     if (stopped_checkpoint is None) != (removed_checkpoint is None):
         _fail("Maintenance stop/removal checkpoints are incomplete")
+    if failed.get("error") == PINNED_LAYOUT_RESUME_ERROR and stopped_checkpoint is None:
+        _fail("Pinned-layout continuation requires durable exact stop/removal checkpoints")
 
     previous_root = "development/attempts/" + args.attempt
     previous_raw = _control_raw(control, previous_root + "/terminal.json")
@@ -1220,6 +1229,9 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or before.get("prior_terminal_sha256") != _sha256(previous_raw)
             or before.get("prior_compose_sha256") != args.config_sha256):
         _fail("Original development terminal or Compose pins changed")
+    if (failed.get("error") == PINNED_LAYOUT_RESUME_ERROR
+            and previous.get("private_group_storage") != "group-volume-v1"):
+        _fail("Pinned-layout continuation requires the original single-volume layout")
     frontend_ports = document.get("services", {}).get("frontend", {}).get("ports")
     if not isinstance(frontend_ports, list) or len(frontend_ports) != 1:
         _fail("Original frontend port is ambiguous")
@@ -1415,6 +1427,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         _fail("--port must be the explicit original frontend port")
 
     with control.operation("development", operation_inputs) as operation:
+        _pin_cancellation_layout(control, operation, previous)
         import docker_group_ledger as group_ledger
         operation["receipt"]["ledger_profile"] = (
             group_ledger.PROFILE
@@ -1835,6 +1848,7 @@ def _resume_native_cancellation_failure(args, selected, layout, identity, helper
         _fail("--port must be the explicit original frontend port")
 
     with control.operation("development", operation_inputs) as operation:
+        _pin_cancellation_layout(control, operation, previous)
         import docker_group_ledger as group_ledger
         operation["receipt"]["ledger_profile"] = (
             group_ledger.PROFILE if group_ledger.is_group_ledger_backend(
@@ -2309,6 +2323,7 @@ def cancel_unclaimed(args) -> dict[str, Any]:
         _fail("--port must be the explicit retained frontend port")
 
     with control.operation("development", operation_inputs) as operation:
+        _pin_cancellation_layout(control, operation, previous)
         import docker_group_ledger as group_ledger
         operation["receipt"]["ledger_profile"] = (
             group_ledger.PROFILE

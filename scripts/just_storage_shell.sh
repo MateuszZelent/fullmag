@@ -399,7 +399,7 @@ case "${recipe}" in
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/docker_volume_checks.py"*)
-    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-field-map|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
+    volume_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)'( --scope '(all|source-capture|frontend-import|frontend-antenna|frontend-field-map|frontend-field-map-source|frontend-airbox|frontend-camera|frontend-visualization|frontend-tools|field-only|frontend-telemetry-source|frontend-performance-source|frontend-performance)')?( --oracle-wheel '([^']+)')?[[:space:]]*$"
     volume_offline_checks_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_checks.py\" --source-root '([^']+)' --offline --modules '(test_[A-Za-z0-9_]+)'[[:space:]]*$"
     if [[ "${recipe}" =~ ${volume_offline_checks_pattern} ]]; then
       volume_checks_args=(--source-root "${BASH_REMATCH[1]}" --offline --modules "${BASH_REMATCH[2]}")

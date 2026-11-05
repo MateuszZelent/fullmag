@@ -19,6 +19,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedSpatialScope {
     MonitorTarget,
+    Object { object_id: String },
     MeshPart { scope_id: String },
     Airbox { scope_id: Option<String> },
     FdmNativeLayer { layer_id: String },
@@ -297,10 +298,10 @@ pub(crate) fn resolve_spatial_target(
             }
             if !matches!(
                 scope,
-                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Region { .. }
+                ResolvedSpatialScope::MonitorTarget | ResolvedSpatialScope::Object { .. } | ResolvedSpatialScope::Region { .. }
             ) {
                 return Err(ApiError::unprocessable(
-                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target or region only",
+                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target, object or region only",
                 ));
             }
             let origin = origin_m.ok_or_else(|| {
@@ -315,6 +316,11 @@ pub(crate) fn resolve_spatial_target(
                 membership_error.as_deref(),
                 target,
             )?;
+            if let ResolvedSpatialScope::Object { object_id } = &scope {
+                let object = select_fdm_target(*cells, membership.as_ref(), membership_error.as_deref(),
+                    &MonitorTargetIR::Object { object_id: object_id.clone() })?;
+                intersect_masks(&mut selected, &object);
+            }
             if let ResolvedSpatialScope::Region {
                 object_id,
                 region_id,
@@ -603,6 +609,14 @@ fn build_fem_target(
     let elements = fem_planar_elements(mesh)?;
     let runtime_scope = match scope {
         ResolvedSpatialScope::MonitorTarget => vec![true; elements.len()],
+        ResolvedSpatialScope::Object { object_id } => {
+            let object = select_fem_monitor_target(mesh, &elements,
+                &MonitorTargetIR::Object { object_id: object_id.clone() });
+            if !object.iter().any(|selected| *selected) {
+                return Err(ApiError::unprocessable(format!("empty_target: FEM object scope not found: {object_id}")));
+            }
+            object
+        }
         ResolvedSpatialScope::MeshPart { scope_id } => {
             select_fem_parts(mesh, elements.len(), |part| part.id == *scope_id)
         }

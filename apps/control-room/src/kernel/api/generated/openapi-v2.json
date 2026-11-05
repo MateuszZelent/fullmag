@@ -27874,6 +27874,17 @@
           "non_injective": {
             "type": "boolean"
           },
+          "observation_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedObservationFrameRef",
+                "description": "Accepted source observation, when the exact selected carrier proves it.\nNull means cross-quantity temporal coherence cannot be established."
+              }
+            ]
+          },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
           },
@@ -29138,6 +29149,25 @@
               }
             },
             "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Canonical scene object identity, intersected with the selected source.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
               "kind"
             ],
             "type": "object"

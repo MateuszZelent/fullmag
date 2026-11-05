@@ -1,7 +1,7 @@
 """Recover a stopped runtime namespace while preserving explicitly cancelled runs.
 
 This command consumes one successful, typed unclaimed-task cancellation. It
-revalidates the original Unknown namespace evidence, proves the original IDs
+revalidates the original Unknown or terminal Failed namespace evidence, proves the original IDs
 are absent, removes only the exact successful maintenance pair, and starts the
 replacement through the selected Compose group's ordinary managed path. It
 does not edit the run catalog or start a script/solver.
@@ -231,6 +231,10 @@ def _retained_run_pins(state: Path, request: Mapping[str, Any], native_result: M
                 or not isinstance(catalog.get("revision"), int) or catalog["revision"] <= 0
                 or not isinstance(catalog.get("tasks"), list)):
             _fail("Retained run intent/catalog identity or revision is invalid")
+        if not catalog["tasks"] or any(not isinstance(task, Mapping)
+                or task.get("lifecycle") not in {"succeeded", "failed", "cancelled"}
+                for task in catalog["tasks"]):
+            _fail("Cancelled recovery cannot start while any retained task is nonterminal")
         if run_id == requested_run:
             requested_catalog = catalog
             if (catalog.get("revision") != expected_revision
@@ -386,8 +390,9 @@ def _validate_operation(control: BuildControl, attempt: str, terminal_raw: bytes
             or request.get("run_id") != native.get("run_id")
             or request.get("task_id") != native.get("task_id")):
         _fail("Cancellation request differs from the typed terminal result")
+    archive_attempt = _cancellation_archive_attempt(control, attempt, terminal)
     preflight, preflight_raw = _read_json(
-        control, f"development/attempts/{attempt}/unclaimed-cancellation-before.json",
+        control, f"development/attempts/{archive_attempt}/unclaimed-cancellation-before.json",
         maximum=256 * 1024,
     )
     if (preflight is None or preflight_raw is None
@@ -455,6 +460,59 @@ def _read_original_attempt(control: BuildControl, selected: Path, preflight: Map
     return terminal, terminal_raw, compose, compose_raw, original_image, pins
 
 
+def _cancellation_archive_attempt(control, attempt, terminal):
+    """Follow only the successful receipt's CAS-pinned pre-start parent."""
+    link = terminal.get("unclaimed_cancellation_resume")
+    if link is None:
+        return attempt
+    if not isinstance(link, Mapping) or set(link) != {"failed_attempt", "failed_terminal_sha256", "preflight_sha256"}:
+        _fail("Cancellation archive resume link is malformed")
+    parent_attempt = _require_attempt(link.get("failed_attempt"), "cancellation archive parent")
+    if parent_attempt == attempt:
+        _fail("Cancellation archive cannot reference itself")
+    root = "development/attempts/" + parent_attempt
+    raw = _read_raw(control, root + "/terminal.json")
+    before_raw = _read_raw(control, root + "/unclaimed-cancellation-before.json", maximum=256 * 1024)
+    if (raw is None or before_raw is None or _sha256(raw) != link.get("failed_terminal_sha256")
+            or _sha256(before_raw) != link.get("preflight_sha256")):
+        _fail("Cancellation archive parent terminal or preflight changed")
+    parent = __import__("docker_volume_unclaimed_cancellation")._json_object(raw, "cancellation archive parent")
+    before = __import__("docker_volume_unclaimed_cancellation")._json_object(before_raw, "cancellation archive preflight")
+    if (parent.get("schema") != "fullmag.docker-build-operation.v1"
+            or parent.get("phase") != "development" or parent.get("state") != "failed-confirmed"
+            or parent.get("attempt") != parent_attempt
+            or parent.get("unclaimed_cancellation_resume") is not None
+            or any(parent.get(key) != terminal.get(key) for key in
+                   ("compose_project", "control_volume", "control_namespace"))
+            or parent.get("compose_project") != control.project
+            or parent.get("control_volume") != control.volume
+            or parent.get("inputs", {}).get("source_root") != terminal.get("inputs", {}).get("source_root")
+            or parent.get("inputs", {}).get("unclaimed_cancellation") != terminal.get("inputs", {}).get("unclaimed_cancellation")
+            or parent.get("unclaimed_cancellation_preflight") != before
+            or terminal.get("unclaimed_cancellation_preflight") != before):
+        _fail("Cancellation archive parent is foreign or differs from the successful resume")
+    return parent_attempt
+
+
+def _validate_failed_cancellation_owner(owner, process, request):
+    """Acknowledge the genuine terminal Failed owner; do not recover or rewrite it."""
+    from docker_volume_stop_failed import _validate_native_failed_owner, _validate_native_ready_owner
+    failed = _validate_native_failed_owner(owner, allowed_child_statuses=frozenset({"exited_success", "exited_failure"}))
+    ready = _validate_native_ready_owner(process.get("service_owner"))
+    expected = dict(ready, state="failed", heartbeat_at=failed["heartbeat_at"], children=failed["children"])
+    if (failed != request.get("expected_owner") or failed != expected
+            or not any(child["status"] == "exited_failure" for child in failed["children"])
+            or process.get("schema") != "fullmag.docker-process-tree.v1"
+            or process.get("state") != "shutdown_unknown"
+            or process.get("api_diagnostic_only") is not True
+            or type(process.get("api_exit_code")) is not int
+            or process.get("runtime_pid") is not None
+            or "terminal_service_owner" in process
+            or process.get("error") != "runtime service owner observation failed during supervision: runtime service owner is not ready"):
+        _fail("Cancelled Failed-owner continuation lacks the exact terminal supervision failure")
+    return failed
+
+
 def _prior_runtime_evidence(control: BuildControl, cancellation_attempt: str,
                             preflight: Mapping[str, Any], preflight_raw: bytes,
                             request: Mapping[str, Any]):
@@ -473,7 +531,16 @@ def _prior_runtime_evidence(control: BuildControl, cancellation_attempt: str,
             _fail("Successful cancellation attempt lacks its original runtime archive: " + name)
         archived[name] = raw
     config, config_raw, config_sha = recovery._runtime_config(control)
-    owner, owner_raw, owner_sha = recovery._runtime_owner(control)
+    # Failed is already a native terminal state. Its cancellation-confirmed
+    # continuation uses ordinary service-ensure, never Unknown-owner recovery.
+    owner_raw = _read_raw(control, RUNTIME_ROOT + "/runtime-services/OWNER.json", maximum=256 * 1024)
+    if owner_raw is None:
+        _fail("runtime-service OWNER.json is missing")
+    owner = cancellation._json_object(owner_raw, "retained runtime owner", maximum=256 * 1024)
+    failed_continuation = isinstance(request.get("expected_owner"), Mapping) and request["expected_owner"].get("state") == "failed"
+    if not failed_continuation:
+        recovery._owner_for_native(owner)
+    owner_sha = _sha256(owner_raw)
     launch, launch_raw, launch_sha = recovery._runtime_launch(control)
     process_raw = _read_raw(control, RUNTIME_ROOT + "/runtime-service/process-tree.json")
     if process_raw is None:
@@ -483,6 +550,8 @@ def _prior_runtime_evidence(control: BuildControl, cancellation_attempt: str,
             or process.get("state") != "shutdown_unknown"):
         _fail("container recovery requires the exact shutdown_unknown process receipt")
     recovery._validate_process_receipt_owner(process, owner)
+    if failed_continuation:
+        _validate_failed_cancellation_owner(owner, process, request)
     process_sha = _sha256(process_raw)
     if (archived[names["config"]] != config_raw
             or archived[names["owner"]] != owner_raw
@@ -494,10 +563,10 @@ def _prior_runtime_evidence(control: BuildControl, cancellation_attempt: str,
             or config_sha != request.get("config_sha256")
             or owner_sha != request.get("owner_sha256")
             or owner != request.get("expected_owner")
-            or owner.get("state") != "unknown"
+            or owner.get("state") != ("failed" if failed_continuation else "unknown")
             or process.get("state") != "shutdown_unknown"
-            or process.get("service_owner") != owner):
-        _fail("Current native owner/config/process evidence differs from the Unknown cancellation pins")
+            or (not failed_continuation and process.get("service_owner") != owner)):
+        _fail("Current native owner/config/process evidence differs from the cancellation request pins")
     if config.get("store_root") != "/state/runs/docker-all/session-store":
         _fail("Runtime configuration does not bind the retained accepted session store")
     return {
@@ -507,6 +576,70 @@ def _prior_runtime_evidence(control: BuildControl, cancellation_attempt: str,
         "process": process, "process_raw": process_raw, "process_sha256": process_sha,
         "preflight_sha256": _sha256(preflight_raw),
     }
+
+
+def _start_cancelled_failed_owner(args, control, operation, *, native, state,
+                                  cancellation_terminal, request, result, run_pins,
+                                  removed_record, operator_probe, prepared, image,
+                                  immutable_pins):
+    """Use existing Failed-owner startup and the explicit config CAS rotation.
+
+    No native recovery receipt is emitted: Failed is already terminal and
+    service-ensure revalidates/acquires its native lock in the new backend.
+    """
+    import copy
+    import docker_volume_dev as volume_dev
+    import docker_volume_unclaimed_cancellation as cancellation
+
+    _validate_failed_cancellation_owner(native["owner"], native["process"], request)
+    for relative, expected in immutable_pins.items():
+        if _read_raw(control, relative) != expected:
+            _fail("Failed-owner continuation immutable cancellation evidence changed")
+    if (cancellation_terminal.get("private_group_storage") != "group-volume-v1"
+            or operation["receipt"].get("private_group_storage") != "group-volume-v1"
+            or operation["receipt"]["inputs"].get("previous_config_sha256") != native["config_sha256"]
+            or removed_record.get("state") != "exact-maintenance-pair-removed"):
+        _fail("Failed-owner continuation requires its exact removed namespace and private layout")
+    for relative, expected in (
+            (RUNTIME_ROOT + "/runtime-service/docker-all.json", native["config_raw"]),
+            (RUNTIME_ROOT + "/runtime-services/OWNER.json", native["owner_raw"]),
+            (RUNTIME_ROOT + "/runtime-service/process-tree.json", native["process_raw"]),
+            (RUNTIME_ROOT + "/runtime-services/LAUNCH.json", native["launch_raw"])):
+        if _read_raw(control, relative) != expected:
+            _fail("Failed-owner continuation native evidence changed after namespace removal")
+    request_raw = _read_raw(control, cancellation.REQUEST_ROOT + "/" + request["request_id"] + ".json")
+    if request_raw is None or _sha256(request_raw) != result["request_sha256"]:
+        _fail("Failed-owner continuation cancellation request changed")
+    if _retained_run_pins(state, request, result["native_result"]) != run_pins:
+        _fail("Failed-owner continuation retained terminal catalogs changed")
+    _assert_consumers(control, {cancellation._operation_helper_id(control, operation)})
+    proof = {
+        "schema": "fullmag.docker-cancelled-failed-owner-continuation.v1",
+        "mode": "ordinary-service-ensure", "owner_state_before": "failed",
+        "owner_sha256": native["owner_sha256"], "config_sha256": native["config_sha256"],
+        "process_sha256": native["process_sha256"], "launch_sha256": native["launch_sha256"],
+        "cancellation_request_sha256": result["request_sha256"],
+        "cancellation_receipt_sha256": result["maintenance_receipt_sha256"],
+        "cancellation_admission_sha256": result["admission_sha256"],
+        "removed_namespace_sha256": _sha256(canonical(removed_record) + b"\n"),
+        "retained_terminal_runs": run_pins, "solve_replayed": False,
+    }
+    control.write(operation["root"] + "/cancelled-failed-owner-continuation.json", proof)
+    operation["receipt"]["cancelled_failed_owner_continuation"] = proof
+    control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    host = volume_dev._session_host()
+    start_args = copy.copy(args)
+    start_args.script = None
+    start_args.fresh_state = False
+    volume_dev.start(start_args, reuse_state={
+        "state": state, "host_certificate": volume_dev._certificate_path(state),
+        "owner_marker": state / host.OWNER_NAME, "receipt": {"image_id": image},
+        "operator_probe_environment_record": operator_probe,
+    }, control=control, operation=operation, prepared=prepared,
+       previous_config_sha256=native["config_sha256"])
+    if operation["receipt"].get("state") != "succeeded":
+        _fail("Failed-owner continuation did not produce a successful managed API receipt")
+    return dict(operation["receipt"])
 
 
 def _current_pair(control: BuildControl, identity: Mapping[str, Any], terminal: Mapping[str, Any],
@@ -629,15 +762,54 @@ def _json_bytes(raw: bytes, label: str, maximum: int) -> dict[str, Any]:
     return cancellation._json_object(raw, label, maximum=maximum)
 
 
+def _compose_resource_budget(service):
+    memory, cpus = service.get("mem_limit"), service.get("cpus")
+    if type(memory) is not int or memory <= 0 or type(cpus) is not int or cpus <= 0:
+        _fail("Retained Compose limits must be explicit normalized positive integers")
+    swap = service.get("memswap_limit", 2 * memory)
+    if type(swap) is not int or (swap != -1 and swap < memory):
+        _fail("Retained Compose swap limit is invalid")
+    return {"memory_bytes": memory, "cpus": cpus, "memory_swap_bytes": swap}
+
+
+def _validate_rendered_budget(control, selected, cancellation_compose):
+    """Run the same budget renderer as start before removing either service."""
+    from docker_dev_defaults import configured_group_budget
+    from docker_volume_resources import apply_development_budget
+    configured = docker_capture("compose", "--project-name", control.project,
+        "-f", str(selected / "compose.dev.yaml"), "config", "--no-interpolate", "--format", "json", timeout=90)
+    rendered = _json_bytes(configured.stdout, "current Compose budget template", 1024 * 1024)
+    apply_development_budget(control, rendered, configured_group_budget(selected), source_root=str(selected))
+    result = {}
+    for service in ("backend", "frontend"):
+        result[service] = _compose_resource_budget(rendered["services"][service])
+        if result[service] != _compose_resource_budget(cancellation_compose["services"][service]):
+            _fail("Current resolver/Compose budget differs from the retained " + service + " limits")
+    return result
+
+
 def _saved_resource_budget(control: BuildControl,
-                           cancellation_compose: Mapping[str, Any]) -> dict[str, Any]:
+                           cancellation_compose: Mapping[str, Any], *,
+                           cancellation_terminal=None) -> dict[str, Any]:
     """Bind the saved increase to its own immutable parent attempt and rendered profile."""
     import copy
     import docker_volume_resources as resources
 
-    raw = _read_raw(control, "backend/resource-budget.json", maximum=64 * 1024)
+    raw = _read_raw(control, "backend/resource-budget.json", optional=True, maximum=64 * 1024)
     if raw is None:
-        _fail("Retained backend has no explicit saved resource budget")
+        if (not isinstance(cancellation_terminal, Mapping)
+                or cancellation_terminal.get("state") != "succeeded"
+                or cancellation_terminal.get("config_sha256") != _sha256(canonical(cancellation_compose))):
+            _fail("Retained default budget requires its exact successful terminal/Compose")
+        attempt = _require_attempt(cancellation_terminal.get("attempt"), "budget cancellation attempt")
+        terminal_raw = _read_raw(control, f"development/attempts/{attempt}/terminal.json")
+        if terminal_raw is None or _json_bytes(terminal_raw, "budget terminal", MAX_CONTROL_BYTES) != cancellation_terminal:
+            _fail("Default budget cancellation terminal changed")
+        budget = _compose_resource_budget(cancellation_compose["services"]["backend"])
+        return {"source": "retained-compose", "profile_sha256": _sha256(canonical(budget)),
+                "receipt_sha256": _sha256(terminal_raw),
+                "parent_terminal_sha256": _sha256(terminal_raw),
+                "parent_compose_sha256": _sha256(canonical(cancellation_compose)), "budget": budget}
     profile = _json_bytes(raw, "saved backend resource budget", 64 * 1024)
     relative = profile.get("receipt_path")
     if (profile.get("schema") != resources.SCHEMA
@@ -820,7 +992,8 @@ def recover_cancelled(args) -> dict[str, Any]:
 
     # The cancellation path archived only the three original runtime files;
     # LAUNCH remains a separate live pin and is included in the new manifest.
-    native = _prior_runtime_evidence(control, attempt, preflight, preflight_raw, request)
+    archive_attempt = _cancellation_archive_attempt(control, attempt, cancellation_terminal)
+    native = _prior_runtime_evidence(control, archive_attempt, preflight, preflight_raw, request)
     state, certificate = _read_retained_certificate(layout, cancellation_terminal, cancellation_compose)
     if state != storage.validate_path(Path(previous["state_root"]), Path(layout["runtime_root"]), "original runtime state"):
         _fail("Cancellation changed the retained storage root")
@@ -870,8 +1043,9 @@ def recover_cancelled(args) -> dict[str, Any]:
         native["config"], device_access=old_access
     )
 
-    budget = _saved_resource_budget(control, cancellation_compose)
+    budget = _saved_resource_budget(control, cancellation_compose, cancellation_terminal=cancellation_terminal)
     _validate_live_budget(cancellation_pair["backend"], budget["budget"])
+    rendered_budget = _validate_rendered_budget(control, selected, cancellation_compose)
     operator_probe = volume_dev._operator_probe_record_from_retained(
         cancellation_inputs, cancellation_compose
     )
@@ -919,6 +1093,11 @@ def recover_cancelled(args) -> dict[str, Any]:
             "resource_budget_receipt_sha256": budget["receipt_sha256"],
         },
     }
+    failed_owner_continuation = native["owner"]["state"] == "failed"
+    if failed_owner_continuation:
+        # This is the existing direct-recreate CAS input, not a native
+        # container-recovery authorization or a change to the owner state.
+        operation_inputs["previous_config_sha256"] = native["config_sha256"]
     args.profile = "dev"
     args.image = None
     args.toolchain_image = None
@@ -937,6 +1116,9 @@ def recover_cancelled(args) -> dict[str, Any]:
     )
 
     with control.operation("development", operation_inputs) as operation:
+        volume_dev._pin_private_group_storage(
+            control, operation, new_render=False, previous=cancellation_terminal
+        )
         operation["receipt"]["ledger_profile"] = group_ledger.PROFILE
         helper_id = cancellation._operation_helper_id(control, operation)
         current_ids_set = set(current_ids.values())
@@ -961,7 +1143,10 @@ def recover_cancelled(args) -> dict[str, Any]:
             maximum=256 * 1024,
         )
         current_cancellation_compose_raw = _read_raw(control, cancel_root + "/compose.json")
-        current_preflight_raw = _read_raw(control, cancel_root + "/unclaimed-cancellation-before.json",
+        current_archive_attempt = _cancellation_archive_attempt(control, attempt, cancellation_terminal)
+        if current_archive_attempt != archive_attempt:
+            _fail("Cancellation archive parent changed under the lease")
+        current_preflight_raw = _read_raw(control, f"development/attempts/{archive_attempt}/unclaimed-cancellation-before.json",
                                           maximum=256 * 1024)
         if (current_terminal_raw != cancellation_terminal_raw
                 or current_original_raw != previous_raw
@@ -976,7 +1161,9 @@ def recover_cancelled(args) -> dict[str, Any]:
                 or current_cancellation_compose_raw != cancellation_compose_raw
                 or current_preflight_raw != preflight_raw):
             _fail("Cancellation terminal, original source, native pins, or request changed under the lease")
-        leased_budget = _saved_resource_budget(control, cancellation_compose)
+        leased_budget = _saved_resource_budget(control, cancellation_compose, cancellation_terminal=cancellation_terminal)
+        if _validate_rendered_budget(control, selected, cancellation_compose) != rendered_budget:
+            _fail("Current resolver budget changed before namespace removal")
         if (leased_budget["profile_sha256"] != budget["profile_sha256"]
                 or leased_budget["receipt_sha256"] != budget["receipt_sha256"]
                 or leased_budget["parent_terminal_sha256"] != budget["parent_terminal_sha256"]
@@ -1121,6 +1308,32 @@ def recover_cancelled(args) -> dict[str, Any]:
         control.write_bytes(operation["root"] + "/cancelled-recovery-removed.json", removed_raw)
         operation["receipt"]["cancelled_namespace_recovery_removed"] = removed_record
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
+
+        if failed_owner_continuation:
+            if _validate_rendered_budget(control, selected, cancellation_compose) != rendered_budget:
+                _fail("Current resolver budget changed before Failed-owner startup")
+            if _cancellation_archive_attempt(control, attempt, cancellation_terminal) != archive_attempt:
+                _fail("Failed-owner continuation archive link changed after namespace removal")
+            completed = _start_cancelled_failed_owner(args, control, operation,
+                native=native, state=state, cancellation_terminal=cancellation_terminal,
+                request=request, result=result, run_pins=run_pins,
+                removed_record=removed_record, operator_probe=operator_probe,
+                prepared=prepared, image=cancellation_image, immutable_pins={
+                    cancel_root + "/terminal.json": cancellation_terminal_raw,
+                    cancel_root + "/compose.json": cancellation_compose_raw,
+                    result["maintenance_receipt_path"]: cancellation_receipt_raw,
+                    "backend/runtime-service/unclaimed-cancellation/admissions/" + attempt + ".json": cancellation_admission_raw,
+                    f"development/attempts/{archive_attempt}/unclaimed-cancellation-before.json": preflight_raw,
+                    f"development/attempts/{previous['attempt']}/terminal.json": previous_raw,
+                    f"development/attempts/{previous['attempt']}/compose.json": previous_compose_raw,
+                })
+            print(json.dumps({"schema": OPERATION_SCHEMA, "state": "succeeded",
+                "mode": "cancelled-failed-owner-continuation", "request_id": request_id,
+                "cancellation_attempt": attempt, "recovery_attempt": completed.get("attempt"),
+                "backend_container": completed.get("backend_container"),
+                "frontend_container": completed.get("frontend_container"),
+                "url": completed.get("url")}, ensure_ascii=False, sort_keys=True))
+            return completed
 
         operator_document = {
             "schema": OPERATOR_SCHEMA,

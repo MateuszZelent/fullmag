@@ -249,6 +249,28 @@ Nie zastępuj tego procedurą `down --volumes`, przejęciem obcej grupy ani rese
 ownera. Niepotwierdzone zatrzymanie wymaga kanonicznego recovery; nie jest zgodą
 na ponowne uruchomienie aktywnej symulacji. Zachowaj logi i receipty błędu.
 
+### Kontynuacja po potwierdzonym anulowaniu zadania i terminalnym ownerze Failed
+
+`recover-cancelled-volume` rozróżnia recovery ownera `Unknown` od kontynuacji
+autentycznego, terminalnego `Failed`. Ten drugi wariant wymaga poprawnego
+receiptu natywnego anulowania wskazanego zadania, zgodnych hashy requestu,
+ownera, konfiguracji, process receipt i katalogów oraz braku nieterminalnych
+zadań i aktywnych rezerwacji. Pod lease grupy ponownie sprawdza oba kontenery,
+źródła, storage i ich piny, a następnie usuwa wyłącznie wskazaną parę maintenance.
+Layout `group-volume-v1`, dane użytkownika i wyniki pozostają zachowane.
+
+Kontynuacja `Failed` korzysta z istniejącego jawnego pinu
+`FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256` oraz zwykłego `service-ensure`.
+Rotacja konfiguracji sprawdza poprzednie bajty i profil operatora; zmienia
+plik konfiguracji i zachowuje jego poprzednią wersję, bez edycji katalogów
+runów lub wyników. Native sprawdza terminalnego ownera i przejmuje jego lock
+przez normalny startup. Nie przepisujemy `Failed` na `Unknown`, nie tworzymy
+fikcyjnego receiptu native recovery i nie odtwarzamy anulowanego zadania.
+Start nie otrzymuje skryptu ani parametrów cancellation maintenance.
+Receipt `cancelled_failed_owner_continuation` zapisuje tryb i piny tej operacji.
+Nowy backend musi przejść zwykłą bramkę cgroup READY oraz admission API;
+testy źródeł nie potwierdzają wykonania tej ścieżki w runtime.
+
 ### Odzyskiwanie po anulowaniu zaakceptowanego FDM GPU po przygotowaniu in-process
 
 Jeżeli zaakceptowany run FDM GPU strict double otrzymał kompletny receipt geometrii,

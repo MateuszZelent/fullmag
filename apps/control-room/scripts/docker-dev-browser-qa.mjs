@@ -475,10 +475,11 @@ const waitForPlanarAirboxMeta = async (firstIndex) => {
 };
 
 const assertPlanarFieldMapCanvas = async (page) => {
-  const canvas = page.locator(".fm-field-map__canvas").first();
+  const canvas = page.locator(".fm-field-map__canvas[aria-label='Planar scalar field']:visible").first();
   await canvas.waitFor({ state: "visible", timeout });
   await page.waitForFunction(() => {
-    const node = document.querySelector(".fm-field-map__canvas");
+    const node = [...document.querySelectorAll(".fm-field-map__canvas[aria-label='Planar scalar field']")]
+      .find((candidate) => getComputedStyle(candidate).visibility !== "hidden");
     if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return false;
     const rect = node.getBoundingClientRect();
     const style = getComputedStyle(node);
@@ -496,7 +497,7 @@ const assertPlanarFieldMapCanvas = async (page) => {
 };
 
 const capturePlanarFieldMapScreenshot = async (page) => {
-  const png = await page.locator(".fm-field-map__canvas").first().screenshot({ type: "png", timeout });
+  const png = await page.locator(".fm-field-map__canvas-stack:visible").first().screenshot({ type: "png", timeout });
   if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
     throw new Error("Planar Airbox screenshot was not a PNG");
   }
@@ -632,6 +633,29 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       throw new Error("Planar Airbox raster evidence is not bound to the current metadata/layout identities");
     }
     const canvas = await assertPlanarFieldMapCanvas(page);
+    const requestedLayers = (planar.field_overlays ?? [])
+      .filter((layer) => layer.raster_visible || layer.vectors_visible)
+      .map((layer) => ({ id: layer.id, quantity_id: layer.quantity_id }));
+    let composition = null;
+    if (requestedLayers.length) {
+      const handle = await page.waitForFunction((expected) => {
+        const buffers = document.querySelector("[data-planar-composition-state]");
+        if (!buffers || !["verified", "unverified"].includes(buffers.getAttribute("data-planar-composition-state"))) return null;
+        const slot = buffers.querySelector('[data-planar-composition-slot][aria-hidden="false"]');
+        if (!slot) return null;
+        const layers = expected.map((profile) => {
+          const node = [...slot.querySelectorAll("canvas[data-planar-overlay-layer='raster']")]
+            .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === profile.id);
+          if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0 ||
+              node.getAttribute("data-planar-overlay-quantity") !== profile.quantity_id ||
+              node.getAttribute("data-planar-overlay-rendered-current") !== "true") return null;
+          const evidence = JSON.parse(node.getAttribute("data-planar-overlay-rendered-evidence") ?? "null");
+          return evidence ? { ...profile, width: node.width, height: node.height, evidence } : null;
+        });
+        return layers.every(Boolean) ? { state: buffers.getAttribute("data-planar-composition-state"), layers } : null;
+      }, requestedLayers, { timeout });
+      composition = await handle.jsonValue();
+    }
     const screenshot = await capturePlanarFieldMapScreenshot(page);
     observation = {
       schema: "fullmag.docker-dev-planar-airbox-browser-proof.v1",
@@ -670,6 +694,7 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       expected_frame: expectedFrame,
       matched_frame: matchedFrame,
       canvas,
+      composition,
       screenshot,
       display_state_patch_count: displayPatchRequestCount - patchStart,
       visualization_client_ack_request_count: visualizationClientAckRequestCount,

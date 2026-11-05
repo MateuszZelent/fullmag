@@ -193,6 +193,7 @@ pub async fn replace_visualization_state(
     validate_planar_target_override_identities(&state, &replacement.planar.target_overrides)
         .await?;
     validate_planar_source_selection(&state, &replacement.planar.source).await?;
+    validate_planar_object_scope_identities(&state, Some(&replacement.planar.view_scope), Some(&replacement.planar.field_overlays)).await?;
     {
         let live_snapshot = state.current_live_state.read().await;
         let targets = build_visualization_target_registry(
@@ -298,6 +299,7 @@ pub async fn patch_visualization_state(
     crate::validate_current_live_request_context(&state, &request_context).await?;
     validate_visualization_state_patch(&update)?;
     if let Some(planar) = &update.planar {
+        validate_planar_object_scope_identities(&state, planar.view_scope.as_ref(), planar.field_overlays.as_deref()).await?;
         if let Some(target_overrides) = &planar.target_overrides {
             validate_planar_target_override_identities(&state, target_overrides).await?;
         }
@@ -664,7 +666,8 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         }
     }
     if let Some(
-        crate::schemas::visualization_state::PlanarViewScopeState::MeshPart { scope_id }
+        crate::schemas::visualization_state::PlanarViewScopeState::Object { scope_id }
+        | crate::schemas::visualization_state::PlanarViewScopeState::MeshPart { scope_id }
         | crate::schemas::visualization_state::PlanarViewScopeState::Layer { scope_id },
     ) = &patch.view_scope
     {
@@ -956,6 +959,31 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         multislice: Some(state.multislice.clone()),
         ..PlanarVisualizationPatch::default()
     })
+}
+
+async fn validate_planar_object_scope_identities(
+    state: &Arc<AppState>,
+    view_scope: Option<&crate::schemas::visualization_state::PlanarViewScopeState>,
+    overlays: Option<&[crate::schemas::visualization_state::PlanarFieldOverlayState]>,
+) -> Result<(), ApiError> {
+    use crate::schemas::visualization_state::PlanarViewScopeState;
+    let object_ids = view_scope.into_iter()
+        .chain(overlays.unwrap_or_default().iter().map(|overlay| &overlay.view_scope))
+        .filter_map(|scope| match scope { PlanarViewScopeState::Object { scope_id } => Some(scope_id), _ => None })
+        .collect::<Vec<_>>();
+    if object_ids.is_empty() { return Ok(()); }
+    let targets = {
+        let selection = state.current_display_selection.read().await;
+        let presentation = state.current_display_presentation.read().await;
+        let live_snapshot = state.current_live_state.read().await;
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref()).targets
+    };
+    for object_id in object_ids {
+        if !targets.objects.iter().any(|target| target.scope_id == *object_id) {
+            return Err(ApiError::bad_request(format!("unknown_planar_object_scope: '{object_id}' is absent from the current target registry")));
+        }
+    }
+    Ok(())
 }
 
 async fn validate_planar_target_override_identities(

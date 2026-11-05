@@ -55538,3 +55538,6 @@ async fn manual_domain_outside_blocks_readiness_and_mesh_command_before_queueing
     assert!(String::from_utf8_lossy(&body_bytes(command).await).contains("outside"));
     assert!(state.current_control_queue.lock().await.is_empty());
 }
+
+#[path = "tests_planar_composition.rs"]
+mod planar_composition_tests;

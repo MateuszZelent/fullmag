@@ -1307,12 +1307,15 @@ def run_windows_workspace_build(
     )
 
 
-def register(layout, task_id, owner, purpose, state="active", *, retirement_resume=None):
+def register(layout, task_id, owner, purpose, state="active", *, retirement_resume=None,
+             retirement_helper_image=None):
     if not task_id.strip() or not owner.strip() or not purpose.strip():
         raise StorageError("Task id, owner and purpose must be nonempty")
     if retirement_resume is not None and (state != "completed"
             or re.fullmatch(r"[0-9a-f]{32}@[0-9a-f]{64}", retirement_resume) is None):
         raise StorageError("Retirement resume requires completed state and an exact attempt@receipt_sha256")
+    if retirement_helper_image is not None and state != "completed":
+        raise StorageError("A retirement helper image is only valid for completed state")
     initialize(layout)
     path = validate_path(Path(layout["storage_root"]) / "index" / f"{layout['worktree_id']}.json", layout["storage_root"], "worktree registry")
     with build_lock(layout):
@@ -1325,7 +1328,10 @@ def register(layout, task_id, owner, purpose, state="active", *, retirement_resu
                 raise StorageError("Completion requires the exact registered task and owner")
             from docker_worktree_finish import finish as finish_docker_worktree
             try:
-                cleanup = finish_docker_worktree(layout, task_id, owner, resume=retirement_resume)
+                options = {"resume": retirement_resume}
+                if retirement_helper_image is not None:
+                    options["helper_image"] = retirement_helper_image
+                cleanup = finish_docker_worktree(layout, task_id, owner, **options)
             except RuntimeError as error:
                 raise StorageError("Docker cache retirement blocked completion: " + str(error)) from error
         record = {"schema": SCHEMA, "worktree_id": layout["worktree_id"], "repo_root": layout["repo_root"],
@@ -1394,6 +1400,8 @@ def main(argv=None):
     parser.add_argument("--owner")
     parser.add_argument("--purpose")
     parser.add_argument("--retirement-resume")
+    parser.add_argument("--retirement-helper-image",
+                        help="installed immutable sha256 image ID for source-only worktree retirement (no pull/build)")
     parser.add_argument("--state", choices=("review", "blocked", "wip", "completed"), default="review")
     args_list = list(sys.argv[1:] if argv is None else argv)
     command = []
@@ -1404,6 +1412,8 @@ def main(argv=None):
     try:
         if args.retirement_resume is not None and args.action != "finish":
             raise StorageError("--retirement-resume is only valid for finish")
+        if args.retirement_helper_image is not None and (args.action != "finish" or args.state != "completed"):
+            raise StorageError("--retirement-helper-image is only valid for finish --state completed")
         if args.workspace_request_id is not None:
             validate_workspace_request_id(args.workspace_request_id)
             if args.action != "run-windows-workspace-build":
@@ -1475,7 +1485,8 @@ def main(argv=None):
                 raise StorageError("register/finish requires --task-id, --owner and --purpose (reason/next step)")
             layout = register(layout, args.task_id, args.owner, args.purpose,
                               "active" if args.action == "register" else args.state,
-                              retirement_resume=args.retirement_resume)
+                              retirement_resume=args.retirement_resume,
+                              retirement_helper_image=args.retirement_helper_image)
         elif args.action == "inventory":
             layout = inventory(layout)
         elif args.create:

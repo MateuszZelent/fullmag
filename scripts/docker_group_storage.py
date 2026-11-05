@@ -33,6 +33,7 @@ DEFAULT_COMPOSE_NAMES = {
 }
 _PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*\Z")
+_WORKTREE_ID_RE = re.compile(r"[a-z0-9_][a-z0-9._-]*\Z")
 _NAMESPACE_RE = re.compile(r"namespaces/[0-9a-f]{32}\Z")
 _ATTEMPT_RE = re.compile(r"[0-9a-f]{32}\Z")
 _TARGET_PART_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
@@ -197,7 +198,7 @@ def owner_manifest(control, source_root: str | os.PathLike[str]) -> dict[str, ob
         "control_volume": volume,
         "control_namespace": namespace,
         "source_project_id": _identity_text(identity, "project_id", _ID_RE),
-        "source_worktree_id": _identity_text(identity, "worktree_id", _ID_RE),
+        "source_worktree_id": _identity_text(identity, "worktree_id", _WORKTREE_ID_RE),
         "source_root": canonical_source,
         "layout": {
             "version": 1,
