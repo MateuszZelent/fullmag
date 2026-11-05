@@ -456,6 +456,20 @@ na hoście wykonującym cleanup. Niezgodny hash lub mount, nieznany konsument
 oraz konsument usuwanego worktree/namespace nadal blokują retencję; pozostałe
 grupy i ich pakiety nie podlegają tej operacji.
 
+Ścieżka `worktree-finish`, jej tożsamość Compose i backendowy owner cache
+zachowują identyfikator nadany przez resolver, również z początkowym `_`.
+Nie generują zastępczego ID ani nowych hashy namespace.
+Rozszerzenie dotyczy wyłącznie worktree ID; identyfikatory projektu, Compose,
+task i unit zachowują dotychczasowe ograniczenia.
+
+Preflight danych naukowych obejmuje zarówno pliki wersjonowane, jak i ignored
+oraz untracked. Sam czysty `git status` nie dowodzi braku wyników w źródłach.
+Przed usunięciem zachowaj pełne grupy Zarr, łącznie z chunkami i metadanymi,
+oraz sprawdź zgodność zachowanej kopii. Wersjonowanie danych nie zastępuje
+zabezpieczenia wyników wymaganego przez plan cleanupu. Nie przechodź przez
+junction/symlink do zewnętrznego storage podczas usuwania źródeł; zachowaj
+tożsamość i poprzedni stan jego celu.
+
 Każde zakończenie worktree, profilu, builda i runu zapisuje stan końcowy,
 również po błędzie, anulowaniu lub przerwaniu. Stan musi wskazywać właściciela,
 źródła, ścieżki, procesy/kontenery, lease, ostatnią aktywność, powód

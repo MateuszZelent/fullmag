@@ -39,6 +39,7 @@ PRIVATE_GROUP_RESULT_PATH = "cache-retirement/private-group-cache.json"
 PRIVATE_GROUP_REGISTRY_SCHEMA = "fullmag.private-group-cache-registry.v1"
 PRIVATE_GROUP_CLEANUP_SCHEMA = "fullmag.private-group-cache-retirement.v1"
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_WORKTREE_ID = re.compile(r"^[a-z0-9_][a-z0-9._-]{0,127}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -201,7 +202,7 @@ def _container_inventory(docker: Callable[..., Any] | None) -> list[dict[str, An
 def _identity(control: Any, layout: Mapping[str, Any]) -> dict[str, str]:
     identity = _mapping(getattr(control, "identity", None), "BuildControl identity")
     worktree_id = _text(layout.get("worktree_id"), "worktree_id")
-    if _ID.fullmatch(worktree_id) is None:
+    if _WORKTREE_ID.fullmatch(worktree_id) is None:
         raise CacheRetirementError("worktree_id is not a safe registered identifier")
     if identity.get("checkout_kind") != "worktree" or worktree_id == "master":
         raise CacheRetirementError("Cache retirement is allowed only for a registered non-master worktree")
@@ -941,7 +942,7 @@ def _recorded_cache_key(cache: Any, source_root: Any, worktree: Any,
         raise CacheRetirementError("Recorded source root must be a local absolute POSIX or Windows drive path")
 
     try:
-        worktree = cache._require_identifier(worktree, "worktree_id")
+        worktree = cache._require_worktree_identifier(worktree)
         toolchain = cache._require_image_id(toolchain, "toolchain_image")
     except cache.BackendVolumeCacheError as error:
         raise CacheRetirementError("Recorded cache identity has an invalid worktree or toolchain") from error
@@ -991,7 +992,7 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             or not isinstance(unit, str) or _SHA.fullmatch(unit) is None
             or labels.get(cache.LABEL_OWNER) != unit
             or not isinstance(cache_key, str) or _SHA.fullmatch(cache_key) is None
-            or not isinstance(worktree, str) or _ID.fullmatch(worktree) is None
+            or not isinstance(worktree, str) or _WORKTREE_ID.fullmatch(worktree) is None
             or not isinstance(toolchain, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain) is None
             or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES):
         raise CacheRetirementError("Unknown shared package consumer identity; all shared root consumers must be registered")

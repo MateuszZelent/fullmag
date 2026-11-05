@@ -26,6 +26,7 @@
 - [x] Oddzielić weryfikację zapisanej tożsamości konsumenta od sprawdzania żywego katalogu źródłowego; zachować wszystkie kontrole hashy, mountów i namespace.
 - [x] Ustalić i wdrożyć obsługiwaną ścieżkę finishera dla historycznych źródeł bez Compose, z przypiętym helperem i pełnym inventory.
 - [x] Przetestować niezgodną tożsamość, własny namespace, nieznanego konsumenta, owner i drift oraz zachowanie chronionych danych. Blokady lease pozostają w niezmienionym BuildControl.
+- [x] Odtworzyć i naprawić odrzucanie istniejącego worktree ID z początkowym `_`, bez zmiany generatora, hashy i walidatorów project/task/unit.
 - [ ] Review, commity etapów, CI/PR do mastera i integracja zgodnie z governance.
 - [ ] Ponownie kwalifikować każdy cel z audytu, wykonać worktree-finish, niezależny inventory i pojedyncze usunięcia Git bez force. Zapisać receipty i rzeczywiste pomiary.
 
@@ -44,3 +45,25 @@ Etap 1: commit `c19c9baa0ff855407f0b22396af8eecfd74bed49`, recorded consumer ide
 Etap 2: RED dla nowego wejścia finishera; GREEN: 10 testów `test_docker_worktree_finish.py` i 54 testy `test_fullmag_storage.py` (1 platformowy skip). Wybór helper image jest świadomym pinem operatora z istniejącej kwalifikowanej konfiguracji/receiptu, zapisywanym w operacyjnym planie cleanupu.
 
 Audyt wejściowy: `/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/storage-audit-20261105-0742`. Pierwszy failed-confirmed finisher PR373: attempt `08cd49abb8b94934adc3482ba49366b5`, bez usunięcia źródeł. Nie ponawiać operacji o nieznanym wyniku.
+
+Etap 3: worktree-only walidatory dla identyfikatorów z początkowym `_`.
+RED: odrzucenie resolver ID w Compose, planie cache i kwalifikacji retencji.
+GREEN: 27 testów Compose, 24 backend cache, 49 retencji i 17 ownera grupy;
+zachowane negatywne testy path/identity oraz restrykcje projektu i namespace.
+Review wykrył dodatkowy walidator w `docker_group_storage.owner_manifest`;
+uzupełniono go wraz z regresją retencji `group-volume-v1`. Końcowy zestaw
+9 lekkich modułów: 216 testów, 2 platformowe skipy, exit 0.
+
+Operacje cleanupu: usunięte 4 stare źródła WSL i 9 Windows po kwalifikacji,
+z zachowaniem unikalnych ignored artefaktów i zewnętrznych celów odnośników.
+Końcowa kontrola wykryła wersjonowane referencje Zarr pominięte przez wstępny
+skan ignored. Pełne 5 unikalnych drzew, odpowiadających 45 kopiom grup,
+zabezpieczono z zachowanych obiektów Git i niezależnie sprawdzono wszystkie
+101 wpisów. Kolejne operacje wymagają tracked scientific preflight przed
+usunięciem. Dowody i receipty pozostają w
+`/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/storage-cleanup-20261105-finish-repair`.
+
+Integracja pozostaje zablokowana przez bootstrap CI PR397 (head
+`3701e8986ef66c07c3dae226da0e916e69092f13`, base
+`f7fee545085646442efe08f82c133e821c026c18`). Dwa pozostałe workflow przeszły.
+Aktywne cudze zmiany w głównym checkoutcie pozostają zachowane.
