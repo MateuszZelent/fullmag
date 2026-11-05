@@ -654,7 +654,176 @@ test "$(readlink -f -- "$root")" = "$root"
     return result
 
 
-def _already_completed_receipt(control, request, request_raw):
+def _validate_completed_replay_evidence(
+    control, request, request_raw, receipt, receipt_raw, receipt_relative,
+    admission, admission_raw, admission_sha256, *, prior_attempt,
+    prior_terminal_raw, prior_compose_sha256,
+):
+    """Bind a completed native receipt to its original immutable preflight."""
+    request_id = request.get("request_id")
+    request_sha256 = _sha256(request_raw)
+    if (canonical(request) + b"\n" != request_raw
+            or not isinstance(request.get("config_sha256"), str)
+            or SHA256_RE.fullmatch(request["config_sha256"]) is None
+            or not isinstance(request.get("owner_sha256"), str)
+            or SHA256_RE.fullmatch(request["owner_sha256"]) is None
+            or not isinstance(request.get("expected_catalog_sha256"), str)
+            or SHA256_RE.fullmatch(request["expected_catalog_sha256"]) is None
+            or not isinstance(prior_attempt, str)
+            or ATTEMPT_RE.fullmatch(prior_attempt) is None
+            or not isinstance(prior_terminal_raw, bytes)
+            or not isinstance(prior_compose_sha256, str)
+            or SHA256_RE.fullmatch(prior_compose_sha256) is None
+            or canonical(admission) + b"\n" != admission_raw):
+        _fail("Completed cancellation replay inputs or admission are not canonical and pinned")
+
+    attempt_root = "development/attempts/" + admission["attempt"]
+    operation_terminal_raw = _control_raw(
+        control, attempt_root + "/terminal.json", maximum=MAX_CONTROL_BYTES
+    )
+    operation_receipt_raw = _control_raw(
+        control, attempt_root + "/receipt.json", maximum=MAX_CONTROL_BYTES
+    )
+    if (operation_terminal_raw is None or operation_terminal_raw != operation_receipt_raw
+            or canonical(_json_object(operation_terminal_raw, "completed cancellation operation"))
+            + b"\n" != operation_terminal_raw):
+        _fail("Completed cancellation attempt terminal is missing, noncanonical, or changed")
+    operation = _json_object(operation_terminal_raw, "completed cancellation operation")
+    before_raw = _control_raw(
+        control, attempt_root + "/unclaimed-cancellation-before.json",
+        optional=True, maximum=256 * 1024,
+    )
+    if before_raw is None:
+        # Older successful maintenance resumes retain before under their pinned
+        # failed attempt. Read that immutable history; never repair old records.
+        resume = operation.get("unclaimed_cancellation_resume")
+        if (not isinstance(resume, Mapping)
+                or set(resume) != {"failed_attempt", "failed_terminal_sha256", "preflight_sha256"}
+                or not isinstance(resume.get("failed_attempt"), str)
+                or ATTEMPT_RE.fullmatch(resume["failed_attempt"]) is None
+                or resume["failed_attempt"] == admission["attempt"]
+                or any(not isinstance(resume.get(key), str)
+                       or SHA256_RE.fullmatch(resume[key]) is None
+                       for key in ("failed_terminal_sha256", "preflight_sha256"))):
+            _fail("Completed cancellation attempt has no retained preflight evidence")
+        failed_root = "development/attempts/" + resume["failed_attempt"]
+        failed_raw = _control_raw(control, failed_root + "/terminal.json", maximum=MAX_CONTROL_BYTES)
+        failed_receipt_raw = _control_raw(control, failed_root + "/receipt.json", maximum=MAX_CONTROL_BYTES)
+        if (failed_raw is None or failed_raw != failed_receipt_raw
+                or _sha256(failed_raw) != resume["failed_terminal_sha256"]):
+            _fail("Completed maintenance resume lost its pinned failed terminal")
+        failed = _json_object(failed_raw, "completed maintenance resume origin")
+        failed_inputs = failed.get("inputs")
+        operation_inputs = operation.get("inputs")
+        if (canonical(failed) + b"\n" != failed_raw
+                or failed.get("schema") != "fullmag.docker-build-operation.v1"
+                or failed.get("phase") != "development"
+                or failed.get("state") != "failed-confirmed"
+                or failed.get("attempt") != resume["failed_attempt"]
+                or failed.get("compose_project") != control.project
+                or failed.get("control_volume") != control.volume
+                or failed.get("helper_container") != "fullmag-control-" + resume["failed_attempt"]
+                or failed.get("error") != PRESTART_RESUME_ERROR
+                or not isinstance(failed_inputs, Mapping)
+                or not isinstance(operation_inputs, Mapping)
+                or failed_inputs.get("unclaimed_cancellation")
+                    != operation_inputs.get("unclaimed_cancellation")
+                or failed.get("unclaimed_cancellation_preflight")
+                    != operation.get("unclaimed_cancellation_preflight")
+                or any(key in failed for key in (
+                    "backend_started_at", "backend_build_receipt_sha256",
+                    "unclaimed_cancellation_admission", "unclaimed_cancellation_result",
+                    "backend_container", "frontend_container",
+                ))):
+            _fail("Completed maintenance resume origin is not its exact pre-start failure")
+        before_raw = _control_raw(
+            control, failed_root + "/unclaimed-cancellation-before.json", maximum=256 * 1024
+        )
+        if before_raw is None or _sha256(before_raw) != resume["preflight_sha256"]:
+            _fail("Completed maintenance resume lost its pinned original preflight")
+    before = _json_object(before_raw, "completed cancellation preflight evidence", maximum=256 * 1024)
+    required_before_keys = {
+        "schema", "request_id", "request_sha256", "prior_attempt",
+        "prior_terminal_sha256", "prior_compose_sha256",
+        "prior_runtime_config_sha256", "prior_owner_sha256",
+        "prior_process_receipt_sha256", "prior_catalog_sha256",
+        "backend", "frontend", "container_pins",
+    }
+    if (set(before) not in (required_before_keys, required_before_keys | {"prepared_unclaimed_quarantine"})
+            or canonical(before) + b"\n" != before_raw
+            or before.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-before.v1"
+            or before.get("request_id") != request_id
+            or before.get("request_sha256") != request_sha256
+            or before.get("prior_attempt") != prior_attempt
+            or before.get("prior_terminal_sha256") != _sha256(prior_terminal_raw)
+            or before.get("prior_compose_sha256") != prior_compose_sha256
+            or before.get("prior_runtime_config_sha256") != request.get("config_sha256")
+            or before.get("prior_owner_sha256") != request.get("owner_sha256")
+            or before.get("prior_catalog_sha256") != request.get("expected_catalog_sha256")
+            or not isinstance(before.get("prior_process_receipt_sha256"), str)
+            or SHA256_RE.fullmatch(before["prior_process_receipt_sha256"]) is None
+            or not isinstance(before.get("backend"), Mapping)
+            or not isinstance(before.get("frontend"), Mapping)
+            or not isinstance(before.get("container_pins"), list)
+            or len(before["container_pins"]) != 2):
+        _fail("Completed cancellation preflight differs from its original request and source pins")
+
+    expected_maintenance = {
+        "request_id": request_id,
+        "request_sha256": request_sha256,
+        "request_path": _request_path(request_id),
+    }
+    expected_terminal_state = "succeeded" if receipt.get("state") == "cancelled" else "failed-confirmed"
+    inputs = operation.get("inputs")
+    if (operation.get("schema") != "fullmag.docker-build-operation.v1"
+            or operation.get("phase") != "development"
+            or operation.get("state") != expected_terminal_state
+            or operation.get("attempt") != admission.get("attempt")
+            or operation.get("compose_project") != control.project
+            or operation.get("control_volume") != control.volume
+            or operation.get("helper_container") != "fullmag-control-" + admission["attempt"]
+            or not isinstance(inputs, Mapping)
+            or inputs.get("unclaimed_cancellation") != expected_maintenance
+            or operation.get("unclaimed_cancellation_preflight") != before
+            or operation.get("unclaimed_cancellation_admission") != admission):
+        _fail("Completed cancellation attempt does not own the pinned preflight and admission")
+
+    local_receipt_raw = _control_raw(
+        control, attempt_root + "/unclaimed-cancellation-receipt.json", maximum=256 * 1024
+    )
+    terminal_result_raw = _control_raw(
+        control, attempt_root + "/unclaimed-cancellation-terminal.json", maximum=256 * 1024
+    )
+    if local_receipt_raw != receipt_raw or terminal_result_raw is None:
+        _fail("Completed cancellation attempt lost its exact typed receipt or terminal")
+    terminal_result = _json_object(terminal_result_raw, "completed typed cancellation terminal", maximum=256 * 1024)
+    expected_result_keys = {
+        "schema", "state", "request_id", "request_sha256", "native_result",
+        "maintenance_receipt_sha256", "maintenance_receipt_path", "backend_container_id",
+        "backend_finished_at", "admission", "admission_sha256",
+    }
+    if (set(terminal_result) != expected_result_keys
+            or canonical(terminal_result) + b"\n" != terminal_result_raw
+            or terminal_result.get("schema") != OPERATION_SCHEMA
+            or terminal_result.get("state") != receipt.get("state")
+            or terminal_result.get("request_id") != request_id
+            or terminal_result.get("request_sha256") != request_sha256
+            or terminal_result.get("native_result") != receipt.get("native_result")
+            or terminal_result.get("maintenance_receipt_sha256") != _sha256(receipt_raw)
+            or terminal_result.get("maintenance_receipt_path") != receipt_relative
+            or terminal_result.get("backend_container_id") != admission.get("backend_container_id")
+            or not isinstance(terminal_result.get("backend_finished_at"), str)
+            or not terminal_result["backend_finished_at"]
+            or terminal_result.get("admission") != admission
+            or terminal_result.get("admission_sha256") != admission_sha256
+            or operation.get("unclaimed_cancellation_result") != terminal_result):
+        _fail("Completed operation terminal does not bind the exact immutable cancellation result")
+
+
+def _already_completed_receipt(
+    control, request, request_raw, *, prior_attempt, prior_terminal_raw,
+    prior_compose_sha256,
+):
     """Return a prior immutable result for a repeated identical request."""
     request_id = request["request_id"]
     request_sha256 = _sha256(request_raw)
@@ -737,6 +906,13 @@ find "$root" -mindepth 1 -maxdepth 1 -type f -name {shlex.quote("*-" + request_i
             or not isinstance(admission.get("backend_build_receipt_sha256"), str)
             or SHA256_RE.fullmatch(admission["backend_build_receipt_sha256"]) is None):
         _fail("Prior cancellation admission is not bound to the immutable request")
+    _validate_completed_replay_evidence(
+        control, request, request_raw, receipt, raw,
+        paths[0].removeprefix("/control/"), admission, admission_raw,
+        admission_sha256, prior_attempt=prior_attempt,
+        prior_terminal_raw=prior_terminal_raw,
+        prior_compose_sha256=prior_compose_sha256,
+    )
     return {
         "schema": OPERATION_SCHEMA,
         "state": receipt["state"],
@@ -1903,19 +2079,34 @@ def cancel_unclaimed(args) -> dict[str, Any]:
     volume = docker_capture("volume", "inspect", control.volume, allow_failure=True, timeout=60)
     if volume.returncode:
         _fail("Selected group has no existing control volume; cancellation cannot adopt a new namespace")
-    control.prepare()
-
+    try:
+        volume_records = json.loads(volume.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Selected control volume inspection is not valid JSON") from error
+    if not isinstance(volume_records, list) or len(volume_records) != 1:
+        _fail("Selected control volume inspection is ambiguous")
+    volume_record = volume_records[0]
+    volume_labels = volume_record.get("Labels") or {} if isinstance(volume_record, Mapping) else None
+    if (not isinstance(volume_record, Mapping)
+            or volume_record.get("Name") != control.volume
+            or volume_record.get("Driver") != "local"
+            or volume_record.get("Options")
+            or not isinstance(volume_labels, Mapping)
+            or any(volume_labels.get(key) != value for key, value in control.shared_labels.items())):
+        _fail("Selected control volume ownership/driver differs; existing data retained")
     native_resume = getattr(args, "resume_native_failure_attempt", None)
     failed_backend_id = getattr(args, "failed_backend_container_id", None)
     if native_resume is not None:
         if getattr(args, "resume_maintenance_attempt", None) is not None:
             _fail("Choose only one maintenance continuation mode")
+        control.prepare()
         return _resume_native_cancellation_failure(
             args, selected, layout, identity, helper_image, control
         )
     if failed_backend_id is not None:
         _fail("--failed-backend-container-id is valid only with --resume-native-failure-attempt")
     if getattr(args, "resume_maintenance_attempt", None) is not None:
+        control.prepare()
         return _resume_cancel_unclaimed(
             args, selected, layout, identity, helper_image, control
         )
@@ -1979,7 +2170,6 @@ def cancel_unclaimed(args) -> dict[str, Any]:
                 or canonical(existing_request) + b"\n" != existing_request_raw
                 or existing_request.get("schema_version") != REQUEST_SCHEMA
                 or existing_request.get("request_id") != request_id
-                or existing_request.get("config_sha256") != args.config_sha256
                 or existing_request.get("run_id") != getattr(args, "run_id", None)
                 or existing_request.get("task_id") != getattr(args, "task_id", None)
                 or existing_request.get("reason") != getattr(args, "reason", None)
@@ -1993,6 +2183,8 @@ def cancel_unclaimed(args) -> dict[str, Any]:
                 or not isinstance(expected_owner, Mapping)
                 or expected_owner.get("schema_version") != "runtime_service_owner.v1"
                 or expected_owner.get("state") not in {"unknown", "failed"}
+                or not isinstance(existing_request.get("config_sha256"), str)
+                or SHA256_RE.fullmatch(existing_request["config_sha256"]) is None
                 or not isinstance(expected_task, Mapping)
                 or expected_task.get("task_id") != existing_request.get("task_id")
                 or expected_task.get("lifecycle") not in {"accepted", "queued"}
@@ -2002,12 +2194,15 @@ def cancel_unclaimed(args) -> dict[str, Any]:
                 ))):
             _fail("Existing request_id is not the exact explicit cancellation request")
         completed = _already_completed_receipt(
-            control, existing_request, existing_request_raw
+            control, existing_request, existing_request_raw,
+            prior_attempt=args.attempt, prior_terminal_raw=previous_raw,
+            prior_compose_sha256=args.config_sha256,
         )
         if completed is None:
             _fail("Cancellation request already exists without a terminal receipt; no automatic retry is allowed")
         print(json.dumps(completed, ensure_ascii=False, sort_keys=True))
         return completed
+    control.prepare()
     state = storage.validate_path(
         Path(previous.get("state_root", "")), layout["runtime_root"],
         "retained Linux/Windows user state",

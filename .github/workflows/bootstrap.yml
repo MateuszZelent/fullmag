@@ -993,6 +993,7 @@ jobs:
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
+          python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
           python -B scripts/test_docker_volume_native_init_successor.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v
