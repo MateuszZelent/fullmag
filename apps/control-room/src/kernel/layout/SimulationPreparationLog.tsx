@@ -5,6 +5,7 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -200,7 +201,10 @@ export function SimulationPreparationLogView({
     [scrollAreaRef],
   );
 
-  useEffect(() => {
+  // A layout effect so leaving the tail disconnects the observer in the same
+  // commit. With a passive effect, the resize caused by the "Return to latest"
+  // button fired the stale observer first and snapped the reader back down.
+  useLayoutEffect(() => {
     const viewport = preparationLogViewport(scrollRootRef.current);
     if (!viewport || !isFollowingTail) return;
     const follow = () => followPreparationLogTail(viewport, true);
