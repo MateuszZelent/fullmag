@@ -182,6 +182,8 @@ struct DeviceMultilayerLayer {
     DeviceVectorField k4;
     uint8_t *active_mask = nullptr;
     bool has_active_mask = false;
+    bool periodic_x = false;
+    bool periodic_y = false;
     DeviceMultilayerPushMap push_map;
 };
 
@@ -844,6 +846,7 @@ struct Context {
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
+    bool multilayer_xy_periodic = false;
     // Lazily allocated once for FP64 multilayer PG-BB scalar reductions.
     bool multilayer_bb_history_valid = false;
     bool multilayer_bb_evaluation_valid = false;

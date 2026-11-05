@@ -6,7 +6,7 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, ConstraintActivationIR,
     DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
-    ExecutionPlanIR, ExecutionPrecision, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
+    ExecutionPlanIR, ExecutionPrecision, FdmDemagPeriodicityIR, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
     FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FdmPrecisionPolicyIR,
     FrozenReferencePolicyIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
@@ -4128,14 +4128,10 @@ pub fn fdm_multilayer_cuda_aligned_embedding_eligible(layers: &[FdmLayerPlanIR])
     })
 }
 
-/// Bounded multilayer PG-BB operator contract, shared by planner and runtime.
-/// The minimizer owns iterations rather than an LLG timestep. Every trial
-/// uses the existing open 3D FP64 coupled operator and native-layer layout.
-pub fn fdm_multilayer_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+/// Shared geometry and operator checks for FP64 multilayer PG-BB.
+fn fdm_multilayer_projected_bb_geometry_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
     let algorithm_ok = plan.relaxation.as_ref()
         .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb);
-    let open = plan.periodicity.as_ref().is_none_or(|policy|
-        policy.axes.iter().all(|axis| matches!(axis, AxisBoundary::Open)));
     let reference = plan.layers.first();
     let identity = !plan.layers.is_empty() && plan.layers.iter().all(|layer|
         layer.transfer_kind == "identity" && layer.native_grid == layer.convolution_grid
@@ -4152,18 +4148,39 @@ pub fn fdm_multilayer_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<S
             layer.native_active_mask.as_ref().is_some_and(|mask| mask.get(index).copied() == Some(false))
                 || *value == layer.material.saturation_magnetisation)));
     if !algorithm_ok || !plan.enable_demag || plan.mode != "three_d"
-        || plan.planner_summary.resolved_mode != "three_d" || !open
+        || plan.planner_summary.resolved_mode != "three_d"
         || plan.precision != fullmag_ir::ExecutionPrecision::Double
         || plan.frozen_spins.is_some() || !geometry || !common || !uniform_ms || !masks_ok
         || !fdm_multilayer_cuda_containment_reason_codes(plan.enable_demag, &plan.mode, &plan.layers).is_empty()
     {
-        Some("fdm_multilayer_projected_gradient_bb_contract: PG-BB requires open three_d FP64 coupled demag, equal native/convolution cell sizes, identity or centered aligned native grids, uniform Ms within each object, and no frozen spins; no device/precision/LLG fallback".into())
+        Some("fdm_multilayer_projected_gradient_bb_contract: PG-BB requires three_d FP64 coupled demag, equal native/convolution cell sizes, identity or centered aligned native grids, uniform Ms within each object, and no frozen spins; no device/precision/LLG fallback".into())
     } else { None }
 }
 
-/// CUDA uses the same explicitly bounded PG-BB geometry as its CPU oracle.
+/// CPU multilayer PG-BB uses the open-boundary pair kernels.
+pub fn fdm_multilayer_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
+    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
+        return Some("CPU multilayer PG-BB requires open boundaries".into());
+    }
+    fdm_multilayer_projected_bb_geometry_error(plan)
+}
+
+fn is_multilayer_xy_periodic(policy: &fullmag_ir::FdmPeriodicityIR) -> bool {
+    policy.axes == [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open]
+        && policy.demag == FdmDemagPeriodicityIR::TruncatedImages
+}
+
+/// CUDA PG-BB also accepts exact integer-cell embeddings in an XY lattice.
 pub fn fdm_multilayer_cuda_projected_bb_error(plan: &FdmMultilayerPlanIR) -> Option<String> {
-    fdm_multilayer_projected_bb_error(plan)
+    if let Some(policy) = plan.periodicity.as_ref().filter(|policy| policy.has_any_periodic()) {
+        if !is_multilayer_xy_periodic(policy)
+            || plan.resolved_periodic_images.is_none()
+            || !fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers)
+        {
+            return Some("CUDA multilayer PG-BB periodicity requires truncated images in XY, open Z and centered aligned grids".into());
+        }
+    }
+    fdm_multilayer_projected_bb_geometry_error(plan)
 }
 
 /// Narrow execution contract for the new exact embedding lane. Identity plans
@@ -4172,13 +4189,15 @@ pub fn fdm_multilayer_cuda_aligned_embedding_error(plan: &FdmMultilayerPlanIR) -
     if plan.relaxation.as_ref().is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb) {
         return fdm_multilayer_cuda_projected_bb_error(plan);
     }
+    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
+        return Some("CUDA multilayer periodic axes require PG-BB".into());
+    }
     if !plan.enable_demag || !plan.layers.iter().any(|l| l.transfer_kind == "push_pull") {
         return None;
     }
     let geometry_ok = fdm_multilayer_cuda_aligned_embedding_eligible(&plan.layers)
         && plan.layers.first().is_some_and(|l| l.convolution_grid == plan.common_cells);
-    let open = plan.periodicity.as_ref().map_or(true, |p| p.axes.iter().all(|axis| matches!(axis, AxisBoundary::Open)));
-    if !geometry_ok || !open || plan.mode != "three_d"
+    if !geometry_ok || plan.mode != "three_d"
         || plan.planner_summary.resolved_mode != "three_d"
         || plan.precision != fullmag_ir::ExecutionPrecision::Double
         || plan.integrator != IntegratorChoice::Heun
@@ -4560,18 +4579,13 @@ pub(crate) fn plan_fdm_multilayer(
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);
         }
-        if pbc.has_any_periodic() {
-            errors.push(
-                "FDM multilayer periodic axes are capability-gated until exchange seams and self/shifted demag kernels are qualified across every layer; use open boundaries or a qualified single-grid plan"
-                    .to_string(),
-            );
-        }
-        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
-            && runtime_requests_cuda(problem)
-            && pbc.has_any_periodic()
+        if pbc.has_any_periodic()
+            && (!runtime_requests_cuda(problem)
+                || problem.backend_policy.execution_precision != ExecutionPrecision::Double
+                || !is_multilayer_xy_periodic(pbc))
         {
             errors.push(
-                "FDM multilayer execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                "FDM multilayer periodic axes require CUDA double PG-BB with XY truncated-image demag and open Z"
                     .to_string(),
             );
         }
@@ -5468,8 +5482,8 @@ pub(crate) fn plan_fdm_multilayer(
         }
     }
 
-    if projected_bb {
-        if let Some(reason) = fdm_multilayer_cuda_projected_bb_error(&plan) {
+    if projected_bb && !runtime_requests_cuda(problem) {
+        if let Some(reason) = fdm_multilayer_projected_bb_error(&plan) {
             return Err(PlanError { reasons: vec![reason] });
         }
     }
