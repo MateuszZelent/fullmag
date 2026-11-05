@@ -547,7 +547,7 @@ export function RegionalFieldDrivePanel({
       <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
         <InspectorMetricStrip
           metrics={[
-            { label: "Drives", tone: "accent", value: String(allDrives.length) },
+            { label: "Drives", tone: "neutral", value: String(allDrives.length) },
             {
               label: "Active",
               tone: activeCount > 0 ? "success" : "neutral",

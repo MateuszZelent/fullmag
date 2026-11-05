@@ -92,6 +92,6 @@ describe("PlanarSectionStrip", () => {
     const html = render(airbox, { kind: "plane_sample" });
 
     expect(html).toContain('max="25"');
-    expect(html).toContain("z: 26.25 nm · layer 12 / 25");
+    expect(html).toContain("z: 26.3 nm · layer 12 / 25");
   });
 });

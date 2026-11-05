@@ -3,7 +3,7 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DomainMetaResource, PlanarFieldMetaResource } from "@/kernel/api/apiTypes";
+import type { DomainMetaResource, PlanarFieldMetaResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
@@ -364,20 +364,45 @@ describe("FieldMapModule planar state ownership", () => {
   });
 
   it("publishes base sample Airbox geometry instead of the magnetic domain grid", async () => {
-    mocks.visualization.data = {
-      planar: {
-        component: "magnitude",
-        layers: { mesh: true, vectors: false },
-        quantity_id: "m",
-        resolution: { height: 128, width: 256 },
-        source: { kind: "default" },
-        default_slice: {
-          operator: { kind: "plane_sample" },
-          plane: "xy",
-          position_fraction: 0.5,
-        },
-        view_scope: { kind: "airbox" },
+    const airboxPlanar = {
+      colormap: "viridis",
+      component: "magnitude",
+      default_slice: {
+        operator: { kind: "plane_sample" },
+        plane: "xy",
+        position_fraction: 0.5,
       },
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: {
+        boundaries: false,
+        bounds: true,
+        contours: false,
+        mesh: true,
+        points: false,
+        probes: false,
+        raster: true,
+        vectors: false,
+      },
+      point_style: { color: "#ffffff", opacity: 1, size: 1 },
+      quality: "interactive",
+      quantity_id: "m",
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      source: { kind: "default" },
+      vector_style: {
+        color_mode: "orientation",
+        length_mode: "uniform",
+        monochrome_color: "#ffffff",
+        opacity: 1,
+        scale: 1,
+        thickness: 1,
+      },
+      view_scope: { kind: "airbox" },
+      viewport_colorbar_visible: true,
+      visible: true,
+      wireframe_style: { color: "#ffffff", opacity: 1 },
+    } satisfies NonNullable<VisualizationStateResource["planar"]>;
+    mocks.visualization.data = {
+      planar: airboxPlanar,
     };
     mocks.visualization.status = "ready";
     mocks.renderReady = true;

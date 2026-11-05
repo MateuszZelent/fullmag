@@ -1029,6 +1029,11 @@ async function verifyReferenceImportResultInspector(browser, workspaceUrl, baseU
 
     const inspector = page.locator(".fm-inspector");
     await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+    const provenanceGroup = inspector.getByRole("button", { name: "Provenance", exact: true });
+    await provenanceGroup.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await provenanceGroup.getAttribute("aria-expanded") !== "true") {
+      await provenanceGroup.click({ timeout: timeoutMs });
+    }
     const ownerText = (await inspector.innerText()).replace(/\s+/g, " ");
     for (const expected of [runId, stageId, "Artifact revision", "17"]) {
       if (!ownerText.includes(expected)) {
