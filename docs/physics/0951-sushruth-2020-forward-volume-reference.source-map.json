@@ -65,6 +65,88 @@
         "sushruth-source-spectrum",
         "sushruth-response-tests"
       ]
+    },
+    {
+      "id": "eq-sushruth-a8-numerator-factor",
+      "symbols": [
+        "a8-C",
+        "a8-f",
+        "a8-gammaf",
+        "be",
+        "alpha",
+        "a8-chi-pair",
+        "a8-response-pair"
+      ],
+      "sources": [
+        "sushruth-a8-factor",
+        "sushruth-a8-tests"
+      ]
+    },
+    {
+      "id": "eq-sushruth-a5-uniform-free-pole",
+      "symbols": [
+        "a8-poles",
+        "a8-gammaf",
+        "be",
+        "alpha"
+      ],
+      "sources": [
+        "sushruth-a5-pole",
+        "sushruth-a8-tests"
+      ]
+    },
+    {
+      "id": "eq-sushruth-k0-runtime-control",
+      "symbols": [
+        "k0-gamma-H",
+        "k0-Hz",
+        "k0-time",
+        "k0-variables",
+        "k0-initial-m",
+        "k0-phi",
+        "k0-m",
+        "alpha"
+      ],
+      "sources": [
+        "sushruth-k0-oracle",
+        "sushruth-k0-example",
+        "sushruth-k0-example-tests"
+      ]
+    },
+    {
+      "id": "eq-sushruth-k0-exact-susceptibility",
+      "symbols": [
+        "rf-det",
+        "rf-chi-pair",
+        "a8-gammaf",
+        "be",
+        "bm",
+        "alpha",
+        "a8-f"
+      ],
+      "sources": [
+        "sushruth-rf-chi",
+        "sushruth-rf-chi-tests"
+      ]
+    },
+    {
+      "id": "eq-sushruth-k0-rf-demodulation",
+      "symbols": [
+        "rf-Hx",
+        "rf-amplitude",
+        "rf-frequencies",
+        "rf-components",
+        "rf-grid",
+        "rf-start",
+        "rf-measured",
+        "rf-Ms",
+        "k0-time"
+      ],
+      "sources": [
+        "sushruth-rf-example",
+        "sushruth-rf-demod",
+        "sushruth-rf-demod-tests"
+      ]
     }
   ],
   "symbols": [
@@ -163,6 +245,156 @@
       "latex": "D",
       "meaning": "normalizator widma",
       "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "bezwymiarowa zmienna całkowania",
+      "si_unit": "1"
+    },
+    {
+      "id": "L",
+      "latex": "L",
+      "meaning": "szerokość każdego paska, parametr width_m",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "a8-C",
+      "latex": "C(f)",
+      "meaning": "Dokładny stosunek liczników A8 i równania1.",
+      "si_unit": "1"
+    },
+    {
+      "id": "a8-f",
+      "latex": "f",
+      "meaning": "Podpisana częstotliwość bodźca.",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "a8-gammaf",
+      "latex": "\\gamma_f",
+      "meaning": "Współczynnik gamma_B/(2pi), domyślnie30GHz/T.",
+      "si_unit": "\\mathrm{Hz\\,T^{-1}}"
+    },
+    {
+      "id": "a8-chi-pair",
+      "latex": "\\chi_{xx}^{A8},\\chi_{xx}^{(1)}",
+      "meaning": "Dwie jawnie odróżnione przybliżone podatności.",
+      "si_unit": "1"
+    },
+    {
+      "id": "a8-response-pair",
+      "latex": "\\widetilde R_{A8},\\widetilde R_{(1)},\\widetilde T_{A8},\\widetilde T_{(1)}",
+      "meaning": "Unormowane odpowiedzi dla obu liczników.",
+      "si_unit": "1"
+    },
+    {
+      "id": "a8-poles",
+      "latex": "f_0,f_p",
+      "meaning": "Częstotliwość bez tłumienia oraz zespolony swobodny biegun przy k=0.",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "k0-gamma-H",
+      "latex": "\\gamma_H",
+      "meaning": "Dodatnia gamma dla H w A/m, równa mu0 razy2pi razy30GHz/T.",
+      "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"
+    },
+    {
+      "id": "k0-Hz",
+      "latex": "H_z",
+      "meaning": "Całe stałe pole efektywne testu,0,25T podzielone przez mu0.",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "k0-time",
+      "latex": "\\tau",
+      "meaning": "Fizyczny czas od początku Run; osobny od grubości t.",
+      "si_unit": "\\mathrm s"
+    },
+    {
+      "id": "k0-variables",
+      "latex": "q,u",
+      "meaning": "Bezwymiarowe zmienne precesji i tłumienia.",
+      "si_unit": "1"
+    },
+    {
+      "id": "k0-initial-m",
+      "latex": "m_{z0},m_{\\perp0}",
+      "meaning": "Początkowa składowa z i dodatnia amplituda poprzeczna znormalizowanego m.",
+      "si_unit": "1"
+    },
+    {
+      "id": "k0-phi",
+      "latex": "\\phi_0",
+      "meaning": "Początkowa faza atan2(my0,mx0), tutaj0.",
+      "si_unit": "\\mathrm{rad}"
+    },
+    {
+      "id": "k0-m",
+      "latex": "\\mathbf m(\\tau)",
+      "meaning": "Znormalizowana magnetyzacja testu.",
+      "si_unit": "1"
+    },
+    {
+      "id": "rf-det",
+      "latex": "\\mathcal D_0",
+      "meaning": "Wyznacznik liniowej macierzy A5 w cyklach/s dla k=0.",
+      "si_unit": "\\mathrm{Hz^2}"
+    },
+    {
+      "id": "rf-chi-pair",
+      "latex": "\\chi_{xx}^{A5},\\chi_{yx}^{A5}",
+      "meaning": "Dokładne liniowe podatności Mx/Hx i My/Hx modelu k=0.",
+      "si_unit": "1"
+    },
+    {
+      "id": "rf-Hx",
+      "latex": "H_x(\\tau)",
+      "meaning": "Zadane sumaryczne poprzeczne pole RF.",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "rf-amplitude",
+      "latex": "h_0",
+      "meaning": "Amplituda peak każdej z trzech składowych,0,1A/m.",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "rf-frequencies",
+      "latex": "j,f_j",
+      "meaning": "Indeks1–3 i częstotliwość składowej6/7,5/9GHz.",
+      "si_unit": "1;\\;\\mathrm{Hz}"
+    },
+    {
+      "id": "rf-components",
+      "latex": "a,m_a(\\tau)",
+      "meaning": "a=x lub y, poprzeczna składowa znormalizowanego m.",
+      "si_unit": "1"
+    },
+    {
+      "id": "rf-grid",
+      "latex": "N,n,\\Delta\\tau",
+      "meaning": "Liczba2000 próbek, indeks0–1999 i okres2ps.",
+      "si_unit": "1;\\;1;\\;\\mathrm s"
+    },
+    {
+      "id": "rf-start",
+      "latex": "\\tau_a",
+      "meaning": "Początek okna odczytu20ns; koniec24ns jest wyłączony z sumy.",
+      "si_unit": "\\mathrm s"
+    },
+    {
+      "id": "rf-measured",
+      "latex": "\\widehat m_a,\\chi_{ax}^{\\mathrm{meas}}",
+      "meaning": "Zmierzony zespolony współczynnik m i odpowiadająca podatność.",
+      "si_unit": "1"
+    },
+    {
+      "id": "rf-Ms",
+      "latex": "M_s",
+      "meaning": "Magnetyzacja nasycenia modelu, b_M/mu0.",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
     }
   ],
   "sources": [
@@ -195,6 +427,105 @@
       "path": "scripts/reference_sushruth_2020_antenna_spectrum.py",
       "symbol": "antenna_spectra",
       "responsibility": "Istniejący wzorzec widma cienkich pasków Eq6–8."
+    },
+    {
+      "id": "sushruth-figure3-renderer",
+      "path": "scripts/plot_sushruth_2020_response_reference.py",
+      "symbol": "plot_figure3_reference",
+      "responsibility": "Prezentacja przypiętych referencyjnych Re(T) w PNG/SVG, z jednostkami, bez interpolacji i dopasowania.",
+      "evidence_status": "rendered_png_visually_checked"
+    },
+    {
+      "id": "sushruth-figure3-raster-anchors",
+      "path": "scripts/plot_sushruth_2020_response_reference.py",
+      "symbol": "measure_figure3_anchors",
+      "responsibility": "Przybliżone położenia ekstremów i znacznika FMR z przypiętego rastra; nierozstrzygnięta różnica względem wzorca, nie kwalifikacja fizyki.",
+      "evidence_status": "real_pdf_image_measured"
+    },
+    {
+      "id": "sushruth-a8-factor",
+      "path": "scripts/reference_sushruth_2020_a8_diagnostic.py",
+      "symbol": "a8_numerator_factor",
+      "responsibility": "Stosunek liczników A8 i równania1, bez nowej kwadratury lub zmiany domyślnego modelu."
+    },
+    {
+      "id": "sushruth-a5-pole",
+      "path": "scripts/reference_sushruth_2020_a8_diagnostic.py",
+      "symbol": "uniform_free_pole_hz",
+      "responsibility": "Dokładny swobodny biegun A5 dla k=0; osobny obserwabl od maksimum transmisji."
+    },
+    {
+      "id": "sushruth-a8-tests",
+      "path": "scripts/test_sushruth_a8_diagnostic.py",
+      "symbol": "class SushruthA8DiagnosticTests",
+      "responsibility": "Bezpośrednie A8, granice i jednostki oraz niezależne podstawienie do wyznacznika A5."
+    },
+    {
+      "id": "sushruth-k0-oracle",
+      "path": "scripts/antenna_macrospin_oracle.py",
+      "symbol": "macrospin_from_field_impulse",
+      "responsibility": "Istniejący niezależny dokładny wzorzec stałego/kolinearnego pola; bez uruchamiania backendu."
+    },
+    {
+      "id": "sushruth-k0-example",
+      "path": "examples/fdm_sushruth_2020_k0_free_precession.py",
+      "symbol": "study",
+      "responsibility": "Jawny publiczny przypadek FDM CPU k=0, bez anteny, wymiany i demag."
+    },
+    {
+      "id": "sushruth-k0-example-tests",
+      "path": "packages/fullmag-py/tests/test_sushruth_k0_precession_example.py",
+      "symbol": "class SushruthK0PrecessionExampleTests",
+      "responsibility": "Publiczny loader, parametry snapshotu Run i semantyczny round-trip pełnego fizycznego IR."
+    },
+    {
+      "id": "sushruth-rf-chi",
+      "path": "scripts/reference_sushruth_2020_a8_diagnostic.py",
+      "symbol": "uniform_susceptibility",
+      "responsibility": "Dokładna liniowa macierz A5 dla k=0, bez zmiany Eq1."
+    },
+    {
+      "id": "sushruth-rf-chi-tests",
+      "path": "scripts/test_sushruth_k0_susceptibility.py",
+      "symbol": "class SushruthK0SusceptibilityTests",
+      "responsibility": "Niezależna macierz2x2, statyka, sprzężenie, pasywność i odmowy."
+    },
+    {
+      "id": "sushruth-rf-example",
+      "path": "examples/fdm_sushruth_2020_k0_rf_response.py",
+      "symbol": "study",
+      "responsibility": "Publiczny kontrolny Run z trzema zadanymi polami RF; bez antenowej bazy."
+    },
+    {
+      "id": "sushruth-rf-example-tests",
+      "path": "packages/fullmag-py/tests/test_sushruth_k0_rf_example.py",
+      "symbol": "class SushruthK0RfExampleTests",
+      "responsibility": "Wymuszenia, gamma, czas i sampler oraz round-trip publicznego skryptu."
+    },
+    {
+      "id": "sushruth-rf-demod",
+      "path": "scripts/verify_sushruth_k0_rf_response.py",
+      "symbol": "verify_rf_response",
+      "responsibility": "Niezależny pomiar sześciu zespolonych podatności z zachowanych próbek, bez uwierzytelnienia runu."
+    },
+    {
+      "id": "sushruth-rf-demod-tests",
+      "path": "scripts/test_sushruth_k0_rf_demodulation.py",
+      "symbol": "class SushruthK0RfDemodulationTests",
+      "responsibility": "Znany sygnał trójtonowy i negatywne kontrole fazy, jednostek, braków oraz niefinitych danych."
+    },
+    {
+      "id": "sushruth-figure3e-raster",
+      "path": "scripts/plot_sushruth_2020_response_reference.py",
+      "symbol": "measure_figure3_e_pixels",
+      "responsibility": "Czysty odczyt panelu(e), jawne maski adnotacji i zakres szarej kreski; DOC-ANCHOR:sushruth-figure3e-raster-comparison.",
+      "evidence_status": "synthetic_raster_tests_and_pinned_image_read"
+    },
+    {
+      "id": "sushruth-figure3e-raster-tests",
+      "path": "scripts/test_sushruth_figure3_panel_e.py",
+      "symbol": "class Figure3PanelERasterTests",
+      "responsibility": "Niezależny fixture osi, ticków, legend, ekstremów i odmów."
     }
   ],
   "public_api": {
@@ -325,7 +656,7 @@
         "default": "80.0",
         "si_unit": "$1$",
         "validation": "skończony > 0",
-        "meaning": "górny limit q = |k|L",
+        "meaning": "górny limit $q=\\lvert k\\rvert L$",
         "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
         "problem_ir": "nie serializuje się do ProblemIR"
       },
@@ -348,6 +679,146 @@
         "meaning": "częstotliwość do obliczenia χ",
         "backend_support": "niezależny wzorzec NumPy; bez backendu Fullmaga",
         "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "a8_numerator_factor.frequency_hz",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "skończony bez bool; znak dowolny",
+        "meaning": "podpisana częstotliwość bodźca",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "a8_numerator_factor.alpha",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "skończony nieujemny bez bool",
+        "meaning": "tłumienie wyłącznie diagnostyki algebraicznej",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "a8_numerator_factor.mu0_h_eff_t",
+        "type": "float",
+        "default": "0.25",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "μ0 razy statyczne pole efektywne",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "a8_numerator_factor.gamma_hz_per_t",
+        "type": "float",
+        "default": "30e9",
+        "si_unit": "$\\mathrm{Hz\\,T^{-1}}$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "współczynnik gamma_B/(2pi)",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_free_pole_hz.alpha",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "skończony nieujemny bez bool",
+        "meaning": "tłumienie wyłącznie diagnostyki algebraicznej",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_free_pole_hz.mu0_h_eff_t",
+        "type": "float",
+        "default": "0.25",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "μ0 razy statyczne pole efektywne",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_free_pole_hz.gamma_hz_per_t",
+        "type": "float",
+        "default": "30e9",
+        "si_unit": "$\\mathrm{Hz\\,T^{-1}}$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "współczynnik gamma_B/(2pi)",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_susceptibility.frequency_hz",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "skończony bez bool; znak dowolny",
+        "meaning": "częstotliwość bodźca",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_susceptibility.alpha",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "tłumienie stanu ustalonego",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_susceptibility.mu0_h_eff_t",
+        "type": "float",
+        "default": "0.25",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "statyczne pole efektywne razy mu0",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_susceptibility.mu0_ms_t",
+        "type": "float",
+        "default": "0.89",
+        "si_unit": "$\\mathrm T$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "magnetyzacja nasycenia razy mu0",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "uniform_susceptibility.gamma_hz_per_t",
+        "type": "float",
+        "default": "30e9",
+        "si_unit": "$\\mathrm{Hz\\,T^{-1}}$",
+        "validation": "skończony >0 bez bool",
+        "meaning": "gamma dla pól w teslach podzielona przez2pi",
+        "backend_support": "niezależna diagnostyka CPU; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do ProblemIR"
+      },
+      {
+        "python": "measure_figure3_anchors.panel",
+        "type": "str",
+        "default": "a",
+        "si_unit": "$1$",
+        "validation": "wyłącznie a lub e, inaczej odmowa przed odczytem plików",
+        "meaning": "wybór panelu obrazu, nie modelu fizycznego",
+        "backend_support": "niezależna diagnostyka rastra; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do IR"
+      },
+      {
+        "python": "measure_figure3_e_pixels.image",
+        "type": "ndarray uint8",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "dokładnie1524×1015×3 kanały RGB; wymagane osie, krzywa i pojedyncza ciągła szara kreska",
+        "meaning": "raster wyłącznie do czystego odczytu panelu(e); wrapper uwierzytelnia plik",
+        "backend_support": "niezależna diagnostyka rastra; bez backendu Fullmaga",
+        "problem_ir": "nie serializuje się do IR"
       }
     ]
   }
