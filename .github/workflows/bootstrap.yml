@@ -111,6 +111,13 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Check periodic Airbox observation contracts
+        # cargo check type-checks the CUDA Rust path without linking a native
+        # library. The actual cuFFT operator is qualified on the managed GPU.
+        run: |
+          cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
+          FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
+
       - name: Run closed-loop volume inspection policy contracts
         run: |
           cargo test -p fullmag-ir --lib closed_loop_direct_budget_
@@ -195,7 +202,9 @@ jobs:
 
       - name: Verify read-only saved FDM/FEM playback and binary frame routes
         run: |
-          cargo test --locked -p fullmag-workspace-inspect --lib
+          # Writer-gate tests launch a child that can briefly inherit unrelated
+          # manifest locks from other test threads before exec.
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --test-threads=1
           cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_
 
       - name: Run instance discovery contracts (ADR 0069)
@@ -248,13 +257,6 @@ jobs:
         run: |
           cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
           cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
-
-      - name: Check periodic Airbox observation contracts
-        # cargo check type-checks the CUDA Rust path without linking a native
-        # library. The actual cuFFT operator is qualified on the managed GPU.
-        run: |
-          cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
-          FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
 
       - name: Run local material coefficient regressions
         run: |
