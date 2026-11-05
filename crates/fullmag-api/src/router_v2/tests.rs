@@ -33378,6 +33378,35 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     {
         let mut guard = state.current_live_state.write().await;
         let snapshot = guard.as_mut().expect("live session exists");
+        // The two diagonal cells of the target grid are magnetic. The two
+        // other cells are inside the native bounds but inactive.
+        let layer = serde_json::json!({
+            "layer_id": "layer:magnet",
+            "object_id": "object:magnet",
+            "magnet_name": "magnet",
+            "native_grid": [2, 2, 1],
+            "native_origin": [10.0, 20.0, 30.0],
+            "native_cell_size": [0.5, 0.25, 2.0],
+            "native_active_mask": [true, false, false, true],
+            "native_region_mask": [0, 0, 0, 0],
+            "native_region_legend": [],
+            "value_offset": 0,
+            "value_count": 4,
+        });
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "common_cells": [4, 1, 1],
+                "layers": [layer.clone()],
+            },
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm_multilayer",
+                    "common_cells": [4, 1, 1],
+                    "layers": [layer],
+                },
+            },
+        }).into());
         snapshot.field_samples_revision = 99;
         snapshot
             .field_quantity_revisions
@@ -33431,7 +33460,7 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     let meta_status = meta.status();
     let meta_json = body_json(meta).await;
     assert_eq!(meta_status, StatusCode::OK, "{meta_json}");
-    assert_eq!(meta_json["stats"]["max"], 6.0);
+    assert_eq!(meta_json["stats"]["max"], 3.0);
     assert_eq!(meta_json["field_revision"], 17);
     assert_eq!(
         meta_json["domain_generation_id"],
@@ -33488,8 +33517,8 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         ("airbox".into(), "airbox".into())
     );
     assert_eq!(decode_fmvp_topology_revision(&bytes), carrier_revision);
-    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
-    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0]);
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![1]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![0.0, 2.0, 0.0]);
 
     {
         let mut guard = state.current_live_state.write().await;
@@ -33504,13 +33533,39 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&max_samples=1")
-                .header("if-none-match", vector_etag)
+                .header("if-none-match", vector_etag.clone())
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(unchanged_carrier.status(), StatusCode::NOT_MODIFIED);
+
+    // Changing the accepted occupancy changes the served node ordinals,
+    // even when the raw field carrier and its revision stay the same.
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let metadata = snapshot.metadata.as_deref_mut().expect("multilayer metadata");
+        let new_mask = serde_json::json!([false, true, true, false]);
+        metadata["artifact_layout"]["layers"][0]["native_active_mask"] = new_mask.clone();
+        metadata["execution_plan"]["backend_plan"]["layers"][0]["native_active_mask"] = new_mask;
+    }
+    let changed_scope = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&max_samples=1")
+                .header("if-none-match", vector_etag.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_scope.status(), StatusCode::OK);
+    assert_ne!(changed_scope.headers()["etag"], vector_etag);
+    assert_eq!(decode_fmvp_node_indices(&body_bytes(changed_scope).await), vec![0]);
+
 
     let h_eff = app
         .oneshot(
