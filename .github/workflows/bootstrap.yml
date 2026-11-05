@@ -148,8 +148,12 @@ jobs:
         env:
           RUST_MIN_STACK: 8388608
         run: |
+          cargo check --locked -p fullmag-api --bins
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
@@ -421,6 +425,7 @@ jobs:
         run: |
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_launch_wait_ --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
@@ -940,6 +945,7 @@ jobs:
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
+          python -B scripts/test_docker_volume_cancelled_recovery_archive.py -v
           python -B scripts/test_docker_volume_cold_budget_restore.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
@@ -988,6 +994,7 @@ jobs:
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
+          python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
           python -B scripts/test_docker_volume_native_init_successor.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v

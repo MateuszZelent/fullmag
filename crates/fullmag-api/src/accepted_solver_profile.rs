@@ -1,62 +1,21 @@
-//! Explicit accepted-operation diagnostics; never part of the scientific output bundle.
+//! Explicit accepted operation/step diagnostics, separate from scientific output.
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use super::accepted_worker_execution_receipt::WorkerExecutionReceiptIdentity;
 
-pub(crate) const PARAMETER: &str = "solver_profile";
-const SCHEMA: &str = "accepted_solver_profile.v1";
+#[path = "accepted_profile_admission.rs"]
+mod admission;
+pub(crate) use admission::{config, parameter, request_digest, validate_study_profile,
+    validate_resolved_study_profile, validate_fem_profile_plan, PARAMETER};
+#[cfg(test)]
+use admission::{configure_child, SCHEMA};
+
 const RECEIPT_SCHEMA: &str = "worker_operation_profile.v1";
 const RECEIPT: &str = "worker_operation_profile.v1.json";
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Request {
-    schema_version: String,
-    config: fullmag_runner::SolverProfileConfig,
-}
-
-pub(crate) fn config(parameters: &serde_json::Value) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    let Some(value) = parameters.get(PARAMETER) else { return Ok(None); };
-    let object = value.get("config").and_then(serde_json::Value::as_object)
-        .context("accepted solver profile requires a config object")?;
-    const KEYS: &[&str] = &["enabled", "sample_every", "sample_interval_wall_ms", "max_samples", "emit_engine_log", "persist_artifact"];
-    if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-        bail!("accepted solver profile contains an unknown config key");
-    }
-    let request: Request = serde_json::from_value(value.clone())?;
-    if request.schema_version != SCHEMA { bail!("unsupported accepted solver profile schema"); }
-    let config = request.config.normalized();
-    if config.enabled && config.emit_engine_log {
-        bail!("accepted solver profiling does not yet support emit_engine_log=true");
-    }
-    if config.enabled && !config.persist_artifact {
-        bail!("accepted solver profiling requires explicit persist_artifact=true");
-    }
-    Ok(config.enabled.then_some(config))
-}
-
-pub(crate) fn parameter(configuration: fullmag_runner::SolverProfileConfig) -> Result<serde_json::Value> {
-    let value = serde_json::to_value(Request { schema_version: SCHEMA.into(), config: configuration })?;
-    let mut parameters = serde_json::Map::new();
-    parameters.insert(PARAMETER.into(), value.clone());
-    config(&serde_json::Value::Object(parameters))?;
-    Ok(value)
-}
-
-/// Validate before RunIntent acceptance, for live and headless admission alike.
-pub(crate) fn validate_study_profile(parameters: &serde_json::Value,
-    study: &fullmag_authoring::StudyPlan,
-) -> Result<Option<fullmag_runner::SolverProfileConfig>> {
-    if parameters.get(PARAMETER).is_none() { return Ok(None); }
-    let configuration = config(parameters)?;
-    let mut enabled = study.steps.iter().filter(|step| step.enabled).peekable();
-    if enabled.peek().is_none() || !enabled.all(|step| matches!(&step.kind,
-        fullmag_authoring::StudyStepKind::ClosedLoopInspection { .. })) {
-        bail!("the solver_profile parameter is supported only for closed-loop inspection, including explicit disabled configuration; omit the parameter for LLG, FEM Run/Relax or external-lead stages");
-    }
-    Ok(configuration)
-}
+#[path = "accepted_step_profile.rs"]
+pub(crate) mod step_profile;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -116,6 +75,7 @@ pub(crate) fn load_projection(store: &fullmag_session::SessionStore,
     let Some(config) = config(&specification.parameters)? else { return Ok(None); };
     let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
         store, &specification.run_id, &specification.snapshot.project_id)?;
+    validate_resolved_study_profile(&specification.parameters, &accepted.study, &accepted.catalog, &accepted.lowered)?;
     let journal = store.read_coordinator_journal(specification.run_id.as_str())?;
     let mut latest = None;
     for step in &accepted.lowered.steps {
@@ -142,7 +102,10 @@ pub(crate) fn load_projection(store: &fullmag_session::SessionStore,
                     .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)) => continue,
                 Err(error) => return Err(error),
             };
-            if let Some(profile) = load(&path, &identity, &config)? { latest = Some(profile); }
+            let profile = if matches!(&plan.backend_plan, fullmag_ir::BackendPlanIR::Fem(_)) {
+                step_profile::load(&path, &identity, &config)?
+            } else { load(&path, &identity, &config)? };
+            if let Some(profile) = profile { latest = Some(profile); }
         }
     }
     Ok(latest)
@@ -182,4 +145,154 @@ mod tests {
         parameters.insert(PARAMETER.into(), parameter(config.clone()).unwrap());
         assert_eq!(super::config(&serde_json::Value::Object(parameters)).unwrap(), Some(config));
     }
+    fn fem_fixture() -> (fullmag_authoring::StudyPlan, fullmag_plan::StudyProblemCatalog) {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/runtime/accepted-fem-preparation-run-v2.json")).unwrap();
+        (serde_json::from_value(fixture["study_plan"].clone()).unwrap(),
+            serde_json::from_value(fixture["study_problem_catalog"].clone()).unwrap())
+    }
+    #[test]
+    fn exact_fem_run_catalog_admits_cpu_and_gpu_instrumentation() {
+        let (study, catalog) = fem_fixture();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        for device in ["cpu", "gpu"] {
+            let mut problem = catalog.entries()[0].problem().clone();
+            problem.problem_meta.runtime_metadata.insert("runtime_device_override".into(),
+                serde_json::json!({"device": device, "source": "managed_launcher"}));
+            let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+                fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], problem)]).unwrap();
+            assert!(validate_study_profile(&parameters, &study, &catalog).unwrap().is_some());
+        }
+    }
+    #[test]
+    fn exact_fem_relax_catalog_is_supported_without_enlarging_other_stage_scope() {
+        let (mut study, catalog) = fem_fixture();
+        study.steps[0].kind = fullmag_authoring::StudyStepKind::Primitive {
+            stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Relax };
+        study.steps[0].until_seconds = None;
+        let mut problem = catalog.entries()[0].problem().clone();
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = problem.study else { panic!("FEM Run fixture"); };
+        problem.study = fullmag_ir::StudyIR::Relaxation { algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            dynamics: Some(dynamics), sampling, stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1.0), energy_tolerance_j: None, max_steps: Some(10), max_relaxation_time_s: None } };
+        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+            fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], problem)]).unwrap();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        assert!(validate_study_profile(&parameters, &study, &catalog).unwrap().is_some());
+    }
+    #[test]
+    fn authored_fem_without_mesh_is_profile_admissible_but_not_a_resolved_execution() {
+        let (study, catalog) = fem_fixture();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        assert!(catalog.entries()[0].problem().geometry_assets.is_none());
+        assert!(validate_study_profile(&parameters, &study, &catalog).unwrap().is_some());
+        // The fixture is genuinely pre-preparation. Do not inject a structural
+        // MeshIR or reinterpret its planning failure as an execution plan.
+        let error = fullmag_plan::lower_study_plan_with_catalog(&study, &catalog).unwrap_err();
+        assert!(error.to_string().contains("precomputed FEM mesh asset"));
+
+        let mut fdm_problem = catalog.entries()[0].problem().clone();
+        fdm_problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        let fdm_catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+            fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], fdm_problem)]).unwrap();
+        let non_native = fullmag_plan::lower_study_plan_with_catalog(&study, &fdm_catalog).unwrap();
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &non_native).is_err());
+        let mut missing = non_native.clone(); missing.steps[0].execution_plan = None;
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &missing).is_err());
+        let mut foreign = non_native.clone(); foreign.study_revision += 1;
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &foreign).is_err());
+        let mut mislabeled = non_native;
+        let plan = mislabeled.steps[0].execution_plan.as_mut().unwrap();
+        plan.common.requested_backend = fullmag_ir::BackendTarget::Fem;
+        plan.common.resolved_backend = fullmag_ir::BackendTarget::Fem;
+        // A native label on an FDM payload cannot satisfy the native plan gate.
+        assert!(validate_resolved_study_profile(&parameters, &study, &catalog, &mislabeled).is_err());
+    }
+
+    #[test]
+    fn preparation_profile_admission_keeps_strict_double_and_p1_magnetization_guards() {
+        let (study, catalog) = fem_fixture();
+        let parameters = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        for dimension in ["precision", "mode", "magnetization_order"] {
+            let mut problem = catalog.entries()[0].problem().clone();
+            match dimension {
+                "precision" => problem.backend_policy.execution_precision = fullmag_ir::ExecutionPrecision::Single,
+                "mode" => problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended,
+                _ => problem.backend_policy.discretization_hints.as_mut().unwrap().fem.as_mut().unwrap().order = 2,
+            }
+            let result = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+                fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], problem)]);
+            // The catalog itself may already reject the unsupported lane;
+            // otherwise the profile admission must do so before preparation.
+            if let Ok(candidate) = result {
+                assert!(validate_study_profile(&parameters, &study, &candidate).is_err(), "{dimension}");
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_disabled_fdm_and_unsupported_steps_still_refuse_before_acceptance() {
+        let (study, catalog) = fem_fixture();
+        let mut problem = catalog.entries()[0].problem().clone();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        let fdm = fullmag_plan::StudyProblemCatalog::from_entries(&study, vec![
+            fullmag_plan::StudyProblemCatalogEntry::from_step(&study.steps[0], problem)]).unwrap();
+        for enabled in [false, true] {
+            let parameters = request(serde_json::json!({"enabled": enabled, "persist_artifact": true}));
+            assert!(validate_study_profile(&parameters, &study, &fdm).is_err());
+            let mut unsupported = study.clone();
+            unsupported.steps[0].kind = fullmag_authoring::StudyStepKind::Unsupported {
+                unsupported_kind: "future".into(), payload: serde_json::json!({}) };
+            assert!(validate_study_profile(&parameters, &unsupported, &catalog).is_err());
+        }
+        assert!(validate_study_profile(&serde_json::json!({}), &study, &fdm).unwrap().is_none());
+    }
+    #[test]
+    fn child_timer_environment_is_explicit_and_removes_ambient_values() {
+        let mut command = std::process::Command::new("unused-worker");
+        command.env("FULLMAG_FEM_STEP_PROFILE", "ambient");
+        configure_child(&mut command, false);
+        assert!(command.get_envs().any(|(key, value)| key == "FULLMAG_FEM_STEP_PROFILE" && value.is_none()));
+        configure_child(&mut command, true);
+        assert!(command.get_envs().any(|(key, value)| key == "FULLMAG_FEM_STEP_PROFILE" && value == Some(std::ffi::OsStr::new("1"))));
+        configure_child(&mut command, false);
+        assert!(command.get_envs().any(|(key, value)| key == "FULLMAG_FEM_STEP_PROFILE" && value.is_none()));
+    }
+    #[test]
+    fn request_digest_binds_the_whole_immutable_wrapper() {
+        let first = request(serde_json::json!({"enabled": true, "persist_artifact": true}));
+        let mut other = first[PARAMETER].clone(); other["config"]["max_samples"] = serde_json::json!(128);
+        assert_ne!(request_digest(&first[PARAMETER]).unwrap(), request_digest(&other).unwrap());
+        assert_eq!(request_digest(&other).unwrap(), fullmag_session::canonical_json_sha256(&other));
+    }
+
+    #[test]
+    fn closed_loop_operation_snapshot_contract_remains_separate_and_unchanged() {
+        let config = config(&request(serde_json::json!({"enabled": true, "persist_artifact": true}))).unwrap().unwrap();
+        let mut snapshot = fullmag_runner::SolverProfileState::new(config).snapshot();
+        let phases = [
+            ("antenna.surface.source_prepare", "Source preparation"),
+            ("antenna.surface.exact_geometry", "Exact geometry"),
+            ("antenna.surface.binary64", "Binary64 evaluation"),
+            ("antenna.surface.precision80", "80-digit evaluation"),
+            ("antenna.surface.precision120", "120-digit evaluation"),
+            ("antenna.surface.consistency", "Consistency checks"),
+            ("antenna.surface.reduction", "Reduction"),
+            ("antenna.surface.serialization", "Serialization"),
+            ("antenna.surface.unattributed", "Unattributed operation time"),
+        ];
+        snapshot.operation_samples.push(fullmag_runner::SolverProfileOperationSample {
+            sequence: 0, operation_id: "antenna.closed_loop.inspect".into(),
+            outcome: fullmag_runner::SolverProfileOperationOutcome::Completed,
+            total_wall_time_ns: 10, native_operator_wall_ns: None, native_call_wall_ns: None,
+            phases: std::array::from_fn(|index| fullmag_runner::SolverProfilePhaseSample {
+                id: phases[index].0.into(), label: phases[index].1.into(),
+                wall_time_ns: if index == 8 { 10 } else { 0 }, percent_of_total: if index == 8 { 100.0 } else { 0.0 },
+            }), accounting_issue: false,
+        });
+        validate_snapshot(&snapshot).unwrap();
+        snapshot.latest_samples.push(fullmag_runner::SolverProfileStepSample::from_step_stats(&fullmag_runner::StepStats::default()));
+        assert!(validate_snapshot(&snapshot).is_err());
+    }
+
 }

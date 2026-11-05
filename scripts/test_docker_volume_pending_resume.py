@@ -352,7 +352,13 @@ class FrontendOnlyResumeTests(unittest.TestCase):
             stack.enter_context(patch.object(codegen, "_exec", return_value=(json.dumps(processes).encode(), b"")))
             capture = stack.enter_context(patch.object(docker_dev, "docker_capture", side_effect=start_frontend))
             compose = stack.enter_context(patch.object(docker_dev, "compose_capture", side_effect=fixture.compose))
-            docker_dev.resume(fixture.args)
+            try:
+                docker_dev.resume(fixture.args)
+            finally:
+                self.assertIn(
+                    ("read_bytes", "prepared-unclaimed/current.json", True),
+                    fixture.events,
+                )
             self.assertEqual(fixture.previous["state"], "succeeded")
             prepare.assert_not_called()
             mocks[-1].assert_not_called()

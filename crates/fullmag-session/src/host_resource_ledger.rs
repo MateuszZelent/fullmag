@@ -3086,16 +3086,26 @@ impl HostResourceLedger {
             .ok_or_else(|| anyhow::Error::new(ComputeNodeSampleNotCurrent)
                 .context("host admission requires a published compute-node sample; compute-node snapshot is missing"))?;
         self.validate_v2_snapshot_locked(&snapshot)?;
-        if snapshot.schema_version
-            != crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2
-            || snapshot.node_id != self.node_id()
-            || snapshot.runtime_owner_id != self.owner_id()
-            || snapshot.owner_epoch != self.policy.owner_epoch
-            || snapshot.host_owner_id.as_deref() != Some(owner_id)
-            || snapshot.host_owner_epoch != Some(owner_epoch)
-            || !snapshot.is_current_at(chrono::Utc::now())?
+        let evaluated_at = chrono::Utc::now();
+        let schema_matches = snapshot.schema_version
+            == crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2;
+        let node_matches = snapshot.node_id == self.node_id();
+        let runtime_owner_matches = snapshot.runtime_owner_id == self.owner_id();
+        let policy_epoch_matches = snapshot.owner_epoch == self.policy.owner_epoch;
+        let host_owner_matches = snapshot.host_owner_id.as_deref() == Some(owner_id);
+        let host_owner_epoch_matches = snapshot.host_owner_epoch == Some(owner_epoch);
+        if !schema_matches || !node_matches || !runtime_owner_matches
+            || !policy_epoch_matches || !host_owner_matches || !host_owner_epoch_matches
+            || !snapshot.is_current_at(evaluated_at.clone())?
         {
-            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent));
+            return Err(anyhow::Error::new(ComputeNodeSampleNotCurrent).context(format!(
+                "compute-node sample is not current for admission: collected_at={}, evaluated_at={}, freshness={:?}, schema_matches={}, node_matches={}, runtime_owner_matches={}, policy_epoch_matches={}, host_owner_matches={}, host_owner_epoch_matches={}",
+                snapshot.sample.collected_at.to_rfc3339(),
+                evaluated_at.to_rfc3339(),
+                snapshot.sample.freshness_at(evaluated_at),
+                schema_matches, node_matches, runtime_owner_matches,
+                policy_epoch_matches, host_owner_matches, host_owner_epoch_matches,
+            )));
         }
         Ok(())
     }
@@ -8440,6 +8450,51 @@ mod tests {
     }
 
     #[test]
+    fn expired_compute_sample_refusal_retains_typed_cause_and_exact_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let collected_at = chrono::Utc::now() - chrono::Duration::seconds(31);
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), collected_at, 1, 1);
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
+        sample.host_owner_id = Some(owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(owner.descriptor().host_owner_epoch);
+        ledger.publish_compute_node_snapshot_with_owner(&owner, &sample).unwrap();
+        let error = ledger.current_compute_node_owner_for_admission().unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+        let detail = format!("{error:#}");
+        for expected in ["collected_at=", "evaluated_at=", "freshness=Stale", "schema_matches=true", "node_matches=true", "runtime_owner_matches=true", "policy_epoch_matches=true", "host_owner_matches=true", "host_owner_epoch_matches=true"] {
+            assert!(detail.contains(expected), "missing {expected}: {detail}");
+        }
+    }
+
+    #[test]
+    fn previous_owner_sample_remains_typed_pending_for_the_active_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = policy();
+        let ledger = HostResourceLedger::initialize(directory.path(), policy.clone()).unwrap();
+        let first_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let mut sample = compute_node_snapshot(&policy, ledger.node_id(), chrono::Utc::now(), 1, 1);
+        sample.schema_version = crate::compute_node_snapshot::COMPUTE_NODE_SNAPSHOT_SCHEMA_V2.into();
+        sample.runtime_owner_id = ledger.owner_id();
+        sample.host_owner_id = Some(first_owner.descriptor().host_owner_id.clone());
+        sample.host_owner_epoch = Some(first_owner.descriptor().host_owner_epoch);
+        ledger.publish_compute_node_snapshot_with_owner(&first_owner, &sample).unwrap();
+        drop(first_owner);
+        let active_owner = ledger.try_acquire_inventory_owner().unwrap().unwrap();
+        let _writer = ledger.writer.acquire().unwrap();
+        let error = ledger.validate_compute_node_owner_locked(
+            Some(&active_owner.descriptor().host_owner_id),
+            Some(active_owner.descriptor().host_owner_epoch),
+            true,
+        ).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
+        assert!(format!("{error:#}").contains("host_owner_epoch_matches=false"));
+    }
+
+    #[test]
     fn host_reservation_cannot_cross_compute_node_owner_epoch() {
         let directory = tempfile::tempdir().unwrap();
         let policy = policy();
@@ -8494,7 +8549,9 @@ mod tests {
             .publish_compute_node_snapshot_with_owner(&second_owner, &second_sample)
             .unwrap();
 
-        assert!(ledger.reserve(&request).is_err());
+        let fenced = ledger.reserve(&request).unwrap_err();
+        assert!(fenced.to_string().contains("fenced by a different compute-node inventory owner"));
+        assert!(!fenced.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
         request.expected_compute_node_owner_epoch =
             Some(second_owner.descriptor().host_owner_epoch);
         assert!(ledger.reserve(&request).is_err());
