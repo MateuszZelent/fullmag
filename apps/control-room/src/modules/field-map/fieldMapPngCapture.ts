@@ -329,7 +329,7 @@ function drawSourceCanvas(
     throw captureFailure(error instanceof Error ? error.message : "a visible field layer could not be read.");
   }
   const outlineWidth = Number.parseFloat(style?.outlineWidth ?? "0");
-  if (outlineWidth > 0 && style?.outlineStyle !== "none") {
+  if (style && outlineWidth > 0 && style.outlineStyle !== "none") {
     context.strokeStyle = style.outlineColor || "transparent";
     context.lineWidth = outlineWidth;
     context.strokeRect(x, y, rect.width, rect.height);
@@ -386,7 +386,7 @@ function drawLegend(
     context.fill();
   }
   const borderWidth = Number.parseFloat(style?.borderTopWidth ?? "0");
-  if (borderWidth > 0 && style?.borderTopStyle !== "none") {
+  if (style && borderWidth > 0 && style.borderTopStyle !== "none") {
     context.strokeStyle = style?.borderTopColor || "transparent";
     context.lineWidth = borderWidth;
     roundedRect(context, rect.left, rect.top, rect.width, rect.height, parseFloat(style.borderRadius) || 0);
