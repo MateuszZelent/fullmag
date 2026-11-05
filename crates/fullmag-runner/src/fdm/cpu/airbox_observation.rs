@@ -1070,13 +1070,13 @@ mod tests {
         .resolve_periodic_images([4, 4, 3], ExecutionPrecision::Double)
         .unwrap().unwrap();
         let manifest = |periodic| {
-            let artifacts = build_airbox_observation_artifacts(
+            let artifacts = super::build_airbox_observation_artifacts(
                 &problem, &plan, &target, &[[0.0; 3]; 48], json!({}), periodic,
             ).unwrap();
             let artifact = artifacts.iter().find(|artifact| {
                 artifact.relative_path == "fields/H_demag/airbox/manifest.json"
             }).unwrap();
-            serde_json::from_slice::<Value>(&artifact.bytes).unwrap()
+            serde_json::from_slice::<serde_json::Value>(&artifact.bytes).unwrap()
         };
         let periodic = manifest(Some(&workspace));
         let open = manifest(None);
