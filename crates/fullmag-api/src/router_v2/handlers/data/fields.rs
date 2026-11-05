@@ -12,6 +12,7 @@ use axum::Json;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use super::fdm_airbox_membership::resolve_fdm_airbox_membership;
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
     current_fem_nodal_projection_kind, extract_fdm_field, extract_fem_field, field_values_match_current_domain,
@@ -737,6 +738,12 @@ pub(crate) fn resolved_fdm_multilayer_airbox_field(
             .ok_or_else(|| ApiError::not_found("requested Airbox quantity is not published"))?;
         &hydrated
     } else { carrier };
+    let air_membership = resolve_fdm_airbox_membership(
+        snapshot,
+        carrier.cells,
+        carrier.origin_m,
+        carrier.cell_size_m,
+    )?;
     let mut field = ResolvedSpatialField::from_airbox(
         quantity_id,
         &carrier.quantity_id,
@@ -746,6 +753,7 @@ pub(crate) fn resolved_fdm_multilayer_airbox_field(
         carrier.cells,
         carrier.origin_m,
         carrier.cell_size_m,
+        air_membership,
         carrier.carrier_fingerprint.clone(),
         carrier.quantity_revision,
         carrier.grid_revision,
@@ -3842,6 +3850,7 @@ fn resolve_field_scope(
             SpatialFieldCarrier::FdmAirboxCells {
                 cells,
                 carrier_fingerprint,
+                air_membership,
                 ..
             },
         ..
@@ -3857,13 +3866,31 @@ fn resolve_field_scope(
                 "field '{quantity_id}' Airbox carrier does not provide scope '{scope_kind}'"
             )));
         }
+        let indices = air_membership
+            .iter()
+            .enumerate()
+            .filter_map(|(index, air)| {
+                (*air && (geometry_scope == "full" || fdm_cell_is_domain_surface(index, *cells)))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if indices.is_empty() {
+            return Err(ApiError::not_found("FDM Airbox scope has no realized air cells"));
+        }
+        let grid = if indices.len() == raw_point_count {
+            *cells
+        } else {
+            [u32::try_from(indices.len()).map_err(|_| {
+                ApiError::conflict("Airbox scope cell count exceeds FMVP capacity")
+            })?, 1, 1]
+        };
         return Ok(Some(ResolvedFieldScope {
             domain: ResolvedFieldScopeDomain::Air,
             kind: "airbox".to_string(),
             id: Some("airbox".to_string()),
-            node_indices: (0..raw_point_count).collect(),
-            value_indices: (0..raw_point_count).collect(),
-            grid: Some(*cells),
+            node_indices: indices.clone(),
+            value_indices: indices,
+            grid: Some(grid),
             carrier_hash: Some(format!("sha256:{carrier_fingerprint}")),
         }));
     }
@@ -5368,16 +5395,6 @@ async fn get_field_vector_unfenced(
         .as_ref()
         .map(|hash| format!(":topology_revision={topology_revision}:topology_hash={hash}"))
         .unwrap_or_default();
-    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}",
-        component_etag_token(
-            quantity_id,
-            session_id.as_str(),
-            field_revision,
-            gen_revision,
-            &component,
-        )
-    ));
     let scoped_grid = resolved_scope
         .as_ref()
         .map(|scope| {
@@ -5444,12 +5461,27 @@ async fn get_field_vector_unfenced(
         .as_ref()
         .and_then(|scope| scope.id.as_deref())
         .unwrap_or("");
+    let node_indices_token = field_node_indices_cache_token(field_node_indices_u32.as_deref());
+    let airbox_membership_token = if airbox_field.is_some() {
+        format!(":airbox_membership=active_cells.v1:{node_indices_token}")
+    } else {
+        String::new()
+    };
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}{airbox_membership_token}",
+        component_etag_token(
+            quantity_id,
+            session_id.as_str(),
+            field_revision,
+            gen_revision,
+            &component,
+        )
+    ));
     let topology_cache_token = topology_hash
         .as_ref()
         .map(|hash| {
             format!(
-                ":topology_revision={topology_revision}:topology_hash={hash}:node_indices={}",
-                field_node_indices_cache_token(field_node_indices_u32.as_deref())
+                ":topology_revision={topology_revision}:topology_hash={hash}:node_indices={node_indices_token}",
             )
         })
         .unwrap_or_default();
@@ -10264,6 +10296,7 @@ mod tests {
             [2, 2, 1],
             [10.0, 20.0, 30.0],
             [0.5, 0.25, 2.0],
+            vec![false, true, false, true],
             "a".repeat(64),
             17,
             19,
@@ -10294,9 +10327,12 @@ mod tests {
 
         assert_eq!(scope.kind, "airbox");
         assert_eq!(scope.id.as_deref(), Some("airbox"));
-        assert_eq!(scope.grid, Some([2, 2, 1]));
-        assert_eq!(scope.node_indices, vec![0, 1, 2, 3]);
-        assert_eq!(scope.value_indices, vec![0, 1, 2, 3]);
+        assert_eq!(scope.grid, Some([2, 1, 1]));
+        assert_eq!(scope.node_indices, vec![1, 3]);
+        assert_eq!(scope.value_indices, vec![1, 3]);
+        let sampled = super::sample_field_scope(scope.clone(), Some(1));
+        assert_eq!(sampled.node_indices, vec![1]);
+        assert_eq!(sampled.value_indices, vec![1]);
         let expected_hash = format!("sha256:{}", "a".repeat(64));
         assert_eq!(scope.carrier_hash.as_deref(), Some(expected_hash.as_str()));
     }

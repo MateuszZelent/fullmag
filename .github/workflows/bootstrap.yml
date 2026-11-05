@@ -257,6 +257,12 @@ jobs:
           cargo test --locked -p fullmag-plan --lib fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
+      - name: Run FDM Airbox target membership contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api fdm_airbox_membership
+          cargo test --locked -p fullmag-api --bin fullmag-api multilayer_airbox
+          cargo test --locked -p fullmag-api --bin fullmag-api airbox_scope_is_derived_from_resolved_field_carrier
+
       - name: Run FDM region exchange operator contracts
         run: |
           cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { FMRM_INACTIVE_REGION_ID, type DecodedFieldVector } from "@/kernel/api/codecs";
 
 import {
   buildFdmMultilayerAirboxFieldRequest,
+  buildFdmMultilayerAirboxRegionIds,
   resolveFdmMultilayerAirboxFieldVector,
   shouldRequestFdmMultilayerAirboxField,
 } from "./viewport3DFdmMultilayerAirbox";
@@ -49,6 +50,27 @@ describe("FDM multilayer Airbox target field", () => {
       },
       requestId: "fdm-multilayer-airbox:H_demag:max_samples=1200",
     });
+  });
+
+  it("keys server-sampled Surface fields separately from Full", () => {
+    const surface = buildFdmMultilayerAirboxFieldRequest(
+      domain as never,
+      1200,
+      "H_demag",
+      "surface",
+    );
+    expect(surface?.query).toEqual({
+      component: "full",
+      geometry_scope: "surface",
+      max_samples: 1200,
+      scope_id: "airbox",
+      scope_kind: "airbox",
+    });
+    expect(surface?.requestId).toBe(
+      "fdm-multilayer-airbox:H_demag:max_samples=1200:geometry_scope=surface",
+    );
+    expect(buildFdmMultilayerAirboxFieldRequest(domain as never, 1200, "H_demag", "full"))
+      .toEqual(buildFdmMultilayerAirboxFieldRequest(domain as never, 1200));
   });
 
   it("demands H_demag for scalar or vector rendering, never for unavailable H_eff", () => {
@@ -160,4 +182,90 @@ describe("FDM multilayer Airbox target field", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("FDM multilayer Airbox occupancy", () => {
+  const air = FMRM_INACTIVE_REGION_ID;
+
+  it("maps Airbox centres into half-open active native cells", () => {
+    const target = {
+      shape: [4, 1, 1],
+      origin: [-0.5, 0, 0],
+      spacing: [1, 1, 1],
+      totalCells: 4,
+    } as const;
+    const layer = {
+      domain: {
+        shape: [2, 1, 1],
+        origin: [0, 0, 0],
+        spacing: [1, 1, 1],
+        totalCells: 2,
+        activeMaskPresent: true,
+      },
+      activeMask: Uint8Array.of(1, 0),
+    } as const;
+    expect(buildFdmMultilayerAirboxRegionIds(target, [layer])).toEqual(
+      Uint32Array.of(0, air, air, air),
+    );
+    expect(buildFdmMultilayerAirboxRegionIds(target, [{
+      ...layer,
+      activeMask: Uint8Array.of(1, 1),
+    }])).toEqual(Uint32Array.of(0, 0, air, air));
+  });
+
+  it("unions active native occupancy across different 3D pitches and origins", () => {
+    const target = {
+      shape: [4, 2, 2],
+      origin: [0, -1, 0],
+      spacing: [0.5, 1, 1],
+      totalCells: 16,
+    } as const;
+    const coarse = {
+      domain: {
+        shape: [2, 1, 1],
+        origin: [0, -1, 0],
+        spacing: [1, 1, 2],
+        totalCells: 2,
+        activeMaskPresent: true,
+      },
+      activeMask: Uint8Array.of(1, 0),
+    } as const;
+    const dense = {
+      domain: {
+        shape: [1, 1, 1],
+        origin: [1.5, 0, 1],
+        spacing: [1, 1, 1],
+        totalCells: 1,
+        activeMaskPresent: false,
+      },
+      activeMask: null,
+    } as const;
+    const overlappingInactive = { ...coarse, activeMask: Uint8Array.of(0, 0) };
+    expect(buildFdmMultilayerAirboxRegionIds(target, [coarse, dense, overlappingInactive]))
+      .toEqual(Uint32Array.of(
+        0, 0, air, air,
+        air, air, air, air,
+        0, 0, air, air,
+        air, air, air, 0,
+      ));
+  });
+
+  it("rejects unavailable native occupancy and inconsistent target cardinality", () => {
+    const target = {
+      shape: [2, 1, 1],
+      origin: [0, 0, 0],
+      spacing: [1, 1, 1],
+      totalCells: 2,
+    } as const;
+    const domain = { ...target, activeMaskPresent: true };
+    expect(buildFdmMultilayerAirboxRegionIds(target, [])).toBeNull();
+    expect(buildFdmMultilayerAirboxRegionIds(target, [{ domain, activeMask: null }]))
+      .toBeNull();
+    expect(buildFdmMultilayerAirboxRegionIds(target, [{ domain, activeMask: Uint8Array.of(1) }]))
+      .toBeNull();
+    expect(buildFdmMultilayerAirboxRegionIds(
+      { ...target, totalCells: 3 },
+      [{ domain, activeMask: Uint8Array.of(1, 0) }],
+    )).toBeNull();
+  });
 });
