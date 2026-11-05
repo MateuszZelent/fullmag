@@ -156,6 +156,7 @@ export function FieldMapToolbar({
           <SelectContent>
             <SelectItem value="monitor_target">Monitor target</SelectItem>
             <SelectItem value="airbox">Universe / Airbox</SelectItem>
+            {planar.view_scope.kind === "object" ? <SelectItem value="object">Current object</SelectItem> : null}
             {planar.view_scope.kind === "mesh_part" ? (
               <SelectItem value="mesh_part">Current mesh part</SelectItem>
             ) : null}
@@ -205,8 +206,9 @@ export function FieldMapToolbar({
         {planar.source?.kind === "default" ? (
           <Button
             aria-pressed={planar.multislice?.enabled ?? false}
+            disabled={Boolean(planar.field_overlays?.length)}
             size="sm"
-            title="Panels of the default slice at several positions along the normal"
+            title={planar.field_overlays?.length ? "Combined object fields use one shared section" : "Panels of the default slice at several positions along the normal"}
             type="button"
             variant={planar.multislice?.enabled ? "primary" : "ghost"}
             onClick={() => onPatch({

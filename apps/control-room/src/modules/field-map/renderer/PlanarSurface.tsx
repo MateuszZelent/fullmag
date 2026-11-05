@@ -1,6 +1,15 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  Children,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 
@@ -37,6 +46,8 @@ interface PlanarSurfaceProps {
   profileSegment?: PlanarProfileSegment | null;
   onRenderEvidence?: (evidence: PlanarRenderEvidence) => void;
   probeOverlay?: ReactNode;
+  /** Additional composited fields; children are renderer-owned and non-interactive. */
+  fieldOverlayContent?: ReactNode;
 }
 
 export function PlanarSurface({
@@ -46,11 +57,13 @@ export function PlanarSurface({
   onProfileSegment,
   onRenderEvidence,
   probeOverlay,
+  fieldOverlayContent,
   profileSegment = null,
 }: PlanarSurfaceProps) {
   const segmentDragRef = useRef<{ pointerId: number; u0: number; v0: number } | null>(null);
   const [draftSegment, setDraftSegment] = useState<PlanarProfileSegment | null>(null);
   const shownSegment = draftSegment ?? profileSegment;
+  const hasFieldOverlayContent = Children.count(fieldOverlayContent) > 0;
   const hoverFrameRef = useRef<number | null>(null);
   const hoverPointerRef = useRef<readonly [number, number] | null>(null);
   const interactionRef = useRef<PlanarInteraction>(model.interaction);
@@ -355,6 +368,15 @@ export function PlanarSurface({
           aria-hidden="true"
           className="fm-field-map__canvas fm-field-map__canvas--overlay"
         />
+        {hasFieldOverlayContent ? (
+          <div
+            aria-hidden="true"
+            className="fm-field-map__field-overlays"
+            style={{ inset: 0, pointerEvents: "none", position: "absolute" }}
+          >
+            {fieldOverlayContent}
+          </div>
+        ) : null}
         {shownSegment ? (
           <svg
             aria-hidden="true"

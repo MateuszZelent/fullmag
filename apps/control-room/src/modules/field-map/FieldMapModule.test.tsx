@@ -7,6 +7,7 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import FieldMapModule from "./FieldMapModule";
+import { getRegisteredFieldMapCapture } from "./fieldMapCaptureRegistry";
 
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
@@ -232,6 +233,22 @@ describe("FieldMapModule planar state ownership", () => {
     expect(mocks.meta).toHaveBeenCalledWith("", { kind: "default" }, expect.any(Object), {
       enabled: false,
     });
+  });
+
+  it("registers and releases the current session capture with the mounted 2D module", async () => {
+    const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=api%3A1";
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+      expect(getRegisteredFieldMapCapture(sessionScopeKey)).not.toBeNull();
+
+      await act(async () => root.unmount());
+      expect(getRegisteredFieldMapCapture(sessionScopeKey)).toBeNull();
+    } finally {
+      dom.restore();
+    }
   });
 
   it("keeps the retained frame without reading missing metadata during refresh", async () => {

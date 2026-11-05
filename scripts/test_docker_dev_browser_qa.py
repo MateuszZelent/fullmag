@@ -654,6 +654,77 @@ def _mock_browser_qa_reconciliation(qa, case):
 
 
 class DockerDevBrowserQaContractTests(unittest.TestCase):
+    def test_prestart_probe_refuses_exec_browser_presence_and_host_controller(self):
+        qa=self.qa
+        import docker_volume_activation_reconcile as reconcile
+        args=SimpleNamespace(reconcile_attempt='a'*32,port=3199)
+        current={'attempt':'development','config_sha256':'digest','backend_started_at':'start',
+                 'development_fence_sha256':'fence'}
+        inputs={'development_attempt':'development','development_config_sha256':'digest',
+                'frontend_container':'front','frontend_volume':'volume',
+                'frontend_inputs_sha256':hashlib.sha256(qa.canonical({})).hexdigest()}
+        receipt={'inputs':inputs}
+        observed={key:{'Id':key,'Image':'image','State':{'Running':True,'StartedAt':'start','Pid':1},
+                       'Config':{},'HostConfig':{},'Mounts':[]} for key in ('back','front','helper')}
+        control=SimpleNamespace(project='project',read=lambda *args,**kw:{})
+        with patch.object(qa,'_assert_no_qa_controller') as controller, \
+             patch.object(qa,'_read_live_development',return_value=(current,'back','front','volume',{})), \
+             patch.object(qa,'_inspect',side_effect=lambda key:observed[key]), \
+             patch.object(qa,'_inspect_image',return_value={'Config':{}}), \
+             patch.object(qa,'_validate_frontend') as validate_frontend,patch.object(qa,'validate_source_labels'), \
+             patch('docker_volume_dev._validate_retained_service'), \
+             patch.object(reconcile,'_control_bytes',return_value=None), \
+             patch.object(reconcile,'_probe_helper_absence',return_value='absent') as absence, \
+             patch.object(qa,'docker_capture',return_value=SimpleNamespace(stdout=b'back\nfront\nhelper\n')):
+            qa._probe_prestart_browser_qa(control,Path('/source'),{},args,receipt,'helper',cache_project_id='resolver-cache-id')
+            self.assertEqual(validate_frontend.call_args.kwargs['cache_project_id'],'resolver-cache-id')
+            observed['back']['ExecIDs']=['live-exec']
+            with self.assertRaisesRegex(qa.BuildControlError,'active Docker exec'):
+                qa._probe_prestart_browser_qa(control,Path('/source'),{},args,receipt,'helper',cache_project_id='resolver-cache-id')
+            observed['back'].pop('ExecIDs')
+            absence.return_value=None
+            with self.assertRaisesRegex(qa.BuildControlError,'browser name exists'):
+                qa._probe_prestart_browser_qa(control,Path('/source'),{},args,receipt,'helper',cache_project_id='resolver-cache-id')
+            controller.side_effect=qa.BuildControlError('host controller alive')
+            with self.assertRaisesRegex(qa.BuildControlError,'host controller alive'):
+                qa._probe_prestart_browser_qa(control,Path('/source'),{},args,receipt,'helper',cache_project_id='resolver-cache-id')
+
+    def test_prestart_reconciliation_refuses_session_drift_before_publication(self):
+        qa=self.qa
+        case=_browser_qa_reconciliation_fixture(qa)
+        case['args'].reconcile_prestart=True
+        with _mock_browser_qa_reconciliation(qa,case), \
+             patch.object(qa,'_probe_prestart_browser_qa',side_effect=[{'pins':'before'},{'pins':'changed'}]):
+            with self.assertRaisesRegex(qa.BuildControlError,'proof changed'):
+                qa._reconcile_prestart_qa(case['control'],case['selected'],case['identity'],case['args'],case['receipt'],case['helper_id'],case['helper_log'],cache_project_id='resolver-cache-id')
+        self.assertEqual(case['calls']['cas'],[])
+        self.assertEqual(case['calls']['docker'],[])
+
+    def test_prestart_reconciliation_publishes_not_run_without_browser_removal(self):
+        qa=self.qa
+        case=_browser_qa_reconciliation_fixture(qa)
+        case['receipt']['state']='starting'
+        case['receipt'].pop('browser_container_name')
+        raw=qa.canonical(case['receipt'])
+        root='browser-qa/attempts/'+case['attempt']
+        case['control'].documents[root+'/receipt.json']=raw
+        case['args'].expected_receipt_sha256=hashlib.sha256(raw).hexdigest()
+        case['args'].expected_browser_id=None
+        case['args'].reconcile_prestart=True
+        with _mock_browser_qa_reconciliation(qa,case), \
+             patch.object(qa,'_probe_prestart_browser_qa',return_value={'browser_state':'NOT RUN'}) as probe:
+            qa.reconcile_browser_qa(case['control'],case['selected'],case['identity'],case['args'],cache_project_id='resolver-cache-id')
+        self.assertEqual(probe.call_count,2)
+        self.assertTrue(all(call.kwargs['cache_project_id']=='resolver-cache-id' for call in probe.call_args_list))
+        self.assertEqual(case['calls']['docker'],[])
+        self.assertEqual(case['calls']['inspect'],[])
+        terminal=json.loads(case['calls']['cas'][0][1])
+        self.assertEqual(terminal['state'],'failed-confirmed')
+        self.assertEqual(terminal['browser_state'],'NOT RUN')
+        self.assertEqual(terminal['verification'],'NOT VERIFIED')
+        self.assertNotIn('browser_container_id',terminal)
+        self.assertNotIn('rm /control/active',case['control'].helper_scripts[0])
+
     @classmethod
     def setUpClass(cls):
         cls.qa = _load_qa_module()

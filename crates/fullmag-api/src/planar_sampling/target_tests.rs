@@ -931,3 +931,24 @@ fn fem_region_scope_selects_region_elements_and_rejects_unknown_regions() {
     );
     assert!(missing.is_err());
 }
+
+#[test]
+fn fdm_object_scope_intersects_source_and_excludes_neighbour_objects() {
+    let field = scalar_fdm_field(multi_object_membership(vec![1, 2]), vec![4.0, 9.0]);
+    let target = resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample).unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    let disjoint = resolve_spatial_target(&field, &MonitorTargetIR::Object { object_id: "left".into() },
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample);
+    assert!(disjoint.is_err());
+}
+
+#[test]
+fn fem_object_scope_selects_only_the_canonical_object() {
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, vec![1.0; 24]);
+    let target = resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "right".into() }, &PlanarOperatorIR::PlaneSample).unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    assert!(resolve_spatial_target(&field, &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Object { object_id: "absent".into() }, &PlanarOperatorIR::PlaneSample).is_err());
+}

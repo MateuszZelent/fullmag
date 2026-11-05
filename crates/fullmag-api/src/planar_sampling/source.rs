@@ -1137,3 +1137,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "source_absolute_position_tests.rs"]
+mod absolute_position_tests;
