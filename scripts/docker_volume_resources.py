@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import hashlib
 import json
 from pathlib import Path
@@ -127,13 +128,72 @@ def apply_saved_budget(control, document, *, superseded=False):
     environment["FULLMAG_DOCKER_MEMORY_BYTES"] = str(memory)
 
 
+def authenticated_prepared_budget(control, *, maintenance=None, recovery=None, source_root=None):
+    """Read retained limits only through the live prepared admission context."""
+    if maintenance is None and recovery is None:
+        return None
+    from docker_volume_linux_supervision_stop import (
+        PREPARED_QUARANTINE, PREPARED_QUARANTINE_SCHEMA,
+        assert_prepared_maintenance_allowed, assert_prepared_start_allowed,
+    )
+    if maintenance is not None and recovery is not None:
+        raise BuildControlError("Prepared budget has conflicting admission contexts")
+    if maintenance is not None:
+        operation, request = maintenance
+        assert_prepared_maintenance_allowed(control, operation, request)
+        receipt = operation.get("receipt", {})
+        constraints = receipt.get("inputs", {}).get("prepared_unclaimed_quarantine")
+        if constraints is None:
+            return None
+        if receipt.get("unclaimed_cancellation_preflight", {}).get("prepared_unclaimed_quarantine") != constraints:
+            raise BuildControlError("Prepared budget differs from the witnessed maintenance preflight")
+    else:
+        assert_prepared_start_allowed(control)
+        constraints = recovery.get("constraints") if isinstance(recovery, Mapping) else None
+    raw = control.read_bytes(PREPARED_QUARANTINE)
+    record = json.loads(raw)
+    scope = record.get("scope", {})
+    if (record.get("schema") != PREPARED_QUARANTINE_SCHEMA
+            or any(scope.get(key) != value for key, value in (
+                ("compose_project", control.project), ("control_volume", control.volume),
+                ("control_namespace", control.namespace),
+                ("namespace_registry_sha256", control.namespace_registry_sha256),
+                ("source_root", source_root)))
+            or not isinstance(constraints, Mapping)
+            or constraints.get("schema") != PREPARED_QUARANTINE_SCHEMA
+            or constraints.get("target") != record.get("target")
+            or constraints.get("stop_journal_sha256") != record.get("stop_journal_sha256")
+            or (maintenance is not None and (record.get("state") != "cancellation-required"
+                or constraints.get("quarantine_sha256") != hashlib.sha256(raw).hexdigest()))
+            or (recovery is not None and (record.get("state") != "archived"
+                or record.get("cancellation_admission") != recovery))):
+        raise BuildControlError("Prepared budget has no matching live quarantine scope/admission")
+    budget = constraints.get("backend_budget")
+    if not isinstance(budget, Mapping) or set(budget) != {"Memory", "NanoCpus", "MemorySwap"}:
+        raise BuildControlError("Prepared backend resource budget is malformed")
+    memory, nano, swap = (budget[key] for key in ("Memory", "NanoCpus", "MemorySwap"))
+    if (type(memory) is not int or memory < 4 * GIB or memory % GIB
+            or type(nano) is not int or nano < 2 * 10**9 or nano % 10**9
+            or type(swap) is not int or (swap != -1 and swap < memory)):
+        raise BuildControlError("Prepared backend resource budget is invalid")
+    return {"cpus": nano // 10**9, "memory_bytes": memory, "memory_swap_bytes": swap}
+
+
 def apply_development_budget(control, document, configured, *, cold_budget_restore=None,
-                             source_root=None, capacity=None):
+                             source_root=None, capacity=None, prepared_maintenance=None,
+                             prepared_recovery_constraints=None):
     """Render one budget, with the authenticated retained pin taking precedence."""
-    restored = None
+    prepared = authenticated_prepared_budget(
+        control, maintenance=prepared_maintenance, recovery=prepared_recovery_constraints,
+        source_root=source_root,
+    )
+    if prepared is not None and cold_budget_restore is not None:
+        raise BuildControlError("Prepared budget cannot be combined with another retained restore")
+    restored = prepared
     if cold_budget_restore is not None:
         from docker_volume_cold_budget_restore import authenticated_budget
         restored = authenticated_budget(control, document, cold_budget_restore, source_root=source_root)
+    if restored is not None:
         configured = {**configured,
             "FULLMAG_DEV_BACKEND_CPUS": restored["cpus"],
             "FULLMAG_DEV_BACKEND_MEMORY_GIB": restored["memory_bytes"] // GIB}
@@ -142,6 +202,8 @@ def apply_development_budget(control, document, configured, *, cold_budget_resto
         apply_saved_budget(control, document)
     else:
         apply_saved_budget(control, document, superseded=True)
+        if prepared is not None:
+            document["services"]["backend"]["memswap_limit"] = prepared["memory_swap_bytes"]
         from docker_volume_cold_budget_restore import overlay_budget
         overlay_budget(document, restored)
 

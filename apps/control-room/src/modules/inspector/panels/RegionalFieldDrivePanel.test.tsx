@@ -71,4 +71,28 @@ describe("RegionalFieldDrivePanel create mode", () => {
     expect(html).toContain('value="global" selected=""');
     expect(html).not.toContain("Selected field drive is unavailable");
   });
+
+  it("renders a collection overview when the parent physics.field-drives node is selected", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <RegionalFieldDrivePanel
+          sectionScope="list"
+          selection={{
+            kind: "physics.field-drives",
+            label: "Field Drives",
+            moduleSource: "explorer",
+            nodeId: "model:physics:field-drives",
+            objectId: null,
+          }}
+        />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Field Drives");
+    expect(html).toContain("Existing");
+    expect(html).toContain("constant · 1 mT · active");
+    expect(html).toContain("Inspect Drive");
+    expect(html).toContain("New Field Drive");
+    expect(html).not.toContain("Selected field drive is unavailable");
+  });
 });

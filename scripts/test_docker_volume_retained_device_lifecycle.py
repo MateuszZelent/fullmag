@@ -11,6 +11,7 @@ from unittest import mock
 import docker_dev
 import docker_volume_dev as dev
 import docker_volume_cancelled_activation_guard as cancelled
+import docker_volume_linux_supervision_stop as supervision_stop
 import fullmag_docker_runtime as runtime
 import test_docker_native_failed_recreate as completed_fixtures
 import test_docker_volume_pending_resume as resume_fixtures
@@ -51,6 +52,8 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     with self.assertRaises(type(failure)):
                         caller._run(harness, helper=helper, device_probe=dev._probe_retained_device_access)
                 self.assertEqual(mutations, [])
+                self.assertIn((supervision_stop.PREPARED_QUARANTINE, True),
+                              harness.control.read_bytes_calls)
                 self.assertNotIn('rm', harness.events)
                 self.assertLess(harness.events.index('lease-enter'), harness.events.index('gpu-probe'))
                 self.assertLess(harness.events.index('gpu-probe'), harness.events.index('lease-exit'))
@@ -141,6 +144,7 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     gpu_access='auto', script=None, fresh_state=False,
                     completed_recreation_attempt='a' * 32, completed_recreation_sha256='c' * 64)
                 control = mock.Mock(project='fixture', image='image')
+                control.read.return_value = None
                 operation = {'root': 'development/attempts/' + 'b' * 32,
                              'receipt': {'attempt': 'b' * 32}}
                 control.operation.return_value = nullcontext(operation)
@@ -181,7 +185,13 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                             dev.start(args, reuse_state=reuse, retained_device_access='gpu')
                         handles[14].assert_not_called()
                 handles[15].assert_not_called()
-                handles[16].assert_called_once_with(control, cancelled.RECORD, optional=True)
+                control.read.assert_called_once_with(supervision_stop.PREPARED_QUARANTINE,
+                                                     optional=True)
+                self.assertEqual(handles[16].call_args_list, [
+                    mock.call(control, cancelled.replay_index_path('state', str(reuse['state'])),
+                              optional=True),
+                    mock.call(control, cancelled.RECORD, optional=True),
+                ])
                 control.write.assert_not_called()
                 self.assertEqual(args.gpu_access, 'auto')
 

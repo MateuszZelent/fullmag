@@ -33,19 +33,35 @@ function renderDedicatedPanel(
 }
 
 export function AnalysisChartInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "analysis.chart", ChartInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="analysis.chart" selection={props.selection}>
+      <ChartInspectorPanel {...props} sectionScope="chart" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function AnalysisChartPointInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "analysis.chart-point", ChartInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="analysis.chart-point" selection={props.selection}>
+      <ChartInspectorPanel {...props} sectionScope="point" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function LiveChartInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "live.chart", LiveChartPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="live.chart" selection={props.selection}>
+      <LiveChartPanel {...props} sectionScope="chart" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function LiveChartPointInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "live.chart-point", LiveChartPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="live.chart-point" selection={props.selection}>
+      <LiveChartPanel {...props} sectionScope="point" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function GeometryObjectInspectorPanel(props: InspectorPanelProps) {
@@ -65,11 +81,19 @@ export function MeshPartAirboxInspectorPanel(props: InspectorPanelProps) {
 }
 
 export function FieldDrivesInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "physics.field-drives", RegionalFieldDrivePanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="physics.field-drives" selection={props.selection}>
+      <RegionalFieldDrivePanel {...props} sectionScope="list" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function FieldDriveInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "physics.field-drive", RegionalFieldDrivePanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="physics.field-drive" selection={props.selection}>
+      <RegionalFieldDrivePanel {...props} sectionScope="item" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function ObjectMagneticParametersInspectorPanel(props: InspectorPanelProps) {
@@ -113,55 +137,83 @@ export function ObjectRegionMagneticTextureInspectorPanel(props: InspectorPanelP
 }
 
 export function ObjectMagneticTextureInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "object.magnetic-texture", ObjectMagneticTexturePanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="object.magnetic-texture" selection={props.selection}>
+      <ObjectMagneticTexturePanel {...props} sectionScope="overview" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function ObjectMagneticTextureAssetInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(
-    props,
-    "object.magnetic-texture.asset",
-    ObjectMagneticTexturePanel,
+  return (
+    <DedicatedInspectorRouteFrame owner="object.magnetic-texture.asset" selection={props.selection}>
+      <ObjectMagneticTexturePanel {...props} sectionScope="asset" />
+    </DedicatedInspectorRouteFrame>
   );
 }
 
 export function ObjectMagneticTextureLoadInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(
-    props,
-    "object.magnetic-texture.load",
-    ObjectMagneticTexturePanel,
+  return (
+    <DedicatedInspectorRouteFrame owner="object.magnetic-texture.load" selection={props.selection}>
+      <ObjectMagneticTexturePanel {...props} sectionScope="load" />
+    </DedicatedInspectorRouteFrame>
   );
 }
 
 export function ObjectMagneticTextureTransformInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(
-    props,
-    "object.magnetic-texture.transform",
-    ObjectMagneticTexturePanel,
+  return (
+    <DedicatedInspectorRouteFrame owner="object.magnetic-texture.transform" selection={props.selection}>
+      <ObjectMagneticTexturePanel {...props} sectionScope="transform" />
+    </DedicatedInspectorRouteFrame>
   );
 }
 
 export function MeshRootInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.root", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.root" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.root" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function MeshSharedDomainInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.shared-domain", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.shared-domain" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.shared-domain" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function MeshBuildsInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.builds", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.builds" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.builds" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function MeshQualityInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.quality", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.quality" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.quality" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function MeshSizeFieldsInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.size-fields", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.size-fields" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.size-fields" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function MeshRegionsInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.regions", MeshDetailsPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.regions" selection={props.selection}>
+      <MeshDetailsPanel {...props} sectionScope="mesh.regions" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function FdmGridInspectorPanelRoute(props: InspectorPanelProps) {
@@ -233,31 +285,59 @@ export function FdmCellInspectorPanel(props: InspectorPanelProps) {
 }
 
 export function CrossSectionInspectorPanelRoute(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.cross-section", CrossSectionInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.cross-section" selection={props.selection}>
+      <CrossSectionInspectorPanel {...props} sectionScope="overview" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function CrossSectionDraftInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.cross-section.draft", CrossSectionInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.cross-section.draft" selection={props.selection}>
+      <CrossSectionInspectorPanel {...props} sectionScope="draft" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function CrossSectionPlotInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh.cross-section.plot", CrossSectionInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="mesh.cross-section.plot" selection={props.selection}>
+      <CrossSectionInspectorPanel {...props} sectionScope="plot" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function StudyRootInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "study.root", StudyInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="study.root" selection={props.selection}>
+      <StudyInspectorPanel {...props} sectionScope="overview" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function StudyStagesInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "study.stages", StudyInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="study.stages" selection={props.selection}>
+      <StudyInspectorPanel {...props} sectionScope="stages" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function StudyExecutionInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "study.execution", StudyInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="study.execution" selection={props.selection}>
+      <StudyInspectorPanel {...props} sectionScope="execution" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function StudyRecoveryInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "study.recovery", StudyInspectorPanel);
+  return (
+    <DedicatedInspectorRouteFrame owner="study.recovery" selection={props.selection}>
+      <StudyInspectorPanel {...props} sectionScope="recovery" />
+    </DedicatedInspectorRouteFrame>
+  );
 }
 
 export function StudyStageActionInspectorPanel(props: InspectorPanelProps) {

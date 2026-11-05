@@ -54,7 +54,7 @@ export function ObjectRegionOverviewPanel({
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <ObjectRegionMetadataSection model={model} meshLane={meshLane} />
+      <ObjectRegionMetadataSection model={model} meshLane={meshLane} defaultOpen />
 
       <InspectorGroup title="Region Identity">
         {laneView.inlineDiagnostics ? (

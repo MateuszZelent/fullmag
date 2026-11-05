@@ -551,6 +551,7 @@ if (not isinstance(task_id,str)
 revision=scene.get("revision",scene.get("scene_revision"))
 if type(revision) is not int or revision<0: fail("current scene revision is invalid")
 print(json.dumps({"run_id":run_id,"task_id":task_id,"session_id":session["session_id"],
+                  "request_scope_epoch":session.get("request_scope_epoch"),
                   "scene_revision":revision,"api_instance_id":next(iter(instances))},sort_keys=True))
 '''
 
@@ -575,6 +576,100 @@ def _discover_scope(backend_id: str) -> dict[str, object]:
             or not scope["api_instance_id"]):
         raise _fail("current cancelled run/task discovery identity is invalid")
     return scope
+
+
+def _read_completed_retirement_evidence(backend_id, context):
+    # Invoke only the existing image-owned read helpers: no retirement POST,
+    # startup command, marker publication, or replay is permitted here.
+    script = r'''import hashlib,importlib.util,json,os,stat,sys
+path="/opt/fullmag/docker_startup_script.py"
+fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+with os.fdopen(fd,"rb") as source:
+    if not stat.S_ISREG(os.fstat(source.fileno()).st_mode): raise RuntimeError("startup helper is not regular")
+    raw=source.read(1024*1024+1)
+if len(raw)>1024*1024 or hashlib.sha256(raw).hexdigest()!=sys.argv[1]: raise RuntimeError("startup helper bytes differ")
+sys.path.insert(0,"/opt/fullmag")
+spec=importlib.util.spec_from_file_location("fullmag_retirement_evidence_reader",path)
+helper=importlib.util.module_from_spec(spec)
+sys.modules[spec.name]=helper
+spec.loader.exec_module(helper)
+operation,inputs,session,run,scope=sys.argv[2:]
+receipt=helper.retirement_receipt_evidence(operation,inputs)
+archive=helper._retirement_archive_receipt(operation,session_id=session,run_id=run,api_request_scope_epoch=scope)
+print(json.dumps({"receipt":receipt,"archive":archive},sort_keys=True))
+'''
+    result = docker_capture(
+        "exec", backend_id, "/usr/local/bin/python3", "-I", "-B", "-c", script,
+        context["helper_sha256"], context["operation_id"], context["inputs_sha256"],
+        context["session_id"], context["run_id"], context["api_request_scope_epoch"],
+        timeout=30, allow_failure=True,
+    )
+    if result.returncode:
+        raise _fail("completed startup predecessor archive could not be authenticated read-only")
+    return _strict_object(bytes(result.stdout), "completed startup predecessor evidence")
+
+
+def _completed_startup_predecessor(backend_id, receipt, context, scope):
+    retirement = context.get("retirement")
+    if (context.get("phase") != "startup" or not isinstance(retirement, Mapping)
+            or retirement.get("state") not in {"retired", "replayed"}
+            or retirement.get("archive_sha256") is None):
+        if context.get("run_id") is not None and scope.get("run_id") != context["run_id"]:
+            raise _fail("live accepted run differs from the retained startup retirement scope")
+        if context.get("session_id") is not None and scope.get("session_id") != context["session_id"]:
+            raise _fail("live session differs from the retained startup retirement scope")
+        return None
+    result = receipt.get("retirement_result")
+    if (not isinstance(result, Mapping) or result.get("state") != "retirement-only"
+            or result.get("retirement") != retirement or receipt.get("retirement") != retirement
+            or retirement.get("schema") != "fullmag.live-workspace-retirement-response.v1"
+            or retirement.get("terminal_outcome") != "completed"):
+        raise _fail("completed startup predecessor has no exact successful retirement result")
+    for key in ("operation_id", "session_id", "run_id", "archive_sha256",
+                "request_scope_epoch", "api_request_scope_epoch"):
+        if retirement.get(key) != context.get(key):
+            raise _fail("completed startup predecessor context differs: " + key)
+    epoch = retirement.get("session_epoch")
+    api_scope = context.get("api_request_scope_epoch")
+    if type(epoch) is not int or not 0 <= epoch < 2**64 - 1 or not isinstance(api_scope, str):
+        raise _fail("completed startup predecessor epoch is invalid")
+    api_id = scope.get("api_instance_id")
+    if (not isinstance(api_id, str) or not api_id
+            or api_scope != f"{api_id}:{epoch}"
+            or context.get("request_scope_epoch") != api_scope
+            or scope.get("request_scope_epoch") != f"{api_id}:{epoch + 1}"
+            or scope.get("run_id") == context.get("run_id")
+            or scope.get("session_id") == context.get("session_id")):
+        raise _fail("completed startup predecessor is not followed by exactly one same-API startup epoch")
+    evidence = _read_completed_retirement_evidence(backend_id, context)
+    observed = evidence.get("receipt")
+    archive = evidence.get("archive")
+    if not isinstance(observed, Mapping) or not isinstance(archive, Mapping):
+        raise _fail("completed startup predecessor image receipt or archive is missing")
+    marker_sha = observed.get("marker_sha256")
+    if (not isinstance(marker_sha, str) or SHA256_RE.fullmatch(marker_sha) is None
+            or {key: value for key, value in observed.items() if key != "marker_sha256"} != retirement
+            or dict(archive) != {key: retirement[key] for key in (
+                "operation_id", "archive_sha256", "request_scope_epoch", "session_id", "run_id", "api_request_scope_epoch")}):
+        raise _fail("completed startup predecessor immutable archive evidence differs")
+    return {
+        "schema": "fullmag.cancelled-startup-predecessor-transition.v1",
+        "retirement": dict(retirement), "retirement_marker_sha256": marker_sha,
+        "archive": dict(archive), "session_epoch": epoch + 1,
+        **{key: scope[key] for key in ("request_scope_epoch", "api_instance_id", "session_id", "run_id", "task_id")},
+    }
+
+
+def _bind_completed_startup_predecessor(cancellation, predecessor, request_id, source_sha256):
+    expected = {
+        "request_id": request_id, "source_sha256": source_sha256,
+        "live_session_epoch": predecessor["session_epoch"],
+        "live_api_instance_id": predecessor["api_instance_id"],
+        **{key: predecessor[key] for key in ("session_id", "run_id", "task_id")},
+    }
+    if any(cancellation.get(key) != value for key, value in expected.items()):
+        raise _fail("completed startup predecessor differs from the request-bound locked cancellation proof")
+    cancellation["completed_startup_predecessor"] = dict(predecessor)
 
 
 def _failed_preparation_store_probe(
@@ -769,6 +864,19 @@ def _selected_context(args: argparse.Namespace) -> tuple[Any, dict[str, str], Bu
     return selected, identity, control
 
 
+def _runtime_phase(args: argparse.Namespace) -> str:
+    phase = getattr(args, "runtime_phase", "iteration")
+    if not isinstance(phase, str) or phase not in {"iteration", "resume"}:
+        raise _fail("runtime phase must be iteration or resume")
+    return phase
+
+
+def _phase_pin_matches(document: Mapping[str, object], phase: str) -> bool:
+    if phase == "iteration":
+        return "runtime_phase" not in document
+    return document.get("runtime_phase") == phase
+
+
 def _read_control_record(
     control: BuildControl, relative: str, *, optional: bool = False,
 ) -> tuple[dict[str, Any] | None, bytes | None]:
@@ -781,23 +889,32 @@ def _read_control_record(
 def _require_recovery_current_clear(
     control: BuildControl,
     activation_attempt: str,
-) -> None:
+    previous_recovery_sha256: str | None = None,
+) -> dict[str, object] | None:
     raw = _read_control_bytes(control, RECOVERY_CURRENT, optional=True, maximum=MAX_RECORD_BYTES)
     if raw is None:
+        if previous_recovery_sha256 is not None:
+            raise _fail("previous recovery SHA-256 was supplied without a current recovery")
         return
     current = _strict_object(raw, "cancelled activation recovery current pointer")
     if current.get("activation_attempt") == activation_attempt:
         raise _fail(
             "this activation already has a recovery current record; resume its retained journal"
         )
+    if previous_recovery_sha256 is not None:
+        from docker_volume_cancelled_activation_guard import qualified_previous
+        return qualified_previous(control, previous_recovery_sha256, activation_attempt)
     raise _fail(
         "a prior cancelled-activation recovery current record must be reconciled before another drain"
     )
 
 
 def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
+    runtime_phase = _runtime_phase(args)
     selected, identity, control = _selected_context(args)
-    _require_recovery_current_clear(control, args.activation_attempt)
+    prior = _require_recovery_current_clear(
+        control, args.activation_attempt, getattr(args, "previous_recovery_sha256", None),
+    )
     development_root = "development/attempts/" + args.attempt
     previous = control.read(development_root + "/terminal.json")
     compose = control.read(development_root + "/compose.json")
@@ -812,7 +929,7 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         development_attempt=args.attempt,
         config_sha256=args.config_sha256,
         previous=previous,
-        phase="iteration",
+        phase=runtime_phase,
     )
     if (previous.get("compose_project") != control.project
             or previous.get("state_root") is None):
@@ -927,12 +1044,9 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
 
     environment = _explicit_activation_environment(compose)
     scope = _discover_scope(backend_id)
-    expected_run = retirement_context.get("run_id")
-    expected_session = retirement_context.get("session_id")
-    if expected_run is not None and scope.get("run_id") != expected_run:
-        raise _fail("live accepted run differs from the retained startup retirement scope")
-    if expected_session is not None and scope.get("session_id") != expected_session:
-        raise _fail("live session differs from the retained startup retirement scope")
+    completed_predecessor = _completed_startup_predecessor(
+        backend_id, receipt, retirement_context, scope,
+    )
     preparation_kind = getattr(args, "preparation_kind", "failed-external")
     if preparation_kind == "in-process-fdm":
         from docker_volume_inprocess_fdm_cancel_probe import probe_and_validate
@@ -975,8 +1089,10 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         raise _fail("run discovery and locked cancellation probe observed different API instances")
     if cancellation.get("activation_marker_sha256") != probe.get("activation_marker_sha256"):
         raise _fail("failed preparation proof marker digest differs")
+    if completed_predecessor is not None:
+        _bind_completed_startup_predecessor(cancellation, completed_predecessor, request_id, source_sha256)
 
-    return {
+    proof = {
         "selected": selected,
         "identity": identity,
         "control": control,
@@ -1010,9 +1126,17 @@ def _build_proof(args: argparse.Namespace) -> dict[str, Any]:
         "marker_path": marker_path,
         "cancellation": cancellation,
     }
+    if runtime_phase != "iteration":
+        proof["runtime_phase"] = runtime_phase
+    if prior is not None:
+        proof["previous_recovery"] = prior
+    return proof
 
 
 def _plan(proof: Mapping[str, object]) -> dict[str, object]:
+    runtime_phase = proof.get("runtime_phase", "iteration")
+    if not isinstance(runtime_phase, str) or runtime_phase not in {"iteration", "resume"}:
+        raise _fail("runtime phase in cancelled activation proof is invalid")
     cancellation = proof.get("cancellation")
     if not isinstance(cancellation, Mapping):
         raise _fail("cancelled preparation proof is missing")
@@ -1075,6 +1199,16 @@ def _plan(proof: Mapping[str, object]) -> dict[str, object]:
             "runtime_namespace_retirement": False,
         },
     }
+    if runtime_phase != "iteration":
+        body["target"] = {**body["target"], "runtime_phase": runtime_phase}
+    if "previous_recovery" in proof:
+        from docker_volume_cancelled_activation_guard import replay_index_path
+        prior = proof["previous_recovery"]
+        if (not isinstance(prior, dict)
+                or prior.get("request_index_path") == replay_index_path("request", proof["request_id"])
+                or prior.get("state_index_path") == replay_index_path("state", proof["state_root"])):
+            raise _fail("rotation cannot reuse a retired request or runtime state")
+        body["previous_recovery"] = dict(prior)
     return {**body, "plan_sha256": _sha256(canonical(body))}
 
 
@@ -1138,7 +1272,7 @@ def _record_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
     drain = journal.get("drain")
     if not isinstance(target, Mapping) or not isinstance(cancellation, Mapping) or not isinstance(drain, Mapping):
         raise _fail("drain-confirmed journal is incomplete")
-    return {
+    record = {
         "schema": RECOVERY_SCHEMA,
         "state": RECOVERY_STATE,
         "activation_attempt": target["activation_attempt"],
@@ -1175,6 +1309,17 @@ def _record_from_journal(journal: Mapping[str, object]) -> dict[str, object]:
         "successor_marker_present": False,
         "solve_or_retry": False,
     }
+    if "runtime_phase" in target:
+        if target["runtime_phase"] != "resume":
+            raise _fail("recovery record runtime phase is invalid")
+        record["runtime_phase"] = target["runtime_phase"]
+    if "previous_recovery" in plan:
+        if (journal.get("previous_recovery") != plan["previous_recovery"]
+                or journal.get("state") != "drain-confirmed"):
+            raise _fail("rotation journal does not bind its reviewed previous recovery")
+        record["schema"] = "fullmag.cancelled-activation-recovery.v2"
+        record["previous_recovery"] = dict(plan["previous_recovery"])
+    return record
 
 
 def _activation_terminal(
@@ -1344,6 +1489,9 @@ def _proof_from_journal(
     cancellation = plan.get("cancellation_proof")
     if not isinstance(target, Mapping) or not isinstance(cancellation, Mapping):
         raise _fail("stop journal has incomplete immutable proof pins")
+    runtime_phase = _runtime_phase(args)
+    if not _phase_pin_matches(target, runtime_phase):
+        raise _fail("stop journal belongs to another runtime phase")
     expected = {
         "development_attempt": args.attempt,
         "iteration_attempt": args.iteration_attempt,
@@ -1411,6 +1559,10 @@ def _proof_from_journal(
         "cancellation": dict(cancellation),
         "terminal_path": "activation/attempts/" + args.activation_attempt + "/terminal.json",
     }
+    if "previous_recovery" in plan:
+        proof["previous_recovery"] = dict(plan["previous_recovery"])
+    if runtime_phase != "iteration":
+        proof["runtime_phase"] = runtime_phase
     return proof
 
 
@@ -1510,6 +1662,12 @@ def _publish_recovery_and_activation_terminal(
     recovery_record = _record_from_journal(journal)
     recovery_raw = canonical(recovery_record) + b"\n"
     recovery_sha = _sha256(recovery_raw)
+    prior = _journal_rotation(args, journal)
+    previous_raw = None
+    if prior is not None:
+        from docker_volume_cancelled_activation_guard import validate_retired
+        validate_retired(control, prior)
+        previous_raw = _read_control_bytes(control, prior["history_path"])
     existing_terminal = _read_control_bytes(control, recovery_path, optional=True)
     if existing_terminal is None:
         _publish_cas(control, recovery_path, recovery_record, expected_raw=None)
@@ -1517,7 +1675,11 @@ def _publish_recovery_and_activation_terminal(
         raise ControlOutcomeUnknown("immutable cancelled-activation recovery terminal differs from the drain journal")
     existing_current = _read_control_bytes(control, RECOVERY_CURRENT, optional=True)
     if existing_current is None:
+        if prior is not None:
+            raise ControlOutcomeUnknown("previous recovery current disappeared before rotation")
         _publish_cas(control, RECOVERY_CURRENT, recovery_record, expected_raw=None)
+    elif prior is not None and existing_current == previous_raw:
+        _publish_cas(control, RECOVERY_CURRENT, recovery_record, expected_raw=previous_raw)
     elif existing_current != recovery_raw:
         raise ControlOutcomeUnknown("cancelled-activation recovery current pointer belongs to another generation")
     if (_read_control_bytes(control, recovery_path) != recovery_raw
@@ -1564,7 +1726,7 @@ def _publish_recovery_and_activation_terminal(
     if _read_control_bytes(control, recovery_path) != recovery_raw:
         raise ControlOutcomeUnknown("immutable recovery terminal changed after activation lease release")
     return {
-        "schema": RECOVERY_SCHEMA,
+        "schema": recovery_record["schema"],
         "state": RECOVERY_STATE,
         "recovery_terminal_path": recovery_path,
         "recovery_current_path": RECOVERY_CURRENT,
@@ -1588,17 +1750,21 @@ def _initial_journal(
     reviewed_plan: Mapping[str, object],
     control: BuildControl,
 ) -> dict[str, object]:
-    target = reviewed_plan["target"]
+    target = reviewed_plan.get("target")
     cancellation = reviewed_plan["cancellation_proof"]
-    if not isinstance(cancellation, Mapping):
-        raise _fail("reviewed plan cancellation proof is missing")
+    if not isinstance(target, Mapping) or not isinstance(cancellation, Mapping):
+        raise _fail("reviewed plan target or cancellation proof is missing")
     preparation_kind = _preparation_kind(cancellation)
     if getattr(args, "preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND) != preparation_kind:
         raise _fail("requested preparation kind differs from the reviewed source proof")
+    runtime_phase = _runtime_phase(args)
+    if (not _phase_pin_matches(target, runtime_phase)
+            or not _phase_pin_matches(proof, runtime_phase)):
+        raise _fail("requested runtime phase differs from the reviewed proof")
     stop_policy = reviewed_plan.get("stop")
     if not isinstance(stop_policy, Mapping):
         raise _fail("reviewed plan stop policy is missing")
-    return {
+    journal = {
         "schema": JOURNAL_SCHEMA,
         "state": "prepared",
         "plan_sha256": reviewed_plan["plan_sha256"],
@@ -1624,6 +1790,26 @@ def _initial_journal(
         "execution_state": "not-started",
         "archive_present": False,
     }
+    if "runtime_phase" in target:
+        journal["runtime_phase"] = target["runtime_phase"]
+    if "previous_recovery" in reviewed_plan:
+        journal["previous_recovery"] = dict(reviewed_plan["previous_recovery"])
+    _journal_rotation(args, journal)
+    return journal
+
+
+def _journal_rotation(args, journal):
+    plan = _plan_from_journal(journal)
+    prior = plan.get("previous_recovery")
+    expected = getattr(args, "previous_recovery_sha256", None)
+    if prior is None:
+        if expected is not None or "previous_recovery" in journal:
+            raise _fail("previous recovery flag or journal differs from the reviewed plan")
+        return None
+    if (not isinstance(prior, dict) or journal.get("previous_recovery") != prior
+            or expected is None or prior.get("recovery_sha256") != expected):
+        raise _fail("previous recovery SHA-256 differs from the retained rotation journal")
+    return prior
 
 
 def _validate_journal_pins(
@@ -1632,11 +1818,19 @@ def _validate_journal_pins(
     proof: Mapping[str, object],
     reviewed_plan: Mapping[str, object],
 ) -> None:
+    _journal_rotation(args, journal)
     if (journal.get("schema") != JOURNAL_SCHEMA
             or journal.get("journal_path") != _journal_path(args.activation_attempt)
             or journal.get("plan_sha256") != reviewed_plan["plan_sha256"]
             or journal.get("plan") != dict(reviewed_plan)):
         raise _fail("existing cancelled activation journal differs from the reviewed plan")
+    runtime_phase = _runtime_phase(args)
+    target = journal.get("target")
+    if (not isinstance(target, Mapping)
+            or not _phase_pin_matches(target, runtime_phase)
+            or not _phase_pin_matches(journal, runtime_phase)
+            or not _phase_pin_matches(proof, runtime_phase)):
+        raise _fail("existing cancelled activation journal runtime phase differs")
     cancellation = reviewed_plan.get("cancellation_proof")
     if not isinstance(cancellation, Mapping):
         raise _fail("reviewed plan cancellation proof is missing")
@@ -1767,6 +1961,12 @@ def _issue_backend_stop(
 ) -> tuple[dict[str, Any], bytes]:
     if journal.get("state") != "prepared":
         raise _fail("backend stop can only be issued from a fresh prepared journal")
+    if "previous_recovery" in journal:
+        from docker_volume_cancelled_activation_guard import qualified_previous, validate_retired
+        prior = _journal_rotation(args, journal)
+        validate_retired(control, prior)
+        if qualified_previous(control, prior["recovery_sha256"], args.activation_attempt) != prior:
+            raise _fail("previous recovery changed at the immediate pre-stop barrier")
     preparation_kind = journal.get("preparation_kind", FAILED_EXTERNAL_PREPARATION_KIND)
     cancellation = proof.get("cancellation")
     if not isinstance(cancellation, Mapping) or _preparation_kind(cancellation) != preparation_kind:
@@ -1909,6 +2109,9 @@ def _apply(args: argparse.Namespace) -> dict[str, object]:
         initial = _initial_journal(args, proof, reviewed_plan, control)
         journal_raw = _publish_cas(control, journal_rel, initial, expected_raw=None)
         journal = initial
+        if "previous_recovery" in journal:
+            from docker_volume_cancelled_activation_guard import preserve_previous
+            preserve_previous(control, journal["previous_recovery"])
         barrier_proof = _build_proof(args)
         _assert_pre_stop_barrier(proof, barrier_proof, reviewed_plan)
         journal, journal_raw = _issue_backend_stop(
@@ -1918,6 +2121,13 @@ def _apply(args: argparse.Namespace) -> dict[str, object]:
         saved_plan = _plan_from_journal(journal)
         if expected != saved_plan["plan_sha256"]:
             raise _fail("expected plan digest differs from the retained stop journal")
+        prior = _journal_rotation(args, journal)
+        if prior is not None:
+            from docker_volume_cancelled_activation_guard import preserve_previous, validate_retired
+            if journal.get("state") == "prepared":
+                preserve_previous(control, prior)
+            else:
+                validate_retired(control, prior)
         proof = _proof_from_journal(args, selected, identity, control, journal)
         _validate_journal_pins(args, journal, proof, saved_plan)
         target = saved_plan["target"]

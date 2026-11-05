@@ -6,6 +6,7 @@ import ast
 import argparse
 import hashlib
 import importlib
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -16,7 +17,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 module = importlib.import_module("docker_volume_cancelled_activation")
-from docker_build_control import ControlOutcomeUnknown, canonical
+docker_dev = importlib.import_module("docker_dev")
+from docker_build_control import BuildControlError, ControlOutcomeUnknown, canonical
 from docker_volume_dev import _cancelled_activation_probe_script, _retained_startup_enabled
 
 
@@ -136,7 +138,11 @@ def _probe(**overrides: object) -> dict[str, object]:
     return probe
 
 
-def _proof(control: FakeControl | None = None) -> dict[str, object]:
+def _proof(
+    control: FakeControl | None = None,
+    *,
+    runtime_phase: str = "iteration",
+) -> dict[str, object]:
     control = control or FakeControl()
     process = _ready_process()
     process_raw = canonical(process) + b"\n"
@@ -151,7 +157,7 @@ def _proof(control: FakeControl | None = None) -> dict[str, object]:
     receipt_raw = canonical(receipt) + b"\n"
     current_raw = canonical({"attempt": PREVIOUS_ATTEMPT}) + b"\n"
     result_raw = canonical({"attempt": ATTEMPT, "result": "unknown"}) + b"\n"
-    return {
+    proof = {
         "selected": "/repo/worktree",
         "identity": {"project_name": control.project},
         "control": control,
@@ -191,6 +197,9 @@ def _proof(control: FakeControl | None = None) -> dict[str, object]:
             "activation_marker_sha256": "b" * 64,
         },
     }
+    if runtime_phase != "iteration":
+        proof["runtime_phase"] = runtime_phase
+    return proof
 
 
 def _inprocess_fdm_proof(control: FakeControl | None = None) -> dict[str, object]:
@@ -203,9 +212,14 @@ def _inprocess_fdm_proof(control: FakeControl | None = None) -> dict[str, object
     return proof
 
 
-def _args(proof: dict[str, object], *, digest: str | None = None) -> argparse.Namespace:
+def _args(
+    proof: dict[str, object],
+    *,
+    digest: str | None = None,
+    runtime_phase: str | None = None,
+) -> argparse.Namespace:
     plan = module._plan(proof)
-    return argparse.Namespace(
+    args = argparse.Namespace(
         attempt=DEV_ATTEMPT,
         iteration_attempt=ITERATION_ATTEMPT,
         activation_attempt=ATTEMPT,
@@ -215,6 +229,9 @@ def _args(proof: dict[str, object], *, digest: str | None = None) -> argparse.Na
         apply=True,
         expected_plan_sha256=digest or plan["plan_sha256"],
     )
+    if runtime_phase is not None:
+        args.runtime_phase = runtime_phase
+    return args
 
 
 def _drained_receipt(proof: dict[str, object]) -> tuple[bytes, dict[str, object]]:
@@ -229,6 +246,177 @@ def _drained_receipt(proof: dict[str, object]) -> tuple[bytes, dict[str, object]
 
 
 class CancelledActivationProofTests(unittest.TestCase):
+    def test_completed_retirement_reader_only_calls_image_owned_read_helpers(self):
+        context = {"helper_sha256": "1" * 64, "operation_id": ATTEMPT,
+                   "inputs_sha256": "2" * 64, "session_id": "old-session",
+                   "run_id": "old-run", "api_request_scope_epoch": "api:1"}
+        with patch.object(module, "docker_capture", return_value=subprocess.CompletedProcess(
+            [], 0, stdout=b'{"receipt":null,"archive":null}', stderr=b"")) as capture:
+            module._read_completed_retirement_evidence(BACKEND, context)
+        args = capture.call_args.args
+        self.assertEqual(args[:6], ("exec", BACKEND, "/usr/local/bin/python3", "-I", "-B", "-c"))
+        tree = ast.parse(args[6])
+        helper_calls = {node.func.attr for node in ast.walk(tree)
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "helper"}
+        self.assertEqual(helper_calls, {"retirement_receipt_evidence", "_retirement_archive_receipt"})
+        self.assertEqual(capture.call_args.kwargs["timeout"], 30)
+
+    def test_completed_startup_predecessor_requires_exact_next_epoch_and_archive(self):
+        retirement = {
+            "schema": "fullmag.live-workspace-retirement-response.v1", "state": "retired",
+            "operation_id": ATTEMPT, "session_id": "old-session", "run_id": "old-run",
+            "request_scope_epoch": "api:1", "api_request_scope_epoch": "api:1",
+            "session_epoch": 1, "archive_sha256": "1" * 64,
+            "terminal_evidence_sha256": "2" * 64, "terminal_outcome": "completed",
+            "archive_manifest_path": f"retirements/{ATTEMPT}/project/retirement-manifest.json",
+        }
+        receipt = {"retirement": retirement, "retirement_result": {
+            "state": "retirement-only", "retirement": dict(retirement)}}
+        context = dict(retirement, phase="startup", retirement=dict(retirement),
+                       inputs_sha256="3" * 64, helper_sha256="4" * 64)
+        scope = {"request_scope_epoch": "api:2", "api_instance_id": "api",
+                 "run_id": RUN_ID, "session_id": "new-session", "task_id": TASK_ID}
+        archive = {key: retirement[key] for key in (
+            "operation_id", "archive_sha256", "request_scope_epoch", "session_id", "run_id", "api_request_scope_epoch")}
+        evidence = {"receipt": dict(retirement, marker_sha256="5" * 64), "archive": archive}
+        with patch.object(module, "_read_completed_retirement_evidence", return_value=evidence):
+            proof = module._completed_startup_predecessor(BACKEND, receipt, context, scope)
+            self.assertEqual(proof["session_epoch"], 2)
+            for changed in [dict(scope, request_scope_epoch="api:3"),
+                            dict(scope, request_scope_epoch="other:2"),
+                            dict(scope, api_instance_id="other")]:
+                with self.assertRaises(BuildControlError):
+                    module._completed_startup_predecessor(BACKEND, receipt, context, changed)
+        with patch.object(module, "_read_completed_retirement_evidence", return_value={
+            **evidence, "archive": dict(archive, archive_sha256="f" * 64)}):
+            with self.assertRaises(BuildControlError):
+                module._completed_startup_predecessor(BACKEND, receipt, context, scope)
+        for phase, state in [("retirement", "retired"), ("startup", "pending")]:
+            changed = dict(context, phase=phase, retirement=dict(retirement, state=state))
+            with self.assertRaises(BuildControlError):
+                module._completed_startup_predecessor(BACKEND, receipt, changed, scope)
+            old_scope = dict(scope, run_id="old-run", session_id="old-session")
+            self.assertIsNone(module._completed_startup_predecessor(BACKEND, receipt, changed, old_scope))
+        # The no-op/first-start path still has no predecessor scope guard.
+        self.assertIsNone(module._completed_startup_predecessor(BACKEND, {}, {"phase": "startup"}, scope))
+
+    def test_completed_predecessor_cannot_authorize_an_unrelated_locked_probe(self):
+        predecessor = {"session_epoch": 2, "api_instance_id": "api", "session_id": "new-session",
+                       "run_id": RUN_ID, "task_id": TASK_ID}
+        cancellation = {"live_session_epoch": 2, "live_api_instance_id": "api",
+                        "session_id": "new-session", "run_id": RUN_ID, "task_id": TASK_ID,
+                        "request_id": REQUEST, "source_sha256": SOURCE_SHA}
+        module._bind_completed_startup_predecessor(cancellation, predecessor, REQUEST, SOURCE_SHA)
+        proof = _proof()
+        proof["cancellation"] = cancellation
+        plan = module._plan(proof)
+        journal = module._initial_journal(_args(proof), proof, plan, proof["control"])
+        self.assertEqual(plan["cancellation_proof"]["completed_startup_predecessor"], predecessor)
+        self.assertEqual(journal["proof"]["completed_startup_predecessor"], predecessor)
+        changed = _proof()
+        changed["cancellation"] = {**cancellation, "completed_startup_predecessor": {**predecessor, "session_epoch": 3}}
+        self.assertNotEqual(module._plan(changed)["plan_sha256"], plan["plan_sha256"])
+        for key, wrong in [("request_id", "unrelated"), ("source_sha256", "0" * 64),
+                           ("live_session_epoch", 3), ("live_api_instance_id", "other"),
+                           ("session_id", "old-session")]:
+            with self.assertRaises(BuildControlError):
+                module._bind_completed_startup_predecessor(dict(cancellation, **{key: wrong}), predecessor, REQUEST, SOURCE_SHA)
+
+    def test_runtime_phase_cli_defaults_to_legacy_iteration_and_accepts_resume(self) -> None:
+        common = [
+            "--repo-root", "/repo", "recover-cancelled-activation",
+            "--attempt", DEV_ATTEMPT, "--iteration-attempt", ITERATION_ATTEMPT,
+            "--activation-attempt", ATTEMPT, "--config-sha256", CONFIG,
+            "--source-root", "/repo", "--port", "3197",
+        ]
+        legacy = docker_dev._parser().parse_args(common)
+        self.assertIsNone(legacy.previous_recovery_sha256)
+        rotated = docker_dev._parser().parse_args(common + ["--previous-recovery-sha256", "9" * 64])
+        self.assertEqual(rotated.previous_recovery_sha256, "9" * 64)
+        resumed = docker_dev._parser().parse_args(common + ["--runtime-phase", "resume"])
+
+        self.assertEqual(legacy.runtime_phase, "iteration")
+        self.assertEqual(legacy.iteration_attempt, ITERATION_ATTEMPT)
+        self.assertEqual(resumed.runtime_phase, "resume")
+        self.assertEqual(resumed.iteration_attempt, ITERATION_ATTEMPT)
+        with patch("sys.stderr", new_callable=io.StringIO):
+            with self.assertRaises(SystemExit):
+                docker_dev._parser().parse_args(common + ["--runtime-phase", "development"])
+
+    def test_existing_terminal_validator_receives_exact_selected_runtime_phase(self) -> None:
+        compose = {"name": FakeControl.project}
+        previous = {"state_root": STATE_ROOT}
+        control = type("Control", (), {
+            "project": FakeControl.project,
+            "read": lambda _self, path: previous if path.endswith("terminal.json") else compose,
+        })()
+        for phase in ("iteration", "resume"):
+            args = argparse.Namespace(
+                attempt=DEV_ATTEMPT,
+                iteration_attempt=ITERATION_ATTEMPT,
+                activation_attempt=ATTEMPT,
+                config_sha256=hashlib.sha256(canonical(compose)).hexdigest(),
+                port=3197,
+                runtime_phase=phase,
+            )
+            with self.subTest(phase=phase), \
+                 patch.object(module, "_selected_context", return_value=("/repo", {}, control)), \
+                 patch.object(module, "_require_recovery_current_clear"), \
+                 patch.object(module, "_port_matches"), \
+                 patch.object(module, "_validate_resume_terminal", return_value={"attempt": ITERATION_ATTEMPT}) as validate:
+                with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "not bound to this Compose"):
+                    module._build_proof(args)
+            self.assertEqual(validate.call_args.kwargs["phase"], phase)
+
+    def test_legacy_iteration_plan_bytes_and_record_shape_remain_unchanged(self) -> None:
+        proof = _proof()
+        plan = module._plan(proof)
+        self.assertEqual(plan["plan_sha256"], "dde6d60bcdae2634cce86d25a7b10e8da49907a2ddb85e3a7465197bb11a8895")
+        self.assertNotIn("runtime_phase", plan["target"])
+        args = _args(proof)
+        journal = module._initial_journal(args, proof, plan, proof["control"])
+        self.assertNotIn("runtime_phase", journal)
+        journal["drain"] = {}
+        record = module._record_from_journal(journal)
+        self.assertNotIn("runtime_phase", record)
+
+    def test_resume_phase_is_bound_across_plan_journal_record_and_readback(self) -> None:
+        proof = _proof(runtime_phase="resume")
+        args = _args(proof, runtime_phase="resume")
+        plan = module._plan(proof)
+        self.assertEqual(plan["target"]["runtime_phase"], "resume")
+        self.assertEqual(plan["target"]["iteration_attempt"], ITERATION_ATTEMPT)
+        self.assertNotEqual(plan["plan_sha256"], module._plan(_proof())["plan_sha256"])
+        journal = module._initial_journal(args, proof, plan, proof["control"])
+        self.assertEqual(journal["runtime_phase"], "resume")
+        journal["drain"] = {}
+        self.assertEqual(module._record_from_journal(journal)["runtime_phase"], "resume")
+
+        original = {
+            "receipt": proof["receipt"],
+            "receipt_raw": proof["receipt_raw"],
+            "result_raw": proof["result_raw"],
+            "activation_current_raw": proof["current_raw"],
+            "activation_terminal_raw": None,
+        }
+        with patch.object(module, "_read_pinned_original_records", return_value=original), \
+             patch.object(module, "_read_control_bytes", return_value=proof["active_raw"]):
+            resumed = module._proof_from_journal(
+                args, proof["selected"], proof["identity"], proof["control"], journal,
+            )
+        self.assertEqual(resumed["runtime_phase"], "resume")
+
+        wrong_phase_args = _args(proof, runtime_phase="iteration")
+        with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "runtime phase"):
+            module._proof_from_journal(
+                wrong_phase_args, proof["selected"], proof["identity"], proof["control"], journal,
+            )
+        tampered = dict(journal, runtime_phase="iteration")
+        with patch.object(module, "_preserve_original_records"):
+            with self.assertRaisesRegex(module.CancelledActivationRecoveryError, "runtime phase"):
+                module._validate_journal_pins(args, tampered, proof, plan)
+
     def test_inprocess_fdm_plan_binds_exact_sigterm_protocol_and_kind(self) -> None:
         proof = _inprocess_fdm_proof()
         plan = module._plan(proof)
@@ -843,6 +1031,123 @@ class CancelledActivationApplyTests(unittest.TestCase):
         self.assertEqual(terminal["state"], "failed-confirmed")
         self.assertEqual(terminal["cancelled_recovery_sha256"], hashlib.sha256(records[module.RECOVERY_CURRENT]).hexdigest())
         self.assertGreaterEqual(len(preserved), 3)
+
+
+class CancelledActivationRotationPublicationTests(unittest.TestCase):
+    def test_rotation_publication_boundaries_resume_without_repeating_stop(self):
+        import docker_volume_cancelled_activation_guard as guard
+        import docker_volume_unclaimed_cancellation as immutable
+        import test_docker_volume_cancelled_activation_guard as fixtures
+        from contextlib import ExitStack
+
+        for boundary in ["immutable", "current", "activation", "release"]:
+            with self.subTest(boundary=boundary), ExitStack() as stack:
+                control, old = fixtures._record_fixture()
+                old_raw = control.raw_files[guard.RECORD]
+                generation = fixtures._install_archive(control, old, fixtures.ARCHIVE_ATTEMPT_A)
+                anchor_path = "cancelled-activation-recovery/archives/" + old["activation_attempt"] + ".json"
+                anchor = {"schema": "fullmag.cancelled-activation-archive.v1",
+                          "recovery_sha256": hashlib.sha256(canonical(old)).hexdigest(),
+                          "generation": generation}
+                control.files[anchor_path] = anchor
+                control.raw_files[anchor_path] = fixtures._raw(anchor)
+                stack.enter_context(patch.object(guard, "_read_control_bytes", side_effect=fixtures._read_control_bytes))
+                stack.enter_context(patch.object(module, "_read_control_bytes", side_effect=fixtures._read_control_bytes))
+
+                def publish_immutable(c, path, raw):
+                    if path in c.raw_files and c.raw_files[path] != raw:
+                        raise AssertionError("immutable history changed")
+                    c.raw_files[path] = raw
+                    c.files[path] = json.loads(raw)
+                stack.enter_context(patch.object(immutable, "_publish_immutable", side_effect=publish_immutable))
+                new_attempt = "b" * 32
+                pin = guard.qualified_previous(control, hashlib.sha256(old_raw).hexdigest(), new_attempt)
+                guard.preserve_previous(control, pin)
+                proof = _proof(control)
+                proof["receipt"]["attempt"] = new_attempt
+                proof["receipt_raw"] = canonical(proof["receipt"]) + b"\n"
+                proof["receipt_sha256"] = hashlib.sha256(proof["receipt_raw"]).hexdigest()
+                proof["active_raw"] = new_attempt.encode()
+                proof["terminal_path"] = "activation/attempts/" + new_attempt + "/terminal.json"
+                proof["previous_recovery"] = pin
+                args = _args(proof)
+                args.activation_attempt = new_attempt
+                args.previous_recovery_sha256 = pin["recovery_sha256"]
+                plan = module._plan(proof)
+                journal = module._initial_journal(args, proof, plan, control)
+                self.assertEqual(plan["previous_recovery"], pin)
+                self.assertEqual(journal["previous_recovery"], pin)
+                saved_sha = args.previous_recovery_sha256
+                args.previous_recovery_sha256 = "f" * 64
+                with self.assertRaises(BuildControlError):
+                    module._journal_rotation(args, journal)
+                args.previous_recovery_sha256 = saved_sha
+                journal.update(state="drain-confirmed", drain={
+                    "backend_container": BACKEND, "image_id": IMAGE,
+                    "backend_started_at": proof["backend_started_at"],
+                    "backend_exit_code": 0, "process_receipt_sha256": "9" * 64,
+                }, docker_stop_command_return_code=0, stop_response="confirmed")
+                for path, raw in {
+                    "activation/attempts/" + new_attempt + "/receipt.json": proof["receipt_raw"],
+                    "activation/attempts/" + new_attempt + "/result.json": proof["result_raw"],
+                    "activation/current.json": proof["current_raw"],
+                }.items():
+                    control.raw_files[path] = raw
+                recovery_path = module._recovery_terminal_path(new_attempt)
+                failed = [False]
+
+                def publish(c, path, document, *, expected_raw):
+                    self.assertEqual(c.raw_files.get(path), expected_raw)
+                    raw = canonical(document) + b"\n"
+                    c.raw_files[path] = raw
+                    c.files[path] = dict(document)
+                    stage = {recovery_path: "immutable", guard.RECORD: "current",
+                             proof["terminal_path"]: "activation"}.get(path)
+                    if stage == boundary and not failed[0]:
+                        failed[0] = True
+                        raise ControlOutcomeUnknown("publication response lost")
+                    return raw
+                stack.enter_context(patch.object(module, "_publish_cas", side_effect=publish))
+                stack.enter_context(patch.object(module, "_verify_frontend_unchanged"))
+                stack.enter_context(patch.object(module, "_validate_helper_and_active", return_value=proof["active_raw"]))
+                def release(*a, **kw):
+                    if boundary == "release" and not failed[0]:
+                        failed[0] = True
+                        return False
+                    return True
+                stack.enter_context(patch.object(module, "_wait_retirement_lease_release", side_effect=release))
+                pins = {"receipt": proof["receipt"], "receipt_raw": proof["receipt_raw"],
+                        "result_raw": proof["result_raw"], "activation_current_raw": proof["current_raw"],
+                        "activation_terminal_raw": None}
+                with self.assertRaises(ControlOutcomeUnknown):
+                    module._publish_recovery_and_activation_terminal(args, proof, journal, b"journal", pins, control)
+                if boundary == "immutable":
+                    self.assertEqual(control.raw_files[guard.RECORD], old_raw)
+                pins["activation_terminal_raw"] = control.raw_files.get(proof["terminal_path"])
+                stack.enter_context(patch.object(module, "_selected_context", return_value=(proof["selected"], proof["identity"], control)))
+                stack.enter_context(patch.object(module, "_read_journal", return_value=(journal, canonical(journal) + b"\n")))
+                stack.enter_context(patch.object(module, "_proof_from_journal", return_value=proof))
+                stack.enter_context(patch.object(module, "_validate_journal_pins"))
+                stack.enter_context(patch.object(module, "_inspect_exact_backend", return_value={
+                    "Id": BACKEND, "Image": IMAGE,
+                    "State": {"Running": False, "StartedAt": proof["backend_started_at"]}}))
+                stack.enter_context(patch.object(module, "_verify_saved_drain", return_value=journal["drain"]))
+                stack.enter_context(patch.object(module, "_resume_pins_from_journal", return_value=pins))
+                stop = stack.enter_context(patch.object(module, "_issue_backend_stop", side_effect=AssertionError("stop replay")))
+                outcome = module._apply(args)
+                stop.assert_not_called()
+                self.assertEqual(outcome["schema"], guard.SCHEMA_V2)
+                self.assertEqual(control.raw_files[pin["history_path"]], old_raw)
+                successor = guard.read_record(control)
+                self.assertEqual(successor["previous_recovery"], pin)
+                self.assertNotEqual(successor["schema"], guard.SCHEMA)  # v1 readers reject this schema.
+                saved_index = control.raw_files.pop(pin["request_index_path"])
+                with self.assertRaises(BuildControlError):
+                    guard.read_record(control)
+                control.raw_files[pin["request_index_path"]] = saved_index
+                for kw in [{"request_id": old["request_id"]}, {"reuse_state": {"state": old["state_root"]}}]:
+                    with self.assertRaises(BuildControlError):
+                        guard.assert_start_allowed(control, **kw)
 
 
 if __name__ == "__main__":

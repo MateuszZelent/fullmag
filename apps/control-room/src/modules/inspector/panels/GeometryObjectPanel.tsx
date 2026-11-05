@@ -39,6 +39,7 @@ import { DraftQuantityUnitSelect, type DraftUnitUpdater } from "../primitives/Dr
 import type { QuantityDraftField } from "@/kernel/authoring/object-edit/objectEditTypes";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import { useInspectorActiveTab } from "../InspectorTabState";
 import { ObjectPlacementPanel } from "./ObjectPlacementPanel";
 import { Vector3Field } from "../primitives/Vector3Field";
@@ -785,7 +786,19 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
-      <InspectorGroup title="Geometry summary" collapsible defaultOpen>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Shape", value: draft.geometryKind || object.shape },
+          { label: "Dimensions", value: object.dimensions },
+          { label: "Mode", value: draft.mode },
+          {
+            label: "State",
+            value: inspectorDirty ? "modified" : "clean",
+            tone: inspectorDirty ? "warning" : "default",
+          },
+        ]}
+      />
+      <InspectorGroup title="Geometry summary" collapsible defaultOpen={draft.mode !== "committed" || (selection.kind !== "object.geometry" && selection.kind !== "object.antenna.geometry")}>
         {sourceNotice ? <FieldRow label="Source" value={sourceNotice} /> : null}
         {draft.mode === "committed" && (
           <FieldRow label="Object ID" value={object.objectId} />
@@ -830,7 +843,15 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         Object.values(draft.quantityFields).some((field) => field && field.lastValidSI !== null) ? (
         <FeedbackBanner kind="warning" message="Preview retains the last valid values. Complete or revert invalid fields before applying." />
       ) : null}
-      <DraftIdentitySection draft={draft} onFieldChange={updateField} showCommitted={draft.mode === "committed"} />
+      <DraftIdentitySection
+        draft={draft}
+        onFieldChange={updateField}
+        showCommitted={
+          draft.mode === "committed" &&
+          selection.kind !== "object.geometry" &&
+          selection.kind !== "object.antenna.geometry"
+        }
+      />
       <ActionsSection
         draft={draft}
         valid={inspectorValid}

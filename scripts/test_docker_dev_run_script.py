@@ -206,6 +206,42 @@ class DockerDevRunScriptTests(unittest.TestCase):
         self.assertFalse(discovery.call_args.kwargs["frontend_required"])
         self.assertTrue(activation_namespaces[0].headless)
 
+    def test_solver_profile_opt_in_is_forwarded_to_activation(self) -> None:
+        activation_namespaces = []
+
+        def activate(namespace):
+            activation_namespaces.append(namespace)
+            return self._activation()
+
+        with ExitStack() as stack:
+            self._patch_admission(stack)
+            self._patch_activation(stack, side_effect=activate)
+            stack.enter_context(patch.object(
+                run_script_module, "_probe_with_retry",
+                side_effect=(
+                    {"state": "observed", "api_instance_id": API_INSTANCE},
+                    _observation("completed"),
+                ),
+            ))
+            stack.enter_context(patch.object(run_script_module.time, "sleep"))
+            result = run_script_module.run_script(
+                self.repo, "examples/demo.py", solver_profile=True,
+            )
+
+        self.assertEqual(result["state"], "terminal")
+        self.assertTrue(activation_namespaces[0].solver_profile)
+
+    def test_invalid_solver_profile_value_is_rejected_before_group_admission(self) -> None:
+        with patch.object(defaults, "resolve_defaults") as resolve:
+            result = run_script_module.run_script(
+                self.repo, "examples/demo.py", solver_profile=1,
+            )
+        self.assertEqual(result["state"], "rejected")
+        self.assertEqual(result["outcome"], "invalid_solver_profile")
+        self.assertEqual(result["status"], "not_started")
+        self.assertEqual(result["exit_code"], 2)
+        resolve.assert_not_called()
+
     def test_wait_for_solve_remains_attached_until_run_completes(self) -> None:
         observations = iter((
             _observation("waiting_for_solve"),

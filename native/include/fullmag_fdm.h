@@ -1440,6 +1440,16 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
+/**
+ * Enable periodic local XY seams for an aligned FP64 multilayer PG-BB plan.
+ * Call immediately after create_v2, before configuring interactions or
+ * evaluating fields. The supplied pair spectra must use the common XY
+ * dimensions and twice the common Z dimension (open Z).
+ * Each native axis wraps only when it spans the corresponding period.
+ */
+int fullmag_fdm_backend_set_multilayer_xy_periodic_v1(
+    fullmag_fdm_backend *handle);
+
 /*
  * Configure rotated interfacial DMI on a v2 multilayer handle.  This must be
  * called after fullmag_fdm_backend_create_v2 and before the first step.  The

@@ -103,6 +103,24 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(result.stdout), expected if present else {"state": "not-published"})
 
+    def test_restart_probe_recognizes_profiled_startup_refusals(self):
+        captured = {}
+
+        def capture(*args, **kwargs):
+            captured["args"] = args
+            return subprocess.CompletedProcess(args, 0, b"null\n", b"")
+
+        with patch.object(docker_volume_dev, "docker_capture", side_effect=capture):
+            result = docker_volume_dev._terminal_session_restart_probe("e" * 64)
+
+        self.assertIsNone(result)
+        script = captured["args"][-1]
+        compile(script, "<terminal-session-restart-probe>", "exec")
+        self.assertIn('"solver_profile" in authorization', script)
+        self.assertIn('"solver_profile_sha256"', script)
+        self.assertIn('"invalid_solver_profile"', script)
+        self.assertIn('"accepted_solver_profile_unsupported"', script)
+
     @staticmethod
     def _development_context():
         identity = {

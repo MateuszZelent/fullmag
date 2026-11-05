@@ -75,6 +75,15 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                                            "gpu_preflight": "NOT_REQUIRED" if retained_policy == "disabled" else "PASS",
                                            "image_id": "sha256:" + "b" * 64}}
                     control = mock.Mock(project=project_name)
+                    byte_reads = []
+
+                    def read_bytes(path, *, optional=False):
+                        byte_reads.append((path, optional))
+                        if path == "prepared-unclaimed/current.json" and optional:
+                            return None
+                        raise AssertionError(f"unexpected control-volume byte read: {path}")
+
+                    control.read_bytes.side_effect = read_bytes
                     # Retained receipt, its Compose document, then no aborted preparation.
                     control.read.side_effect = [previous, document, None]
                     configuration = {"services": {"fem-gpu-toolchain": {"build": {"args": {
@@ -94,6 +103,7 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                             with self.assertRaisesRegex(BuildControlError, "retained GPU access intent"):
                                 dev._retained_operation(args, recreate_services=True)
                             capture.assert_not_called()
+                    self.assertEqual(byte_reads, [("prepared-unclaimed/current.json", True)])
 
     def test_runtime_supervisor_accepts_only_fixed_provenance_locations(self):
         path = Path(__file__).resolve().parents[1] / 'docker/all-in-one/runtime_service.py'

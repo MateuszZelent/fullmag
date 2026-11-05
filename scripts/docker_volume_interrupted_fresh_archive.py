@@ -1211,6 +1211,226 @@ def apply(args) -> dict[str, object]:
     }
 
 
+PREPARED_PLAN_SCHEMA = 'fullmag.docker-prepared-completed-archive-plan.v1'
+PREPARED_FINISH_SCHEMA = 'fullmag.docker-prepared-completed-archive-finalization.v1'
+
+
+def _prepared_completed_archive_collect(control, args):
+    """Qualify only an already completed archive, never an archive retry."""
+    from docker_volume_linux_supervision_stop import PREPARED_QUARANTINE, PREPARED_QUARANTINE_SCHEMA
+    pins = validate_pins({**vars(args), 'source_root': str(args.source_root)})
+    _require_sha(args.prepared_quarantine_sha256, 'Prepared quarantine pin')
+    _require_sha(args.prepared_archive_terminal_sha256, 'Completed prepared archive pin')
+    _assert_engine(pins['engine_id'])
+    _check_host_writer_processes(pins['prior_attempt'], pins['recreation_attempt'])
+    root = 'recreate-services/attempts/' + pins['recreation_attempt']
+    finish_path = root + '/prepared-completed-archive-finalization.json'
+    finished, finished_raw = _json_optional(control, finish_path)
+    if finished is not None and finished_raw != canonical(finished) + b'\n':
+        _fail('Prepared archive finalization is not exact canonical immutable bytes')
+    current_receipt_raw = control.read_bytes(root + '/receipt.json')
+    sidecar = _raw_optional(control, root + '/prepared-completed-archive-original-unknown.json')
+    original_raw = sidecar if sidecar is not None else current_receipt_raw
+    original = strict_object(original_raw, 'Original prepared archive unknown receipt')
+    inputs = original.get('inputs', {})
+    if (_sha(original_raw) != pins['unknown_receipt_sha256']
+            or original.get('schema') != 'fullmag.docker-build-operation.v1'
+            or original.get('phase') != 'recreate-services' or original.get('attempt') != pins['recreation_attempt']
+            or original.get('state') != 'outcome-unknown-resources-retained' or original.get('fresh_state') is not True
+            or inputs.get('attempt') != pins['prior_attempt'] or inputs.get('config_sha256') != pins['config_sha256']
+            or original.get('compose_project') != control.project or original.get('control_volume') != control.volume
+            or original.get('helper_container') != 'fullmag-control-' + pins['recreation_attempt']
+            or not isinstance(original.get('error'), str) or not original['error']):
+        _fail('Prepared completed archive requires its exact finalized unknown operation, without a legacy error exception')
+    for key in ('started_at', 'finished_at'):
+        if type(original.get(key)) not in (int, float) or not math.isfinite(original[key]):
+            _fail('Prepared archive original writer has no finalized timestamp')
+    if original['finished_at'] < original['started_at']:
+        _fail('Prepared archive original writer timestamps are reversed')
+    archive_raw = control.read_bytes(root + '/runtime-control-archive-terminal.json')
+    intent_raw = control.read_bytes(root + '/runtime-control-archive-intent.json')
+    archive = strict_object(archive_raw, 'Completed prepared archive terminal')
+    intent = strict_object(intent_raw, 'Completed prepared archive intent')
+    if (_sha(archive_raw) != args.prepared_archive_terminal_sha256
+            or archive.get('schema') != 'fullmag.docker-fresh-runtime-archive-terminal.v1'
+            or archive.get('state') != 'succeeded' or archive.get('intent_sha256') != _sha(intent_raw)
+            or intent.get('schema') != 'fullmag.docker-fresh-runtime-archive-intent.v1'
+            or any(row.get('operation_attempt') != pins['recreation_attempt']
+                   or row.get('compose_project') != control.project or row.get('control_volume') != control.volume
+                   or row.get('control_namespace', '') != control.namespace for row in (archive, intent))
+            or intent.get('source_root') != pins['source_root']
+            or intent.get('previous_state_root') != original.get('previous_state_root')
+            or archive.get('mapping') != intent.get('mapping')
+            or archive.get('removed_containers') != intent.get('removed_containers')):
+        _fail('Prepared continuation requires an authentic existing archive intent and terminal from this exact operation')
+    quarantine_raw = control.read_bytes(PREPARED_QUARANTINE)
+    quarantine = strict_object(quarantine_raw, 'Prepared quarantine')
+    if quarantine.get('schema') != PREPARED_QUARANTINE_SCHEMA:
+        _fail('Prepared archive has an unknown quarantine version')
+    if quarantine.get('state') == 'archived':
+        original_quarantine = {k: v for k, v in quarantine.items() if k not in ('fresh_archive', 'cancellation_admission')}
+        original_quarantine['state'] = 'cancellation-required'
+        original_quarantine_raw = canonical(original_quarantine) + b'\n'
+    elif quarantine.get('state') == 'cancellation-required':
+        original_quarantine_raw = quarantine_raw
+    else:
+        _fail('Prepared archive quarantine has an unknown lifecycle')
+    witness = original.get('prepared_cancelled_fresh_admission')
+    if (_sha(original_quarantine_raw) != args.prepared_quarantine_sha256 or not isinstance(witness, Mapping)
+            or witness.get('schema') != 'fullmag.docker-prepared-cancelled-fresh-admission.v1'
+            or witness.get('quarantine_sha256') != args.prepared_quarantine_sha256):
+        _fail('Completed archive is not qualified by the exact prepared cancellation/fresh admission')
+    if quarantine.get('state') == 'archived' and (
+            quarantine.get('cancellation_admission') != witness
+            or quarantine.get('fresh_archive') != {'path': root + '/runtime-control-archive-terminal.json', 'sha256': _sha(archive_raw)}):
+        _fail('Archived prepared quarantine points at another fresh generation')
+    prior_raw = control.read_bytes('development/attempts/' + pins['prior_attempt'] + '/terminal.json')
+    previous = strict_object(prior_raw, 'Prepared cancellation terminal')
+    if (_sha(prior_raw) != witness.get('cancellation_terminal_sha256')
+            or previous.get('config_sha256') != pins['config_sha256']
+            or previous.get('inputs', {}).get('source_root') != pins['source_root']
+            or previous.get('state_root') != original.get('previous_state_root')
+            or control.read_bytes('development/current.json') != prior_raw
+            or control.read_bytes('development/verified.json') != prior_raw):
+        _fail('Prepared cancellation authority changed before completed archive finalization')
+    from docker_volume_fresh_runtime import _archive_mapping
+    if archive.get('mapping') != _archive_mapping(pins['recreation_attempt'], private_ledger='preserved_group_ledger_subpath' in intent):
+        _fail('Prepared archive mapping differs from the owning archive protocol')
+    from docker_volume_fresh_runtime import pinned_group_archive
+    generation_raw = control.read_bytes('group-ledger-generation.json')
+    generation = strict_object(generation_raw, 'Completed prepared group-ledger generation')
+    if pinned_group_archive(control, generation) != archive:
+        _fail('Prepared archive metadata is partial or belongs to another group-ledger generation')
+    from docker_volume_cancelled_recovery import _validate_operation
+    result, _, _, request, _, before, _, _, _ = _validate_operation(
+        control, pins['prior_attempt'], prior_raw, previous, _sha(prior_raw), Path(pins['source_root']))
+    target = quarantine.get('target', {})
+    if (witness.get('constraints') != before.get('prepared_unclaimed_quarantine')
+            or request.get('run_id') != target.get('run_id') or request.get('task_id') != target.get('task_id')
+            or result.get('native_result', {}).get('disposition') != 'cancelled'):
+        _fail('Prepared archive lacks this exact task canonical native cancellation')
+    retained_raw = control.read_bytes(root + '/retained-containers.json')
+    retained = strict_object(retained_raw, 'Archived prepared maintenance pair')
+    removed = archive['removed_containers']
+    if (not isinstance(removed, Mapping) or set(removed) != {'backend', 'frontend'}
+            or any(retained.get(name, {}).get('Id') != removed[name] for name in ('backend', 'frontend'))):
+        _fail('Prepared archive removed pair differs from its retained service evidence')
+    from docker_volume_fresh_runtime import _assert_exact_absence
+    for name, identifier in removed.items():
+        _assert_exact_absence(identifier, name)
+    final = dict(original, state='succeeded', runtime_control_archive=archive,
+                 removed_containers=[removed['backend'], removed['frontend']],
+                 retained_volumes=previous.get('backend_volumes'), retained_frontend_volume=previous.get('frontend_volume'),
+                 prepared_completed_archive={'schema': PREPARED_FINISH_SCHEMA,
+                    'original_unknown_receipt_sha256': _sha(original_raw),
+                    'archive_terminal_sha256': _sha(archive_raw), 'quarantine_sha256': args.prepared_quarantine_sha256})
+    final.pop('error', None)
+    final_raw = canonical(final) + b'\n'
+    core = {'schema': PREPARED_PLAN_SCHEMA, 'pins': pins, 'original_receipt_sha256': _sha(original_raw),
+            'archive_intent_sha256': _sha(intent_raw), 'archive_terminal_sha256': _sha(archive_raw),
+            'retained_containers_sha256': _sha(retained_raw), 'prior_terminal_sha256': _sha(prior_raw),
+            'group_ledger_generation_sha256': _sha(generation_raw),
+            'final_receipt_sha256': _sha(final_raw)}
+    # Exclude invocation controls from the immutable recovery identity.
+    core['pins'] = {k: pins[k] for k in ('prior_attempt', 'config_sha256', 'source_root', 'recreation_attempt',
+                   'unknown_receipt_sha256', 'helper_container_id', 'helper_image', 'engine_id',
+                   'prepared_quarantine_sha256', 'prepared_archive_terminal_sha256')}
+    paths = ('recreate-services/current.json', 'recreate-services/verified.json')
+    pointers = {path: _raw_optional(control, path) for path in paths}
+    if finished is None:
+        plan = dict(core, pointer_predecessors={path: 'ABSENT' if raw is None else _sha(raw) for path, raw in pointers.items()})
+    else:
+        if (finished.get('schema') != PREPARED_FINISH_SCHEMA or finished.get('final_receipt_base64') != base64.b64encode(final_raw).decode()
+                or finished.get('original_receipt_sha256') != _sha(original_raw)
+                or {k: v for k, v in finished.get('plan', {}).items() if k != 'pointer_predecessors'} != core):
+            _fail('Prepared completed archive finalization does not match its immutable plan')
+        plan = finished['plan']
+    if current_receipt_raw not in (original_raw, final_raw):
+        _fail('Prepared recreation receipt changed outside its exact finalization')
+    for path, raw in pointers.items():
+        observed = 'ABSENT' if raw is None else _sha(raw)
+        if observed not in (plan['pointer_predecessors'][path], _sha(final_raw)):
+            _fail('Prepared recreation pointer changed outside its exact finalization')
+    terminal_raw = _raw_optional(control, root + '/terminal.json')
+    if terminal_raw is not None:
+        if (finished is None or terminal_raw != final_raw or current_receipt_raw != final_raw
+                or any(raw != final_raw for raw in pointers.values())
+                or control.read_bytes('active', optional=True) is not None):
+            _fail('Prepared completed publication has incomplete final records or a retained lease')
+        from docker_volume_linux_supervision_stop import assert_prepared_start_allowed
+        assert_prepared_start_allowed(control)
+    else:
+        _inspect_pinned_helper(control, pins['recreation_attempt'], pins['helper_container_id'], pins['helper_image'])
+        _assert_active_marker(pins['helper_container_id'], pins['recreation_attempt'])
+        _assert_logged(pins['helper_container_id'])
+        # Explicit low-level verification only: this cannot create an intent,
+        # publish an archive terminal, rename roots, remove or start services.
+        from docker_volume_fresh_runtime import _archive_runtime_control
+        inode_evidence = _archive_runtime_control(pins['helper_container_id'], pins['recreation_attempt'], intent, verify_only=True)
+        if any(archive.get(key) != value for key, value in inode_evidence.items()):
+            _fail('Completed prepared archive inode evidence drifted')
+    return {'plan': plan, 'plan_sha256': _sha(canonical(plan)), 'root': root, 'pins': pins,
+            'original_raw': original_raw, 'archive': archive, 'archive_raw': archive_raw, 'intent_raw': intent_raw,
+            'witness': dict(witness), 'final': final, 'final_raw': final_raw, 'completed': terminal_raw is not None}
+
+
+def prepared_completed_archive(args):
+    """Finish only metadata after this family's already genuine fresh archive."""
+    control = _prepare_control(Path(args.source_root), args.helper_image)
+    evidence = _prepared_completed_archive_collect(control, args)
+    if not args.apply:
+        return {'schema': PREPARED_PLAN_SCHEMA, 'plan': evidence['plan'], 'plan_sha256': evidence['plan_sha256']}
+    if args.expected_plan_sha256 != evidence['plan_sha256']:
+        _fail('Prepared completed archive differs from the reviewed preview; no writes were made')
+    if evidence['completed']:
+        return {'schema': PREPARED_FINISH_SCHEMA, 'state': 'already-succeeded',
+                'plan_sha256': evidence['plan_sha256'], 'services_started': False, 'solve_replayed': False}
+    root = evidence['root']
+    pins = evidence['pins']
+    observer = _start_observer(control, pins)
+    operation = {'receipt': strict_object(evidence['original_raw'], 'Prepared original operation'),
+                 'root': root, 'logger': observer, 'lease_ready': True, 'daemon_pending': True,
+                 'helper_container_id': pins['helper_container_id']}
+    control._active_operation = operation
+    terminal_published = False
+    try:
+        fresh = _prepared_completed_archive_collect(control, args)
+        if fresh['plan'] != evidence['plan']:
+            _fail('Prepared completed archive changed at the immediate finalization barrier')
+        from docker_volume_fresh_runtime import _operation_helper
+        _operation_helper(control, operation, pins['recreation_attempt'])
+        _publish_immutable(control, root + '/prepared-completed-archive-original-unknown.json', evidence['original_raw'])
+        finalization = {'schema': PREPARED_FINISH_SCHEMA, 'plan': evidence['plan'],
+                        'original_receipt_sha256': _sha(evidence['original_raw']),
+                        'final_receipt_base64': base64.b64encode(evidence['final_raw']).decode()}
+        _publish_immutable(control, root + '/prepared-completed-archive-finalization.json', canonical(finalization) + b'\n')
+        from docker_volume_linux_supervision_stop import pin_prepared_fresh_archive
+        pin_prepared_fresh_archive(control, operation, evidence['witness'])
+        _cas_publish(control, root + '/receipt.json', evidence['final_raw'], pins['unknown_receipt_sha256'])
+        for path, expected in evidence['plan']['pointer_predecessors'].items():
+            _cas_publish(control, path, evidence['final_raw'], expected)
+        for path in (root + '/receipt.json', 'recreate-services/current.json', 'recreate-services/verified.json'):
+            if control.read_bytes(path) != evidence['final_raw']:
+                _fail('Prepared standard recreation records differ before terminal-last publication')
+        from docker_volume_fresh_runtime import pinned_group_archive
+        generation_raw = control.read_bytes('group-ledger-generation.json')
+        if (_sha(generation_raw) != evidence['plan']['group_ledger_generation_sha256']
+                or pinned_group_archive(control, strict_object(generation_raw, 'Prepared generation barrier')) != evidence['archive']):
+            _fail('Prepared completed archive group-ledger generation drifted before terminal publication')
+        _cas_publish(control, root + '/terminal.json', evidence['final_raw'], 'ABSENT')
+        terminal_published = True
+    finally:
+        control._active_operation = None
+        if not terminal_published and observer.stdin and not observer.stdin.closed:
+            observer.stdin.close()
+    _wait_original_release(control, pins['helper_container_id'], observer)
+    final = _prepared_completed_archive_collect(control, args)
+    if not final['completed'] or final['plan_sha256'] != evidence['plan_sha256']:
+        _fail('Prepared completed archive detached finalization readback differs')
+    return {'schema': PREPARED_FINISH_SCHEMA, 'state': 'succeeded', 'plan_sha256': evidence['plan_sha256'],
+            'services_started': False, 'solve_replayed': False, 'original_helper_released': True}
+
+
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prior-attempt", required=True)
@@ -1223,6 +1443,8 @@ def _parser():
     parser.add_argument("--engine-id", required=True)
     parser.add_argument("--expected-plan-sha256")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument('--prepared-quarantine-sha256')
+    parser.add_argument('--prepared-archive-terminal-sha256')
     return parser
 
 
@@ -1233,7 +1455,10 @@ def run(args) -> int:
         if not args.apply and args.expected_plan_sha256 is not None:
             _fail("--expected-plan-sha256 requires --apply")
         require_host()
-        result = apply(args) if args.apply else preview(args)
+        if bool(getattr(args, 'prepared_quarantine_sha256', None)) != bool(getattr(args, 'prepared_archive_terminal_sha256', None)):
+            _fail('Prepared archive continuation requires both quarantine and completed archive terminal pins')
+        result = (prepared_completed_archive(args) if getattr(args, 'prepared_quarantine_sha256', None)
+                  else (apply(args) if args.apply else preview(args)))
         print(json.dumps(result, sort_keys=True, ensure_ascii=False))
         return 0
     except (BuildControlError, OSError, ValueError) as error:

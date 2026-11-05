@@ -90,6 +90,8 @@ __global__ void metrics(DeviceMultilayerLayer l, double *out, uint64_t blocks,
         if(active) {
             const double vol=l.native_grid.dx*l.native_grid.dy*l.native_grid.dz;
             const double w=MU0*l.material.saturation_magnetisation*vol;
+            // Exchange energy uses the same masked open or periodic
+            // stencil as the field through its quadratic energy identity.
             if(exchange) v[0]=-0.5*w*dot(m,read(l.h_ex,i));
             if(demag) v[1]=-0.5*w*dot(m,read(l.h_demag,i));
             if(external) v[2]=-w*dot(m,hext);

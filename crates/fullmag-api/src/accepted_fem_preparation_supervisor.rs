@@ -752,6 +752,7 @@ where
     H: FnMut() -> Result<()>,
 {
     let mut command = Command::new(executable);
+    command.env_remove("FULLMAG_FEM_STEP_PROFILE");
     compute_operator_env::remove_local_compute_operator_token(&mut command);
     command
         .arg("--store-root")

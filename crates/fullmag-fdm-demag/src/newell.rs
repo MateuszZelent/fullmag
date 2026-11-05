@@ -533,7 +533,6 @@ pub struct NewellKernels {
     pub pz: usize,
 }
 
-#[cfg(feature = "parallel")]
 struct KernelPlaneMut<'a> {
     n_xx: &'a mut [f64],
     n_yy: &'a mut [f64],
@@ -1304,6 +1303,207 @@ pub fn try_compute_newell_kernels_shifted_pair(
     };
     ensure_newell_kernels_finite(&kernels)?;
     Ok(kernels)
+}
+
+/// Fold a finite XY image rectangle directly into the circular lateral grid.
+pub(crate) fn try_compute_periodic_xy_newell_kernels(
+    [nx, ny, nz]: [usize; 3],
+    cell_size: [f64; 3],
+    z_shift: f64,
+    images: [u32; 2],
+) -> Result<NewellKernels, KernelBuildError> {
+    validate_shifted_pair_inputs(nx, ny, nz, cell_size, cell_size, [0.0, 0.0, z_shift])?;
+
+    const MAX_PERIODIC_IMAGE_TERMS: u64 = 1_000_000;
+    let [image_span_x, image_span_y] = images.map(|count| 2 * u64::from(count) + 1);
+    if image_span_x
+        .checked_mul(image_span_y)
+        .is_none_or(|terms| terms > MAX_PERIODIC_IMAGE_TERMS)
+    {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: format!("periodic image budget exceeds {MAX_PERIODIC_IMAGE_TERMS} terms"),
+        });
+    }
+
+    let storage_overflow = || KernelBuildError::UnsupportedGeometry {
+        reason: "periodic XY kernel storage size overflows addressable memory".to_string(),
+    };
+    let pz = nz.checked_mul(2).ok_or_else(storage_overflow)?;
+    let plane_len = nx.checked_mul(ny).ok_or_else(storage_overflow)?;
+    let len = plane_len.checked_mul(pz).ok_or_else(storage_overflow)?;
+    // The public builder materializes all six complex FFT components.
+    len.checked_mul(6 * std::mem::size_of::<[f64; 2]>())
+        .filter(|bytes| *bytes <= isize::MAX as usize)
+        .ok_or_else(storage_overflow)?;
+
+    // The tensor is dimensionless. Normalize lengths to keep the exact
+    // stencil and dipole approximation well scaled for SI-sized cells.
+    let scale = cell_size.into_iter().fold(0.0_f64, f64::max);
+    let cell = cell_size.map(|pitch| pitch / scale);
+    let volume = cell.into_iter().product::<f64>();
+    let z_shift = z_shift / scale;
+    if volume == 0.0 || !z_shift.is_finite() {
+        return Err(KernelBuildError::UnsupportedGeometry {
+            reason: "periodic XY kernel geometry cannot be represented in cell units".to_string(),
+        });
+    }
+    let [dx, dy, dz] = cell;
+    let [images_x, images_y] = images.map(i64::from);
+    let mut n_xx = vec![0.0; len];
+    let mut n_yy = vec![0.0; len];
+    let mut n_zz = vec![0.0; len];
+    let mut n_xy = vec![0.0; len];
+    let mut n_xz = vec![0.0; len];
+    let mut n_yz = vec![0.0; len];
+
+    let fill_plane = |iz: usize, plane: KernelPlaneMut<'_>| {
+        // Open Z keeps its unused Nyquist plane zero. For a self kernel
+        // the negative Z lags can be filled by reflection after the sum.
+        if iz == nz || (z_shift == 0.0 && iz > nz) {
+            return;
+        }
+        let z_lag = if iz < nz {
+            iz as f64
+        } else {
+            -((pz - iz) as f64)
+        };
+        let signed_z = z_lag * dz + z_shift;
+        let z = signed_z.abs();
+        let sz = if z == 0.0 { 0.0 } else { signed_z.signum() };
+        let z_squared = z * z;
+
+        for iy in 0..=ny / 2 {
+            let mirror_y = (ny - iy) % ny;
+            for ix in 0..=nx / 2 {
+                let mirror_x = (nx - ix) % nx;
+                let mut sum = CellPairTensor::default();
+                for image_y in -images_y..=images_y {
+                    let y = (iy as f64 + image_y as f64 * ny as f64) * dy;
+                    for image_x in -images_x..=images_x {
+                        let x = (ix as f64 + image_x as f64 * nx as f64) * dx;
+                        let tensor = if x * x + y * y + z_squared
+                            >= (ASYMPTOTIC_DISTANCE * ASYMPTOTIC_DISTANCE) as f64
+                        {
+                            point_dipole_pair_tensor(volume, [x, y, z])
+                        } else {
+                            equal_cell_near_tensor(cell, [x, y, z])
+                        };
+                        sum.xx += tensor.xx;
+                        sum.yy += tensor.yy;
+                        sum.zz += tensor.zz;
+                        sum.xy += tensor.xy;
+                        sum.xz += tensor.xz;
+                        sum.yz += tensor.yz;
+                    }
+                }
+
+                // A zero or even Nyquist lag is its own lateral reflection.
+                // Averaging the two representatives at Nyquist preserves the
+                // even components and cancels the components odd in that axis.
+                let xs: &[(usize, f64)] = if ix == mirror_x {
+                    &[(ix, 0.0)]
+                } else {
+                    &[(ix, 1.0), (mirror_x, -1.0)]
+                };
+                let ys: &[(usize, f64)] = if iy == mirror_y {
+                    &[(iy, 0.0)]
+                } else {
+                    &[(iy, 1.0), (mirror_y, -1.0)]
+                };
+                for &(y, sy) in ys {
+                    for &(x, sx) in xs {
+                        let index = x + y * nx;
+                        plane.n_xx[index] = sum.xx;
+                        plane.n_yy[index] = sum.yy;
+                        plane.n_zz[index] = sum.zz;
+                        plane.n_xy[index] = sum.xy * sx * sy;
+                        plane.n_xz[index] = sum.xz * sx * sz;
+                        plane.n_yz[index] = sum.yz * sy * sz;
+                    }
+                }
+            }
+        }
+    };
+
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        kernel_planes_mut(
+            &mut n_xx, &mut n_yy, &mut n_zz, &mut n_xy, &mut n_xz, &mut n_yz, plane_len,
+        )
+        .enumerate()
+        .for_each(|(iz, plane)| fill_plane(iz, plane));
+    }
+    #[cfg(not(feature = "parallel"))]
+    for iz in 0..pz {
+        let range = iz * plane_len..(iz + 1) * plane_len;
+        fill_plane(
+            iz,
+            KernelPlaneMut {
+                n_xx: &mut n_xx[range.clone()],
+                n_yy: &mut n_yy[range.clone()],
+                n_zz: &mut n_zz[range.clone()],
+                n_xy: &mut n_xy[range.clone()],
+                n_xz: &mut n_xz[range.clone()],
+                n_yz: &mut n_yz[range],
+            },
+        );
+    }
+
+    if z_shift == 0.0 {
+        for (component, sign) in [
+            (&mut n_xx, 1.0),
+            (&mut n_yy, 1.0),
+            (&mut n_zz, 1.0),
+            (&mut n_xy, 1.0),
+            (&mut n_xz, -1.0),
+            (&mut n_yz, -1.0),
+        ] {
+            let (positive, negative) = component.split_at_mut(nz * plane_len);
+            for (src, dst) in positive
+                .chunks_exact(plane_len)
+                .skip(1)
+                .zip(negative.chunks_exact_mut(plane_len).skip(1).rev())
+            {
+                for (src, dst) in src.iter().zip(dst) {
+                    *dst = sign * src;
+                }
+            }
+        }
+    }
+
+    let kernels = NewellKernels {
+        n_xx,
+        n_yy,
+        n_zz,
+        n_xy,
+        n_xz,
+        n_yz,
+        px: nx,
+        py: ny,
+        pz,
+    };
+    ensure_newell_kernels_finite(&kernels)?;
+    Ok(kernels)
+}
+
+/// Exact equal-cell double-volume integral using its reduced 27-point stencil.
+fn equal_cell_near_tensor(
+    [dx, dy, dz]: [f64; 3],
+    [signed_x, signed_y, z]: [f64; 3],
+) -> CellPairTensor {
+    let x = signed_x.abs();
+    let y = signed_y.abs();
+    let sx = signed_x.signum();
+    let sy = signed_y.signum();
+    CellPairTensor::new(
+        ldia_direct(x, y, z, dx, dy, dz, newell_f),
+        ldia_direct(y, x, z, dy, dx, dz, newell_f),
+        ldia_direct(z, y, x, dz, dy, dx, newell_f),
+        sx * sy * ldia_direct(x, y, z, dx, dy, dz, newell_g),
+        sx * ldia_direct(x, z, y, dx, dz, dy, newell_g),
+        sy * ldia_direct(y, z, x, dy, dz, dx, newell_g),
+    )
 }
 
 fn ensure_newell_kernels_finite(kernels: &NewellKernels) -> Result<(), KernelBuildError> {

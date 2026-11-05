@@ -51,6 +51,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField, type FormFieldHelp } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   asRecord,
   formatCount,
@@ -314,6 +315,14 @@ export function FdmObjectMeshPolicySection({
   const statusKind = model.status === "error" ? "error" : "warning";
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Lane", value: "FDM", tone: "accent" },
+          { label: "Grid shape", value: model.shape?.join(" × ") ?? "not materialized" },
+          { label: "Total cells", value: model.totalCells?.toLocaleString("en-US") ?? "not materialized" },
+          { label: "Status", value: model.status },
+        ]}
+      />
       <InspectorGroup title="Object Mesh" badge="structured-grid">
         {model.notice ? <FeedbackBanner kind={statusKind} message={model.notice} /> : null}
         <FieldRow label="Mesh policy" value="execution-plan owned (read-only)" />
@@ -1383,6 +1392,22 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel" data-mesh-policy-draft="object">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Lane", value: "FEM", tone: "accent" },
+          { label: "Policy", value: draft.present ? "custom override" : "inherited" },
+          { label: "Topology", value: draft.topology || "inherited" },
+          {
+            label: "Quality",
+            value:
+              quality.status === "ready"
+                ? qualityStatistics
+                  ? "available"
+                  : "not published"
+                : quality.status,
+          },
+        ]}
+      />
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
         <TabsContent value="policy" className="fm-tabs-content">
