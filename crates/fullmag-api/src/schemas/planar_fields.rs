@@ -186,6 +186,9 @@ pub struct PlanarSectionResource {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
+    /// Accepted source observation, when the exact selected carrier proves it.
+    /// Null means cross-quantity temporal coherence cannot be established.
+    pub observation_frame: Option<super::common::AcceptedObservationFrameRef>,
     pub schema_version: String,
     pub sample_token: String,
     #[serde(with = "crate::schemas::decimal_u64")]

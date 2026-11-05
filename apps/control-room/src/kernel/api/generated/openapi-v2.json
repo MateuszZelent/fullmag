@@ -27874,6 +27874,17 @@
           "non_injective": {
             "type": "boolean"
           },
+          "observation_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedObservationFrameRef",
+                "description": "Accepted source observation, when the exact selected carrier proves it.\nNull means cross-quantity temporal coherence cannot be established."
+              }
+            ]
+          },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
           },
@@ -28030,6 +28041,56 @@
           "partial",
           "empty",
           "occupied_measure"
+        ],
+        "type": "object"
+      },
+      "PlanarFieldOverlayState": {
+        "additionalProperties": false,
+        "description": "Presentation of an additional field on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
+        "properties": {
+          "colormap": {
+            "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/PlanarFieldComponent"
+          },
+          "id": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/PlanarColorRangeState"
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "raster_visible": {
+            "type": "boolean"
+          },
+          "vector_style": {
+            "$ref": "#/components/schemas/PlanarVectorStyleState"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "view_scope": {
+            "$ref": "#/components/schemas/PlanarViewScopeState"
+          }
+        },
+        "required": [
+          "id",
+          "quantity_id",
+          "component",
+          "view_scope",
+          "colormap",
+          "range",
+          "raster_opacity",
+          "raster_visible",
+          "vectors_visible",
+          "vector_style"
         ],
         "type": "object"
       },
@@ -29093,6 +29154,25 @@
             "type": "object"
           },
           {
+            "description": "Canonical scene object identity, intersected with the selected source.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "enum": [
@@ -29200,6 +29280,16 @@
           "display_unit": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "field_overlays": {
+            "description": "Omitted preserves the list; a supplied list replaces it atomically.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -29367,6 +29457,13 @@
               "string",
               "null"
             ]
+          },
+          "field_overlays": {
+            "description": "Additional quantities in the same physical planar view.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": "array"
           },
           "interaction": {
             "$ref": "#/components/schemas/PlanarInteractionState"
@@ -56392,6 +56489,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56619,6 +56726,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56852,6 +56969,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57092,6 +57219,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -57313,6 +57460,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57569,6 +57736,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57793,6 +57970,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58023,6 +58210,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58264,6 +58461,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58502,6 +58709,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58737,6 +58954,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58985,6 +59212,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -59214,6 +59461,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59478,6 +59745,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59710,6 +59987,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59948,6 +60235,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {

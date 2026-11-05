@@ -193,6 +193,42 @@ def _validate_resume_terminal(
     }
 
 
+def _validate_failed_iteration_terminal(control, attempt, expected_sha256, *,
+                                        development_attempt, config_sha256, previous):
+    """Authenticate an explicit failed frontend probe; never promote its state."""
+    if (not isinstance(attempt, str) or ATTEMPT_RE.fullmatch(attempt) is None
+            or not isinstance(expected_sha256, str) or SHA256_RE.fullmatch(expected_sha256) is None):
+        _fail("Failed iteration requires its exact attempt and terminal SHA-256")
+    relative = "iteration/attempts/" + attempt + "/terminal.json"
+    raw = _read_raw(control, relative)
+    receipt = _json(raw, "failed iteration terminal")
+    inputs = receipt.get("inputs", {})
+    original_inputs = previous.get("inputs", {})
+    error = receipt.get("error", "")
+    expected = {"schema": "fullmag.docker-build-operation.v1", "phase": "iteration",
+                "state": "failed-confirmed", "attempt": attempt,
+                "compose_project": control.project, "control_volume": control.volume,
+                "config_sha256": config_sha256, "state_root": previous.get("state_root"),
+                "backend_container": previous.get("backend_container"),
+                "frontend_container": previous.get("frontend_container"),
+                "control_namespace": previous.get("control_namespace")}
+    if (_sha256(raw) != expected_sha256 or not isinstance(inputs, Mapping)
+            or any(receipt.get(key) != value for key, value in expected.items())
+            or inputs.get("attempt") != development_attempt
+            or inputs.get("config_sha256") != config_sha256
+            or any(inputs.get(key) != original_inputs.get(key) for key in ("source_root", "image_id"))
+            or not isinstance(error, str) or "linux_native_probe.py" not in error
+            or re.search(r"OSError: \[Errno 28\] No space left on device: '/state/\.linux-native-probe-[^'\n]+'$", error) is None
+            or any(not isinstance(receipt.get(key), str) or not receipt[key]
+                   for key in ("backend_started_at", "frontend_started_at"))):
+        _fail("Failed iteration is not the exact retained frontend ENOSPC probe")
+    return {"attempt": attempt, "phase": "iteration", "relative": relative,
+            "sha256": expected_sha256, "backend_started_at": receipt["backend_started_at"],
+            "frontend_started_at": receipt["frontend_started_at"],
+            "backend_container": receipt["backend_container"],
+            "frontend_container": receipt["frontend_container"], "failed_iteration": True}
+
+
 def _probe_script() -> str:
     import inspect
     from docker_dev_recovery_build import require, validate_diagnostic_build
@@ -393,6 +429,58 @@ def _probe_backend(backend_id: str) -> dict[str, object]:
             or probe.get("schema") != "fullmag.docker-api-diagnostic-stop-probe.v1"):
         _fail("Diagnostic-only backend probe has an unsupported schema")
     return probe
+
+
+def _failed_iteration_runtime_probe(backend, before):
+    if before["failed_owner"].get("state") != "failed":
+        _fail("Failed iteration stop requires a terminal Failed owner")
+    script = r'''import hashlib,json,pathlib,os,stat
+root=pathlib.Path('/opt/fullmag/runtime-control/worker-cgroup')
+def read(p):
+ if any(parent.is_symlink() for parent in p.parents): raise RuntimeError('symlink proof ancestor')
+ fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
+ try:
+  if not stat.S_ISREG(os.fstat(fd).st_mode): raise RuntimeError('proof is not regular')
+  raw=os.read(fd,1048577)
+  if len(raw)>1048576: raise RuntimeError('proof exceeds bound')
+  return raw
+ finally: os.close(fd)
+request_raw=read(root/'request.json');ready_raw=read(root/'ready.json')
+request=json.loads(request_raw);ready=json.loads(ready_raw)
+pid=request.get('pid')
+if type(pid)!=int or pid<=0: raise RuntimeError('invalid request PID')
+start=(pathlib.Path('/proc')/str(pid)/'stat').read_text().rsplit(') ',1)[1].split()[19]
+if (request.get('schema')!='fullmag.worker-cgroup-request.v1' or start!=request.get('process_start_token')
+ or request.get('nonce')==ready.get('nonce') or ready.get('schema')!='fullmag.worker-cgroup-ready.v1'):
+ raise RuntimeError('not a live pending cgroup request with stale READY')
+rows=list(pathlib.Path('/state/runs/docker-all/session-store/runs').iterdir())
+if len(rows)>128: raise RuntimeError('run inventory exceeds bound')
+catalogs={}
+for run in rows:
+ if run.is_symlink() or not run.is_dir(): raise RuntimeError('unsafe run inventory')
+ raw=read(run/'run_catalog.json');catalog=json.loads(raw);tasks=catalog.get('tasks')
+ if not isinstance(tasks,list) or not tasks: raise RuntimeError('invalid task inventory')
+ for task in tasks:
+  state=task.get('lifecycle')
+  if state not in {'succeeded','failed','cancelled','interrupted','accepted','queued'}: raise RuntimeError('active task')
+  if state in {'accepted','queued'} and (task.get('artifact_ids') or any(task.get(k) is not None for k in ('attempt_id','resource_id','resolved_input_fingerprint','coordinator_watermark','coordinator_genesis'))): raise RuntimeError('claimed task')
+ catalogs[run.name]=hashlib.sha256(raw).hexdigest()
+if read(root/'request.json')!=request_raw or read(root/'ready.json')!=ready_raw: raise RuntimeError('cgroup proof changed')
+print(json.dumps({'request':request,'stale_ready':ready,'catalogs':catalogs,'cgroup_not_ready':True},sort_keys=True))
+'''
+    raw = docker_capture("exec", backend["Id"], "/usr/local/bin/python3", "-I", "-B", "-c", script, timeout=30).stdout
+    proof = _json(raw, "pending cgroup stop proof")
+    request, ready = proof.get("request", {}), proof.get("stale_ready", {})
+    if (proof.get("cgroup_not_ready") is not True
+            or any(request.get(key) != value or ready.get(key) != value for key, value in
+                   (("container_id", backend["Id"]), ("compose_project", backend["Config"]["Labels"]["com.docker.compose.project"])))
+            or ready.get("image_id") != backend["Image"]
+            or request.get("pid") not in before["probe"]["process_ids"]
+            or request.get("pid") in (1, before["process_receipt"]["api_pid"])
+            or not isinstance(request.get("nonce"), str)
+            or ATTEMPT_RE.fullmatch(request["nonce"]) is None):
+        _fail("Pending cgroup request does not belong to the exact supervisor/group")
+    return proof
 
 
 def _probe_evidence(control: BuildControl, previous_root: str, probe: Mapping[str, object]):
@@ -949,6 +1037,10 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
         _fail("Frontend port is outside the valid range")
     resume_attempt = getattr(args, "resume_attempt", None)
     iteration_attempt = getattr(args, "iteration_attempt", None)
+    failed_iteration = getattr(args, "failed_iteration_attempt", None)
+    failed_sha = getattr(args, "failed_iteration_sha256", None)
+    if bool(failed_iteration) != bool(failed_sha) or (failed_iteration and (resume_attempt or iteration_attempt)):
+        _fail("Failed iteration requires its digest and excludes other continuation pins")
     if resume_attempt is not None and iteration_attempt is not None:
         _fail("Specify one exact resume or iteration, never both")
     continuation_phase = "iteration" if iteration_attempt is not None else "resume"
@@ -1011,6 +1103,11 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
         effective_previous["backend_started_at"] = started_at
         effective_previous["backend_container"] = resume_pin["backend_container"]
         effective_previous["frontend_container"] = resume_pin["frontend_container"]
+    if failed_iteration:
+        resume_pin = _validate_failed_iteration_terminal(control, failed_iteration, failed_sha,
+            development_attempt=args.attempt, config_sha256=args.config_sha256, previous=previous)
+        started_at = resume_pin["backend_started_at"]
+        effective_previous = dict(previous, backend_started_at=started_at)
     # A failed-confirmed start has a _finish process sidecar; a succeeded
     # start may fail later under supervision, so current process-tree bytes
     # are the live failure pin in that case.
@@ -1069,6 +1166,11 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
         helper_id = _assert_group_consumers(control, operation, ids)
         guest_probe = _probe_backend(ids["backend"])
         before = _probe_evidence(control, previous_root, guest_probe)
+        failed_runtime = None
+        if failed_iteration:
+            if actual["frontend"]["State"]["StartedAt"] != resume_pin["frontend_started_at"]:
+                _fail("Frontend incarnation differs from the failed iteration")
+            failed_runtime = _failed_iteration_runtime_probe(actual["backend"], before)
         if before["process_receipt_sha256"] != operation_inputs["process_receipt_sha256"]:
             _fail("Diagnostic process receipt changed since the retained failure was pinned")
         # Re-read the pins and repeat both process and health observation
@@ -1090,6 +1192,8 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
             _fail("Compose container incarnation changed during diagnostic stop preflight")
         fresh_probe = _probe_backend(ids["backend"])
         rechecked = _probe_evidence(control, previous_root, fresh_probe)
+        if failed_iteration and _failed_iteration_runtime_probe(fresh_actual["backend"], rechecked) != failed_runtime:
+            _fail("Failed iteration pending cgroup/run evidence changed")
         stable_keys = (
             "runtime_config_sha256", "failed_owner_sha256", "process_receipt_sha256",
             "process_failure_sidecar_sha256", "api_failure_fence_sha256",
@@ -1124,6 +1228,8 @@ def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
         if resume_pin is not None:
             preflight["resume_attempt"] = resume_pin["attempt"]
             preflight["resume_terminal_sha256"] = resume_pin["sha256"]
+        if failed_runtime is not None:
+            preflight["failed_iteration_stop_only"] = failed_runtime
         control.write(operation["root"] + "/diagnostic-stop-preflight.json", preflight)
         if (
             _sha256(_read_raw(control, previous_root + "/terminal.json"))
@@ -1180,6 +1286,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--preview", action="store_true")
+    parser.add_argument("--failed-iteration-attempt")
+    parser.add_argument("--failed-iteration-sha256")
     parser.add_argument(
         "--resume-attempt",
         help="exact successful retained resume attempt that pins the current backend start time",

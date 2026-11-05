@@ -1004,7 +1004,11 @@ as `active_monitor_id`.
 entries and unique non-empty `id` values. Each entry owns `quantity_id`,
 `component`, `view_scope`, `colormap`, `range`, `raster_opacity`,
 `raster_visible`, `vectors_visible`, and `vector_style`, using the existing
-planar types and validation. An omitted PATCH property preserves the list; a
+planar types and validation. `view_scope: {"kind":"object","scope_id":"<object_id>"}`
+selects a canonical scene object for FDM or FEM, intersected with the source
+target. Object ids are validated against the current visualization target
+registry; membership is resolved by the existing object-target machinery.
+An omitted PATCH property preserves the list; a
 supplied list replaces it atomically, including `[]` to clear it. Source,
 default slice/operator, resolution, quality, and camera/interaction remain
 shared by the single planar view. Profiles do not modify the scene, Python,
@@ -1024,6 +1028,15 @@ preserve fractional position overrides. Authored-monitor reads reject either
 override and retain their authored physical frame. Composition clients align
 samples using physical frames and verify shared plane/operator and resource
 revisions; equal pixel indices or equal fractions across scopes are insufficient.
+
+Planar metadata exposes nullable `observation_frame` using the existing
+`AcceptedObservationFrameRef`. Two quantities prove temporal coherence when
+both references are present and `observation_frame_id` matches. Quantity and
+carrier revisions are local identities and need not match across quantities.
+The reference comes from the exact selected publication; accepted target-only
+Airbox layouts inherit their publication's frame. Historical Airbox artifacts
+and persisted snapshots without this proof publish null. Clients must report
+unknown coherence instead of substituting the current session step.
 
 Default-source target resolution is quantity-domain aware: `magnetic_only`
 quantities such as `m` select `magnetic_domain`, while full-domain quantities

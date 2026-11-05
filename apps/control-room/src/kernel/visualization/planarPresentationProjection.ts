@@ -40,6 +40,17 @@ export function projectPlanarPresentationState(
     vector_style: optimistic.vector_style,
     viewport_colorbar_visible: optimistic.viewport_colorbar_visible,
     target_overrides: optimistic.target_overrides ?? authoritative.target_overrides,
+    ...(authoritative.field_overlays ? {
+      field_overlays: authoritative.field_overlays.flatMap((layer) => {
+        const pending = optimistic.field_overlays?.find((entry) => entry.id === layer.id);
+        if (!pending) return optimistic.field_overlays ? [] : [layer];
+        if (pending.quantity_id !== layer.quantity_id || pending.component !== layer.component ||
+            JSON.stringify(pending.view_scope) !== JSON.stringify(layer.view_scope)) return [layer];
+        return [{ ...layer, colormap: pending.colormap, range: pending.range,
+          raster_opacity: pending.raster_opacity, raster_visible: pending.raster_visible,
+          vectors_visible: pending.vectors_visible, vector_style: pending.vector_style }];
+      }),
+    } : {}),
     wireframe_style: optimistic.wireframe_style,
   };
 }

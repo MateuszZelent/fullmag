@@ -375,6 +375,8 @@ where
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PlanarViewScopeState {
     MonitorTarget,
+    /// Canonical scene object identity, intersected with the selected source.
+    Object { scope_id: String },
     MeshPart { scope_id: String },
     Airbox,
     /// Native layer of an FDM multilayer carrier, keyed by its canonical layer id.

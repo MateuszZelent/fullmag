@@ -632,3 +632,16 @@
   font-variant-numeric: tabular-nums;
   color: var(--fm-text-secondary);
 }
+
+/* Independent quantities retain distinct legends and SI units in one row. */
+.fm-field-map__composition-legends {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  justify-content: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+.fm-field-map__composition-legends > .fm-field-map__colorbar {
+  flex: 1 1 20rem;
+}

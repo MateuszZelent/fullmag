@@ -267,6 +267,7 @@ const PLANAR_FIELD_QUERY_ORDER = [
   "expected_scene_revision",
   "include_mesh",
   "position_fraction",
+  "position_m",
   "quality",
   "resolution_x",
   "resolution_y",

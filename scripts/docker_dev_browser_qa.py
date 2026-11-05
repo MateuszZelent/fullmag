@@ -3463,25 +3463,143 @@ def _run(
     operation["daemon_pending"] = False
 
 
-def reconcile_browser_qa(control, selected, identity, args):
+def _assert_no_qa_controller(selected):
+    """Require host /proc visibility; a sandbox PID namespace cannot prove absence."""
+    proc = Path("/proc")
+    if (not proc.is_dir() or b"codex-linux-sandbox" in (proc / "1/cmdline").read_bytes()):
+        raise BuildControlError("Prestart QA reconciliation requires the full host /proc view")
+    count = 0
+    for path in proc.iterdir():
+        if not path.name.isdigit() or int(path.name) == os.getpid():
+            continue
+        count += 1
+        if count > 65536:
+            raise BuildControlError("Host controller inventory exceeds its bound")
+        try:
+            argv = [value.decode("utf-8", "strict") for value in (path / "cmdline").read_bytes().split(b"\0") if value]
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeError) as error:
+            raise BuildControlError("Host QA controller absence cannot be proven") from error
+        if argv and Path(argv[0]).name.startswith("python") and any(
+                Path(value).name == "docker_dev_browser_qa.py" for value in argv[1:]):
+            source = None
+            for flag in ("--source-root", "--repo-root"):
+                if flag in argv and argv.index(flag) + 1 < len(argv):
+                    source = argv[argv.index(flag) + 1]
+                    break
+            if source is None or Path(source).resolve() == selected:
+                raise BuildControlError("A host QA controller still owns the selected source")
+
+
+def _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, *, cache_project_id):
+    from docker_volume_activation_reconcile import _control_bytes, _probe_helper_absence
+    _assert_no_qa_controller(selected)
+    root = "browser-qa/attempts/" + args.reconcile_attempt
+    if any(key in receipt for key in ("browser_container_name", "browser_container_id", "exit_code")):
+        raise BuildControlError("Prestart receipt contains browser launch/exit evidence")
+    for name in ("terminal.json", "result.json", "public-loopback-probe.json"):
+        if _control_bytes(control, root + "/" + name, optional=True) is not None:
+            raise BuildControlError("Prestart QA already has execution or terminal evidence")
+    current, backend_id, frontend_id, volume, frontend_inputs = _read_live_development(control, selected, identity, args.port)
+    inputs = receipt["inputs"]
+    if (current.get("attempt") != inputs.get("development_attempt")
+            or current.get("config_sha256") != inputs.get("development_config_sha256")
+            or frontend_id != inputs.get("frontend_container")
+            or volume != inputs.get("frontend_volume")
+            or hashlib.sha256(canonical(frontend_inputs)).hexdigest() != inputs.get("frontend_inputs_sha256")):
+        raise BuildControlError("Prestart QA session services changed since admission")
+    frontend = _inspect(frontend_id)
+    _validate_frontend(frontend, control, identity, volume, current, args.port,
+        cache_project_id=cache_project_id)
+    backend = _inspect(backend_id)
+    from docker_volume_dev import _validate_retained_service
+    development_compose = control.read("development/attempts/" + current["attempt"] + "/compose.json")
+    image = _inspect_image(backend["Image"])
+    _validate_retained_service(development_compose, backend, "backend", image["Config"],
+        expected_started_at=current.get("backend_started_at"))
+    validate_source_labels(backend, identity)
+    helper = _inspect(helper_id)
+    pins = {}
+    for service, observed in (("backend", backend), ("frontend", frontend), ("helper", helper)):
+        if observed.get("ExecIDs") not in (None, []):
+            raise BuildControlError("A selected QA/session container still has an active Docker exec")
+        state = observed.get("State", {})
+        if state.get("Running") is not True:
+            raise BuildControlError("Prestart QA requires unchanged running session services and helper")
+        pins[service] = {"id": observed["Id"], "image": observed["Image"],
+            "started_at": state.get("StartedAt"), "pid": state.get("Pid"),
+            "config_sha256": hashlib.sha256(canonical(observed["Config"])).hexdigest(),
+            "host_config_sha256": hashlib.sha256(canonical(observed["HostConfig"])).hexdigest(),
+            "mounts_sha256": hashlib.sha256(canonical(observed["Mounts"])).hexdigest()}
+    browser_name = "fullmag-browser-qa-" + args.reconcile_attempt[:12]
+    absence = _probe_helper_absence(browser_name)
+    if absence is None:
+        raise BuildControlError("Prestart QA browser name exists; no release permitted")
+    listed = docker_capture("ps", "--all", "--no-trunc", "--filter",
+        "label=com.docker.compose.project=" + control.project, "--format", "{{.ID}}", timeout=30)
+    if set(listed.stdout.decode().split()) != {backend_id, frontend_id, helper_id}:
+        raise BuildControlError("Prestart QA group has a browser or unknown container")
+    return {"schema": "fullmag.browser-qa-prestart-absence.v1", "browser_state": "NOT RUN",
+            "browser_name_absence_sha256": absence, "host_controllers": [], "service_pins": pins,
+            "development_fence_sha256": current["development_fence_sha256"]}
+
+
+def _reconcile_prestart_qa(control, selected, identity, args, receipt, helper_id, helper_log, *, cache_project_id):
+    from docker_volume_activation_reconcile import _control_bytes, _wait_for_helper_exit
+    root = "browser-qa/attempts/" + args.reconcile_attempt
+    before = _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, cache_project_id=cache_project_id)
+    if _probe_prestart_browser_qa(control, selected, identity, args, receipt, helper_id, cache_project_id=cache_project_id) != before:
+        raise BuildControlError("Prestart QA absence/session proof changed")
+    terminal = {**receipt, "state": "failed-confirmed", "browser_state": "NOT RUN",
+        "error": "Host controller lost before browser launch; browser QA was not run",
+        "verification": "NOT VERIFIED", "finished_at": time.time(),
+        "prestart_reconciliation": {**before, "helper_id": helper_id, "helper_log": helper_log,
+            "receipt_sha256": args.expected_receipt_sha256, "compose_sha256": args.expected_compose_sha256}}
+    payload = canonical(terminal) + b"\n"
+    path = control.path(root + "/terminal.json")
+    script = ("set -eu; test \"$(cat /control/active)\" = '" + args.reconcile_attempt + "'; "
+        "test \"$(sha256sum '" + control.path(root + "/receipt.json") + "' | cut -d' ' -f1)\" = '" + args.expected_receipt_sha256 + "'; "
+        "test \"$(sha256sum '" + control.path(root + "/compose.json") + "' | cut -d' ' -f1)\" = '" + args.expected_compose_sha256 + "'; "
+        "test ! -e '" + path + "'; umask 027; t=$(mktemp '" + control.path(root) + "/.prestart.XXXXXXXX'); "
+        "trap 'rm -f -- \"$t\"' EXIT; cat > \"$t\"; sync \"$t\"; mv -T -- \"$t\" '" + path + "'; sync '" + control.path(root) + "'")
+    from docker_build_control import bounded_capture
+    result = bounded_capture(control.helper_args(script), data=payload, timeout=90)
+    if result.returncode:
+        raise ControlOutcomeUnknown("Prestart QA terminal publication was not confirmed")
+    _wait_for_helper_exit(helper_id)
+    if _control_bytes(control, "active", optional=True) is not None:
+        raise ControlOutcomeUnknown("Prestart QA original helper did not release its lease")
+    mirror_console(json.dumps({"state": "failed-confirmed", "attempt": args.reconcile_attempt,
+        "browser_state": "NOT RUN", "lease_released": True, "verification": "NOT VERIFIED"}) + "\n")
+
+
+def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=None):
     """Close one stopped, failed QA attempt; never infer a successful proof."""
     from docker_volume_activation_reconcile import (
         _control_bytes, _probe_helper_absence, _validate_helper,
         _validate_helper_logged, _wait_for_helper_exit,
     )
     attempt = args.reconcile_attempt
+    prestart = bool(getattr(args, "reconcile_prestart", False))
+    if prestart and (not isinstance(cache_project_id, str) or not cache_project_id):
+        raise BuildControlError("Prestart reconciliation requires the resolver's cache project identity")
     if not re.fullmatch(r"[0-9a-f]{32}", attempt or ""):
         raise BuildControlError("QA reconciliation requires a full attempt UUID")
     for value in (args.expected_receipt_sha256, args.expected_compose_sha256):
         if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
             raise BuildControlError("QA reconciliation requires exact receipt and Compose hashes")
-    for value in (args.expected_browser_id, args.expected_helper_id):
+    if prestart and args.expected_browser_id is not None:
+        raise BuildControlError("Prestart reconciliation cannot consume a browser container pin")
+    for value in ((args.expected_helper_id,) if prestart else (args.expected_browser_id, args.expected_helper_id)):
         if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
             raise BuildControlError("QA reconciliation requires full container IDs")
     root = "browser-qa/attempts/" + attempt
     active_raw = _control_bytes(control, "active", optional=True)
     retained_terminal = control.read(root + "/terminal.json", optional=True)
     already_released = active_raw is None
+    if prestart and (already_released or retained_terminal is not None):
+        raise BuildControlError("Prestart reconciliation requires its still-held original lease without terminal")
     if ((already_released and not isinstance(retained_terminal, Mapping))
             or (not already_released and active_raw != (attempt + "\n").encode())):
         raise BuildControlError("QA reconciliation active fence differs")
@@ -3491,8 +3609,12 @@ def reconcile_browser_qa(control, selected, identity, args):
             or hashlib.sha256(compose_raw).hexdigest() != args.expected_compose_sha256):
         raise BuildControlError("QA reconciliation evidence CAS differs")
     receipt, document = json.loads(receipt_raw), json.loads(compose_raw)
+    if prestart and (receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or receipt.get("control_namespace") != getattr(control, "namespace", None)
+            or receipt.get("namespace_registry_sha256") != getattr(control, "namespace_registry_sha256", None)):
+        raise BuildControlError("Prestart QA receipt schema/namespace differs")
     required = {"phase": "browser-qa", "attempt": attempt, "compose_project": control.project,
-                "control_volume": control.volume, "state": "outcome-unknown-resources-retained"}
+                "control_volume": control.volume, "state": "starting" if prestart else "outcome-unknown-resources-retained"}
     if any(receipt.get(key) != value for key, value in required.items()):
         raise BuildControlError("QA reconciliation receipt identity/outcome differs")
     inputs = receipt.get("inputs")
@@ -3719,6 +3841,10 @@ def reconcile_browser_qa(control, selected, identity, args):
         if helper_id != args.expected_helper_id:
             raise BuildControlError("QA reconciliation lease helper incarnation differs")
         helper_log = _validate_helper_logged(helper_id)
+    if prestart:
+        _reconcile_prestart_qa(control, selected, identity, args, receipt, helper_id, helper_log,
+            cache_project_id=cache_project_id)
+        return
     browser_name = "fullmag-browser-qa-" + attempt[:12]
     if receipt.get("browser_container_name") != browser_name:
         raise BuildControlError("QA reconciliation browser name differs")
@@ -3888,6 +4014,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Inspect one registered saved-results item through its read-only playback resource",
     )
     parser.add_argument("--reconcile-attempt")
+    parser.add_argument("--reconcile-prestart", action="store_true", help="Close an orphaned starting attempt only after proving its browser was never launched")
     parser.add_argument("--expected-receipt-sha256")
     parser.add_argument("--expected-compose-sha256")
     parser.add_argument("--expected-browser-id")
@@ -3897,6 +4024,8 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("FULLMAG_BROWSER_QA_IMAGE", DEFAULT_BROWSER_IMAGE),
     )
     args = parser.parse_args(argv)
+    if args.reconcile_prestart and not args.reconcile_attempt:
+        raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
     defaults = resolve_defaults(args.repo_root, source_root=args.source_root, port=args.port)
     args.source_root = defaults.source_root
     args.port = defaults.port
@@ -4005,7 +4134,8 @@ def main(argv: list[str] | None = None) -> int:
     control = BuildControl(identity, helper_image)
     _validate_existing_control_volume(control)
     if args.reconcile_attempt:
-        reconcile_browser_qa(control, selected, identity, args)
+        reconcile_browser_qa(control, selected, identity, args,
+            cache_project_id=cache_project_id_for_layout(layout))
         return 0
     current, backend_id, frontend_id, frontend_volume, frontend_inputs = _read_live_development(
         control, selected, identity, args.port

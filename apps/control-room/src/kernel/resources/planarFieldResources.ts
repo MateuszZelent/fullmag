@@ -275,16 +275,27 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     scope_region_id: url.searchParams.get("scope_region_id") ?? undefined,
     snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
     stage_id: url.searchParams.get("stage_id") ?? undefined,
-    ...positionFractionFromLink(url),
+    ...positionOverrideFromLink(url),
   });
 }
 
-/** Multislice panels carry their slice position in the canonical links. */
-function positionFractionFromLink(url: URL): { position_fraction?: number } {
-  const raw = url.searchParams.get("position_fraction");
-  if (raw === null) return {};
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0 || value > 1) {
+/** Carry the exact physical plane (or the existing multislice fraction) into replay. */
+function positionOverrideFromLink(url: URL): Pick<PlanarFieldQuery, "position_fraction" | "position_m"> {
+  const fraction = url.searchParams.get("position_fraction");
+  const absolute = url.searchParams.get("position_m");
+  if (fraction !== null && absolute !== null) {
+    throw new Error("Canonical planar metadata link has conflicting position overrides");
+  }
+  if (absolute !== null) {
+    const value = Number(absolute);
+    if (!absolute.trim() || !Number.isFinite(value)) {
+      throw new Error("Canonical planar metadata link has invalid position_m");
+    }
+    return { position_m: value };
+  }
+  if (fraction === null) return {};
+  const value = Number(fraction);
+  if (!fraction.trim() || !Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error("Canonical planar metadata link has invalid position_fraction");
   }
   return { position_fraction: value };
@@ -734,6 +745,7 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       expected_scene_revision: query.expected_scene_revision,
         include_mesh: query.include_mesh,
         position_fraction: query.position_fraction,
+        position_m: query.position_m,
         quality: query.quality,
         resolution_x: query.resolution_x,
         resolution_y: query.resolution_y,
@@ -755,6 +767,7 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       query.expected_scene_revision,
       query.include_mesh,
       query.position_fraction,
+      query.position_m,
       query.quality,
       query.resolution_x,
       query.resolution_y,
