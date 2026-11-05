@@ -118,7 +118,7 @@ class PreparedPathResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(BuildControlError, 'exact current terminal receipt'):
             self.invoke(current_matches=False)
 
-    def full_resume(self, corrupt=None, *, backend_pin=None):
+    def full_resume(self, corrupt=None, *, backend_pin=None, budget_boundary=False, certificate_image=None):
         """Exercise durable proof copying through the real resume orchestration."""
         self.args.port = 3197
         self.args.resume_backend_image_id = backend_pin
@@ -206,6 +206,47 @@ class PreparedPathResumeTests(unittest.TestCase):
             failed_root + '/frontend-docker-logs.txt': b'frontend',
             cancellation.REQUEST_ROOT + '/' + self.args.request_id + '.json': request_raw,
         }
+        if budget_boundary:
+            parent_raw = terminal_raw
+            parent_attempt = self.args.resume_maintenance_attempt
+            self.args.resume_maintenance_attempt = 'c' * 32
+            current = copy.deepcopy(self.failed)
+            current.update(attempt=self.args.resume_maintenance_attempt,
+                helper_container='fullmag-control-' + self.args.resume_maintenance_attempt,
+                error='Linux supervision stop: prepared recovery changed backend resource budget')
+            current.pop('unclaimed_cancellation_stopped')
+            current.pop('unclaimed_cancellation_removed')
+            current['inputs']['image_id'] = backend_pin or image
+            current['inputs']['unclaimed_cancellation_image_transition'] = {
+                'previous_backend_image_id': image, 'backend_image_id': backend_pin or image,
+                'backend_image_attempt': '7' * 32, 'backend_source_digest': '8' * 64}
+            current['unclaimed_cancellation_resume'] = {
+                'failed_attempt': parent_attempt, 'failed_terminal_sha256': cancellation._sha256(parent_raw),
+                'preflight_sha256': cancellation._sha256(before_raw)}
+            if corrupt == 'parent-hash': current['unclaimed_cancellation_resume']['failed_terminal_sha256'] = '0' * 64
+            if corrupt in ('parent-error', 'parent-budget'):
+                self.failed['error'] = 'unknown' if corrupt == 'parent-error' else current['error']
+                parent_raw = cancellation.canonical(self.failed) + b'\n'
+                files[failed_root + '/terminal.json'] = parent_raw
+                files[failed_root + '/receipt.json'] = parent_raw
+                current['unclaimed_cancellation_resume']['failed_terminal_sha256'] = cancellation._sha256(parent_raw)
+            if corrupt == 'parent-before': files[failed_root + '/unclaimed-cancellation-before.json'] = b'changed'
+            if corrupt == 'parent-admission':
+                files['backend/runtime-service/unclaimed-cancellation/admissions/' + parent_attempt + '.json'] = b'{}'
+            if corrupt == 'missing-parent-stop': files.pop(failed_root + '/unclaimed-cancellation-stopped.json')
+            if corrupt == 'missing-parent-removal': files.pop(failed_root + '/unclaimed-cancellation-removed.json')
+            if corrupt == 'log-hash': files[failed_root + '/backend-docker-logs.txt'] = b'changed'
+            if corrupt == 'transition': current['inputs']['unclaimed_cancellation_image_transition']['previous_backend_image_id'] = 'sha256:' + '0' * 64
+            if corrupt == 'budget-error': current['error'] += '; unknown'
+            if corrupt == 'backend-start': current['backend_started_at'] = None
+            if corrupt == 'admission': current['unclaimed_cancellation_admission'] = None
+            current_raw = cancellation.canonical(current) + b'\n'
+            current_root = 'development/attempts/' + self.args.resume_maintenance_attempt
+            files.update({current_root + '/terminal.json': current_raw,
+                          current_root + '/receipt.json': current_raw,
+                          current_root + '/unclaimed-cancellation-before.json': before_raw,
+                          'development/current.json': current_raw})
+            if corrupt == 'current': files['development/current.json'] = b'changed'
         original = dict(files)
         operation = {'root': 'development/attempts/' + '6' * 32, 'receipt': {}}
 
@@ -222,6 +263,7 @@ class PreparedPathResumeTests(unittest.TestCase):
                    'expected_catalog_sha256': cancellation._sha256(catalog_raw)}
 
         def start(*_args, **kwargs):
+            self.assertEqual(kwargs['reuse_state']['receipt']['image_id'], certificate_image or image)
             kwargs['operation']['receipt']['unclaimed_cancellation_result'] = {
                 'state': 'cancelled', 'native_result': {
                     'disposition': 'cancelled', 'request_id': self.args.request_id}}
@@ -243,7 +285,7 @@ class PreparedPathResumeTests(unittest.TestCase):
             mock(docker_dev, '_resolve_gpu_access', return_value='disabled')
             mock(docker_dev, '_verify_docker_gpu_access', return_value='cpu')
             mock(volume_dev, '_certificate_path', return_value=Path('/certificate'))
-            mock(volume_dev, '_retained_certificate', return_value={'image_id': image})
+            mock(volume_dev, '_retained_certificate', return_value={'image_id': certificate_image or image})
             mock(volume_dev, '_operator_probe_record_from_retained', return_value={})
             mock(volume_dev, 'include_untracked_from_compose', return_value=[])
             mock(volume_dev, '_session_host', return_value=SimpleNamespace(OWNER_NAME='OWNER'))
@@ -262,7 +304,7 @@ class PreparedPathResumeTests(unittest.TestCase):
     def test_resume_persists_original_before_bytes_with_historical_link(self):
         files, original, operation, before_raw = self.full_resume()
         path = operation['root'] + '/unclaimed-cancellation-before.json'
-        self.control.write_bytes.assert_called_once_with(path, before_raw)
+        self.control.write_bytes.assert_any_call(path, before_raw)
         self.assertEqual(files[path], before_raw)
         self.assertEqual(operation['receipt']['unclaimed_cancellation_preflight'], self.before)
         self.assertNotIn('unclaimed_cancellation_image_transition', operation['receipt']['inputs'])
@@ -283,6 +325,41 @@ class PreparedPathResumeTests(unittest.TestCase):
         failed = json.loads(original['development/attempts/' + self.args.resume_maintenance_attempt + '/terminal.json'])
         self.assertEqual(failed['inputs']['image_id'], transition['previous_backend_image_id'])
         self.assertEqual(operation['receipt']['inputs']['image_id'], new_image)
+
+    def test_exact_budget_refusal_uses_authenticated_parent_and_rotated_certificate(self):
+        image = 'sha256:' + '9' * 64
+        for certificate_image in ('sha256:' + '1' * 64, image):
+            with self.subTest(certificate_image=certificate_image):
+                self.setUp()
+                files, original, operation, before_raw = self.full_resume(
+                    backend_pin=image, budget_boundary=True, certificate_image=certificate_image)
+                self.assertEqual(operation['receipt']['unclaimed_cancellation_resume']['failed_attempt'], 'c' * 32)
+                origin = operation['receipt']['unclaimed_cancellation_checkpoint_origin']
+                self.assertEqual(origin['attempt'], 'b' * 32)
+                for name in ('unclaimed-cancellation-before.json', 'unclaimed-cancellation-stopped.json',
+                             'unclaimed-cancellation-removed.json', 'prior-runtime-config.json',
+                             'prior-runtime-owner.json', 'prior-process-tree.json',
+                             'backend-docker-logs.txt', 'frontend-docker-logs.txt'):
+                    self.assertEqual(files[operation['root'] + '/' + name],
+                                     original['development/attempts/' + 'b' * 32 + '/' + name], name)
+                self.assertEqual(files[operation['root'] + '/unclaimed-cancellation-before.json'], before_raw)
+                for name, sha in origin['archive_sha256'].items():
+                    self.assertEqual(sha, cancellation._sha256(files[operation['root'] + '/' + name]))
+
+    def test_budget_refusal_rejects_parent_chain_or_foreign_certificate(self):
+        for case in ('parent-hash', 'parent-error', 'parent-budget', 'budget-error', 'parent-before',
+                     'transition', 'backend-start', 'admission', 'stop-hash',
+                     'removal-hash', 'foreign-certificate', 'parent-admission', 'missing-parent-stop',
+                     'missing-parent-removal', 'log-hash', 'current'):
+            with self.subTest(case=case):
+                self.setUp()
+                cert = 'sha256:' + '0' * 64 if case == 'foreign-certificate' else None
+                with self.assertRaises(BuildControlError):
+                    self.full_resume(case, backend_pin='sha256:' + '9' * 64,
+                                     budget_boundary=True, certificate_image=cert)
+                self.control.operation.assert_not_called()
+                self.control.write.assert_not_called()
+                self.control.write_bytes.assert_not_called()
 
     def test_prepared_resume_still_rejects_broken_checkpoint_hash_chain(self):
         for corruption in ('stop-hash', 'removal-hash', 'consumer', 'failed-image'):

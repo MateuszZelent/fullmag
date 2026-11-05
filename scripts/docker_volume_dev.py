@@ -2115,6 +2115,29 @@ def _pin_native_contract_command(backend, requested):
                                      for argument in ("--native-contract", identifier)]
 
 
+def _preflight_prepared_start_budget(control, operation, maintenance, recovery, selected,
+                                     native_contracts, include_untracked):
+    """Reject retained admission/budget drift before cache, ledger or certificate writes."""
+    constraints = operation.get("receipt", {}).get("inputs", {}).get("prepared_unclaimed_quarantine")
+    if constraints is None and recovery is None:
+        return None
+    if constraints is None and isinstance(recovery, Mapping):
+        constraints = recovery.get("constraints")
+    if (not isinstance(constraints, Mapping)
+            or list(native_contracts) != constraints.get("retained_native_contracts")
+            or list(include_untracked) != constraints.get("retained_include_untracked")):
+        raise BuildControlError("Prepared start changed retained native contracts or source allowlist")
+    from docker_dev_defaults import configured_group_budget
+    from docker_volume_resources import apply_development_budget
+    document = {"name": control.project, "services": {"backend": {}, "frontend": {}}}
+    apply_development_budget(
+        control, document, configured_group_budget(selected), source_root=str(selected),
+        prepared_maintenance=(operation, maintenance) if maintenance is not None else None,
+        prepared_recovery_constraints=recovery,
+    )
+    return document
+
+
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
@@ -2381,6 +2404,12 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        prepared_budget_render = _preflight_prepared_start_budget(
+            control, operation, maintenance, prepared_recovery_constraints, selected,
+            native_contracts, include_untracked,
+        )
+        if prepared_budget_render is not None and cold_budget_restore is not None:
+            raise BuildControlError("Prepared budget cannot be combined with another retained restore")
         operation["receipt"]["ui_mode"] = ui_mode
         if validated_startup_diagnostic_restart is not None and recreation_resume_proof is not None:
             leased_records = _validate_recreation_resume_records(
@@ -2630,10 +2659,21 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         document = json.loads(configured.stdout)
         from docker_dev_defaults import configured_group_budget
         from docker_volume_resources import apply_development_budget
-        apply_development_budget(
-            control, document, configured_group_budget(selected),
-            cold_budget_restore=cold_budget_restore, source_root=str(selected),
-        )
+        if prepared_budget_render is None:
+            apply_development_budget(
+                control, document, configured_group_budget(selected),
+                cold_budget_restore=cold_budget_restore, source_root=str(selected),
+            )
+        else:
+            # This exact render was authenticated and capacity-checked before
+            # cache/ledger allocation or certificate rotation under this lease.
+            for service in ("backend", "frontend"):
+                approved = prepared_budget_render["services"][service]
+                target = document["services"][service]
+                for key in ("cpus", "mem_limit", "memswap_limit"):
+                    if key in approved:
+                        target[key] = approved[key]
+                target.setdefault("environment", {}).update(approved.get("environment", {}))
         if device_access == "gpu":
             document["services"]["backend"]["gpus"] = [{"count": "all"}]
         backend, frontend = (document["services"][name] for name in ("backend", "frontend"))

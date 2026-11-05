@@ -61,6 +61,7 @@ PRESTART_RESUME_ERROR = (
 )
 PINNED_LAYOUT_RESUME_ERROR = "Single-volume group cannot fall back to legacy volume allocation; resume its pinned layout"
 PREPARED_PATH_RESUME_ERROR = "Invalid control-volume relative path"
+PREPARED_BUDGET_RESUME_ERROR = "Linux supervision stop: prepared recovery changed backend resource budget"
 NATIVE_FAILURE_RESUME_ERROR = "Unclaimed cancellation backend has no clean terminal container outcome"
 NATIVE_FAILURE_LOG_MARKER = "runtime generation differs from the execution pin"
 
@@ -1140,6 +1141,62 @@ def _resume_backend_image_pin(args):
     return value
 
 
+def _prepared_budget_resume_parent(control, failed, before_raw, maintenance):
+    """Authenticate the single observed path-error -> budget-refusal history hop."""
+    link = failed.get("unclaimed_cancellation_resume")
+    if (not isinstance(link, Mapping)
+            or set(link) != {"failed_attempt", "failed_terminal_sha256", "preflight_sha256"}
+            or not isinstance(link.get("failed_attempt"), str)
+            or ATTEMPT_RE.fullmatch(link["failed_attempt"]) is None
+            or link["failed_attempt"] == failed["attempt"]
+            or link.get("preflight_sha256") != _sha256(before_raw)):
+        _fail("Prepared budget continuation has no exact original path-error history")
+    root = "development/attempts/" + link["failed_attempt"]
+    raw = _control_raw(control, root + "/terminal.json")
+    if (raw is None or _sha256(raw) != link.get("failed_terminal_sha256")
+            or raw != _control_raw(control, root + "/receipt.json")
+            or _control_raw(control, root + "/unclaimed-cancellation-before.json") != before_raw):
+        _fail("Prepared budget continuation lost its original terminal/preflight bytes")
+    parent = _json_object(raw, "original prepared path-error terminal")
+    parent_inputs = parent.get("inputs")
+    if (parent.get("schema") != "fullmag.docker-build-operation.v1"
+            or parent.get("phase") != "development" or parent.get("state") != "failed-confirmed"
+            or parent.get("attempt") != link["failed_attempt"]
+            or parent.get("helper_container") != "fullmag-control-" + link["failed_attempt"]
+            or parent.get("error") != PREPARED_PATH_RESUME_ERROR
+            or any(parent.get(key) != failed.get(key) for key in (
+                "compose_project", "control_volume", "control_namespace", "namespace_registry_sha256"))
+            or parent.get("unclaimed_cancellation_preflight") != failed.get("unclaimed_cancellation_preflight")
+            or not isinstance(parent_inputs, Mapping)
+            or parent_inputs.get("unclaimed_cancellation") != maintenance
+            or any(parent_inputs.get(key) != failed["inputs"].get(key) for key in (
+                "source_root", "source_project_id", "source_worktree_id", "source_checkout_kind",
+                "gpu_access_requested", "device_access"))
+            or parent_inputs.get("prepared_unclaimed_quarantine")
+                != failed["inputs"].get("prepared_unclaimed_quarantine")
+            or any(key in parent for key in (
+                "backend_started_at", "backend_build_receipt_sha256", "unclaimed_cancellation_admission",
+                "unclaimed_cancellation_result", "backend_container", "frontend_container"))):
+        _fail("Prepared budget continuation parent is not the exact untouched path-error boundary")
+    transition = failed["inputs"].get("unclaimed_cancellation_image_transition")
+    if (not isinstance(transition, Mapping)
+            or set(transition) != {"previous_backend_image_id", "backend_image_id",
+                                   "backend_image_attempt", "backend_source_digest"}
+            or transition.get("previous_backend_image_id") != parent_inputs.get("image_id")
+            or transition.get("backend_image_id") != failed["inputs"].get("image_id")
+            or any(not isinstance(transition.get(key), str)
+                   or IMAGE_RE.fullmatch(transition[key]) is None
+                   for key in ("previous_backend_image_id", "backend_image_id"))
+            or not isinstance(transition.get("backend_image_attempt"), str)
+            or ATTEMPT_RE.fullmatch(transition["backend_image_attempt"]) is None
+            or not isinstance(transition.get("backend_source_digest"), str)
+            or SHA256_RE.fullmatch(transition["backend_source_digest"]) is None):
+        _fail("Prepared budget continuation has no exact historical image transition")
+    if _control_raw(control, "development/attempts/" + failed["attempt"] + "/compose.json", optional=True) is not None:
+        _fail("Prepared budget continuation already published a Compose document")
+    return root, parent, raw
+
+
 def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, control):
     """Resume only the observed failure before the first replacement container."""
     from docker_dev import _resolve_gpu_access, _verify_docker_gpu_access
@@ -1182,7 +1239,8 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or (control.namespace and failed.get("namespace_registry_sha256")
                 != control.namespace_registry_sha256)
             or failed.get("error") not in {
-                PRESTART_RESUME_ERROR, PINNED_LAYOUT_RESUME_ERROR, PREPARED_PATH_RESUME_ERROR
+                PRESTART_RESUME_ERROR, PINNED_LAYOUT_RESUME_ERROR, PREPARED_PATH_RESUME_ERROR,
+                PREPARED_BUDGET_RESUME_ERROR,
             }
             or not isinstance(maintenance, Mapping)
             or set(maintenance) != {"request_id", "request_sha256", "request_path"}
@@ -1209,7 +1267,13 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             or before.get("prior_attempt") != args.attempt
             or before.get("prior_compose_sha256") != args.config_sha256):
         _fail("Failed maintenance preflight does not bind the original request and Compose pins")
-    prepared_path_resume = failed.get("error") == PREPARED_PATH_RESUME_ERROR
+    budget_resume = failed.get("error") == PREPARED_BUDGET_RESUME_ERROR
+    evidence_root, evidence_owner, evidence_terminal_raw = failed_root, failed, terminal_raw
+    if budget_resume:
+        evidence_root, evidence_owner, evidence_terminal_raw = _prepared_budget_resume_parent(
+            control, failed, before_raw, maintenance
+        )
+    prepared_path_resume = failed.get("error") in {PREPARED_PATH_RESUME_ERROR, PREPARED_BUDGET_RESUME_ERROR}
     if prepared_path_resume:
         witness = before.get("prepared_unclaimed_quarantine")
         if (not isinstance(witness, Mapping)
@@ -1230,10 +1294,10 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
     # on preserved preflight plus authoritative absence checks below. The newer
     # pinned-layout and prepared-path boundaries always require both records.
     stopped_checkpoint = _control_raw(
-        control, failed_root + "/unclaimed-cancellation-stopped.json", optional=True
+        control, evidence_root + "/unclaimed-cancellation-stopped.json", optional=True
     )
     removed_checkpoint = _control_raw(
-        control, failed_root + "/unclaimed-cancellation-removed.json", optional=True
+        control, evidence_root + "/unclaimed-cancellation-removed.json", optional=True
     )
     if (stopped_checkpoint is None) != (removed_checkpoint is None):
         _fail("Maintenance stop/removal checkpoints are incomplete")
@@ -1292,7 +1356,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         "prior-process-tree.json": process_raw,
     }
     for name, current in archived.items():
-        raw = _control_raw(control, failed_root + "/" + name)
+        raw = _control_raw(control, evidence_root + "/" + name)
         if current is None or raw != current:
             _fail("Current native evidence changed from the failed-attempt archive: " + name)
     process = _json_object(process_raw, "current runtime process receipt")
@@ -1321,6 +1385,10 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
     )
     if _control_raw(control, admission_relative, optional=True, maximum=MAX_REQUEST_BYTES) is not None:
         _fail("Failed pre-start attempt already published a backend admission")
+    if budget_resume and _control_raw(
+            control, "backend/runtime-service/unclaimed-cancellation/admissions/"
+            + evidence_owner["attempt"] + ".json", optional=True, maximum=MAX_REQUEST_BYTES) is not None:
+        _fail("Original prepared path-error attempt already published a backend admission")
 
     services = (before.get("backend"), before.get("frontend"))
     pins = before.get("container_pins")
@@ -1359,6 +1427,7 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
 
     # Validate any newer stop/removal checkpoints and the exact Docker log
     # archives they bind. Legacy pre-start attempts may have neither checkpoint.
+    archived_logs = {}
     if stopped_checkpoint is not None:
         stopped = _json_object(stopped_checkpoint, "stopped cancellation checkpoint")
         removed = _json_object(removed_checkpoint, "removed cancellation checkpoint")
@@ -1367,8 +1436,8 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
                 or removed.get("schema") != "fullmag.docker-volume-unclaimed-cancellation-removed.v1"
                 or canonical(stopped) + b"\n" != stopped_checkpoint
                 or canonical(removed) + b"\n" != removed_checkpoint
-                or failed.get("unclaimed_cancellation_stopped") != stopped
-                or failed.get("unclaimed_cancellation_removed") != removed
+                or evidence_owner.get("unclaimed_cancellation_stopped") != stopped
+                or evidence_owner.get("unclaimed_cancellation_removed") != removed
                 or stopped.get("request_id") != args.request_id
                 or removed.get("request_id") != args.request_id
                 or stopped.get("request_sha256") != maintenance["request_sha256"]
@@ -1397,10 +1466,11 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         if not isinstance(log_hashes, Mapping) or set(log_hashes) != {"backend", "frontend"}:
             _fail("Stopped checkpoint has no bounded Docker log digests")
         for service in ("backend", "frontend"):
-            log_raw = _control_raw(control, failed_root + "/" + service + "-docker-logs.txt",
+            log_raw = _control_raw(control, evidence_root + "/" + service + "-docker-logs.txt",
                                    maximum=MAX_LOG_BYTES)
             if log_raw is None or _sha256(log_raw) != log_hashes.get(service):
                 _fail("Bounded Docker log archive differs from stop evidence: " + service)
+            archived_logs[service + "-docker-logs.txt"] = log_raw
 
     policy = previous_inputs.get("gpu_access_requested")
     old_access = document.get("services", {}).get("backend", {}).get("environment", {}).get(
@@ -1429,8 +1499,12 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
 
     certificate_path = volume_dev._certificate_path(state)
     certificate = volume_dev._retained_certificate(state, document)
-    if certificate.get("image_id") != old_image_id:
-        _fail("Retained session certificate differs from the original application image")
+    allowed_certificate_images = {old_image_id}
+    if budget_resume:
+        allowed_certificate_images.add(failed_image)
+    certificate_image = certificate.get("image_id")
+    if certificate_image not in allowed_certificate_images:
+        _fail("Retained session certificate differs from the authenticated application images")
     operator_probe_record = volume_dev._operator_probe_record_from_retained(previous, document)
     operation_inputs = {
         "source_root": str(selected), "image_id": backend_image,
@@ -1509,12 +1583,27 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
             "preflight_sha256": _sha256(before_raw),
         }
         control.write_bytes(operation["root"] + "/unclaimed-cancellation-before.json", before_raw)
+        for name, raw in {**archived, **archived_logs}.items():
+            control.write_bytes(operation["root"] + "/" + name, raw)
+        if stopped_checkpoint is not None:
+            operation["receipt"]["unclaimed_cancellation_stopped"] = stopped
+            operation["receipt"]["unclaimed_cancellation_removed"] = removed
+            operation["receipt"]["unclaimed_cancellation_checkpoint_origin"] = {
+                "attempt": evidence_owner["attempt"],
+                "terminal_sha256": _sha256(evidence_terminal_raw),
+                "preflight_sha256": _sha256(before_raw),
+                "stopped_sha256": _sha256(stopped_checkpoint),
+                "removed_sha256": _sha256(removed_checkpoint),
+                "archive_sha256": {name: _sha256(raw) for name, raw in {**archived, **archived_logs}.items()},
+            }
+            control.write_bytes(operation["root"] + "/unclaimed-cancellation-stopped.json", stopped_checkpoint)
+            control.write_bytes(operation["root"] + "/unclaimed-cancellation-removed.json", removed_checkpoint)
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
         host = volume_dev._session_host()
         reuse = {
             "state": state, "host_certificate": certificate_path,
             "owner_marker": state / host.OWNER_NAME,
-            "receipt": {"image_id": old_image_id},
+            "receipt": {"image_id": certificate_image},
             "operator_probe_environment_record": operator_probe_record,
         }
         volume_dev.start(

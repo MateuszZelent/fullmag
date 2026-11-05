@@ -453,6 +453,20 @@ stary store i jego certyfikat pozostają związane z oryginalnym obrazem runtime
 Ta kontynuacja nadal nie uruchamia API ani solvera. Faktyczny runtime z nowym
 pinem pozostaje **NOT VERIFIED** do odrębnej próby i kontroli jej receiptów.
 
+Prepared maintenance i fresh archive zachowują dokładne limity backendu z
+uwierzytelnionego witness (`Memory`, `NanoCpus`, `MemorySwap`), także przy innej
+bieżącej konfiguracji `.env`. Preflight sprawdza live quarantine/admission,
+Docker capacity, native contracts i allowlist przed cache, ledgerem i rotacją
+certyfikatu; końcowy render nadal przechodzi dokładny guard. Zapisany budget
+nadal wymaga prawidłowej historii, ale nie zastępuje retained limits. Wyłącznie
+zaobserwowana odmowa `prepared recovery changed backend resource budget` przed
+Compose/start może kontynuować z dokładnego parenta błędu ścieżki: własny before,
+request i witness muszą się zgadzać, pełny chain stop/removal oraz archiwa są
+kopiowane do nowej operacji z pinami pochodzenia. Dla tego boundary częściowo
+obrócony certyfikat może wskazywać oryginalny obraz albo dokładny obraz failed
+maintenance; pozostałe kontrole właściciela, store, inode, profilu i engine
+pozostają obowiązkowe. Nie przywracaj markerów ani historycznych receiptów.
+
 Dopiero po potwierdzonym Cancelled osobny
 `recreate-volume --fresh-state --prepared-quarantine-sha256 <sha>` może
 zarchiwizować stary runtime-control/ledger i uruchomić nową generację przez
