@@ -6,6 +6,64 @@ import unittest
 
 
 class DevelopmentRecoveryShellTests(unittest.TestCase):
+    def test_prepared_completed_archive_actual_recipe_dispatches_only_both_pins(self):
+        repo = Path(__file__).resolve().parents[1]
+        base = ['a' * 32, 'b' * 64, '/selected/checkout', 'c' * 32, 'd' * 64, 'e' * 64,
+                'sha256:' + 'f' * 64, 'engine-id']
+        for plan, apply in [('', 'false'), ('1' * 64, 'true')]:
+            dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-resume-interrupted-fresh-archive', *base, plan, apply, '2' * 64, '3' * 64],
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv = result.stdout.split(b'\0')[:-1]
+            self.assertIn(b'resume-interrupted-fresh-archive', argv)
+            at = argv.index(b'--prepared-quarantine-sha256')
+            self.assertEqual(argv[at:at+4], [b'--prepared-quarantine-sha256', b'2' * 64,
+                                          b'--prepared-archive-terminal-sha256', b'3' * 64])
+            self.assertEqual(b'--apply' in argv, apply == 'true')
+
+    def test_prepared_stop_real_recipe_preserves_preview_apply_and_continuation_as_fixed_argv(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/checkout with spaces/$(printf injected);literal'
+        target = '/diagnostics/prepared target.json'
+        marker = '  *"scripts/docker_volume_stop_failed.py"*)\n'
+        base = [source, 'a' * 64, 'sha256:' + 'b' * 64, 'c' * 64, 'd' * 32, target, 'e' * 64]
+        for extra in ([], ['true', 'f' * 64], ['true', 'f' * 64, '1' * 64]):
+            with self.subTest(extra=extra):
+                dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                                      'docker-dev-stop-prepared-unclaimed', *base, *extra],
+                                     capture_output=True, text=True, timeout=15)
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                result = self.dispatch(dry.stderr.strip(), marker=marker)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                argv = result.stdout.split(b'\0')[:-1]
+                expected = [b'/recorded/python', b'-B', b'/registered/checkout/scripts/docker_volume_stop_failed.py',
+                            b'--failure-variant', b'prepared-unclaimed-v1', b'--source-root', source.encode(),
+                            b'--container-id', b'a' * 64, b'--image-id', b'sha256:' + b'b' * 64,
+                            b'--process-receipt-sha256', b'c' * 64, b'--activation-attempt', b'd' * 32,
+                            b'--prepared-target', target.encode(), b'--prepared-target-sha256', b'e' * 64]
+                if extra:
+                    expected += [b'--apply', b'--expected-plan-sha256', b'f' * 64]
+                if len(extra) == 3:
+                    expected += [b'--continue-intent-sha256', b'1' * 64]
+                self.assertEqual(argv, expected)
+
+    def test_prepared_stop_wrapper_rejects_bad_pins_extra_options_and_shell_commands(self):
+        recipe = ('python "/ignored/scripts/docker_volume_stop_failed.py" --failure-variant prepared-unclaimed-v1 '
+                  "--source-root '/selected' --container-id '" + 'a' * 64 + "' --image-id 'sha256:" + 'b' * 64
+                  + "' --process-receipt-sha256 '" + 'c' * 64 + "' --activation-attempt '" + 'd' * 32
+                  + "' --prepared-target '/target.json' --prepared-target-sha256 '" + 'e' * 64 + "'")
+        marker = '  *"scripts/docker_volume_stop_failed.py"*)\n'
+        for invalid in [recipe + '; printf injected', recipe + ' --force', recipe + ' --apply',
+                        recipe + " --continue-intent-sha256 '" + 'f' * 64 + "'",
+                        recipe.replace('e' * 64, 'not-a-hash'), recipe.replace('prepared-unclaimed-v1', 'legacy')]:
+            with self.subTest(invalid=invalid):
+                result = self.dispatch(invalid, marker=marker)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn(b'injected', result.stdout)
+
     def dispatch(self, recipe, marker='  *"scripts/docker_volume_development_interrupted.py"*)\n'):
         source = globals().get('WRAPPER') or (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text()
         body = source.split(marker, 1)[1].split('\n    ;;', 1)[0]

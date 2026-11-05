@@ -1901,6 +1901,8 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
         solver_profile=solver_profile,
     )
     request_id = _request_id(startup_helper, args.attempt, authorization.source_sha256, args.request_id)
+    from docker_volume_cancelled_activation_guard import assert_start_allowed
+    assert_start_allowed(control, request_id)
     if request_id != authorization.request_id:
         authorization = _prepare_startup_authorization(
             startup_helper,

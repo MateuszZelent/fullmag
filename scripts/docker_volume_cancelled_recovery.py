@@ -780,6 +780,11 @@ def recover_cancelled(args) -> dict[str, Any]:
     if volume.returncode:
         _fail("Selected Compose group has no existing control volume; cancelled recovery cannot create a namespace")
     control.prepare()
+    from docker_volume_linux_supervision_stop import PREPARED_QUARANTINE, assert_prepared_start_allowed
+    # This legacy recovery restores the retained namespace. The prepared
+    # failure family instead requires the separately qualified fresh archive.
+    if control.read(PREPARED_QUARANTINE, optional=True) is not None:
+        assert_prepared_start_allowed(control)
 
     cancel_root = f"development/attempts/{attempt}"
     cancellation_terminal, cancellation_terminal_raw = _read_json(control, cancel_root + "/terminal.json")

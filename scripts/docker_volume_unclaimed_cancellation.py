@@ -1214,7 +1214,11 @@ def _resume_cancel_unclaimed(args, selected, layout, identity, helper_image, con
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record, "unclaimed_cancellation": dict(maintenance),
+        **({'prepared_unclaimed_quarantine': before['prepared_unclaimed_quarantine']}
+           if 'prepared_unclaimed_quarantine' in before else {}),
     }
+    if 'prepared_unclaimed_quarantine' in before:
+        args.native_contract = list(before['prepared_unclaimed_quarantine']['retained_native_contracts'])
     args.profile = "dev"
     args.script = None
     args.image = None
@@ -1630,7 +1634,11 @@ def _resume_native_cancellation_failure(args, selected, layout, identity, helper
         "gpu_access_requested": policy, "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record, "unclaimed_cancellation": dict(maintenance),
+        **({'prepared_unclaimed_quarantine': before['prepared_unclaimed_quarantine']}
+           if 'prepared_unclaimed_quarantine' in before else {}),
     }
+    if 'prepared_unclaimed_quarantine' in before:
+        args.native_contract = list(before['prepared_unclaimed_quarantine']['retained_native_contracts'])
     args.profile = "dev"
     args.script = None
     args.image = None
@@ -2031,6 +2039,15 @@ def cancel_unclaimed(args) -> dict[str, Any]:
     ids, actual, old_image_id, image_config, _ = _observe_retained_namespace(
         args, control, identity, previous, document
     )
+    from docker_volume_linux_supervision_stop import prepared_quarantine_context
+    prepared_quarantine = prepared_quarantine_context(
+        control, previous, document, actual,
+        expected_sha256=getattr(args, 'prepared_quarantine_sha256', None))
+    if prepared_quarantine is not None:
+        target = prepared_quarantine['target']
+        if request.get('run_id') != target['run_id'] or request.get('task_id') != target['task_id']:
+            _fail('Cancellation request does not target the exact prepared quarantine task')
+        args.native_contract = list(prepared_quarantine['retained_native_contracts'])
     attempt_inputs = previous_inputs
     policy = attempt_inputs.get("gpu_access_requested") if isinstance(attempt_inputs, Mapping) else None
     if policy not in {"auto", "required", "disabled"}:
@@ -2075,6 +2092,7 @@ def cancel_unclaimed(args) -> dict[str, Any]:
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
         **operator_probe_record,
         "unclaimed_cancellation": maintenance,
+        **({'prepared_unclaimed_quarantine': prepared_quarantine} if prepared_quarantine is not None else {}),
     }
     args.profile = "dev"
     args.script = None
@@ -2111,6 +2129,11 @@ def cancel_unclaimed(args) -> dict[str, Any]:
         )
         if leased_ids != ids:
             _fail("Retained service IDs changed before cancellation teardown")
+        if prepared_quarantine_context(
+                control, previous, document, leased_actual,
+                expected_sha256=getattr(args, 'prepared_quarantine_sha256', None),
+                allowed_active=operation['receipt']['attempt']) != prepared_quarantine:
+            _fail('Prepared quarantine changed under the native cancellation maintenance lease')
         for service in ("backend", "frontend"):
             before = _safe_inspect_summary(actual[service])
             after = _safe_inspect_summary(leased_actual[service])
@@ -2152,6 +2175,7 @@ def cancel_unclaimed(args) -> dict[str, Any]:
                 )
                 for service in ("backend", "frontend")
             ],
+            **({'prepared_unclaimed_quarantine': prepared_quarantine} if prepared_quarantine is not None else {}),
         }
         operation["receipt"]["unclaimed_cancellation_preflight"] = evidence
         control.write(operation["root"] + "/unclaimed-cancellation-before.json", evidence)

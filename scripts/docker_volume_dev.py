@@ -2065,7 +2065,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None):
+          cold_budget_restore=None, prepared_recovery_constraints=None):
     from docker_dev import (_select_source, _compose_identity,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
@@ -2230,7 +2230,13 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           or getattr(args, "fresh_state", False)):
         raise BuildControlError("Isolated snapshot start must preserve its source and cannot replay a script")
     from docker_volume_cancelled_activation_guard import assert_start_allowed
-    assert_start_allowed(control, getattr(args, "request_id", None), reuse_state=reuse_state)
+    assert_start_allowed(control, getattr(args, "request_id", None), reuse_state=reuse_state,
+                         **({'prepared_maintenance': (operation, maintenance)} if maintenance is not None else {}))
+    if maintenance is None:
+        if prepared_recovery_constraints is not None:
+            from docker_volume_linux_supervision_stop import PREPARED_QUARANTINE
+            if control.read(PREPARED_QUARANTINE).get('cancellation_admission') != prepared_recovery_constraints:
+                raise BuildControlError('Fresh prepared recovery constraints differ from the qualified archive')
     image = images["backend"]["image_id"]
     if retained_device_access is None:
         device_access = _verify_docker_gpu_access(device_access, policy, image, control.project)
@@ -2256,6 +2262,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_volume_activation_reconcile import assert_no_unresolved_activation
         assert_no_unresolved_activation(control)
     operation_inputs = {"source_root": str(selected), "image_id": image,
+        **({'prepared_cancelled_fresh_admission': prepared_recovery_constraints} if prepared_recovery_constraints is not None else {}),
         **({"native_contracts": list(native_contracts)} if native_contracts else {}),
         "source_project_id": identity["project_id"],
         "source_worktree_id": identity["worktree_id"],
@@ -2722,6 +2729,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         backend["environment"][INCLUDE_UNTRACKED_ENV] = json.dumps(
             include_untracked, ensure_ascii=False, separators=(",", ":")
         )
+        from docker_volume_linux_supervision_stop import validate_prepared_render
+        prepared_constraints = operation['receipt'].get('inputs', {}).get('prepared_unclaimed_quarantine')
+        if prepared_constraints is None and prepared_recovery_constraints is not None:
+            prepared_constraints = prepared_recovery_constraints['constraints']
+        validate_prepared_render(document, prepared_constraints)
         control.write(operation["root"] + "/compose.json", document)
         operation["receipt"].update(state="starting-services", state_root=str(state),
             frontend_volume=frontend_volume, backend_volumes=cache["volume_names"])
@@ -7592,6 +7604,9 @@ def _retained_operation(
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
     preparation_abort = require_fresh_archive(control, args, previous, document, recreate_services=recreate_services)
+    from docker_volume_linux_supervision_stop import require_prepared_fresh_archive
+    prepared_fresh_archive = require_prepared_fresh_archive(
+        control, args, previous, document, recreate_services=recreate_services)
     if getattr(args, "build_for_recovery", None) or getattr(args, "build_for_recovery_sha256", None):
         if recreate_services or restart_idle_service or stop_after_drain or refresh_frontend_service or resume_recreation_id is not None:
             raise BuildControlError("Recovery build is supported only by plain retained resume")
@@ -8263,6 +8278,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 backend_id=actual["backend"].get("Id"),
                 drained_successor=drained_successor_pins, actual=successor_actual,
             )
+            if require_prepared_fresh_archive(
+                    control, args, previous, document, actual,
+                    recreate_services=recreate_services) != prepared_fresh_archive:
+                raise BuildControlError('Prepared cancellation/fresh archive proof changed under recreation lease')
+            if prepared_fresh_archive is not None:
+                operation['receipt']['prepared_cancelled_fresh_admission'] = prepared_fresh_archive
             if drained_successor:
                 if (not isinstance(leased_recovery_context, DrainedSuccessorContext)
                         or leased_recovery_context.witness != recovery_context.witness):
@@ -8589,6 +8610,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     source_root=str(selected),
                     removed_containers=list(ids.values()),
                 )
+                from docker_volume_linux_supervision_stop import pin_prepared_fresh_archive
+                pin_prepared_fresh_archive(control, operation, prepared_fresh_archive)
             operation["daemon_pending"] = False
             operation["receipt"].update(state="succeeded", removed_containers=list(ids.values()),
                                         retained_volumes=previous["backend_volumes"], retained_frontend_volume=previous["frontend_volume"])
@@ -8661,6 +8684,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         return start(
             args, reuse_state=reuse, retained_device_access=retained_device_access,
             terminal_observation=terminal_observation, helper_source_binding=helper_source_binding,
+            **({'prepared_recovery_constraints': prepared_fresh_archive} if prepared_fresh_archive is not None else {}),
             **recovery_context,
         )
     restart_backend = bool(getattr(args, "restart_backend", False))

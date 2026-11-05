@@ -15,6 +15,7 @@ from collections.abc import Mapping
 import re
 import shlex
 import time
+from contextlib import contextmanager
 
 from docker_build_control import (
     BuildControl,
@@ -41,6 +42,97 @@ OPERATION_SCHEMA = "fullmag.docker-build-operation.v1"
 NAMESPACE_ATTESTATION_SCHEMA = "fullmag.docker-stopped-namespace-attestation.v1"
 UNKNOWN_STATE = "unknown-retained"
 UNKNOWN_REASON = "backend-namespace-stopped"
+
+
+def _prepared_observer_lock_script():
+    """Open only the observer lock, without truncating any existing inode."""
+    path = '/control/.prepared-unclaimed-observer.lock'
+    q = shlex.quote(path)
+    return (
+        f'if test ! -e {q} && test ! -L {q}; then (umask 077; set -C; : >{q}); fi; '
+        f'test -f {q}; test ! -L {q}; '
+        f'test "$(stat -c "%h:%u:%a" {q})" = "1:$(id -u):600"; '
+        f'exec 7<{q}; '
+        f'test ! -L {q}; test -f {q}; '
+        f'test "$(stat -Lc "%d:%i:%h:%u:%a" /proc/$$/fd/7)" = "$(stat -c "%d:%i:%h:%u:%a" {q})"; '
+        'test "$(stat -Lc "%h:%u:%a" /proc/$$/fd/7)" = "1:$(id -u):600"; '
+        'flock -n 7; '
+        f'test ! -L {q}; test -f {q}; '
+        f'test "$(stat -Lc "%d:%i:%h:%u:%a" /proc/$$/fd/7)" = "$(stat -c "%d:%i:%h:%u:%a" {q})"; '
+        'test "$(stat -Lc "%h:%u:%a" /proc/$$/fd/7)" = "1:$(id -u):600"; ')
+
+
+@contextmanager
+def retained_activation_observer(control, activation_attempt, receipt_raw):
+    """Observe a finalized unknown receipt while its original helper owns the lease.
+
+    The exec process holds only a separate observation lock. It never acquires
+    operation.lock, pretends to be the original logger, or removes active.
+    Writes/readback through the yielded control use that same helper incarnation.
+    """
+    import copy
+    import selectors
+    import subprocess
+    from docker_dev_host import docker_argv
+    from docker_build_control import ControlOutcomeUnknown
+    _attempt(activation_attempt, "retained observer activation")
+    receipt = _json(receipt_raw, "retained observer receipt")
+    if (receipt.get('phase') != 'activation' or receipt.get('attempt') != activation_attempt
+            or receipt.get('state') != 'outcome-unknown-resources-retained'
+            or type(receipt.get('finished_at')) not in (int, float)):
+        raise _fail('Retained observer requires a finalized unknown activation receipt')
+    helper_name = 'fullmag-control-' + activation_attempt
+    _, helper_id = _validate_helper(control, helper_name, activation_attempt)
+    _validate_helper_logged(helper_id)
+    root = 'activation/attempts/' + activation_attempt
+    if (_control_bytes(control, root + '/receipt.json') != receipt_raw
+            or _control_bytes(control, root + '/terminal.json', optional=True) is not None
+            or _control_bytes(control, 'active').strip() != activation_attempt.encode()):
+        raise _fail('Original activation receipt/terminal/active changed before observation')
+    prefix = [*docker_argv('exec'), '--user', '65532:65532', '-i', helper_id,
+              '/bin/bash', '-euo', 'pipefail', '-c']
+    # The original operation helper owns operation.lock. A successful lock
+    # acquisition here disproves that ownership and must stop the observer.
+    script = control._namespace_guard(
+        'test -f /control/operation.lock; test ! -L /control/operation.lock; '
+        'exec 8</control/operation.lock; if flock -n 8; then exit 51; fi; '
+        + _prepared_observer_lock_script() +
+        'printf "OBSERVING\\n"; cat >/dev/null')
+    process = subprocess.Popen([*prefix, script], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            if not selector.select(30) or process.stdout.readline(32) != b'OBSERVING\n' or process.poll() is not None:
+                raise ControlOutcomeUnknown('Original helper observation lock was not acknowledged')
+        retained = copy.copy(control)
+        def helper_args(command, **options):
+            if options:
+                raise _fail('Retained observer cannot create or initialize a helper')
+            if process.poll() is not None:
+                raise ControlOutcomeUnknown('Original helper observer exited; no fallback helper is allowed')
+            return [*prefix, control._namespace_guard(command)]
+        retained.helper_args = helper_args
+        def check():
+            if process.poll() is not None:
+                raise ControlOutcomeUnknown('Original helper observer exited')
+            _, fresh_id = _validate_helper(control, helper_name, activation_attempt)
+            _validate_helper_logged(fresh_id)
+            if (fresh_id != helper_id or _control_bytes(retained, root + '/receipt.json') != receipt_raw
+                    or _control_bytes(retained, 'active').strip() != activation_attempt.encode()):
+                raise ControlOutcomeUnknown('Original helper receipt/incarnation/lease changed')
+        check()
+        yield retained, helper_id, check
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            # End only this Docker exec client. The original operation helper
+            # remains the sole owner of the control lease.
+            process.terminate()
+            process.wait(timeout=10)
 
 
 def _fail(message: str) -> BuildControlError:

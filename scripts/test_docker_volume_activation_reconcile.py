@@ -50,6 +50,11 @@ class Control:
         "checkout_kind": "worktree",
     }
 
+    def read(self, relative, *, optional=False):
+        if relative == 'prepared-unclaimed/current.json' and optional:
+            return None
+        raise AssertionError('Unexpected prepared control read: ' + relative)
+
     def read_raw(self, relative, *, optional=False):
         if relative == "offline-reconciliation/current.json" and optional:
             return None
@@ -123,6 +128,41 @@ def _read_absent_cancelled_activation_recovery(
 
 
 class UnknownActivationTests(unittest.TestCase):
+    def test_prepared_observer_lock_refuses_hardlink_and_symlink_without_changing_bytes(self):
+        for kind in ('hardlink', 'symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                receipt = root / 'protected-receipt.json'
+                original = b'{"protected":"original immutable receipt"}\n'
+                receipt.write_bytes(original)
+                receipt.chmod(0o600)
+                lock = root / '.prepared-unclaimed-observer.lock'
+                if kind == 'hardlink':
+                    os.link(receipt, lock)
+                else:
+                    lock.symlink_to(receipt)
+                script = module._prepared_observer_lock_script().replace('/control', directory)
+                result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', script + 'printf UNSAFE'],
+                                        capture_output=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b'UNSAFE', result.stdout)
+                self.assertEqual(receipt.read_bytes(), original)
+
+    def test_prepared_observer_lock_reuses_its_regular_inode_without_truncating(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = root / '.prepared-unclaimed-observer.lock'
+            lock.write_bytes(b'preserve existing observer lock bytes')
+            lock.chmod(0o600)
+            inode = lock.stat().st_ino
+            script = module._prepared_observer_lock_script().replace('/control', directory)
+            result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', script + 'printf LOCKED'],
+                                    capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, b'LOCKED')
+            self.assertEqual(lock.stat().st_ino, inode)
+            self.assertEqual(lock.read_bytes(), b'preserve existing observer lock bytes')
+
     def test_activation_receipt_normalization_preserves_optional_solver_profile_digest(self) -> None:
         inputs = {
             "development_attempt": DEV_ATTEMPT,

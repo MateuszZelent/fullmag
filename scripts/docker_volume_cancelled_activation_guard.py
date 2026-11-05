@@ -210,7 +210,13 @@ def has_archive(control, record):
     return generation is not None and _archive_matches(control, record, generation)
 
 
-def assert_start_allowed(control, request_id=None, *, reuse_state=None):
+def assert_start_allowed(control, request_id=None, *, reuse_state=None, prepared_maintenance=None):
+    from docker_volume_linux_supervision_stop import assert_prepared_start_allowed, assert_prepared_maintenance_allowed
+    if prepared_maintenance is None:
+        assert_prepared_start_allowed(control, request_id, reuse_state=reuse_state)
+    else:
+        operation, maintenance = prepared_maintenance
+        assert_prepared_maintenance_allowed(control, operation, maintenance)
     if request_id is not None:
         _assert_not_retired(control, "request", request_id)
     if reuse_state is not None:

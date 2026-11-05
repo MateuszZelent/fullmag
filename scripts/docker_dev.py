@@ -2800,6 +2800,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument('--prepared-quarantine-sha256',
+                                 help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
                                  choices=("fem-demag-poisson",),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
@@ -2864,6 +2866,8 @@ def _parser() -> argparse.ArgumentParser:
     interrupted_archive.add_argument("--engine-id", required=True)
     interrupted_archive.add_argument("--expected-plan-sha256")
     interrupted_archive.add_argument("--apply", action="store_true")
+    interrupted_archive.add_argument('--prepared-quarantine-sha256')
+    interrupted_archive.add_argument('--prepared-archive-terminal-sha256')
 
     cancel_unclaimed = subparsers.add_parser(
         "cancel-unclaimed-volume",
@@ -2874,6 +2878,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancel_unclaimed.add_argument("--attempt", required=True,
                                   help="exact retained development attempt to replace")
+    cancel_unclaimed.add_argument('--prepared-quarantine-sha256',
+                                  help='explicit exact prepared-unclaimed stop quarantine digest')
     cancellation_resume = cancel_unclaimed.add_mutually_exclusive_group()
     cancellation_resume.add_argument(
         "--resume-maintenance-attempt",
