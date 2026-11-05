@@ -4,6 +4,7 @@ import json
 import unittest
 
 import docker_activation_history_policy as history
+from docker_startup_script import SOLVER_PROFILE_PRESET
 
 
 TOKEN = "a" * 32
@@ -53,6 +54,32 @@ def qualify(files, catalog, intent, **kwargs):
         TOKEN, files, project=PROJECT, volume=VOLUME, namespace="",
         run_catalog_raw=raw(catalog), run_intent_raw=raw(intent),
         lease_records=kwargs.get("leases", {}))
+
+
+def profiled_fixture():
+    files, catalog, intent = fixture()
+    receipt = json.loads(files["receipt.json"])
+    result = json.loads(files["result.json"])
+    provenance = json.loads(files["startup-provenance.json"])
+    profile = copy.deepcopy(SOLVER_PROFILE_PRESET)
+    profile_sha = history.digest(history.canonical(profile))
+    session = "docker-startup-" + history.digest("\0".join((REQUEST, SOURCE, profile_sha)).encode())
+    for record in (receipt, receipt["inputs"], result["response"]):
+        record["solver_profile_sha256"] = profile_sha
+    receipt["session_id"] = result["response"]["session_id"] = session
+    provenance["solver_profile"] = profile
+    parameters = intent["specification"]["parameters"]
+    parameters["solver_profile"] = copy.deepcopy(profile)
+    parameters["live_workspace"]["session_id"] = session
+    return files, catalog, intent, receipt, result, provenance
+
+
+def profile_records(files, receipt, result, provenance, authorization=None):
+    provenance_raw = raw(provenance)
+    receipt["provenance_sha256"] = receipt["inputs"]["provenance_sha256"] = history.digest(provenance_raw)
+    return {**files, "receipt.json": raw(receipt), "terminal.json": raw(receipt),
+            "result.json": raw(result), "startup-provenance.json": provenance_raw,
+            "authorization.json": raw(provenance if authorization is None else authorization)}
 
 
 class HistoryQualificationTests(unittest.TestCase):
@@ -112,6 +139,81 @@ class HistoryQualificationTests(unittest.TestCase):
         intent["idempotency_key"] = "live-http-other"
         with self.assertRaisesRegex(history.HistoryError, "RunIntent"):
             qualify(files, catalog, intent)
+
+    def test_profiled_terminal_run_uses_the_profile_aware_session(self):
+        files, catalog, intent, receipt, result, provenance = profiled_fixture()
+        qualified = qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+        self.assertNotEqual(receipt["session_id"], SESSION)
+        self.assertEqual(qualified["session_id"], receipt["session_id"])
+
+    def test_profile_digest_is_required_on_every_boundary(self):
+        for location in ("receipt", "inputs", "response"):
+            for value in (None, "", "c" * 64, "A" * 64):
+                with self.subTest(location=location, value=value):
+                    files, catalog, intent, receipt, result, provenance = profiled_fixture()
+                    record = {"receipt": receipt, "inputs": receipt["inputs"], "response": result["response"]}[location]
+                    if value is None:
+                        del record["solver_profile_sha256"]
+                    else:
+                        record["solver_profile_sha256"] = value
+                    with self.assertRaisesRegex(history.HistoryError, "solver profile"):
+                        qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+
+    def test_profile_wrappers_must_be_present_and_match_the_managed_preset(self):
+        for location in ("provenance", "intent", "authorization"):
+            for mutation in ("missing", "null", "disabled", "numeric_enabled", "changed"):
+                with self.subTest(location=location, mutation=mutation):
+                    files, catalog, intent, receipt, result, provenance = profiled_fixture()
+                    authorization = copy.deepcopy(provenance)
+                    target = {"provenance": provenance, "intent": intent["specification"]["parameters"],
+                              "authorization": authorization}[location]
+                    if mutation == "missing":
+                        del target["solver_profile"]
+                    elif mutation == "null":
+                        target["solver_profile"] = None
+                    elif mutation == "disabled":
+                        target["solver_profile"]["config"]["enabled"] = False
+                    elif mutation == "numeric_enabled":
+                        target["solver_profile"]["config"]["enabled"] = 1
+                    else:
+                        target["solver_profile"]["config"]["max_samples"] = 64
+                    # Keep authorization and provenance equal when testing
+                    # the provenance wrapper itself, and distinct when testing authorization.
+                    if location == "provenance":
+                        authorization = provenance
+                    records = profile_records(files, receipt, result, provenance, authorization)
+                    with self.assertRaises(history.HistoryError):
+                        qualify(records, catalog, intent)
+
+    def test_legacy_requires_consistent_absence_of_profile_and_digest(self):
+        for location in ("provenance", "intent", "receipt", "inputs", "response"):
+            for value in (None, "c" * 64):
+                with self.subTest(location=location, value=value):
+                    files, catalog, intent = fixture()
+                    receipt = json.loads(files["receipt.json"])
+                    result = json.loads(files["result.json"])
+                    provenance = json.loads(files["startup-provenance.json"])
+                    if location in ("provenance", "intent"):
+                        target = provenance if location == "provenance" else intent["specification"]["parameters"]
+                        target["solver_profile"] = None if value is None else copy.deepcopy(SOLVER_PROFILE_PRESET)
+                    else:
+                        target = {"receipt": receipt, "inputs": receipt["inputs"], "response": result["response"]}[location]
+                        target["solver_profile_sha256"] = value
+                    with self.assertRaisesRegex(history.HistoryError, "solver profile"):
+                        qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+
+    def test_profiled_run_rejects_the_legacy_session_at_each_boundary(self):
+        for location in ("receipt", "response", "intent", "all"):
+            with self.subTest(location=location):
+                files, catalog, intent, receipt, result, provenance = profiled_fixture()
+                if location in ("receipt", "all"):
+                    receipt["session_id"] = SESSION
+                if location in ("response", "all"):
+                    result["response"]["session_id"] = SESSION
+                if location in ("intent", "all"):
+                    intent["specification"]["parameters"]["live_workspace"]["session_id"] = SESSION
+                with self.assertRaises(history.HistoryError):
+                    qualify(profile_records(files, receipt, result, provenance), catalog, intent)
 
     def test_active_and_mismatched_leases_are_not_eligible(self):
         files, catalog, intent = fixture()

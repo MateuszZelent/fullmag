@@ -163,15 +163,35 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
     except RuntimeError as error:
         raise HistoryError("Run is not terminal with released leases: " + str(error)) from error
     intent = document(run_intent_raw, "run intent")
-    expected_session = "docker-startup-" + digest(
-        (receipt["request_id"] + "\0" + receipt["source_sha256"]).encode())
     if (intent.get("schema_version") != "run_intent.v1" or intent.get("run_id") != run_id
-            or intent.get("idempotency_key") != "live-http-" + digest(receipt["request_id"].encode())
-            or receipt["session_id"] != expected_session):
+            or intent.get("idempotency_key") != "live-http-" + digest(receipt["request_id"].encode())):
         raise HistoryError("RunIntent does not bind the activated request")
     specification = intent.get("specification")
     parameters = specification.get("parameters") if isinstance(specification, dict) else None
-    workspace = parameters.get("live_workspace") if isinstance(parameters, dict) else None
+    if not isinstance(parameters, dict):
+        raise HistoryError("RunIntent session binding differs")
+
+    session_identity = [receipt["request_id"], receipt["source_sha256"]]
+    profile_records = (authorization, provenance, parameters)
+    profile_pins = (receipt, inputs, response)
+    if (any("solver_profile" in record for record in profile_records)
+            or any("solver_profile_sha256" in record for record in profile_pins)):
+        from docker_startup_script import StartupScriptError, solver_profile_sha256
+        try:
+            profile_sha, provenance_sha, intent_sha = (
+                solver_profile_sha256(record.get("solver_profile")) for record in profile_records
+            )
+        except StartupScriptError as error:
+            raise HistoryError("Activation solver profile is missing or invalid") from error
+        if (profile_sha != provenance_sha or profile_sha != intent_sha
+                or any(record.get("solver_profile_sha256") != profile_sha for record in profile_pins)):
+            raise HistoryError("Activation solver profile digest differs")
+        session_identity.append(profile_sha)
+
+    expected_session = "docker-startup-" + digest("\0".join(session_identity).encode())
+    if receipt["session_id"] != expected_session:
+        raise HistoryError("RunIntent does not bind the activated request")
+    workspace = parameters.get("live_workspace")
     if not isinstance(workspace, dict) or workspace.get("session_id") != expected_session:
         raise HistoryError("RunIntent session binding differs")
     return {"attempt": attempt, "run_id": run_id, "session_id": receipt["session_id"],
