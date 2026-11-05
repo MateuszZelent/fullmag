@@ -699,9 +699,61 @@ async function exercisePointerGestures(page, { viewport, canvas, assertCanvas, t
     throw new Error("Committed pointer orbit changed its projection, up, target, or distance");
   }
   await assertCanvas("after continuous pointer orbit");
+
+  // Exercise translation and dolly independently of rotation: nanometre scenes
+  // can rotate while fixed world-unit change thresholds suppress pan/zoom.
+  const center = { x: rect.x + rect.width * 0.5, y: rect.y + rect.height * 0.6 };
+  await page.mouse.move(center.x, center.y);
+  const beforeZoom = await readCamera(viewport);
+  await page.mouse.wheel(0, 240);
+  const afterZoom = await waitForCommittedGesture(page, viewport, beforeZoom, timeout,
+    (camera) => distance(camera.position, camera.target) >
+      distance(beforeZoom.position, beforeZoom.target) * 1.01, "wheel zoom out");
+  if (!sameVector(afterZoom.target, beforeZoom.target, sceneCoordinateEpsilon(radius))) {
+    throw new Error("Wheel zoom unexpectedly moved the orbit target");
+  }
+  await assertCanvas("after wheel zoom out");
+
+  const beforePan = afterZoom;
+  await page.mouse.down({ button: "right" });
+  try {
+    await page.mouse.move(center.x + 60, center.y + 30, { steps: 12 });
+  } finally {
+    await page.mouse.up({ button: "right" });
+  }
+  const afterPan = await waitForCommittedGesture(page, viewport, beforePan, timeout,
+    (camera) => distance(camera.target, beforePan.target) > radius * 0.001,
+    "right-button pan");
+  const translationError = Math.hypot(...afterPan.position.map((value, index) =>
+    (value - beforePan.position[index]) - (afterPan.target[index] - beforePan.target[index])));
+  if (translationError > scalarRelativeEpsilon(radius) * 100) {
+    throw new Error("Pan failed to translate the camera and orbit target together");
+  }
+  await assertCanvas("after right-button pan");
   return { state: "passed", view_cube: { state: "passed", face: "+X", hit_css: hit,
     before, after: snapped }, orbit: { state: "passed", input: "Playwright mouse drag",
-    live_samples: samples, committed_camera: after } };
+    live_samples: samples, committed_camera: after },
+    zoom: { state: "passed", input: "Playwright mouse wheel", before: beforeZoom, after: afterZoom },
+    pan: { state: "passed", input: "Playwright right-button drag", before: beforePan, after: afterPan } };
+}
+
+async function waitForCommittedGesture(page, viewport, before, timeout, changed, label) {
+  const deadline = Date.now() + timeout;
+  let previous = before;
+  let stableSince = null;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    const camera = await readCamera(viewport);
+    assertCameraFinite(camera, label);
+    if (changed(camera) && sameCamera(camera, previous)) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= 500) return camera;
+    } else {
+      stableSince = null;
+    }
+    previous = camera;
+  }
+  throw new Error(`${label} did not produce a stable changed camera pose`);
 }
 
 async function readDialogValues(dialog) {

@@ -2354,11 +2354,11 @@ pub(crate) fn snapshot_accepted_multilayer_observables(
         });
     }
 
+    validate_accepted_multilayer_observation_cuda_lane(plan, execution_engine)?;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let (contexts, default_states) = build_contexts_and_states(plan, pure_damping_relax)?;
     let observables = match execution_engine {
         "cuda_native_multilayer_convolution" => {
-            validate_device_resident_cuda_multilayer_lane(plan)?;
             let mut backend = NativeFdmBackend::create_multilayer_v2(plan)?;
             let mut offset = 0usize;
             for (layer_index, layer) in plan.layers.iter().enumerate() {
@@ -2564,27 +2564,27 @@ pub(crate) fn snapshot_accepted_multilayer_observables(
     Ok((observables, fields))
 }
 
-/// Materialize the target-only Airbox H_demag field for an accepted CUDA
-/// multilayer state. Source magnetization projection is host-side overlap
-/// transfer; the target-grid Newell convolution and field copy are performed
-/// by a native CUDA FDM backend. The original execution engine is retained in
-/// the manifest, including the host-assisted lane identity.
-pub(crate) fn materialize_airbox_observation_snapshot_gpu(
-    problem: &fullmag_ir::ProblemIR,
+/// Validate the accepted source lane before reconstructing a target-only field.
+/// Observation evaluates the demag operator without advancing its integrator.
+fn validate_accepted_multilayer_observation_cuda_lane(
     plan: &FdmMultilayerPlanIR,
     execution_engine: &str,
-) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError> {
-    let target = crate::fdm::cpu::airbox_observation::airbox_observation_target(problem, plan)
-        .map_err(|message| RunError { message })?;
-    let Some(target) = target else {
-        return Ok(Vec::new());
-    };
-    if !plan.enable_demag {
-        return Err(RunError {
-            message: "Airbox observation requires demagnetization enabled".into(),
-        });
-    }
+) -> Result<(), RunError> {
     validate_accepted_fdm_multilayer_cuda_lane(plan)?;
+    // The accepted PG-BB pair-payload lane does not advance an LLG
+    // integrator. Its operator, geometry, material and budget gates have
+    // already been checked above; D-07's fixed-Heun gate is unrelated here.
+    if plan.relaxation.as_ref().is_some_and(|control| {
+        control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb
+    }) {
+        return if execution_engine == "cuda_native_multilayer_convolution" {
+            Ok(())
+        } else {
+            Err(RunError {
+                message: "accepted CUDA multilayer BB Airbox observation requires its native pair-payload engine".into(),
+            })
+        };
+    }
     match execution_engine {
         "cuda_native_multilayer_convolution" => {
             validate_device_resident_cuda_multilayer_lane(plan)?;
@@ -2617,6 +2617,31 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
             });
         }
     }
+
+    Ok(())
+}
+
+/// Materialize the target-only Airbox H_demag field for an accepted CUDA
+/// multilayer state. Source magnetization projection is host-side overlap
+/// transfer; the target-grid Newell convolution and field copy are performed
+/// by a native CUDA FDM backend. The original execution engine is retained in
+/// the manifest, including the host-assisted lane identity.
+pub(crate) fn materialize_airbox_observation_snapshot_gpu(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+    execution_engine: &str,
+) -> Result<Vec<crate::types::AuxiliaryArtifact>, RunError> {
+    let target = crate::fdm::cpu::airbox_observation::airbox_observation_target(problem, plan)
+        .map_err(|message| RunError { message })?;
+    let Some(target) = target else {
+        return Ok(Vec::new());
+    };
+    if !plan.enable_demag {
+        return Err(RunError {
+            message: "Airbox observation requires demagnetization enabled".into(),
+        });
+    }
+    validate_accepted_multilayer_observation_cuda_lane(plan, execution_engine)?;
 
     let target_grid = [
         u32::try_from(target.shape[0]).map_err(|_| RunError {
@@ -6487,6 +6512,34 @@ mod tests {
             .unwrap_err()
             .message
             .contains("integrator_not_qualified"));
+        validate_accepted_multilayer_observation_cuda_lane(&plan, "cuda_native_multilayer_convolution")
+            .expect("accepted BB Airbox observation is independent of the LLG integrator");
+        for engine in ["cuda_native_multilayer_single_grid", "cuda_assisted_multilayer", "unknown"] {
+            assert!(validate_accepted_multilayer_observation_cuda_lane(&plan, engine).is_err(),
+                "BB must retain its accepted pair-payload engine: {engine}");
+        }
+        let mut invalid = plan.clone();
+        invalid.grid_certificate = None;
+        assert!(validate_accepted_multilayer_observation_cuda_lane(&invalid,
+            "cuda_native_multilayer_convolution").is_err());
+        let mut invalid = plan.clone();
+        invalid.precision = ExecutionPrecision::Single;
+        assert!(validate_accepted_multilayer_observation_cuda_lane(&invalid,
+            "cuda_native_multilayer_convolution").is_err());
+    }
+
+    #[test]
+    fn airbox_observation_preserves_llg_engine_and_integrator_guards() {
+        let plan = make_bounded_device_resident_plan();
+        validate_accepted_multilayer_observation_cuda_lane(&plan, "cuda_native_multilayer_convolution")
+            .expect("fixed-step Heun retains its qualified observation lane");
+        for engine in ["cuda_native_multilayer_single_grid", "cuda_assisted_multilayer", "unknown"] {
+            assert!(validate_accepted_multilayer_observation_cuda_lane(&plan, engine).is_err());
+        }
+        let mut adaptive = plan.clone();
+        adaptive.fixed_timestep = None;
+        assert!(validate_accepted_multilayer_observation_cuda_lane(&adaptive,
+            "cuda_native_multilayer_convolution").is_err());
     }
 
     #[test]

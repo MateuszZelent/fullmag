@@ -118,7 +118,7 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
                  'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
                  'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
                  'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
@@ -250,6 +250,41 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.assertEqual(commands[-2]['name'], 'architecture')
         self.assertEqual(commands[-1]['name'], 'api-hygiene')
 
+    def test_camera_scope_runs_gesture_regressions_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-camera')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-camera')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-camera-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.CAMERA_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.CAMERA_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_airbox_scope_uses_authoritative_inspector_and_geometry_tests(self):
+        result, receipt = self.run_checks('frontend-airbox')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-airbox')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-airbox-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.AIRBOX_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.AIRBOX_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_field_map_scope_runs_canonical_planar_tests_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-field-map')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-field-map')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-field-map-checks/receipt.json')
+        commands = receipt['commands']
+        vitest = next(command for command in commands if command['name'] == 'vitest')
+        self.assertIn('src/modules/field-map/components/FieldMapToolbar.test.tsx', vitest['arguments'])
+        self.assertIn('src/modules/field-map/model/fieldMapDataPlan.test.ts', vitest['arguments'])
+        self.assertIn('src/modules/inspector/visualization/VisualizationViewContext.test.ts', vitest['arguments'])
+        self.assertTrue(set(checks.FIELD_MAP_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
     def test_antenna_scope_uses_exact_geometry_tests_lint_and_separate_receipt(self):
         result, receipt = self.run_checks('frontend-antenna')
         self.assertEqual(result, 0)
@@ -350,6 +385,14 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
         result = self.dispatch(recipe)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
+
+    def test_dispatches_literal_field_map_scope_as_fixed_argv(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-field-map'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-field-map'])
 
     def test_dispatches_only_exact_telemetry_source_scope(self):
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '

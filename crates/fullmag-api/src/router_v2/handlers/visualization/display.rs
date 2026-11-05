@@ -791,6 +791,34 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             "planar interaction must contain finite values and positive zoom",
         ));
     }
+    if let Some(overlays) = patch.field_overlays.as_ref() {
+        if overlays.len() > crate::schemas::visualization_state::PLANAR_FIELD_OVERLAYS_MAX {
+            return Err(ApiError::bad_request("planar.field_overlays must contain at most 4 entries"));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for overlay in overlays {
+            if overlay.id.trim().is_empty() || !ids.insert(overlay.id.trim()) {
+                return Err(ApiError::bad_request("planar.field_overlays requires unique non-empty ids"));
+            }
+            if overlay.quantity_id.trim().is_empty()
+                || fullmag_quantities::quantity_spec(&overlay.quantity_id).is_none()
+                || overlay.colormap.trim().is_empty()
+            {
+                return Err(ApiError::bad_request("planar.field_overlays requires a known quantity and non-empty colormap"));
+            }
+            let mut overlay_state = default_planar_visualization_state();
+            overlay_state.quantity_id = overlay.quantity_id.clone();
+            overlay_state.component = overlay.component;
+            validate_planar_tensor_projection(&overlay_state)?;
+            validate_planar_visualization_patch(&PlanarVisualizationPatch {
+                view_scope: Some(overlay.view_scope.clone()),
+                range: Some(overlay.range.clone()),
+                raster_opacity: Some(overlay.raster_opacity),
+                vector_style: Some(overlay.vector_style.clone()),
+                ..PlanarVisualizationPatch::default()
+            })?;
+        }
+    }
     if let Some(multislice) = patch.multislice.as_ref() {
         let count = multislice.position_fractions.len();
         if !(crate::schemas::visualization_state::PLANAR_MULTISLICE_MIN_PANELS
@@ -916,6 +944,8 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
     validate_planar_tensor_projection(state)?;
     validate_planar_visualization_patch(&PlanarVisualizationPatch {
         source: Some(state.source.clone()),
+        field_overlays: Some(state.field_overlays.clone()),
+        view_scope: Some(state.view_scope.clone()),
         default_slice: Some(state.default_slice.clone()),
         range: Some(state.range.clone()),
         raster_opacity: Some(state.raster_opacity),
@@ -1047,6 +1077,9 @@ fn apply_planar_visualization_patch(
     }
     if let Some(interaction) = &patch.interaction {
         state.interaction = interaction.clone();
+    }
+    if let Some(field_overlays) = &patch.field_overlays {
+        state.field_overlays = field_overlays.clone();
     }
     if let Some(multislice) = &patch.multislice {
         state.multislice = multislice.clone();
@@ -3235,3 +3268,7 @@ mod visualization_override_migration_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "display_field_overlay_tests.rs"]
+mod field_overlay_tests;
