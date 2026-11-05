@@ -2296,6 +2296,18 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     .locator(`dd[title="${globalRotatedNodeId}"]`)
     .waitFor({ state: "attached", timeout: 60_000 });
 
+  const interactionSection = inspector.getByRole("button", {
+    name: "Physics Interaction",
+    exact: true,
+  });
+  assert(
+    await interactionSection.count() === 1,
+    "Physics Interaction checklist section is missing from the global interaction inspector.",
+  );
+  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
+    await interactionSection.click();
+  }
+
   const rotatedToggle = inspector.getByRole("checkbox", {
     name: /^Rotated interfacial DMI(?:\s|$)/,
   });
