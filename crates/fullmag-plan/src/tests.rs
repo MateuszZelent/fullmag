@@ -15914,23 +15914,80 @@ fn fdm_cuda_fp32_subcell_boundary_is_capability_gated_until_field_energy_parity(
     }));
 }
 
-#[test]
-fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
-    let mut ir = stacked_two_body_multilayer_problem();
-    ir.pbc = Some(FdmPeriodicityIR {
-        axes: [
-            AxisBoundary::Periodic,
-            AxisBoundary::Open,
-            AxisBoundary::Open,
-        ],
-        demag: FdmDemagPeriodicityIR::TruncatedImages,
-        image_counts: Some([2, 0, 0]),
+fn fdm_multilayer_xy_periodic_bb_problem() -> ProblemIR {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { base, .. } = &mut ir.geometry.entries[1] else {
+        panic!("expected translated upper object");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("expected upper box");
+    };
+    *size = [32e-9, 12e-9, 2e-9];
+    ir.magnets[0].object_id = Some("film".into());
+    ir.magnets[1].object_id = Some("upper".into());
+    ir.energy_terms.push(EnergyTermIR::RotatedInterfacialDmi {
+        d: 0.004,
+        object_ids: Some(vec!["film".into()]),
     });
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: Some(1e-4),
+            energy_tolerance_j: None,
+            max_steps: Some(6000),
+            max_relaxation_time_s: None,
+        },
+        sampling: ir.study.sampling().clone(),
+    };
+    ir.pbc = Some(FdmPeriodicityIR {
+        axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+        demag: FdmDemagPeriodicityIR::TruncatedImages,
+        image_counts: Some([2, 3, 0]),
+    });
+    ir
+}
 
-    let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("multilayer periodic axes") && reason.contains("self/shifted demag kernels")
-    }));
+#[test]
+fn fdm_multilayer_periodic_xy_lowers_aligned_fp64_cuda_bb() {
+    let ir = fdm_multilayer_xy_periodic_bb_problem();
+    let planned = plan(&ir).expect("centered XY periodic CUDA PG-BB should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected native multilayer plan");
+    };
+    let images = multilayer.resolved_periodic_images.as_ref().expect("resolved image policy");
+    assert_eq!(images.padded_counts, [20, 10, 2]);
+    assert_eq!(images.resolved_image_counts, [2, 3, 0]);
+    assert_eq!(multilayer.layers[0].native_grid, [20, 10, 1]);
+    assert_eq!(multilayer.layers[1].native_grid, [16, 6, 1]);
+    assert_eq!(multilayer.layers[0].rotated_interfacial_dmi, Some(0.004));
+    assert_eq!(multilayer.layers[1].rotated_interfacial_dmi, Some(0.0));
+    assert_eq!(multilayer.relaxation.as_ref().unwrap().stop.max_steps, Some(6000));
+    assert!(fdm_multilayer_projected_bb_error(&multilayer).is_some());
+}
+
+#[test]
+fn fdm_multilayer_periodic_xy_rejects_other_lanes_and_periodic_z() {
+    let periodic = fdm_multilayer_xy_periodic_bb_problem();
+    let mut cpu = periodic.clone();
+    cpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    let mut single = periodic.clone();
+    single.backend_policy.execution_precision = ExecutionPrecision::Single;
+    let mut xyz = periodic.clone();
+    xyz.pbc.as_mut().unwrap().axes[2] = AxisBoundary::Periodic;
+    let mut llg = periodic.clone();
+    llg.study = cuda_three_d_identity_multilayer_problem().study;
+    for ir in [cpu, single, xyz, llg] {
+        let error = plan(&ir).expect_err("only XY periodic FP64 CUDA PG-BB is supported");
+        assert!(
+            error.reasons.iter().any(|reason| reason.contains("multilayer periodic axes")),
+            "{:?}",
+            error.reasons,
+        );
+    }
 }
 
 #[test]

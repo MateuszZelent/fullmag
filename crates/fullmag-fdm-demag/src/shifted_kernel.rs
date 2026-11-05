@@ -93,6 +93,25 @@ pub fn try_compute_shifted_kernel_pair(
     Ok(kernel)
 }
 
+/// Build a shifted or self kernel for truncated periodic images in X and Y.
+///
+/// `z_shift` is the destination-minus-source displacement in metres. Pass
+/// zero for a self kernel. `images` contains the count on each side of the
+/// centred lag for X and Y. Z remains open, with FFT shape `[nx, ny, 2*nz]`.
+pub fn try_compute_periodic_xy_kernel(
+    conv_cells: [usize; 3],
+    cell_size: [f64; 3],
+    z_shift: f64,
+    images: [u32; 2],
+) -> Result<TensorDemagKernel, KernelBuildError> {
+    let nk =
+        newell::try_compute_periodic_xy_newell_kernels(conv_cells, cell_size, z_shift, images)?;
+    let (px, py, pz) = (nk.px, nk.py, nk.pz);
+    let kernel = fft_newell_to_kernel(nk, px, py, pz);
+    ensure_kernel_finite(&kernel)?;
+    Ok(kernel)
+}
+
 fn ensure_kernel_finite(kernel: &TensorDemagKernel) -> Result<(), KernelBuildError> {
     let all_finite = kernel
         .k_xx

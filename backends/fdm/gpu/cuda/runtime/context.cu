@@ -2260,6 +2260,7 @@ static bool upload_tensor_kernel_component(
 static bool free_multilayer_plan_v2(Context &ctx) {
     if (ctx.multilayer_bb_partials) cudaFree(ctx.multilayer_bb_partials);
     if (ctx.multilayer_bb_scalars) cudaFree(ctx.multilayer_bb_scalars);
+    ctx.multilayer_xy_periodic = false;
     ctx.multilayer_bb_history_valid = false;
     ctx.multilayer_bb_evaluation_valid = false;
     ctx.multilayer_bb_partials = nullptr;
