@@ -2254,6 +2254,20 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   notFoundResponseEvidenceTasks.length = 0;
 }
 
+async function expandPhysicsInteractionChecklist(inspector) {
+  const interactionSection = inspector.getByRole("button", {
+    name: "Physics Interaction",
+    exact: true,
+  });
+  assert(
+    await interactionSection.count() === 1,
+    "Physics Interaction checklist section is missing from the interaction inspector.",
+  );
+  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
+    await interactionSection.click();
+  }
+}
+
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   fixture.physicsGuardEnabled = true;
   await reloadInspectorDocument(page, fixture, {
@@ -2296,17 +2310,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     .locator(`dd[title="${globalRotatedNodeId}"]`)
     .waitFor({ state: "attached", timeout: 60_000 });
 
-  const interactionSection = inspector.getByRole("button", {
-    name: "Physics Interaction",
-    exact: true,
-  });
-  assert(
-    await interactionSection.count() === 1,
-    "Physics Interaction checklist section is missing from the global interaction inspector.",
-  );
-  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
-    await interactionSection.click();
-  }
+  await expandPhysicsInteractionChecklist(inspector);
 
   const rotatedToggle = inspector.getByRole("checkbox", {
     name: /^Rotated interfacial DMI(?:\s|$)/,
@@ -2361,6 +2365,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     owner: "physics-interaction",
     label: "Object interfacial DMI recovery",
   });
+  await expandPhysicsInteractionChecklist(inspector);
   const interfacialToggle = inspector.getByRole("checkbox", {
     name: /^Interfacial DMI(?:\s|$)/,
   });
