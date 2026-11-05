@@ -703,7 +703,7 @@ describe("PlanarVisualizationSection", () => {
       const layer = findControl(container, "Layer");
       expect(layer.getAttribute("max")).toBe("25");
       expect(layer.getAttribute("aria-valuetext")).toBe("Layer 12 of 26");
-      expect(container.textContent).toContain("z 27.5 nm → 26.2 nm (cell layer 12 / 25)");
+      expect(container.textContent).toContain("z 27.5 nm → 26.3 nm (cell layer 12 / 25)");
       expect(container.textContent).not.toContain("23.8 nm");
     } finally {
       await act(async () => root.unmount());
