@@ -414,6 +414,7 @@ macierzy materiałów, geometrii, obsługi przerwań ani wydania produkcyjnego.
 | crates/fullmag-plan/src/fdm.rs | fdm_multilayer_cuda_projected_bb_error | Admit aligned FP64 CUDA PG-BB with periodic XY and open Z. |
 | crates/fullmag-fdm-demag/src/newell.rs | try_compute_periodic_xy_newell_kernels | Fold self and shifted image tensors into the circular XY grid. |
 | backends/fdm/api/c_api.cpp | fullmag_fdm_backend_set_multilayer_xy_periodic_v1 | Validate FFT shape and set layer-local seams. |
+| crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs | materialize_airbox_observation_snapshot_gpu | Evaluate the accepted state on a compatible open-Z target grid. |
 
 ### Lateral periodic cells (FP64 CUDA PG-BB)
 
@@ -439,7 +440,39 @@ The implementation scope is strict double CUDA with aligned grids and PG-BB.
 Validation compares shifted and self tensors against direct image sums,
 verifies local seam fields and energies, and exercises the coupled minimizer
 on CUDA. CPU execution, other multilayer integrators and periodic Z require
-their own qualification. Object fields can be published from the accepted CUDA
-state. Periodic airbox observation requires a separate target-grid operator
-and is unavailable. See the pair-convolution formulation in
+their own qualification. See the pair-convolution formulation in
 [Lepadatu (2019)](https://doi.org/10.1063/1.5116754).
+
+### Airbox observation on the periodic cell
+
+For the same CUDA lane, a compatible Airbox spans one complete period in X and
+Y, has the common cell pitch, and contains the aligned source grids. Its Z
+extent may include additional layers of air. Each active source cell contributes
+its physical magnetization $M_{s,i}\mathbf m_i$ to the corresponding target
+lattice cell. The other lattice cells contribute zero magnetization.
+
+```{math}
+:label: eq-multilayer-bb-periodic-airbox
+\mathbf H^{\mathrm{obs}}_{\mathrm{demag},j}
+  = -\sum_i \mathbf N^{\mathrm{XY}}_{j-i}\, M_{s,i}\mathbf m_i .
+```
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $i$ | Active source cell index on the observation lattice | $1$ |
+| $j$ | Observation cell index | $1$ |
+| $\mathbf N^{\mathrm{XY}}_{j-i}$ | Cell-averaged tensor with the resolved finite XY images and open Z | $1$ |
+| $\mathbf H^{\mathrm{obs}}_{\mathrm{demag},j}$ | Demagnetizing field on the Airbox lattice | $\mathrm{A\,m^{-1}}$ |
+
+The observation uses cuFFT on the circular XY grid with doubled target Z
+extent. It consumes the accepted magnetization and publishes an independent
+target carrier through the existing field resource. It does not enter the
+minimizer or alter an accepted step. The carrier identifies the observation
+boundary, resolved image counts and FFT shape. An incompatible target produces
+an unavailable Airbox field. Python and ProblemIR use the existing universe
+and periodic boundary declarations.
+
+The numerical gate compares the observation values against the pair operator
+at active source cells and an independent finite-image reconstruction in air.
+Runtime acceptance also requires the selected accepted step, material masking
+and field presentation to agree in the 2D and 3D consumers.

@@ -59,6 +59,7 @@ import {
   resolveViewport3DMeshBackedRegionOverlays,
   resolveViewport3DPrimitiveVisualizationSettings,
   resolveViewport3DPartVisualizationSettings,
+  resolveAirboxManualColorRange,
   resolveViewport3DPartScalarRangeRequests,
   mergeViewport3DPartScalarRanges,
   resolveViewport3DRegionMembershipIds,
@@ -658,6 +659,28 @@ const visualizationStateResourceSourceUrl = new URL(
 type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
 >[0];
+
+describe("Airbox manual color range", () => {
+  const quantity = {
+    active_quantity_id: "H_demag",
+    field_component: "magnitude",
+    colormap: "viridis",
+    auto_contrast: false,
+    contrast_min: 0,
+    contrast_max: 256_618.6,
+  } as const;
+
+  it("uses the manual range only for the same field and component", () => {
+    expect(resolveAirboxManualColorRange(quantity, "H_demag", "magnitude"))
+      .toEqual({ min: 0, max: 256_618.6 });
+    expect(resolveAirboxManualColorRange(quantity, "m", "magnitude")).toBeNull();
+    expect(resolveAirboxManualColorRange(quantity, "H_demag", "z")).toBeNull();
+    expect(resolveAirboxManualColorRange({ ...quantity, auto_contrast: true }, "H_demag", "magnitude"))
+      .toBeNull();
+    expect(resolveAirboxManualColorRange({ ...quantity, contrast_max: 0 }, "H_demag", "magnitude"))
+      .toBeNull();
+  });
+});
 
 describe("airbox vector sample budget", () => {
   it("clamps to the effective air-only carrier, not legacy or session limits", () => {

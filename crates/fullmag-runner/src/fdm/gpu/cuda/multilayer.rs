@@ -2637,9 +2637,154 @@ fn validate_accepted_multilayer_observation_cuda_lane(
     Ok(())
 }
 
+struct PeriodicAirboxObservation {
+    workspace: fullmag_ir::ResolvedPeriodicImagesIR,
+    source_offsets: Vec<[usize; 3]>,
+}
+
+fn periodic_airbox_observation(
+    plan: &FdmMultilayerPlanIR,
+    target: &crate::fdm::cpu::airbox_observation::AirboxObservationTarget,
+    target_grid: [u32; 3],
+) -> Result<Option<PeriodicAirboxObservation>, RunError> {
+    use fullmag_ir::{AxisBoundary, FdmDemagPeriodicityIR};
+
+    let Some(periodicity) = plan.periodicity.as_ref().filter(|policy| policy.has_any_periodic()) else {
+        if plan.resolved_periodic_images.is_some() {
+            return Err(RunError {
+                message: "Airbox has resolved periodic images without a periodic source".into(),
+            });
+        }
+        return Ok(None);
+    };
+    if periodicity.axes != [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open]
+        || periodicity.demag != FdmDemagPeriodicityIR::TruncatedImages
+        || plan.precision != ExecutionPrecision::Double
+        || !plan.relaxation.as_ref().is_some_and(|control| {
+            control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb
+        })
+    {
+        return Err(RunError {
+            message: "periodic Airbox requires the CUDA FP64 PG-BB XY truncated-image lane with open Z".into(),
+        });
+    }
+    let source_workspace = periodicity
+        .resolve_periodic_images(plan.common_cells, plan.precision)
+        .map_err(|message| RunError { message })?;
+    if source_workspace.is_none() || source_workspace != plan.resolved_periodic_images {
+        return Err(RunError {
+            message: "periodic Airbox source image resolution does not match the accepted plan".into(),
+        });
+    }
+    let first_layer = plan.layers.first().ok_or_else(|| RunError {
+        message: "periodic Airbox requires at least one source layer".into(),
+    })?;
+    if target_grid[..2] != plan.common_cells[..2]
+        || target.spacing_m != first_layer.convolution_cell_size
+    {
+        return Err(RunError {
+            message: "periodic Airbox must span one complete common XY period at the common cell pitch".into(),
+        });
+    }
+    for axis in 0..2 {
+        if aligned_airbox_cell_offset(
+            first_layer.convolution_origin[axis],
+            target.origin_m[axis],
+            target.spacing_m[axis],
+            target.shape[axis],
+            target.shape[axis],
+        ) != Some(0) {
+            return Err(RunError {
+                message: "periodic Airbox XY origin must match the common lattice origin".into(),
+            });
+        }
+    }
+
+    let mut source_offsets = Vec::with_capacity(plan.layers.len());
+    for layer in &plan.layers {
+        if layer.native_cell_size != target.spacing_m {
+            return Err(RunError {
+                message: format!("periodic Airbox source '{}' has a different native pitch", layer.layer_id),
+            });
+        }
+        let mut offset = [0; 3];
+        for axis in 0..3 {
+            offset[axis] = aligned_airbox_cell_offset(
+                layer.native_origin[axis],
+                target.origin_m[axis],
+                target.spacing_m[axis],
+                layer.native_grid[axis] as usize,
+                target.shape[axis],
+            ).ok_or_else(|| RunError {
+                message: format!(
+                    "periodic Airbox source '{}' must have a fully contained integer-cell window on axis {axis}",
+                    layer.layer_id,
+                ),
+            })?;
+        }
+        source_offsets.push(offset);
+    }
+    let workspace = periodicity
+        .resolve_periodic_images(target_grid, plan.precision)
+        .map_err(|message| RunError { message })?
+        .ok_or_else(|| RunError {
+            message: "periodic Airbox target image resolution is unavailable".into(),
+        })?;
+    Ok(Some(PeriodicAirboxObservation { workspace, source_offsets }))
+}
+
+fn aligned_airbox_cell_offset(
+    source_origin: f64,
+    target_origin: f64,
+    pitch: f64,
+    source_cells: usize,
+    target_cells: usize,
+) -> Option<usize> {
+    let last_offset = target_cells.checked_sub(source_cells)?;
+    let actual = (source_origin - target_origin) / pitch;
+    let offset = actual.round();
+    let scale = (source_origin / pitch).abs()
+        .max((target_origin / pitch).abs())
+        .max(target_cells as f64)
+        .max(1.0);
+    // Large absolute coordinates must never turn a fractional cell offset
+    // into an accepted lattice match.
+    let tolerance = (64.0 * f64::EPSILON * scale).min(1e-6);
+    if !actual.is_finite() || !scale.is_finite() || offset < 0.0 || offset > last_offset as f64
+        || (actual - offset).abs() > tolerance
+    {
+        return None;
+    }
+    Some(offset as usize)
+}
+
+fn embed_periodic_airbox_source(
+    target: &mut [[f64; 3]],
+    [tx, ty, _]: [usize; 3],
+    [nx, ny, nz]: [usize; 3],
+    [ox, oy, oz]: [usize; 3],
+    physical_m: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+) {
+    for z in 0..nz {
+        for y in 0..ny {
+            let target_row = ((z + oz) * ty + y + oy) * tx + ox;
+            let source_row = (z * ny + y) * nx;
+            for x in 0..nx {
+                let source = source_row + x;
+                if active_mask.is_none_or(|mask| mask[source]) {
+                    for (sum, value) in target[target_row + x].iter_mut().zip(physical_m[source]) {
+                        *sum += value;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Materialize the target-only Airbox H_demag field for an accepted CUDA
-/// multilayer state. Source magnetization projection is host-side overlap
-/// transfer; the target-grid Newell convolution and field copy are performed
+/// multilayer state. Open grids use host-side overlap transfer, while XY
+/// periodic grids use exact aligned insertion. Convolution and field copy are performed
 /// by a native CUDA FDM backend. The original execution engine is retained in
 /// the manifest, including the host-assisted lane identity.
 pub(crate) fn materialize_airbox_observation_snapshot_gpu(
@@ -2658,12 +2803,6 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
         });
     }
     validate_accepted_multilayer_observation_cuda_lane(plan, execution_engine)?;
-    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
-        return Err(RunError {
-            message: "Multilayer Airbox H_demag requires a periodic observation operator for XY PBC".into(),
-        });
-    }
-
     let target_grid = [
         u32::try_from(target.shape[0]).map_err(|_| RunError {
             message: "GPU Airbox target grid x-axis exceeds u32".into(),
@@ -2688,6 +2827,7 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
             target_cost.cells
         ),
     })?;
+    let periodic_observation = periodic_airbox_observation(plan, &target, target_grid)?;
     let target_region_mask = vec![0u32; target_cells];
     let target_grid_certificate = FdmGridCertificateIR::new_with_masks(
         target.origin_m,
@@ -2704,7 +2844,7 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
 
     let mut projected_m = vec![[0.0; 3]; target_cells];
     let mut source_offset = 0usize;
-    for layer in &plan.layers {
+    for (layer_index, layer) in plan.layers.iter().enumerate() {
         let native_grid = layer.native_grid.map(|axis| axis as usize);
         let native_cells = native_grid.iter().try_fold(1usize, |count, axis| {
             count.checked_mul(*axis)
@@ -2761,6 +2901,18 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
             return Err(RunError {
                 message: format!("GPU Airbox source layer '{}' physical M contains nonfinite values", layer.layer_id),
             });
+        }
+        if let Some(periodic) = periodic_observation.as_ref() {
+            embed_periodic_airbox_source(
+                &mut projected_m,
+                target.shape,
+                native_grid,
+                periodic.source_offsets[layer_index],
+                &physical_m,
+                layer.native_active_mask.as_deref(),
+            );
+            source_offset = source_end;
+            continue;
         }
         let transfer = VolumeWeightedTransfer::new(
             native_grid,
@@ -2822,8 +2974,10 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
     target_plan.enable_exchange = false;
     target_plan.enable_demag = true;
     target_plan.external_field = None;
-    target_plan.periodicity = None;
-    target_plan.resolved_periodic_images = None;
+    if let Some(periodic) = periodic_observation.as_ref() {
+        target_plan.periodicity = plan.periodicity.clone();
+        target_plan.resolved_periodic_images = Some(periodic.workspace.clone());
+    }
     target_plan.boundary_correction = None;
     target_plan.boundary_phi_floor = None;
     target_plan.boundary_delta_min = None;
@@ -2848,11 +3002,18 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
     target_plan.oersted_field_xyz = None;
     target_plan.oersted_realization = None;
 
-    let mut backend = NativeFdmBackend::create(&target_plan)?;
+    let mut backend = if periodic_observation.is_some() {
+        NativeFdmBackend::create_periodic_xy_observation(&target_plan)?
+    } else {
+        NativeFdmBackend::create(&target_plan)?
+    };
     backend.refresh_observables()?;
     let field = backend.copy_h_demag(target_cells)?;
     let observation_device = backend.device_info().ok();
     let (demag_operator_kind, fft_backend) = match execution_engine {
+        "cuda_native_multilayer_convolution" if periodic_observation.is_some() => {
+            ("native_multilayer_periodic_xy_tensor_fft_newell", "cuFFT")
+        }
         "cuda_native_multilayer_convolution" => {
             ("native_multilayer_tensor_fft_newell", "cuFFT")
         }
@@ -2880,7 +3041,11 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
         "build_identity": build_identity,
         "observation_execution_engine": "native_cuda_fdm_single_grid",
         "observation_precision": precision_name(plan.precision),
-        "observation_source_projection": "host_volume_weighted_transfer",
+        "observation_source_projection": if periodic_observation.is_some() {
+            "host_aligned_integer_embedding"
+        } else {
+            "host_volume_weighted_transfer"
+        },
     });
     if let Some(device_name) = observation_device
         .as_ref()
@@ -2896,6 +3061,7 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
         &target,
         &field,
         source_runtime_identity,
+        periodic_observation.as_ref().map(|periodic| &periodic.workspace),
     )
     .map_err(|message| RunError { message })
 }
@@ -6550,6 +6716,68 @@ mod tests {
     }
 
     #[test]
+    fn periodic_airbox_requires_full_aligned_period_and_embeds_only_active_sources() {
+        use crate::fdm::cpu::airbox_observation::AirboxObservationTarget;
+        use fullmag_ir::{AxisBoundary, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
+        let mut plan = make_bounded_device_resident_plan();
+        plan.relaxation.as_mut().unwrap().algorithm = RelaxationAlgorithmIR::ProjectedGradientBb;
+        let periodicity = FdmPeriodicityIR {
+            axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([2, 3, 0]),
+        };
+        plan.resolved_periodic_images = periodicity
+            .resolve_periodic_images(plan.common_cells, plan.precision)
+            .unwrap();
+        plan.periodicity = Some(periodicity);
+        let target = AirboxObservationTarget {
+            shape: [4, 4, 7],
+            spacing_m: [2e-9, 2e-9, 1e-9],
+            origin_m: [-4e-9, -4e-9, -1e-9],
+            padding_cells_above_below: [2, 1],
+            source_shape: [4, 4, 4],
+            source_spacing_m: [2e-9, 2e-9, 1e-9],
+        };
+        let observation = periodic_airbox_observation(&plan, &target, [4, 4, 7])
+            .unwrap().unwrap();
+        assert_eq!(observation.workspace.padded_counts, [4, 4, 14]);
+        assert_eq!(observation.workspace.resolved_image_counts, [2, 3, 0]);
+        assert_eq!(observation.source_offsets, [[0, 0, 1], [0, 0, 4]]);
+
+        let mut projected = vec![[0.0; 3]; 4 * 4 * 7];
+        embed_periodic_airbox_source(
+            &mut projected, target.shape, [2, 1, 1], [1, 1, 4],
+            &[[1.0, 2.0, 3.0], [500.0; 3]], Some(&[true, false]),
+        );
+        assert_eq!(projected[69], [1.0, 2.0, 3.0]);
+        assert_eq!(projected.iter().filter(|value| **value != [0.0; 3]).count(), 1);
+
+        for (invalid, grid) in [
+            (AirboxObservationTarget { shape: [5, 4, 7], ..target.clone() }, [5, 4, 7]),
+            (AirboxObservationTarget { origin_m: [-3e-9, -4e-9, -1e-9], ..target.clone() }, [4, 4, 7]),
+            (AirboxObservationTarget { origin_m: [-4e-9, -4e-9, -0.5e-9], ..target.clone() }, [4, 4, 7]),
+            (AirboxObservationTarget { shape: [4, 4, 4], ..target.clone() }, [4, 4, 4]),
+        ] {
+            assert!(periodic_airbox_observation(&plan, &invalid, grid).is_err());
+        }
+        let mut invalid = plan.clone();
+        invalid.resolved_periodic_images.as_mut().unwrap().resolved_image_counts[2] = 1;
+        assert!(periodic_airbox_observation(&invalid, &target, [4, 4, 7]).is_err());
+        invalid.periodicity.as_mut().unwrap().axes[2] = AxisBoundary::Periodic;
+        assert!(periodic_airbox_observation(&invalid, &target, [4, 4, 7]).is_err());
+    }
+
+    #[test]
+    fn periodic_airbox_does_not_round_fractional_offsets_at_large_origins() {
+        let origin = 1e14;
+        assert_eq!(aligned_airbox_cell_offset(origin, origin, 1.0, 4, 4), Some(0));
+        assert_eq!(aligned_airbox_cell_offset(origin + 2.0, origin, 1.0, 4, 6), Some(2));
+        assert_eq!(aligned_airbox_cell_offset(origin + 0.25, origin, 1.0, 4, 4), None);
+        assert_eq!(aligned_airbox_cell_offset(origin + 2.25, origin, 1.0, 4, 6), None);
+    }
+
+    #[test]
     fn airbox_observation_preserves_llg_engine_and_integrator_guards() {
         let plan = make_bounded_device_resident_plan();
         validate_accepted_multilayer_observation_cuda_lane(&plan, "cuda_native_multilayer_convolution")
@@ -7174,6 +7402,7 @@ mod tests {
             .problem
             .terms
             .uniaxial_anisotropy
+            .as_ref()
             .expect("Ku2 alone must activate the native assisted anisotropy context");
         assert_eq!(anisotropy.ku1, 0.0);
         assert_eq!(anisotropy.ku2, 2.5e4);

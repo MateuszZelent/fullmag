@@ -738,6 +738,25 @@ function resolveViewport3DFieldMetaScalarRange(
   };
 }
 
+export function resolveAirboxManualColorRange(
+  quantity: VisualizationStateResource["quantity"] | null | undefined,
+  quantityId: string,
+  component: string,
+): ScalarRange | null {
+  if (
+    !quantity ||
+    quantity.auto_contrast !== false ||
+    quantity.field_component !== component ||
+    !sameViewport3DQuantityId(quantity.active_quantity_id, quantityId)
+  ) return null;
+
+  const { contrast_min: min, contrast_max: max } = quantity;
+  return typeof min === "number" && typeof max === "number" &&
+    Number.isFinite(min) && Number.isFinite(max) && min < max
+    ? { min, max }
+    : null;
+}
+
 interface Viewport3DPartScalarRangeRequest {
   component: string;
   mode: string;
@@ -6730,6 +6749,11 @@ export function useViewport3DSceneModel({
       model && fieldVector
         ? surfaceColorSourceToColorMode(airboxSettings.surfaceColorSource)
         : null;
+    const surfaceRange = surfaceMode
+      ? resolveAirboxManualColorRange(
+          renderingState?.quantity, airboxSettings.activeQuantityId, surfaceMode,
+        )
+      : null;
     const surfaceColorKey = [
       "multilayer-airbox",
       fieldBuffer?.bufferId ?? "none",
@@ -6740,6 +6764,8 @@ export function useViewport3DSceneModel({
       airboxSettings.surfaceColorSource,
       surfaceMode ?? "none",
       airboxSettings.scalarColorPalette,
+      surfaceRange?.min ?? "auto",
+      surfaceRange?.max ?? "auto",
     ].join("|");
     const surfaceColors = memoizeViewport3DFdmSurfaceColors({
       build: () => {
@@ -6750,6 +6776,7 @@ export function useViewport3DSceneModel({
           fdmMultilayerAirboxDomain.totalCells,
           surfaceMode,
           airboxSettings.scalarColorPalette,
+          surfaceRange,
         );
         return colors
           ? {
@@ -6779,6 +6806,11 @@ export function useViewport3DSceneModel({
             fdmMultilayerAirboxDomain.totalCells,
             airboxSettings.vectorColorMode,
             airboxSettings.scalarColorPalette,
+            resolveAirboxManualColorRange(
+              renderingState?.quantity,
+              airboxSettings.activeQuantityId,
+              airboxSettings.vectorColorMode,
+            ),
           )
         : null;
     const vectorSegments = vectorBuffers.vectorSegments;
@@ -6823,6 +6855,7 @@ export function useViewport3DSceneModel({
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerAirboxField.responseMetadata,
     fdmMultilayerAirboxFieldRequest,
+    renderingState?.quantity,
     sessionIdentity,
     fdmMultilayerAirboxFieldResourceKey,
   ]);

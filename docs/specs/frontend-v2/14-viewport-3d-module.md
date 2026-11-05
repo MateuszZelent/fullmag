@@ -152,6 +152,11 @@ Airbox bounds still describe the full observation volume.
 
 Airbox wireframe has a different visual contract from magnetic-object wireframe. `geometryScope: "surface"` may show only boundary surface edges. `geometryScope: "full"` must show the airbox volume/bounds edge set as an overlay that is not hidden by the translucent airbox surface. Full mode uses the procedural interior volume/bounds overlay as the primary wireframe, even when backend mesh edge geometry exists, because backend-provided or fallback edge geometry can otherwise make the full airbox collapse visually to a surface-only display. Airbox surface opacity must not attenuate airbox wireframe opacity; those are separate display controls.
 
+The multilayer FDM Airbox uses the explicit View quantity color range when
+its quantity and component match the Airbox scalar or vector color mode.
+The same finite limits and palette can be selected for the 2D Airbox slice.
+Each view retains its own automatic scaling when no manual range is selected.
+
 ## 8. Picking
 
 Picking emits canonical selection identity through the kernel. The viewport does not directly open inspector panels.
