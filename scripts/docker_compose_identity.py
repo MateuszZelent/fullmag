@@ -11,6 +11,7 @@ import fullmag_storage as storage
 
 _COMPOSE_PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 _LABEL_VALUE_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_WORKTREE_LABEL_VALUE_RE = re.compile(r"[a-z0-9_][a-z0-9._-]*")
 _MAX_DOCKER_NETWORK_NAME = 63
 _NETWORK_ALIAS_PREFIX = "fullmag-net-"
 
@@ -49,7 +50,9 @@ def compose_project_identity(layout: Mapping[str, object]) -> dict[str, str]:
     """
 
     repo_value = layout.get("repo_root")
-    worktree_id = _valid(layout.get("worktree_id"), "registered worktree id", _LABEL_VALUE_RE)
+    worktree_id = _valid(
+        layout.get("worktree_id"), "registered worktree id", _WORKTREE_LABEL_VALUE_RE
+    )
     environment = layout.get("env")
     if not isinstance(repo_value, str) or not repo_value:
         raise ValueError("Resolved storage layout has no repository root")
@@ -121,7 +124,9 @@ def source_labels(identity: Mapping[str, object]) -> dict[str, str]:
     project = _valid(identity.get("project_name"), "Compose project name")
     labels = {
         "org.fullmag.source.project-id": _valid(identity.get("project_id"), "source project id", _LABEL_VALUE_RE),
-        "org.fullmag.source.worktree-id": _valid(identity.get("worktree_id"), "source worktree id", _LABEL_VALUE_RE),
+        "org.fullmag.source.worktree-id": _valid(
+            identity.get("worktree_id"), "source worktree id", _WORKTREE_LABEL_VALUE_RE
+        ),
         "org.fullmag.source.checkout-kind": _valid(identity.get("checkout_kind"), "source checkout kind", _LABEL_VALUE_RE),
         "org.fullmag.compose.project": project,
     }

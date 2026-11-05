@@ -19433,6 +19433,34 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
     assert_eq!(valid["scalar_max"], 9.0);
 
     set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    let mismatched_domain = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-000&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatched_domain.status(), StatusCode::CONFLICT);
+    let mismatched_domain = body_json(mismatched_domain).await;
+    assert!(mismatched_domain["error"]
+        .as_str()
+        .unwrap()
+        .contains("does not match the current magnetic domain"));
+    {
+        // Keep the persisted two-cell magnetic domain while the common Airbox
+        // grid has four cells; the next request must reach target validation.
+        let mut guard = state.current_live_state.write().await;
+        let metadata = guard.as_mut().unwrap().metadata.as_mut().unwrap();
+        let layer = &mut metadata["artifact_layout"]["layers"][0];
+        layer["native_grid"] = serde_json::json!([2, 1, 1]);
+        layer["native_origin"] = serde_json::json!([-0.5, -0.5, -0.5]);
+        layer["value_count"] = serde_json::json!(2);
+    }
     let default_airbox_snapshot = app
         .clone()
         .oneshot(

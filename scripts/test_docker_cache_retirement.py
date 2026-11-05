@@ -196,6 +196,45 @@ class RetirementTests(unittest.TestCase):
         return retirement.retire(self.control, self.layout, "task-1", "owner-1",
                                  retire_namespaces=callback, docker=self.docker)
 
+    def test_target_identity_accepts_the_resolver_leading_underscore_worktree_id(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        compose_project = "fullmag-worktree-" + worktree_id
+        control = FakeControl(self.source)
+        control.project = compose_project
+        control.identity.update(worktree_id=worktree_id, project_name=compose_project)
+        control.labels.update({
+            "org.fullmag.compose.project": compose_project,
+            "org.fullmag.source.worktree-id": worktree_id,
+        })
+        layout = {**self.layout, "worktree_id": worktree_id}
+
+        identity = retirement._identity(control, layout)
+
+        self.assertEqual(identity["worktree_id"], worktree_id)
+        self.assertEqual(identity["compose_project"], compose_project)
+        self.assertEqual(identity["project_id"], PROJECT_ID)
+
+    def test_recorded_cache_key_accepts_underscore_worktree_without_changing_hash(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        source_root = "/repo/_codex_ci_fix"
+        inputs = {
+            "source_root": source_root,
+            "worktree_id": worktree_id,
+            "toolchain_image_id": TOOLCHAIN_IMAGE,
+            "cargo_profile": "backend-dev",
+        }
+
+        result = retirement._recorded_cache_key(
+            backend_cache, source_root, worktree_id, TOOLCHAIN_IMAGE, "backend-dev"
+        )
+
+        self.assertEqual(result["schema"], backend_cache.KEY_SCHEMA)
+        self.assertEqual(result["inputs"], inputs)
+        self.assertEqual(
+            result["key"],
+            backend_cache._sha256({"schema": backend_cache.KEY_SCHEMA, **inputs}),
+        )
+
     def _interrupted_retirement(self):
         self._group_cache_profile()
         identity = retirement._identity(self.control, self.layout)
@@ -340,21 +379,24 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(json.loads(terminal_file.read_bytes()), proof)
         self.assertEqual((self.root / "active").read_bytes(), active)
 
-    def _group_cache_profile(self, *, source_root=None):
+    def _group_cache_profile(self, *, source_root=None, worktree_id=WORKTREE_ID,
+                             compose_project=None, control=None):
         source_root = source_root or self.source
+        control = control or self.control
+        compose_project = compose_project or control.project
         prepared = backend_cache._plan(
             {"storage_root": str(self.storage_root), "project_id": self.cache_project_id,
-             "worktree_id": WORKTREE_ID, "compose_project": self.project},
+             "worktree_id": worktree_id, "compose_project": compose_project},
             source_root, RUNTIME_IMAGE, self.storage_root,
             source_root=source_root, toolchain_image=TOOLCHAIN_IMAGE,
-            cargo_profile="backend-dev", control_volume_name=self.control.volume,
+            cargo_profile="backend-dev", control_volume_name=control.volume,
             control_namespace="", shared_packages=True, group_volume=True,
         )
         build_labels = backend_cache.volume_labels(prepared, backend_cache.BUILD_VOLUME_ROLE)
-        self.docker.add_volume(self.control.volume, build_labels)
+        self.docker.add_volume(control.volume, build_labels)
         documents = {
-            backend_cache.BUILD_VOLUME_ROLE: self.docker.volumes[self.control.volume],
-            backend_cache.CONTROL_VOLUME_ROLE: self.docker.volumes[self.control.volume],
+            backend_cache.BUILD_VOLUME_ROLE: self.docker.volumes[control.volume],
+            backend_cache.CONTROL_VOLUME_ROLE: self.docker.volumes[control.volume],
             backend_cache.PACKAGE_VOLUME_ROLE: self.docker.volumes[self.shared_name],
         }
         markers = {
@@ -362,7 +404,7 @@ class RetirementTests(unittest.TestCase):
                 "schema": backend_cache.OWNER_SCHEMA, "state": "owned",
                 "unit_key": prepared["unit_key"], "owner_id": prepared["owner_id"],
                 "role": backend_cache.BUILD_VOLUME_ROLE,
-                "volume_name": self.control.volume, "uid": 65532, "gid": 65532,
+                "volume_name": control.volume, "uid": 65532, "gid": 65532,
             },
             backend_cache.PACKAGE_VOLUME_ROLE: {
                 "schema": backend_cache.OWNER_SCHEMA, "state": "owned",
@@ -373,7 +415,7 @@ class RetirementTests(unittest.TestCase):
             backend_cache.CONTROL_VOLUME_ROLE: {
                 "schema": "fullmag.docker-toolchain-control-owner.v1", "state": "owned",
                 "role": backend_cache.CONTROL_VOLUME_ROLE,
-                "volume_name": self.control.volume,
+                "volume_name": control.volume,
                 "mount": backend_cache.CONTROL_TARGET,
                 "namespace": backend_cache.CONTROL_BACKEND_TARGET,
             },
@@ -381,7 +423,7 @@ class RetirementTests(unittest.TestCase):
         receipt = {
             "schema": backend_cache.MAINTENANCE_RECEIPT_SCHEMA,
             "profile": backend_cache.PROFILE, "state": "ready",
-            "project_id": self.cache_project_id, "worktree_id": WORKTREE_ID,
+            "project_id": self.cache_project_id, "worktree_id": worktree_id,
             "cache_key": prepared["cache_key"], "unit_key": prepared["unit_key"],
             "owner_id": prepared["owner_id"], "cargo_profile": prepared["cargo_profile"],
             "runtime_image_id": RUNTIME_IMAGE, "toolchain_image_id": TOOLCHAIN_IMAGE,
@@ -393,12 +435,12 @@ class RetirementTests(unittest.TestCase):
                           for role in backend_cache.VOLUME_ROLES}},
         }
         profile = backend_cache.validate(prepared, documents, receipt)
-        self.control.records[retirement.GROUP_STORAGE_REGISTRY_PATH] = {
+        control.records[retirement.GROUP_STORAGE_REGISTRY_PATH] = {
             "schema": retirement.PRIVATE_GROUP_REGISTRY_SCHEMA,
             "state": "ready", "profile": profile,
         }
-        self.control.records[retirement.GROUP_STORAGE_OWNER_PATH] = group_storage.owner_manifest(
-            self.control, self.source
+        control.records[retirement.GROUP_STORAGE_OWNER_PATH] = group_storage.owner_manifest(
+            control, source_root
         )
         return profile
 
@@ -568,6 +610,221 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(result["state"], "succeeded")
         self.assertIn(self.shared_name, self.docker.volumes)
 
+    def test_registered_other_shared_consumer_accepts_leading_underscore_worktree_id(self):
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        compose_project = "fullmag-worktree-" + worktree_id
+        labels = consumer["Config"]["Labels"]
+        labels[backend_cache.LABEL_WORKTREE] = worktree_id
+        labels["com.docker.compose.project"] = compose_project
+        labels["org.fullmag.compose.project"] = compose_project
+        labels["org.fullmag.source.worktree-id"] = worktree_id
+        environment = dict(item.split("=", 1) for item in consumer["Config"]["Env"] if "=" in item)
+        environment["FULLMAG_BACKEND_CACHE_WORKTREE_ID"] = worktree_id
+        environment["FULLMAG_SOURCE_WORKTREE_ID"] = worktree_id
+        consumer["Config"]["Env"] = [f"{key}={value}" for key, value in environment.items()]
+        other_unit = self._set_other_consumer_recorded_source(consumer, str(self.root / "other-wt"))
+        identity = retirement._identity(self.control, self.layout)
+        shared = retirement._shared_package(self.control, identity, self.docker)
+
+        retirement._registered_other_shared_consumer(consumer, identity, shared, set())
+
+        self.assertEqual(consumer["Config"]["Labels"][backend_cache.LABEL_UNIT], other_unit)
+        self.assertEqual(consumer["Config"]["Labels"][backend_cache.LABEL_WORKTREE], worktree_id)
+
+    def _assert_missing_other_consumer_source_is_retained(self, *, group_volume):
+        retiring_group = self._group_cache_profile() if group_volume else None
+        self._add_root_consumer(other=True, group_volume=group_volume)
+        consumer = self.docker.containers["2" * 64]
+        consumer_unit = consumer["Config"]["Labels"][backend_cache.LABEL_UNIT]
+        other_source = self.root / "other-wt"
+        other_source.rmdir()
+
+        callback_calls = []
+        callback = lambda keys, operation: (callback_calls.append(list(keys)) or
+                                             {"state": "succeeded", "unit_keys": list(keys)})
+        if group_volume:
+            with mock.patch.object(retirement, "_clear_private_group_cache",
+                                   return_value={"state": "succeeded", "cleared": []}):
+                result = self._retire(callback)
+        else:
+            result = self._retire(callback)
+
+        self.assertEqual(result["state"], "succeeded")
+        self.assertIn("2" * 64, self.docker.containers)
+        self.assertIn(self.shared_name, self.docker.volumes)
+        self.assertNotIn(consumer_unit, callback_calls[0])
+        package_mount = next(
+            mount for mount in consumer["HostConfig"]["Mounts"]
+            if mount.get("Target") == backend_cache.PACKAGE_TARGET
+        )
+        self.assertEqual(package_mount["VolumeOptions"]["Subpath"], backend_cache.shared_group(consumer_unit))
+        expected_retiring = {self.backend_profile["unit_key"]}
+        if retiring_group is not None:
+            expected_retiring.add(retiring_group["unit_key"])
+        self.assertEqual(set(callback_calls[0]), expected_retiring)
+
+    def test_retirement_preserves_legacy_other_consumer_with_missing_recorded_source(self):
+        self._assert_missing_other_consumer_source_is_retained(group_volume=False)
+
+    def test_retirement_preserves_group_volume_other_consumer_with_missing_recorded_source(self):
+        self._assert_missing_other_consumer_source_is_retained(group_volume=True)
+
+    def _set_other_consumer_recorded_source(self, consumer, source_root):
+        labels = consumer["Config"]["Labels"]
+        environment = dict(item.split("=", 1) for item in consumer["Config"]["Env"] if "=" in item)
+        source_key = ("FULLMAG_SOURCE_HOST_ROOT" if "FULLMAG_SOURCE_HOST_ROOT" in environment
+                      else "FULLMAG_SOURCE_ROOT")
+        environment[source_key] = source_root
+        inputs = {
+            "source_root": source_root,
+            "worktree_id": labels[backend_cache.LABEL_WORKTREE],
+            "toolchain_image_id": labels[backend_cache.LABEL_TOOLCHAIN],
+            "cargo_profile": labels[backend_cache.LABEL_CARGO_PROFILE],
+        }
+        cache_key = backend_cache._sha256({"schema": backend_cache.KEY_SCHEMA, **inputs})
+        labels[backend_cache.LABEL_CACHE_KEY] = cache_key
+        environment["FULLMAG_BACKEND_CACHE_KEY"] = cache_key
+
+        if environment.get("FULLMAG_PRIVATE_GROUP_STORAGE") == "group-volume-v1":
+            unit = backend_cache._sha256({
+                "schema": retirement._PRIVATE_UNIT_SCHEMA,
+                "project_id": labels[backend_cache.LABEL_PROJECT],
+                "worktree_id": labels[backend_cache.LABEL_WORKTREE],
+                "source_root": source_root,
+            })
+        else:
+            unit = backend_cache._sha256({
+                "schema": backend_cache.SCHEMA,
+                "project_id": labels[backend_cache.LABEL_PROJECT],
+                "cache_key": cache_key,
+                "worktree_id": labels[backend_cache.LABEL_WORKTREE],
+                "toolchain_image_id": labels[backend_cache.LABEL_TOOLCHAIN],
+                "cargo_profile": labels[backend_cache.LABEL_CARGO_PROFILE],
+            })
+            name_id = retirement.hashlib.sha256(
+                f"{labels[backend_cache.LABEL_PROJECT]}:{unit}".encode()
+            ).hexdigest()[:24]
+            environment["FULLMAG_BACKEND_CACHE_BUILD_VOLUME"] = f"fullmag-backend-v2-{name_id}-build"
+
+        labels[backend_cache.LABEL_UNIT] = unit
+        labels[backend_cache.LABEL_OWNER] = unit
+        environment["FULLMAG_BACKEND_CACHE_UNIT_KEY"] = unit
+        environment["FULLMAG_BACKEND_CACHE_OWNER_ID"] = unit
+        environment["FULLMAG_SHARED_BACKEND_GROUP"] = backend_cache.shared_group(unit)
+        group = backend_cache.shared_group(unit)
+        mountpoint = self.docker.volumes[self.shared_name]["Mountpoint"]
+        for mount in consumer["HostConfig"]["Mounts"]:
+            if mount.get("Target") == backend_cache.PACKAGE_TARGET:
+                mount["VolumeOptions"]["Subpath"] = group
+        for mount in consumer["Mounts"]:
+            if mount.get("Destination") == backend_cache.PACKAGE_TARGET:
+                mount["Source"] = f"{mountpoint}/{group}"
+        consumer["Config"]["Env"] = [f"{key}={value}" for key, value in environment.items()]
+        return unit
+
+    def test_retirement_accepts_canonical_windows_source_for_legacy_consumer(self):
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        other_unit = self._set_other_consumer_recorded_source(consumer, r"C:\src\other-wt")
+        (self.root / "other-wt").rmdir()
+        result = self._retire(lambda keys, operation: {"state": "succeeded", "unit_keys": keys})
+        self.assertEqual(result["state"], "succeeded")
+        self.assertIn("2" * 64, self.docker.containers)
+        self.assertIn(self.shared_name, self.docker.volumes)
+        self.assertNotIn(other_unit, result["namespaces_pending"])
+
+    def test_retirement_accepts_canonical_windows_source_for_group_volume_consumer(self):
+        retiring_group = self._group_cache_profile()
+        self._add_root_consumer(other=True, group_volume=True)
+        consumer = self.docker.containers["2" * 64]
+        other_unit = self._set_other_consumer_recorded_source(consumer, r"C:\src\other-wt")
+        (self.root / "other-wt").rmdir()
+        callback_calls = []
+        callback = lambda keys, operation: (callback_calls.append(list(keys)) or
+                                             {"state": "succeeded", "unit_keys": list(keys)})
+        with mock.patch.object(retirement, "_clear_private_group_cache",
+                               return_value={"state": "succeeded", "cleared": []}):
+            result = self._retire(callback)
+        self.assertEqual(result["state"], "succeeded")
+        self.assertIn("2" * 64, self.docker.containers)
+        self.assertIn(self.shared_name, self.docker.volumes)
+        self.assertNotIn(other_unit, callback_calls[0])
+        self.assertIn(retiring_group["unit_key"], callback_calls[0])
+
+    def test_recorded_cache_identity_rejects_noncanonical_or_nonlocal_paths(self):
+        invalid_paths = (
+            str(self.source) + "/.",
+            str(self.source) + "/../source",
+            str(self.root) + "//source",
+            str(self.source) + "/",
+            str(self.source) + "\x00",
+            str(self.source) + "\x01",
+            "//server/share/source",
+            r"\\server\share\source",
+            r"C:relative\source",
+            r"C:\source/mixed",
+            r"C:\source\\nested",
+            r"C:\source\..\source",
+            "C:\\source\\nested\\",
+        )
+        for source_root in invalid_paths:
+            with self.subTest(source_root=repr(source_root)):
+                with self.assertRaises(retirement.CacheRetirementError):
+                    retirement._recorded_cache_key(
+                        backend_cache, source_root, "other-wt", TOOLCHAIN_IMAGE, "backend-dev"
+                    )
+
+    def test_other_consumer_cache_key_and_source_drift_are_rejected(self):
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        identity = retirement._identity(self.control, self.layout)
+        shared = retirement._shared_package(self.control, identity, self.docker)
+
+        consumer["Config"]["Labels"][backend_cache.LABEL_CACHE_KEY] = "e" * 64
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "labels/environment"):
+            retirement._registered_other_shared_consumer(consumer, identity, shared, set())
+
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        environment = dict(item.split("=", 1) for item in consumer["Config"]["Env"] if "=" in item)
+        environment["FULLMAG_SOURCE_WORKTREE_ID"] = "different-wt"
+        consumer["Config"]["Env"] = [f"{key}={value}" for key, value in environment.items()]
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "labels/environment"):
+            retirement._registered_other_shared_consumer(consumer, identity, shared, set())
+
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        alternate_source = self.root / "alternate-source"
+        alternate_source.mkdir()
+        environment = dict(item.split("=", 1) for item in consumer["Config"]["Env"] if "=" in item)
+        environment["FULLMAG_SOURCE_ROOT"] = str(alternate_source)
+        consumer["Config"]["Env"] = [f"{key}={value}" for key, value in environment.items()]
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "not derived from its source identity"):
+            retirement._registered_other_shared_consumer(consumer, identity, shared, set())
+
+    def test_retiring_consumer_worktree_and_unit_block_before_source_validation(self):
+        self._add_root_consumer(other=True)
+        consumer = self.docker.containers["2" * 64]
+        identity = retirement._identity(self.control, self.layout)
+        shared = retirement._shared_package(self.control, identity, self.docker)
+        other_source = self.root / "other-wt"
+        other_source.rmdir()
+
+        consumer["Config"]["Labels"][backend_cache.LABEL_WORKTREE] = WORKTREE_ID
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "retiring worktree"):
+            retirement._registered_other_shared_consumer(
+                consumer, identity, shared, {self.backend_profile["unit_key"]}
+            )
+
+        consumer["Config"]["Labels"][backend_cache.LABEL_WORKTREE] = "other-wt"
+        consumer["Config"]["Labels"][backend_cache.LABEL_UNIT] = self.backend_profile["unit_key"]
+        with self.assertRaisesRegex(retirement.CacheRetirementError, "retiring groups"):
+            retirement._registered_other_shared_consumer(
+                consumer, identity, shared, {self.backend_profile["unit_key"]}
+            )
+
     def test_split_project_ids_retire_only_the_registered_private_namespace(self):
         self.layout.pop("project_id")
         self.layout.update(project_root=str(self.root), env={"FULLMAG_PROJECT_ID": PROJECT_ID})
@@ -673,6 +930,35 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(result["namespaces_pending"], expected_units)
         self.assertNotIn(self.control.volume, self.docker.removed)
         self.assertIn(self.control.volume, self.docker.volumes)
+
+    def test_group_volume_retirement_accepts_resolver_leading_underscore_worktree(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        compose_project = "fullmag-worktree-" + worktree_id
+        control = FakeControl(self.source)
+        control.project = compose_project
+        control.volume = bootstrap.control_volume_name(compose_project)
+        control.identity.update(worktree_id=worktree_id, project_name=compose_project)
+        control.labels.update({
+            "org.fullmag.compose.project": compose_project,
+            "org.fullmag.source.worktree-id": worktree_id,
+        })
+        self.control = control
+        self.layout = {**self.layout, "worktree_id": worktree_id}
+
+        profile = self._group_cache_profile(
+            worktree_id=worktree_id, compose_project=compose_project, control=control
+        )
+        callback_calls = []
+        callback = lambda keys, operation: (callback_calls.append(list(keys)) or
+                                             {"state": "succeeded", "unit_keys": list(keys)})
+        with mock.patch.object(retirement, "_clear_private_group_cache",
+                               return_value={"state": "succeeded", "cleared": []}):
+            result = self._retire(callback)
+
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(callback_calls, [[profile["unit_key"]]])
+        self.assertIn(control.volume, self.docker.volumes)
+        self.assertNotIn(control.volume, self.docker.removed)
 
     def test_group_registry_supplies_namespace_without_legacy_backend_volume(self):
         profile = self._group_cache_profile()

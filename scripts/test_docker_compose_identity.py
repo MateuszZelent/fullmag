@@ -45,6 +45,30 @@ class ComposeProjectIdentityTests(unittest.TestCase):
         self.assertEqual(identity.source_labels(result)["org.fullmag.source.worktree-id"],
                          "worktree-abc.def-1234")
 
+    def test_generated_leading_underscore_worktree_is_preserved_in_source_labels(self):
+        source_root = "/checkout/worktrees/_codex_ci_fix"
+        worktree_id = storage.identifier(source_root)
+        self.assertRegex(worktree_id, r"^_codex_ci_fix-[0-9a-f]{16}$")
+        layout = self._layout(source_root, worktree_id)
+        with patch.object(storage, "worktree_records",
+                          return_value=[{"worktree": "/checkout/fullmag"},
+                                        {"worktree": source_root}]):
+            result = identity.compose_project_identity(layout)
+
+        labels = identity.source_labels(result)
+        self.assertEqual(result["worktree_id"], worktree_id)
+        self.assertEqual(labels["org.fullmag.source.worktree-id"], worktree_id)
+        self.assertEqual(result["project_name"], "fullmag-worktree-" + worktree_id)
+
+    def test_project_id_and_compose_project_names_still_reject_leading_underscore(self):
+        with self.assertRaisesRegex(ValueError, "resolver project id"):
+            identity.compose_project_identity({
+                **self._layout("/checkout/worktrees/feature-a"),
+                "env": {"FULLMAG_PROJECT_ID": "_fullmag-project"},
+            })
+        with self.assertRaisesRegex(ValueError, "Compose project name"):
+            identity.compose_network_name("_codex_ci_fix")
+
     def test_long_worktree_identity_keeps_readable_project_and_safe_network(self):
         worktree_id = "docker-all-windows-20261014-" + "a" * 16
         layout = self._layout("/checkout/worktrees/feature-a", worktree_id)

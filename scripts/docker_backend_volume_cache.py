@@ -96,6 +96,7 @@ _LABEL_PREFIX = "com.fullmag.backend-cache."
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_WORKTREE_IDENTIFIER = re.compile(r"^[a-z0-9_][a-z0-9._-]{0,127}$")
 _VOLUME_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _HEX_OR_ID = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL_NAMESPACE = re.compile(r"^namespaces/[0-9a-f]{32}$")
@@ -162,6 +163,12 @@ def _require_identifier(value: str, label: str) -> str:
     return value
 
 
+def _require_worktree_identifier(value: str, label: str = "worktree_id") -> str:
+    if not isinstance(value, str) or _WORKTREE_IDENTIFIER.fullmatch(value) is None:
+        raise BackendVolumeCacheError(f"{label} is not a safe worktree identifier")
+    return value
+
+
 def _validated_control_namespace(value: Any) -> str:
     if not isinstance(value, str) or (value and _CONTROL_NAMESPACE.fullmatch(value) is None):
         raise BackendVolumeCacheError("control namespace must be empty or namespaces/<32 lowercase hexadecimal characters>")
@@ -222,7 +229,7 @@ def cache_key(
     """
 
     source = _source_root(source_root)
-    worktree = _require_identifier(worktree_id, "worktree_id")
+    worktree = _require_worktree_identifier(worktree_id)
     toolchain = _require_image_id(toolchain_image, "toolchain_image")
     if cargo_profile not in SUPPORTED_CARGO_PROFILES:
         raise BackendVolumeCacheError(
@@ -484,7 +491,7 @@ def _plan(
     image = _require_image_id(image, "runtime image")
     toolchain_image = _require_image_id(toolchain_image, "toolchain image")
     control_namespace = _validated_control_namespace(control_namespace)
-    worktree_id = _require_identifier(str(layout.get("worktree_id", "")), "worktree_id")
+    worktree_id = _require_worktree_identifier(str(layout.get("worktree_id", "")))
     project_id = _safe_project_id(layout)
     control_project = layout.get("compose_project")
     if control_project is not None:
@@ -778,7 +785,7 @@ def _validate_volume_document(
                 if key not in labels or labels[key] == value:
                     continue
                 if key == "org.fullmag.source.worktree-id" and namespace_owner is not None:
-                    _require_identifier(labels[key], "historical root worktree label")
+                    _require_worktree_identifier(labels[key], "historical root worktree label")
                     continue
                 raise BackendVolumeCacheError("Group cache volume belongs to another source/group")
         required = {
@@ -1020,7 +1027,7 @@ def _is_registered_shared_maintenance(
         and isinstance(cache_key_value, str)
         and _HEX_OR_ID.fullmatch(cache_key_value) is not None
         and isinstance(worktree_id, str)
-        and _IDENTIFIER.fullmatch(worktree_id) is not None
+        and _WORKTREE_IDENTIFIER.fullmatch(worktree_id) is not None
         and isinstance(toolchain_id, str)
         and _IMAGE_ID.fullmatch(toolchain_id) is not None
         and cargo_profile in SUPPORTED_CARGO_PROFILES

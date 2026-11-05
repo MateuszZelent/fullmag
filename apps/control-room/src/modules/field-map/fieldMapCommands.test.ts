@@ -446,7 +446,7 @@ describe("field-map commands", () => {
       source: "test",
     });
 
-    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining("open the 2D view") });
+    expect(result).toMatchObject({ status: "failed", message: expect.stringContaining("Open the 2D view") });
     expect(visualizationState).toHaveBeenCalledTimes(1);
     expect(meta).not.toHaveBeenCalled();
     expect(renderPng).not.toHaveBeenCalled();
