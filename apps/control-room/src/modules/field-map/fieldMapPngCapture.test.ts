@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { resolveVisibleFieldMapCapture } from "./fieldMapPngCapture";
+
+let restoreDom: (() => void) | undefined;
+
+beforeEach(() => {
+  restoreDom = installSimulationPreparationTestDom().restore;
+});
+
+afterEach(() => {
+  restoreDom?.();
+  restoreDom = undefined;
+});
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) } as DOMRect;
@@ -17,7 +30,7 @@ function makeCanvas(parent: Element, layer: string): HTMLCanvasElement {
   canvas.height = 48;
   canvas.setAttribute("data-test-layer", layer);
   setRect(canvas, rect(20, 30, 64, 48));
-  parent.append(canvas);
+  parent.appendChild(canvas);
   return canvas;
 }
 
@@ -40,50 +53,50 @@ function makeRoot(compositionState = "verified") {
   root.className = "fm-field-map";
   const evidence = document.createElement("output");
   evidence.setAttribute("aria-label", "Planar field evidence");
-  evidence.dataset.planarEvidence = JSON.stringify(makeEvidence());
-  evidence.dataset.planarStatus = "ready";
-  root.append(evidence);
+  evidence.setAttribute("data-planar-evidence", JSON.stringify(makeEvidence()));
+  evidence.setAttribute("data-planar-status", "ready");
+  root.appendChild(evidence);
 
   const stage = document.createElement("div");
   stage.className = "fm-field-map__stage";
   setRect(stage, rect(10, 20, 600, 500));
-  root.append(stage);
+  root.appendChild(stage);
 
   const composition = document.createElement("div");
   composition.className = "fm-field-map__composition-buffers";
-  composition.dataset.planarCompositionState = compositionState;
-  composition.dataset.planarCompositionVisibleSlot = "B";
-  stage.append(composition);
+  composition.setAttribute("data-planar-composition-state", compositionState);
+  composition.setAttribute("data-planar-composition-visible-slot", "B");
+  stage.appendChild(composition);
 
   const slotA = document.createElement("div");
-  slotA.dataset.planarCompositionSlot = "A";
+  slotA.setAttribute("data-planar-composition-slot", "A");
   slotA.setAttribute("aria-hidden", "true");
   setRect(slotA, rect(20, 30, 64, 48));
   // A hidden preparing buffer is deliberately invalid and must never poison or
   // enter a capture of the committed B stack.
   makeCanvas(slotA, "hidden-A").width = 0;
-  composition.append(slotA);
+  composition.appendChild(slotA);
 
   const slotB = document.createElement("div");
-  slotB.dataset.planarCompositionSlot = "B";
+  slotB.setAttribute("data-planar-composition-slot", "B");
   slotB.setAttribute("aria-hidden", "false");
   setRect(slotB, rect(20, 30, 64, 48));
-  composition.append(slotB);
+  composition.appendChild(slotB);
   makeCanvas(slotB, "base-raster").setAttribute("aria-label", "Planar scalar field");
-  makeCanvas(slotB, "base-glyphs").classList.add("fm-field-map__canvas--overlay");
+  makeCanvas(slotB, "base-glyphs").setAttribute("class", "fm-field-map__canvas fm-field-map__canvas--overlay");
   for (const [id, quantityId, sample] of [
     ["object:ferromagnet", "H_demag", "etag-overlay-3"],
     ["object:antiferromagnet", "H_eff", "etag-overlay-4"],
   ]) {
     for (const layer of ["raster", "vectors"] as const) {
       const overlay = makeCanvas(slotB, `overlay-${id}-${layer}`);
-      overlay.dataset.planarOverlayId = id;
-      overlay.dataset.planarOverlayLayer = layer;
-      overlay.dataset.planarOverlayQuantity = quantityId;
-      overlay.dataset.planarOverlaySample = sample;
-      overlay.dataset.planarOverlayRenderedSample = sample;
-      overlay.dataset.planarOverlayRenderedCurrent = "true";
-      overlay.dataset.planarOverlayRenderedEvidence = JSON.stringify({ sampleIdentity: sample, renderKey: `render-${sample}` });
+      overlay.setAttribute("data-planar-overlay-id", id);
+      overlay.setAttribute("data-planar-overlay-layer", layer);
+      overlay.setAttribute("data-planar-overlay-quantity", quantityId);
+      overlay.setAttribute("data-planar-overlay-sample", sample);
+      overlay.setAttribute("data-planar-overlay-rendered-sample", sample);
+      overlay.setAttribute("data-planar-overlay-rendered-current", "true");
+      overlay.setAttribute("data-planar-overlay-rendered-evidence", JSON.stringify({ sampleIdentity: sample, renderKey: `render-${sample}` }));
     }
   }
 
@@ -91,13 +104,13 @@ function makeRoot(compositionState = "verified") {
   axes.className = "fm-field-map__axes";
   axes.textContent = "X (nm) Y (nm)";
   setRect(axes, rect(20, 30, 64, 48));
-  slotB.append(axes);
+  slotB.appendChild(axes);
   const legend = document.createElement("aside");
   legend.className = "fm-field-map__colorbar";
   legend.setAttribute("aria-label", "Scalar color range");
   setRect(legend, rect(20, 100, 120, 40));
   legend.innerHTML = '<span class="fm-field-map__colorbar-quantity">H demag</span><span class="fm-field-map__colorbar-unit">A/m</span><span class="fm-field-map__colorbar-limit--min">-2</span><span class="fm-field-map__colorbar-limit--max">2</span><span class="fm-field-map__colorbar-ramp" data-colormap="coolwarm"></span>';
-  stage.append(legend);
+  stage.appendChild(legend);
   return { root, stage, slotA, slotB, composition };
 }
 
@@ -143,7 +156,7 @@ describe("visible field-map PNG capture", () => {
   it("rejects an overlay whose visible pixels have not been acknowledged for its current sample", () => {
     const { root, slotB } = makeRoot();
     const overlay = slotB.querySelector('[data-planar-overlay-layer="vectors"]') as HTMLCanvasElement;
-    overlay.dataset.planarOverlayRenderedCurrent = "false";
+    overlay.setAttribute("data-planar-overlay-rendered-current", "false");
 
     expect(() => resolveVisibleFieldMapCapture(root)).toThrow(/not current/);
   });
@@ -152,8 +165,8 @@ describe("visible field-map PNG capture", () => {
     const { root } = makeRoot();
     const output = root.querySelector('[aria-label="Planar field evidence"]')!;
     for (const status of ["loading", "stale"] as const) {
-      output.dataset.planarStatus = status;
-      output.dataset.planarEvidence = JSON.stringify({ ...makeEvidence(), status });
+      output.setAttribute("data-planar-status", status);
+      output.setAttribute("data-planar-evidence", JSON.stringify({ ...makeEvidence(), status }));
       expect(() => resolveVisibleFieldMapCapture(root)).toThrow(/not current/);
     }
   });
