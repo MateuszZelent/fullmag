@@ -156,6 +156,7 @@ from fullmag.model.study import (
 )
 from fullmag.model.structure import (
     Ferromagnet,
+    MagnetizationAssignment,
     Material,
     MaterialParameterAssignment,
     MaterialParameterField,
@@ -642,7 +643,12 @@ class MagnetHandle:
 
     @m.setter
     def m(self, value: Any) -> None:  # type: ignore[assignment]
+        self._set_magnetization(value)
+
+    def _set_magnetization(self, value: Any) -> None:
+        self._assert_active_context()
         self._m_value = value
+        _record_magnetization_assignment(self._object_id or self._name, None, value)
 
     @property
     def alpha(self) -> AlphaControl:
@@ -721,7 +727,14 @@ class MagnetHandle:
 
         # Capture region data without retaining the editable DSL handles.
         object_regions = tuple(
-            copy.deepcopy(replace(region, _delete_callback=None, _context_guard=None))
+            copy.deepcopy(
+                replace(
+                    region,
+                    _delete_callback=None,
+                    _context_guard=None,
+                    _texture_assignment_callback=None,
+                )
+            )
             for region in self._object_regions
         )
 
@@ -769,6 +782,7 @@ class MagnetHandle:
         )
         region._context_guard = self._assert_active_context
         region._delete_callback = lambda region_id=region.region_id: self.remove_region(region_id)
+        region._texture_assignment_callback = _record_region_texture_assignment
         self._object_regions.append(region)
         return region
 
@@ -777,6 +791,7 @@ class MagnetHandle:
         index, resolved = self._resolve_region_index(region)
         removed = self._object_regions.pop(index)
         removed._delete_callback = None
+        removed._texture_assignment_callback = None
         self._material_parameter_assignments = [
             assignment
             for assignment in self._material_parameter_assignments
@@ -1021,7 +1036,7 @@ class MagnetHandle:
                 f"field state contains quantity '{state.quantity_id}', expected '{quantity_id}'"
             )
         if mode in {"auto", "apply"} and quantity_id == "m":
-            self._m_value = state.as_sampled_magnetization()
+            self._set_magnetization(state.as_sampled_magnetization())
         elif mode == "apply":
             raise ValueError(f"quantity '{quantity_id}' cannot be applied to object state")
         self._field_states[quantity_id] = state
@@ -1089,12 +1104,12 @@ class MagnetizationHandle:
 
     def set(self, value: Any) -> Any:
         self._owner._assert_active_context()
-        self._owner._m_value = value
+        self._owner._set_magnetization(value)
         return value
 
     def clear(self) -> None:
         self._owner._assert_active_context()
-        self._owner._m_value = None
+        self._owner._set_magnetization(None)
 
     def loadfile(
         self,
@@ -1108,7 +1123,7 @@ class MagnetizationHandle:
         from fullmag.init import load_magnetization
 
         state = load_magnetization(path, format=format, dataset=dataset, sample=sample)
-        self._owner._m_value = state
+        self._owner._set_magnetization(state)
         return state
 
     def savefile(
@@ -2687,6 +2702,7 @@ class CapturedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
 
 @dataclass
@@ -2694,6 +2710,34 @@ class _CaptureState:
     enabled: bool = False
     skip_geometry_assets: bool = False
     stages: list[CapturedStage] = field(default_factory=list)
+    has_physical_stage: bool = False
+    pending_magnetization_assignments: list[MagnetizationAssignment] = field(default_factory=list)
+
+
+def _record_magnetization_assignment(object_id: str, region_id: str | None, initializer: Any) -> None:
+    capture = _capture_binding.current()
+    if capture.enabled and capture.has_physical_stage:
+        capture.pending_magnetization_assignments.append(
+            MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+        )
+
+
+def _record_region_texture_assignment(region: ObjectRegion) -> None:
+    _record_magnetization_assignment(region.owner_object, region.region_id, region.texture)
+
+
+def _capture_magnetization_assignments(stage: CapturedStage) -> CapturedStage:
+    capture = _capture_binding.current()
+    if not capture.enabled or stage.entrypoint_kind not in {"flat_run", "flat_relax"}:
+        return stage
+    capture.has_physical_stage = True
+    if not capture.pending_magnetization_assignments:
+        return stage
+    captured = replace(
+        stage, magnetization_assignments=tuple(capture.pending_magnetization_assignments)
+    )
+    capture.pending_magnetization_assignments.clear()
+    return captured
 
 
 _ContextValue = TypeVar("_ContextValue")
@@ -4240,7 +4284,7 @@ class StudyStagesBuilder:
         merged_constraints: list[FrozenSpins],
     ) -> None:
         _state._magnetization_constraints = merged_constraints
-        _state._declared_stages.append(captured_stage)
+        _state._declared_stages.append(_capture_magnetization_assignments(captured_stage))
 
     def add_stage(
         self,
@@ -10159,10 +10203,12 @@ def run(until: float) -> Any:
         return live.submit_stage("run", len(_state._live_stages) - 1, until_seconds=float(until))
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_run",
-                default_until_seconds=until,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_run",
+                    default_until_seconds=until,
+                )
             )
         )
         return problem
@@ -10541,10 +10587,12 @@ def relax(
 
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_relax",
-                default_until_seconds=None,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_relax",
+                    default_until_seconds=None,
+                )
             )
         )
         return problem

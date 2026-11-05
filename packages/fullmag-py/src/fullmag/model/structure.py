@@ -323,6 +323,15 @@ class RegionTextureOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class MagnetizationAssignment:
+    """An explicit authored texture operation, in script order."""
+
+    object_id: str
+    region_id: str | None
+    initializer: InitialMagnetization | None
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialTransitionSpec:
     kind: str
     cells: int | None = None
@@ -391,6 +400,9 @@ class ObjectRegion:
     texture_override: RegionTextureOverride | None = None
     _delete_callback: Callable[[], None] | None = field(default=None, repr=False, compare=False)
     _context_guard: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    _texture_assignment_callback: Callable[[ObjectRegion], None] | None = field(
+        default=None, repr=False, compare=False
+    )
     material: ObjectRegionMaterialProxy = field(init=False, repr=False)
     _magnetization_constraints: list[object] = field(
         default_factory=list, repr=False, compare=False
@@ -432,15 +444,20 @@ class ObjectRegion:
     @texture.setter
     def texture(self, value: InitialMagnetization | None) -> None:
         if value is None:
-            self.texture_override = None
+            self._assign_texture_override(None)
         else:
             self.set_texture(value)
 
     def set_texture(self, value: InitialMagnetization) -> "ObjectRegion":
         if self._context_guard is not None:
             self._context_guard()
-        self.texture_override = RegionTextureOverride(value)
+        self._assign_texture_override(RegionTextureOverride(value))
         return self
+
+    def _assign_texture_override(self, override: RegionTextureOverride | None) -> None:
+        self.texture_override = override
+        if self._texture_assignment_callback is not None:
+            self._texture_assignment_callback(self)
 
     def set_material(
         self,

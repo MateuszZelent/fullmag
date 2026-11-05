@@ -699,6 +699,9 @@ def render_loaded_problem_as_script(
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
+        magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
+        region_vars=region_vars,
+        source_root=source_root,
     )
     if stage_lines:
         lines.append("")
@@ -8257,6 +8260,9 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    magnet_names: dict[str, str],
+    region_vars: dict[str, str],
+    source_root: Path,
 ) -> list[str]:
     if not stages:
         return []
@@ -8267,6 +8273,26 @@ def _render_stages(
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
+        for assignment in stage.magnetization_assignments:
+            if assignment.region_id is None:
+                magnet_var = magnet_vars[magnet_names[assignment.object_id]]
+                if assignment.initializer is None:
+                    lines.append(f"{magnet_var}.m.clear()")
+                else:
+                    rendered = _render_initial_magnetization(
+                        assignment.initializer, magnet_var=magnet_var, source_root=source_root
+                    )
+                    lines.extend(rendered if isinstance(rendered, list) else [rendered])
+            else:
+                region_var = region_vars[assignment.region_id]
+                expression = (
+                    "None"
+                    if assignment.initializer is None
+                    else _render_initial_magnetization_expr(
+                        assignment.initializer, source_root=source_root
+                    )
+                )
+                lines.append(f"{region_var}.texture = {expression}")
         if is_study_surface and stage.problem.study is not None:
             output_lines, active_outputs = _sync_stage_output_snapshot(
                 active_outputs,
@@ -12111,6 +12137,25 @@ def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:
     baseline = _stage_signature(solver_stages[0].problem)
     for stage in solver_stages[1:]:
         signature = _stage_signature(stage.problem)
+        if stage.magnetization_assignments:
+            names = {
+                magnet.object_id or magnet.name: magnet.name for magnet in stage.problem.magnets
+            }
+            magnetization_by_name = {
+                names[assignment.object_id]: (
+                    assignment.initializer or UniformMagnetization((1, 0, 0))
+                ).to_ir()
+                for assignment in stage.magnetization_assignments
+                if assignment.region_id is None
+            }
+            baseline = {
+                **baseline,
+                "magnets": [
+                    {**magnet, "initial_magnetization": magnetization_by_name[magnet["name"]]}
+                    if magnet["name"] in magnetization_by_name else magnet
+                    for magnet in cast(list[dict[str, object]], baseline["magnets"])
+                ],
+            }
         if signature != baseline:
             raise ValueError(
                 "canonical rewrite does not yet support stage-local geometry or material mutations"

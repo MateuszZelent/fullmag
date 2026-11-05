@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
+from fullmag.model.structure import MagnetizationAssignment
 from fullmag.runtime.output_storage_lowering import configure_problem_ir_autosave
 
 
@@ -22,6 +23,7 @@ class LoadedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
     def to_ir(
         self,
@@ -236,6 +238,37 @@ class LoadedProblem:
                 )
             else:
                 runtime_metadata.pop("spin_wave_response", None)
+        if any(stage.magnetization_assignments for stage in self.stages):
+            # The workspace reflects the last edit. Replaying the pipeline starts
+            # with the first physical stage's texture, before later assignments.
+            first_physical_problem = next(
+                stage.problem for stage in self.stages
+                if stage.entrypoint_kind in {"flat_run", "flat_relax"} and stage.action is None
+            )
+            initial_magnets = {
+                magnet.object_id or magnet.name: magnet
+                for magnet in first_physical_problem.magnets
+            }
+            magnets = []
+            for magnet in candidate.magnets:
+                initial = initial_magnets.get(magnet.object_id or magnet.name)
+                if initial is None:
+                    magnets.append(magnet)
+                    continue
+                initial_textures = {
+                    region.region_id: region.texture_override for region in initial.object_regions
+                }
+                magnets.append(
+                    replace(
+                        magnet,
+                        m0=initial.m0,
+                        object_regions=tuple(
+                            replace(region, texture_override=initial_textures.get(region.region_id))
+                            for region in magnet.object_regions
+                        ),
+                    )
+                )
+            candidate = replace(candidate, magnets=magnets)
         return replace(
             candidate,
             field_drives=tuple(
@@ -388,6 +421,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in captured_stages
             )
@@ -415,6 +449,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in declared_stages
             )

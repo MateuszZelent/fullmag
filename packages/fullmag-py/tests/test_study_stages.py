@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 import textwrap
 import unittest
@@ -50,6 +51,70 @@ study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
             texture = region["texture_override"]["initial_magnetization"]
             directions.append(texture["preset_params"]["direction"])
         self.assertEqual(directions, [[0, 1, 0], [0, 0, 1]])
+
+    def test_script_export_keeps_an_explicit_repeat_of_the_same_texture(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+study.stages.add_relax(stage_id="third", max_steps=2, dt=1e-13)
+"""
+        )
+        rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        statements = ast.parse(str(rendered)).body
+        relax_lines = [
+            statement.lineno
+            for statement in statements
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr == "add_relax"
+        ]
+        texture_lines = [
+            statement.lineno
+            for statement in statements
+            if isinstance(statement, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "m"
+                for target in statement.targets
+            )
+        ]
+
+        self.assertEqual(len(relax_lines), 3)
+        first, second, third = relax_lines
+        self.assertTrue(any(first < line < second for line in texture_lines))
+        self.assertFalse(any(second < line < third for line in texture_lines))
+
+    def test_script_round_trip_keeps_initial_and_scoped_textures_per_stage(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9))
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+core.set_texture(fm.texture.uniform(0, 0, 1))
+body.m.set(fm.texture.uniform(0, 1, 0))
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+"""
+        )
+        rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        reloaded = _load(str(rendered))
+
+        directions = []
+        for stage in reloaded.stages:
+            ir = stage.problem.to_ir(include_geometry_assets=False)
+            body_texture = ir["magnets"][0]["initial_magnetization"]
+            region_texture = ir["object_regions"][0]["texture_override"]["initial_magnetization"]
+            directions.append((
+                body_texture["preset_params"]["direction"],
+                region_texture["preset_params"]["direction"],
+            ))
+        self.assertEqual(directions, [
+            ([1, 0, 0], [0, 1, 0]),
+            ([0, 1, 0], [0, 0, 1]),
+        ])
 
     def test_transport_current_action_mutates_exact_electrodes_for_subsequent_run(self) -> None:
         loaded = _load(
