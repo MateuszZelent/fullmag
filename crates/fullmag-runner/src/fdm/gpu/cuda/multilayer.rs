@@ -7402,6 +7402,7 @@ mod tests {
             .problem
             .terms
             .uniaxial_anisotropy
+            .as_ref()
             .expect("Ku2 alone must activate the native assisted anisotropy context");
         assert_eq!(anisotropy.ku1, 0.0);
         assert_eq!(anisotropy.ku2, 2.5e4);

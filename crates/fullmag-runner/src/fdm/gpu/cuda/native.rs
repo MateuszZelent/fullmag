@@ -4602,6 +4602,7 @@ mod tests {
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
             rotated_dmi_only: false,
+            centered_aligned_multilayer: false,
         };
         let request = LivePreviewRequest {
             quantity: "frozen_spins".to_string(),
@@ -7363,6 +7364,8 @@ mod tests {
 
     #[test]
     fn native_periodic_airbox_observation_matches_centered_image_sum_when_cuda_is_available() {
+        use fullmag_ir::{AxisBoundary, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
         if !is_cuda_available() {
             eprintln!("skipping native periodic Airbox parity test: CUDA backend unavailable");
             return;
