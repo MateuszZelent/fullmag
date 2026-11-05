@@ -99,7 +99,11 @@ class StoreProofTests(unittest.TestCase):
             self.observe()
 
     def test_immutable_definition_and_study_cas_drift_is_rejected(self):
-        blob = next((self.store / 'objects/sha256').iterdir())
+        # PreparedStoreProofTests also adds a separate bundle object. Directory
+        # enumeration order must not choose that unreferenced object instead.
+        accepted = json.loads((self.run / 'run_intent.json').read_bytes())
+        digest = accepted['specification']['snapshot']['definition_sha256']
+        blob = self.store / 'objects/sha256' / digest
         blob.write_bytes(b'changed immutable definition')
         with self.assertRaisesRegex(ValueError, 'CAS object differs'):
             self.observe()
