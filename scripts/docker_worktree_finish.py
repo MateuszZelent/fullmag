@@ -7,7 +7,7 @@ import shlex
 import uuid
 
 from docker_build_control import (BuildControl, BuildControlError, ControlOutcomeUnknown,
-    MIN_FREE_CONTROL_BYTES, bounded_capture, docker_capture, toolchain_configuration)
+    MIN_FREE_CONTROL_BYTES, _exact_local_image_id, bounded_capture, docker_capture, toolchain_configuration)
 from docker_compose_identity import compose_project_identity
 from docker_named_volume_safety import validate_local_named_volume
 import docker_shared_build_storage as shared
@@ -69,7 +69,7 @@ print(json.dumps(result))
     return proof
 
 
-def finish(layout, task_id, owner, *, resume=None):
+def finish(layout, task_id, owner, *, resume=None, helper_image=None):
     """Called under storage's worktree lock after exact registry owner validation."""
     from docker_backend_volume_cache import _safe_project_id
     from docker_cache_retirement import retire
@@ -77,12 +77,24 @@ def finish(layout, task_id, owner, *, resume=None):
     if identity['checkout_kind'] != 'worktree':
         raise BuildControlError('Automatic worktree completion cannot retire the main checkout')
     selected = Path(identity['source_root'])
-    configured = toolchain_configuration(selected, identity)
-    control = BuildControl(identity, configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE'])
+    if helper_image is not None:
+        # A source-only historical checkout need not contain today's Compose
+        # files. This selects only an installed control helper; target identity,
+        # leases, inventory and namespace retirement remain unchanged.
+        if (not isinstance(helper_image, str)
+                or re.fullmatch(r'sha256:[a-f0-9]{64}', helper_image) is None):
+            raise BuildControlError('Retirement helper requires a full immutable local image ID')
+        if not _exact_local_image_id(helper_image, helper_image):
+            raise BuildControlError('Retirement helper image is not installed locally; no pull or build is allowed')
+    else:
+        configured = toolchain_configuration(selected, identity)
+        helper_image = configured['services']['fem-gpu-toolchain']['build']['args']['FULLMAG_CUDA_BASE_IMAGE']
+    control = BuildControl(identity, helper_image)
     control.prepare(minimum_free_bytes=MIN_FREE_CONTROL_BYTES)
     cache_project_id = _safe_project_id(layout)
     result = retire(control, layout, task_id, owner, resume=resume,
         retire_namespaces=lambda keys, operation: _retire_groups(
             control, selected, cache_project_id, keys, operation))
     return {'state': result['state'], 'compose_project': control.project,
+            'control_helper_image': control.image,
             'receipt': 'docker-volume://'+control.volume+'/'+control.subpath('cache-retirement/result.json')}

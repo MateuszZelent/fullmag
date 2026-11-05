@@ -428,6 +428,34 @@ albo `blocked`, z przyczyną i konkretnym następnym krokiem. Jawne polecenie
 zachowania worktree jest wyjątkiem i musi być zapisane. Nie przedstawiaj
 samej gotowości kodu ani PR jako ukończenia pełnego cyklu.
 
+### Zakończenie źródłowego worktree bez historycznego Compose
+
+Stary, scalony worktree może nie zawierać `compose.toolchain.yaml`. Aktualny
+`scripts/fullmag_storage.py finish --state completed` obsługuje wtedy jawne
+`--retirement-helper-image sha256:<pełne-64-znakowe-ID>`. Wskazany obraz musi
+już istnieć lokalnie pod dokładnie tym ID; finisher nie pobiera ani nie buduje
+obrazu. Jest to świadomy pin operatora dla znanego, zakwalifikowanego obrazu
+kontrolnego, np. z zachowanej konfiguracji toolchaina lub receiptu. Samo ID
+potwierdza niezmienność obrazu, nie jego pochodzenie. Źródło tego wyboru należy
+zapisać w planie operacyjnym. Opcja wybiera wyłącznie obraz technicznego helpera kontrolnego.
+Tożsamość wybranego worktree, exact task/owner, blokady, inventory, plan
+retencji i wymagania dotyczące konsumentów pozostają takie same jak w zwykłym
+zakończeniu. Opcja jest niedozwolona dla innych akcji i stanów.
+
+Finisher może przygotować kanoniczny wolumen control wybranej grupy i uruchomić
+krótkie helpery retencji; nie uruchamia usług aplikacji ani solvera. Zachowuje
+control, ledger i receipty. Jeżeli istnieje prywatny namespace pakietów,
+dotychczasowe wymagania jego retencji, w tym zweryfikowany obraz backendowego
+helpera i źródła kodu retencji, nadal obowiązują. Pusty plan nie zastępuje
+niezależnego sprawdzenia historycznych tożsamości z punktu 7.
+
+Zakończenie jednej grupy sprawdza innych konsumentów współdzielonych pakietów
+na podstawie zapisanej kanonicznej ścieżki, hashy identity, etykiet, environment
+i dokładnych mountów/subpathów. Nie wymaga dostępności checkoutu innej grupy
+na hoście wykonującym cleanup. Niezgodny hash lub mount, nieznany konsument
+oraz konsument usuwanego worktree/namespace nadal blokują retencję; pozostałe
+grupy i ich pakiety nie podlegają tej operacji.
+
 Każde zakończenie worktree, profilu, builda i runu zapisuje stan końcowy,
 również po błędzie, anulowaniu lub przerwaniu. Stan musi wskazywać właściciela,
 źródła, ścieżki, procesy/kontenery, lease, ostatnią aktywność, powód
