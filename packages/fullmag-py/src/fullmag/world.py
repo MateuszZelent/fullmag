@@ -719,6 +719,12 @@ class MagnetHandle:
             else None
         )
 
+        # Capture region data without retaining the editable DSL handles.
+        object_regions = tuple(
+            copy.deepcopy(replace(region, _delete_callback=None, _context_guard=None))
+            for region in self._object_regions
+        )
+
         return Ferromagnet(
             name=self._name,
             geometry=resolved_geometry,
@@ -726,7 +732,7 @@ class MagnetHandle:
             object_id=self._object_id,
             region=region,
             m0=m0,
-            object_regions=tuple(self._object_regions),
+            object_regions=object_regions,
             allocated_region_ids=tuple(self._allocated_region_ids),
             material_parameter_fields=tuple(self._material_parameter_assignments),
             absorbing_boundary=self._absorbing_boundary,

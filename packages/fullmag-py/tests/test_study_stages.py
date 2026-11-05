@@ -31,6 +31,26 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+
+    def test_captured_stages_keep_their_own_region_textures(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9))
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+core.texture = fm.texture.uniform(0, 0, 1)
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+"""
+        )
+
+        directions = []
+        for stage in loaded.stages:
+            region = stage.problem.to_ir(include_geometry_assets=False)["object_regions"][0]
+            texture = region["texture_override"]["initial_magnetization"]
+            directions.append(texture["preset_params"]["direction"])
+        self.assertEqual(directions, [[0, 1, 0], [0, 0, 1]])
+
     def test_transport_current_action_mutates_exact_electrodes_for_subsequent_run(self) -> None:
         loaded = _load(
             _PREAMBLE
