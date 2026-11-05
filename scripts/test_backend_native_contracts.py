@@ -54,12 +54,16 @@ class BackendNativeContractsTests(unittest.TestCase):
         self.native_root = self.root / "native-build"
         self.build_fem = self.native_root / "backends" / "fem"
         self.build_fem.mkdir(parents=True)
+        (self.native_root / "CMakeCache.txt").write_text(
+            "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256:STRING=" + SNAPSHOT + "\n")
         (self.build_fem / "libfullmag_fem.so").write_bytes(b"native library")
+        (self.build_fem / "libfullmag_fem.so.0").symlink_to("libfullmag_fem.so")
         (self.build_fem / "fem_demag_poisson_contract").write_bytes(b"contract executable")
         self.package_root = self.root / "package"
         self.package_lib = self.package_root / "lib"
         self.package_lib.mkdir(parents=True)
         (self.package_lib / "libfullmag_fem.so").write_bytes(b"native library")
+        (self.package_lib / "libfullmag_fem.so.0").write_bytes(b"native library")
         self.evidence_root = self.root / "private-control" / "native-contracts"
         self.environment = {"LD_LIBRARY_PATH": "/existing/dependencies", "PATH": "/usr/bin"}
 
@@ -86,6 +90,135 @@ class BackendNativeContractsTests(unittest.TestCase):
             jobs=3,
         )
 
+    def _prepare(self):
+        return native_contracts.prepare_contracts(
+            requested=[FEM_DEMAG_POISSON], native_build_root=self.native_root,
+            evidence_root=self.root / "preparation", source_snapshot_sha256=SNAPSHOT,
+            environment=self.environment, jobs=3,
+        )
+
+    def _run_prepared(self):
+        return run_contracts(
+            requested=[FEM_DEMAG_POISSON], native_build_root=self.native_root,
+            package_root=self.package_root, evidence_root=self.evidence_root,
+            source_snapshot_sha256=SNAPSHOT, environment=self.environment, jobs=3,
+            preparation_root=self.root / "preparation",
+        )
+
+    def test_preparation_rebuild_precedes_copy_and_test_does_not_recompile(self) -> None:
+        def rebuild_library():
+            (self.build_fem / "libfullmag_fem.so").write_bytes(b"new library bytes")
+
+        runner, calls = self._runner(callbacks=[rebuild_library, None])
+        with runner:
+            prepared = self._prepare()
+            self.assertEqual(prepared["state"], "compiled")
+            self.assertFalse(receipt_satisfies(
+                prepared, requested=[FEM_DEMAG_POISSON],
+                source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+            (self.package_lib / "libfullmag_fem.so").write_bytes(
+                (self.build_fem / "libfullmag_fem.so").read_bytes())
+            (self.package_lib / "libfullmag_fem.so.0").write_bytes(
+                (self.build_fem / "libfullmag_fem.so").read_bytes())
+            report = self._run_prepared()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0][0], "cmake")
+        self.assertEqual(calls[1][0], [str(self.build_fem / "fem_demag_poisson_contract")])
+        contract = report["contracts"][FEM_DEMAG_POISSON]
+        self.assertEqual(contract["compile"], prepared["contracts"][FEM_DEMAG_POISSON]["compile"])
+        self.assertTrue(receipt_satisfies(
+            report, requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+        altered = json.loads(json.dumps(report))
+        altered["preparation"]["source_snapshot_sha256"] = "b" * 64
+        self.assertFalse(receipt_satisfies(
+            altered, requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+
+    def test_preparation_compile_failure_cannot_reach_test(self) -> None:
+        runner, calls = self._runner(outcomes=[7])
+        with runner:
+            with self.assertRaisesRegex(NativeContractError, "compile failed") as caught:
+                self._prepare()
+            self.assertTrue(caught.exception.receipt_path.is_file())
+            with self.assertRaisesRegex(NativeContractError, "preparation"):
+                self._run_prepared()
+        self.assertEqual(len(calls), 1)
+
+    def test_preparation_rejects_changed_binary_library_log_or_snapshot(self) -> None:
+        for target in ("binary", "library", "log", "snapshot", "compile", "duplicate"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                self.root = Path(temporary)
+                runner, calls = self._runner(outcomes=[0])
+                with runner:
+                    prepared = self._prepare()
+                    attempt = self.root / "preparation" / ("attempt-" + prepared["attempt_id"])
+                    if target == "binary":
+                        path = self.build_fem / "fem_demag_poisson_contract"
+                        original = path.read_bytes()
+                        path.write_bytes(original + b"tamper")
+                    elif target == "library":
+                        path = self.build_fem / "libfullmag_fem.so"
+                        original = path.read_bytes()
+                        path.write_bytes(original + b"tamper")
+                    elif target == "log":
+                        (attempt / "native-contract.log").write_bytes(b"tampered log")
+                    elif target in ("snapshot", "compile"):
+                        if target == "snapshot":
+                            prepared["source_snapshot_sha256"] = "b" * 64
+                        else:
+                            prepared["contracts"][FEM_DEMAG_POISSON]["compile"]["argv"][4] = "wrong-target"
+                        (attempt / "report.json").write_text(json.dumps(prepared))
+                    else:
+                        (self.root / "preparation" / "unexpected").mkdir()
+                    try:
+                        with self.assertRaisesRegex(NativeContractError, "preparation"):
+                            self._run_prepared()
+                    finally:
+                        if target in ("binary", "library"):
+                            path.write_bytes(original)
+                self.assertEqual(len(calls), 1)
+
+    def test_preparation_rejects_wrong_cmake_snapshot_before_compile(self) -> None:
+        (self.native_root / "CMakeCache.txt").write_text(
+            "FULLMAG_FEM_SOURCE_SNAPSHOT_SHA256:STRING=" + "b" * 64 + "\n")
+        runner, calls = self._runner()
+        with runner, self.assertRaisesRegex(NativeContractError, "CMake snapshot"):
+            self._prepare()
+        self.assertEqual(calls, [])
+
+    def test_prepared_test_rechecks_binary_after_reading_preparation(self) -> None:
+        runner, calls = self._runner(outcomes=[0])
+        read = native_contracts._read_preparation
+
+        def replace_after_read(*args):
+            result = read(*args)
+            (self.build_fem / "fem_demag_poisson_contract").write_bytes(b"replaced after proof")
+            return result
+
+        with runner:
+            self._prepare()
+            with patch.object(native_contracts, "_read_preparation", side_effect=replace_after_read):
+                with self.assertRaisesRegex(NativeContractError, "prepared.*changed"):
+                    self._run_prepared()
+        self.assertEqual(len(calls), 1)
+
+    def test_prepared_test_rejects_different_soname_library(self) -> None:
+        for directory in (self.build_fem, self.package_lib):
+            with self.subTest(directory=directory):
+                runner, calls = self._runner(outcomes=[0])
+                with runner:
+                    prepared = self._prepare()
+                    alias = directory / "libfullmag_fem.so.0"
+                    alias.unlink()
+                    alias.write_bytes(b"different dynamically loaded library")
+                    with self.assertRaisesRegex(NativeContractError, "SONAME"):
+                        self._run_prepared()
+                    alias.write_bytes(b"native library")
+                self.assertEqual(len(calls), 1)
+                # Keep one distinct preparation root for each case.
+                self.root = self.root / prepared["attempt_id"]
+
     def test_normalize_contracts_allows_empty_and_rejects_unknown_or_duplicate(self) -> None:
         self.assertEqual(normalize_contracts(None), ())
         self.assertEqual(normalize_contracts([]), ())
@@ -96,6 +229,27 @@ class BackendNativeContractsTests(unittest.TestCase):
             normalize_contracts([FEM_DEMAG_POISSON, FEM_DEMAG_POISSON])
         with self.assertRaisesRegex(ValueError, "sequence"):
             normalize_contracts(FEM_DEMAG_POISSON)
+
+    def test_prepare_entrypoint_uses_only_managed_environment(self) -> None:
+        environment = {
+            "FULLMAG_DIRECT_COMPOSE": "1",
+            "FULLMAG_INTERNAL_NATIVE_CONTRACTS": FEM_DEMAG_POISSON,
+            "FULLMAG_FEM_NATIVE_BUILD_ROOT": str(self.native_root),
+            "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": str(self.root / "preparation"),
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": SNAPSHOT,
+            "CARGO_BUILD_JOBS": "3", "FULLMAG_CMAKE": "/usr/bin/cmake",
+        }
+        prepared = {"evidence": {"report_path": "attempt-fixture/report.json"}}
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+            native_contracts, "prepare_contracts", return_value=prepared,
+        ) as prepare, patch("sys.stdout", new=io.StringIO()), patch("sys.stderr", new=io.StringIO()):
+            self.assertEqual(native_contracts._main(["prepare"]), 0)
+            self.assertEqual(prepare.call_args.kwargs["jobs"], 3)
+            self.assertEqual(prepare.call_args.kwargs["environment"]["FULLMAG_CMAKE"], "/usr/bin/cmake")
+            self.assertEqual(native_contracts._main(["prepare", "--arbitrary-command"]), 2)
+            del os.environ["FULLMAG_DIRECT_COMPOSE"]
+            self.assertEqual(native_contracts._main(["prepare"]), 1)
+            self.assertEqual(prepare.call_count, 1)
 
     def test_success_runs_fixed_compile_then_test_and_binds_installed_library(self) -> None:
         runner, calls = self._runner()
@@ -231,6 +385,15 @@ class BackendNativeContractsTests(unittest.TestCase):
             source_snapshot_sha256=SNAPSHOT,
             package_root=self.package_root,
         ))
+
+    def test_receipt_rejects_replaced_package_soname_after_test(self) -> None:
+        runner, _calls = self._runner()
+        with runner:
+            report = self._run()
+        (self.package_lib / "libfullmag_fem.so.0").write_bytes(b"replaced runtime library")
+        self.assertFalse(receipt_satisfies(
+            report, requested=[FEM_DEMAG_POISSON],
+            source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
 
     def test_receipt_rejects_missing_hash_wrong_revision_or_wrong_contract_id(self) -> None:
         runner, _calls = self._runner()

@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any, Callable, NoReturn
 
 try:
@@ -6057,6 +6058,9 @@ def _prepare_locked(
 ) -> int:
     source_tar = Path(args.source_tar) if args.source_tar is not None else None
     direct_install = direct_install_root is not None
+    required_contracts = _requested_native_contracts(args)
+    if required_contracts and not direct_install:
+        _fail("native contract qualification requires the direct DEV candidate")
     legacy_stage_before_materialize = (
         _snapshot_legacy_install_stage(build_root / "workspace")
         if direct_install
@@ -6081,7 +6085,26 @@ def _prepare_locked(
     cargo_profile = _validate_cargo_profile(
         os.environ.get("FULLMAG_BACKEND_CARGO_PROFILE", BACKEND_CARGO_PROFILE)
     )
+    if required_contracts and cargo_profile != BACKEND_CARGO_PROFILE:
+        _fail("native contract qualification requires the backend-dev profile")
+    if required_contracts and required_contracts != ("fem-demag-poisson",):
+        _fail("native contract qualification has no matching Make prebuild selector")
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
+    # These selectors and paths are internal Make inputs. Never trust inherited
+    # values from the host or Compose environment.
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACTS", None)
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", None)
+    environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", None)
+    if required_contracts:
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = "fem-demag-poisson"
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"] = str(
+            Path(__file__).resolve().with_name("backend_native_contracts.py")
+        )
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"] = str(
+            BACKEND_CONTROL_ROOT
+            / "native-contracts"
+            / f"preparation-{uuid.uuid4().hex}"
+        )
     if direct_install:
         if direct_install_root != output or cargo_profile != BACKEND_CARGO_PROFILE:
             _fail("direct package publication is reserved for the backend-dev candidate")
@@ -6119,10 +6142,7 @@ def _prepare_locked(
     if source_mode == LIVE_SOURCE_MODE:
         _verify_shadow_source(workspace, capsule)
     native_contract_report = None
-    required_contracts = _requested_native_contracts(args)
     if required_contracts:
-        if not direct_install:
-            _fail("native contract qualification requires the direct DEV candidate")
         _flatten_package_library_aliases(output)
         import backend_native_contracts
         _log_phase("native-contract", "start", contracts=",".join(required_contracts))
@@ -6133,6 +6153,9 @@ def _prepare_locked(
                 package_root=output, evidence_root=BACKEND_CONTROL_ROOT / "native-contracts",
                 source_snapshot_sha256=native["source_snapshot_sha256"],
                 environment=environment, jobs=jobs,
+                preparation_root=Path(
+                    environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"]
+                ),
             )
         except backend_native_contracts.NativeContractError as error:
             _fail(f"native contract qualification failed: {error}")

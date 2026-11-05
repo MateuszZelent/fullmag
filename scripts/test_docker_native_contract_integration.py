@@ -132,12 +132,34 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 "deleted": [],
             }
             native_root = root / "native-build"
-            environment = {"FULLMAG_FEM_NATIVE_BUILD_ROOT": str(native_root)}
+            inherited_preparation_root = root / "spoofed-preparation"
+            environment = {
+                "FULLMAG_FEM_NATIVE_BUILD_ROOT": str(native_root),
+                "FULLMAG_INTERNAL_NATIVE_CONTRACTS": "spoofed-selector",
+                "FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER": "/spoofed/helper.py",
+                "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": str(inherited_preparation_root),
+            }
             package_library = candidate / native_contracts.PACKAGE_LIBRARY_ARTIFACT_PATH
             make_log_bytes = b"mocked canonical Make success\n"
             reports = []
+            make_environments = []
 
             def fake_make(_command, _workspace, make_environment, log_path):
+                make_environments.append(dict(make_environment))
+                self.assertEqual(
+                    make_environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"],
+                    "fem-demag-poisson",
+                )
+                self.assertEqual(
+                    Path(make_environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"]),
+                    Path(backend.__file__).resolve().with_name("backend_native_contracts.py"),
+                )
+                preparation_root = Path(
+                    make_environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"]
+                )
+                self.assertTrue(preparation_root.is_absolute())
+                self.assertNotEqual(preparation_root, inherited_preparation_root)
+                self.assertTrue(preparation_root.name.startswith("preparation-"))
                 install_root = Path(make_environment["FULLMAG_INTERNAL_INSTALL_ROOT"])
                 for relative in backend.REQUIRED_PACKAGE_PATHS:
                     if relative in backend.RUNTIME_MANIFEST_PATHS:
@@ -151,14 +173,18 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 library_root = install_root / "lib"
                 library_root.mkdir(parents=True, exist_ok=True)
                 (library_root / "libfullmag_fdm.so.1").write_bytes(b"FDM package library fixture")
-                (library_root / "libfullmag_fem.so.1").write_bytes(b"FEM package library fixture")
-                (library_root / "libfullmag_fem.so").symlink_to("libfullmag_fem.so.1")
+                (library_root / "libfullmag_fem.so.0").write_bytes(b"FEM package library fixture")
+                (library_root / "libfullmag_fem.so").symlink_to("libfullmag_fem.so.0")
                 log_path.write_bytes(make_log_bytes)
                 return 0
 
             def fake_run_contracts(**kwargs):
                 self.assertEqual(kwargs["requested"], GATES)
                 self.assertEqual(kwargs["package_root"], candidate)
+                self.assertEqual(
+                    kwargs["preparation_root"],
+                    Path(make_environments[0]["FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT"]),
+                )
                 library_sha256 = hashlib.sha256(package_library.read_bytes()).hexdigest()
                 attempt_id = "d" * 32
                 test_binary_sha256 = "e" * 64
@@ -236,11 +262,15 @@ class NativeContractIntegrationTests(unittest.TestCase):
 
             with (
                 patch.object(backend, "PACKAGE_ROOT", package),
+                patch.object(backend, "BACKEND_CONTROL_ROOT", root / "control" / "backend"),
                 patch.dict(
                     os.environ,
                     {
                         "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
                         "FULLMAG_PRIVATE_GROUP_STORAGE": "",
+                        "FULLMAG_INTERNAL_NATIVE_CONTRACTS": "inherited-shell-selector",
+                        "FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER": "/inherited/shell-helper.py",
+                        "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": "/inherited/preparation",
                     },
                     clear=False,
                 ),
@@ -263,6 +293,10 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 )
 
             self.assertEqual(len(reports), 1)
+            self.assertEqual(
+                make_environments[0]["FULLMAG_INTERNAL_NATIVE_CONTRACTS"],
+                "fem-demag-poisson",
+            )
             self.assertTrue(
                 native_contracts.receipt_satisfies(
                     reports[0],
@@ -277,6 +311,90 @@ class NativeContractIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(receipt["state"], "succeeded")
             self.assertEqual(receipt["native_contracts"], reports[0])
+
+    def test_legacy_native_contract_request_fails_before_source_materialization_or_make(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = backend.argparse.Namespace(
+                source_tar=None,
+                manifest=root / "manifest.json",
+                source_root=root / "source",
+                git_common_root=root / "git-common",
+                native_contract=list(GATES),
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
+                        "FULLMAG_PRIVATE_GROUP_STORAGE": "",
+                    },
+                    clear=False,
+                ),
+                patch.object(backend, "_materialize_source") as materialize,
+                patch.object(backend, "_run_canonical_make") as make,
+            ):
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._prepare_locked(
+                        args, root / "build", root / "output", 2, {}, None
+                    )
+            materialize.assert_not_called()
+            make.assert_not_called()
+
+    def test_prepare_locked_removes_inherited_internal_contract_environment_without_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            build_root = root / "build"
+            build_root.mkdir()
+            native = {
+                "source_snapshot_sha256": "a" * 64,
+                "head_commit_full": "b" * 40,
+                "source_snapshot_dirty": False,
+            }
+            capsule = {"source_digest": "c" * 64, "resolved_commit": "b" * 40, "files": [], "deleted": []}
+            args = backend.argparse.Namespace(
+                source_tar=None,
+                manifest=root / "manifest.json",
+                source_root=root / "source",
+                git_common_root=root / "git-common",
+                native_contract=None,
+            )
+            inherited = {
+                "FULLMAG_INTERNAL_NATIVE_CONTRACTS": "spoofed-selector",
+                "FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER": "/spoofed/helper.py",
+                "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": "/spoofed/preparation",
+                "FULLMAG_FEM_NATIVE_BUILD_ROOT": "/native-build",
+            }
+            observed = {}
+
+            def fake_make(_command, _workspace, environment, _log_path):
+                observed.update(environment)
+                return 1
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "FULLMAG_BACKEND_CARGO_PROFILE": "backend-dev",
+                        "FULLMAG_PRIVATE_GROUP_STORAGE": "",
+                    },
+                    clear=False,
+                ),
+                patch.object(
+                    backend,
+                    "_materialize_source",
+                    return_value=(workspace, capsule, native, "1" * 64, None, "snapshot"),
+                ),
+                patch.object(backend, "_build_environment", return_value=inherited),
+                patch.object(backend, "_run_canonical_make", side_effect=fake_make),
+            ):
+                with self.assertRaises(backend.BackendBuildError):
+                    backend._prepare_locked(args, build_root, root / "output", 2, {})
+            self.assertNotIn("FULLMAG_INTERNAL_NATIVE_CONTRACTS", observed)
+            self.assertNotIn("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", observed)
+            self.assertNotIn("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", observed)
 
     def test_shared_cache_identity_separates_required_native_contracts(self):
         capsule = {"resolved_commit": "a" * 40}
