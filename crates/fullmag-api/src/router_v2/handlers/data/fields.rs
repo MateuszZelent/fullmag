@@ -10330,7 +10330,7 @@ mod tests {
         assert_eq!(scope.grid, Some([2, 1, 1]));
         assert_eq!(scope.node_indices, vec![1, 3]);
         assert_eq!(scope.value_indices, vec![1, 3]);
-        let sampled = sample_field_scope(scope.clone(), Some(1));
+        let sampled = super::sample_field_scope(scope.clone(), Some(1));
         assert_eq!(sampled.node_indices, vec![1]);
         assert_eq!(sampled.value_indices, vec![1]);
         let expected_hash = format!("sha256:{}", "a".repeat(64));
