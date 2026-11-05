@@ -612,6 +612,8 @@ describe("FDM Airbox mesh demand", () => {
       "const magneticPartFieldVectors =",
       fieldRequestStart,
     );
+    const membershipStart = source.indexOf("const fdmMultilayerAirboxRegionIds = useMemo(");
+    const membershipEnd = source.indexOf("const fdmMultilayerCuboidBuildEntries", membershipStart);
     const geometryEntryStart = source.indexOf(
       "if (fdmMultilayerAirboxDomain && airboxSettings.visible)",
     );
@@ -633,9 +635,13 @@ describe("FDM Airbox mesh demand", () => {
     expect(source.slice(fieldRequestStart, fieldRequestEnd)).toContain(
       "fdmMultilayerAirboxDomain,\n        ),",
     );
-    expect(source.slice(geometryEntryStart, geometryEntryEnd)).toContain(
-      "fdmMultilayerAirboxDomain.geometryOnly || airboxVectorsOnlyEnabled",
-    );
+    const membershipSource = source.slice(membershipStart, membershipEnd);
+    expect(membershipSource).toContain("buildFdmMultilayerAirboxRegionIds");
+    expect(membershipSource).not.toContain("fdmMultilayerAirboxField");
+    const geometryEntry = source.slice(geometryEntryStart, geometryEntryEnd);
+    expect(geometryEntry).toContain('cellSelection: airboxCellGeometryReady ? "inactive" : "all"');
+    expect(geometryEntry).toContain("enabled: airboxCellGeometryReady ||");
+    expect(geometryEntry).toContain("realizedRegionIds: fdmMultilayerAirboxRegionIds");
     expect(source.slice(diagnosticStart, diagnosticEnd)).toContain(
       "!fdmMultilayerAirboxDomain?.geometryOnly",
     );
