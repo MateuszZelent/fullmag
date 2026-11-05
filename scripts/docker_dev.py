@@ -2584,6 +2584,10 @@ def _parser() -> argparse.ArgumentParser:
         "--request-id",
         help="optional stable request fence; default is fresh for each explicit invocation",
     )
+    activate_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
@@ -2620,6 +2624,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument("--source-root", type=Path)
     run_script_parser.add_argument("--port", type=int)
     run_script_parser.add_argument("--request-id")
+    run_script_parser.add_argument(
+        "--solver-profile", action="store_true",
+        help="enable the bounded accepted FEM solver profile for this run",
+    )
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
     run_script_parser.add_argument(
@@ -2741,6 +2749,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancelled_activation.add_argument("--attempt", required=True)
     cancelled_activation.add_argument("--iteration-attempt", required=True)
+    cancelled_activation.add_argument(
+        "--runtime-phase",
+        choices=("iteration", "resume"),
+        default="iteration",
+        help="select the exact retained continuation terminal; defaults to legacy iteration",
+    )
     cancelled_activation.add_argument("--activation-attempt", required=True)
     cancelled_activation.add_argument("--config-sha256", required=True)
     cancelled_activation.add_argument("--source-root", type=Path, required=True)
@@ -2753,6 +2767,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancelled_activation.add_argument("--apply", action="store_true")
     cancelled_activation.add_argument("--expected-plan-sha256")
+    cancelled_activation.add_argument(
+        "--previous-recovery-sha256",
+        help="explicitly rotate the exact archived prior recovery (SHA-256 of its raw current bytes)",
+    )
     preowner_policy = subparsers.add_parser(
         "stop-preowner-policy-volume",
         help="preview or gracefully stop the exact startup-only diagnostic group after a refused budget",
@@ -2782,6 +2800,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--config-sha256", required=True)
     recreate_volume.add_argument("--source-root", type=Path, required=True)
     recreate_volume.add_argument("--port", type=int, required=True)
+    recreate_volume.add_argument('--prepared-quarantine-sha256',
+                                 help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
                                  choices=("fem-demag-poisson",),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
@@ -2846,6 +2866,8 @@ def _parser() -> argparse.ArgumentParser:
     interrupted_archive.add_argument("--engine-id", required=True)
     interrupted_archive.add_argument("--expected-plan-sha256")
     interrupted_archive.add_argument("--apply", action="store_true")
+    interrupted_archive.add_argument('--prepared-quarantine-sha256')
+    interrupted_archive.add_argument('--prepared-archive-terminal-sha256')
 
     cancel_unclaimed = subparsers.add_parser(
         "cancel-unclaimed-volume",
@@ -2856,6 +2878,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     cancel_unclaimed.add_argument("--attempt", required=True,
                                   help="exact retained development attempt to replace")
+    cancel_unclaimed.add_argument('--prepared-quarantine-sha256',
+                                  help='explicit exact prepared-unclaimed stop quarantine digest')
     cancellation_resume = cancel_unclaimed.add_mutually_exclusive_group()
     cancellation_resume.add_argument(
         "--resume-maintenance-attempt",
@@ -2864,6 +2888,11 @@ def _parser() -> argparse.ArgumentParser:
             "resume only the exact failed-confirmed pre-start maintenance attempt "
             "after its pinned old services are already absent"
         ),
+    )
+    cancel_unclaimed.add_argument(
+        "--resume-backend-image-id",
+        help=("explicit immutable backend image ID from the current verified same-group "
+              "image receipt; valid only with --resume-maintenance-attempt"),
     )
     cancellation_resume.add_argument(
         "--resume-native-failure-attempt",
@@ -3201,6 +3230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attempt=getattr(args, "attempt", None),
                 config_sha256=getattr(args, "config_sha256", None),
                 headless=bool(getattr(args, "headless", False)),
+                solver_profile=getattr(args, "solver_profile", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

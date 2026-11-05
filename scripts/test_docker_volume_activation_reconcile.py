@@ -34,6 +34,7 @@ JOURNAL = "1" * 64
 SOURCE = "C:/git/fullmag"
 REQUEST = "fdm:cpu-docker-20261019-2035"
 KEY = "2" * 64
+SOLVER_PROFILE = "9" * 64
 
 
 class Control:
@@ -48,6 +49,11 @@ class Control:
         "worktree_id": "demo",
         "checkout_kind": "worktree",
     }
+
+    def read(self, relative, *, optional=False):
+        if relative == 'prepared-unclaimed/current.json' and optional:
+            return None
+        raise AssertionError('Unexpected prepared control read: ' + relative)
 
     def read_raw(self, relative, *, optional=False):
         if relative == "offline-reconciliation/current.json" and optional:
@@ -122,6 +128,106 @@ def _read_absent_cancelled_activation_recovery(
 
 
 class UnknownActivationTests(unittest.TestCase):
+    def test_prepared_observer_lock_refuses_hardlink_and_symlink_without_changing_bytes(self):
+        for kind in ('hardlink', 'symlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                receipt = root / 'protected-receipt.json'
+                original = b'{"protected":"original immutable receipt"}\n'
+                receipt.write_bytes(original)
+                receipt.chmod(0o600)
+                lock = root / '.prepared-unclaimed-observer.lock'
+                if kind == 'hardlink':
+                    os.link(receipt, lock)
+                else:
+                    lock.symlink_to(receipt)
+                script = module._prepared_observer_lock_script().replace('/control', directory)
+                result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', script + 'printf UNSAFE'],
+                                        capture_output=True, timeout=5)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn(b'UNSAFE', result.stdout)
+                self.assertEqual(receipt.read_bytes(), original)
+
+    def test_prepared_observer_lock_reuses_its_regular_inode_without_truncating(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = root / '.prepared-unclaimed-observer.lock'
+            lock.write_bytes(b'preserve existing observer lock bytes')
+            lock.chmod(0o600)
+            inode = lock.stat().st_ino
+            script = module._prepared_observer_lock_script().replace('/control', directory)
+            result = subprocess.run(['/bin/bash', '-euo', 'pipefail', '-c', script + 'printf LOCKED'],
+                                    capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, b'LOCKED')
+            self.assertEqual(lock.stat().st_ino, inode)
+            self.assertEqual(lock.read_bytes(), b'preserve existing observer lock bytes')
+
+    def test_activation_receipt_normalization_preserves_optional_solver_profile_digest(self) -> None:
+        inputs = {
+            "development_attempt": DEV_ATTEMPT,
+            "config_sha256": CONFIG,
+            "source_root": SOURCE,
+            "image_id": IMAGE,
+            "backend_container": BACKEND,
+            "source_relative": "examples/model.py",
+            "source_sha256": "3" * 64,
+            "request_id": REQUEST,
+            "provenance_sha256": "4" * 64,
+            "activation_receipt_key": KEY,
+            "activation_receipt_path": module._activation_marker_path(KEY),
+        }
+        receipt = {
+            "schema": module.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": "outcome-unknown-resources-retained",
+            "attempt": ATTEMPT,
+            "compose_project": PROJECT,
+            "control_volume": VOLUME,
+            "helper_container": "fullmag-control-" + ATTEMPT,
+            "helper_sha256": HELPER,
+            "started_at": 1_729_000_000.0,
+            "finished_at": 1_729_000_001.0,
+            "error": "activation observation was interrupted",
+            "inputs": inputs,
+        }
+        expected = {
+            "activation_attempt": ATTEMPT,
+            "development_attempt": DEV_ATTEMPT,
+            "config_sha256": CONFIG,
+            "source_root": SOURCE,
+            "image_id": IMAGE,
+            "backend_id": BACKEND,
+        }
+
+        legacy = module._validate_activation_receipt(
+            Control(), **expected, receipt_raw=canonical(receipt)
+        )[2]
+        self.assertNotIn("solver_profile_sha256", legacy)
+
+        inputs["solver_profile_sha256"] = SOLVER_PROFILE
+        profiled = module._validate_activation_receipt(
+            Control(), **expected, receipt_raw=canonical(receipt)
+        )[2]
+        self.assertEqual(profiled["solver_profile_sha256"], SOLVER_PROFILE)
+
+        inputs["solver_profile_sha256"] = "not-a-sha256"
+        with self.assertRaisesRegex(BuildControlError, "solver profile"):
+            module._validate_activation_receipt(
+                Control(), **expected, receipt_raw=canonical(receipt)
+            )
+
+    def test_unresolved_activation_quarantine_validates_optional_solver_profile_digest(self) -> None:
+        profiled = unresolved(solver_profile_sha256=SOLVER_PROFILE)
+        self.assertEqual(
+            module._validate_unresolved_activation(Control(), profiled)["solver_profile_sha256"],
+            SOLVER_PROFILE,
+        )
+        with self.assertRaisesRegex(BuildControlError, "solver profile"):
+            module._validate_unresolved_activation(
+                Control(), unresolved(solver_profile_sha256="invalid")
+            )
+
     def test_control_read_authenticates_parent_chain_before_optional_absence(self) -> None:
         script = control_read_script("/control/activation/attempts/" + ATTEMPT + "/receipt.json")
         self.assertLess(script.index("check_parent /control"), script.index("check_parent /control/activation"))

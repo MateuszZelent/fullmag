@@ -871,7 +871,7 @@ fn build_contexts_and_states(
             message: format!("LLG for magnet '{}': {}", layer.magnet_name, error),
         })?
         .with_precession_enabled(!pure_damping_relax);
-        let problem = ExchangeLlgProblem::with_terms_and_mask(
+        let mut problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
             material,
@@ -927,6 +927,22 @@ fn build_contexts_and_states(
                 layer.magnet_name, error
             ),
         })?;
+        if let Some(periodicity) = plan.periodicity.as_ref() {
+            // The native grid wraps only when it spans the whole lattice
+            // period. Match the device stencil for host-side DMI energies.
+            let boundary = |axis| {
+                if periodicity.is_periodic(axis) && layer.native_grid[axis] == plan.common_cells[axis] {
+                    fullmag_engine::AxisBoundary::Periodic
+                } else {
+                    fullmag_engine::AxisBoundary::Open
+                }
+            };
+            problem.boundary_policy = fullmag_engine::FdmBoundaryPolicy {
+                x: boundary(0),
+                y: boundary(1),
+                z: boundary(2),
+            };
+        }
         let state = problem
             .new_state(layer.initial_magnetization.clone())
             .map_err(|error| RunError {
@@ -2642,6 +2658,11 @@ pub(crate) fn materialize_airbox_observation_snapshot_gpu(
         });
     }
     validate_accepted_multilayer_observation_cuda_lane(plan, execution_engine)?;
+    if plan.periodicity.as_ref().is_some_and(|policy| policy.has_any_periodic()) {
+        return Err(RunError {
+            message: "Multilayer Airbox H_demag requires a periodic observation operator for XY PBC".into(),
+        });
+    }
 
     let target_grid = [
         u32::try_from(target.shape[0]).map_err(|_| RunError {

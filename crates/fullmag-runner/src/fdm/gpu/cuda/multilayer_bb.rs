@@ -528,13 +528,18 @@ fn projected_gradient_bb_provenance(
 ) -> Result<ExecutionProvenance, RunError> {
     let fdm_fft_execution =
         crate::fdm::resolve_cuda_fft_execution_for_demag(plan.enable_demag, plan.fft.as_ref())?;
+    let demag_realization = plan.enable_demag.then(|| {
+        if plan.resolved_periodic_images.is_some() {
+            "native_multilayer_periodic_xy_tensor_fft_newell".to_string()
+        } else {
+            "native_multilayer_tensor_fft_newell".to_string()
+        }
+    });
     Ok(ExecutionProvenance {
         execution_engine: "cuda_native_multilayer_convolution".into(),
         precision: "double".into(),
         fdm_fft_execution,
-        demag_operator_kind: plan
-            .enable_demag
-            .then(|| "native_multilayer_tensor_fft_newell".into()),
+        demag_operator_kind: demag_realization.clone(),
         fft_backend: plan.enable_demag.then(|| "cuFFT".into()),
         device_name: device_info.as_ref().map(|info| info.name.clone()),
         compute_capability: device_info
@@ -549,12 +554,8 @@ fn projected_gradient_bb_provenance(
             true,
         )
         .map(str::to_string),
-        requested_demag_realization: plan
-            .enable_demag
-            .then(|| "native_multilayer_tensor_fft_newell".into()),
-        resolved_demag_realization: plan
-            .enable_demag
-            .then(|| "native_multilayer_tensor_fft_newell".into()),
+        requested_demag_realization: demag_realization.clone(),
+        resolved_demag_realization: demag_realization,
         fdm_multilayer_transfer_telemetry: Some(
             transfer_counters.projected_gradient_bb_telemetry(plan.precision),
         ),

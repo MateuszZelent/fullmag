@@ -284,7 +284,21 @@ z niezmienną definicją, StudyPlan i katalogiem ProblemIR w CAS, potwierdzi zgo
 intencję FDM GPU strict double, komplet pięciu certyfikatów oraz zamkniętą bramkę
 manualnego startu. Odrzuci claim/admission/worker, lease solvera lub hosta,
 rezerwację, niepustą kolejkę, zewnętrzny launch/exit/lease preparera i receipt
-retry. Nie uruchamia Solve ani ponownego startu. Przykład podglądu:
+retry. Nie uruchamia Solve ani ponownego startu.
+
+Jeżeli działająca grupa pochodzi z pomyślnego `resume-volume`, podaj
+`--runtime-phase resume` oraz jego UUID w zachowanym dla zgodności argumencie
+`--iteration-attempt`. Domyślna faza to `iteration`. Plan i journal przypinają
+wybraną fazę razem z dokładnym receiptem; nie można podstawić receiptu innej
+kontynuacji lub instancji kontenera.
+
+Gdy grupa ma już wcześniejszy rekord recovery, domyślnie podgląd odmawia
+kolejnego drain. `--previous-recovery-sha256 <sha-surowego-rekordu>` pozwala
+zakwalifikować rotację wyłącznie po weryfikacji jego niezmiennego terminalu
+i trwałego archiwum. Plan przypina wcześniejsze dowody; historia nadal
+zabrania ponowienia poprzedniego request ID i wznowienia jego state root.
+Rekord v2 wymaga aktualnego kontrolera, który sprawdza tę historię. Przykład
+podglądu:
 
 ```powershell
 python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `

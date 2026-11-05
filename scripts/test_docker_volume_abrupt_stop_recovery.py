@@ -452,9 +452,12 @@ class AbruptStopTests(unittest.TestCase):
             validate.assert_called_once_with({'typed': 'proof'}, source=r'D:\foreign\storage', container_id=foreign['Id'])
         with patch.object(r, 'docker_capture', side_effect=responses()), \
              patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
-             patch('docker_windows_bind_isolation.prove_windows_bind_disjoint', side_effect=ValueError('physical overlap')):
+             patch('docker_windows_bind_isolation.prove_windows_bind_disjoint', side_effect=ValueError('physical overlap')), \
+             patch('docker_windows_absent_bind_isolation.prove_absent_stopped_windows_bind',
+                   side_effect=ValueError('absence not qualified')) as absent:
             with self.assertRaisesRegex(r.ContainerRecoveryError, 'unresolved storage identity.*physical overlap'):
                 r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
+            absent.assert_called_once()
         backend['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': r.CONTROL_ROOT})
         foreign['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': '/foreign-control'})
         with patch.object(r, 'docker_capture', side_effect=responses()), \

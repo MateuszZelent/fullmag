@@ -993,7 +993,7 @@ fn load_durable_projection(
                 }
                 Ok::<_, anyhow::Error>(resource)
             }).transpose())
-            .map_err(|error| ApiError::conflict(format!("invalid accepted operation diagnostics: {error:#}")))?
+            .map_err(|error| ApiError::conflict(format!("invalid accepted solver diagnostics: {error:#}")))?
     } else { None };
     Ok(Some(DurableProjection {
         solver_profile,
@@ -2968,6 +2968,24 @@ fn replace_operation_profile(
     Ok(true)
 }
 
+fn accepted_profile_candidate(
+    mut candidate: crate::schemas::diagnostics::SolverProfileResource,
+    next_admission: Option<crate::schemas::diagnostics::SolverProfileCommandConfig>,
+) -> crate::schemas::diagnostics::SolverProfileResource {
+    // Step samples have no separate execution_config in the public resource.
+    // Their config therefore remains the immutable configuration that actually
+    // produced them. The command journal still owns next-admission settings.
+    if candidate.latest_samples.is_empty() {
+        if let Some(config) = next_admission { candidate.config = config; }
+    }
+    candidate.state = if candidate.config.enabled { "enabled" } else { "disabled" }.into();
+    if !candidate.config.enabled {
+        candidate.operation_samples.clear(); candidate.latest_samples.clear();
+        candidate.aggregates = Default::default(); candidate.rates = Default::default(); candidate.threading = None;
+    }
+    candidate
+}
+
 async fn apply_projection(
     state: &Arc<AppState>,
     context: &ProjectionContext,
@@ -2997,18 +3015,14 @@ async fn apply_projection(
             .find(|record| record.command.kind == "set_solver_profile"
                 && record.status == crate::types::CommandLifecycleState::Completed)
             .and_then(|record| record.command.profile.clone());
-        let config = match configured {
-            Some(value) => serde_json::from_value(value)
-                .map_err(|error| ApiError::conflict(format!("invalid recovered solver profile configuration: {error}")))?,
-            None => profile.config.clone(),
-        };
-        let mut candidate = profile.clone();
-        candidate.config = config;
-        candidate.state = if candidate.config.enabled { "enabled" } else { "disabled" }.into();
-        if !candidate.config.enabled { candidate.operation_samples.clear(); }
+        let next_config = configured.map(serde_json::from_value).transpose()
+            .map_err(|error| ApiError::conflict(format!("invalid recovered solver profile configuration: {error}")))?;
+        let candidate = accepted_profile_candidate(profile.clone(), next_config);
         replace_operation_profile(&mut next.solver_profile, candidate)?
-    } else if !next.solver_profile.operation_samples.is_empty() {
-        next.solver_profile.operation_samples.clear();
+    } else if !next.solver_profile.operation_samples.is_empty() || !next.solver_profile.latest_samples.is_empty() {
+        next.solver_profile.operation_samples.clear(); next.solver_profile.latest_samples.clear();
+        next.solver_profile.aggregates = Default::default(); next.solver_profile.rates = Default::default();
+        next.solver_profile.threading = None;
         next.solver_profile.revision = next.solver_profile.revision.wrapping_add(1);
         true
     } else { false };
@@ -5021,7 +5035,7 @@ mod tests {
 
 #[cfg(test)]
 mod operation_profile_projection_tests {
-    use super::{profile_content_identity, replace_operation_profile};
+    use super::{profile_content_identity, replace_operation_profile, accepted_profile_candidate};
     use crate::schemas::diagnostics::SolverProfileResource;
 
     #[test]
@@ -5039,6 +5053,26 @@ mod operation_profile_projection_tests {
         assert_eq!(current.revision, 18);
         assert!(!replace_operation_profile(&mut current, changed).unwrap());
         assert_eq!(current.revision, 18);
+    }
+
+    #[test]
+    fn bounded_fem_step_snapshot_uses_the_existing_resource_and_revision_merge() {
+        let mut state = fullmag_runner::SolverProfileState::new(fullmag_runner::SolverProfileConfig {
+            enabled: true, sample_every: 1, sample_interval_wall_ms: 0, max_samples: 4,
+            emit_engine_log: false, persist_artifact: true });
+        let stats = fullmag_runner::StepStats { step: 1, time: 1e-12, dt: 1e-12, ..Default::default() };
+        state.record_step(&stats); state.force_record_step(&stats);
+        let candidate: SolverProfileResource = serde_json::from_value(serde_json::to_value(state.snapshot()).unwrap()).unwrap();
+        let original = serde_json::to_value(&candidate.config).unwrap();
+        let mut next = candidate.config.clone(); next.enabled = false; next.max_samples = 128;
+        let candidate = accepted_profile_candidate(candidate, Some(next));
+        assert_eq!(serde_json::to_value(&candidate.config).unwrap(), original);
+        assert_eq!(candidate.latest_samples.len(), 2);
+        let mut current = SolverProfileResource::default();
+        assert!(replace_operation_profile(&mut current, candidate.clone()).unwrap());
+        assert_eq!(current.latest_samples.len(), 2);
+        assert!(current.operation_samples.is_empty());
+        assert!(!replace_operation_profile(&mut current, candidate).unwrap());
     }
 
     #[test]

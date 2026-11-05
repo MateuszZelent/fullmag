@@ -81,6 +81,16 @@ kontraktu; solverowa pula celowo przyjmuje tylko CPU/GPU.
     ponownie blokuje task. Zwiększenie limitu po pierwszej decyzji jest
     odrzucane.
 
+Brak bieżącej próbki inventory przed rozpoczęciem native preparation pozostaje
+odmową admission, a nie uprawnieniem do użycia starej próbki. Ten sam preparer
+ma 35 s budżetu na oczekiwanie i ponawianie idempotentnej walidacji tej samej
+consumed launch permit: za każdym razem sprawdza przypiętą runtime generation, ownera,
+lease i token. Oczekiwanie zwalnia blokady; nie uruchamia ponownie preparera ani
+native producer'a. Retry obejmuje wyłącznie typowany brak bieżącej próbki oraz
+istniejące przejściowe błędy store/writera. Pozostałe błędy i wyczerpanie czasu
+kończą admission odmową. Deadline nie przerywa rozpoczętego synchronicznego
+odczytu. Limit świeżości próbki nie zmienia się.
+
 ## Konsekwencje
 
 ### Recovery anulowanej aktywacji Docker DEV (25.10.2026)
@@ -92,10 +102,24 @@ usunięcia tej blokady ani ponowienia poprzedniej aktywacji.
 
 `recover-cancelled-activation` dodaje osobną, jawną procedurę dla tego stanu.
 Podgląd przypina grupę Compose, checkout, próbę development i jej ostatnią
-iterację, obraz i tożsamość kontenera, oryginalny helper operacji, surowe
+potwierdzoną kontynuację (`iteration` albo `resume`), obraz i tożsamość kontenera, oryginalny helper operacji, surowe
 receipty oraz tożsamość sesji/runu i request scope. Warunkiem jest anulowany
 manualny run bez kroków solvera i artefaktów, trwały failed exit preparera
 oraz zgodny, zwolniony lease. Inne stany pozostają odrzucone.
+
+Faza kontynuacji jest częścią pinów planu, journalu i recovery. Dla zgodności
+domyślną fazą CLI pozostaje `iteration`; jawne `--runtime-phase resume` wybiera
+wyłącznie istniejący, pomyślny receipt `resume` powiązany z tą samą próbą
+development. Nazwa argumentu identyfikatora `--iteration-attempt` pozostaje
+zachowana. Wybranie fazy nie zastępuje żadnego warunku anulowania ani drain.
+
+Jeżeli aktywacja zdążyła zakończyć retirement poprzednika i weszła w `startup`,
+identyfikatory w retirement opisują poprzednią sesję. Cel recovery musi być
+nowym runem uruchamianym przez tę aktywację. Wymaga to niezmienionego dowodu marker/archive
+poprzednika, tej samej instancji API, zakresu sesji dokładnie `N+1` oraz
+zgodnego, zablokowanego do zapisu dowodu nowego request/source/session.
+Dowód przejścia wchodzi do planu i journalu; samo wykrycie innego runu nie
+uprawnia do zmiany celu. Nieukończony lub niezgodny poprzednik jest odrzucany.
 
 Wykonanie wymaga skrótu zaakceptowanego planu i ponownej walidacji. Najpierw
 zapisuje trwały intent recovery, następnie zatrzymuje wyłącznie przypięty
@@ -131,9 +155,30 @@ blokadę oryginalnego helpera; wymaga osobnej, przypiętej rekonsyliacji tej
 operacji. Nie wolno w tym stanie usuwać blokady ani deklarować zakończenia
 recovery całego runtime.
 Procedura nie zastępuje automatycznie rekordu wcześniejszego recovery tej
-samej grupy: podgląd odrzuca taki konflikt przed stopem. Rotacja historii
-recovery wymaga osobnej, zweryfikowanej procedury; nie jest uprawnieniem do
-usunięcia poprzednich dowodów.
+samej grupy: bez jawnych pinów podgląd odrzuca konflikt przed stopem.
+
+### Rotacja zarchiwizowanego recovery w tej samej grupie (04.11.2026)
+
+Jawne `--previous-recovery-sha256` przypina surowe bajty wcześniejszego rekordu.
+Rotacja wymaga jego zgodności z niezmiennym terminalem oraz zweryfikowanego
+archiwum i jego trwałego anchoru. SHA rekordu i anchoru wchodzą do planu oraz
+journalu. Niezgodność albo brak któregokolwiek dowodu blokuje operację przed
+stopem.
+
+Przed zmianą wskaźnika pozostają zachowane oryginalne bajty rekordu, terminal
+i dowody archiwum. Niezmienne indeksy historii według request ID oraz state root
+utrzymują zakaz ponowienia starego żądania i wznowienia anulowanego runtime.
+Zmiana wskaźnika `current` na nowy rekord jest dozwolona dopiero po
+uwierzytelnionym drain nowej, dokładnie przypiętej instancji. Publikacja używa
+CAS starego rekordu; kontynuacja przerwanej publikacji nie ponawia Stop.
+
+Rekord powstały przez rotację używa `fullmag.cancelled-activation-recovery.v2`.
+Kontroler v2 odczytuje v1 i v2, a dla v2 waliduje również historię i jej indeksy.
+Starszy kontroler odrzuca v2 zamiast pomijać ochronę historycznych żądań.
+Zmiana dotyczy tylko prywatnego control volume wybranej grupy; nie migruje
+ani nie zatrzymuje pozostałych grup. Domyślny pierwszy recovery v1 zachowuje
+dotychczasowy kształt. Sukces testów nie zastępuje rzeczywistego podglądu,
+receiptu drain i późniejszej kwalifikacji archiwum.
 
 Zakres implementacji: `scripts/docker_volume_cancelled_activation.py`,
 blokady startu w `scripts/docker_volume_cancelled_activation_guard.py`,
@@ -168,6 +213,9 @@ niezależnego review, podglądu rzeczywistego stanu i receiptu wykonania.
   niewłaściwym readiness kończy się przed spawnem.
 - Preparer bez aktywnego lease nie publikuje receiptu; stary token i inny
   preparation attempt są odrzucane.
+- Oczekiwanie na inventory ponownie sprawdza generation i to samo pozwolenie;
+  twarda zmiana ownera/generation/tokena przerywa je natychmiast. Deadline
+  zachowuje typowaną przyczynę i nie wykonuje kolejnej próby walidacji.
 - Crash przed exit receiptem zachowuje lease. Recovery z poprawnym receiptem
   finalizuje dokładnie raz; utrata ACK nie wykonuje native producer'a drugi raz.
 - Retry bez failed exit, przed zwolnieniem lease, dla już zdecydowanego attemptu,

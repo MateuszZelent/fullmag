@@ -94,6 +94,34 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         self.assertTrue(headless.headless)
         self.assertTrue(run_script.headless)
 
+    def test_solver_profile_cli_flag_is_opt_in_and_forwarded_by_both_commands(self):
+        parser = docker_dev._parser()
+        activate_base = [
+            "--repo-root", "/repo", "activate-script",
+            "--attempt", "a" * 32,
+            "--config-sha256", "b" * 64,
+            "--source-root", "/repo",
+            "--script", "examples/model.py",
+        ]
+        run_base = ["--repo-root", "/repo", "run-script", "--script", "examples/model.py"]
+        for base in (activate_base, run_base):
+            self.assertFalse(parser.parse_args(base).solver_profile)
+            self.assertTrue(parser.parse_args([*base, "--solver-profile"]).solver_profile)
+
+        with patch("docker_volume_activate.activate") as activate:
+            self.assertEqual(
+                docker_dev.main([*activate_base, "--solver-profile"]), 0
+            )
+        self.assertTrue(activate.call_args.args[0].solver_profile)
+
+        with patch(
+            "docker_dev_run_script.run_script", return_value={"exit_code": 0}
+        ) as run_script:
+            self.assertEqual(
+                docker_dev.main([*run_base, "--solver-profile"]), 0
+            )
+        self.assertTrue(run_script.call_args.kwargs["solver_profile"])
+
     def setUp(self):
         self._build_input_match_impl = docker_dev_up._build_inputs_match
         self._build_input_guard = patch.object(

@@ -393,6 +393,7 @@ def run_script(
     attempt: str | None = None,
     config_sha256: str | None = None,
     headless: bool = False,
+    solver_profile: bool = False,
     cancel_requested: Callable[[], bool] | None = None,
     output: Callable[[str], None] = _terminal_output,
 ) -> dict[str, Any]:
@@ -414,6 +415,8 @@ def run_script(
         return _result("rejected", "invalid_request_id", 2, status="not_started")
     if type(headless) is not bool:
         return _result("rejected", "invalid_headless_mode", 2, status="not_started")
+    if type(solver_profile) is not bool:
+        return _result("rejected", "invalid_solver_profile", 2, status="not_started")
     if cancel_requested is not None and not callable(cancel_requested):
         return _result("rejected", "invalid_cancel_callback", 2, status="not_started")
 
@@ -525,6 +528,7 @@ def run_script(
             script=Path(script),
             request_id=request_id,
             headless=headless,
+            solver_profile=solver_profile,
         ))
     except KeyboardInterrupt:
         return _result(

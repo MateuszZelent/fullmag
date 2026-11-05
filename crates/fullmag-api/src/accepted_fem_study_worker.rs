@@ -97,6 +97,10 @@ pub(crate) fn prepare_accepted_fem_execution(
     let execution_plan =
         crate::accepted_study_worker::materialize_resolved_study_inputs(store, accepted_step)
             .context("materialize accepted FEM CAS inputs for the runner")?;
+    if accepted.run.specification.parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() {
+        crate::accepted_solver_profile::validate_fem_profile_plan(&accepted_step.problem, &execution_plan)
+            .context("validate the actual preparation-resolved profiling plan before native dispatch")?;
+    }
     let mut problem = accepted_step.problem.clone();
     problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
         serde_json::json!({
@@ -146,6 +150,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     attempt_output_dir: &Path,
     autosave_root: &Path,
     interrupt_requested: Option<&AtomicBool>,
+    profile: &mut crate::accepted_solver_profile::step_profile::Capture,
 ) -> Result<AcceptedFemExecutionOutcome> {
     let display_selection = fullmag_runner::DisplaySelectionState::default;
     let mut live_observation = crate::accepted_study_worker::AcceptedLiveObservationWriter::new(
@@ -167,6 +172,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         interrupt_requested,
         false,
         |update| {
+            profile.observe(&update.stats);
             live_observation.observe(&update);
             StepAction::Continue
         },
@@ -174,6 +180,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     // Scalar and mapped live fields share the bounded sidecar; final state is
     // still committed only through the durable output path.
     live_observation.finish();
+    profile.finish(runner_result.as_ref().ok().and_then(|result| result.steps.last()));
     let result = runner_result
         .map_err(|error| anyhow::anyhow!(error.to_string()))
         .with_context(|| format!("execute accepted native FEM {} runner plan", prepared.resolved_device))?;

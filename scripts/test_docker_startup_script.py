@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from contextlib import nullcontext
 import importlib.util
 import json
@@ -13,6 +14,27 @@ from unittest import mock
 
 import docker_startup_script as startup
 import fullmag_docker_runtime as docker_runtime
+
+
+def _solver_profile_wrapper() -> dict[str, object]:
+    return {
+        "schema_version": "accepted_solver_profile.v1",
+        "config": {
+            "enabled": True,
+            "sample_every": 1,
+            "sample_interval_wall_ms": 0,
+            "max_samples": 128,
+            "emit_engine_log": False,
+            "persist_artifact": True,
+        },
+    }
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class DockerStartupScriptTests(unittest.TestCase):
@@ -44,8 +66,151 @@ class DockerStartupScriptTests(unittest.TestCase):
             self.assertTrue(request["execution"]["auto_study"])
             self.assertEqual(request["execution"]["wait_for_solve"], "script_metadata")
             self.assertFalse(request["execution"]["legacy_cli"])
+            self.assertNotIn("solver_profile", request)
+            self.assertNotIn("solver_profile", authorization.as_dict())
             self.assertTrue(startup.STARTUP_ENDPOINT.startswith("/v1/internal/live/current/"))
             self.assertEqual(startup.MAX_SCRIPT_BYTES, 1024 * 1024)
+
+    def test_solver_profile_opt_in_uses_the_exact_preset_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.write_script(root)
+            authorization = startup.prepare(
+                root,
+                "models/scene.py",
+                request_id="startup-profile-opt-in",
+                solver_profile=True,
+            ).as_dict()
+
+        expected = _solver_profile_wrapper()
+        self.assertEqual(authorization["solver_profile"], expected)
+        request = startup.build_activation_request(authorization)
+        self.assertEqual(request["solver_profile"], expected)
+
+        response = {
+            "schema": startup.RESPONSE_SCHEMA,
+            "authorization": startup.AUTHORIZATION_KIND,
+            "request_id": authorization["request_id"],
+            "source_sha256": authorization["source_sha256"],
+            "status": "accepted",
+            "session_id": "session-startup-profile",
+            "run_id": "run-startup-profile",
+            "step_ids": ["step-startup-profile"],
+            "scene_revision": 1,
+            "runtime_metadata": {"interactive": True, "wait_for_solve": False},
+            "execution": {
+                "mode": "canonical_live_v2",
+                "auto_study": True,
+                "interactive": "script_metadata",
+                "wait_for_solve": "script_metadata",
+                "legacy_cli": False,
+            },
+            "solver_profile_sha256": _canonical_sha256(expected),
+        }
+        self.assertEqual(startup.validate_activation_response(response, authorization), response)
+
+    def test_solver_profile_response_requires_the_exact_wrapper_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.write_script(root)
+            authorization = startup.prepare(
+                root,
+                "models/scene.py",
+                request_id="startup-profile-response",
+                solver_profile=True,
+            ).as_dict()
+
+        response = {
+            "schema": startup.RESPONSE_SCHEMA,
+            "authorization": startup.AUTHORIZATION_KIND,
+            "request_id": authorization["request_id"],
+            "source_sha256": authorization["source_sha256"],
+            "status": "accepted",
+            "session_id": "session-startup-profile-response",
+            "run_id": "run-startup-profile-response",
+            "step_ids": ["step-startup-profile-response"],
+            "scene_revision": 1,
+            "runtime_metadata": {"interactive": True, "wait_for_solve": False},
+            "execution": {
+                "mode": "canonical_live_v2",
+                "auto_study": True,
+                "interactive": "script_metadata",
+                "wait_for_solve": "script_metadata",
+                "legacy_cli": False,
+            },
+        }
+        for digest in (None, "0" * 64):
+            candidate = dict(response)
+            if digest is not None:
+                candidate["solver_profile_sha256"] = digest
+            with self.subTest(digest=digest), self.assertRaisesRegex(
+                startup.StartupScriptError, "solver profile digest"
+            ):
+                startup.validate_activation_response(candidate, authorization)
+
+    def test_invalid_solver_profile_is_refused_before_post(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.write_script(root)
+            authorization = startup.prepare(
+                root,
+                "models/scene.py",
+                request_id="startup-invalid-profile",
+                solver_profile=True,
+            ).as_dict()
+        authorization["solver_profile"]["config"]["max_samples"] = 0
+
+        opener = mock.Mock()
+        with mock.patch.object(
+            startup.urllib.request, "build_opener", return_value=opener
+        ):
+            with self.assertRaisesRegex(startup.StartupScriptError, "solver profile"):
+                startup.activate(authorization)
+        opener.open.assert_not_called()
+
+    def test_profile_rejections_are_terminal_startup_rejections(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.write_script(root)
+            authorization = startup.prepare(
+                root,
+                "models/scene.py",
+                request_id="startup-profile-refusal",
+                solver_profile=True,
+            ).as_dict()
+
+        for code in ("invalid_solver_profile", "accepted_solver_profile_unsupported"):
+            payload = json.dumps({"code": code, "message": "profile refused"}).encode()
+            http_error = startup.urllib.error.HTTPError(
+                "http://127.0.0.1:8081/startup", 422, "Unprocessable", {}, io.BytesIO(payload)
+            )
+            opener = mock.Mock()
+            opener.open.side_effect = http_error
+            with self.subTest(code=code), mock.patch.object(
+                startup.urllib.request, "build_opener", return_value=opener
+            ):
+                with self.assertRaises(startup.StartupScriptRejected) as raised:
+                    startup.activate(authorization)
+            self.assertEqual(raised.exception.code, code)
+
+    def test_replay_with_same_request_id_and_different_profile_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.write_script(root)
+            legacy = startup.prepare(
+                root, "models/scene.py", request_id="startup-profile-replay"
+            ).as_dict()
+            opted_in = startup.prepare(
+                root,
+                "models/scene.py",
+                request_id="startup-profile-replay",
+                solver_profile=True,
+            ).as_dict()
+
+        started = startup._activation_receipt_started(legacy, "1" * 64)
+        self.assertFalse(startup._receipt_identity_matches(started, opted_in, "2" * 64))
+        with self.assertRaisesRegex(startup.StartupScriptError, "different request"):
+            startup._replay_or_reject_existing_receipt(started, opted_in, "2" * 64)
 
     def test_managed_receipt_path_is_deterministic_and_bounded(self) -> None:
         key = "a" * 64
