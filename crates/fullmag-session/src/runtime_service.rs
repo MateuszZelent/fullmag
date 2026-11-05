@@ -899,13 +899,89 @@ pub struct RuntimeServiceOwner {
 /// an error; `None` means another process still owns the native lock.
 pub struct RuntimeServiceOwnerLockGuard {
     _lock: File,
+    root: PathBuf,
 }
 
 impl RuntimeServiceOwnerLockGuard {
     /// Try to hold the existing owner lock without creating it.
     pub fn try_acquire_existing(root: &Path) -> Result<Option<Self>> {
         let path = checked_path(root, RUNTIME_SERVICE_OWNER_LOCK_PATH)?;
-        Ok(try_open_existing_owner_lock(&path)?.map(|lock| Self { _lock: lock }))
+        Ok(try_open_existing_owner_lock(&path)?.map(|lock| Self { _lock: lock, root: root.to_path_buf() }))
+    }
+
+    /// A separate operational transition after a claimed interruption. It
+    /// retains genuine child statuses and never publishes a drain or exit.
+    /// The caller continues to hold startup/launch fencing across this call.
+    pub fn acknowledge_claimed_interruption(
+        &self, store: &SessionStore, expected: &RuntimeServiceOwnerDescriptor,
+        receipt: &crate::host_resource_ledger::ClaimedWorkerInterruptionReceipt,
+        ledger: &crate::host_resource_ledger::HostResourceLedger,
+    ) -> Result<()> {
+        use crate::host_resource_ledger::{HostReservationOwner, HostResourceReservationState};
+        receipt.validate()?;
+        validate_descriptor(expected)?;
+        if store.root() != self.root.as_path() || expected.state != RuntimeServiceState::Unknown
+            || expected.children.len() != 2
+            || expected.children.iter().map(|child| child.role.as_str()).collect::<BTreeSet<_>>()
+                != BTreeSet::from(["compute", "preparation"])
+            || expected.children.iter().any(|child| !matches!(child.status.as_str(), "exited_success" | "exited_failure"))
+        {
+            bail!("claimed interruption requires the locked exact Unknown owner with retained terminal children");
+        }
+        // Reading the ledger validates its immutable v3 release proof first.
+        let snapshot = ledger.read()?;
+        ledger.verify_completed_claimed_interruption(receipt)?;
+        let id = &receipt.request.identity;
+        let released = snapshot.reservations.iter().find(|row|
+            row.identity.store_id == id.store_id && row.identity.run_id == id.run_id
+                && row.identity.task_id == id.task_id && row.identity.resource_id == id.resource_id
+                && row.identity.lease_token == id.lease_token
+                && row.identity.owner == (HostReservationOwner::Solver {
+                    attempt_id: id.attempt_id.clone(), ownership_epoch: id.ownership_epoch,
+                })) .context("claimed interruption owner acknowledgement lacks exact reservation")?;
+        if released.state != HostResourceReservationState::Released
+            || snapshot.reservations.iter().any(|row| row.state != HostResourceReservationState::Released)
+            || store.read_claimed_worker_interruption(&id.run_id, &receipt.request.request_id)?.as_ref() != Some(receipt)
+        {
+            bail!("claimed interruption owner acknowledgement requires its complete durable release");
+        }
+        let _store = store.write_transaction()?;
+        let owner_path = checked_path(store.root(), RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH)?;
+        let current_bytes = read_stable_regular_path(&owner_path, MAX_RECOVERY_REQUEST_BYTES, "claimed interruption owner")?;
+        let current: RuntimeServiceOwnerDescriptor = serde_json::from_slice(&current_bytes)?;
+        let mut after = expected.clone();
+        after.state = RuntimeServiceState::Failed;
+        validate_descriptor(&after)?;
+        let prefix = format!("runtime-services/claimed-worker-interruptions/{}", receipt.request.request_id);
+        let before_relative = format!("{prefix}/owner-before.json");
+        if current == *expected {
+            if crate::hex_sha256(&current_bytes) != receipt.request.pins.owner_sha256 {
+                bail!("claimed interruption owner-before CAS differs");
+            }
+            create_parent(store.root(), &before_relative)?;
+            crate::host_resource_ledger::publish_immutable_exact(store.root(), &before_relative,
+                &current_bytes, MAX_RECOVERY_REQUEST_BYTES)?;
+        } else if current != after {
+            bail!("claimed interruption owner changed before acknowledgement");
+        }
+        let archived = crate::repository_path::read_bounded_regular_file(store.root(),
+            &before_relative, MAX_RECOVERY_REQUEST_BYTES)?;
+        if crate::hex_sha256(&archived) != receipt.request.pins.owner_sha256
+            || serde_json::from_slice::<RuntimeServiceOwnerDescriptor>(&archived)? != *expected
+        {
+            bail!("claimed interruption archived owner differs");
+        }
+        let ack_relative = format!("{prefix}/acknowledgement.json");
+        let ack = serde_json::to_vec(&serde_json::json!({
+            "schema_version": "runtime_service_claimed_interruption_ack.v1",
+            "request_sha256": receipt.request.sha256()?, "receipt_sha256": receipt.sha256()?,
+            "owner_before_sha256": receipt.request.pins.owner_sha256,
+            "owner_after": after, "reason": "interrupted-no-final-state",
+            "solve_replayed": false, "final_state_available": false,
+        }))?;
+        create_parent(store.root(), &ack_relative)?;
+        crate::host_resource_ledger::publish_immutable_exact(store.root(), &ack_relative, &ack, MAX_RECOVERY_RECEIPT_BYTES)?;
+        persist_descriptor(&owner_path, &after)
     }
 }
 

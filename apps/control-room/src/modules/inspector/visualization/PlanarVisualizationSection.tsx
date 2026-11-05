@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { Palette, ScanLine } from "lucide-react";
 
 import type {
@@ -15,14 +15,10 @@ import {
   usePlanarMaskResource,
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
-import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { isFlowMajorTensorDescriptor, tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsAnySpatialVisualization } from "@/kernel/api/quantityIds";
 import { useFieldCatalogResource, useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
-import {
-  planarGridResolutionPresets,
-  resolvePlanarSectionGeometry,
-} from "@/kernel/visualization/planarSectionModel";
+import { planarGridResolutionPresets } from "@/kernel/visualization/planarSectionModel";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
@@ -35,7 +31,10 @@ import {
   resolvePlanarTargetWireframeStyle,
 } from "@/kernel/visualization/planarTargetPresentation";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
-import { useFieldMapSurfaceEvidenceStatus } from "@/kernel/visualization/fieldMapSurfaceStore";
+import {
+  fieldMapSurfaceStore,
+  useFieldMapSurfaceEvidenceStatus,
+} from "@/kernel/visualization/fieldMapSurfaceStore";
 import { DIRECTION_COLORMAP } from "@/shared/visualization/directionColor";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
 import {
@@ -80,6 +79,10 @@ import {
   type PlanarTargetFieldQuantityOption,
 } from "./planarTargetFieldProfile";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+
+const currentFieldMapSectionGeometry = () =>
+  fieldMapSurfaceStore.get().sectionGeometry;
+const serverFieldMapSectionGeometry = () => null;
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarRange = NonNullable<PlanarState["range"]>;
@@ -168,7 +171,11 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const [validationError, setValidationError] = useState<string | null>(null);
   const surfaceEvidence = useFieldMapSurfaceEvidenceStatus();
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
-  const domain = useDomainMetaResource({ enabled: coverage.supported });
+  const sectionGeometry = useSyncExternalStore(
+    fieldMapSurfaceStore.subscribe,
+    currentFieldMapSectionGeometry,
+    serverFieldMapSectionGeometry,
+  );
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const quantityCatalog = useQuantityCatalogResource({ enabled: coverage.supported });
   const discretization = useSessionStatusSelector(
@@ -379,9 +386,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const interaction = planar.interaction;
   const quality = planar.quality;
   const resolutionPresets = source.kind === "default"
-    ? planarGridResolutionPresets(
-        resolvePlanarSectionGeometry(domain.data, planar.default_slice.plane),
-      )
+    ? planarGridResolutionPresets(sectionGeometry)
     : [];
   const capabilities = resolvePlanarInspectorCapabilities({
     descriptor: meta.data
@@ -444,7 +449,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           <option value="default">Default</option>
           <optgroup label="Monitors">{(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}</optgroup>
         </FormField>
-        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} domain={domain.data} patch={patch} section={meta.data?.section ?? null} /> : null}
+        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} geometry={sectionGeometry} patch={patch} /> : null}
       </div>
     </InspectorGroup>
   );

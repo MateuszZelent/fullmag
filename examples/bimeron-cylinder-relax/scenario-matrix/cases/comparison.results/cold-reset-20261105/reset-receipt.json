@@ -1,0 +1,40 @@
+{
+  "archive": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/cold-reset-20261105/old-group-control-and-source-42a102f0560d4f04952d05481ff13bde.tar.gz",
+  "archive_bytes": 255772783,
+  "archive_helper_id": "0721e0ddd2f9263d0c27bba652842ef26164051af5d6e52feb87dd58f8fc189e",
+  "archive_members": 17843,
+  "archive_sha256": "b39d18499cb702306246b8f04d5836eabaeb7ad3f86f6d8d413bf186005eb595",
+  "archive_summary": "{\"files\": 16309, \"uncompressed_bytes\": 533375974}",
+  "host_state_roots_preserved": true,
+  "plan": {
+    "container_ids": [
+      "bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392",
+      "cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808"
+    ],
+    "control_namespace": "namespaces/d5caee179fce44569fa9eabc16bc7101",
+    "explicit_authority": "User 2026-11-05: remove everything from this group and rebuild from zero",
+    "host_results_deleted": false,
+    "image_id": "sha256:c8b03789c307db4b69e12ca32266df40998ce8f2da917489d3b1cb70408e7d0a",
+    "native_owner_drained": false,
+    "network_ids": [
+      "9d7f07ae1a189fbef568371aeed21bf853909f9b9cf05d596abfe4509cb55420"
+    ],
+    "old_claims_recovered": false,
+    "private_volume": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+    "project": "fullmag-master",
+    "schema": "fullmag.operator-cold-group-reset.v1",
+    "shared_volumes_deleted": false,
+    "source_root": "/home/kkingstoun/git/fullmag/fullmag"
+  },
+  "plan_sha256": "9dd7f11cc01e8ea220c806ab562938da11300f1430388d784e6a004bd1cd370b",
+  "removed_container_ids": [
+    "bf04e8150e763e39160290b363c56828dab7784b7bedf39eaa8c33f655f8d392",
+    "cf5b8ffbefb4b2e41e2ecf36db299f2b0253c5a4c69a60253a40390af50a2808"
+  ],
+  "removed_network_ids": [
+    "9d7f07ae1a189fbef568371aeed21bf853909f9b9cf05d596abfe4509cb55420"
+  ],
+  "removed_private_volume": "fullmag-build-control-fullmag-master-a7f7e9b9a4026499",
+  "shared_dependency_and_package_volumes_preserved": true,
+  "state": "removed-private-group-resources"
+}

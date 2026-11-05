@@ -41,6 +41,20 @@ def _observation(status: str, **fields: object) -> dict[str, object]:
 
 
 class DockerDevRunScriptTests(unittest.TestCase):
+    def test_unknown_activation_reports_bounded_cause_without_retry(self):
+        for error in (run_script_module.BuildControlError('Exact retained helper mismatch'),
+                      OSError(30,'Read-only file system','/storage/.initialize.lock')):
+            with self.subTest(error=type(error).__name__),ExitStack() as stack:
+                self._patch_admission(stack)
+                activation=self._patch_activation(stack,side_effect=error)
+                stack.enter_context(patch.object(run_script_module,'_probe_with_retry',return_value={'api_instance_id':API_INSTANCE}))
+                result=run_script_module.run_script(self.repo,'examples/demo.py',output=lambda _:None)
+                self.assertEqual(result['state'],'unknown')
+                self.assertEqual(result['outcome'],'activation_outcome_unknown')
+                self.assertEqual(result['exit_code'],75)
+                self.assertIn(type(error).__name__+': '+str(error),result['message'])
+                activation.assert_called_once()
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)

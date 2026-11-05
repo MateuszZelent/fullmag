@@ -34,23 +34,23 @@ study.solver(dt_initial=1e-14, max_err=1e-6, integrator="rk23")
 
 # Film spans z=-5..+5 nm. Material comes from the historical formula-guided
 # R50 experiment; the 600x600x10 nm geometry follows Julia's film dimensions.
-# film = study.geometry(
-#     fm.Box(size=(600 * NM, 600 * NM, 10 * NM)), name="bimeron_film", object_id="bimeron-film"
-# )
-# film.Ms = 580000.0
-# film.Aex = 15e-12
-# film.Ku1 = 663920.0
-# film.anisU = (1.0, 0.0, 0.0)
-# film.alpha = 1.0
-# film.mesh(cell_size=CELL)
-# film.m = fm.texture.bimeron(
-#     radius=50 * NM,
-#     wall_width=4.732 * NM,
-#     vorticity=-1,
-#     helicity_rad=0.0,
-#     background_sign=1,
-#     plane="xy",
-# )
+film = study.geometry(
+    fm.Box(size=(600 * NM, 600 * NM, 10 * NM)), name="bimeron_film", object_id="bimeron-film"
+)
+film.Ms = 580000.0
+film.Aex = 15e-12
+film.Ku1 = 663920.0
+film.anisU = (1.0, 0.0, 0.0)
+film.alpha = 1.0
+film.mesh(cell_size=CELL)
+film.m = fm.texture.bimeron(
+    radius=50 * NM,
+    wall_width=4.732 * NM,
+    vorticity=-1,
+    helicity_rad=0.0,
+    background_sign=1,
+    plane="xy",
+)
 
 # The cylinder spans z=10..40 nm, leaving a 5 nm surface-to-surface gap.
 # Its initial -x magnetization opposes the film background.
@@ -66,7 +66,7 @@ cylinder.mesh(cell_size=CELL)
 cylinder.m = fm.texture.uniform(-1.0, 0.0, 0.0)
 
 # %% Object-scoped DMI: the upper cylinder has no DMI.
-# study.terms.add(fm.RotatedInterfacialDMI(D=0.004, object_ids=[film.object_id]))
+study.terms.add(fm.RotatedInterfacialDMI(D=0.004, object_ids=[film.object_id]))
 
 study.fdm(
     default_cell=CELL,

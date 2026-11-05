@@ -284,8 +284,10 @@ ANTENNA_COMMANDS = (
 
 
 FIELD_MAP_TESTS = (
+    'src/kernel/visualization/planarSectionModel.test.ts',
     'src/kernel/visualization/VisualizationRegistrySyncController.test.ts',
     'src/modules/inspector/visualization/PlanarVisualizationSection.test.tsx',
+    'src/modules/field-map/components/PlanarSectionStrip.test.tsx',
     'src/modules/field-map/components/PlanarColorLegend.test.tsx',
     'src/modules/field-map/model/planarFieldComposition.test.ts',
     'src/modules/field-map/model/planarCompositionBuffers.test.ts',
@@ -307,7 +309,9 @@ FIELD_MAP_TESTS = (
     'src/modules/inspector/visualization/VisualizationViewContext.test.ts',
 )
 FIELD_MAP_FILES = (
+    'src/kernel/visualization/planarSectionModel.ts',
     'src/kernel/visualization/VisualizationRegistrySyncController.ts',
+    'src/modules/field-map/components/PlanarSectionStrip.tsx',
     'src/modules/field-map/components/PlanarColorLegend.tsx',
     'src/modules/field-map/model/planarFieldComposition.ts',
     'src/modules/field-map/model/planarCompositionFrame.ts',
@@ -323,6 +327,7 @@ FIELD_MAP_FILES = (
     'src/modules/field-map/fieldMapExport.ts',
     'src/modules/field-map/model/fieldMapEvidence.ts',
     'src/modules/inspector/visualization/PlanarVisualizationSection.tsx',
+    'src/modules/inspector/visualization/DefaultPlanarSourceSection.tsx',
     'src/modules/inspector/visualization/PlanarTargetFieldSection.tsx',
     'src/modules/inspector/visualization/planarTargetFieldProfile.ts',
     'src/kernel/api/apiTypes.ts',

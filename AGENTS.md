@@ -53,6 +53,22 @@ Instrukcje dotyczą GPT-Astra, GPT-Sol, GPT-Luna oraz innych agentów pracujący
 
 - Fizyczną lokalizację storage hosta deklaruj przez `FULLMAG_PROJECT_STORAGE_ROOT` w lokalnym `.env` głównego checkoutu (szablon: `.env.example`). Worktree korzystają z tej samej konfiguracji przez resolver. Poza jawną decyzją hostową dotyczącą obrazów ext4 poniżej nie wpisuj stałych ścieżek Windows/Linux do instrukcji ani skilli i nie kopiuj całego `.env` do worktree. W Docker DEV rozwiązanemu storage wolno zawierać tylko sesje, wyniki, projekty, ustawienia, historię i wymagane rejestry użytkownika; dane buildu są w nazwanych wolumenach Docker/BuildKit. Jawne zmienne procesu, w tym mapowanie kontenera, mają pierwszeństwo i podlegają tej samej walidacji.
 
+- W Linux/WSL każda symulacja ma własny `<stem>.py` i sąsiedni `<stem>.zarr` na ext4 hoście WSL. Skrypt,
+  wyniki, PNG/PPTX, checkpointy i provenance potrzebne do interpretacji lub wznowienia muszą być na WSL albo w
+  samowystarczalnym Zarr, nigdy jako jedyna kopia w Dockerze. Windows służy tylko dla raportowej kopii jawnie
+  wybranej przez użytkownika.
+
+- W Docker DEV `FULLMAG_SCRIPT_OUTPUT_DIRECTORY` w `.env` głównego checkoutu wskazuje istniejący podkatalog
+  wybranego checkoutu i mapuje go jako RW `/opt/fullmag/script-output`; bind źródeł pozostaje RO. Zapis
+  ogranicz do wybranego drzewa; nie montuj całego checkoutu RW.
+
+- Build cache, staging i pakiety w wolumenach Docker mają być odtwarzalne. Istniejący root
+  `BuildControl.volume` i ledger mogą zawierać unikalne rekordy control/owner/lock, więc nie traktuj całego
+  wolumenu jako cache do usunięcia. Przed migracją lub usunięciem zinwentaryzuj i zachowaj/wyeksportuj
+  wymagane rekordy, potwierdź dostępność danych i provenance potrzebnych do interpretacji/wznowienia na WSL
+  lub w samowystarczalnym Zarr, brak aktywnych zadań, konsumentów, lease i referencji oraz receipt. Nie usuwaj
+  aktywnego lock/ledger; receipt ani metadane nie uchylają blokad. To kontrakt, nie dowód runtime.
+
 - Decyzja hostowa 24.10.2026: nowe pliki obrazów ext4 (backing images) twórz w `E:\git\storage` (widok WSL: `/mnt/e/git/storage`), zamiast w `storage/build-volumes` projektu. To lokalizacja plików obrazów, nie linuksowy mount ext4 ani zmiana `FULLMAG_PROJECT_STORAGE_ROOT` dla danych użytkownika. Docker DEV nadal przechowuje dane buildu w named volumes/BuildKit. Istniejące obrazy zachowaj; ich przeniesienie wymaga osobnego planu migracji z kontrolą właścicieli i mountów. Przed tworzeniem obrazu sprawdź obsługę tej lokalizacji przez właściwy launcher/resolver; sama zmiana instrukcji nie wdraża konfiguracji runtime, a brak obsługi oznacza `NOT VERIFIED` bez fallbacku do starej lokalizacji.
 
 - Przed wyborem polecenia builda czytaj `justfile`. Docker dev używa recept grupy `just docker-dev-toolchain` i `just docker-dev`; natywne FEM/MFEM/CUDA/hypre/libCEED pozostają container-backed i używają właściwej zarządzanej recepty wyłącznie dla jawnych bramek release/naukowych. Hostowe `cargo`, `cmake`, bezpośrednie binaria i ręczny Docker nie są ścieżką kwalifikacji.

@@ -424,6 +424,62 @@ pub(crate) fn archive_reaped_supervisor_slot(
         || receipts[0].status_success || receipts[0].timed_out || receipts[0].stop_requested {
         bail!("slot archive process-exit proof differs from the released attempt");
     }
+    archive_validated_supervisor_slot(store, claim, request_id, pin)
+}
+
+pub(crate) fn archive_interrupted_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    receipt: &fullmag_session::host_resource_ledger::ClaimedWorkerInterruptionReceipt,
+    released: &fullmag_session::host_resource_ledger::HostResourceReservation,
+) -> Result<()> {
+    use fullmag_session::{FmsTaskLifecycle, FmsResourceLeaseState};
+    use fullmag_session::host_resource_ledger::{HostResourceReservationState, HostReservationOwner};
+    receipt.validate()?;
+    let request = &receipt.request;
+    if store.read_claimed_worker_interruption(claim.run_id.as_str(), request_id)?.as_ref() != Some(receipt)
+        || request.request_id != request_id
+        || request.identity.store_id != fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store.root())?
+        || released.state != HostResourceReservationState::Released || released.release_proof_sha256.is_none()
+        || released.identity.run_id != claim.run_id.as_str()
+        || released.identity.task_id != claim.task_id.as_str()
+        || released.identity.lease_token != claim.lease.lease_token.as_str()
+        || released.identity.resource_id != claim.lease.resource_id
+        || released.identity.owner != (HostReservationOwner::Solver {
+            attempt_id: claim.attempt_id.as_str().into(), ownership_epoch: claim.ownership_epoch.value(),
+        })
+        || pin.owner_sha256 != request.pins.supervisor_slot_sha256
+    {
+        bail!("interrupted slot archive lacks its exact operational release chain");
+    }
+    let _writer = store.write_transaction()?;
+    let catalog = store.read_run_catalog(claim.run_id.as_str())?.context("interrupted catalog missing")?;
+    let mut expected = request.expected_task.clone();
+    expected.lifecycle = FmsTaskLifecycle::Interrupted;
+    expected.readiness = fullmag_session::FmsTaskReadiness::Blocked {
+        reason: fullmag_session::host_resource_ledger::CLAIMED_WORKER_INTERRUPTION_REASON.into(),
+    };
+    expected.observation = Some(fullmag_session::FmsObservationState::Disconnected);
+    if catalog.tasks.iter().find(|task| task.task_id == expected.task_id) != Some(&expected) {
+        bail!("interrupted slot archive terminal task differs");
+    }
+    let lease = store.read_resource_lease(claim.run_id.as_str(), &claim.lease.resource_id,
+        claim.lease.lease_token.as_str())?.context("interrupted slot archive lease missing")?;
+    if lease.state != FmsResourceLeaseState::Released || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.heartbeat_sequence != claim.lease.heartbeat_sequence
+    {
+        bail!("interrupted slot archive lease differs");
+    }
+    archive_validated_supervisor_slot(store, claim, request_id, pin)
+}
+
+fn archive_validated_supervisor_slot(
+    store: &SessionStore, claim: &fullmag_application::TaskClaim,
+    request_id: &str, pin: &ReapedSupervisorSlotPin,
+) -> Result<()> {
     let (active, archived) = validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
     if active.try_exists()? {
         let parent_relative = format!("reaped-worker-recovery/{request_id}");

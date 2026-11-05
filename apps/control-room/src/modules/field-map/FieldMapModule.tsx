@@ -46,8 +46,7 @@ import {
 import {
   objectSectionLayers,
   planarSectionAxes,
-  resolvePlanarSectionGeometry,
-  withSectionStops,
+  resolvePlanarSectionGeometryFromMeta,
 } from "@/kernel/visualization/planarSectionModel";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
 import { FieldMapToolbar, type FieldMapToolbarQuantity } from "./components/FieldMapToolbar";
@@ -645,15 +644,15 @@ function useFieldMapModuleController() {
     scalarIdentity: scalar.data?.etag,
     scalarStatus: scalar.status,
   });
-  const metaSection = meta.data?.section ?? null;
+  const metaSection = meta.status === "ready" ? meta.data?.section ?? null : null;
   const sectionGeometry = useMemo(
     () => canonicalPlanar?.source.kind === "default"
-      ? withSectionStops(
-          resolvePlanarSectionGeometry(domain.data, canonicalPlanar.default_slice.plane),
+      ? resolvePlanarSectionGeometryFromMeta(
           metaSection,
+          canonicalPlanar.default_slice.plane,
         )
       : null,
-    [canonicalPlanar, domain.data, metaSection],
+    [canonicalPlanar, metaSection],
   );
   // Publish derived facts for keyboard commands and the Inspector (one owner).
   useEffect(() => {
@@ -839,7 +838,6 @@ export default function FieldMapModule() {
   const sectionStrip = sectionDefaultSlice ? (
     <PlanarSectionStrip
       defaultSlice={sectionDefaultSlice}
-      domain={domainMeta}
       objectLayers={objectLayers}
       section={metaSection}
       shownCoordinate={shownCoordinateM}

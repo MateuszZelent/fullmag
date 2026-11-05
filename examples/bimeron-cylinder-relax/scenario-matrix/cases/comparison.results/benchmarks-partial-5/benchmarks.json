@@ -1,0 +1,2613 @@
+{
+  "available_captured_case_count": 5,
+  "captured_case_count": 5,
+  "cases": [
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "completion": {
+        "converged": true,
+        "metric": "max_torque_apm",
+        "metric_name": "max_torque_apm",
+        "metric_value": 7.665186369419121,
+        "reason": "torque",
+        "status": "completed",
+        "threshold": 7.95774715459
+      },
+      "limits": [
+        "accepted_solver_steps is the copied metadata count and may include the initial state; scalar_step_count is max(step)-min(step) from scalars.csv.",
+        "native_wall_time_s is terminal_stats.wall_time_ns; it includes callback costs and is not a CUDA-kernel-only duration.",
+        "GPU telemetry has device_total scope and is nonexclusive to this case; other processes may contribute.",
+        "GPU-kernel elapsed time is unmeasured: a missing or zero terminal_stats field is retained as null.",
+        "1 valid device_total telemetry row(s) were observed post-terminal and are excluded from execution-window means.",
+        "journal_wall_end_to_end_s includes later adoption/collection work and is not the SDK activation-to-completion duration."
+      ],
+      "metrics": {
+        "accepted_solver_steps": 1038,
+        "gpu_kernel_elapsed_s": null,
+        "gpu_kernel_timing_raw_value": null,
+        "gpu_kernel_timing_source_field": null,
+        "gpu_kernel_timing_status": "missing_unmeasured",
+        "gpu_mean_capacity_device_total_mib": null,
+        "gpu_mean_memory_device_total_bytes": null,
+        "gpu_mean_memory_device_total_mib": null,
+        "gpu_mean_power_w": null,
+        "gpu_mean_utilization_percent": null,
+        "gpu_memory_exclusive_to_case": false,
+        "gpu_memory_scope": "device_total",
+        "gpu_telemetry_device_row_count": 0,
+        "gpu_telemetry_measured_sample_count": 0,
+        "journal_wall_end_to_end_s": 536.801357,
+        "mean_native_s_per_accepted_solver_step": 0.07798086287861272,
+        "native_wall_time_s": 80.944135668,
+        "scalar_step_count": 1037,
+        "scalar_steps_per_native_s": 12.811304876407021,
+        "sdk_activation_to_completion_s": 326.375
+      },
+      "provenance": {
+        "accepted_solver_steps_source": "metadata.json#/accepted_solver_steps",
+        "archive_attempt_id": "attempt-b2d9a4239af54f3aaf0a9cf400ebdb4a",
+        "compute_capability": "8.9",
+        "cuda_driver_version": 13040,
+        "cuda_runtime_version": 12060,
+        "demag_operator_kind": "native_multilayer_tensor_fft_newell",
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "execution_engine": "cuda_native_multilayer_convolution",
+        "execution_resolution": {
+          "authored_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "effective_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "fallback_occurred": false,
+          "fallback_reason": null,
+          "resolution_mode": "exact",
+          "resolved_execution": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          }
+        },
+        "fdm_fft_execution": {
+          "backend_version": null,
+          "executed_backend": "cufft",
+          "plan_mode": "cufft_explicit_workspace",
+          "requested_backend": "cufft",
+          "resolved_backend": "cufft",
+          "thread_count": null,
+          "workspace_layout": "full_complex"
+        },
+        "fft_backend": "cuFFT",
+        "lossy_fallback_used": false,
+        "native_wall_time_source": "worker_execution_completed.v1.json#/terminal_stats/wall_time_ns",
+        "precision": "double",
+        "requested_execution": {
+          "backend": "fdm",
+          "device": "gpu",
+          "fallback_policy": "forbidden",
+          "mode": "strict",
+          "precision": "double"
+        },
+        "scalar_step_count_source": "scalars.csv#step",
+        "sdk_timing": {
+          "completed_at_utc": "2026-11-05T15:25:47.676+00:00",
+          "source": "exact SDK activation/completion event timestamps supplied with the first-case activation evidence",
+          "started_at_utc": "2026-11-05T15:20:21.301+00:00"
+        },
+        "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+        "telemetry_raw_sha256": "606642ce37ce2b8986050946ca077b11d1af77a412ff3df82e7e4b516a144e77"
+      },
+      "raw_inputs": {
+        "metadata_sha256": "9ffd5bc672cefa6f483bfb6c9e35d3b9987a2539c2e039208751803e8a950d8f",
+        "scalars_sha256": "7bbc31a119fe8158e9881369378bad77954a6cb9eac3c4becc07ea732df857c0",
+        "worker_execution_completed_sha256": "97613e6a7e7bd18410699d88e3b16568a14001d701417fa105aefc1e105054fd"
+      },
+      "run_id": "run-live-7ff17d43b5eaeb2fdd1621ede4b9aa718aa40cb566b77dbf0f1a97892fd0fa6f",
+      "state": "captured",
+      "status": "completed",
+      "telemetry": {
+        "execution_window": {
+          "end_basis": "exact_sdk_completion_timestamp",
+          "end_utc": "2026-11-05T15:25:47.676+00:00",
+          "start_utc": "2026-11-05T15:20:21.301+00:00"
+        },
+        "journal_exclusive_to_case": false,
+        "journal_sampling_coverage": "partial_after_observer_reconciliation",
+        "journal_scope": "device_total",
+        "journal_state": "observed",
+        "last_record_state": "measured",
+        "measured_record_count": 1,
+        "path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/telemetry/material_rdmi_current__film_bimeron__cylinder_plus_x.jsonl",
+        "records": [
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "post_terminal",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4870.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.38,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4870, 16376, 11.38",
+                "scope": "device_total",
+                "utilization_percent": 7.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 0.485,
+            "exclusive_to_case": false,
+            "execution_phase": "post_terminal",
+            "observed_at_utc": "2026-11-05T15:29:18.098+00:00",
+            "phase_basis": "observed_at_utc is later than the selected completion boundary",
+            "reason": null,
+            "record_index": 0,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4870, 16376, 11.38"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          }
+        ],
+        "records_seen": 1,
+        "sha256": "606642ce37ce2b8986050946ca077b11d1af77a412ff3df82e7e4b516a144e77",
+        "valid_measured_record_count": 1
+      }
+    },
+    {
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "completion": {
+        "converged": false,
+        "metric": "steps",
+        "metric_name": "steps",
+        "metric_value": 3000.0,
+        "reason": "max_steps",
+        "status": "completed",
+        "threshold": 3000.0
+      },
+      "limits": [
+        "accepted_solver_steps is the copied metadata count and may include the initial state; scalar_step_count is max(step)-min(step) from scalars.csv.",
+        "native_wall_time_s is terminal_stats.wall_time_ns; it includes callback costs and is not a CUDA-kernel-only duration.",
+        "GPU telemetry has device_total scope and is nonexclusive to this case; other processes may contribute.",
+        "GPU-kernel elapsed time is unmeasured: a missing or zero terminal_stats field is retained as null.",
+        "The final telemetry record is not_measured; earlier valid measured records remain included when their timestamps fall within the selected case window.",
+        "journal_wall_end_to_end_s is the recorded observer interval; it is kept separate from native wall_time_ns and exact SDK timing."
+      ],
+      "metrics": {
+        "accepted_solver_steps": 3001,
+        "gpu_kernel_elapsed_s": null,
+        "gpu_kernel_timing_raw_value": null,
+        "gpu_kernel_timing_source_field": null,
+        "gpu_kernel_timing_status": "missing_unmeasured",
+        "gpu_mean_capacity_device_total_mib": 16376.0,
+        "gpu_mean_memory_device_total_bytes": 5229125150.117647,
+        "gpu_mean_memory_device_total_mib": 4986.882352941177,
+        "gpu_mean_power_w": 15.90764705882353,
+        "gpu_mean_utilization_percent": 5.882352941176471,
+        "gpu_memory_exclusive_to_case": false,
+        "gpu_memory_scope": "device_total",
+        "gpu_telemetry_device_row_count": 17,
+        "gpu_telemetry_measured_sample_count": 17,
+        "journal_wall_end_to_end_s": 440.73561117303325,
+        "mean_native_s_per_accepted_solver_step": 0.06840159488970343,
+        "native_wall_time_s": 205.273186264,
+        "scalar_step_count": 3000,
+        "scalar_steps_per_native_s": 14.614670598729475,
+        "sdk_activation_to_completion_s": null
+      },
+      "provenance": {
+        "accepted_solver_steps_source": "metadata.json#/accepted_solver_steps",
+        "archive_attempt_id": "attempt-1c6a1594abef4d56bccae6a13eb8e618",
+        "compute_capability": "8.9",
+        "cuda_driver_version": 13040,
+        "cuda_runtime_version": 12060,
+        "demag_operator_kind": "native_multilayer_tensor_fft_newell",
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "execution_engine": "cuda_native_multilayer_convolution",
+        "execution_resolution": {
+          "authored_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "effective_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "fallback_occurred": false,
+          "fallback_reason": null,
+          "resolution_mode": "exact",
+          "resolved_execution": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          }
+        },
+        "fdm_fft_execution": {
+          "backend_version": null,
+          "executed_backend": "cufft",
+          "plan_mode": "cufft_explicit_workspace",
+          "requested_backend": "cufft",
+          "resolved_backend": "cufft",
+          "thread_count": null,
+          "workspace_layout": "full_complex"
+        },
+        "fft_backend": "cuFFT",
+        "lossy_fallback_used": false,
+        "native_wall_time_source": "worker_execution_completed.v1.json#/terminal_stats/wall_time_ns",
+        "precision": "double",
+        "requested_execution": {
+          "backend": "fdm",
+          "device": "gpu",
+          "fallback_policy": "forbidden",
+          "mode": "strict",
+          "precision": "double"
+        },
+        "scalar_step_count_source": "scalars.csv#step",
+        "sdk_timing": null,
+        "source_sha256": "4c90ff2380d0ab2a24aab2c087c218c812779241095c748c7dc7ce622d2ab479",
+        "telemetry_raw_sha256": "6ee23972194c3f92cd677a71d5d4334e066db7aa5c7094c05e92a1fef3bbc7e9"
+      },
+      "raw_inputs": {
+        "metadata_sha256": "769c5ba583a4e2dc6c9d9d2a1a29bafa5cfb58ce48882f095f65a9c378953825",
+        "scalars_sha256": "1e8d9e0374caa55896ca9bb64ec805872c8fd0a2540f1471212f98f28665c27f",
+        "worker_execution_completed_sha256": "02e3814e6a1ab5d09d12455f8bb8d09090eac731f82b352ca769226710be0453"
+      },
+      "run_id": "run-live-1521a3d82076ab5a1f7c6c37fe46ce5856eec3cb2e2bbfcd913898a57a6af3e0",
+      "state": "captured",
+      "status": "completed",
+      "telemetry": {
+        "execution_window": {
+          "end_basis": "journal_wall_end_to_end_s_as_observer_interval",
+          "end_utc": "2026-11-05T15:48:36.186+00:00",
+          "start_utc": "2026-11-05T15:41:15.451+00:00"
+        },
+        "journal_exclusive_to_case": false,
+        "journal_sampling_coverage": null,
+        "journal_scope": "device_total",
+        "journal_state": "not_measured",
+        "last_record_state": "not_measured",
+        "measured_record_count": 17,
+        "path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/telemetry/material_rdmi_current__film_bimeron__cylinder_minus_x.jsonl",
+        "records": [
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4858.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.27,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4858, 16376, 11.27",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 3.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:21.504+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 0,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4858, 16376, 11.27"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.27,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 4857, 16376, 11.27",
+                "scope": "device_total",
+                "utilization_percent": 8.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 6.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:24.479+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 1,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 4857, 16376, 11.27"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.28,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4857, 16376, 11.28",
+                "scope": "device_total",
+                "utilization_percent": 7.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 9.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:27.478+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 2,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4857, 16376, 11.28"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.23,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4857, 16376, 11.23",
+                "scope": "device_total",
+                "utilization_percent": 5.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 12.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:30.478+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 3,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4857, 16376, 11.23"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.35,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 15.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:33.479+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 4,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.35,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 18.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:36.453+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 5,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.35,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 21.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:39.480+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 6,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4857, 16376, 11.35"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4857.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.33,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4857, 16376, 11.33",
+                "scope": "device_total",
+                "utilization_percent": 5.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 24.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:42.604+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 7,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4857, 16376, 11.33"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4870.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.37,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4870, 16376, 11.37",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 27.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:45.504+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 8,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4870, 16376, 11.37"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4867.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.22,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4867, 16376, 11.22",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 30.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:48.504+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 9,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4867, 16376, 11.22"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4863.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.53,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4863, 16376, 11.53",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 33.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:54.236+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 10,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4863, 16376, 11.53"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4867.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.41,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4867, 16376, 11.41",
+                "scope": "device_total",
+                "utilization_percent": 5.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 36.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:41:57.212+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 11,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 4867, 16376, 11.41"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4870.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.74,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4870, 16376, 11.74",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 39.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:00.236+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 12,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4870, 16376, 11.74"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4869.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.54,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4869, 16376, 11.54",
+                "scope": "device_total",
+                "utilization_percent": 6.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 42.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:03.213+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 13,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 6, 4869, 16376, 11.54"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 4874.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.84,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4874, 16376, 11.84",
+                "scope": "device_total",
+                "utilization_percent": 7.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 45.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:06.236+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 14,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 4874, 16376, 11.84"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5113.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 51.53,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5113, 16376, 51.53",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 48.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:10.346+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 15,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5113, 16376, 51.53"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 6727.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 47.82,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 6727, 16376, 47.82",
+                "scope": "device_total",
+                "utilization_percent": 8.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 51.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:12.238+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 16,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 6727, 16376, 47.82"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [],
+            "elapsed_wall_s": 54.004,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:42:25.778+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": "DockerObservationBudgetExceeded",
+            "record_index": 17,
+            "rows_csv": [],
+            "scope": "device_total",
+            "state": "not_measured"
+          }
+        ],
+        "records_seen": 18,
+        "sha256": "6ee23972194c3f92cd677a71d5d4334e066db7aa5c7094c05e92a1fef3bbc7e9",
+        "valid_measured_record_count": 17
+      }
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "completion": {
+        "converged": true,
+        "metric": "max_torque_apm",
+        "metric_name": "max_torque_apm",
+        "metric_value": 7.346096102486118,
+        "reason": "torque",
+        "status": "completed",
+        "threshold": 7.95774715459
+      },
+      "limits": [
+        "accepted_solver_steps is the copied metadata count and may include the initial state; scalar_step_count is max(step)-min(step) from scalars.csv.",
+        "native_wall_time_s is terminal_stats.wall_time_ns; it includes callback costs and is not a CUDA-kernel-only duration.",
+        "GPU telemetry has device_total scope and is nonexclusive to this case; other processes may contribute.",
+        "GPU-kernel elapsed time is unmeasured: a missing or zero terminal_stats field is retained as null.",
+        "The final telemetry record is not_measured; earlier valid measured records remain included when their timestamps fall within the selected case window.",
+        "journal_wall_end_to_end_s is the recorded observer interval; it is kept separate from native wall_time_ns and exact SDK timing."
+      ],
+      "metrics": {
+        "accepted_solver_steps": 1589,
+        "gpu_kernel_elapsed_s": null,
+        "gpu_kernel_timing_raw_value": null,
+        "gpu_kernel_timing_source_field": null,
+        "gpu_kernel_timing_status": "missing_unmeasured",
+        "gpu_mean_capacity_device_total_mib": 16376.0,
+        "gpu_mean_memory_device_total_bytes": 5515968512.0,
+        "gpu_mean_memory_device_total_mib": 5260.4375,
+        "gpu_mean_power_w": 15.989999999999998,
+        "gpu_mean_utilization_percent": 0.6875,
+        "gpu_memory_exclusive_to_case": false,
+        "gpu_memory_scope": "device_total",
+        "gpu_telemetry_device_row_count": 16,
+        "gpu_telemetry_measured_sample_count": 16,
+        "journal_wall_end_to_end_s": 285.5099343099864,
+        "mean_native_s_per_accepted_solver_step": 0.057265881583385775,
+        "native_wall_time_s": 90.995485836,
+        "scalar_step_count": 1588,
+        "scalar_steps_per_native_s": 17.451415148901255,
+        "sdk_activation_to_completion_s": null
+      },
+      "provenance": {
+        "accepted_solver_steps_source": "metadata.json#/accepted_solver_steps",
+        "archive_attempt_id": "attempt-6b02ff99d45644cdb30c4574e8775fc9",
+        "compute_capability": "8.9",
+        "cuda_driver_version": 13040,
+        "cuda_runtime_version": 12060,
+        "demag_operator_kind": "native_multilayer_tensor_fft_newell",
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "execution_engine": "cuda_native_multilayer_convolution",
+        "execution_resolution": {
+          "authored_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "effective_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "fallback_occurred": false,
+          "fallback_reason": null,
+          "resolution_mode": "exact",
+          "resolved_execution": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          }
+        },
+        "fdm_fft_execution": {
+          "backend_version": null,
+          "executed_backend": "cufft",
+          "plan_mode": "cufft_explicit_workspace",
+          "requested_backend": "cufft",
+          "resolved_backend": "cufft",
+          "thread_count": null,
+          "workspace_layout": "full_complex"
+        },
+        "fft_backend": "cuFFT",
+        "lossy_fallback_used": false,
+        "native_wall_time_source": "worker_execution_completed.v1.json#/terminal_stats/wall_time_ns",
+        "precision": "double",
+        "requested_execution": {
+          "backend": "fdm",
+          "device": "gpu",
+          "fallback_policy": "forbidden",
+          "mode": "strict",
+          "precision": "double"
+        },
+        "scalar_step_count_source": "scalars.csv#step",
+        "sdk_timing": null,
+        "source_sha256": "b7aaa8413bb6d22111ea27244388ec4a359afda81a91a0e9b694dfc5f1ca590f",
+        "telemetry_raw_sha256": "14e999b8f63d78ffdfb309ef4b4f00eeedf6c8fbd99dc8d55a4c586d2f3abb88"
+      },
+      "raw_inputs": {
+        "metadata_sha256": "eeb248927e1585164756c2ee492586865e2c5dd8dd966b8293693b4f8af34418",
+        "scalars_sha256": "a02cc326f8c203abfe8566b3e03675437db764dda83a91ca9c52034d5243f027",
+        "worker_execution_completed_sha256": "aa12d862e077b21e79d487f9ecd8c6965c3154e4e410063d59304ce0362ddd61"
+      },
+      "run_id": "run-live-7a2087a5cfafb0344f8f3d9d41c180020dd5a3e7ad51c6131f4b24ce70d070e0",
+      "state": "captured",
+      "status": "completed",
+      "telemetry": {
+        "execution_window": {
+          "end_basis": "journal_wall_end_to_end_s_as_observer_interval",
+          "end_utc": "2026-11-05T16:01:55.111+00:00",
+          "start_utc": "2026-11-05T15:57:09.602+00:00"
+        },
+        "journal_exclusive_to_case": false,
+        "journal_sampling_coverage": null,
+        "journal_scope": "device_total",
+        "journal_state": "not_measured",
+        "last_record_state": "not_measured",
+        "measured_record_count": 16,
+        "path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/telemetry/material_rdmi_current__film_uniform_plus_x__cylinder_plus_x.jsonl",
+        "records": [
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5156.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.79,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5156, 16376, 10.79",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 3.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:12.937+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 0,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5156, 16376, 10.79"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5137.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.94,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5137, 16376, 10.94",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 6.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:15.910+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 1,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5137, 16376, 10.94"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5146.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.34,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5146, 16376, 11.34",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 9.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:18.911+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 2,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5146, 16376, 11.34"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5127.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.9,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5127, 16376, 10.90",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 12.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:21.910+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 3,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5127, 16376, 10.90"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5128.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.8,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5128, 16376, 10.80",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 15.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:24.887+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 4,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5128, 16376, 10.80"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5148.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.84,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5148, 16376, 10.84",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 18.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:27.910+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 5,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5148, 16376, 10.84"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5145.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.99,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5145, 16376, 10.99",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 21.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:30.936+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 6,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5145, 16376, 10.99"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5155.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.62,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5155, 16376, 11.62",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 24.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:33.911+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 7,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5155, 16376, 11.62"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5172.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.2,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5172, 16376, 11.20",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 27.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:39.636+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 8,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5172, 16376, 11.20"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5144.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.27,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5144, 16376, 11.27",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 30.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:42.663+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 9,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5144, 16376, 11.27"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5135.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.11,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5135, 16376, 11.11",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 33.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:45.662+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 10,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5135, 16376, 11.11"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5138.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.81,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.81",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 36.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:48.637+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 11,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.81"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5138.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.67,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.67",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 39.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:51.644+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 12,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.67"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5138.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.99,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.99",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 42.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:54.662+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 13,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5138, 16376, 10.99"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5159.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 53.97,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5159, 16376, 53.97",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 45.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:57:59.099+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 14,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5159, 16376, 53.97"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 7001.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 47.6,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 7001, 16376, 47.60",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 48.051,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:58:00.662+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 15,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 7001, 16376, 47.60"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [],
+            "elapsed_wall_s": 51.051,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T15:58:14.026+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": "DockerObservationBudgetExceeded",
+            "record_index": 16,
+            "rows_csv": [],
+            "scope": "device_total",
+            "state": "not_measured"
+          }
+        ],
+        "records_seen": 17,
+        "sha256": "14e999b8f63d78ffdfb309ef4b4f00eeedf6c8fbd99dc8d55a4c586d2f3abb88",
+        "valid_measured_record_count": 16
+      }
+    },
+    {
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "completion": {
+        "converged": true,
+        "metric": "max_torque_apm",
+        "metric_name": "max_torque_apm",
+        "metric_value": 7.526721530095709,
+        "reason": "torque",
+        "status": "completed",
+        "threshold": 7.95774715459
+      },
+      "limits": [
+        "accepted_solver_steps is the copied metadata count and may include the initial state; scalar_step_count is max(step)-min(step) from scalars.csv.",
+        "native_wall_time_s is terminal_stats.wall_time_ns; it includes callback costs and is not a CUDA-kernel-only duration.",
+        "GPU telemetry has device_total scope and is nonexclusive to this case; other processes may contribute.",
+        "GPU-kernel elapsed time is unmeasured: a missing or zero terminal_stats field is retained as null.",
+        "The final telemetry record is not_measured; earlier valid measured records remain included when their timestamps fall within the selected case window.",
+        "journal_wall_end_to_end_s is the recorded observer interval; it is kept separate from native wall_time_ns and exact SDK timing."
+      ],
+      "metrics": {
+        "accepted_solver_steps": 1321,
+        "gpu_kernel_elapsed_s": null,
+        "gpu_kernel_timing_raw_value": null,
+        "gpu_kernel_timing_source_field": null,
+        "gpu_kernel_timing_status": "missing_unmeasured",
+        "gpu_mean_capacity_device_total_mib": 16376.0,
+        "gpu_mean_memory_device_total_bytes": 5440733184.0,
+        "gpu_mean_memory_device_total_mib": 5188.6875,
+        "gpu_mean_power_w": 13.217499999999998,
+        "gpu_mean_utilization_percent": 0.625,
+        "gpu_memory_exclusive_to_case": false,
+        "gpu_memory_scope": "device_total",
+        "gpu_telemetry_device_row_count": 16,
+        "gpu_telemetry_measured_sample_count": 16,
+        "journal_wall_end_to_end_s": 268.75132114300504,
+        "mean_native_s_per_accepted_solver_step": 0.05755904362452688,
+        "native_wall_time_s": 76.035496628,
+        "scalar_step_count": 1320,
+        "scalar_steps_per_native_s": 17.360312729435257,
+        "sdk_activation_to_completion_s": null
+      },
+      "provenance": {
+        "accepted_solver_steps_source": "metadata.json#/accepted_solver_steps",
+        "archive_attempt_id": "attempt-c797a814624d412f9936935d033bfc1e",
+        "compute_capability": "8.9",
+        "cuda_driver_version": 13040,
+        "cuda_runtime_version": 12060,
+        "demag_operator_kind": "native_multilayer_tensor_fft_newell",
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "execution_engine": "cuda_native_multilayer_convolution",
+        "execution_resolution": {
+          "authored_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "effective_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "fallback_occurred": false,
+          "fallback_reason": null,
+          "resolution_mode": "exact",
+          "resolved_execution": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          }
+        },
+        "fdm_fft_execution": {
+          "backend_version": null,
+          "executed_backend": "cufft",
+          "plan_mode": "cufft_explicit_workspace",
+          "requested_backend": "cufft",
+          "resolved_backend": "cufft",
+          "thread_count": null,
+          "workspace_layout": "full_complex"
+        },
+        "fft_backend": "cuFFT",
+        "lossy_fallback_used": false,
+        "native_wall_time_source": "worker_execution_completed.v1.json#/terminal_stats/wall_time_ns",
+        "precision": "double",
+        "requested_execution": {
+          "backend": "fdm",
+          "device": "gpu",
+          "fallback_policy": "forbidden",
+          "mode": "strict",
+          "precision": "double"
+        },
+        "scalar_step_count_source": "scalars.csv#step",
+        "sdk_timing": null,
+        "source_sha256": "d9847904125b339ae51a61cc31901801041b43dcc548b03de6dbba254fb44c00",
+        "telemetry_raw_sha256": "bb1df783991049312a1cc235f3afd2295547cf0b5bc72c54ca56053b62d19dc9"
+      },
+      "raw_inputs": {
+        "metadata_sha256": "f169f0e3df512dcf9d149ad0c75618d5c82d01aa5088e2f90cd3865a68b9160f",
+        "scalars_sha256": "dbc5a9886011971424a711d802d8714c379307a4dfa415b338f6ba0bd470e048",
+        "worker_execution_completed_sha256": "962351fa259eaf08248bab5185d773062ae8aa165c67d15f43d9504e54c08590"
+      },
+      "run_id": "run-live-b122281b890729c4f37eb4fc57f4edc0b527883b1781e056087769e75a3591a6",
+      "state": "captured",
+      "status": "completed",
+      "telemetry": {
+        "execution_window": {
+          "end_basis": "journal_wall_end_to_end_s_as_observer_interval",
+          "end_utc": "2026-11-05T16:07:14.430+00:00",
+          "start_utc": "2026-11-05T16:02:45.679+00:00"
+        },
+        "journal_exclusive_to_case": false,
+        "journal_sampling_coverage": null,
+        "journal_scope": "device_total",
+        "journal_state": "not_measured",
+        "last_record_state": "not_measured",
+        "measured_record_count": 16,
+        "path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/telemetry/material_rdmi_current__film_uniform_plus_x__cylinder_minus_x.jsonl",
+        "records": [
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.65,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.65",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 3.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:02:48.981+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 0,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.65"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.88,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.88",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 6.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:02:51.955+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 1,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.88"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.82,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5130, 16376, 10.82",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 9.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:02:54.956+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 2,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5130, 16376, 10.82"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.7,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.70",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 12.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:02:57.982+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 3,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.70"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.56,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.56",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 15.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:03.735+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 4,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.56"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5130.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.56,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.56",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 18.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:06.762+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 5,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5130, 16376, 10.56"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5129.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.93,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5129, 16376, 10.93",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 21.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:09.710+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 6,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5129, 16376, 10.93"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5129.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.74,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5129, 16376, 10.74",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 24.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:12.736+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 7,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5129, 16376, 10.74"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5167.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.89,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5167, 16376, 10.89",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 27.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:15.712+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 8,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5167, 16376, 10.89"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5144.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.32,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5144, 16376, 11.32",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 30.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:18.736+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 9,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5144, 16376, 11.32"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5140.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.73,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5140, 16376, 10.73",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 33.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:21.788+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 10,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5140, 16376, 10.73"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5136.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.56,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5136, 16376, 10.56",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 36.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:24.685+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 11,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5136, 16376, 10.56"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5139.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.93,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5139, 16376, 10.93",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 39.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:27.711+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 12,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5139, 16376, 10.93"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5139.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.7,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5139, 16376, 10.70",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 42.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:30.685+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 13,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5139, 16376, 10.70"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5148.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 10.64,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5148, 16376, 10.64",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 45.002,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:34.693+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 14,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5148, 16376, 10.64"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5968.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 49.87,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 5968, 16376, 49.87",
+                "scope": "device_total",
+                "utilization_percent": 8.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 48.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:37.643+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 15,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 8, 5968, 16376, 49.87"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [],
+            "elapsed_wall_s": 51.003,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:03:50.387+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": "DockerObservationBudgetExceeded",
+            "record_index": 16,
+            "rows_csv": [],
+            "scope": "device_total",
+            "state": "not_measured"
+          }
+        ],
+        "records_seen": 17,
+        "sha256": "bb1df783991049312a1cc235f3afd2295547cf0b5bc72c54ca56053b62d19dc9",
+        "valid_measured_record_count": 16
+      }
+    },
+    {
+      "case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "completion": {
+        "converged": false,
+        "metric": "steps",
+        "metric_name": "steps",
+        "metric_value": 3000.0,
+        "reason": "max_steps",
+        "status": "completed",
+        "threshold": 3000.0
+      },
+      "limits": [
+        "accepted_solver_steps is the copied metadata count and may include the initial state; scalar_step_count is max(step)-min(step) from scalars.csv.",
+        "native_wall_time_s is terminal_stats.wall_time_ns; it includes callback costs and is not a CUDA-kernel-only duration.",
+        "GPU telemetry has device_total scope and is nonexclusive to this case; other processes may contribute.",
+        "GPU-kernel elapsed time is unmeasured: a missing or zero terminal_stats field is retained as null.",
+        "The final telemetry record is not_measured; earlier valid measured records remain included when their timestamps fall within the selected case window.",
+        "journal_wall_end_to_end_s is the recorded observer interval; it is kept separate from native wall_time_ns and exact SDK timing."
+      ],
+      "metrics": {
+        "accepted_solver_steps": 3001,
+        "gpu_kernel_elapsed_s": null,
+        "gpu_kernel_timing_raw_value": null,
+        "gpu_kernel_timing_source_field": null,
+        "gpu_kernel_timing_status": "missing_unmeasured",
+        "gpu_mean_capacity_device_total_mib": 16376.0,
+        "gpu_mean_memory_device_total_bytes": 5798995365.6470585,
+        "gpu_mean_memory_device_total_mib": 5530.35294117647,
+        "gpu_mean_power_w": 16.067647058823532,
+        "gpu_mean_utilization_percent": 2.823529411764706,
+        "gpu_memory_exclusive_to_case": false,
+        "gpu_memory_scope": "device_total",
+        "gpu_telemetry_device_row_count": 17,
+        "gpu_telemetry_measured_sample_count": 17,
+        "journal_wall_end_to_end_s": 378.5229996460257,
+        "mean_native_s_per_accepted_solver_step": 0.0599191699326891,
+        "native_wall_time_s": 179.817428968,
+        "scalar_step_count": 3000,
+        "scalar_steps_per_native_s": 16.683588555444615,
+        "sdk_activation_to_completion_s": null
+      },
+      "provenance": {
+        "accepted_solver_steps_source": "metadata.json#/accepted_solver_steps",
+        "archive_attempt_id": "attempt-d0757d80850f403d8d3f5b1083279a22",
+        "compute_capability": "8.9",
+        "cuda_driver_version": 13040,
+        "cuda_runtime_version": 12060,
+        "demag_operator_kind": "native_multilayer_tensor_fft_newell",
+        "device_name": "NVIDIA GeForce RTX 4080 SUPER",
+        "execution_engine": "cuda_native_multilayer_convolution",
+        "execution_resolution": {
+          "authored_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "effective_request": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          },
+          "fallback_occurred": false,
+          "fallback_reason": null,
+          "resolution_mode": "exact",
+          "resolved_execution": {
+            "backend": "fdm",
+            "device": "gpu",
+            "mode": "strict",
+            "precision": "double"
+          }
+        },
+        "fdm_fft_execution": {
+          "backend_version": null,
+          "executed_backend": "cufft",
+          "plan_mode": "cufft_explicit_workspace",
+          "requested_backend": "cufft",
+          "resolved_backend": "cufft",
+          "thread_count": null,
+          "workspace_layout": "full_complex"
+        },
+        "fft_backend": "cuFFT",
+        "lossy_fallback_used": false,
+        "native_wall_time_source": "worker_execution_completed.v1.json#/terminal_stats/wall_time_ns",
+        "precision": "double",
+        "requested_execution": {
+          "backend": "fdm",
+          "device": "gpu",
+          "fallback_policy": "forbidden",
+          "mode": "strict",
+          "precision": "double"
+        },
+        "scalar_step_count_source": "scalars.csv#step",
+        "sdk_timing": null,
+        "source_sha256": "8ca15a09b33a2499cfe713acc98651ac7b0a97ea7224e66e6ed021a1e657cf0e",
+        "telemetry_raw_sha256": "2dd504cbb41886d23640764887f8afbeba26a6dbd308eb66b18f129fc6f58b14"
+      },
+      "raw_inputs": {
+        "metadata_sha256": "480dee8b3b0f428ecb1c3448833d13e57cebcdd62029ccde0d73fd1f0eee2ef8",
+        "scalars_sha256": "4edbd6c393e0770a6463cdd80e10e89948d4a806a0f1f283d1d5c04ba279ebc7",
+        "worker_execution_completed_sha256": "dfe2fa476816d9c2f84c2fe4df70fadf34880b3b5ee92f83bd6917750ddd85c7"
+      },
+      "run_id": "run-live-c1b7588aa42f8001a81f4472fc6e5822177b9e11e4581b214bbb87824c1523f3",
+      "state": "captured",
+      "status": "completed",
+      "telemetry": {
+        "execution_window": {
+          "end_basis": "journal_wall_end_to_end_s_as_observer_interval",
+          "end_utc": "2026-11-05T16:14:24.048+00:00",
+          "start_utc": "2026-11-05T16:08:05.525+00:00"
+        },
+        "journal_exclusive_to_case": false,
+        "journal_sampling_coverage": null,
+        "journal_scope": "device_total",
+        "journal_state": "not_measured",
+        "last_record_state": "not_measured",
+        "measured_record_count": 17,
+        "path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/telemetry/material_yig__film_bimeron__cylinder_plus_x.jsonl",
+        "records": [
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5382.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.48,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5382, 16376, 11.48",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 3.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:08.829+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 0,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5382, 16376, 11.48"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5384.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.11,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5384, 16376, 11.11",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 6.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:11.830+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 1,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5384, 16376, 11.11"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5398.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.57,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5398, 16376, 11.57",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 9.0,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:14.855+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 2,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5398, 16376, 11.57"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5406.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.92,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5406, 16376, 11.92",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 12.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:17.881+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 3,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5406, 16376, 11.92"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5397.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.41,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5397, 16376, 11.41",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 15.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:20.830+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 4,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5397, 16376, 11.41"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5470.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.52,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5470, 16376, 11.52",
+                "scope": "device_total",
+                "utilization_percent": 2.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 18.001,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:23.880+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 5,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 2, 5470, 16376, 11.52"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5444.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.04,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5444, 16376, 11.04",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 21.01,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:29.593+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 6,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5444, 16376, 11.04"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5395.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.4,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 5395, 16376, 11.40",
+                "scope": "device_total",
+                "utilization_percent": 5.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 24.01,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:32.593+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 7,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 5, 5395, 16376, 11.40"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5395.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.92,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 3, 5395, 16376, 11.92",
+                "scope": "device_total",
+                "utilization_percent": 3.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 27.01,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:35.594+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 8,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 3, 5395, 16376, 11.92"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5350.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 12.06,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 5350, 16376, 12.06",
+                "scope": "device_total",
+                "utilization_percent": 7.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 30.01,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:38.593+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 9,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 7, 5350, 16376, 12.06"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5326.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.32,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 3, 5326, 16376, 11.32",
+                "scope": "device_total",
+                "utilization_percent": 3.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 33.011,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:41.619+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 10,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 3, 5326, 16376, 11.32"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5358.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.47,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5358, 16376, 11.47",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 36.011,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:44.594+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 11,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5358, 16376, 11.47"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5353.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.0,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5353, 16376, 11.00",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 39.011,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:47.594+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 12,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 5353, 16376, 11.00"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5359.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.02,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5359, 16376, 11.02",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 42.011,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:50.594+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 13,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5359, 16376, 11.02"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5362.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 11.07,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5362, 16376, 11.07",
+                "scope": "device_total",
+                "utilization_percent": 1.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 45.011,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:53.543+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 14,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 1, 5362, 16376, 11.07"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 5443.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 54.24,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5443, 16376, 54.24",
+                "scope": "device_total",
+                "utilization_percent": 0.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 48.012,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:08:56.996+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 15,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 0, 5443, 16376, 54.24"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [
+              {
+                "exclusive_to_case": false,
+                "execution_phase": "within_journal_observer_interval",
+                "memory_total_mib": 16376.0,
+                "memory_used_mib": 7794.0,
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "power_w": 47.6,
+                "raw_csv": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 7794, 16376, 47.60",
+                "scope": "device_total",
+                "utilization_percent": 4.0,
+                "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937"
+              }
+            ],
+            "elapsed_wall_s": 51.012,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:09:00.090+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": null,
+            "record_index": 16,
+            "rows_csv": [
+              "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937, NVIDIA GeForce RTX 4080 SUPER, 4, 7794, 16376, 47.60"
+            ],
+            "scope": "device_total",
+            "state": "measured"
+          },
+          {
+            "device_rows": [],
+            "elapsed_wall_s": 54.012,
+            "exclusive_to_case": false,
+            "execution_phase": "within_journal_observer_interval",
+            "observed_at_utc": "2026-11-05T16:09:12.851+00:00",
+            "phase_basis": "timestamp lies within activation plus journal wall_end_to_end_s",
+            "reason": "DockerObservationBudgetExceeded",
+            "record_index": 17,
+            "rows_csv": [],
+            "scope": "device_total",
+            "state": "not_measured"
+          }
+        ],
+        "records_seen": 18,
+        "sha256": "2dd504cbb41886d23640764887f8afbeba26a6dbd308eb66b18f129fc6f58b14",
+        "valid_measured_record_count": 17
+      }
+    }
+  ],
+  "caveats": [
+    "The report contains only captured cases with completed copied worker artifacts; uncaptured matrix rows are omitted.",
+    "A device_total sample cannot attribute utilization, memory, or power exclusively to this simulation.",
+    "The first case journal wall_end_to_end_s includes later adoption/collection and differs from its exact SDK activation-to-completion duration.",
+    "An observer interval and terminal_stats.wall_time_ns have different clock boundaries and are reported independently.",
+    "These benchmark summaries do not establish scientific qualification, backend parity, or release qualification."
+  ],
+  "expected_case_count": 12,
+  "generated_at_utc": "2026-11-05T16:18:49.785+00:00",
+  "matrix_completeness": "partial",
+  "matrix_state": "running",
+  "methodology": [
+    "native_wall_time_s = copied worker_execution_completed.v1.json terminal_stats.wall_time_ns / 1e9.",
+    "mean_native_s_per_accepted_solver_step = native_wall_time_s / metadata.json accepted_solver_steps; the count can include the initial state.",
+    "scalar_step_count = max(step)-min(step) from the copied scalars.csv, so the initial state is excluded from the delta.",
+    "scalar_steps_per_native_s = scalar_step_count / native_wall_time_s; this throughput includes callback costs and is not a standalone GPU-kernel rate.",
+    "Missing or zero GPU-kernel timing in terminal_stats is unmeasured and is emitted as null.",
+    "Telemetry files are parsed as concatenated JSON objects with JSONDecoder.raw_decode; valid measured records are retained even when the last record is not_measured.",
+    "GPU rows_csv is decoded as uuid, name, utilization percent, memory used MiB, total MiB, and power W. Device telemetry is scope=device_total and exclusive_to_case=false.",
+    "For the first bimeron +x case, exact SDK timestamps are retained separately; other journal wall_end_to_end_s values remain observer intervals and are not converted into SDK durations.",
+    "Only measured device_total samples timestamped within the selected exact SDK interval or recorded journal observer interval contribute to telemetry means; post-terminal samples remain in JSON/CSV and are excluded."
+  ],
+  "plots": {
+    "gpu_png": "benchmarks-partial-5/gpu.png",
+    "runtime_png": "benchmarks-partial-5/runtime.png"
+  },
+  "schema_version": "fullmag.bimeron-matrix-benchmarks.v1",
+  "selection": {
+    "case_ids": [
+      "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "material_yig__film_bimeron__cylinder_plus_x"
+    ],
+    "mode": "explicit_case_id_allowlist"
+  },
+  "source": {
+    "journal_relative_path": "examples/bimeron-cylinder-relax/scenario-matrix/cases/comparison.results/run-tools/execution-journal.json",
+    "journal_sha256": "42f913e873573de57d47ea6c041caacccada874638e1daf28ee2eed2475aadab",
+    "repo_root": "/home/kkingstoun/git/fullmag/fullmag",
+    "report_root": "/mnt/c/Users/Mateusz/Documents/ChatGPT/Fullmag/bimeron-matrix-2026-11-05",
+    "source_head": "b2896445fef381a2f912f675c4418579caa7deaf"
+  },
+  "warnings": []
+}

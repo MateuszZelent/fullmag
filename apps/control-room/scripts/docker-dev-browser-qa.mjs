@@ -512,6 +512,117 @@ const capturePlanarFieldMapScreenshot = async (page) => {
   };
 };
 
+const planarFilenameToken = (value) => String(value)
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "") || "value";
+
+const readPlanarExportDownload = async (download, { expectedFrame, fieldRevision, visibleLayers }) => {
+  const filename = download.suggestedFilename();
+  if (!filename || !filename.toLowerCase().endsWith(".png")) {
+    throw new Error(`Export 2D PNG returned an unexpected filename: ${filename || "empty"}`);
+  }
+  const normalizedFilename = filename.toLowerCase();
+  const filenameChecks = {
+    png_extension: true,
+    quantity_id: normalizedFilename.includes("h-demag"),
+    field_revision: normalizedFilename.includes(`_r${String(fieldRevision).toLowerCase()}_`),
+    default_plane: normalizedFilename.includes(`default-${planarFilenameToken(expectedFrame.plane)}-`),
+    visible_layer_count: visibleLayers.length === 0 ||
+      normalizedFilename.includes(`-layers-${visibleLayers.length}-`),
+    visible_layer_ids: visibleLayers.every((layer) =>
+      normalizedFilename.includes(`${planarFilenameToken(layer.id)}-${planarFilenameToken(layer.quantity_id)}`)),
+  };
+  const failedFilenameChecks = Object.entries(filenameChecks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  if (failedFilenameChecks.length) {
+    throw new Error(`Exported PNG filename did not preserve current field/layer identity: ${failedFilenameChecks.join(", ")}`);
+  }
+
+  const stream = await download.createReadStream();
+  if (!stream) throw new Error("Export 2D PNG download did not expose a readable stream");
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of stream) {
+    const bytes = Buffer.from(chunk);
+    byteLength += bytes.length;
+    if (byteLength > maxCanvasScreenshotBytes) {
+      stream.destroy?.();
+      throw new Error(`Exported PNG exceeds the bounded ${maxCanvasScreenshotBytes}-byte image proof limit`);
+    }
+    chunks.push(bytes);
+  }
+  const png = Buffer.concat(chunks, byteLength);
+  if (png.length < 24 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error("Export 2D PNG download did not contain a non-empty PNG payload");
+  }
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (png.length === 0 || width <= 0 || height <= 0) {
+    throw new Error("Export 2D PNG download has an empty image size");
+  }
+  const decoded = PNG.sync.read(png);
+  if (decoded.width !== width || decoded.height !== height) {
+    throw new Error("Export 2D PNG dimensions disagree with its decoded image");
+  }
+  return {
+    state: "captured",
+    command_id: "field-map.export-png",
+    command_title: "Export 2D PNG",
+    filename,
+    filename_checks: filenameChecks,
+    media_type: "image/png",
+    width,
+    height,
+    byte_length: png.length,
+    png_base64: png.toString("base64"),
+    visible_layers: visibleLayers,
+    png_validation: "signature, non-zero dimensions, and pinned PNG decoder passed",
+  };
+};
+
+const exportVisiblePlanarComposition = async (page, expected) => {
+  const commandSearchButton = page.getByRole("button", { name: /Command search/i });
+  if (await commandSearchButton.count() !== 1) {
+    throw new Error("Workspace did not expose one accessible Command search button");
+  }
+  await commandSearchButton.click();
+  const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+  try {
+    await palette.waitFor({ state: "visible", timeout });
+    const search = palette.getByPlaceholder("Search commands");
+    await search.fill("Export 2D PNG");
+    const command = palette.getByRole("option").filter({ hasText: "Export 2D PNG" });
+    await command.waitFor({ state: "visible", timeout });
+    if (await command.count() !== 1) {
+      throw new Error("Command palette did not resolve one Export 2D PNG command");
+    }
+    const commandValue = await command.getAttribute("data-value");
+    const commandText = await command.innerText();
+    if (!commandValue?.includes("field-map.export-png") && !commandText.includes("field-map.export-png")) {
+      throw new Error("Export 2D PNG palette entry did not expose command id field-map.export-png");
+    }
+    if ((await command.getAttribute("aria-disabled")) === "true") {
+      throw new Error("Export 2D PNG is disabled in the current command palette");
+    }
+    const downloadPromise = page.waitForEvent("download", { timeout });
+    try {
+      await command.click();
+      const download = await downloadPromise;
+      return await readPlanarExportDownload(download, expected);
+    } catch (error) {
+      await downloadPromise.catch(() => {});
+      throw error;
+    }
+  } finally {
+    if (await palette.isVisible().catch(() => false)) {
+      await page.keyboard.press("Escape").catch(() => {});
+    }
+  }
+};
+
 const selectToolbarOption = async (page, trigger, label, description) => {
   await trigger.click();
   const option = page.getByRole("option", { name: label, exact: true });
@@ -635,7 +746,12 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
     const canvas = await assertPlanarFieldMapCanvas(page);
     const requestedLayers = (planar.field_overlays ?? [])
       .filter((layer) => layer.raster_visible || layer.vectors_visible)
-      .map((layer) => ({ id: layer.id, quantity_id: layer.quantity_id }));
+      .map((layer) => ({
+        id: layer.id,
+        quantity_id: layer.quantity_id,
+        raster_visible: layer.raster_visible,
+        vectors_visible: layer.vectors_visible,
+      }));
     let composition = null;
     if (requestedLayers.length) {
       const handle = await page.waitForFunction((expected) => {
@@ -644,19 +760,43 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
         const slot = buffers.querySelector('[data-planar-composition-slot][aria-hidden="false"]');
         if (!slot) return null;
         const layers = expected.map((profile) => {
-          const node = [...slot.querySelectorAll("canvas[data-planar-overlay-layer='raster']")]
-            .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === profile.id);
-          if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0 ||
-              node.getAttribute("data-planar-overlay-quantity") !== profile.quantity_id ||
-              node.getAttribute("data-planar-overlay-rendered-current") !== "true") return null;
-          const evidence = JSON.parse(node.getAttribute("data-planar-overlay-rendered-evidence") ?? "null");
-          return evidence ? { ...profile, width: node.width, height: node.height, evidence } : null;
+          const surfaces = ["raster", "vectors"].map((kind) => {
+            const node = [...slot.querySelectorAll("canvas[data-planar-overlay-id]")]
+              .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === profile.id &&
+                candidate.getAttribute("data-planar-overlay-layer") === kind);
+            if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0 ||
+                node.getAttribute("data-planar-overlay-quantity") !== profile.quantity_id ||
+                node.getAttribute("data-planar-overlay-rendered-current") !== "true") return null;
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            if (rect.width <= 0 || rect.height <= 0 || style.display === "none" ||
+                style.visibility === "hidden" || Number(style.opacity) <= 0) return null;
+            const sample = node.getAttribute("data-planar-overlay-sample");
+            if (!sample || node.getAttribute("data-planar-overlay-rendered-sample") !== sample) return null;
+            const evidence = JSON.parse(node.getAttribute("data-planar-overlay-rendered-evidence") ?? "null");
+            if (!evidence || evidence.sampleIdentity !== sample) return null;
+            return { kind, width: node.width, height: node.height, sample_identity: sample };
+          });
+          return surfaces.every(Boolean) ? { ...profile, surfaces } : null;
         });
-        return layers.every(Boolean) ? { state: buffers.getAttribute("data-planar-composition-state"), layers } : null;
+        const actualIds = [...new Set([...slot.querySelectorAll("canvas[data-planar-overlay-id]")]
+          .map((node) => node.getAttribute("data-planar-overlay-id")).filter(Boolean))];
+        const expectedIds = expected.map((profile) => profile.id);
+        if (actualIds.length !== expectedIds.length || expectedIds.some((id) => !actualIds.includes(id))) return null;
+        return layers.every(Boolean) ? {
+          state: buffers.getAttribute("data-planar-composition-state"),
+          visible_slot: slot.getAttribute("data-planar-composition-slot"),
+          layers,
+        } : null;
       }, requestedLayers, { timeout });
       composition = await handle.jsonValue();
     }
     const screenshot = await capturePlanarFieldMapScreenshot(page);
+    const exportProof = await exportVisiblePlanarComposition(page, {
+      expectedFrame,
+      fieldRevision: meta.field_revision,
+      visibleLayers: composition?.layers ?? [],
+    });
     observation = {
       schema: "fullmag.docker-dev-planar-airbox-browser-proof.v1",
       state: "passed",
@@ -696,6 +836,7 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       canvas,
       composition,
       screenshot,
+      export: exportProof,
       display_state_patch_count: displayPatchRequestCount - patchStart,
       visualization_client_ack_request_count: visualizationClientAckRequestCount,
       blocked_mutation_count: blockedMutations.length,
@@ -1831,7 +1972,7 @@ const main = async () => {
   if (playwrightPackage.version !== expectedVersion || expectedVersion !== "1.62.1") {
     throw new Error(`Playwright package ${playwrightPackage.version} does not match ${expectedVersion}`);
   }
-  if (!canvasOnly && typeof PNG?.sync?.read !== "function") {
+  if ((!canvasOnly || expectPlanarAirbox) && typeof PNG?.sync?.read !== "function") {
     throw new Error("Pinned Playwright utilsBundle does not expose PNG.sync.read");
   }
   const sourceHashesBefore = await readHarnessSourceHashes();
