@@ -149,8 +149,8 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
     };
     use fullmag_authoring::{StudyInputPort, StudyInputSource, StudyPortDataKind};
     use fullmag_ir::{
-        BackendPlanIR, EnergyTermIR, ExecutionPlanIR, InitialMagnetizationIR, RelaxStopIR,
-        RelaxationAlgorithmIR, StudyIR,
+        BackendPlanIR, EnergyTermIR, ExecutionPlanIR, GeometryEntryIR, InitialMagnetizationIR,
+        RelaxStopIR, RelaxationAlgorithmIR, StudyIR,
     };
 
     let directory = tempfile::tempdir().unwrap();
@@ -158,6 +158,12 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
     let run = run_spec("cpu");
     let make_step = |step_id: &str, algorithm, field_tesla| {
         let mut problem = ProblemIR::bootstrap_example();
+        // One spin in a transverse field gives each solver a real update
+        // without making continuation depend on line search near equilibrium.
+        problem.geometry.entries[0] = GeometryEntryIR::Box {
+            name: "strip".into(),
+            size: [2e-9; 3],
+        };
         problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
             value: [1.0, 0.0, 0.0],
         });
@@ -165,19 +171,22 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
             "runtime_selection".into(),
             json!({"device": "cpu", "precision": "double", "source": "qualification_fixture"}),
         );
-        problem
-            .energy_terms
-            .push(EnergyTermIR::Zeeman { b: field_tesla });
-        let StudyIR::TimeEvolution { dynamics, sampling } = problem.study else {
+        problem.energy_terms = vec![EnergyTermIR::Zeeman { b: field_tesla }];
+        let StudyIR::TimeEvolution { dynamics, mut sampling } = problem.study else {
             panic!("expected the bootstrap dynamics fixture");
         };
+        sampling.outputs.clear();
         problem.study = StudyIR::Relaxation {
             algorithm,
             dynamics: (algorithm == RelaxationAlgorithmIR::LlgOverdamped).then_some(dynamics),
             stop: RelaxStopIR {
                 torque_tolerance_apm: Some(1e-4),
                 energy_tolerance_j: None,
-                max_steps: Some(10),
+                max_steps: Some(if algorithm == RelaxationAlgorithmIR::LlgOverdamped {
+                    10
+                } else {
+                    1
+                }),
                 max_relaxation_time_s: None,
             },
             sampling,
@@ -258,7 +267,9 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
         assert_eq!(
             result.status,
             fullmag_runner::RunStatus::Completed,
-            "{case}"
+            "{case}: completion={:?}, last step={:?}",
+            result.completion,
+            result.steps.last().map(|stats| (stats.step, stats.max_torque_Apm, stats.e_total)),
         );
         let initial = std::fs::read(output_dir.join("m_initial.json")).unwrap();
         let initial = decode_state("initial_state", &initial);
