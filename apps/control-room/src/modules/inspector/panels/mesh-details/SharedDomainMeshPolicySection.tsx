@@ -174,7 +174,17 @@ export function SharedDomainMeshPolicySection() {
   const validation = buildSharedDomainPolicyConfig(draft);
   const validationError = validation.ok ? null : validation.error;
 
-  const applyPolicy = async ({ silent = false } = {}) => {
+  const acknowledgePolicyDraft = useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    sessionScopeKey !== null && validationError === null,
+    undefined,
+    applyPolicy,
+    revert,
+  );
+
+  async function applyPolicy({ silent = false } = {}) {
     if (!sessionScopeKey || commandContext.isCurrentSessionScope?.() === false) {
       if (!silent) {
         setFeedback({
@@ -257,17 +267,7 @@ export function SharedDomainMeshPolicySection() {
     } finally {
       if (operationGuard.current === opId) setPending(false);
     }
-  };
-
-  const acknowledgePolicyDraft = useRegisterInspectorEditSession(
-    "staged",
-    pending,
-    dirty,
-    sessionScopeKey !== null && validationError === null,
-    undefined,
-    applyPolicy,
-    revert,
-  );
+  }
 
   const buildSharedDomain = async () => {
     if (!sessionScopeKey || pending || buildPending) return;

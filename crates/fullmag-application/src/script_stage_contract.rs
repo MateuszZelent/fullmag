@@ -85,6 +85,7 @@ struct ScriptMagnetizationAssignments {
     assignments: Vec<ScriptMagnetizationAssignment>,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct StageMagnetizationAssignments {
     pub(crate) ordered: Vec<ScriptMagnetizationAssignment>,
     independent_count: usize,
