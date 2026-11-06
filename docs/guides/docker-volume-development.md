@@ -786,6 +786,41 @@ native contract, explicit untracked inputs i brak startup Solve pozostają
 przypięte. Zdrowe API, bieżący native owner i fizyczne wykonanie solvera są
 oddzielnymi bramkami; pozytywny preview nie dowodzi ich ukończenia.
 
+### Odmowa po wznowieniu nieudanego buildu
+
+Wariant `cold-resume-restore-stored-budget` obejmuje odmowę polityki podczas
+`resume` po nieudanym development buildzie. Parent development pozostaje
+niezmienny; aktualne container ID, StartedAt, cgroup-ready i odmowa pochodzą
+z osobno uwierzytelnionego, bieżącego terminala resume. Zakończony native drain
+może należeć do iteracji, której późniejszy rebuild się nie powiódł. Wtedy
+wymagany jest również zakończony retained recreate, który usunął dokładnie
+historyczną parę kontenerów i zachował state root.
+
+```bash
+python3 -B scripts/docker_dev.py --repo-root <source> stop-preowner-policy-volume \
+  --variant cold-resume-restore-stored-budget \
+  --source-root <source> --attempt <parent-development-uuid> \
+  --resume-attempt <failed-resume-uuid> \
+  --config-sha256 <compose-sha256> --backend-container-id <full-container-id> \
+  --image-id <sha256:image-id> --drain-attempt <drained-then-failed-rebuild-uuid> \
+  --recreate-attempt <completed-historical-recreate-uuid>
+```
+
+Dozwolona różnica polityki obejmuje CPU i RAM wynikające z Compose oraz
+rzeczywistych limitów cgroup. SHA topologii musi dać się odtworzyć z dokładnego
+snapshotu CAS ledgeru i zmiany wyłącznie quota CPU. Serializacja odpowiada
+`CanonicalInventory` Rust. Affinity, fizyczna topologia CPU/GPU, host, epoch,
+revision i pozostałe budżety pozostają identyczne. Nieznana hierarchia cgroup,
+brak CAS, zmieniony owner/lease/run lub niezgodny hash odmawia operacji.
+
+Apply oraz kontynuacja używają wszystkich tych samych pinów i parametrów
+opisanych wyżej. Journal wiąże także resume i historyczny recreate; nie daje
+uprawnienia do odzyskania ownera. Kolejne odtworzenie korzysta ze zwykłego
+`recreate-volume`, bez `fresh-state` i bez skryptu aktywującego Solve.
+Zachowuje zapisany budżet, native contract i allowlist wejść. Późniejszy
+konsument budżetu weryfikuje archiwalne receipty drain/recreate; nowy poprawnie
+uruchomiony owner nie musi nadal mieć stanu historycznego `drained`.
+
 ## Zatrzymanie zbędnej kontroli rollbacków przed API
 
 Gdy opublikowany pakiet jest gotowy, lecz stary helper nadal sprawdza rollbacki,
