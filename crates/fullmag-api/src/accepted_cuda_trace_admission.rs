@@ -17,7 +17,7 @@ pub(crate) struct Config {
 pub(crate) fn config(parameters: &serde_json::Value) -> Result<Option<Config>> {
     let Some(value) = parameters.get(PARAMETER) else { return Ok(None); };
     let config: Config = serde_json::from_value(value.clone())?;
-    if config.schema_version != SCHEMA || !(4096..=268435456).contains(&config.max_bytes)
+    if config.schema_version != SCHEMA || !(4096..=536870912).contains(&config.max_bytes)
         || !(1..=120000).contains(&config.max_duration_ms) {
         bail!("CUDA trace requires accepted_cuda_trace.v1 and bounded byte/time limits");
     }
@@ -78,12 +78,25 @@ mod tests {
     }
 
     #[test]
+    fn largest_trace_budget_is_admitted_and_fully_reserved() {
+        for max_bytes in [67108864_u64, 134217728, 268435456, 536870912] {
+            let mut value = request();
+            value["max_bytes"] = json!(max_bytes);
+            let admitted = config(&json!({PARAMETER: value})).unwrap().unwrap();
+            assert_eq!(admitted.max_bytes, max_bytes);
+            assert!(output_storage_budget(Some(&admitted), max_bytes + 1024 * 1024).is_err());
+            assert_eq!(output_storage_budget(Some(&admitted), 1024 * 1024 * 1024).unwrap(),
+                       1024 * 1024 * 1024 - max_bytes - 1024 * 1024);
+        }
+    }
+
+    #[test]
     fn absence_is_off_and_the_request_is_strict_and_bounded() {
         assert!(config(&json!({})).unwrap().is_none());
         let value = request();
         assert_eq!(request_digest(&value).unwrap(), fullmag_session::canonical_json_sha256(&value));
         for (key, bad) in [("max_bytes", json!(true)), ("max_bytes", json!(4095)),
-            ("max_bytes", json!(268435457)), ("max_duration_ms", json!(0)),
+            ("max_bytes", json!(536870913)), ("max_duration_ms", json!(0)),
             ("max_duration_ms", json!(120001)), ("max_duration_ms", json!(1.5)),
             ("schema_version", json!("future")), ("enabled", json!(true))] {
             let mut changed = value.clone(); changed[key] = bad;

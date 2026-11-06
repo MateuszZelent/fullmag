@@ -1,10 +1,13 @@
 """Bounded trace interpretation; no CUDA or solver execution."""
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from scripts import analyze_accepted_cuda_trace as trace_analyzer
 from scripts.analyze_accepted_cuda_trace import analyze, TraceError
 
 
@@ -85,6 +88,92 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         (self.root / "worker_execution_started.v1.json").write_bytes(encoded({"identity": {}}))
         with self.assertRaises(TraceError): self.read()
 
+    def test_512_mib_boundary_is_accepted_without_large_reads_or_allocation(self):
+        self.receipt["config"]["max_bytes"] = 536870912
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(self.receipt["config"])).hexdigest()
+        self.header["max_bytes"] = 536870912
+        self.publish([self.event("kernel", 110, 180)])
+
+        real_regular = trace_analyzer.regular
+        requested_line_sizes = []
+
+        @contextmanager
+        def guarded_regular(path, limit):
+            with real_regular(path, limit) as (stream, size):
+                if Path(path).name != self.receipt["trace_file"]:
+                    yield stream, size
+                    return
+
+                class ReadlineOnly:
+                    def readline(_self, size=-1):
+                        requested_line_sizes.append(size)
+                        if size < 0 or size > trace_analyzer.MAX_LINE_BYTES + 1:
+                            raise AssertionError("trace reader requested an unbounded line")
+                        return stream.readline(size)
+
+                yield ReadlineOnly(), size
+
+        with patch.object(trace_analyzer, "regular", guarded_regular):
+            result = self.read()
+
+        self.assertEqual(result["records"], 1)
+        self.assertTrue(requested_line_sizes)
+        self.assertEqual(set(requested_line_sizes), {trace_analyzer.MAX_LINE_BYTES + 1})
+
+    def test_analyzer_rejects_byte_budget_one_byte_above_512_mib(self):
+        self.publish([self.event("kernel", 110, 180)])
+        self.receipt["config"]["max_bytes"] = 536870913
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(self.receipt["config"])).hexdigest()
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "invalid byte budget"):
+            self.read()
+
+    def test_complete_large_metadata_trace_exceeds_old_record_cap_without_large_file(self):
+        # A complete native trace can contain over one million short records
+        # within 512 MiB. Generate its byte stream lazily rather than writing it.
+        count = 1_000_001
+        self.receipt["config"]["max_bytes"] = 536870912
+        self.receipt["config_sha256"] = hashlib.sha256(encoded(self.receipt["config"])).hexdigest()
+        self.header["max_bytes"] = 536870912
+        self.header["activity_kinds"].append("cuda_event_metadata")
+        event = self.event("cuda_event_metadata", 0, 0, "cuda_event_record",
+            timestamps_valid=False, timestamp_status="not_applicable", activity_kind=36,
+            event_id=1234567, context_id=1, stream_id=7)
+        self.publish([event])
+        header, record = encoded(self.header) + b"\n", encoded(event) + b"\n"
+        size = len(header) + count * len(record)
+        self.assertLessEqual(size, self.receipt["config"]["max_bytes"])
+        digest = hashlib.sha256(header)
+        for _ in range(count):
+            digest.update(record)
+        self.receipt.update(trace_size_bytes=size, trace_sha256=digest.hexdigest())
+        self.receipt["native"]["stats"].update(records_written=count, bytes_written=size)
+        self.save_receipt()
+        real_regular = trace_analyzer.regular
+
+        @contextmanager
+        def virtual_regular(path, limit):
+            if Path(path).name != self.receipt["trace_file"]:
+                with real_regular(path, limit) as value:
+                    yield value
+                return
+
+            class RepeatedLines:
+                index = -1
+
+                def readline(_self, bound):
+                    self.assertEqual(bound, trace_analyzer.MAX_LINE_BYTES + 1)
+                    _self.index += 1
+                    return header if _self.index == 0 else record if _self.index <= count else b""
+
+            yield RepeatedLines(), size
+
+        with patch.object(trace_analyzer, "regular", virtual_regular):
+            result = self.read()
+        self.assertEqual(result["records"], count)
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["observed_gpu_union_ns"], 0)
+
     def test_partial_is_preserved_and_complete_with_loss_is_rejected(self):
         self.receipt["native"]["stats"]["dropped_records"] = 3
         self.receipt["native"]["stats"]["limit_flags"] = 2
@@ -164,7 +253,7 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.receipt["native"]["stats"]["bytes_written"] = len(raw)-1
         self.receipt["trace_sha256"] = hashlib.sha256(raw[:-1]).hexdigest(); self.save_receipt()
         with self.assertRaises(TraceError): self.read()
-        self.receipt["trace_size_bytes"] = 268435457; self.save_receipt()
+        self.receipt["trace_size_bytes"] = 536870913; self.save_receipt()
         with self.assertRaises(TraceError): self.read()
 
 

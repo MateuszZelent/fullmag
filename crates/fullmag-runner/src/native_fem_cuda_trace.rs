@@ -43,7 +43,7 @@ pub struct FemCudaTrace {
 
 impl FemCudaTrace {
     pub fn start(file: &File, max_bytes: u64, max_duration_ms: u32) -> Result<Self, String> {
-        if !(4096..=268435456).contains(&max_bytes) || !(1..=120000).contains(&max_duration_ms) {
+        if !(4096..=536870912).contains(&max_bytes) || !(1..=120000).contains(&max_duration_ms) {
             return Err("CUDA trace byte/time budget is invalid".into());
         }
         #[cfg(all(unix, any(feature = "fem-native", feature = "fem-gpu")))]

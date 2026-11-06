@@ -252,7 +252,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "no unique exact rejected activation receipt"):
                 namespace["rejected_startup_marker"](status, (legacy_session_id, 1, 1))
 
-            for max_bytes in (67108864, 134217728):
+            for max_bytes in (67108864, 134217728, 536870912):
                 trace["max_bytes"] = max_bytes
                 expected_trace_sha256 = canonical_sha256(trace)
                 session_material = (
@@ -265,7 +265,7 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                 self.assertEqual(accepted["solver_profile_sha256"], profile_sha256)
                 self.assertEqual(accepted["cuda_trace_sha256"], expected_trace_sha256)
 
-            trace["max_bytes"] = 134217727
+            trace["max_bytes"] = 536870911
             marker_path.write_text(json.dumps(marker), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "cuda trace"):
                 namespace["rejected_startup_marker"](status, (session_id, 1, 1))

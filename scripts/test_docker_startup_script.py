@@ -33,7 +33,7 @@ def _solver_profile_wrapper() -> dict[str, object]:
 def _cuda_trace_wrapper() -> dict[str, object]:
     return {
         "schema_version": "accepted_cuda_trace.v1",
-        "max_bytes": 134217728,
+        "max_bytes": 536870912,
         "max_duration_ms": 60000,
     }
 
@@ -161,24 +161,32 @@ class DockerStartupScriptTests(unittest.TestCase):
         }
         self.assertEqual(startup.validate_activation_response(response, authorization), response)
 
-    def test_cuda_trace_hash_and_request_preserve_the_historical_64_mib_wrapper(self) -> None:
-        legacy_trace = {
+    def test_cuda_trace_hash_and_request_preserve_exact_legacy_and_current_wrappers(self) -> None:
+        legacy_64 = {
             "schema_version": "accepted_cuda_trace.v1",
             "max_bytes": 67108864,
             "max_duration_ms": 60000,
         }
-        current_trace = _cuda_trace_wrapper()
-
-        self.assertEqual(startup._validate_cuda_trace(legacy_trace, "test"), legacy_trace)
-        self.assertEqual(
-            startup.cuda_trace_sha256(legacy_trace),
-            "b4bcad66b67ece494bead3265b89d1541358869d2d510b63520b238b45e2152d",
+        legacy_128 = {
+            "schema_version": "accepted_cuda_trace.v1",
+            "max_bytes": 134217728,
+            "max_duration_ms": 60000,
+        }
+        current_512 = _cuda_trace_wrapper()
+        cases = (
+            (legacy_64, "b4bcad66b67ece494bead3265b89d1541358869d2d510b63520b238b45e2152d"),
+            (legacy_128, "046b402ff3c0ad94bd0bbfec7d8ba444774b9e6c7bacdfeec3b4cc4f10f28893"),
+            (current_512, "ee2a5de0e9a18a03935e0c384b1f21983d658ed591c28ab1279415605d92ea38"),
         )
-        self.assertEqual(startup._validate_cuda_trace(current_trace, "test"), current_trace)
-        self.assertNotEqual(
-            startup.cuda_trace_sha256(legacy_trace),
-            startup.cuda_trace_sha256(current_trace),
-        )
+        digests = []
+        for wrapper, expected_digest in cases:
+            with self.subTest(max_bytes=wrapper["max_bytes"]):
+                validated = startup._validate_cuda_trace(wrapper, "test")
+                self.assertEqual(validated, wrapper)
+                actual_digest = startup.cuda_trace_sha256(validated)
+                self.assertEqual(actual_digest, expected_digest)
+                digests.append(actual_digest)
+        self.assertEqual(len(set(digests)), len(cases))
 
         authorization = {
             "schema": startup.AUTHORIZATION_SCHEMA,
@@ -199,13 +207,13 @@ class DockerStartupScriptTests(unittest.TestCase):
                 "wait_for_solve": "script_metadata",
                 "legacy_cli": False,
             },
-            "cuda_trace": legacy_trace,
+            "cuda_trace": legacy_64,
         }
         request = startup.build_activation_request(authorization)
-        self.assertEqual(request["cuda_trace"], legacy_trace)
+        self.assertEqual(request["cuda_trace"], legacy_64)
         started = startup._activation_receipt_started(authorization, "2" * 64)
         self.assertTrue(startup._receipt_identity_matches(started, authorization, "2" * 64))
-        changed_authorization = {**authorization, "cuda_trace": current_trace}
+        changed_authorization = {**authorization, "cuda_trace": current_512}
         self.assertFalse(
             startup._receipt_identity_matches(started, changed_authorization, "2" * 64)
         )
@@ -222,11 +230,12 @@ class DockerStartupScriptTests(unittest.TestCase):
 
         for mutation in (
             None,
-            {"schema_version": "accepted_cuda_trace.v2", "max_bytes": 134217728, "max_duration_ms": 60000},
+            {"schema_version": "accepted_cuda_trace.v2", "max_bytes": 536870912, "max_duration_ms": 60000},
             {"schema_version": "accepted_cuda_trace.v1", "max_bytes": True, "max_duration_ms": 60000},
-            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 134217728, "max_duration_ms": 60000, "enabled": True},
-            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 134217727, "max_duration_ms": 60000},
-            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 134217728, "max_duration_ms": 60000.0},
+            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 536870912, "max_duration_ms": 60000, "enabled": True},
+            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 536870911, "max_duration_ms": 60000},
+            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 536870913, "max_duration_ms": 60000},
+            {"schema_version": "accepted_cuda_trace.v1", "max_bytes": 536870912, "max_duration_ms": 60000.0},
         ):
             with self.subTest(wrapper=mutation), self.assertRaisesRegex(
                 startup.StartupScriptError, "cuda trace"

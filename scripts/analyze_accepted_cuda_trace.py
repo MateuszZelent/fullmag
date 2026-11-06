@@ -17,8 +17,11 @@ from pathlib import Path
 import stat
 import sys
 
-MAX_BYTES = 268435456
-MAX_RECORDS = 1000000
+MAX_BYTES = 536870912
+# Even the legacy native v1 activity envelope exceeds 256 bytes without a
+# name. Keep an independent finite bound that covers every admitted file;
+# interval storage scales with this bound, while file reads remain streaming.
+MAX_RECORDS = MAX_BYTES // 256
 MAX_NAMES = 2048
 MAX_LINE_BYTES = 16384
 LEGACY_KINDS = ("driver_api", "runtime_api", "kernel", "memcpy", "memset", "synchronization", "memory")

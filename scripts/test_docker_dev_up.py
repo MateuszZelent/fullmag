@@ -213,7 +213,7 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         )
         trace = {
             "schema_version": "accepted_cuda_trace.v1",
-            "max_bytes": 134217728,
+            "max_bytes": 536870912,
             "max_duration_ms": 60000,
         }
         trace_sha256 = hashlib.sha256(

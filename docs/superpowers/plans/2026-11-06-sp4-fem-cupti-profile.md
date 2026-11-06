@@ -16,7 +16,7 @@
 - Profil domyślnie nieaktywny; kompilacja obsługi przy dostępnych CUDA/CUPTI nie aktywuje API. CPU i nieobsługiwana wersja CUPTI mają jawny wynik unavailable.
 - Nie zmieniać modelu, materiałów, siatki, m0, integratora, tolerancji, timestepów, operatorów ani zapisu naukowego. Nie dodawać `cudaDeviceSynchronize` dla pomiaru.
 - Accepted trace wymaga native FEM strict/double z jawnym GPU i bez fallbacku; weryfikacja przed acceptance i ponownie po materializacji planu.
-- Osobny wrapper `accepted_cuda_trace.v1`: pierwotny CLI preset64MiB; po pomiarze SP4 podnieść domyślny limit do128MiB, zachowując walidację i niezmienione hashe historycznych wrapperów64MiB. `max_duration_ms=60000`; limity ABI4096..268435456 B i1..120000ms. Osiem prealokowanych buforów po1MiB.
+- Osobny wrapper `accepted_cuda_trace.v1`: CLI preset 512 MiB po kalibracji rozmiaru śladu SP4, z zachowaniem niezmienionych wrapperów i digestów 64/128 MiB. `max_duration_ms=60000`; limity ABI 4096..536870912 B i 1..120000 ms. Osiem prealokowanych buforów po 1 MiB; limit pliku nie powiększa puli RAM.
 - Wynik: ograniczony NDJSON `worker_cuda_trace.v1.ndjson` oraz immutable `worker_cuda_trace.v1.json` w dokładnym attempt output directory. Żadnych serializowanych wskaźników do CUPTI; adresy alokacji tylko jako liczby diagnostyczne.
 - Receipt wiąże config digest, accepted attempt identity, PID, GPU UUID, outcome solvera, status/limity/dropped/overhead i SHA pliku. Brak receipt albo przekroczony limit oznacza partial/failed trace, nie pełny dowód.
 - Wszystkie buildy w stałym backendzie właściwej grupy przez launcher; wejścia44, Zarr, ledger i cudze zmiany pozostają chronione.
@@ -171,3 +171,66 @@ i 36 711 181 B w pierwszej próbie. Estymacja siedmiu takich kroków to
 capture. Limit 128 MiB jest za mały; przed kolejną parą trzeba zwiększyć
 ograniczony budżet i zachować zgodność poprzednich wrapperów. Accepted capture
 poprawionej wersji pozostaje do weryfikacji.
+
+Kolejny etap zwiększa cap ABI, wrappera Rust, admission i analizatora do
+512 MiB, a CLI dopuszcza dokładnie presety 64/128/512 MiB. Budżet nie jest
+nieograniczony: admission nadal odejmuje pełny cap i 1 MiB receipt od lease
+przed uruchomieniem solvera. Poprzedni accepted worker miał lease 7 GiB;
+przy nowym cap pozostałoby 6 978 273 280 B na output solvera. To dowód dla
+tego przydziału, a nie gwarancja minimalnego lease każdego przyszłego runu.
+Test natywny ma przyjąć maksymalny cap bez alokowania pliku tej wielkości
+i odrzucić cap+1; test admission sprawdza również rezerwację całego limitu.
+Limit analizatora wynosi teraz 2 097 152 rekordy: nawet starsza natywna
+koperta rekordu przekracza 256 B, więc mieści wszystkie rekordy dopuszczone
+przez cap 512 MiB. Odczyt pozostaje liniowy; pamięć na przedziały czasowe
+rośnie z ograniczoną liczbą rekordów. Regresja używa wirtualnego strumienia
+1 000 001 rekordów metadata, bez zapisu dużego pliku na dysku.
+
+## Dłuższy capture — awaria procesu 06.11.2026
+
+Snapshot `f3919daaacc78151afd52f6f750f15ed8172d859f77596b8cd27a5f25119f8d5`
+i biblioteka `bcd7d8b5ef83ef42d131c958a189d038ee866761701694960b8e73a2cc13e5f9`
+przeszły managed build oraz krótki native contract
+`5202c90a3acb43c580224a35eaa1a03f` (3,706 s). Wariant bez profilera ukończył
+7 kroków / 50 fs i zapisał Zarr. Wariant z limitem 512 MiB zakończył proces
+sygnałem 11 (`SIGSEGV`) po ostatnio obserwowanym kroku 3 / 7 fs.
+Nie jest to zgłoszenie CUDA 719 ani potwierdzenie przyczyny starszej awarii.
+
+Zachowano 112192533 B częściowego NDJSON, ostatnie dostępne pole oraz receipt
+wyjścia workera `attempt-422eb800fea64557b4775061497ead79`. Nie powstał końcowy
+receipt trace ani Zarr. Core dump był wyłączony (limit 0); stack jest niedostępny.
+Nie powtórzono aktywacji. PR pozostaje draft i nie ma kwalifikacji pełnego profilu.
+
+Kolektor API24 odmawia bufora, gdy osiem slotów jest zajętych, oraz podczas
+disable/flush. NVIDIA dokumentuje naprawę awarii po odmowie bufora w CUDA12.9
+([release notes](https://docs.nvidia.com/cupti/12.9.1/release-notes/release-notes.html)).
+To potwierdzona klasa ryzyka, lecz jeszcze nie przyczyna tej konkretnej próby.
+Następna bramka dodaje jednorazowe komunikaty przy obu odmowach i gęsty workload
+CUDA z długimi nazwami. Sama większa pula nie dowodzi bezpieczeństwa odmowy;
+nie wolno przyjmować kompletności ani poprawy wydajności na podstawie partial.
+
+Gęsta bramka przeszła na snapshocie
+`ba37da787f4049464ee8d7f98c62599644009358cc65fad86fd7d08ad495f0c1`:
+50000 launchy, 112513 rekordów, 144727169 B i wszystkie liczniki strat/błędów 0.
+Native attempt `1d088345920941029eff9da68ce9094b` trwał 4,818 s; biblioteka
+`7d8e7892c6aec7f46080771f7dd5bbb4865786d70ebd58cdb88110094a496c44`.
+Nie odtworzyła więc nasycenia występującego w rzeczywistym SP4.
+
+Jedna nowa próba SP4 z tą diagnostyką ponownie zakończyła się SIGSEGV po
+kroku 3 / 7 fs. Receipt workera `attempt-d59e9b4851e843e7baa4b7fb24de4347`
+zawiera `cuda_activity_trace: refusing buffer: all 8 slots occupied` tuż przed
+awarią. Załadowana biblioteka CUPTI zwraca API24, zgodnie z dekoderem.
+Potwierdzono odmowę bufora i powtórzenie tej samej klasy awarii opisanej przez
+producenta; stos awarii nadal nie jest dostępny. Nie przenosi to diagnozy na
+historyczny CUDA719. Zwiększenie limitu pliku nie naprawia odmowy bufora.
+
+Obie ostatnie klatki odzyskano do osobnych Zarr v2 (step3, 7fs, m oraz9pól,
+skalary, mesh, skrypty i13plików provenance). Zwykły czytnik Zarr2.18.3
+potwierdził shape, wartości skalarów, SHA wszystkich pól i osadzonych plików.
+Każdy artefakt ma `completed=false`, `full_trajectory=false` oraz sąsiedni `.py`;
+nie jest końcowym wynikiem solvera ani dowodem odtworzenia UI.
+
+Następny etap: oddzielnie przypięta CUPTI12.9.79/API28 z kontrolą wersji
+załadowanej biblioteki, przy zachowaniu CUDA12.6 oraz MFEM/hypre solvera.
+Wymagane są testy kontrolowanego wyczerpania puli, zgodnego dekodowania i
+nowy accepted capture. Pełne profilowanie oraz merge PR408 nadal oczekują.

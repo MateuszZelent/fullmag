@@ -75,10 +75,10 @@ SOLVER_PROFILE_PRESET = {
 CUDA_TRACE_SCHEMA = "accepted_cuda_trace.v1"
 CUDA_TRACE_PRESET = {
     "schema_version": CUDA_TRACE_SCHEMA,
-    "max_bytes": 134217728,
+    "max_bytes": 536870912,
     "max_duration_ms": 60000,
 }
-CUDA_TRACE_LEGACY_MAX_BYTES = 67108864
+CUDA_TRACE_COMPAT_MAX_BYTES = frozenset({67108864, 134217728})
 STARTUP_RECEIPT_KEY_ENV = "FULLMAG_STARTUP_RECEIPT_KEY"
 STARTUP_RECEIPT_ROOT = Path("/opt/fullmag/control/backend")
 PROVENANCE_SHA256_ENV = "FULLMAG_STARTUP_PROVENANCE_SHA256"
@@ -445,14 +445,14 @@ def _validate_cuda_trace(value: object, label: str) -> dict[str, Any]:
         raise StartupScriptError(f"{label} cuda trace schema is unsupported")
     max_bytes = value.get("max_bytes")
     if (type(max_bytes) is not int
-            or max_bytes not in {CUDA_TRACE_LEGACY_MAX_BYTES, CUDA_TRACE_PRESET["max_bytes"]}):
+            or max_bytes not in {*CUDA_TRACE_COMPAT_MAX_BYTES, CUDA_TRACE_PRESET["max_bytes"]}):
         raise StartupScriptError(f"{label} cuda trace preset differs at max_bytes")
     max_duration_ms = value.get("max_duration_ms")
     if (type(max_duration_ms) is not int
             or max_duration_ms != CUDA_TRACE_PRESET["max_duration_ms"]):
         raise StartupScriptError(f"{label} cuda trace preset differs at max_duration_ms")
-    # Preserve the exact accepted wrapper so historical 64 MiB request and
-    # session digests remain stable while new opt-ins use the 128 MiB preset.
+    # Preserve the exact accepted wrapper so historical 64/128 MiB request
+    # and session digests remain stable while new opt-ins use the 512 MiB preset.
     return dict(value)
 
 

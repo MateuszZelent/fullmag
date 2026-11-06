@@ -71,6 +71,8 @@ struct ActivityTrace {
     std::atomic<bool> writer_done{false};
     std::atomic<uint64_t> callbacks_in_flight{0};
     std::atomic<bool> collector_poisoned{false};
+    std::atomic<bool> reported_closed_buffer_request{false};
+    std::atomic<bool> reported_exhausted_buffer_request{false};
     std::atomic<int> output_fd{-1};
     std::atomic<uint64_t> max_bytes{0};
     std::atomic<uint64_t> start_timestamp_ns{0};
@@ -130,6 +132,11 @@ void CUPTIAPI buffer_requested(uint8_t **buffer, size_t *size, size_t *max_recor
     *size = 0;
     *max_records = 0;
     if (!g_trace.callbacks_accepting.load(std::memory_order_acquire)) {
+        if (!g_trace.reported_closed_buffer_request.exchange(true, std::memory_order_relaxed)) {
+            // Keep a bounded breadcrumb even if CUPTI faults before stop can write its receipt.
+            constexpr char message[] = "cuda_activity_trace: refusing buffer: collection closed\n";
+            (void)::write(STDERR_FILENO, message, sizeof(message) - 1);
+        }
         if (g_trace.active.load(std::memory_order_acquire)) {
             increment(g_trace.counts.buffer_starvations);
             increment(g_trace.counts.dropped_records);
@@ -151,6 +158,10 @@ void CUPTIAPI buffer_requested(uint8_t **buffer, size_t *size, size_t *max_recor
     }
     increment(g_trace.counts.buffer_starvations);
     increment(g_trace.counts.dropped_records);
+    if (!g_trace.reported_exhausted_buffer_request.exchange(true, std::memory_order_relaxed)) {
+        constexpr char message[] = "cuda_activity_trace: refusing buffer: all 8 slots occupied\n";
+        (void)::write(STDERR_FILENO, message, sizeof(message) - 1);
+    }
 }
 
 void CUPTIAPI buffer_completed(CUcontext, uint32_t, uint8_t *buffer, size_t, size_t valid_size) {
@@ -730,6 +741,8 @@ void reset_capture(ActivityTrace &trace) {
     trace.counts.io_errors.store(0);
     trace.counts.limit_flags.store(0);
     trace.stop_requested.store(false);
+    trace.reported_closed_buffer_request.store(false);
+    trace.reported_exhausted_buffer_request.store(false);
     trace.active.store(false);
     trace.callbacks_accepting.store(false);
     trace.flush_complete.store(false);
