@@ -10,6 +10,7 @@
 #include "core/demag_linear_solve_validation.hpp"
 #include "core/demag_solver_policy.hpp"
 #include "core/fem_material_runtime.hpp"
+#include "cuda_demag_residual_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
@@ -2834,12 +2835,28 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     check(cudaDeviceSynchronize() == cudaSuccess,
           "mixed-P1 Robin device Hypre step must synchronize for test readback");
     const auto after = fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    const auto control_bytes = after.hot_loop_control_scalar_d2h_bytes -
+                               before.hot_loop_control_scalar_d2h_bytes;
+    const auto control_fences = after.hot_loop_control_scalar_host_sync_count -
+                                before.hot_loop_control_scalar_host_sync_count;
+    std::fprintf(stderr,
+                 "mixed-P1 GPU validation readbacks: bc=%d control_bytes=%llu control_fences=%llu\n",
+                 ctx.demag.realization,
+                 static_cast<unsigned long long>(control_bytes),
+                 static_cast<unsigned long long>(control_fences));
+    // Aggregate counters include the explicitly classified scalar readbacks.
+    // Each of the two solves can read at most the RHS and residual norms.
+    check(control_fences <= 4u && control_bytes == control_fences * sizeof(double),
+          "mixed-P1 GPU validation may read only one scalar per required norm");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
-              after.hot_loop_d2h_bytes == before.hot_loop_d2h_bytes &&
-              after.hot_loop_host_sync_count == before.hot_loop_host_sync_count &&
+              after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&
+              after.hot_loop_host_sync_count - before.hot_loop_host_sync_count == control_fences &&
               after.hot_loop_compute_h2d_bytes == before.hot_loop_compute_h2d_bytes &&
               after.hot_loop_compute_d2h_bytes == before.hot_loop_compute_d2h_bytes &&
-              after.hot_loop_compute_host_sync_count == before.hot_loop_compute_host_sync_count,
+              after.hot_loop_compute_host_sync_count == before.hot_loop_compute_host_sync_count &&
+              after.hot_loop_exchange_h2d_bytes == before.hot_loop_exchange_h2d_bytes &&
+              after.hot_loop_exchange_d2h_bytes == before.hot_loop_exchange_d2h_bytes &&
+              after.hot_loop_exchange_host_sync_count == before.hot_loop_exchange_host_sync_count,
           "mixed-P1 device Hypre field step must have zero bulk hot-loop transfer/sync delta");
 
     std::vector<double> gpu_field;
@@ -2901,6 +2918,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
     fullmag::fem::context_destroy_poisson(ctx);
     }
+    fullmag::fem::test::check_gpu_hypre_demag_residual(check);
 }
 #endif
 

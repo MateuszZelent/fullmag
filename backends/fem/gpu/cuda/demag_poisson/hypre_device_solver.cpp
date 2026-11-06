@@ -18,6 +18,8 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -26,12 +28,16 @@
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 #include <HYPRE_utilities.h>
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <HYPRE_parcsr_mv.h>
+#endif
 #endif
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace fullmag::fem {
 
@@ -354,29 +360,97 @@ bool validate_demag_poisson_hypre_device_solve(
     bool residual_independently_certified = false;
     double absolute_residual = 0.0;
     double rhs_norm = 0.0;
-    if (validation_needs.rhs_norm && workspace.b_par != nullptr) {
-        rhs_norm = workspace.b_par->Norml2();
+    if (validation_needs.rhs_norm) {
+#if FULLMAG_HAS_CUDA_RUNTIME
+        const auto &interop = workspace.stream_interop;
+        if (!interop.ready || interop.hypre_stream == nullptr ||
+            workspace.b_par == nullptr || workspace.residual == nullptr ||
+            workspace.b_par->Size() <= 0 ||
+            workspace.b_par->Size() != workspace.residual->Size() ||
+            (validation_needs.independent_residual &&
+             (workspace.A_par == nullptr || workspace.x_par == nullptr))) {
+            error = "GPU Poisson demag residual validation requires initialized device vectors and HYPRE stream";
+            return false;
+        }
+        const cudaStream_t stream = interop.hypre_stream;
+        const auto reject_queued_work = [&](std::string message) {
+            // The stage may clear the candidate on the Fullmag stream after
+            // failure. A rejected matvec can still have queued HYPRE work.
+            const auto status = cudaStreamSynchronize(stream);
+            error = std::move(message);
+            if (status != cudaSuccess) {
+                error += std::string("; synchronize HYPRE validation stream failed: ") +
+                         cudaGetErrorString(status);
+            }
+            return false;
+        };
+
+        const int rows = workspace.b_par->Size();
+        const auto memory_class = mfem::GetHypreMemoryClass();
+        workspace.b_par->HypreRead();
+        const double *rhs_data = workspace.b_par->GetMemory().Read(memory_class, rows);
+        // The owned residual vector is private to validation. Its first
+        // entry can hold the scalar before the matvec overwrites the vector.
+        workspace.residual->HypreWrite();
+        double *scratch = workspace.residual->GetMemory().Write(memory_class, rows);
+        const auto read_validation_norm = [&](const double *values, const char *name,
+                                              double &norm) {
+            const auto status = fullmag_cuda_demag_validation_norm(
+                values, rows, scratch, norm, stream);
+            if (status != cudaSuccess) {
+                return reject_queued_work(std::string("GPU Poisson demag ") + name +
+                                          " norm failed: " + cudaGetErrorString(status));
+            }
+            record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(norm));
+            GpuPerformanceCounterDelta readback_delta{};
+            readback_delta.control_fences = 1;
+            readback_delta.control_d2h_bytes = sizeof(norm);
+            gpu_performance_note(ctx.gpu_state.performance_counters, readback_delta);
+            if (!std::isfinite(norm)) {
+                error = std::string("GPU Poisson demag ") + name + " norm is nonfinite";
+                return false;
+            }
+            return true;
+        };
+        if (!read_validation_norm(rhs_data, "RHS", rhs_norm)) {
+            return false;
+        }
         GpuPerformanceCounterDelta performance_delta{};
         performance_delta.demag_rhs_norm_evaluations = 1;
         performance_delta.demag_rhs_norm_sum = rhs_norm;
         gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
-    }
-    if (validation_needs.independent_residual &&
-        workspace.A_par != nullptr &&
-        workspace.x_par != nullptr &&
-        workspace.b_par != nullptr &&
-        workspace.residual != nullptr) {
-        workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
-#if FULLMAG_HAS_CUDA_RUNTIME
-        if (!mfem_default_stream_wait_for_hypre_validation(
-                workspace.stream_interop, error)) {
-            return false;
+
+        if (validation_needs.independent_residual) {
+            const HYPRE_Int prior_status = HYPRE_GetError();
+            if ((prior_status & ~HYPRE_ERROR_CONV) != 0) {
+                error = "GPU Poisson demag residual validation found HYPRE status " +
+                        std::to_string(prior_status);
+                return false;
+            }
+            const HYPRE_Int matvec_status =
+                workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
+            if (matvec_status != 0) {
+                return reject_queued_work("GPU Poisson demag residual matvec failed: HYPRE status " +
+                                          std::to_string(matvec_status));
+            }
+            const HYPRE_Int axpy_status = HYPRE_ParVectorAxpy(
+                -1.0, *workspace.b_par, *workspace.residual);
+            // AXPY returns the sticky HYPRE status, including an earlier
+            // nonconvergence bit. Certification must still detect new errors.
+            if ((axpy_status & ~(prior_status & HYPRE_ERROR_CONV)) != 0) {
+                return reject_queued_work("GPU Poisson demag residual AXPY failed: HYPRE status " +
+                                          std::to_string(axpy_status));
+            }
+            if (!read_validation_norm(scratch, "residual", absolute_residual)) {
+                return false;
+            }
+            residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
+            residual_independently_certified = true;
         }
+#else
+        error = "GPU Poisson demag residual validation requires CUDA stream interop";
+        return false;
 #endif
-        workspace.residual->Add(-1.0, *workspace.b_par);
-        absolute_residual = workspace.residual->Norml2();
-        residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
-        residual_independently_certified = std::isfinite(absolute_residual);
     }
 
     DemagLinearSolveResult result;

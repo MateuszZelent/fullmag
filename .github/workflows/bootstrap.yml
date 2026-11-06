@@ -1080,6 +1080,9 @@ jobs:
       - name: Verify canonical source snapshot identity
         run: python -m pytest -q scripts/test_capture_source_snapshot_identity.py
 
+      - name: Verify managed Make native contract ordering
+        run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
+
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |
           python -c "import gmsh"
