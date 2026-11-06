@@ -288,6 +288,31 @@ class DockerDevDefaultsTests(unittest.TestCase):
         self.assertEqual(forwarded.request_id, "stable-request")
         self.assertEqual(forwarded.script, Path("examples/model.py"))
 
+    def test_discovered_activation_forwards_cuda_trace_only_when_requested(self) -> None:
+        pins = defaults.ScriptPins("a" * 32, "b" * 64, self.worktree, 3197)
+        args = argparse.Namespace(
+            repo_root=self.main, source_root=None, port=None,
+            script=Path("examples/model.py"), request_id="stable-trace-request",
+            cuda_trace=True,
+        )
+        with patch.object(defaults, "resolve_defaults", return_value=defaults.ScriptDefaults(self.worktree, 3197)), \
+                patch.object(defaults, "_discover_pins", return_value=pins), \
+                patch("docker_dev._require_native_windows", side_effect=AssertionError("legacy Windows gate")), \
+                patch("docker_volume_activate.activate") as activate:
+            defaults.activate_discovered(args)
+        self.assertTrue(activate.call_args.args[0].cuda_trace)
+
+        args = argparse.Namespace(
+            repo_root=self.main, source_root=None, port=None,
+            script=Path("examples/model.py"), request_id="stable-trace-request",
+        )
+        with patch.object(defaults, "resolve_defaults", return_value=defaults.ScriptDefaults(self.worktree, 3197)), \
+                patch.object(defaults, "_discover_pins", return_value=pins), \
+                patch("docker_dev._require_native_windows", side_effect=AssertionError("legacy Windows gate")), \
+                patch("docker_volume_activate.activate") as activate:
+            defaults.activate_discovered(args)
+        self.assertFalse(activate.call_args.args[0].cuda_trace)
+
     def test_just_keeps_discovery_and_pinned_activation_as_distinct_routes(self) -> None:
         root = Path(__file__).resolve().parents[1]
         justfile = (root / "justfile").read_text(encoding="utf-8")

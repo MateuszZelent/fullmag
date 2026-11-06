@@ -8,6 +8,8 @@ option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
 option(FULLMAG_ENABLE_NVTX "Enable phase-level FEM GPU NVTX ranges" OFF)
 option(FULLMAG_FEM_REQUIRE_GPU "Fail configuration unless FEM GPU can be built" OFF)
+option(FULLMAG_ENABLE_CUPTI_ACTIVITY_TRACE
+    "Build optional CUPTI Activity API 24 tracing when CUDA toolkit support is available" ON)
 include("${CMAKE_SOURCE_DIR}/cmake/RequireFemGpu.cmake")
 fullmag_require_fem_gpu_configuration()
 
@@ -25,9 +27,11 @@ include(FullmagCudaDriverLibrary)
 
 set(FEM_PUBLIC_HEADERS
     ${CMAKE_SOURCE_DIR}/include/fullmag_fem.h
+    ${CMAKE_SOURCE_DIR}/include/fullmag_fem_cuda_trace.h
 )
 
 set(FEM_SOURCES
+    gpu/cuda/runtime/cuda_activity_trace.cpp
     core/petsc_slepc_runtime.cpp
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
@@ -362,6 +366,27 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
 endif()
 
+# CUPTI remains optional: a normal FEM build without an API 24 target uses the
+# explicit unavailable stub in cuda_activity_trace.cpp.
+set(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED FALSE)
+if(UNIX AND NOT APPLE AND FULLMAG_ENABLE_CUPTI_ACTIVITY_TRACE AND
+   FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND TARGET CUDA::cupti)
+    include(CheckCXXSourceCompiles)
+    string(MAKE_C_IDENTIFIER "${CUDAToolkit_VERSION}" _fullmag_cupti_version_id)
+    set(_fullmag_cupti_api_check "FULLMAG_CUPTI_API_24_${_fullmag_cupti_version_id}")
+    set(_fullmag_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+    set(CMAKE_REQUIRED_LIBRARIES CUDA::cupti)
+    check_cxx_source_compiles(
+        "#include <cupti_version.h>\n#if !defined(CUPTI_API_VERSION) || CUPTI_API_VERSION != 24\n#error CUPTI Activity API 24 is required\n#endif\nint main() { return 0; }"
+        ${_fullmag_cupti_api_check})
+    set(CMAKE_REQUIRED_LIBRARIES "${_fullmag_saved_required_libraries}")
+    unset(_fullmag_saved_required_libraries)
+    if(${_fullmag_cupti_api_check})
+        set(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED TRUE)
+        find_package(Threads REQUIRED)
+    endif()
+endif()
+
 # A managed capsule is identified by content rather than preserved mtimes.
 # Legacy managed-capsule builds keep this definition target-wide: changing it
 # forces CMake to rebuild native objects without deleting caches, even when a
@@ -408,6 +433,13 @@ endfunction()
 add_library(fullmag_fem SHARED ${FEM_SOURCES})
 fullmag_configure_runtime_source_snapshot(fullmag_fem)
 target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_BUILD_SHARED=1)
+if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
+    target_compile_definitions(fullmag_fem PRIVATE FULLMAG_FEM_CUPTI_TRACE_ENABLED=1)
+    target_link_libraries(fullmag_fem PRIVATE CUDA::cupti Threads::Threads)
+    message(STATUS "FEM CUPTI Activity trace enabled (CUPTI API 24)")
+else()
+    message(STATUS "FEM CUPTI Activity trace unavailable; building explicit stub")
+endif()
 
 if(FULLMAG_ENABLE_NVTX)
     target_compile_definitions(fullmag_fem PRIVATE FULLMAG_ENABLE_NVTX=1)
@@ -497,6 +529,21 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/fullmag-fem-library-path.txt"
 
 # ── Tests ──
 enable_testing()
+
+add_executable(fem_cuda_activity_trace_contract tests/cuda_activity_trace_contract.cpp)
+target_link_libraries(fem_cuda_activity_trace_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cuda_activity_trace_contract PRIVATE
+    ${CMAKE_SOURCE_DIR}/include)
+if(FULLMAG_FEM_CUPTI_TRACE_SUPPORTED)
+    target_compile_definitions(fem_cuda_activity_trace_contract PRIVATE
+        FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED=1)
+    target_link_libraries(fem_cuda_activity_trace_contract PRIVATE
+        CUDA::cudart CUDA::cuda_driver)
+endif()
+add_test(NAME fem_cuda_activity_trace_contract COMMAND fem_cuda_activity_trace_contract)
+set_tests_properties(fem_cuda_activity_trace_contract PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 75)
 
 if(FULLMAG_USE_MFEM_STACK)
     add_executable(

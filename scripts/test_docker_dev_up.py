@@ -14,7 +14,8 @@ import docker_dev_up
 import docker_dev
 
 
-def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request", headless=False):
+def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request", headless=False,
+          cuda_trace=False):
     return argparse.Namespace(
         repo_root=Path("/repo"),
         source_root=Path("/repo"),
@@ -24,6 +25,7 @@ def _args(*, script=None, port=3197, port_explicit=False, request_id="test-reque
         request_id=request_id,
         profile="dev",
         gpu_access="auto",
+        cuda_trace=cuda_trace,
         image=None,
         toolchain_image=None,
         source_manifest=None,
@@ -121,6 +123,107 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
                 docker_dev.main([*run_base, "--solver-profile"]), 0
             )
         self.assertTrue(run_script.call_args.kwargs["solver_profile"])
+
+    def test_cuda_trace_cli_flag_is_opt_in_and_forwarded_by_all_script_entrypoints(self):
+        parser = docker_dev._parser()
+        activate_base = [
+            "--repo-root", "/repo", "activate-script",
+            "--attempt", "a" * 32,
+            "--config-sha256", "b" * 64,
+            "--source-root", "/repo",
+            "--script", "examples/model.py",
+        ]
+        run_base = ["--repo-root", "/repo", "run-script", "--script", "examples/model.py"]
+        up_base = ["--repo-root", "/repo", "up", "--script", "examples/model.py"]
+        for base in (activate_base, run_base, up_base):
+            parsed = parser.parse_args(base)
+            self.assertFalse(getattr(parsed, "cuda_trace", False))
+            self.assertTrue(parser.parse_args([*base, "--cuda-trace"]).cuda_trace)
+
+        with patch("docker_volume_activate.activate") as activate:
+            self.assertEqual(docker_dev.main([*activate_base, "--cuda-trace"]), 0)
+        self.assertTrue(activate.call_args.args[0].cuda_trace)
+
+        with patch(
+            "docker_dev_run_script.run_script", return_value={"exit_code": 0}
+        ) as run_script:
+            self.assertEqual(docker_dev.main([*run_base, "--cuda-trace"]), 0)
+        self.assertTrue(run_script.call_args.kwargs["cuda_trace"])
+
+        with patch("docker_dev_host.require_host"), \
+                patch("docker_dev_defaults.resolve_defaults", return_value=SimpleNamespace(
+                    source_root=Path("/repo"), port=3197,
+                )), \
+                patch("docker_dev.up") as up:
+            self.assertEqual(docker_dev.main([*up_base, "--cuda-trace"]), 0)
+        self.assertTrue(up.call_args.args[0].cuda_trace)
+
+    def test_native_contract_cli_accepts_cuda_activity_gate_but_remains_single_select(self):
+        parser = docker_dev._parser()
+        commands = parser._subparsers._group_actions[0].choices
+        expected = {"fem-demag-poisson", "fem-cuda-activity-trace"}
+        for command_name in ("build", "up", "recreate-volume"):
+            with self.subTest(command=command_name):
+                command = commands[command_name]
+                option = next(
+                    action for action in command._actions
+                    if "--native-contract" in action.option_strings
+                )
+                self.assertEqual(set(option.choices), expected)
+                self.assertIsInstance(option, argparse._AppendAction)
+
+    def test_up_activation_namespace_preserves_cuda_trace_opt_in(self):
+        group = _group()
+        args = _args(script=Path("examples/model.py"), cuda_trace=True)
+        activation = docker_dev_up._activation_args(group, args)
+        self.assertTrue(activation.cuda_trace)
+
+    def test_stable_up_request_id_binds_trace_digest_and_preserves_disabled_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            script = source / "model.py"
+            script.write_text("VALUE = 1\n", encoding="utf-8")
+            group = docker_dev_up.RetainedGroup(
+                **{
+                    **vars(_group()),
+                    "repo_root": source,
+                    "source_root": source,
+                }
+            )
+            disabled = _args(script=Path("model.py"), request_id=None)
+            enabled = _args(script=Path("model.py"), request_id=None, cuda_trace=True)
+            with patch("fullmag_storage.git", return_value="a" * 40):
+                disabled_id = docker_dev_up._stable_activation_request_id(group, disabled)
+                enabled_id = docker_dev_up._stable_activation_request_id(group, enabled)
+
+        source_sha256 = hashlib.sha256(b"VALUE = 1\n").hexdigest()
+        old_material = b"\0".join(
+            value.encode("utf-8")
+            for value in (
+                group.attempt,
+                group.config_sha256,
+                "model.py",
+                source_sha256,
+                "a" * 40,
+            )
+        )
+        self.assertEqual(
+            disabled_id,
+            "docker-volume-up-" + hashlib.sha256(old_material).hexdigest(),
+        )
+        trace = {
+            "schema_version": "accepted_cuda_trace.v1",
+            "max_bytes": 67108864,
+            "max_duration_ms": 60000,
+        }
+        trace_sha256 = hashlib.sha256(
+            json.dumps(trace, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        expected_enabled = "docker-volume-up-" + hashlib.sha256(
+            old_material + b"\0cuda_trace\0" + trace_sha256.encode("ascii")
+        ).hexdigest()
+        self.assertEqual(enabled_id, expected_enabled)
+        self.assertNotEqual(disabled_id, enabled_id)
 
     def setUp(self):
         self._build_input_match_impl = docker_dev_up._build_inputs_match

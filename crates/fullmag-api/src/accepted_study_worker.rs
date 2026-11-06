@@ -567,17 +567,22 @@ fn validate_accepted_worker_parameters(
     parameters: &serde_json::Value,
     accepted_step_id: &str,
     allow_operation_profile: bool,
+    allow_cuda_trace: bool,
 ) -> Result<()> {
     if parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() && !allow_operation_profile {
         bail!("solver_profile is supported only for accepted closed-loop inspection");
     }
     crate::accepted_solver_profile::config(parameters)?;
+    if crate::accepted_solver_profile::cuda_trace::config(parameters)?.is_some() && !allow_cuda_trace {
+        bail!("cuda_trace is supported only for accepted FEM GPU execution");
+    }
     let parameters = parameters
         .as_object()
         .context("accepted worker RunSpec parameters must be an object")?;
     for key in parameters.keys() {
         if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY
-            && key != crate::accepted_solver_profile::PARAMETER {
+            && key != crate::accepted_solver_profile::PARAMETER
+            && key != crate::accepted_solver_profile::cuda_trace::PARAMETER {
             bail!("accepted worker has no binding for RunSpec parameter `{key}`");
         }
     }
@@ -2680,7 +2685,8 @@ fn execute_accepted_worker_start_with_snapshot(
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
-    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, request.backend == "fem")?;
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id,
+        request.backend == "fem", request.backend == "fem")?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -3017,7 +3023,7 @@ fn validate_inspection_run_parameters(
     step_id: &str,
     allow_operation_profile: bool,
 ) -> Result<()> {
-    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile)?;
+    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile, false)?;
     let parameters = specification.parameters.as_object()
         .context("inspection RunSpec parameters must be an object")?;
     if parameters.keys().any(|key| {
@@ -3301,6 +3307,9 @@ fn execute_accepted_fem_worker_start(
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
             &mut profile,
+            || crate::accepted_solver_profile::cuda_capture::Capture::start(
+                prepared.cuda_trace.as_ref(), &attempt_output_dir, &receipt_identity,
+                prepared.gpu_uuid.as_deref()),
         );
         let profile_outcome = match &outcome {
             Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(_)) =>
@@ -4744,6 +4753,21 @@ mod closed_loop_run_parameter_tests {
     use fullmag_application::{ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
         RunId, RunSpecification, StudyId, StudyReference};
     use serde_json::json;
+
+    #[test]
+    fn cuda_trace_passes_fem_worker_binding_but_never_inspection_binding() {
+        let mut specification = startup();
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER] = json!({
+            "schema_version": "accepted_cuda_trace.v1", "max_bytes": 67108864, "max_duration_ms": 60000
+        });
+        super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).unwrap();
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", false, false).is_err());
+        for allow_profile in [false, true] {
+            assert!(super::validate_inspection_run_parameters(&specification, "step", allow_profile).is_err());
+        }
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER]["max_bytes"] = json!(0);
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).is_err());
+    }
 
     fn startup() -> RunSpecification {
         let source = "a".repeat(64);

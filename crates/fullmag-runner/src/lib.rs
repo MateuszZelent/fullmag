@@ -166,6 +166,8 @@ mod interactive_runtime;
 mod live_demand;
 pub use live_demand::{live_quantity_demand, set_live_quantity_demand};
 mod native_fem;
+mod native_fem_cuda_trace;
+pub use native_fem_cuda_trace::{fem_cuda_trace_available, FemCudaTrace, FemCudaTraceEnd, FemCudaTraceStats};
 #[cfg(feature = "fem-native")]
 pub use native_fem::prepare_fem_mesh_space;
 mod observation;

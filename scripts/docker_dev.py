@@ -2588,6 +2588,10 @@ def _parser() -> argparse.ArgumentParser:
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this activation",
     )
+    activate_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
@@ -2627,6 +2631,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument(
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this run",
+    )
+    run_script_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this run",
     )
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
@@ -2805,7 +2813,7 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument('--prepared-quarantine-sha256',
                                  help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
-                                 choices=("fem-demag-poisson",),
+                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -2962,7 +2970,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
         command.add_argument("--native-contract", action="append", default=None,
-                             choices=("fem-demag-poisson",),
+                             choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
@@ -2995,6 +3003,10 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--headless", action="store_true",
                 help="start the backend without starting the retained frontend service",
+            )
+            command.add_argument(
+                "--cuda-trace", action="store_true",
+                help="enable the bounded accepted FEM CUDA activity trace for the startup script",
             )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
@@ -3233,6 +3245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_sha256=getattr(args, "config_sha256", None),
                 headless=bool(getattr(args, "headless", False)),
                 solver_profile=getattr(args, "solver_profile", False),
+                cuda_trace=getattr(args, "cuda_trace", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

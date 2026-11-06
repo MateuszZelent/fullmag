@@ -915,6 +915,7 @@ jobs:
           python -B scripts/test_docker_backend_dev.py -v
           python -B scripts/test_backend_native_contracts.py -v
           python -B scripts/test_docker_native_contract_integration.py -v
+          python -B -m unittest scripts.test_analyze_accepted_cuda_trace -v
           python -B scripts/test_docker_shared_build_storage.py -v
           python -B scripts/test_backend_shared_store.py -v
           python -B scripts/test_backend_shared_integration.py -v

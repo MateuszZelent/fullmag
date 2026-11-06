@@ -231,6 +231,41 @@ class DockerDevRunScriptTests(unittest.TestCase):
         self.assertEqual(result["state"], "terminal")
         self.assertTrue(activation_namespaces[0].solver_profile)
 
+    def test_cuda_trace_opt_in_is_forwarded_to_activation(self) -> None:
+        activation_namespaces = []
+
+        def activate(namespace):
+            activation_namespaces.append(namespace)
+            return self._activation()
+
+        with ExitStack() as stack:
+            self._patch_admission(stack)
+            self._patch_activation(stack, side_effect=activate)
+            stack.enter_context(patch.object(
+                run_script_module, "_probe_with_retry",
+                side_effect=(
+                    {"state": "observed", "api_instance_id": API_INSTANCE},
+                    _observation("completed"),
+                ),
+            ))
+            stack.enter_context(patch.object(run_script_module.time, "sleep"))
+            result = run_script_module.run_script(
+                self.repo, "examples/demo.py", cuda_trace=True,
+            )
+
+        self.assertEqual(result["state"], "terminal")
+        self.assertTrue(activation_namespaces[0].cuda_trace)
+
+    def test_invalid_cuda_trace_value_is_rejected_before_group_admission(self) -> None:
+        with patch.object(defaults, "resolve_defaults") as resolve:
+            result = run_script_module.run_script(
+                self.repo, "examples/demo.py", cuda_trace=1,
+            )
+        self.assertEqual(result["outcome"], "invalid_cuda_trace")
+        self.assertEqual(result["status"], "not_started")
+        self.assertEqual(result["exit_code"], 2)
+        resolve.assert_not_called()
+
     def test_invalid_solver_profile_value_is_rejected_before_group_admission(self) -> None:
         with patch.object(defaults, "resolve_defaults") as resolve:
             result = run_script_module.run_script(

@@ -72,6 +72,12 @@ SOLVER_PROFILE_PRESET = {
         "persist_artifact": True,
     },
 }
+CUDA_TRACE_SCHEMA = "accepted_cuda_trace.v1"
+CUDA_TRACE_PRESET = {
+    "schema_version": CUDA_TRACE_SCHEMA,
+    "max_bytes": 67108864,
+    "max_duration_ms": 60000,
+}
 STARTUP_RECEIPT_KEY_ENV = "FULLMAG_STARTUP_RECEIPT_KEY"
 STARTUP_RECEIPT_ROOT = Path("/opt/fullmag/control/backend")
 PROVENANCE_SHA256_ENV = "FULLMAG_STARTUP_PROVENANCE_SHA256"
@@ -89,6 +95,7 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_script_capture_invalid", "accepted_script_capture_required",
     "accepted_script_compilation_failed",
     "invalid_solver_profile", "accepted_solver_profile_unsupported",
+    "invalid_cuda_trace", "accepted_cuda_trace_unsupported",
     # Output mapping validation is pure and precedes durable run admission.
     "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
@@ -312,6 +319,7 @@ class StartupScriptAuthorization:
     request_id: str
     source_commit: str | None = None
     solver_profile: dict[str, Any] | None = None
+    cuda_trace: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         value = {
@@ -336,6 +344,8 @@ class StartupScriptAuthorization:
         }
         if self.solver_profile is not None:
             value["solver_profile"] = dict(self.solver_profile)
+        if self.cuda_trace is not None:
+            value["cuda_trace"] = dict(self.cuda_trace)
         return value
 
 
@@ -347,11 +357,14 @@ def prepare(
     source_commit: str | None = None,
     container_source_root: str = "/opt/fullmag/source",
     solver_profile: bool = False,
+    cuda_trace: bool = False,
 ) -> StartupScriptAuthorization:
     """Admit a regular Python file relative to one readonly checkout."""
 
     if type(solver_profile) is not bool:
         raise StartupScriptError("solver profile opt-in must be a boolean")
+    if type(cuda_trace) is not bool:
+        raise StartupScriptError("cuda trace opt-in must be a boolean")
     root = _no_reparse_path(Path(source_root), "startup source checkout", require_directory=True)
     candidate = Path(script_path).expanduser()
     if not candidate.is_absolute():
@@ -382,6 +395,7 @@ def prepare(
         container_script_path=_container_script_path(relative),
         request_id=_validate_request_id(request_id),
         solver_profile=_solver_profile_wrapper() if solver_profile else None,
+        cuda_trace=_cuda_trace_wrapper() if cuda_trace else None,
     )
 
 
@@ -412,6 +426,33 @@ def solver_profile_sha256(value: object) -> str:
     """Hash the complete profile wrapper using the Rust canonical JSON rules."""
 
     wrapper = _validate_solver_profile(value, "solver profile")
+    payload = json.dumps(
+        wrapper, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _cuda_trace_wrapper() -> dict[str, Any]:
+    return dict(CUDA_TRACE_PRESET)
+
+
+def _validate_cuda_trace(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != set(CUDA_TRACE_PRESET):
+        raise StartupScriptError(f"{label} cuda trace wrapper is invalid")
+    if value.get("schema_version") != CUDA_TRACE_SCHEMA:
+        raise StartupScriptError(f"{label} cuda trace schema is unsupported")
+    for key in ("max_bytes", "max_duration_ms"):
+        observed = value.get(key)
+        expected = CUDA_TRACE_PRESET[key]
+        if type(observed) is not type(expected) or observed != expected:
+            raise StartupScriptError(f"{label} cuda trace preset differs at {key}")
+    return _cuda_trace_wrapper()
+
+
+def cuda_trace_sha256(value: object) -> str:
+    """Hash the complete immutable trace wrapper using canonical JSON."""
+
+    wrapper = _validate_cuda_trace(value, "cuda trace")
     payload = json.dumps(
         wrapper, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -740,6 +781,10 @@ def build_activation_request(authorization: Mapping[str, Any]) -> dict[str, Any]
     if "solver_profile" in authorization:
         request["solver_profile"] = _validate_solver_profile(
             authorization["solver_profile"], "startup authorization"
+        )
+    if "cuda_trace" in authorization:
+        request["cuda_trace"] = _validate_cuda_trace(
+            authorization["cuda_trace"], "startup authorization"
         )
     return request
 
@@ -1439,6 +1484,15 @@ def validate_activation_response(
                 or not SHA256_RE.fullmatch(observed_profile_sha256)
                 or observed_profile_sha256 != expected_profile_sha256):
             raise StartupScriptError("startup activation response solver profile digest mismatch")
+    if "cuda_trace" in authorization:
+        expected_cuda_trace_sha256 = cuda_trace_sha256(authorization["cuda_trace"])
+        observed_cuda_trace_sha256 = response.get("cuda_trace_sha256")
+        if (not isinstance(observed_cuda_trace_sha256, str)
+                or not SHA256_RE.fullmatch(observed_cuda_trace_sha256)
+                or observed_cuda_trace_sha256 != expected_cuda_trace_sha256):
+            raise StartupScriptError("startup activation response cuda trace digest mismatch")
+    elif "cuda_trace_sha256" in response:
+        raise StartupScriptError("startup activation response contains an unsolicited cuda trace digest")
     for field in ("session_id", "run_id"):
         value = response.get(field)
         if not isinstance(value, str) or not value.strip():

@@ -2079,9 +2079,12 @@ def _native_contracts(values):
     if values is None:
         return ()
     if (not isinstance(values, (list, tuple))
-            or any(value != "fem-demag-poisson" for value in values)
+            or any(not isinstance(value, str)
+                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace"}
+                   for value in values)
+            or len(values) > 1
             or len(set(values)) != len(values)):
-        raise BuildControlError("Native contracts must be unique allowlisted identifiers")
+        raise BuildControlError("Native contracts must contain at most one unique allowlisted identifier")
     return tuple(sorted(values))
 
 
@@ -3402,12 +3405,10 @@ def rejected_startup_marker(status,identity):
                 or not isinstance(source_sha,str)
                 or re.fullmatch(r"[0-9a-f]{64}",source_sha) is None):
             continue
-        expected_session="docker-startup-"+hashlib.sha256(
-            (request_id+"\0"+source_sha).encode("utf-8")).hexdigest()
-        if expected_session!=identity[0]: continue
         authorization=marker.get("authorization")
         if not isinstance(authorization,dict):
             raise RuntimeError("startup activation receipt has no authorization")
+        session_identity=request_id+"\0"+source_sha
         solver_profile_sha256=None
         authorization_fields={"schema","authorization","source_root","source_path","source_relative","source_sha256","source_size_bytes","source_commit","container_source_root","container_script_path","request_id","execution_policy"}
         if "solver_profile" in authorization:
@@ -3427,6 +3428,25 @@ def rejected_startup_marker(status,identity):
             solver_profile_sha256=hashlib.sha256(json.dumps(profile,
                 ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
             authorization_fields.add("solver_profile")
+            session_identity+="\0"+solver_profile_sha256
+        cuda_trace_sha256=None
+        if "cuda_trace" in authorization:
+            trace=authorization.get("cuda_trace")
+            if (not isinstance(trace,dict)
+                    or set(trace)!={"schema_version","max_bytes","max_duration_ms"}
+                    or trace.get("schema_version")!="accepted_cuda_trace.v1"
+                    or type(trace.get("max_bytes")) is not int
+                    or trace.get("max_bytes")!=67108864
+                    or type(trace.get("max_duration_ms")) is not int
+                    or trace.get("max_duration_ms")!=60000):
+                raise RuntimeError("startup authorization cuda trace differs from the supported preset")
+            cuda_trace_sha256=hashlib.sha256(json.dumps(trace,
+                ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+            authorization_fields.add("cuda_trace")
+            session_identity+="\0cuda_trace\0"+cuda_trace_sha256
+        expected_session="docker-startup-"+hashlib.sha256(
+            session_identity.encode("utf-8")).hexdigest()
+        if expected_session!=identity[0]: continue
         if (hashlib.sha256(request_id.encode("utf-8")).hexdigest()!=key
                 or marker.get("schema")!="fullmag.docker-startup-activation-receipt.v1"
                 or marker.get("state")!="rejected"
@@ -3472,7 +3492,7 @@ def rejected_startup_marker(status,identity):
                 or result.get("source_relative")!=relative):
             raise RuntimeError("startup activation rejection result differs from its receipt")
         rejection=result.get("rejection")
-        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","invalid_solver_profile","accepted_solver_profile_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
+        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","invalid_solver_profile","accepted_solver_profile_unsupported","invalid_cuda_trace","accepted_cuda_trace_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
         if (not isinstance(rejection,dict)
                 or set(rejection)!={"http_status","code","message"}
                 or type(rejection.get("http_status")) is not int
@@ -3485,6 +3505,8 @@ def rejected_startup_marker(status,identity):
             "source_sha256":source_sha,"source_relative":relative,"rejection":rejection}
         if solver_profile_sha256 is not None:
             match["solver_profile_sha256"]=solver_profile_sha256
+        if cuda_trace_sha256 is not None:
+            match["cuda_trace_sha256"]=cuda_trace_sha256
         matches.append(match)
     if len(matches)!=1:
         raise RuntimeError("startup_failed session has no unique exact rejected activation receipt")
@@ -3591,7 +3613,9 @@ def startup_failed_preacceptance(status,run,identity):
             "source_relative":activation["source_relative"],
             "rejection":activation["rejection"],
             **({"solver_profile_sha256":activation["solver_profile_sha256"]}
-               if "solver_profile_sha256" in activation else {})},
+               if "solver_profile_sha256" in activation else {}),
+            **({"cuda_trace_sha256":activation["cuda_trace_sha256"]}
+               if "cuda_trace_sha256" in activation else {})},
         "session_status":{"solver":status.get("solver"),"lifecycle":status.get("lifecycle"),
             "resources":status.get("resources"),"session":session},
         "preparation":preparation,"compute_queue":queue,"commands":commands,

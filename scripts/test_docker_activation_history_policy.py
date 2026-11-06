@@ -74,6 +74,30 @@ def profiled_fixture():
     return files, catalog, intent, receipt, result, provenance
 
 
+def cuda_traced_fixture():
+    files, catalog, intent = fixture()
+    receipt = json.loads(files["receipt.json"])
+    result = json.loads(files["result.json"])
+    provenance = json.loads(files["startup-provenance.json"])
+    trace = {
+        "schema_version": "accepted_cuda_trace.v1",
+        "max_bytes": 67108864,
+        "max_duration_ms": 60000,
+    }
+    trace_sha = history.digest(history.canonical(trace))
+    session = "docker-startup-" + history.digest(
+        (REQUEST + "\0" + SOURCE + "\0cuda_trace\0" + trace_sha).encode()
+    )
+    for record in (receipt, receipt["inputs"], result["response"]):
+        record["cuda_trace_sha256"] = trace_sha
+    receipt["session_id"] = result["response"]["session_id"] = session
+    provenance["cuda_trace"] = copy.deepcopy(trace)
+    parameters = intent["specification"]["parameters"]
+    parameters["cuda_trace"] = copy.deepcopy(trace)
+    parameters["live_workspace"]["session_id"] = session
+    return files, catalog, intent, receipt, result, provenance, trace, trace_sha
+
+
 def profile_records(files, receipt, result, provenance, authorization=None):
     provenance_raw = raw(provenance)
     receipt["provenance_sha256"] = receipt["inputs"]["provenance_sha256"] = history.digest(provenance_raw)
@@ -211,6 +235,109 @@ class HistoryQualificationTests(unittest.TestCase):
                 if location in ("response", "all"):
                     result["response"]["session_id"] = SESSION
                 if location in ("intent", "all"):
+                    intent["specification"]["parameters"]["live_workspace"]["session_id"] = SESSION
+                with self.assertRaises(history.HistoryError):
+                    qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+
+    def test_cuda_traced_terminal_run_uses_tagged_trace_aware_session_and_is_archivable(self):
+        files, catalog, intent, receipt, result, provenance, _trace, trace_sha = cuda_traced_fixture()
+        qualified = qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+        self.assertEqual(qualified["session_id"], receipt["session_id"])
+        self.assertNotEqual(receipt["session_id"], SESSION)
+        self.assertEqual(receipt["cuda_trace_sha256"], trace_sha)
+
+    def test_solver_profile_and_cuda_trace_bind_in_the_documented_order(self):
+        files, catalog, intent, receipt, result, provenance, _trace, trace_sha = cuda_traced_fixture()
+        profile = copy.deepcopy(SOLVER_PROFILE_PRESET)
+        profile_sha = history.digest(history.canonical(profile))
+        session_material = (
+            REQUEST + "\0" + SOURCE + "\0" + profile_sha
+            + "\0cuda_trace\0" + trace_sha
+        )
+        session = "docker-startup-" + history.digest(session_material.encode())
+        for record in (receipt, receipt["inputs"], result["response"]):
+            record["solver_profile_sha256"] = profile_sha
+        receipt["session_id"] = result["response"]["session_id"] = session
+        provenance["solver_profile"] = copy.deepcopy(profile)
+        parameters = intent["specification"]["parameters"]
+        parameters["solver_profile"] = copy.deepcopy(profile)
+        parameters["live_workspace"]["session_id"] = session
+
+        qualified = qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+        self.assertEqual(qualified["session_id"], session)
+
+    def test_cuda_trace_digest_is_required_and_equal_on_every_history_boundary(self):
+        for location in ("receipt", "inputs", "response"):
+            for value in (None, "", "c" * 64, "A" * 64):
+                with self.subTest(location=location, value=value):
+                    files, catalog, intent, receipt, result, provenance, *_ = cuda_traced_fixture()
+                    record = {
+                        "receipt": receipt,
+                        "inputs": receipt["inputs"],
+                        "response": result["response"],
+                    }[location]
+                    if value is None:
+                        del record["cuda_trace_sha256"]
+                    else:
+                        record["cuda_trace_sha256"] = value
+                    with self.assertRaisesRegex(history.HistoryError, "cuda trace"):
+                        qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+
+    def test_cuda_trace_wrapper_must_be_exact_in_authorization_provenance_and_intent(self):
+        for location in ("provenance", "intent", "authorization"):
+            for mutation in ("missing", "null", "wrong_schema", "bool_limit", "extra_key", "changed_limit"):
+                with self.subTest(location=location, mutation=mutation):
+                    files, catalog, intent, receipt, result, provenance, _trace, _trace_sha = cuda_traced_fixture()
+                    authorization = copy.deepcopy(provenance)
+                    target = {
+                        "provenance": provenance,
+                        "intent": intent["specification"]["parameters"],
+                        "authorization": authorization,
+                    }[location]
+                    if mutation == "missing":
+                        del target["cuda_trace"]
+                    elif mutation == "null":
+                        target["cuda_trace"] = None
+                    elif mutation == "wrong_schema":
+                        target["cuda_trace"]["schema_version"] = "accepted_cuda_trace.v2"
+                    elif mutation == "bool_limit":
+                        target["cuda_trace"]["max_bytes"] = True
+                    elif mutation == "extra_key":
+                        target["cuda_trace"]["enabled"] = True
+                    else:
+                        target["cuda_trace"]["max_duration_ms"] = 59999
+                    if location == "provenance":
+                        authorization = provenance
+                    records = profile_records(files, receipt, result, provenance, authorization)
+                    with self.assertRaises(history.HistoryError):
+                        qualify(records, catalog, intent)
+
+    def test_disabled_history_rejects_unsolicited_cuda_trace_digest_or_wrapper(self):
+        for location in ("provenance", "intent", "receipt", "inputs", "response"):
+            with self.subTest(location=location):
+                files, catalog, intent = fixture()
+                receipt = json.loads(files["receipt.json"])
+                result = json.loads(files["result.json"])
+                provenance = json.loads(files["startup-provenance.json"])
+                if location in ("provenance", "intent"):
+                    target = provenance if location == "provenance" else intent["specification"]["parameters"]
+                    target["cuda_trace"] = None
+                else:
+                    target = {"receipt": receipt, "inputs": receipt["inputs"],
+                              "response": result["response"]}[location]
+                    target["cuda_trace_sha256"] = "8" * 64
+                with self.assertRaisesRegex(history.HistoryError, "cuda trace"):
+                    qualify(profile_records(files, receipt, result, provenance), catalog, intent)
+
+    def test_cuda_traced_run_rejects_legacy_session_id_on_each_identity_record(self):
+        for location in ("receipt", "response", "intent"):
+            with self.subTest(location=location):
+                files, catalog, intent, receipt, result, provenance, *_ = cuda_traced_fixture()
+                if location == "receipt":
+                    receipt["session_id"] = SESSION
+                elif location == "response":
+                    result["response"]["session_id"] = SESSION
+                else:
                     intent["specification"]["parameters"]["live_workspace"]["session_id"] = SESSION
                 with self.assertRaises(history.HistoryError):
                     qualify(profile_records(files, receipt, result, provenance), catalog, intent)

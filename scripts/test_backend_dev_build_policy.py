@@ -71,7 +71,8 @@ def test_direct_compose_keeps_native_fem_release_for_backend_dev():
 
 @pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
                     reason="The extracted Makefile recipe is a Linux-container regression")
-def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path):
+@pytest.mark.parametrize("contract_id", ["fem-demag-poisson", "fem-cuda-activity-trace"])
+def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path, contract_id):
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
     recipe_end = makefile.index("\nshow-cli-path:", recipe_start)
@@ -104,13 +105,13 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
         )
 
     assert run_guard().returncode == 0
-    assert run_guard("fem-demag-poisson").returncode == 0
+    assert run_guard(contract_id).returncode == 0
     assert run_guard("unknown-contract").returncode == 2
-    assert run_guard("fem-demag-poisson", target="install-cli").returncode == 2
-    assert run_guard("fem-demag-poisson", direct="0").returncode == 2
-    assert run_guard("fem-demag-poisson", profile="release").returncode == 2
+    assert run_guard(contract_id, target="install-cli").returncode == 2
+    assert run_guard(contract_id, direct="0").returncode == 2
+    assert run_guard(contract_id, profile="release").returncode == 2
 
-    marker = '\tif [ "' + expansion + '{FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}" = "fem-demag-poisson" ]; then \\\n'
+    marker = '\tif [ -n "' + expansion + '{FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}" ]; then \\\n'
     prebuild_start = recipe.index(marker)
     prebuild_stop = recipe.index(
         '\n\tmkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib";', prebuild_start
@@ -146,7 +147,7 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
         "if [ \"$1\" = \"$FAKE_HELPER\" ]; then\n"
         "  [ \"$2\" = \"prepare\" ] || exit 8\n"
         "  \"$FULLMAG_CMAKE\" --build \"$FULLMAG_FEM_NATIVE_BUILD_ROOT\" "
-        "--target fem_demag_poisson_contract --parallel \"$CARGO_BUILD_JOBS\"\n"
+        "--target $FAKE_CONTRACT_TARGET --parallel \"$CARGO_BUILD_JOBS\"\n"
         "elif [ \"$1\" = \"scripts/select_managed_fem_library.py\" ]; then\n"
         "  printf '%s\\n' \"$FAKE_FEM_SELECTION\"\n"
         "else\n"
@@ -188,6 +189,7 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
             "FULLMAG_SOURCE_SNAPSHOT_SHA256": "a" * 64,
             "CARGO_BUILD_JOBS": "3",
             "FAKE_HELPER": str(helper),
+            "FAKE_CONTRACT_TARGET": contract_id.replace("-", "_") + "_contract",
             "FAKE_FEM_SELECTION": str(fem_build),
             "FAKE_FEM_LIBRARY": str(build_library),
             "FAKE_CMAKE_LOG": str(capture),
@@ -204,12 +206,12 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     changed_root = tmp_path / "changed"
     changed_root.mkdir()
     result, packaged_library, cmake_log = run_build(
-        changed_root, selector="fem-demag-poisson"
+        changed_root, selector=contract_id
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert packaged_library.read_bytes() == b"post-prebuild-library"
     assert cmake_log.read_text(encoding="utf-8").strip() == (
-        f"--build {changed_root / 'native-root'} --target fem_demag_poisson_contract --parallel 3"
+        f"--build {changed_root / 'native-root'} --target {contract_id.replace('-', '_')}_contract --parallel 3"
     )
 
     skipped_root = tmp_path / "skipped"
@@ -222,7 +224,7 @@ def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(
     failed_root = tmp_path / "failed"
     failed_root.mkdir()
     result, packaged_library, _ = run_build(
-        failed_root, selector="fem-demag-poisson", fail=True
+        failed_root, selector=contract_id, fail=True
     )
     assert result.returncode == 7
     assert not packaged_library.exists()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 import os
 import subprocess
@@ -63,6 +64,28 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                         changed["document"], changed["actual"], "frontend", {}
                     )
 
+    def test_native_contract_allowlist_keeps_one_contract_per_invocation(self):
+        self.assertEqual(docker_volume_dev._native_contracts(None), ())
+        self.assertEqual(docker_volume_dev._native_contracts([]), ())
+        self.assertEqual(
+            docker_volume_dev._native_contracts(["fem-cuda-activity-trace"]),
+            ("fem-cuda-activity-trace",),
+        )
+        self.assertEqual(
+            docker_volume_dev._native_contracts(["fem-demag-poisson"]),
+            ("fem-demag-poisson",),
+        )
+        for values in (
+            ["unknown-contract"],
+            ["fem-cuda-activity-trace", "fem-demag-poisson"],
+            ["fem-cuda-activity-trace", "fem-cuda-activity-trace"],
+            "fem-cuda-activity-trace",
+        ):
+            with self.subTest(values=values), self.assertRaisesRegex(
+                docker_volume_dev.BuildControlError, "Native contracts"
+            ):
+                docker_volume_dev._native_contracts(values)
+
     def test_legacy_frontend_manifest_is_allowed_only_for_recreation(self):
         fixture = self._frontend_owner_service(
             "rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
@@ -120,6 +143,129 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
         self.assertIn('"solver_profile_sha256"', script)
         self.assertIn('"invalid_solver_profile"', script)
         self.assertIn('"accepted_solver_profile_unsupported"', script)
+
+    def test_restart_probe_authenticates_cuda_trace_refusal_marker_at_runtime(self):
+        request_id = "cuda-trace-refusal"
+        source_sha256 = "b" * 64
+        relative = "examples/sp4.py"
+        trace = {
+            "schema_version": "accepted_cuda_trace.v1",
+            "max_bytes": 67108864,
+            "max_duration_ms": 60000,
+        }
+        solver_profile = {
+            "schema_version": "accepted_solver_profile.v1",
+            "config": {
+                "enabled": True,
+                "sample_every": 1,
+                "sample_interval_wall_ms": 0,
+                "max_samples": 128,
+                "emit_engine_log": False,
+                "persist_artifact": True,
+            },
+        }
+        authorization = {
+            "schema": "fullmag.docker-startup-script.v1",
+            "authorization": "explicit_startup_script",
+            "source_root": "/source",
+            "source_path": "/source/" + relative,
+            "source_relative": relative,
+            "source_sha256": source_sha256,
+            "source_size_bytes": 10,
+            "source_commit": None,
+            "container_source_root": "/opt/fullmag/source",
+            "container_script_path": "/opt/fullmag/source/" + relative,
+            "request_id": request_id,
+            "execution_policy": {
+                "mode": "canonical_live_v2", "auto_study": True,
+                "interactive": "script_metadata", "wait_for_solve": "script_metadata",
+                "legacy_cli": False,
+            },
+            "solver_profile": solver_profile,
+            "cuda_trace": trace,
+        }
+        key = hashlib.sha256(request_id.encode()).hexdigest()
+        marker = {
+            "schema": "fullmag.docker-startup-activation-receipt.v1",
+            "state": "rejected",
+            "request_id": request_id,
+            "provenance_sha256": "c" * 64,
+            "source_sha256": source_sha256,
+            "authorization": authorization,
+            "result": {
+                "schema": "fullmag.startup-script-activation.v1",
+                "state": "rejected",
+                "request_id": request_id,
+                "source_sha256": source_sha256,
+                "source_relative": relative,
+                "rejection": {
+                    "http_status": 422,
+                    "code": "accepted_cuda_trace_unsupported",
+                    "message": "trace unavailable",
+                },
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            control_root = Path(temporary).resolve()
+            marker_dir = control_root / ("script-activation-" + key)
+            marker_dir.mkdir()
+            marker_path = marker_dir / "activation.json"
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+            captured = {}
+
+            def capture(*args, **kwargs):
+                captured["args"] = args
+                return subprocess.CompletedProcess(args, 0, b"null\n", b"")
+
+            with patch.object(docker_volume_dev, "docker_capture", side_effect=capture):
+                probe_result = docker_volume_dev._terminal_session_restart_probe(
+                    "e" * 64, startup_enabled=False,
+                )
+            self.assertIsNone(probe_result)
+            probe = captured["args"][-1]
+            code = probe[probe.index("def unique_object"):
+                         probe.index("def startup_failed_preacceptance")]
+            code = code.replace("/opt/fullmag/control/backend", str(control_root))
+            namespace = {
+                "STARTUP_ENABLED": False,
+                "MAX": 1024 * 1024,
+                "MAX_STARTUP_RECEIPT": 2 * 1024 * 1024,
+                "MAX_STARTUP_MARKERS": 256,
+                "MAX_CONTROL_ENTRIES": 4096,
+                "hashlib": hashlib,
+                "json": json,
+                "os": os,
+                "re": __import__("re"),
+                "stat": __import__("stat"),
+            }
+            exec(compile(code, "<restart-probe-startup-marker>", "exec"), namespace)
+            canonical_sha256 = lambda value: hashlib.sha256(
+                json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            profile_sha256 = canonical_sha256(solver_profile)
+            expected_trace_sha256 = canonical_sha256(trace)
+            session_material = (
+                request_id + "\0" + source_sha256 + "\0" + profile_sha256
+                + "\0cuda_trace\0" + expected_trace_sha256
+            )
+            session_id = "docker-startup-" + hashlib.sha256(session_material.encode()).hexdigest()
+            status = {"session": {"script": {"path": authorization["container_script_path"]}}}
+            accepted = namespace["rejected_startup_marker"](status, (session_id, 1, 1))
+            self.assertEqual(accepted["solver_profile_sha256"], profile_sha256)
+            self.assertEqual(accepted["cuda_trace_sha256"], expected_trace_sha256)
+
+            legacy_session_id = "docker-startup-" + hashlib.sha256(
+                (request_id + "\0" + source_sha256).encode()
+            ).hexdigest()
+            with self.assertRaisesRegex(RuntimeError, "no unique exact rejected activation receipt"):
+                namespace["rejected_startup_marker"](status, (legacy_session_id, 1, 1))
+
+            marker["authorization"]["cuda_trace"]["max_bytes"] = True
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "cuda trace"):
+                namespace["rejected_startup_marker"](status, (session_id, 1, 1))
 
     @staticmethod
     def _development_context():

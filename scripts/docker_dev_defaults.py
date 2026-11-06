@@ -582,6 +582,9 @@ def _discover_pins(
 
 def activate_discovered(args) -> None:
     """Resolve pins, then invoke the unchanged explicit activation operation."""
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DiscoveryError("Script activation cuda trace opt-in must be a boolean")
     require_host()
     repo = Path(args.repo_root).resolve(strict=True)
     defaults = resolve_defaults(repo, source_root=getattr(args, "source_root", None),
@@ -601,4 +604,5 @@ def activate_discovered(args) -> None:
         script=args.script,
         request_id=getattr(args, "request_id", None),
         headless=bool(getattr(args, "headless", False)),
+        cuda_trace=cuda_trace,
     ))
