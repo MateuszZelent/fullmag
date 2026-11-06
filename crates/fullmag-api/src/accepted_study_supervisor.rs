@@ -3633,12 +3633,15 @@ mod tests {
 
     #[test]
     fn cuda_trace_diagnostics_require_exact_line_prefixes() {
-        let stderr = b"noise cuda_activity_trace: buffer_pressure occurrence=1\n\
-cuda_activity_trace: buffer_pressure_suffix occurrence=2\n\
-cuda_activity_trace: buffer_processingx completed=3\n\
- cuda_activity_trace: buffer_pressure occurrence=4\n\
-cuda_activity_trace: buffer_pressure occurrence=5\n\
-cuda_activity_trace: buffer_processing completed=6\n";
+        let stderr = concat!(
+            "noise cuda_activity_trace: buffer_pressure occurrence=1\n",
+            "cuda_activity_trace: buffer_pressure_suffix occurrence=2\n",
+            "cuda_activity_trace: buffer_processingx completed=3\n",
+            " cuda_activity_trace: buffer_pressure occurrence=4\n",
+            "cuda_activity_trace: buffer_pressure occurrence=5\n",
+            "cuda_activity_trace: buffer_processing completed=6\n",
+        )
+        .as_bytes();
 
         assert_eq!(
             successful_cuda_activity_trace_diagnostics(true, stderr).as_deref(),
