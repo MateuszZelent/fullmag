@@ -419,6 +419,31 @@ class AbruptStopTests(unittest.TestCase):
                     r._retained_compose_state_root(backend, compose, project=project)
                 self.assertEqual(validate.call_count, 1)
 
+    def test_foreign_alias_probe_uses_selected_worktree_and_rejects_foreign_project(self):
+        proof, _, _ = self.fixture()
+        backend = copy.deepcopy(proof['containers']['backend'])
+        project = 'fullmag-worktree-selected'
+        control = SimpleNamespace(project=project)
+        backend['Config']['Labels']['com.docker.compose.project'] = project
+        with tempfile.TemporaryDirectory() as directory:
+            state = str(Path(directory).resolve())
+            backend['Mounts'][0]['Source'] = '/daemon/state-alias'
+            compose = {'name': project, 'services': {'backend': {
+                'volumes': [{'type': 'bind', 'source': state, 'target': '/state'}],
+                'x-fullmag-daemon-binds': {'/state': '/daemon/state-alias'}}}}
+            image = {'Id': backend['Image'], 'Config': {}}
+            foreign = {'Id': 'a' * 64}
+            with patch.object(r, 'docker_capture', return_value=SimpleNamespace(stdout=json.dumps([image]).encode())), \
+                 patch('docker_volume_dev._validate_retained_service'), \
+                 patch('docker_bind_overlap_probe.prove_foreign_alias_disjoint', return_value={'qualified': True}) as probe:
+                self.assertEqual(r._prove_foreign_alias_for_abrupt(
+                    control, backend, foreign, '/daemon/foreign-alias', compose), {'qualified': True})
+                probe.assert_called_once_with(control, backend, foreign, '/daemon/foreign-alias', Path(state))
+                control.project = 'fullmag-master'
+                with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
+                    r._prove_foreign_alias_for_abrupt(control, backend, foreign, '/daemon/foreign-alias', compose)
+                self.assertEqual(probe.call_count, 1)
+
     def test_windows_raw_protected_overlap_precedes_qualified_proof(self):
         proof, _, compose = self.fixture()
         backend, frontend = proof['containers'].values()
