@@ -878,6 +878,90 @@ reprodukcji Fig.3. Szczegóły i źródła: [raport kontroli](../superpowers/pla
 Mapowanie: scripts/plot_sushruth_2020_response_reference.py::measure_figure3_anchors
 oraz scripts/test_reference_sushruth_2020_response.py::SushruthResponseReferenceTests::test_independent_signed_quadrature_and_convergence.
 
+(sushruth-faraday-observable-audit)=
+## Indukcyjność a napięcie — diagnostyka obserwabli 06.11.2026
+
+To test hipotezy generatora Fig.3, nie zmiana równania10, kalibracja S21
+lub dobór fazy. §II.C wiąże T z indukcyjnością wzajemną. Opis cosine-like
+w §III.B.2 oraz czynnik i w Eq14/AppendixB uzasadniają rozróżnienie sygnałów,
+ale nie dowodzą, że autorzy narysowali napięcie zamiast podpisanego Re(T).
+Domyślny renderer zachowuje Re(T). Źródłem jest ta sama praca z bibliografii.
+
+Dla zachowanej konwencji czasowej $e^{i\omega\tau}$ prawo Faradaya daje:
+
+```{math}
+:label: eq-sushruth-faraday-observable
+
+\widehat\Phi=M_\ast\widetilde T\widehat I,\qquad
+\widehat{\mathcal E}=-i\omega\widehat\Phi,\qquad
+\omega_\ast=2\pi f_\ast,\qquad
+P_{\mathcal E}=\frac{\widehat{\mathcal E}}
+{\omega_\ast M_\ast\widehat I}
+=-i\frac{f}{f_\ast}\widetilde T,\qquad
+P_V=-P_{\mathcal E}.
+
+```
+
+$P_{\mathcal E}$ oznacza znormalizowaną SEM o znaku minus pochodnej strumienia;
+$P_V$ ma przeciwny znak zgodnie z pasywnym spadkiem indukcyjnym. Pokazujemy
+obie ustalone konwencje, nie wybieramy znaku po dopasowaniu wykresu. Nieznane
+$M_\ast$ i polaryzacja rzeczywistych portów nie pozwalają wyprowadzić z tego
+skalibrowanych woltów lub S21. Czynnik $f/f_\ast$ nie zmienia biegunów ani FMR.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\widehat\Phi$ | zespolona amplituda strumienia sprzężonego | $\mathrm{Wb}$ |
+| $M_\ast$ | niekalibrowana stała skali indukcyjności | $\mathrm H$ |
+| $\widehat I$ | niezerowa zespolona amplituda prądu nadajnika | $\mathrm A$ |
+| $\widehat{\mathcal E}$ | zespolona amplituda SEM Faradaya | $\mathrm V$ |
+| $f_\ast$ | dodatnia częstotliwość normalizacji, FMR z TableI | $\mathrm{Hz}$ |
+| $\omega_\ast$ | kołowa częstotliwość normalizacji | $\mathrm{rad\,s^{-1}}$ |
+| $P_{\mathcal E},P_V$ | bezwymiarowe diagnostyki SEM i pasywnego napięcia | $1$ |
+| $i$ | jednostka urojona | $1$ |
+
+Funkcja `faraday_emf_proxy` jest niezależnym postprocessingiem wzorca,
+nie publicznym konstruktorem DSL. Nie ma mapowania do ProblemIR, zmian
+planera, zasobów API lub źródła LLG. Dla FEM CPU, FEM GPU, FDM CPU i FDM GPU
+jest to not-applicable jako realizacja solvera; nie przenosi dowodów runtime.
+
+| Parametr diagnostyki | Typ | Default | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| faraday_emf_proxy.frequency_hz | float | wymagany | $\mathrm{Hz}$ | skończony nieujemny bez bool | częstotliwość próbki | niezależny postprocessing CPU | brak serializacji |
+| faraday_emf_proxy.normalized_inductance | complex | wymagany | $1$ | obie składowe skończone bez bool | zespolone T z zachowanej całki | niezależny postprocessing CPU | brak serializacji |
+| faraday_emf_proxy.reference_frequency_hz | float | wymagany keyword | $\mathrm{Hz}$ | skończony dodatni bez bool | f_ast jawnie z FMR wejścia | niezależny postprocessing CPU | brak serializacji |
+
+Przed porównaniem: test znanego rzeczywistego strumienia i niezależnej
+centralnej pochodnej dla6/7,5/9GHz ma potwierdzić znak, czynnik częstotliwości
+oraz jednostki z błędem względnym poniżej5e−7 przy4096próbkach okresu.
+Odmowa niefinitych danych lub przepełnienia to ValueError, nie zerowy sygnał.
+Następnie wyłącznie zachowane701próbek/case, bez nowej kwadratury, zmiany
+osi, materiałów lub odległości. Ekstrema mierzymy na6–9GHz bez interpolacji;
+pierwsze dwa dodatnie lokalne maksima muszą przekraczać10% maksimum tego
+samego wariantu. Brak dwóch maksimów ma być jawny. Próg opisuje lokalizator,
+nie akceptację fizyki. Nie wybieramy obserwabli według najlepszego dopasowania.
+Sama zmiana obserwabli nie wystarcza do reprodukcji, jeżeli nie zgadza się FMR
+lub pozostałe jawne parametry. Stan reprodukcji pozostaje NOT VERIFIED.
+
+### Wykonany test obserwabli — 06.11.2026
+
+Cztery testy diagnostyki PASS; niezależna rzeczywista pochodna strumienia
+potwierdziła znak i skalę dla6/7,5/9GHz. Następnie przetworzono zachowane
+12przebiegów po701próbek; ekstrema odczytano na601próbkach6–9GHz. Bez nowej
+kwadratury, interpolacji, wyboru fazy lub parametrów. Dla alfa0,01:
+
+| Antena | Maksimum Re(T), GHz | Maksimum SEM, GHz | Maksimum pasywnego napięcia, GHz |
+|---|---:|---:|---:|
+|S|7,800|7,700|7,900|
+|GS|8,175|8,085|8,265|
+|GSG|8,175|8,440|8,265|
+
+Wobec odczytanego maksimum GSG7,59759GHz oraz niezgodnego FMR sama
+zamiana obserwabli nie uzgadnia tej figury. Nie wybieramy wariantu tylko
+dlatego, że jedno maksimum S stało się bliższe. Nie rozstrzyga to recepty
+autorów ani wszystkich możliwych różnic modelu. Wynik pozostaje diagnostyką,
+nie dowodem reprodukcji lub błędu publikacji. Domyślny Re(T) jest niezmieniony.
+Pełne ekstrema i dowody: [raport obserwabli](../superpowers/plans/2026-11-06-sushruth-voltage-observable-audit.md).
+
 (scientific-bibliography)=
 ## Bibliografia
 
@@ -912,3 +996,5 @@ oraz scripts/test_reference_sushruth_2020_response.py::SushruthResponseReference
 | packages/fullmag-py/tests/test_sushruth_k0_rf_example.py | class SushruthK0RfExampleTests | Wymuszenia, gamma, czas i sampler oraz round-trip publicznego skryptu. |
 | scripts/verify_sushruth_k0_rf_response.py | verify_rf_response | Niezależny pomiar sześciu zespolonych podatności z zachowanych próbek, bez uwierzytelnienia runu. |
 | scripts/test_sushruth_k0_rf_demodulation.py | class SushruthK0RfDemodulationTests | Znany sygnał trójtonowy i negatywne kontrole fazy, jednostek, braków oraz niefinitych danych. |
+| scripts/reference_sushruth_2020_voltage_observable.py | faraday_emf_proxy | Ustalona pochodna Faradaya dla zachowanej konwencji czasowej; bez kalibracji i zmiany domyślnego T. |
+| scripts/test_sushruth_voltage_observable.py | class SushruthVoltageObservableTests | Niezależna rzeczywista pochodna strumienia, jednostki i odmowy. |

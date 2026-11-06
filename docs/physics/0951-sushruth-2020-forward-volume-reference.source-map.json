@@ -147,6 +147,27 @@
         "sushruth-rf-demod",
         "sushruth-rf-demod-tests"
       ]
+    },
+    {
+      "id": "eq-sushruth-faraday-observable",
+      "symbols": [
+        "T",
+        "omega",
+        "a8-f",
+        "k0-time",
+        "faraday-flux",
+        "faraday-scale",
+        "faraday-current",
+        "faraday-emf",
+        "faraday-fref",
+        "faraday-wref",
+        "faraday-proxies",
+        "faraday-i"
+      ],
+      "sources": [
+        "sushruth-faraday",
+        "sushruth-faraday-tests"
+      ]
     }
   ],
   "symbols": [
@@ -395,6 +416,54 @@
       "latex": "M_s",
       "meaning": "Magnetyzacja nasycenia modelu, b_M/mu0.",
       "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "faraday-flux",
+      "latex": "\\widehat\\Phi",
+      "meaning": "zespolona amplituda strumienia sprzężonego",
+      "si_unit": "\\mathrm{Wb}"
+    },
+    {
+      "id": "faraday-scale",
+      "latex": "M_\\ast",
+      "meaning": "niekalibrowana stała skali indukcyjności",
+      "si_unit": "\\mathrm H"
+    },
+    {
+      "id": "faraday-current",
+      "latex": "\\widehat I",
+      "meaning": "niezerowa zespolona amplituda prądu nadajnika",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "faraday-emf",
+      "latex": "\\widehat{\\mathcal E}",
+      "meaning": "zespolona amplituda SEM Faradaya",
+      "si_unit": "\\mathrm V"
+    },
+    {
+      "id": "faraday-fref",
+      "latex": "f_\\ast",
+      "meaning": "dodatnia częstotliwość normalizacji, FMR z TableI",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "faraday-wref",
+      "latex": "\\omega_\\ast",
+      "meaning": "kołowa częstotliwość normalizacji",
+      "si_unit": "\\mathrm{rad\\,s^{-1}}"
+    },
+    {
+      "id": "faraday-proxies",
+      "latex": "P_{\\mathcal E},P_V",
+      "meaning": "bezwymiarowe diagnostyki SEM i pasywnego napięcia",
+      "si_unit": "1"
+    },
+    {
+      "id": "faraday-i",
+      "latex": "i",
+      "meaning": "jednostka urojona",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -526,6 +595,18 @@
       "path": "scripts/test_sushruth_figure3_panel_e.py",
       "symbol": "class Figure3PanelERasterTests",
       "responsibility": "Niezależny fixture osi, ticków, legend, ekstremów i odmów."
+    },
+    {
+      "id": "sushruth-faraday",
+      "path": "scripts/reference_sushruth_2020_voltage_observable.py",
+      "symbol": "faraday_emf_proxy",
+      "responsibility": "Ustalona pochodna Faradaya dla zachowanej konwencji czasowej; bez kalibracji i zmiany domyślnego T."
+    },
+    {
+      "id": "sushruth-faraday-tests",
+      "path": "scripts/test_sushruth_voltage_observable.py",
+      "symbol": "class SushruthVoltageObservableTests",
+      "responsibility": "Niezależna rzeczywista pochodna strumienia, jednostki i odmowy."
     }
   ],
   "public_api": {
@@ -819,6 +900,36 @@
         "meaning": "raster wyłącznie do czystego odczytu panelu(e); wrapper uwierzytelnia plik",
         "backend_support": "niezależna diagnostyka rastra; bez backendu Fullmaga",
         "problem_ir": "nie serializuje się do IR"
+      },
+      {
+        "python": "faraday_emf_proxy.frequency_hz",
+        "type": "float",
+        "default": "wymagany",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "skończony nieujemny bez bool",
+        "meaning": "częstotliwość próbki",
+        "backend_support": "niezależny postprocessing CPU",
+        "problem_ir": "brak serializacji"
+      },
+      {
+        "python": "faraday_emf_proxy.normalized_inductance",
+        "type": "complex",
+        "default": "wymagany",
+        "si_unit": "$1$",
+        "validation": "obie składowe skończone bez bool",
+        "meaning": "zespolone T z zachowanej całki",
+        "backend_support": "niezależny postprocessing CPU",
+        "problem_ir": "brak serializacji"
+      },
+      {
+        "python": "faraday_emf_proxy.reference_frequency_hz",
+        "type": "float",
+        "default": "wymagany keyword",
+        "si_unit": "$\\mathrm{Hz}$",
+        "validation": "skończony dodatni bez bool",
+        "meaning": "f_ast jawnie z FMR wejścia",
+        "backend_support": "niezależny postprocessing CPU",
+        "problem_ir": "brak serializacji"
       }
     ]
   }
