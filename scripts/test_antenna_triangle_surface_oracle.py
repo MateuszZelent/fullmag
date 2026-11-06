@@ -445,7 +445,16 @@ class FixedCtypesLifecycleTests(unittest.TestCase):
     def test_measurement_only_preserves_existing_math_and_budget_ast(self):
         import ast,hashlib
         import antenna_triangle_surface_oracle as oracle
-        tree=ast.parse(Path(oracle.__file__).read_text(encoding="utf8"))
+        source=Path(oracle.__file__).read_text(encoding="utf8")
+        start=source.index("@dataclass\nclass Budget:")
+        end=source.index("\n\nclass Arithmetic:",start)
+        budget=source[start:end]
+        selection="    @property\n    def limits(self):\n        return LIMITS\n\n"
+        self.assertEqual(budget.count(selection),1)
+        # Allow only the explicit, default-equivalent limit selection seam.
+        # Keep the original frozen hash for every equation, guard and default.
+        budget=budget.replace(selection,"").replace("self.limits","LIMITS")
+        tree=ast.parse(source[:start]+budget+source[end:])
         nodes=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef,ast.Assign))
                and not (isinstance(n,ast.FunctionDef) and n.name=="peak_ram_bytes")]
         module=ast.Module(body=nodes,type_ignores=[])

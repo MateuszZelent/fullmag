@@ -12449,6 +12449,202 @@ odmowy i wspólne bramki obu wersji. Dwie nowe regresje przed poprawką odtwarza
 odmowę; po poprawce cały plik przechodzi 8/8 testów. Wykonanie nowego tokenu
 przez zbudowany Rust, publiczne Prepare/plan i H-only pozostaje **NOT VERIFIED**.
 
+(antenna-gsg-convergence-reference-profile)=
+### Jawny profil kontroli zbieżności źródła GSG — 03.11.2026
+
+<!-- DOC-ANCHOR:antenna-gsg-convergence-reference-profile-20261103 -->
+
+Zatwierdzony projekt eksperymentu ma SHA256
+`7c61be489e0638d52bdec8324480fc24572c3ae8988fee77e8a9f8eb6c475c04`
+(`docs/superpowers/plans/2026-11-03-gsg-source-convergence-experiment-proposal.md`).
+Profil `gsg_source_convergence_reference_v1` służy wyłącznie dziewięciu
+niezależnym kontrolom zachowanego prądu RT0: trzem punktom na każdej z trzech
+siatek źródła. Nie jest polityką solvera ani certyfikatem bazy. Profil ma implementację i 9/9 regresji limitów. Stan na 05.11.2026: trzy zachowane V/J/H 100/75/50 nm mają status Succeeded; odczyt dokładnych bajtów przez publiczne API przeszedł. Końcowy odbiór dziewięciu niezależnych kontroli pozostaje **NOT VERIFIED**; bieżący postęp zapisują receipty serii, a nie test profilu. Kryterium zbieżności korekty prądu nie zostało spełnione: iloraz dla 50/75 nm wynosi 0,913078649, powyżej zatwierdzonego progu 0,8; baza nie jest dopuszczona do LLG.
+
+Fizyczny operator pozostaje tym samym operatorem Biota–Savarta i istniejącą
+referencją powierzchniową RT0. Nie zmieniamy równań, rekonstrukcji QR,
+precyzji binary64/80/120, tolerancji ani limitu 8192 bitów. Native zachowuje
+`direct_tetra_quadrature` oraz `volume_inspection_v1`: 4 mln par, 500 mln
+wywołań kernela i 500 mln wizyt liści; order4, depth6, atol $10^{-9}$ A/m,
+rtol $10^{-5}$. Profil kontroli nie podnosi zasobów kontenera.
+
+| Realizacja | Zakres tego profilu |
+|---|---|
+| FEM CPU | Osobna interpretowana referencja Python zachowanego RT0; nie zastępuje publicznego managed solve. Runtime dziewięciu kontroli NOT VERIFIED. |
+| FEM GPU | Poza zakresem; brak kwalifikacji tej referencji jako solvera GPU. |
+| FDM CPU | Poza zakresem; eksperyment używa źródła H1/RT0 Tet4. |
+| FDM GPU | Poza zakresem; brak odpowiadającego źródła i dowodu urządzenia. |
+
+#### Parametry, tożsamość i mapowanie
+
+Wszystkie poniższe parametry są stałymi tylko do odczytu wybieranymi przez
+`scripts/antenna_gsg_convergence_reference.py::GsgSourceConvergenceBudget`.
+Zwykłe `scripts/antenna_triangle_surface_oracle.py::Budget` zachowuje
+wartości domyślne oraz dotychczasowy kształt raportu. Nie ma dowolnego
+argumentu podnoszącego limity. Każdy licznik dotyczy rzeczywistej próby
+operacji; przekroczenie jest naliczane przed odmową.
+
+| Parametr | Typ; jednostka SI | Profil jawny | Domyślnie | Walidacja i znaczenie | Python → ProblemIR |
+|---|---|---:|---:|---|---|
+| `pairs_target` | int; $1$ | 1000000 | 100000 | Oceny ściana–punkt–precyzja dla jednej pary źródło/XYZ. | `Budget.charge`; poza IR, referencja. |
+| `pairs_case` | int; $1$ | 5000000 | 5000000 | Suma całej dziewiątki, bez resetu. | Jak wyżej. |
+| `transc_target` | int; $1$ | 25000000 | 2000000 | Łączne sqrt/log/log1p/atan2 dla źródło/XYZ. | Jak wyżej. |
+| `transc_case` | int; $1$ | 100000000 | 100000000 | Łączny limit tych wywołań. | Jak wyżej. |
+| `predicates_target` | int; $1$ | 4000000 | 500000 | Dokładne predykaty geometrii dla źródło/XYZ. | Jak wyżej. |
+| `predicates_case` | int; $1$ | 20000000 | 20000000 | Suma predykatów całego eksperymentu. | Jak wyżej. |
+| `reference_test` | int; $1$ | 10000000 | 10000000 | Istniejący limit ocen pomocniczej kwadratury; nie zmieniony. | Jak wyżej. |
+| `reference_case` | int; $1$ | 100000000 | 100000000 | Istniejący sumaryczny limit kwadratury. | Jak wyżej. |
+| `reference_comparisons_test` | int; $1$ | 174 | 174 | Istniejące porównania referencji na target. | Jak wyżej. |
+| `reference_comparisons_case` | int; $1$ | 9396 | 9396 | Istniejące porównania referencji na przypadek. | Jak wyżej. |
+| `seconds_target` | int; $\mathrm{s}$ | 10800 | 3600 | Monotoniczny czas źródło/XYZ, bez resetu przy aktywacji. | `Budget.guard`; poza IR. |
+| `seconds_case` | int; $\mathrm{s}$ | 43200 | 28800 | Jeden zegar całej dziewiątki; 12 h to limit, nie ETA. | Jak wyżej. |
+| `ram_bytes` | int; $1$ (bajt) | 2147483648 | 2147483648 | Zmierzony peak całego procesu, także wcześniejszych alokacji. | Jak wyżej. |
+
+`activate_source(problem_ir_sha256)` przyjmuje jeden z trzech dokładnych
+SHA256 przygotowanego IR: `1744d3830a359e2d17e3cfb184900a6509233facc8773857c4ae8790c0da79b3`
+(100 nm), `ad466216dbbe93fb0de8260711c7466b8344299fe827fc2eb1c05e82b50ba39c`
+(75 nm), `c6f6087b311999218fa9d188d759bd3de767c428ab2eb38b1fcd30549b9cb785`
+(50 nm). To identyfikatory limitowania pracy, **nie uwierzytelnienie źródła**.
+Wywołujący nadal musi odczytać rzeczywiste bajty, sprawdzić ich hash,
+publiczny accepted owner, geometrię, materiały i zachowane ślady J.
+Nie wolno skopiować historycznego accepted state do nowego IR.
+
+`activate(target)` przyjmuje dokładny binary64 XYZ zapisany jako little-endian
+`<3d` hex: x = -2, 0 albo +2 µm, y = -50 nm, z = -22,4 nm. Są to indeksy
+0, 8 i 16 zamrożonego nośnika, a nie dowolny punkt próbki. Klucz lokalnego
+licznika łączy SHA źródła i XYZ: ten sam punkt na różnych siatkach ma osobny
+limit lokalny, lecz nadal wspólne liczniki, początek czasu i peak RAM.
+Ponowna aktywacja zachowuje dotychczasowy licznik i czas. Nieznane źródło,
+punkt, brak aktywacji lub wyczerpanie limitu dają jawną odmowę. Raport odmowy
+pozostaje serializowalny bez ponownego admission; nie oznacza zera pola.
+
+Nie powstaje nowy publiczny parametr `fm.study`, pole ProblemIR, operator,
+receipt, wynik accepted ani prawo do LLG. Końcowy driver ma użyć jednej
+instancji tego profilu dla wszystkich dziewięciu kontroli i przypiętego wheel
+mpmath 1.3.0 (`a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c`).
+Bramki native–oracle i zbieżności pozostają dokładnie w zatwierdzonym
+projekcie; nie dopasowujemy znaku, amplitudy ani progów po obejrzeniu danych.
+
+#### Walidacja, ograniczenia i indeks źródeł
+
+Plan regresji obejmuje: niezmienione domyślne limity, dokładny profil,
+nieznane piny/XYZ, brak resetu i wspólne limity trzech źródeł, zliczenie próby
+przekraczającej limit, czas, rzeczywisty RAM, bit-length oraz współpracę
+z istniejącym `evaluate_retained_rt0`. Testy interpretowane nie zastępują
+trzech nowych publicznych solve ani dziewięciu rzeczywistych kontroli.
+Nie wolno z tych punktów wnioskować o całej próbce lub zgodności transmisji.
+
+| Źródło + symbol | Odpowiedzialność i status |
+|---|---|
+| `scripts/antenna_triangle_surface_oracle.py::Budget` | Istniejący właściciel liczników i odmów; domyślny profil bez zmian. |
+| `scripts/antenna_gsg_convergence_reference.py::GsgSourceConvergenceBudget` | Jawny profil i rozdzielenie źródło/XYZ, bez nowego kernela. |
+| `scripts/antenna_rt0_surface_oracle.py::evaluate_retained_rt0` | Istniejąca niezależna rekonstrukcja i trzy precyzje; bez kwalifikacji źródła. |
+| `scripts/test_antenna_gsg_convergence_reference.py::GsgConvergenceBudgetTests` | 9/9 regresji limitów i współpracy PASS; brak nowego native solve. |
+
+Kontekst publikacyjny: [Sushruth et al., Phys. Rev. Research 2, 043203 (2020)](https://doi.org/10.1103/PhysRevResearch.2.043203).
+Profil jest narzędziem kontroli numerycznej, nie odtworzeniem odpowiedzi
+magnetyzacji ani transmisji z tej pracy.
+
+Dowody interpretowane: 9/9 nowych testów profilu PASS; istniejący zestaw
+referencji ma 54 testy, 52 PASS i dwa istniejące pominięcia ABI Windows
+w Linux. Oryginalny hash AST równań i bramek pozostał ten sam; normalizacja
+obejmuje wyłącznie dostęp do limitów przez nową właściwość o niezmienionym
+domyślnym wyniku. Trzy SHA rzeczywistych wejść oraz bity XYZ wszystkich
+dziewięciu referencji są zgodne z zamrożonymi plikami. Te kontrole nie
+wykonały nowych V/J/H ani właściwej referencji pełnego GSG. Receipty i logi:
+prywatny control volume grupy 3203, katalog
+`verification/retained-current-h-only-20261102/accepted-store-v2/producer-dispatch-build/lock-scope-fix-build/work-budget-preflight-20261103/public-gsg-universe-275-01-version-fixed/gsg-reference-profile-20261103/`.
+
+
+
+(antenna-gsg-reference-global-sum)=
+### Sumowanie niezależnej referencji pełnego prądu — 03.11.2026
+
+<!-- DOC-ANCHOR:antenna-gsg-reference-global-sum -->
+
+`scripts/antenna_gsg_convergence_reference.py::evaluate_retained_field`
+ma sumować istniejące `antenna_rt0_surface_oracle.py::evaluate_retained_rt0`
+na wszystkich Tet4 tego samego zachowanego prądu. Nie rozwiązuje V lub J,
+nie dodaje nowego kernela i nie kwalifikuje źródła. Sumowanie ma implementację i11/11 regresji matematycznych PASS. Seria dziewięciu
+rzeczywistych kontroli pełnego GSG pozostaje nieukończona; te regresje nie są jej wykonaniem.
+
+Używamy wszystkich lokalnych śladów J, a nie wygładzonego J nodal.
+Wiersz `closed_loop_cell280_le` składa się z pięciu uint64 (ordinal i4 ID),
+12 liczb współrzędnych wierzchołków, 12 lokalnych J,3 współrzędnych środka
+oraz3 składowych J w środku. Ten układ nie dostarcza osobnego J_H1.
+Pełne uwierzytelnienie pakietu, natywne cold admission i zgodność przygotowania
+pozostają po stronie wywołującego; sam poprawny wiersz nie jest accepted state.
+
+Zachowujemy dotychczasowe trzy precyzje i obie postacie potencjału ściany.
+Globalna bramka sprawdza sumę lokalnych budżetów, nie tylko przypadkową
+zgodność wyniku po cancellation:
+
+```{math}
+:label: antenna-gsg-reference-global-field
+\mathbf H^{(p)}=\sum_{T=1}^{N}\mathbf H_T^{(p)},\qquad
+ E_p=\sum_{T=1}^{N}e_{p,T},\qquad E_s=\sum_{T=1}^{N}e_{s,T},\qquad
+ \tau=10^{-6}\,\mathrm{A\,m^{-1}}+10^{-6}\|\mathbf H^{(120)}\|_2.
+```
+
+```{math}
+:label: antenna-gsg-reference-global-gates
+ E_p\le\tau,\quad E_s\le\tau,\quad
+ \|\mathbf H^{(120)}-\mathbf H^{(80)}\|_2\le\tau,\quad
+ \|\mathbf H^{(120)}-\mathbf H_w^{(120)}\|_2\le\tau,\quad
+ \kappa=\frac{S}{\max(\|\mathbf H^{(120)}\|_2,10^{-6}\,\mathrm{A\,m^{-1}})}\le10^{40}.
+```
+
+Dopiero po tych kontrolach wolno porównać z zachowanym natywnym H, bez fitu:
+
+```{math}
+:label: antenna-gsg-reference-native-comparison
+ \|\mathbf H^{(120)}-\mathbf H_n\|_2\le
+ 10^{-3}\,\mathrm{A\,m^{-1}}+10^{-3}\|\mathbf H^{(120)}\|_2.
+```
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $T,N$ | Indeks komórki i pełna liczba źródłowych Tet4. | $1$ |
+| $p$ | binary64,80 lub120 cyfr; binary64 może wymagać jawnego fallback do wysokiej precyzji. | $1$ |
+| $\mathbf H_T^{(p)},\mathbf H^{(p)}$ | Wkład komórki oraz jego suma we wskazanej precyzji. | $\mathrm{A\,m^{-1}}$ |
+| $e_{p,T},e_{s,T}$ | Istniejące lokalne budżety precyzji i whole-face/fan dla komórki. | $\mathrm{A\,m^{-1}}$ |
+| $E_p,E_s$ | Sumy tych budżetów po wszystkich komórkach. | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_w^{(120)}$ | Suma alternatywnej postaci whole-face w120 cyfrach. | $\mathrm{A\,m^{-1}}$ |
+| $S$ | Suma norm lokalnych wkładów ścian zwrócona przez istniejącą referencję. | $\mathrm{A\,m^{-1}}$ |
+| $\tau$ | Niezmieniona globalna tolerancja precyzji i formuły. | $\mathrm{A\,m^{-1}}$ |
+| $\kappa$ | Globalny wskaźnik cancellation, z istniejącą podłogą pola. | $1$ |
+| $\mathbf H_n$ | Pełny wektor natywny przy tym samym podpisanym prądzie. | $\mathrm{A\,m^{-1}}$ |
+
+| Parametr funkcji | Typ; default; SI | Znaczenie i odmowa |
+|---|---|---|
+| `cells` | Iterator wierszy cells280; required; mieszane SI jak układ powyżej. | Kolejne ordinale od0, cztery różne ID; skończone dane. Wywołujący weryfikuje źródło i pełny carrier. |
+| `target_m` | vector3; required; $\mathrm m$. | Jawny skończony punkt bez przesunięcia w rendererze. Profil GSG dopuszcza tylko trzy przypięte punkty. |
+| `expected_cells` | int; required; $1$. | Dodatnia pełna liczba komórek, do72911 dla eksperymentu. Brak lub nadmiar komórek odmawia zamiast zwracać częściowe H. |
+| `budget` | istniejący Budget; required; $1$. | Ten sam obiekt całej dziewiątki; funkcja nigdy nie tworzy ani nie resetuje budżetu. |
+| `native_h_apm` | vector3 albo None; defaultNone; $\mathrm{A\,m^{-1}}$. | Opcjonalny pełny Hraw; brak oznacza brak porównania, nie zgodność. |
+| `progress` | callable albo None; defaultNone; $1$. | Odbiera tylko completed/total co256 komórek i na końcu; nie zmienia równania, licznika ani czasu startu. |
+
+Każda odmowa propaguje do drivera; driver zachowuje terminalny raport wraz
+z `budget.report()`, bez ponowienia obliczenia. Niekompletny iterator nie daje
+częściowego wektora udającego wynik. Ślad hash per-cell nie zastępuje
+uwierzytelnionych wejść ani dowodu naukowej kwalifikacji.
+To narzędzie interpretowane dla danych FEM CPU/double/strict. FEM GPU, FDM CPU
+i FDM GPU pozostają poza zakresem kwalifikacji tego eksperymentu.
+Python DSL, ProblemIR, planner, API i formaty accepted nie są zmienione.
+
+Indeks źródeł: `scripts/antenna_gsg_convergence_reference.py::evaluate_retained_field`
+— sumy i bramki; `scripts/antenna_rt0_surface_oracle.py::evaluate_retained_rt0`
+— niezmieniony kernel; `scripts/test_antenna_gsg_field_reference_sum.py::GsgFieldReferenceSumTests`
+— testy sumowania i odmów. Kontekst: [Sushruth et al.(2020)](https://doi.org/10.1103/PhysRevResearch.2.043203);
+pozytywny wynik referencji pola nie odtwarza jeszcze transmisji fal spinowych.
+
+Dowody implementacji tego kroku: 12/12 regresji kryteriów,11/11 regresji
+sumowania i9/9 regresji profilu. To małe dane matematyczne i celowe odmowy,
+nie nowe wyniki publikacji. Kod `antenna_rt0_surface_oracle.py` i jego
+kernel pozostał bajtowo bez zmian. Wyniki w prywatnym control volume grupy3203:
+`verification/retained-current-h-only-20261102/accepted-store-v2/producer-dispatch-build/lock-scope-fix-build/work-budget-preflight-20261103/public-gsg-universe-275-01-version-fixed/gsg-source-convergence-analysis-20261103/`.
+
+
 (antenna-gsg-current-correction-analysis)=
 ### Obliczenie istniejącej korekty weighted-L2 z zachowanych V i RT0
 

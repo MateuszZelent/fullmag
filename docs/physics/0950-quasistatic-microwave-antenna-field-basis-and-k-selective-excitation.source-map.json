@@ -2002,6 +2002,66 @@
       "latex": "$f_p$",
       "meaning": "Udział części w liczniku; niezdefiniowany dla N_eta=0.",
       "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-cells",
+      "latex": "$T,N$",
+      "meaning": "Indeks komórki i pełna liczba źródłowych Tet4.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-precision",
+      "latex": "$p$",
+      "meaning": "binary64,80 lub120 cyfr; binary64 może wymagać jawnego fallback do wysokiej precyzji.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-sum-field",
+      "latex": "$\\mathbf H_T^{(p)},\\mathbf H^{(p)}$",
+      "meaning": "Wkład komórki oraz jego suma we wskazanej precyzji.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-local-error",
+      "latex": "$e_{p,T},e_{s,T}$",
+      "meaning": "Istniejące lokalne budżety precyzji i whole-face/fan dla komórki.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-sum-error",
+      "latex": "$E_p,E_s$",
+      "meaning": "Sumy tych budżetów po wszystkich komórkach.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-whole",
+      "latex": "$\\mathbf H_w^{(120)}$",
+      "meaning": "Suma alternatywnej postaci whole-face w120 cyfrach.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-norm-sum",
+      "latex": "$S$",
+      "meaning": "Suma norm lokalnych wkładów ścian zwrócona przez istniejącą referencję.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-gate",
+      "latex": "$\\tau$",
+      "meaning": "Niezmieniona globalna tolerancja precyzji i formuły.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "gsg-convergence-cancellation",
+      "latex": "$\\kappa$",
+      "meaning": "Globalny wskaźnik cancellation, z istniejącą podłogą pola.",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "gsg-convergence-native",
+      "latex": "$\\mathbf H_n$",
+      "meaning": "Pełny wektor natywny przy tym samym podpisanym prądzie.",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
     }
   ],
   "equations": [
@@ -3757,6 +3817,47 @@
         "gsg-current-correction",
         "gsg-current-correction-partition",
         "gsg-current-correction-partition-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-global-field",
+      "symbols": [
+        "gsg-convergence-cells",
+        "gsg-convergence-precision",
+        "gsg-convergence-sum-field",
+        "gsg-convergence-local-error",
+        "gsg-convergence-sum-error",
+        "gsg-convergence-gate"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-global-gates",
+      "symbols": [
+        "gsg-convergence-sum-field",
+        "gsg-convergence-sum-error",
+        "gsg-convergence-whole",
+        "gsg-convergence-norm-sum",
+        "gsg-convergence-gate",
+        "gsg-convergence-cancellation"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-gsg-reference-native-comparison",
+      "symbols": [
+        "gsg-convergence-sum-field",
+        "gsg-convergence-native"
+      ],
+      "sources": [
+        "gsg-reference-global-sum",
+        "gsg-reference-global-sum-tests"
       ]
     }
   ],
@@ -9188,6 +9289,41 @@
       "path": "scripts/test_antenna_gsg_current_correction.py",
       "symbol": "class PartitionedCurrentCorrectionTests",
       "responsibility": "Niezależne ważenie dwóch części, nieciągła partycja, lokalne sourcecut IDs, odmowy braków i nadmiaru oraz ograniczone iteratory.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-reference-profile",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "class GsgSourceConvergenceBudget",
+      "responsibility": "Jawny profil dziewięciu kontroli z jednym budżetem i kluczem źródło/XYZ; brak autoryzacji danych lub kwalifikacji bazy.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-convergence-reference-budget-regressions",
+      "path": "scripts/test_antenna_gsg_convergence_reference.py",
+      "symbol": "class GsgConvergenceBudgetTests",
+      "responsibility": "9 regresji limitów, odmów, czasu, RAM, dokładnych bitów i współpracy z istniejącą referencją RT0.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-default-equivalence",
+      "path": "scripts/test_antenna_triangle_surface_oracle.py",
+      "symbol": "test_measurement_only_preserves_existing_math_and_budget_ast",
+      "responsibility": "Oryginalny hash AST równań, wartości i bramek po normalizacji wyłącznie nowego wyboru limitów.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-global-sum",
+      "path": "scripts/antenna_gsg_convergence_reference.py",
+      "symbol": "evaluate_retained_field",
+      "responsibility": "Sumowanie istniejącego kernela RT0, globalne sumy błędów i cancellation, wspólny budżet, bez Solve.",
+      "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "gsg-reference-global-sum-tests",
+      "path": "scripts/test_antenna_gsg_field_reference_sum.py",
+      "symbol": "class GsgFieldReferenceSumTests",
+      "responsibility": "11 regresji na małych danych matematycznych; niepełny/nadmiarowy nośnik, sumy błędów, cancellation i postęp.",
       "evidence_status": "interpreted_tests_passed"
     }
   ],
