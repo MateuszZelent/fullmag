@@ -64,6 +64,36 @@ class HistoryInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "prepared-unclaimed"):
             control_references(self.root, TOKEN)
 
+    def test_host_device_reattest_intent_and_current_are_reference_hash_pins(self):
+        candidate = "d" * 32
+        operation_attempt = "e" * 32
+        certificate_sha = "f" * 64
+        pins = {"attempt": candidate, "config_sha256": "1" * 64,
+                "certificate_sha256": certificate_sha, "expected_host_device": 11,
+                "source_root": "/source", "compose_project": "fullmag-worktree-test"}
+        intent = {"pins": pins, "state_root": "/state", "engine_id": "engine",
+                  "old_certificate": "old", "new_certificate": "new",
+                  "containers": {"backend": "2" * 64}}
+        intent_path = ("host-device-reattest/" + certificate_sha + "/intent.json")
+        self.put(intent_path, intent)
+
+        operation = {"schema": "fullmag.docker-build-operation.v1",
+                     "phase": "host-device-reattest", "state": "succeeded",
+                     "attempt": operation_attempt, "compose_project": pins["compose_project"],
+                     "control_volume": "fullmag-worktree-test-control", "inputs": pins,
+                     "new_certificate_sha256": "3" * 64}
+        self.put("host-device-reattest/attempts/" + operation_attempt + "/receipt.json", operation)
+        self.put("host-device-reattest/attempts/" + operation_attempt + "/terminal.json", operation)
+        current_path = "host-device-reattest/current.json"
+        self.put(current_path, operation)
+
+        proof = control_references(self.root, "0" * 32)
+        self.assertIn(candidate, proof["protected"])
+        self.assertEqual(digest(raw(intent)), proof["pins"][intent_path])
+        self.assertEqual(digest(raw(operation)), proof["pins"][current_path])
+        with self.assertRaisesRegex(HistoryError, "referenced"):
+            control_references(self.root, candidate)
+
     def test_failed_or_inconsistent_terminal_attempt_is_a_live_root(self):
         a, b = "a" * 32, "b" * 32
         self.terminal(a, "run-a")

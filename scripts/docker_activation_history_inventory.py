@@ -25,6 +25,7 @@ KNOWN_ROOTS = frozenset({
     "activation", "iteration", "backend", "frontend", "cancelled-activation-recovery",
     "cold-stored-budget-stop-preview", "cold-stored-budget-stop", "recreate-services",
     "offline-reconciliation", "pre-admission-output-reconciliation", "namespaces",
+    "host-device-reattest",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
