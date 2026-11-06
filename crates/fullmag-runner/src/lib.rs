@@ -3575,7 +3575,7 @@ fn run_planned_problem_with_artifact_context(
                 &runtime_outputs,
                 None,
                 artifact_writer.clone(),
-                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                frozen_stage.map(|(frozen, source_frozen_plan)| crate::constraints::FdmTerminalContext {
                     frozen, source_frozen_plan, drain_writer: &mut drain_writer,
                 }),
             )?;
@@ -4195,7 +4195,7 @@ fn run_planned_problem_with_callback_artifact_context(
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
-                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                frozen_stage.map(|(frozen, source_frozen_plan)| crate::constraints::FdmTerminalContext {
                     frozen, source_frozen_plan, drain_writer: &mut drain_writer,
                 }),
             )?;
@@ -4852,7 +4852,7 @@ fn run_planned_problem_with_live_preview_artifact_context(
                     on_step: &mut capture_terminal_fields,
                 }),
                 artifact_writer.clone(),
-                frozen_stage.map(|(frozen, source_frozen_plan)| cpu_reference::FdmTerminalContext {
+                frozen_stage.map(|(frozen, source_frozen_plan)| crate::constraints::FdmTerminalContext {
                     frozen, source_frozen_plan, drain_writer: &mut drain_writer,
                 }),
             )?;

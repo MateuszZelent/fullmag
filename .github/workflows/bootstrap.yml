@@ -111,11 +111,12 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
-      - name: Check periodic Airbox observation contracts
+      - name: Check FDM CUDA runner contracts
         # cargo check type-checks the CUDA Rust path without linking a native
         # library. The actual cuFFT operator is qualified on the managed GPU.
         run: |
           cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
+          cargo test --locked -p fullmag-runner --lib cuda_stage_handoff_preserves_reference_and_rejects_changed_state
           FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
 
       - name: Run closed-loop volume inspection policy contracts

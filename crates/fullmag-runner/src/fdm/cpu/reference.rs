@@ -1557,12 +1557,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     )
 }
 
-pub(crate) struct FdmTerminalContext<'a> {
-    pub frozen: &'a crate::constraints::FrozenStageContextV1,
-    pub source_frozen_plan: Option<&'a fullmag_ir::ResolvedFrozenSpinsPlanIR>,
-    pub drain_writer: &'a mut (dyn FnMut() -> Result<(), RunError> + Send),
-}
-
 pub(crate) fn execute_reference_fdm_with_terminal_context(
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -1570,7 +1564,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
     coupled_checkpoint: Option<serde_json::Value>,
-    mut terminal: Option<FdmTerminalContext<'_>>,
+    mut terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if terminal.is_some() && coupled_checkpoint.is_some() {
         return Err(RunError { message: "terminal publication context cannot authorize checkpoint resume".into() });

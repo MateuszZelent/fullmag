@@ -118,8 +118,13 @@ pub(crate) fn prepare_and_publish(
     })));
     let decoded = fullmag_application::decode_study_artifact_bytes(
         "state", &output.codec_id, &output.codec_version, &output.bytes)?;
-    let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
-        bail!("materialization requires an accepted magnetization artifact");
+    let (state, has_frozen_lifecycle) = match decoded {
+        fullmag_application::DecodedStudyArtifact::MagnetizationState(state) => (state, false),
+        fullmag_application::DecodedStudyArtifact::FrozenMagnetizationState(state)
+            if step.resolved_input.frozen_stage_context.is_some()
+                && step.resolved_input.requested_execution.backend == "fdm"
+                && step.resolved_input.requested_execution.device == "gpu" => (state.state, true),
+        _ => bail!("materialization requires an accepted magnetization artifact"),
     };
     let terminal_stats = execution.terminal_stats.as_ref().and_then(|stats| {
         match build_terminal_scalar_stats(step, source, &state_object_ref, stats, &state) {
@@ -141,6 +146,11 @@ pub(crate) fn prepare_and_publish(
         publish_terminal_completion(store, step, &record, budget.saturating_sub(terminal_stats_bytes))?
             .unwrap_or(0)
     } else { 0 };
+    if has_frozen_lifecycle {
+        // The typed handoff supports completion and scalar evidence. The
+        // standalone field evaluator has no frozen reference input.
+        return Ok(());
+    }
     let quantity_budget = budget.saturating_sub(terminal_stats_bytes).saturating_sub(completion_bytes);
     let can_materialize_quantities = quantity_budget >= 4096;
     if !can_materialize_quantities && terminal_stats_bytes == 0 {

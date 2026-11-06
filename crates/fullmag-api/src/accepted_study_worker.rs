@@ -1553,15 +1553,18 @@ fn accepted_state_ref_from_runner_snapshot(
     else {
         return Ok(None);
     };
-    if !fdm_plan.spin_transport_plans.is_empty() || fdm_plan.frozen_spins.is_some() {
-        return Ok(None);
-    }
-
     let requested_device = accepted_step
         .resolved_input
         .requested_execution
         .device
         .as_str();
+    let accepted_cuda_frozen = requested_device == "gpu"
+        && accepted_step.resolved_input.frozen_stage_context.is_some();
+    if !fdm_plan.spin_transport_plans.is_empty()
+        || (fdm_plan.frozen_spins.is_some() && !accepted_cuda_frozen)
+    {
+        return Ok(None);
+    }
     if requested_device == "gpu"
         && (!fdm_plan.fdm_gpu_charge_transports.is_empty()
             || fdm_plan.temperature.unwrap_or(0.0) > 0.0
