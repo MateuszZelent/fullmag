@@ -1070,6 +1070,13 @@ montowany tylko do odczytu podczas kwalifikacji oraz ponownej kontroli pod
 `operation.lock`. Nie wolno zastępować go rootem wolumenu ani podkatalogiem
 innej roli lub przestrzeni nazw.
 
+Współdzielone wolumeny pakietów, Cargo i pnpm nie są traktowane jako prywatne
+wolumeny grupy po uwierzytelnieniu ich dokładnych nazw i etykiet. Kontrola
+pakietów nadal odrzuca obcy dostęp do katalogu `groups/<unit_key>` tej grupy,
+niezarejestrowane mounty rootu i aliasy przez bind mount. Uwzględnia działające
+oraz zatrzymane kontenery. Hash profilu cache i dowód wolumenów wchodzą do planu;
+kwalifikacja jest ponawiana pod blokadą przed zatwierdzeniem naprawy.
+
 Najpierw wykonaj podgląd `reconcile-offline-volume` z przypiętymi
 `--attempt`, `--config-sha256`, `--source-root`, `--port` i nowym
 `--operation-attempt`. Wykonanie wymaga `--apply --expected-plan-sha256`

@@ -302,7 +302,8 @@ def _read_pair(document: dict, identity: dict, control, terminal: dict) -> tuple
 
 def _project_inventory(control, pair: Mapping[str, Mapping[str, object]], *,
                        protected_volumes: set[str], state_root: Path, ledger_volume: str,
-                       helper_name: str | None = None, state_sources=()) -> list[str]:
+                       helper_name: str | None = None, state_sources=(),
+                       shared_consumer_validator=None) -> list[str]:
     def overlaps(left: str, right: str) -> bool:
         left, right = left.rstrip("/"), right.rstrip("/")
         return left == right or left.startswith(right + "/") or right.startswith(left + "/")
@@ -331,6 +332,8 @@ def _project_inventory(control, pair: Mapping[str, Mapping[str, object]], *,
                 _fail("Selected Compose project has another container: " + str(identifier))
         if identifier in allowed:
             continue
+        if shared_consumer_validator is not None:
+            shared_consumer_validator(row)
         for mount in [*row.get("Mounts", []), *row.get("HostConfig", {}).get("Mounts", [])]:
             source = str(mount.get("Source", "")).replace("\\", "/")
             targets = [str(state_root), *state_sources]

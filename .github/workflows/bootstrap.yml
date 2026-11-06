@@ -982,6 +982,7 @@ jobs:
           python -B scripts/test_docker_volume_resumed_budget_projection.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
+          python -B scripts/test_docker_offline_shared_consumers.py -v
           python -B scripts/test_docker_stopped_network.py -v
           python -B scripts/test_docker_native_failed_recreate.py -v
           python -B scripts/test_docker_retained_recovery_context.py -v

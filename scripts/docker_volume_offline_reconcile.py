@@ -892,11 +892,13 @@ def _activation_marker(control, record: Mapping[str, Any]) -> tuple[str | None, 
 def _compose_pair(document: Mapping[str, Any], identity: Mapping[str, str], control,
                   development: Mapping[str, Any], *, state_root: Path,
                   ledger_volume: str, helper_name: str | None = None,
-                  helper_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+                  helper_id: str | None = None,
+                  attest_shared_cache: bool = True) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     from docker_dev_up import _validate_retained_network
     from docker_volume_dev import _validate_retained_service
     from docker_volume_empty_quarantine import _project_inventory
     from docker_compose_identity import compose_network_name, validate_source_labels
+    from docker_shared_build_storage import PACKAGE_VOLUME_PREFIX
 
     try:
         expected_network_name = compose_network_name(control.project)
@@ -1021,6 +1023,14 @@ def _compose_pair(document: Mapping[str, Any], identity: Mapping[str, str], cont
     for volume in (document.get("volumes") or {}).values():
         if isinstance(volume, Mapping) and isinstance(volume.get("name"), str):
             protected.add(volume["name"])
+    shared_evidence = None
+    shared_validator = None
+    if attest_shared_cache and any(name.startswith(PACKAGE_VOLUME_PREFIX + "-") for name in protected):
+        from docker_offline_shared_consumers import qualify
+        shared_evidence, shared_names, shared_validator = qualify(control, development, document, pair["backend"])
+        if shared_names & {control.volume, ledger_volume, frontend_volume}:
+            raise _fail("Shared cache exemption overlaps private control, ledger or frontend storage")
+        protected -= shared_names
     state_sources = {str(state_root), str(state_root / "runs/docker-all/session-store")}
     for row in pair.values():
         for mount in row.get("Mounts", []):
@@ -1031,9 +1041,13 @@ def _compose_pair(document: Mapping[str, Any], identity: Mapping[str, str], cont
         control, {key: {"id": evidence[key]["id"]} for key in evidence},
         protected_volumes=protected, state_root=state_root, ledger_volume=ledger_volume,
         helper_name=helper_name, state_sources=sorted(state_sources),
+        shared_consumer_validator=shared_validator,
     )
     ids = _scope_container_inventory(ids, list(actual_ids.values()), helper_id=helper_id)
-    return {"containers": evidence, "network": network_evidence}, pair, ids
+    observation = {"containers": evidence, "network": network_evidence}
+    if shared_evidence is not None:
+        observation["shared_cache"] = shared_evidence
+    return observation, pair, ids
 
 
 def _document_port(document: Mapping[str, Any]) -> int:
@@ -1087,6 +1101,42 @@ def _validate_iteration_incarnation(original: Mapping[str, Any], backend: Mappin
             and (backend.get("id") != original.get("backend_container")
                  or backend.get("started_at") != original.get("backend_started_at"))):
         raise _fail("Stopped backend incarnation differs from the interrupted idle restart")
+
+
+def _collection_shared_cache_mode(control, operation_attempt: str, original_token: str) -> bool:
+    """Keep a publish-before-unlink retry on its immutable proof's policy."""
+    raw = _control_raw(control, CURRENT, optional=True)
+    if raw is None:
+        root = "offline-reconciliation/" + _attempt(operation_attempt, "offline operation attempt")
+        intent_raw = _control_raw(control, root + "/intent.json", optional=True)
+        receipt_raw = _control_raw(control, root + "/receipt.json", optional=True)
+        if intent_raw is None:
+            if receipt_raw is not None:
+                raise _fail("Partial offline receipt has no immutable intent")
+            return True
+        intent = _strict_json(intent_raw, "Partial offline intent")
+        proof = intent.get("proof")
+        if (not isinstance(proof, Mapping) or proof.get("schema") != SCHEMA
+                or proof.get("state") != "planned" or proof.get("operation_attempt") != operation_attempt
+                or proof.get("original_operation_attempt") != original_token
+                or proof.get("phase") not in ("activation", "iteration")
+                or proof.get("control_volume") != control.volume
+                or proof.get("compose_project") != control.project):
+            raise _fail("Partial offline intent belongs to another operation or group")
+        material = dict(proof)
+        if _hash(material.pop("plan_sha256", None), "partial offline plan") != _sha256(canonical(material)):
+            raise _fail("Partial offline intent plan digest differs")
+        expected_intent, expected_receipt = _operation_records(proof)
+        if (intent_raw != canonical(expected_intent) + b"\n"
+                or (receipt_raw is not None and receipt_raw != canonical(expected_receipt) + b"\n")):
+            raise _fail("Partial offline intent/receipt chain differs")
+        # This only selects the observation policy. The caller recollects every
+        # live pin; apply and the transaction still require the exact old plan SHA.
+        return "shared_cache" in proof.get("stopped_pair", {})
+    current = _strict_json(raw, "Offline reconciliation current pointer")
+    _verify_completed_record(control, current, raw, operation_attempt,
+                             allow_active_token=original_token, active_pin_matches=True)
+    return "shared_cache" in current["proof"].get("stopped_pair", {})
 
 
 def _collect_context(args) -> dict[str, Any]:
@@ -1182,10 +1232,14 @@ def _collect_context(args) -> dict[str, Any]:
     pair, pair_rows, inventory_ids = _compose_pair(
         document, identity, control, development_terminal,
         state_root=state_root, ledger_volume=ledger_volume,
+        attest_shared_cache=_collection_shared_cache_mode(control, operation_attempt, original_token),
     )
     if pair["containers"]["backend"]["id"] != backend_id:
         raise _fail("Stopped backend ID differs from the successful development attempt")
     _validate_iteration_incarnation(original, pair["containers"]["backend"])
+    if "shared_cache" in pair:
+        shared = pair["shared_cache"]
+        pins[shared["profile_relative"]] = shared["profile_sha256"]
     plan = {
         "schema": SCHEMA,
         "state": "planned",
@@ -1568,6 +1622,7 @@ def _current_live_plan(context: Mapping[str, Any], helper_name: str, helper_id: 
         context["document"], context["identity"], context["control"], development,
         state_root=context["state_root"], ledger_volume=context["ledger_volume"],
         helper_name=helper_name, helper_id=helper_id,
+        attest_shared_cache="shared_cache" in plan["stopped_pair"],
     )
     inventory_without_helper = [identifier for identifier in inventory_ids if identifier != helper_id]
     if inventory_without_helper != plan["container_inventory_ids"]:
@@ -2005,6 +2060,8 @@ def _revalidate_for_recreate(control, receipt: Mapping[str, Any], previous: Mapp
         state_root=state_root, ledger_volume=ledger_volume,
         helper_name=(current_operation.get("helper_name") if current_operation is not None else None),
         helper_id=(current_operation.get("helper_id") if current_operation is not None else None),
+        # Old immutable v1 proofs retain the strict whole-volume consumer fence.
+        attest_shared_cache="shared_cache" in proof["stopped_pair"],
     )
     if live_pair != proof.get("stopped_pair"):
         raise _fail("Live stopped pair differs from offline proof")

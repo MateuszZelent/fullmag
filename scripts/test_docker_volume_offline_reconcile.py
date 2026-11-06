@@ -292,6 +292,28 @@ class StoreAndPhaseTests(unittest.TestCase):
 
 
 class ProjectInventoryScopeTests(unittest.TestCase):
+    def test_shared_consumer_proof_cannot_bypass_private_volume_fence(self):
+        from unittest.mock import patch, Mock
+        from docker_volume_empty_quarantine import _project_inventory
+        foreign = "1" * 64
+        rows = [
+            {"Id": CONTAINER, "Config": {"Labels": {"com.docker.compose.project": "fullmag-demo"}},
+             "Mounts": [], "HostConfig": {}},
+            {"Id": foreign, "Config": {"Labels": {"com.docker.compose.project": "other"}},
+             "Mounts": [{"Name": "private-control"}], "HostConfig": {}},
+        ]
+        for error in (None, BuildControlError("unregistered shared consumer")):
+            validator = Mock(side_effect=error)
+            outputs = [SimpleNamespace(stdout=(CONTAINER + "\n" + foreign + "\n").encode()),
+                       SimpleNamespace(stdout=json.dumps(rows).encode())]
+            with patch("docker_volume_empty_quarantine.docker_capture", side_effect=outputs):
+                with self.assertRaisesRegex(BuildControlError, "another consumer|unregistered shared consumer"):
+                    _project_inventory(SimpleNamespace(project="fullmag-demo"),
+                        {"backend": {"id": CONTAINER}}, protected_volumes={"private-control"},
+                        state_root=Path("/state"), ledger_volume="private-control",
+                        shared_consumer_validator=validator)
+            validator.assert_called_once_with(rows[1])
+
     def test_selected_inventory_is_stable_as_unrelated_container_ids_change(self) -> None:
         pair = [CONTAINER, "f" * 64]
         helper_id = "3" * 64
@@ -1009,6 +1031,35 @@ class DurableTransactionTests(unittest.TestCase):
 
 
 class PreparedRetryTests(unittest.TestCase):
+    def test_collection_keeps_policy_before_current_publication(self):
+        for shared in (False, True):
+            for receipt_written in (False, True):
+                pair = {"containers": {}, "network": {}}
+                if shared: pair["shared_cache"] = {"profile_sha256": "f" * 64}
+                control, _plan, _receipt = offline_fixture(active=(TOKEN + "\n").encode(),
+                    plan_extra={"stopped_pair": pair})
+                del control.records[module.CURRENT]
+                if not receipt_written:
+                    del control.records[f"offline-reconciliation/{OPERATION}/receipt.json"]
+                self.assertIs(module._collection_shared_cache_mode(control, OPERATION, TOKEN), shared)
+                intent_path = f"offline-reconciliation/{OPERATION}/intent.json"
+                control.records[intent_path] += b" "
+                with self.assertRaises(BuildControlError):
+                    module._collection_shared_cache_mode(control, OPERATION, TOKEN)
+
+    def test_collection_preserves_verified_legacy_or_shared_policy_after_partial_commit(self):
+        for shared in (False, True):
+            pair = {"containers": {}, "network": {}}
+            if shared: pair["shared_cache"] = {"profile_sha256": "f" * 64}
+            control, _plan, _receipt = offline_fixture(active=(TOKEN + "\n").encode(),
+                plan_extra={"stopped_pair": pair})
+            self.assertIs(module._collection_shared_cache_mode(control, OPERATION, TOKEN), shared)
+            original = f"iteration/attempts/{TOKEN}/receipt.json"
+            control.records[original] += b" "
+            with self.assertRaises(BuildControlError):
+                module._collection_shared_cache_mode(control, OPERATION, TOKEN)
+        self.assertTrue(module._collection_shared_cache_mode(MemoryControl({}), OPERATION, TOKEN))
+
     def test_published_pending_chain_is_verified_but_not_reported_complete(self) -> None:
         active = (TOKEN + "\n").encode()
         control, plan, _receipt = offline_fixture(active=active)
