@@ -1,6 +1,7 @@
 #include "fullmag_fem_cuda_trace.h"
 
 #include <cerrno>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -16,9 +17,13 @@
 #if defined(FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED)
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include "../gpu/cuda/runtime/cupti_library.hpp"
 #include <fcntl.h>
+#include <spawn.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
+extern char **environ;
 #endif
 
 namespace {
@@ -29,6 +34,17 @@ int fail(const char *message) {
 }
 
 #if defined(FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED)
+
+std::atomic<unsigned> refused_buffers{0};
+
+void CUPTIAPI refuse_buffer(uint8_t **buffer, size_t *size, size_t *max_records) {
+    *buffer = nullptr;
+    *size = 0;
+    *max_records = 0;
+    ++refused_buffers;
+}
+
+void CUPTIAPI complete_refused_buffer(CUcontext, uint32_t, uint8_t *, size_t, size_t) {}
 
 std::string probe_ptx(const std::string &kernel_name) {
     return std::string(R"ptx(
@@ -125,6 +141,55 @@ bool run_cuda_workload() {
     if (event != nullptr && cudaEventDestroy(event) != cudaSuccess) ok = false;
     if (stream != nullptr && cudaStreamDestroy(stream) != cudaSuccess) ok = false;
     return ok;
+}
+
+int buffer_refusal_contract() {
+    fullmag::fem::CuptiLibrary api;
+    if (!api.load() || api.version != 28) return fail("buffer refusal requires verified CUPTI API 28");
+    if (api.cuptiActivityRegisterCallbacks(refuse_buffer, complete_refused_buffer) != CUPTI_SUCCESS ||
+        api.cuptiActivityEnable(CUPTI_ACTIVITY_KIND_RUNTIME) != CUPTI_SUCCESS ||
+        api.cuptiActivityEnable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL) != CUPTI_SUCCESS)
+        return fail("could not start intentional buffer refusal capture");
+    const bool workload_ok = run_cuda_workload();
+    const auto disable_runtime = api.cuptiActivityDisable(CUPTI_ACTIVITY_KIND_RUNTIME);
+    const auto disable_kernel = api.cuptiActivityDisable(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
+    const auto flush = api.cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+    std::cerr << "cuda_activity_trace_contract: phase=buffer_refusal"
+              << " cupti_version=" << api.version << " refused_buffers=" << refused_buffers.load()
+              << " workload_ok=" << workload_ok << " disable_runtime=" << disable_runtime
+              << " disable_kernel=" << disable_kernel << " flush=" << flush << '\n' << std::flush;
+    if (!workload_ok || refused_buffers.load() == 0)
+        return fail("buffer refusal did not preserve the CUDA workload or was not exercised");
+    if (disable_runtime != CUPTI_SUCCESS || disable_kernel != CUPTI_SUCCESS || flush != CUPTI_SUCCESS)
+        return fail("buffer refusal capture did not close successfully");
+    return 0;
+}
+
+int run_buffer_refusal_child() {
+    // A separate process keeps this deliberately lossy CUPTI subscriber out of
+    // the production collector's callback registration and exact-loss tests.
+    char program[] = "/proc/self/exe";
+    char mode[] = "--reject-buffers";
+    char *arguments[] = {program, mode, nullptr};
+    pid_t child = -1;
+    if (posix_spawn(&child, program, nullptr, nullptr, arguments, environ) != 0)
+        return fail("could not spawn buffer refusal contract");
+    int status = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(25);
+    pid_t waited = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        waited = waitpid(child, &status, WNOHANG);
+        if (waited == child || (waited < 0 && errno != EINTR)) break;
+        usleep(10000);
+    }
+    if (waited == 0 || (waited < 0 && errno == EINTR)) {
+        (void)kill(child, SIGKILL);
+        do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+        return fail("buffer refusal child exceeded its deadline");
+    }
+    if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        return fail("buffer refusal child failed or crashed");
+    return 0;
 }
 
 bool file_contains(const char *path, const char *needle) {
@@ -278,6 +343,17 @@ void print_dense_capture_stats(int stop_status, int fd,
 }
 
 int enabled_contract() {
+    std::ifstream maps("/proc/self/maps");
+    if (!maps) return fail("could not inspect trace-off library mappings");
+    const std::string mapped((std::istreambuf_iterator<char>(maps)), std::istreambuf_iterator<char>());
+    if (mapped.find("libcupti.so") != std::string::npos)
+        return fail("CUPTI was loaded before capture opt-in");
+    int runtime_version = 0;
+    if (cudaRuntimeGetVersion(&runtime_version) != cudaSuccess || runtime_version != CUDART_VERSION)
+        return fail("CUDA runtime differs from the solver toolkit headers");
+    std::cerr << "cuda_activity_trace_contract: phase=trace_off cupti_mapped=false"
+              << " cuda_runtime_version=" << runtime_version
+              << " cuda_headers_version=" << CUDART_VERSION << '\n' << std::flush;
     TempTrace trace;
     if (!trace.create()) return fail("could not create trace output file");
 
@@ -300,6 +376,10 @@ int enabled_contract() {
     uint64_t token = 0;
     if (fullmag_fem_cuda_trace_start_v1(trace.fd, FULLMAG_FEM_CUDA_TRACE_MAX_BYTES, 30000, &token) !=
         FULLMAG_FEM_OK || token == 0) return fail("valid capture did not start");
+    if (!file_contains("/proc/self/maps", FULLMAG_FEM_CUPTI_LIBRARY_PATH))
+        return fail("capture did not map the pinned CUPTI library");
+    std::cerr << "cuda_activity_trace_contract: phase=trace_on cupti_library="
+              << FULLMAG_FEM_CUPTI_LIBRARY_PATH << '\n' << std::flush;
     TempTrace competing_trace;
     if (!competing_trace.create()) return fail("could not create competing output file");
     uint64_t second_token = 0;
@@ -320,7 +400,7 @@ int enabled_contract() {
         std::memcmp(&stats, &repeated, sizeof(stats)) != 0)
         return fail("repeated stop did not return the stable result");
     if (stats.schema_version != FULLMAG_FEM_CUDA_TRACE_SCHEMA_VERSION ||
-        stats.cupti_version == 0 || stats.records_written == 0 ||
+        stats.cupti_version != 28 || stats.records_written == 0 ||
         stats.bytes_written > 4 * 1024 * 1024 || stats.io_errors != 0 ||
         stats.dropped_records != 0 || stats.buffer_starvations != 0 ||
         stats.unknown_records != 0 || stats.truncated_names != 0 ||
@@ -369,7 +449,7 @@ int enabled_contract() {
     if (dense_stop_status != FULLMAG_FEM_OK)
         return fail("dense capture did not stop cleanly");
     if (dense_stats.schema_version != FULLMAG_FEM_CUDA_TRACE_SCHEMA_VERSION ||
-        dense_stats.cupti_version == 0 || dense_stats.records_written == 0 ||
+        dense_stats.cupti_version != 28 || dense_stats.records_written == 0 ||
         dense_stats.bytes_written <= 8 * 1024 * 1024 ||
         dense_stats.bytes_written > FULLMAG_FEM_CUDA_TRACE_MAX_BYTES ||
         dense_stats.dropped_records != 0 || dense_stats.buffer_starvations != 0 ||
@@ -452,7 +532,7 @@ int enabled_contract() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
     static_assert(sizeof(fullmag_fem_cuda_trace_stats_v1) == 112,
                   "native trace stats ABI must be 112 bytes");
 #if !defined(FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED)
@@ -465,6 +545,11 @@ int main() {
     std::cout << "CUPTI activity tracing unavailable in this build (expected)\n";
     return 77;
 #else
+    // Bound initialization too: a child must not keep the managed log pipe open
+    // indefinitely if CUDA stalls before the refusal workload begins.
+    const bool refusal_child = argc == 2 && std::strcmp(argv[1], "--reject-buffers") == 0;
+    std::signal(SIGALRM, [](int) { std::_Exit(124); });
+    alarm(refusal_child ? 20 : 60);
     if (fullmag_fem_cuda_trace_available_v1() != 1) {
         int device_count = 0;
         if (cudaGetDeviceCount(&device_count) == cudaSuccess && device_count == 0) return 77;
@@ -474,9 +559,14 @@ int main() {
     const cudaError_t device_result = cudaGetDeviceCount(&device_count);
     if (device_result != cudaSuccess || device_count == 0) return 77;
     if (cudaSetDevice(0) != cudaSuccess) return 77;
-    std::signal(SIGALRM, [](int) { std::_Exit(124); });
+    if (refusal_child)
+        return buffer_refusal_contract();
+    if (argc != 1) return fail("unexpected contract arguments");
+    // Reset before spawning: the bounded wait can kill/reap the exact child
+    // before the parent-wide alarm expires, even after slow initialization.
     alarm(60);
-    const int result = enabled_contract();
+    const int refusal_result = run_buffer_refusal_child();
+    const int result = refusal_result == 0 ? enabled_contract() : refusal_result;
     alarm(0);
     return result;
 #endif

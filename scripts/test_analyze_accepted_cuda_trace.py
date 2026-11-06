@@ -75,6 +75,26 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.assertEqual(result["names"]["memcpy"]["device_to_host"]["bytes"], 4096)
         self.assertNotIn("gpu_utilization", result)
 
+    def test_api28_requires_matching_receipt_and_complete_activity_header(self):
+        self.receipt["native"]["stats"]["cupti_version"] = 28
+        self.header["cupti_api_version"] = 28
+        self.header["activity_kinds"].append("cuda_event_metadata")
+        self.publish([self.event("kernel", 110, 180)])
+        self.assertEqual(self.read()["status"], "complete")
+        self.header["cupti_api_version"] = 24
+        self.publish([self.event("kernel", 110, 180)])
+        with self.assertRaisesRegex(TraceError, "header"):
+            self.read()
+        self.header["cupti_api_version"] = 28
+        self.header["activity_kinds"].remove("cuda_event_metadata")
+        self.publish([self.event("kernel", 110, 180)])
+        with self.assertRaisesRegex(TraceError, "header"):
+            self.read()
+        self.receipt["native"]["stats"]["cupti_version"] = 27
+        self.save_receipt()
+        with self.assertRaisesRegex(TraceError, "unsupported native trace version"):
+            self.read()
+
     def test_hash_identity_config_and_size_mismatches_refuse(self):
         self.publish([self.event("kernel", 110, 180)])
         for key, bad in [("trace_sha256", "0" * 64), ("trace_size_bytes", True),

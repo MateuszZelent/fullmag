@@ -6,9 +6,7 @@
 
 #if defined(FULLMAG_FEM_CUPTI_TRACE_ENABLED) && defined(__linux__)
 
-#include <cupti_activity.h>
-#include <cupti_callbacks.h>
-#include <cupti_version.h>
+#include "cupti_library.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,8 +24,6 @@
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
-
-static_assert(CUPTI_API_VERSION == 24, "CUPTI trace collector requires Activity API 24");
 
 namespace {
 
@@ -85,10 +81,11 @@ struct ActivityTrace {
     uint64_t next_token = 1;
     uint64_t last_token = 0;
     fullmag_fem_cuda_trace_stats_v1 last_stats{};
-    bool enabled[7]{};
+    bool enabled[8]{};
 };
 
 ActivityTrace g_trace;
+fullmag::fem::CuptiLibrary g_cupti;
 std::mutex g_api_mutex;
 std::once_flag g_callback_registration_once;
 CUptiResult g_callback_registration = CUPTI_ERROR_NOT_INITIALIZED;
@@ -452,7 +449,7 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
             const char *callback_name = nullptr;
             const CUpti_CallbackDomain domain = record->kind == CUPTI_ACTIVITY_KIND_DRIVER
                 ? CUPTI_CB_DOMAIN_DRIVER_API : CUPTI_CB_DOMAIN_RUNTIME_API;
-            if (cuptiGetCallbackName(domain, static_cast<uint32_t>(item->cbid), &callback_name) == CUPTI_SUCCESS) {
+            if (g_cupti.cuptiGetCallbackName(domain, static_cast<uint32_t>(item->cbid), &callback_name) == CUPTI_SUCCESS) {
                 event.name = callback_name;
             } else {
                 increment(trace.counts.api_errors);
@@ -470,7 +467,7 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
             break;
         }
         case CUPTI_ACTIVITY_KIND_MEMCPY: {
-            const auto *item = reinterpret_cast<const CUpti_ActivityMemcpy5 *>(record);
+            const auto *item = reinterpret_cast<const CUpti_ActivityMemcpy6 *>(record);
             event.kind = "memcpy";
             const char *copy_name = "unknown_copy_kind";
             switch (item->copyKind) {
@@ -527,7 +524,7 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
             break;
         }
         case CUPTI_ACTIVITY_KIND_SYNCHRONIZATION: {
-            const auto *item = reinterpret_cast<const CUpti_ActivitySynchronization *>(record);
+            const auto *item = reinterpret_cast<const CUpti_ActivitySynchronization2 *>(record);
             event.kind = "synchronization";
             const char *sync_name = "unknown_synchronization_type";
             switch (item->type) {
@@ -557,7 +554,7 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
             break;
         }
         case CUPTI_ACTIVITY_KIND_CUDA_EVENT: {
-            const auto *item = reinterpret_cast<const CUpti_ActivityCudaEvent *>(record);
+            const auto *item = reinterpret_cast<const CUpti_ActivityCudaEvent2 *>(record);
             event.kind = "cuda_event_metadata";
             event.name = "cuda_event_record";
             event.timestamps_applicable = false;
@@ -612,7 +609,7 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
 void process_buffer(ActivityTrace &trace, BufferSlot &slot) {
     CUpti_Activity *record = nullptr;
     while (true) {
-        const CUptiResult result = cuptiActivityGetNextRecord(slot.bytes, slot.valid_size, &record);
+        const CUptiResult result = g_cupti.cuptiActivityGetNextRecord(slot.bytes, slot.valid_size, &record);
         if (result == CUPTI_ERROR_MAX_LIMIT_REACHED) break;
         if (result == CUPTI_ERROR_INVALID_KIND) {
             increment(trace.counts.incomplete_records);
@@ -626,7 +623,7 @@ void process_buffer(ActivityTrace &trace, BufferSlot &slot) {
     }
 
     size_t dropped = 0;
-    const CUptiResult dropped_result = cuptiActivityGetNumDroppedRecords(nullptr, 0, &dropped);
+    const CUptiResult dropped_result = g_cupti.cuptiActivityGetNumDroppedRecords(nullptr, 0, &dropped);
     if (dropped_result == CUPTI_SUCCESS) {
         if (dropped > 0) increment(trace.counts.dropped_records, dropped);
     } else if (dropped_result != CUPTI_ERROR_NOT_INITIALIZED) {
@@ -672,10 +669,11 @@ void disable_and_flush(ActivityTrace &trace) {
         CUPTI_ACTIVITY_KIND_MEMSET,
         CUPTI_ACTIVITY_KIND_SYNCHRONIZATION,
         CUPTI_ACTIVITY_KIND_MEMORY2,
+        CUPTI_ACTIVITY_KIND_CUDA_EVENT,
     };
     for (size_t index = 0; index < std::size(kinds); ++index) {
         if (trace.enabled[index]) {
-            const CUptiResult result = cuptiActivityDisable(kinds[index]);
+            const CUptiResult result = g_cupti.cuptiActivityDisable(kinds[index]);
             if (result != CUPTI_SUCCESS) {
                 increment(trace.counts.api_errors);
                 trace.collector_poisoned.store(true, std::memory_order_release);
@@ -683,7 +681,7 @@ void disable_and_flush(ActivityTrace &trace) {
             trace.enabled[index] = false;
         }
     }
-    const CUptiResult flush_result = cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
+    const CUptiResult flush_result = g_cupti.cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
     if (flush_result != CUPTI_SUCCESS) {
         increment(trace.counts.api_errors);
         trace.collector_poisoned.store(true, std::memory_order_release);
@@ -701,7 +699,7 @@ void disable_and_flush(ActivityTrace &trace) {
         }
     }
     uint64_t timestamp = 0;
-    const CUptiResult timestamp_result = cuptiGetTimestamp(&timestamp);
+    const CUptiResult timestamp_result = g_cupti.cuptiGetTimestamp(&timestamp);
     if (timestamp_result == CUPTI_SUCCESS) trace.end_timestamp_ns.store(timestamp);
     else increment(trace.counts.api_errors);
     trace.flush_complete.store(true, std::memory_order_release);
@@ -765,11 +763,11 @@ bool append_header(ActivityTrace &trace, uint64_t max_bytes, uint32_t duration_m
     const int length = std::snprintf(
         header, sizeof(header),
         "{\"type\":\"header\",\"schema\":\"worker_cuda_trace.v1\","
-        "\"timestamp_domain\":\"cupti_activity_ns\",\"cupti_api_version\":24,"
+        "\"timestamp_domain\":\"cupti_activity_ns\",\"cupti_api_version\":%u,"
         "\"max_bytes\":%llu,\"max_duration_ms\":%u,"
         "\"activity_kinds\":[\"driver_api\",\"runtime_api\",\"kernel\",\"memcpy\","
         "\"memset\",\"synchronization\",\"memory\",\"cuda_event_metadata\"]}\n",
-        static_cast<unsigned long long>(max_bytes), duration_ms);
+        g_cupti.version, static_cast<unsigned long long>(max_bytes), duration_ms);
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(header) ||
         static_cast<uint64_t>(length) > max_bytes) return false;
     size_t written = 0;
@@ -807,7 +805,7 @@ bool validate_output_fd(int fd) {
 
 void register_callbacks_once() {
     std::call_once(g_callback_registration_once, [] {
-        g_callback_registration = cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed);
+        g_callback_registration = g_cupti.cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed);
     });
 }
 
@@ -819,9 +817,9 @@ constexpr CUpti_ActivityKind kKinds[] = {
     CUPTI_ACTIVITY_KIND_MEMSET,
     CUPTI_ACTIVITY_KIND_SYNCHRONIZATION,
     CUPTI_ACTIVITY_KIND_MEMORY2,
+    CUPTI_ACTIVITY_KIND_CUDA_EVENT,
 };
-// CUPTI Activity API 24 emits CUDA_EVENT metadata with SYNCHRONIZATION.
-// CUDA_EVENT itself cannot be passed to ActivityEnable/ActivityDisable.
+// API 28 decouples event metadata from synchronization: enable both explicitly.
 
 void terminate_failed_start(ActivityTrace &trace) {
     request_stop(trace);
@@ -857,6 +855,8 @@ extern "C" int fullmag_fem_cuda_trace_start_v1(
         max_duration_ms < kMinDurationMs || max_duration_ms > kMaxDurationMs ||
         !validate_output_fd(fd)) return FULLMAG_FEM_ERR_INVALID;
 
+    if (!g_cupti.load()) return FULLMAG_FEM_ERR_UNAVAILABLE;
+
     const int duplicate = fcntl(fd, F_DUPFD_CLOEXEC, 0);
     if (duplicate < 0) return FULLMAG_FEM_ERR_INVALID;
     reset_capture(g_trace);
@@ -881,7 +881,7 @@ extern "C" int fullmag_fem_cuda_trace_start_v1(
     }
 
     uint64_t timestamp = 0;
-    if (cuptiGetTimestamp(&timestamp) != CUPTI_SUCCESS) {
+    if (g_cupti.cuptiGetTimestamp(&timestamp) != CUPTI_SUCCESS) {
         increment(g_trace.counts.api_errors);
         ::close(duplicate);
         g_trace.output_fd.store(-1);
@@ -903,7 +903,7 @@ extern "C" int fullmag_fem_cuda_trace_start_v1(
     }
 
     for (size_t index = 0; index < std::size(kKinds); ++index) {
-        const CUptiResult result = cuptiActivityEnable(kKinds[index]);
+        const CUptiResult result = g_cupti.cuptiActivityEnable(kKinds[index]);
         if (result != CUPTI_SUCCESS) {
             std::fprintf(stderr, "cuda_activity_trace: enable kind=%u failed: CUPTI result=%u\n",
                          static_cast<unsigned>(kKinds[index]), static_cast<unsigned>(result));

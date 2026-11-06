@@ -6,7 +6,7 @@
 
 **Architektura:** natywny, opcjonalnie dostępny kolektor w `backends/fem/gpu/cuda/runtime/`; cienkie C ABI i Rust RAII; jawny immutable parametr `cuda_trace` w istniejącej aktywacji. Brak osobnego procesu, endpointu, solvera lub obejścia admission.
 
-**Technologie:** C++17, CUPTI Activity API 24 z CUDA12.6, Rust, istniejący Python launcher, Docker Compose grupy SP4.
+**Technologie:** C++17, prywatne CUPTI12.9.79 / Activity API28 przy zachowanym CUDA12.6 solvera, Rust, istniejący Python launcher, Docker Compose grupy SP4. Historyczne ślady API24 pozostają czytelne.
 
 **Specyfikacja:** `docs/superpowers/specs/2026-11-04-sp4-fem-accepted-profiling-design.md`, etap2.
 
@@ -36,7 +36,7 @@ Właściciel: bounded worker. Pliki: nowe `native/include/fullmag_fem_cuda_trace
 - [ ] Najpierw wykonywalny native contract: poprawne rekordy runtime/driver/kernel/copy/memset/sync/memory; invalid fd/limity, drugi start, powtórny stop, ograniczenie bajtów/czasu i czytelne partial.
 - [ ] C ABI: `available_v1() -> int`; `start_v1(int fd, uint64_t max_bytes, uint32_t max_duration_ms, uint64_t *token) -> int`; `stop_v1(uint64_t token, fullmag_fem_cuda_trace_stats_v1 *stats) -> int`. Statusy jak `FULLMAG_FEM_OK/ERR_*`. Caller posiada fd; kolektor duplikuje pusty regularny plik. Token nie jest wskaźnikiem.
 - [ ] Stats: 14 pól `uint64_t`: schema_version, cupti_version, start_timestamp_ns, end_timestamp_ns, records_written, bytes_written, dropped_records, buffer_starvations, unknown_records, truncated_names, incomplete_records, api_errors, io_errors, limit_flags. Bity limit_flags:1 bytes,2 duration. Rozmiar112B.
-- [ ] CPU/Windows/inna wersja niż API24: stub unavailable, bez obowiązkowej rezydencji GPU. CUDA Linux: użyć zainstalowanych oficjalnych headers/sample12.6 i dostępnego `CUDA::cupti`; brak CUPTI nie blokuje nieprofilowanego solvera.
+- [ ] CPU/Windows/brak prywatnego prefiksu API28: stub unavailable, bez obowiązkowej rezydencji GPU. CUDA Linux: osobne nagłówki i biblioteka z `FULLMAG_CUPTI_ROOT`, bez fallbacku do CUPTI12.6. Biblioteka ładowana wyłącznie przy opt-in, po absolutnej ścieżce; sprawdzane `cuptiGetVersion()==28`. Brak CUPTI nie blokuje nieprofilowanego solvera.
 - [ ] Jeden capture na proces, deadline watchdog wyłącza aktywności i opróżnia bufory poza callbackiem; stop budzi/łączy watchdog i zwraca statystyki. Brak resetu CUDA lub wyciszania błędów solvera.
 - [ ] Native trace posiada wersjonowany nagłówek, timestamp domain CUPTI ns, rodzaje aktywności, correlation/stream/context/thread/device IDs, bajty i nazwy. Truncation/niekompletne timestampy są jawne.
 
@@ -234,3 +234,88 @@ Następny etap: oddzielnie przypięta CUPTI12.9.79/API28 z kontrolą wersji
 załadowanej biblioteki, przy zachowaniu CUDA12.6 oraz MFEM/hypre solvera.
 Wymagane są testy kontrolowanego wyczerpania puli, zgodnego dekodowania i
 nowy accepted capture. Pełne profilowanie oraz merge PR408 nadal oczekują.
+
+## Migracja API28 — checkpoint przed buildem
+
+Zmiany źródłowe przypinają osobny redistributable CUPTI12.9.79 w końcowym
+stage obrazu, z SHA archiwów amd64/arm64 i biblioteki w manifeście. CMake
+wyprowadza nagłówki oraz bibliotekę z wybranego prefiksu przy każdej konfiguracji;
+kolektor ładuje ją po absolutnej ścieżce dopiero przy opt-in i wymaga API28.
+Dekoder używa Memcpy6, Synchronization2 i CudaEvent2, z jawnym włączeniem
+metadanych event. CUDA oraz zależności FEM nie są podmieniane.
+
+Review wykryło pozostawione wymaganie API24 w receipcie Rust oraz ryzyko
+zachowania starego prefiksu przez cache CMake; oba poprawiono. Native contract
+dodaje oddzielny proces odmawiający wszystkich buforów. Wymaga przeżycia
+workloadu i poprawnego disable/flush; timeout obejmuje inicjalizację CUDA,
+a rodzic ma limit oczekiwania i kończy oraz zbiera dokładnego potomka.
+
+Wykonano 12 testów analizatora (w tym zgodność API28, odmowę niezgodnego
+nagłówka i zachowanie odczytu API24), 8 istniejących testów Dockerfile/helpera,
+kontrolę składni bloku instalacji oraz diff/whitespace. Wszystkie przeszły.
+Testy Rust, kompilacja nowego obrazu/backendu, nowa bramka GPU i accepted
+capture on/off pozostają **NOT VERIFIED**. Zmiany są jeszcze lokalne;
+nie stwierdzono nowego przyspieszenia solvera ani naprawy CUDA719.
+
+## API28 — managed build i bramka GPU
+
+Managed toolchain `f8f5fa7f61c14a88a0a47dd0d75e3b22` oraz backend development
+`204240d42cf8464fb788ef4c2c43b6e0` zakończyły się poprawnie. Snapshot źródeł:
+`8e63ad05f9695dc7432169b340fbb71b1d5668d7097392d00b175093d04edb93`;
+SHA biblioteki FEM:
+`a12a7f79d48bf57eac169e14e8c6914f0c91f06c61d115e6a1a5c3be3e84e251`.
+Instalator używa rzeczywistego pliku `LICENSE` z przypiętego archiwum NVIDIA;
+pierwsza próba z nazwą `LICENSE.txt` została odrzucona, po czym ścieżkę poprawiono.
+
+Native contract `1026bf919bcc4d018a2113fc3ad5cecd` przeszedł w 7,819 s.
+Proces odmawiający wszystkich buforów przeżył 20 odmów i zakończył workload,
+disable oraz flush bez błędu. Przed opt-in CUPTI nie było zmapowane;
+po opt-in użyto dokładnie prywatnej biblioteki 12.9.79/API28.
+Runtime i nagłówki CUDA pozostały 12.6. Gęsty capture zapisał 112513 rekordów
+oraz 144679607 B; dropped, starvation, unknown, truncated, incomplete,
+API/I/O errors i limit flags wyniosły zero.
+
+To dowód bramki profilera, nie pełnego SP4 ani przyspieszenia solvera.
+Nowa para accepted SP4 on/off nadal oczekuje. Limit 64 aktywacji wymaga
+archiwizacji dwóch zakończonych rekordów; wszystkie ich wyniki i provenance
+pozostają zachowane. Pierwszy managed apply odmówił bez przenoszenia danych,
+ponieważ periodyczny heartbeat i znacznik transakcji rejestru zmieniały hash
+planu. Kwalifikacja starszego, nieaktywnego SessionStore potwierdziła stabilny
+inventory; poprawka archiwizacji ogranicza się do blokady i uwierzytelnionej
+normalizacji zwolnionego writera rejestru. Offline inventory nie jest zmieniane.
+
+## API28 — accepted SP4 on/off
+
+Obie nowe próby zakończyły 7 kroków / 50 fs, z zachowanym Zarr, sąsiednim
+skryptem i natywnymi polami. Off: batch `51b7a6c84acc4c0f806cb8499214754f`,
+run `run-live-f31e643180618ec1ce932ab7e88061a73c8a5b7cbb9ce2d22a02990f624b2825`.
+On: batch `d0e534c27ad8426eb65b163185e32203`,
+run `run-live-145c0281823b659e72360075effe3f80a381b49530595a5024bb4d6497915475`.
+Stan początkowy, siatka, snapshot i biblioteka były zgodne. Porównanie 18529
+aktywnych wektorów m, wszystkich ośmiu energii i obu reprezentacji torque dało
+dokładną różnicę zero. Mediana odstępu między callbackami kroków 3–7 wyniosła
+0,656138232 s bez profilera i 0,657317392 s z nim. To pojedyncza para,
+nie pomiar przyspieszenia solvera ani zajętości GPU.
+
+API28 przeżyło rzeczywiste wyczerpanie puli i przekroczyło dawny punkt SIGSEGV
+przy kroku 3. Ślad nadal jest **partial**: 289490 zapisanych rekordów,
+153324796 B, `buffer_starvations=223992`, `dropped_records=447984`.
+Ostatni licznik łączy lokalne odmowy z raportem CUPTI; nie oznacza niezależnie
+zmierzonej liczby unikalnych utraconych zdarzeń. Pozostałe liczniki błędów,
+unknown, truncated, incomplete oraz limit flags wyniosły zero. Receipt solvera
+ma `completed` i exit 0; sterownik kwalifikacji zwrócił exit 3 z powodu
+niepełnego profilu. Nie powtórzono Solve. SHA śladu:
+`7a948a49e854433d8710ed4c010d861e4405ac71d32c0f231d35b783a78b9d6e`.
+
+Następna diagnoza dotyczy cyklu i przepustowości ośmiu buforów po 1 MiB.
+Nie wolno wnioskować o pełnych kosztach synchronizacji z utraconego śladu.
+Pełny profil, historyczna awaria CUDA719, kwalifikacja całego SP4 oraz merge
+PR408 pozostają otwarte.
+
+Archiwizacja dwóch wcześniejszych zakończonych krótkich prób FEM
+`2bb59ed9491c49049298224bcd92e2a8` i `6ed0d8783cd74a848b7624b64c39ed50`
+zakończyła się zgodnie z przypiętymi planami. Oba receipty potwierdzają
+`records_deleted=false` i `solve_replayed=false`; wyniki zostały zachowane.
+Poprawka rejestru przeszła 8 testów referencji, 12 testów admission oraz
+niezależne review bez blokujących uwag. Starsze relaksacje, których layout
+nie jest obsługiwany przez tę ścieżkę archiwizacji, pozostawiono nietknięte.

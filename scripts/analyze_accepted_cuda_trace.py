@@ -121,7 +121,9 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     native = receipt.get("native")
     require(isinstance(native, dict) and isinstance(native.get("stats"), dict), "missing native trace result")
     stats = native["stats"]
-    require(stats.get("schema_version") == 1 and stats.get("cupti_version") == 24, "unsupported native trace version")
+    api_version = stats.get("cupti_version")
+    require(stats.get("schema_version") == 1 and type(api_version) is int and api_version in {24, 28},
+        "unsupported native trace version")
     for key in COUNTERS:
         uint(stats.get(key), key)
     require(stats["bytes_written"] == size, "native byte count differs from trace file")
@@ -150,7 +152,7 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     count = invalid = clipped = truncated_names = 0
     digest = hashlib.sha256()
     expected_header = {"type": "header", "schema": "worker_cuda_trace.v1", "timestamp_domain": "cupti_activity_ns",
-        "cupti_api_version": 24, "max_bytes": config["max_bytes"], "max_duration_ms": config["max_duration_ms"],
+        "cupti_api_version": api_version, "max_bytes": config["max_bytes"], "max_duration_ms": config["max_duration_ms"],
         "activity_kinds": list(KINDS)}
     with regular(root / receipt["trace_file"], config["max_bytes"]) as (stream, actual_size):
         require(actual_size == size, "trace size mismatch")
@@ -163,7 +165,8 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
             digest.update(raw)
             event = parse(raw)
             if line_index == 0:
-                require(event == expected_header or event == expected_header | {"activity_kinds": list(LEGACY_KINDS)},
+                require(event == expected_header or (api_version == 24 and
+                    event == expected_header | {"activity_kinds": list(LEGACY_KINDS)}),
                     "trace header differs from admitted capture")
                 declared_kinds = tuple(event["activity_kinds"])
                 line_index += 1
@@ -188,8 +191,8 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
             timestamp_status = event.get("timestamp_status", "valid" if event["timestamps_valid"] else "incomplete")
             metadata = kind == "cuda_event_metadata"
             if metadata:
-                # CUPTI API24 CUpti_ActivityCudaEvent describes an event identity,
-                # not a measured interval; it has no timestamp fields in the SDK.
+                # Event identity metadata is not a measured interval. API28 adds
+                # a device timestamp, but still has no start/end duration pair.
                 require(timestamp_status == "not_applicable" and not event["timestamps_valid"]
                     and event["activity_kind"] == 36
                     and event["start_ns"] == event["end_ns"] == event["duration_ns"] == 0,

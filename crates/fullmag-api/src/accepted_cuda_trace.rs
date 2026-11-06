@@ -125,7 +125,7 @@ impl<S: Session> Capture<S> {
         }
         if let Some(report) = &self.receipt.native {
             let stats = &report.stats;
-            if report.status_code != 0 || stats.schema_version != 1 || stats.cupti_version != 24
+            if report.status_code != 0 || stats.schema_version != 1 || stats.cupti_version != 28
                 || stats.start_timestamp_ns == 0 || stats.end_timestamp_ns < stats.start_timestamp_ns
                 || Some(stats.bytes_written) != self.receipt.trace_size_bytes
                 || stats.api_errors != 0 || stats.io_errors != 0 {
@@ -182,13 +182,13 @@ mod tests {
     use std::io::Write;
     use fullmag_runner::FemCudaTraceStats;
 
-    struct Fake { stops: Rc<Cell<usize>>, dropped: u64, fail: bool }
+    struct Fake { stops: Rc<Cell<usize>>, dropped: u64, fail: bool, cupti_version: u64 }
     impl Session for Fake {
         fn stop(&mut self) -> Result<FemCudaTraceEnd> {
             self.stops.set(self.stops.get() + 1);
             if self.fail { bail!("mock stop failure"); }
             Ok(FemCudaTraceEnd { status_code: 0, stats: FemCudaTraceStats {
-                schema_version: 1, cupti_version: 24, start_timestamp_ns: 1, end_timestamp_ns: 2,
+                schema_version: 1, cupti_version: self.cupti_version, start_timestamp_ns: 1, end_timestamp_ns: 2,
                 records_written: 1, bytes_written: 3, dropped_records: self.dropped, ..Default::default() } })
         }
     }
@@ -206,7 +206,7 @@ mod tests {
     fn make(path: &Path, stops: Rc<Cell<usize>>, dropped: u64, fail: bool) -> Capture<Fake> {
         Capture::start_with(Some(&config()), path, &identity(), Some("gpu-test"), |file, _| {
             file.try_clone()?.write_all(b"{}\n")?;
-            Ok(Fake { stops, dropped, fail })
+            Ok(Fake { stops, dropped, fail, cupti_version: 28 })
         }).unwrap().unwrap()
     }
     fn read(path: &Path) -> Receipt { serde_json::from_slice(&std::fs::read(path.join(RECEIPT)).unwrap()).unwrap() }
@@ -228,6 +228,20 @@ mod tests {
             let receipt = read(dir.path()); assert_eq!(receipt.status, "complete");
             assert_eq!(receipt.solver_outcome, outcome); assert!(receipt.trace_sha256.is_some());
             assert!(receipt.identity.matches_same_attempt(&identity()));
+        }
+    }
+    #[test]
+    fn incompatible_native_cupti_version_cannot_claim_a_complete_trace() {
+        for version in [24, 27] {
+            let dir = tempfile::tempdir().unwrap(); let stops = Rc::new(Cell::new(0));
+            let mut capture = make(dir.path(), stops.clone(), 0, false);
+            capture.session.as_mut().unwrap().cupti_version = version;
+            capture.finish("completed").unwrap(); drop(capture);
+            let receipt = read(dir.path());
+            assert_eq!(receipt.status, "failed");
+            assert_eq!(receipt.solver_outcome, "completed");
+            assert_eq!(stops.get(), 1);
+            assert!(!receipt.errors.is_empty());
         }
     }
     #[test]

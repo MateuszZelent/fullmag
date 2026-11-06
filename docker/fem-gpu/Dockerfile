@@ -466,6 +466,43 @@ RUN apt-get update && \
 RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase runtime --output "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 RUN python3 -c 'import json,subprocess,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); value["actual"].setdefault("system_packages", {}).update({name:subprocess.check_output(["dpkg-query","-W","-f=${Version}",name],text=True).strip() for name in ("libgmp-dev","libgmp10","libmpfr-dev","libmpfr6","libboost-dev")}); p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
 
+# Keep this CUPTI redistributable isolated from the CUDA toolkit and native FEM dependencies.
+ENV FULLMAG_CUPTI_ROOT=/opt/fullmag-cupti/12.9.79
+RUN set -eu; \
+    cupti_version=12.9.79; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) cupti_relative_path=cuda_cupti/linux-x86_64/cuda_cupti-linux-x86_64-12.9.79-archive.tar.xz; cupti_sha256=f779a24e8f0177b4ce45cbf118cb470139fb5107858df96689d0a0aa01f0fba1 ;; \
+      arm64) cupti_relative_path=cuda_cupti/linux-sbsa/cuda_cupti-linux-sbsa-12.9.79-archive.tar.xz; cupti_sha256=84f8657375c23a425b2d107c3cde1ce75777bff9798b744b78e146fdc02d2de0 ;; \
+      *) echo "Unsupported CUPTI architecture: $(dpkg --print-architecture)" >&2; exit 2 ;; \
+    esac; \
+    cupti_url="https://developer.download.nvidia.com/compute/cuda/redist/${cupti_relative_path}"; \
+    cupti_filename="${cupti_relative_path##*/}"; \
+    cupti_archive="/tmp/${cupti_filename}"; \
+    curl -fsSL --connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused \
+      -o "${cupti_archive}" "${cupti_url}"; \
+    echo "${cupti_sha256}  ${cupti_archive}" | sha256sum -c -; \
+    mkdir -p "${FULLMAG_CUPTI_ROOT}"; \
+    tar -xJf "${cupti_archive}" -C "${FULLMAG_CUPTI_ROOT}" --strip-components=1; \
+    rm -f "${cupti_archive}"; \
+    test -f "${FULLMAG_CUPTI_ROOT}/LICENSE" || { echo "CUPTI archive lacks LICENSE" >&2; exit 2; }; \
+    test -f "${FULLMAG_CUPTI_ROOT}/include/cupti_version.h"; \
+    grep -Eq '^[[:space:]]*#[[:space:]]*define[[:space:]]+CUPTI_API_VERSION[[:space:]]+28([[:space:]]|$)' \
+      "${FULLMAG_CUPTI_ROOT}/include/cupti_version.h"; \
+    cupti_library="${FULLMAG_CUPTI_ROOT}/lib/libcupti.so"; \
+    test -f "${cupti_library}"; \
+    cupti_library="$(readlink -f "${cupti_library}")"; \
+    test -f "${cupti_library}"; \
+    cupti_library_sha256="$(sha256sum "${cupti_library}")"; \
+    cupti_library_sha256="${cupti_library_sha256%% *}"; \
+    FULLMAG_CUPTI_VERSION="${cupti_version}" \
+    FULLMAG_CUPTI_API_VERSION=28 \
+    FULLMAG_CUPTI_REDIST_URL="${cupti_url}" \
+    FULLMAG_CUPTI_REDIST_SHA256="${cupti_sha256}" \
+    FULLMAG_CUPTI_LIBRARY_PATH="${cupti_library}" \
+    FULLMAG_CUPTI_LIBRARY_SHA256="${cupti_library_sha256}" \
+    python3 -c 'import json,os,sys; from pathlib import Path; p=Path(sys.argv[1]); value=json.loads(p.read_text()); declared=value.setdefault("declared", {}); actual=value.setdefault("actual", {}); declared["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"redistribution_url":os.environ["FULLMAG_CUPTI_REDIST_URL"],"redistribution_archive_sha256":os.environ["FULLMAG_CUPTI_REDIST_SHA256"]}; actual["cupti"]={"version":os.environ["FULLMAG_CUPTI_VERSION"],"api_version":int(os.environ["FULLMAG_CUPTI_API_VERSION"]),"library_path":os.environ["FULLMAG_CUPTI_LIBRARY_PATH"],"library_sha256":os.environ["FULLMAG_CUPTI_LIBRARY_SHA256"]}; p.write_text(json.dumps(value,indent=2,sort_keys=True)+chr(10))' \
+      "${INSTALL_PREFIX}/share/fullmag/dependency-versions.json"
+
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}
 
