@@ -957,6 +957,13 @@
       "evidence_status": "implemented"
     },
     {
+      "id": "fem-consistent-mass-plan-import",
+      "path": "backends/fem/cpu/mfem/interactions/exchange.cpp",
+      "symbol": "initialize_exchange_plan_fields",
+      "responsibility": "Preserve requested consistent-mass policy independently of MFEM availability; operator and stepping capability gates are unchanged.",
+      "evidence_status": "implemented"
+    },
+    {
       "id": "fem-dg0-shared-node-average-regression",
       "path": "backends/fem/tests/element_dg0_workflow_contract.cpp",
       "symbol": "make_dg0_shared_node_plan",

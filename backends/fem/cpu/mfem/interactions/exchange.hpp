@@ -80,9 +80,9 @@ struct ExchangeRuntimeState {
 /*
  * Initialize native FEM exchange plan fields.
  *
- * Copies the ABI plan's exchange enable flag and, when the MFEM stack is
- * active, the consistent-mass exchange projection policy into the Exchange
- * runtime state. Operator assembly, mass projection, field computation, and
+ * Copies the ABI plan's exchange enable flag and consistent-mass projection
+ * policy in every build. MFEM operator lifecycle handling remains conditional
+ * on stack availability. Operator assembly, mass projection, field computation, and
  * runtime refresh remain in the dedicated Exchange modules included here.
  */
 void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan);

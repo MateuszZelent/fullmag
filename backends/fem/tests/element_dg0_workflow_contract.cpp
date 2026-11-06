@@ -541,12 +541,33 @@ void element_set_average_excludes_a_foreign_tet_inside_the_object_node_set() {
     fullmag_fem_backend_destroy(backend);
 }
 
+#if !FULLMAG_HAS_MFEM_STACK
+void dependency_free_average_handle_keeps_dynamics_unavailable() {
+    auto plan = make_dg0_plan();
+    fullmag_fem_backend *backend = fullmag_fem_backend_create(&plan);
+    check(backend != nullptr, "DG0 average handle must retain authored consistent-mass policy");
+    fullmag_fem_step_stats stats{};
+    check(fullmag_fem_backend_step(backend, plan.dt_seconds, &stats) == FULLMAG_FEM_ERR_UNAVAILABLE,
+        "preserving mass policy must not enable time integration without MFEM");
+    fullmag_fem_backend_destroy(backend);
+
+    plan.use_consistent_mass = 0;
+    backend = fullmag_fem_backend_create(&plan);
+    check(backend == nullptr &&
+            std::strstr(last_error(nullptr), "lumped-mass exchange projection") != nullptr,
+        "DG0 must still reject authored lumped-mass policy");
+}
+#endif
+
 } // namespace
 
 int main(int argc, char **argv) {
     // Initial-state observables also run in the dependency-free ABI build.
     // Keep the full time-integration workflow as the default MFEM contract.
     if (argc == 2 && std::strcmp(argv[1], "--object-averages-only") == 0) {
+#if !FULLMAG_HAS_MFEM_STACK
+        dependency_free_average_handle_keeps_dynamics_unavailable();
+#endif
         per_object_average_m_uses_element_moment_weights();
         element_set_average_excludes_a_foreign_tet_inside_the_object_node_set();
         return 0;

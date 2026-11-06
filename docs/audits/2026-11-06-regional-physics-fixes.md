@@ -68,7 +68,11 @@ runtime ani parytetu urządzenia.
   oraz rozdzielono test średnich ABI od pełnego testu dynamiki wymagającego MFEM.
 - Niezależny rachunek geometrii: dodatnie wyznaczniki 1, 2, 1, 1, 1;
   średnie 1/2 i 9/14: PASS.
-- Nowe testy Rust i natywny test C++: napisane, **NOT VERIFIED** przez wykonanie.
+- Pierwszy przebieg CI skompilował i zlinkował bibliotekę oraz testy natywne.
+  Test ABI wykrył, że import planu bez MFEM pomijał `use_consistent_mass`.
+  Poprawiono import samej polityki i dodano regresję potwierdzającą dalsze
+  odrzucanie kroków czasowych bez MFEM oraz planów DG0 z lumped mass.
+  Wynik ponownego CI i testów Rust w chwili tej aktualizacji: **NOT VERIFIED**.
 - Nie uruchamiano `cargo test`, `just test` ani kompilacji na hoście.
 
 Zarządzany launcher uruchomiono dla grupy

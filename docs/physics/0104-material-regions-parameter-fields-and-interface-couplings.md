@@ -887,6 +887,10 @@ out-of-range indices are rejected, and inactive elements contribute nothing.
 Nodal and scalar `Ms` keep the existing lumped-mass weighting. This change
 requires native/runner contract tests and a managed-runtime check before it
 can be considered qualified; source inspection alone is not runtime evidence.
+The native plan importer preserves the requested consistent-mass policy even
+in a dependency-free ABI build, so the initial-state average contract observes
+the same material intent. This does not provide MFEM operators or time stepping:
+those capabilities remain unavailable without the MFEM stack.
 
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
@@ -1388,5 +1392,6 @@ must include:
 | FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_elements_f64` | DG0 per-object average `m` over explicit owned elements. |
 | FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
 | FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
+| FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |
 | FEM shared-node regression fixture | `backends/fem/tests/element_dg0_workflow_contract.cpp` | `make_dg0_shared_node_plan` | Analytical ABI regression with unequal volumes: selected elements give 0.5; the induced node set gives 9/14. The initial-state average contract runs separately from MFEM dynamics in CI. |
 | FEM Ms regressions | `crates/fullmag-plan/src/tests.rs` | `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient` | Planner rejection table for transport with spatial `Ms`. |
