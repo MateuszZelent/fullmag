@@ -111,6 +111,13 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Check FEM CPU runner contracts
+        # Type-check the CPU native lane independently of fem-gpu, including
+        # its tests. This does not link or qualify the MFEM runtime.
+        run: |
+          cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
+          FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
+
       - name: Check FDM CUDA runner contracts
         # cargo check type-checks the CUDA Rust path without linking a native
         # library. The actual cuFFT operator is qualified on the managed GPU.
@@ -265,8 +272,6 @@ jobs:
           cargo test --locked -p fullmag-plan --lib fem_aex_field_uniformity_uses_relative_si_tolerance
           cargo test --locked -p fullmag-plan --lib fem_planner_elementwise_material_legality_distinguishes_a_from_ms
           cargo test --locked -p fullmag-plan --lib fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient
-          cargo test --locked -p fullmag-runner --lib native_fem::object_average::tests
-          FULLMAG_FEM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features fem-native --tests
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
 
       - name: Run FDM Airbox target membership contracts

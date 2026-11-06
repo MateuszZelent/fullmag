@@ -89,7 +89,7 @@ pub(crate) use stage_coupled::StageM2CoupledProvider;
 pub(crate) use stage_oersted::{plan_requests_stage_oersted_callback, StageOerstedProvider};
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) use stage_transport::{plan_requests_stage_transport_callback, StageTransportProvider};
-#[cfg(all(test, feature = "fem-gpu"))]
+#[cfg(all(test, any(feature = "fem-gpu", feature = "fem-native")))]
 pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]

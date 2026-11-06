@@ -50,7 +50,7 @@ Oczekiwana średnia dla czterech wybranych elementów to 0,5; domknięcie po ich
 węzłach obejmuje również obcy centralny element i daje 9/14. Jeden zewnętrzny
 element ma dwukrotną objętość, więc test wykrywa również brak wagi objętościowej.
 Testy obejmują też duplikaty, nieaktywne elementy i walidację wejścia. Pięć testów selektorów Rust
-dodano do istniejącego kroku CI `Run local material coefficient regressions`.
+uruchamia krok CI `Check FEM CPU runner contracts`.
 Ten krok sprawdza też kompilację ścieżki Rust z `fem-native`. Istniejąca recepta
 GitHub Actions `run_modal_cabi_contract.py` buduje i uruchamia teraz kontrakty
 `fem_element_quadrature_material_contract` oraz `fem_element_dg0_average_contract`.
@@ -58,6 +58,13 @@ Drugi uruchamia binarium workflow z `--object-averages-only`; pełny test dynami
 DG0 nadal wymaga MFEM i pozostaje osobną, niezmienioną bramką.
 Jest to jawna bramka ABI/CPU bez MFEM/CUDA, nie kwalifikacja produkcyjnego
 runtime ani parytetu urządzenia.
+
+Nowa kontrola kompilacji `fem-native --tests` ujawniła niepełne warunki
+kompilacji wariantu CPU. Wspólny kod zapisu pól i harmonogramów, provenance
+relaksacji/transportu oraz rozdzielenia energii DMI udostępniono również dla
+`fem-native`. Odtworzono brakujące importy i pomocniczą geometrię testów po
+wcześniejszym wydzieleniu kodeka artefaktów. Nie zmieniono bramek dostępności
+CUDA/MFEM ani nie dodano cichego fallbacku CPU.
 
 ## Weryfikacja i blokada
 
@@ -72,7 +79,10 @@ runtime ani parytetu urządzenia.
   Test ABI wykrył, że import planu bez MFEM pomijał `use_consistent_mass`.
   Poprawiono import samej polityki i dodano regresję potwierdzającą dalsze
   odrzucanie kroków czasowych bez MFEM oraz planów DG0 z lumped mass.
-  Wynik ponownego CI i testów Rust w chwili tej aktualizacji: **NOT VERIFIED**.
+  Ponowny przebieg na `8738a43e2c39d7084768a8c6ce6cd3b557b3f496`:
+  osiem kontraktów natywnych oraz pięć testów selektorów Rust PASS.
+  Kontrola `fem-native --tests` wykryła opisane wyżej braki warunków kompilacji;
+  wynik kolejnego CI po ich poprawce: **NOT VERIFIED**.
 - Nie uruchamiano `cargo test`, `just test` ani kompilacji na hoście.
 
 Zarządzany launcher uruchomiono dla grupy
@@ -81,7 +91,7 @@ symulacji. Przygotowanie toolchaina i obrazów development zakończyło się
 sukcesem. Próba development `21294d69464d4230a09574eb9ea79649` zakończyła się
 stanem `outcome-unknown-resources-retained`: Docker odmówił utworzenia sieci,
 ponieważ `all predefined address pools have been fully subnetted`.
-Backend aplikacji nie wystartował; kompilacja zmiany i runtime pozostają
+Backend aplikacji nie wystartował; lokalna kompilacja aplikacji i runtime pozostają
 **NOT VERIFIED**. Nie wolno utożsamiać budowy obrazów z kompilacją aplikacji.
 
 Zachowano wolumen operacyjny

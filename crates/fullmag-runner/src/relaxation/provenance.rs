@@ -2,15 +2,15 @@
 
 use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 use crate::types::FemDirectMinimizerPolicyProvenance;
 use crate::types::{ExecutionProvenance, FdmCpuStateLayoutProvenance};
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 const DIRECTION_POLICY_ENV: &str = "FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY";
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 const LINEAR_SOLVER_ENV: &str = "FULLMAG_FEM_DIRECT_MINIMIZER_PRECONDITIONER_SOLVER";
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 const PRECONDITIONER_ENV: &str = "FULLMAG_FEM_DIRECT_MINIMIZER_PRECONDITIONER";
 
 fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'static str> {
@@ -90,7 +90,7 @@ pub(crate) fn apply_energy_minimizer_provenance(
     provenance.resolved_integrator = None;
 }
 
-#[cfg(any(feature = "fem-gpu", test))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 fn resolve_fem_direct_minimizer_policy(
     gpu: bool,
     direction_override: Option<&str>,
@@ -155,7 +155,7 @@ fn resolve_fem_direct_minimizer_policy(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn apply_fem_direct_minimizer_policy_provenance(
     provenance: &mut ExecutionProvenance,
     relaxation: Option<&RelaxationControlIR>,

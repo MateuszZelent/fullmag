@@ -1,13 +1,45 @@
 use super::*;
 use crate::native_fem::accepted_external_lead::{
-    ExternalLeadBoundary, ExternalLeadBranch, ExternalLeadQuadraturePolicy,
+    ExternalLeadBoundary, ExternalLeadBranch, ExternalLeadQuadraturePolicy, OPERATOR, SCHEMA,
 };
 use crate::native_fem::accepted_terminal_charge::{
     AcceptedChargeInterface, AcceptedChargeTerminal, AcceptedTerminalChargeRequest,
 };
+use fullmag_antenna_artifacts::charge::decode_accepted_terminal_charge_record;
 use fullmag_ir::MeshIR;
 
 // Independent scientific codec fixture; it does not claim a native solve ran.
+const SCOPE: &str = "external_electrode_truncation";
+
+// Orient fixture fluxes geometrically, without depending on the decoder's
+// private orientation helper. Positive scaling preserves the sign at SI scales.
+fn outward_sign(
+    face: [u64; 3],
+    element: [u64; 4],
+    xyz: &BTreeMap<u64, [f64; 3]>,
+) -> Option<f64> {
+    let opposite = element.iter().find(|id| !face.contains(id))?;
+    let origin = xyz[&face[0]];
+    let offset = |id: u64| std::array::from_fn::<_, 3, _>(|axis| xyz[&id][axis] - origin[axis]);
+    let edges = [offset(face[1]), offset(face[2]), offset(*opposite)];
+    let scale = edges
+        .iter()
+        .flatten()
+        .copied()
+        .map(f64::abs)
+        .fold(0.0, f64::max);
+    if !scale.is_finite() || scale == 0.0 {
+        return None;
+    }
+    let [b, c, d] = edges.map(|edge| edge.map(|coordinate| coordinate / scale));
+    let triple = Sum::of([
+        (b[1] * c[2] - b[2] * c[1]) * d[0],
+        (b[2] * c[0] - b[0] * c[2]) * d[1],
+        (b[0] * c[1] - b[1] * c[0]) * d[2],
+    ]);
+    (triple.is_finite() && triple != 0.0).then(|| -triple.signum())
+}
+
 #[derive(Default)]
 struct Bytes(Vec<u8>);
 impl Bytes {
