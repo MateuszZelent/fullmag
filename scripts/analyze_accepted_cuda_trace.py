@@ -149,11 +149,16 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     counts = defaultdict(lambda: {"count": 0, "summed_duration_ns": 0, "bytes": 0})
     devices = defaultdict(list)
     observed_devices = set()
-    count = invalid = clipped = truncated_names = 0
+    count = invalid = clipped = truncated_names = out_of_bounds = 0
+    max_before_ns = max_after_ns = 0
+    clock_source = None
+    timestamp_callback_registered = None
     digest = hashlib.sha256()
     expected_header = {"type": "header", "schema": "worker_cuda_trace.v1", "timestamp_domain": "cupti_activity_ns",
         "cupti_api_version": api_version, "max_bytes": config["max_bytes"], "max_duration_ms": config["max_duration_ms"],
         "activity_kinds": list(KINDS)}
+    monotonic_header = expected_header | {"clock_source": "clock_monotonic_raw",
+        "timestamp_callback_registered": True}
     with regular(root / receipt["trace_file"], config["max_bytes"]) as (stream, actual_size):
         require(actual_size == size, "trace size mismatch")
         total = line_index = 0
@@ -165,9 +170,14 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
             digest.update(raw)
             event = parse(raw)
             if line_index == 0:
-                require(event == expected_header or (api_version == 24 and
-                    event == expected_header | {"activity_kinds": list(LEGACY_KINDS)}),
+                legacy_api24_header = expected_header | {"activity_kinds": list(LEGACY_KINDS)}
+                require(event == expected_header or (api_version == 24 and event == legacy_api24_header)
+                    or (api_version == 28 and event == monotonic_header
+                        and event.get("timestamp_callback_registered") is True),
                     "trace header differs from admitted capture")
+                if event == monotonic_header:
+                    clock_source = event["clock_source"]
+                    timestamp_callback_registered = event["timestamp_callback_registered"]
                 declared_kinds = tuple(event["activity_kinds"])
                 line_index += 1
                 continue
@@ -213,6 +223,12 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
             if event["timestamps_valid"]:
                 first, last = event["start_ns"], event["end_ns"]
                 require(0 < first <= last and event["duration_ns"] == last-first, "inconsistent activity duration")
+                if first < start or last > end:
+                    out_of_bounds += 1
+                    if first < start:
+                        max_before_ns = max(max_before_ns, start - first)
+                    if last > end:
+                        max_after_ns = max(max_after_ns, last - end)
                 left, right = max(start, first), min(end, last)
                 duration = max(0, right - left)
                 clipped += int(left != first or right != last)
@@ -233,17 +249,41 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     require(invalid <= stats["incomplete_records"], "invalid timestamps absent from native loss counters")
     require(truncated_names <= stats["truncated_names"], "truncated names absent from native loss counters")
     require(counts["unknown"]["count"] <= stats["unknown_records"], "unknown activity absent from native loss counters")
+    capture_duration_ns = end - start
+    duration_tolerance_ns = 1_000_000
+    timing_reasons = []
+    if clock_source != "clock_monotonic_raw" or timestamp_callback_registered is not True:
+        timing_reasons.append("clock_source_not_attested")
+    if receipt["status"] != "complete":
+        timing_reasons.append("capture_not_complete")
+    if out_of_bounds:
+        timing_reasons.append("timed_records_outside_capture_window")
+    if invalid:
+        timing_reasons.append("invalid_timed_records")
+    if capture_duration_ns > timing["total_wall_seconds"] * 1_000_000_000 + duration_tolerance_ns:
+        timing_reasons.append("capture_duration_exceeds_host_window")
+    timing_qualification = {"status": "passed" if not timing_reasons else "not_verified",
+        "clock_source": clock_source, "reasons": timing_reasons,
+        "evidence": {"capture_status": receipt["status"],
+            "timestamp_callback_registered": timestamp_callback_registered,
+            "capture_duration_ns": capture_duration_ns,
+            "total_wall_seconds": timing["total_wall_seconds"],
+            "duration_tolerance_ns": duration_tolerance_ns,
+            "out_of_bounds_timed_records": out_of_bounds,
+            "max_before_ns": max_before_ns, "max_after_ns": max_after_ns,
+            "invalid_timed_records": invalid}}
     for kind, record in counts.items():
         record["union_ns"] = union_ns(intervals[kind])
     return {"schema_version": "accepted_cuda_trace_analysis.v1", "identity": identity,
         "gpu_uuid": gpu_uuid, "worker_pid": worker_pid, "trace_sha256": digest.hexdigest(),
         "config_sha256": config_hash, "status": receipt["status"], "solver_outcome": receipt["solver_outcome"],
         "capture_window_ns": end-start, "records": count, "clipped_records": clipped,
+        "timing_qualification": timing_qualification,
         "native": native, "errors": errors, "host_timing": timing, "kinds": dict(counts), "names": dict(names),
         "observed_gpu_union_ns": union_ns(pair for values in devices.values() for pair in values),
         "observed_gpu_union_by_device_ns": {str(device): union_ns(values) for device, values in devices.items()},
         "host_api_union_ns": union_ns(intervals["runtime_api"] + intervals["driver_api"]),
-        "interpretation": "Observed interval unions are not hardware utilization. API, GPU and synchronization times overlap. Host timings exclude callback overhead; measure it with matched on/off runs."}
+        "interpretation": "Observed interval unions are not hardware utilization. API, GPU and synchronization times overlap. Activity time aggregates remain clipped to the native capture window and are unqualified unless timing_qualification.status is 'passed'; consumers must gate on that status. Host timings exclude callback overhead; measure it with matched on/off runs."}
 
 
 def main(argv=None):

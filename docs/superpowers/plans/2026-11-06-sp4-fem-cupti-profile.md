@@ -506,3 +506,32 @@ Próba kontrolna trace-off nie ma nowej aktywacji ani katalogu wynikowego;
 ostatnia aktywacja nadal wskazuje zakończony trace-on. Matched on/off, koszt
 synchronizacji i przyspieszenie pozostają NOT VERIFIED. Pełne SP4 A/B czterech
 solverów i porównanie z MuMax3 GPU nie są ukończone.
+
+## Bramka czasu i kolejne wznowienie — 06.11.2026
+
+Master `914c04ac93b64d16268c62978b44b155c0609f10` dołączono bez konfliktów
+w merge `b508e1a476bb9c36512b5684eb51782af7f3ce65`. Zachowano lokalne zmiany
+profilera i 44 niewersjonowane wejścia SP4.
+
+Czytnik zachowuje historyczne nagłówki CUPTI24/28, ale kwalifikuje czas
+oddzielnie. Nowy nagłówek API28 wymaga dokładnej pary
+`clock_source=clock_monotonic_raw`, `timestamp_callback_registered=true`.
+Pełny capture, poprawne rekordy w jego granicach oraz czas capture mieszczący
+się w monotonicznym czasie hosta są konieczne do `timing_qualification=passed`.
+Tolerancja porównania dwóch zegarów hosta wynosi 1 ms; nie rozszerza okna GPU.
+18 testów czytnika przeszło, w tym odrzucenie liczby1 zamiast boolean true.
+
+Ponowny odczyt niezmienionego śladu watchdog potwierdził 30376 rekordów poza
+oknem, maksymalnie 37,304835085 s przed i 1,651652545 s po granicach. Capture
+25,317092049 s przekracza host wall23,108236555 s. Osobny raport na WSL:
+`sp4-diagnostics/cupti-watchdog-reanalysis-clock-qualification-20261106.json`.
+Sterownik kolejnych prób wymaga nowej bramki; jego poprzednia wersja pozostaje
+w sąsiednim pliku `sp4_run_cupti_resume_validation_probe_20261106.before-monotonic-clock.py`.
+Nowy SHA sterownika: `ec403153140fd1e4732ce281a4272354c323e8fc8004382f93b7665b270b3bcc`.
+
+Native callback CLOCK_MONOTONIC_RAW przeszedł review źródeł; build i test na
+GPU pozostają NOT VERIFIED. Zarządzany resume `2222ee63f8964ff3951b395593d9606f`
+odmówił przed startem usług: operacja nie odziedziczyła prywatnego layoutu.
+Oryginalny helper potwierdził READY/LOGGED i czeka z blokadą na terminal.
+Naprawa wymaga zachowania jego własności oraz failure-only finalizacji;
+wyniki, usługi i poprzednie pokwitowania pozostają zachowane.
