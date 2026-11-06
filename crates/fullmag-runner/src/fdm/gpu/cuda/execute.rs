@@ -754,8 +754,10 @@ pub(crate) fn execute_cuda_fdm(
                 plan.precision == fullmag_ir::ExecutionPrecision::Double
                     && plan.spin_transport_plans.is_empty()
                     && plan.fdm_gpu_charge_transports.is_empty()
+                    && plan.temperature.unwrap_or(0.0) <= 0.0
+                    && plan.thermal_seed_config.is_none()
             }).ok_or_else(|| RunError {
-                message: "CUDA frozen terminal context requires single-grid FP64 with active frozen spins and no transport".into(),
+                message: "CUDA frozen terminal context requires deterministic single-grid FP64 with active frozen spins and no transport".into(),
             })?;
             context.frozen.cuda_frozen_stage_state(
                 context.source_frozen_plan, target, plan.active_mask.as_deref(),
@@ -1518,7 +1520,7 @@ pub(crate) fn execute_cuda_fdm(
     }
     let accepted_state_snapshot = if plan.spin_transport_plans.is_empty()
         && plan.fdm_gpu_charge_transports.is_empty()
-        && plan.frozen_spins.is_none()
+        && (plan.frozen_spins.is_none() || terminal.is_some())
         && plan.temperature.unwrap_or(0.0) <= 0.0
         && plan.thermal_seed_config.is_none()
     {
