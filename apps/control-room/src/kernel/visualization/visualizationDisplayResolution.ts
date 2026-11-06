@@ -35,13 +35,14 @@ export function resolveVisualizationTopologyFreshness(
   const sceneRecord = asRecord(scene);
   const sceneRevision = resolveSceneRevision(scene);
   const manifestRecord = asRecord(manifest);
-  const sourceSceneRevision = asFiniteNumber(manifestRecord?.source_scene_revision);
+  const qualifiedSceneRevision = asFiniteNumber(manifestRecord?.validated_for_scene_revision) ??
+    asFiniteNumber(manifestRecord?.source_scene_revision);
 
   if (sceneRevision === null) {
     return "unknown";
   }
 
-  if (sourceSceneRevision === null) {
+  if (qualifiedSceneRevision === null) {
     const cleanTopologyCoverage =
       !sceneHasDirtyGeometry(sceneRecord) &&
       manifestCoversVisibleSceneObjects(
@@ -58,7 +59,7 @@ export function resolveVisualizationTopologyFreshness(
     return cleanTopologyCoverage ? "current" : "unknown";
   }
 
-  return sceneRevision === sourceSceneRevision ? "current" : "stale";
+  return sceneRevision === qualifiedSceneRevision ? "current" : "stale";
 }
 
 /**

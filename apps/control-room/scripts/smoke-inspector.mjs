@@ -2209,6 +2209,11 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   assert(evidence.renderCount <= 3,
     `Magnetic Texture render count exceeded budget: ${evidence.renderCount}.`);
   const mutationRequests = fixture.requests.slice(requestStart);
+  assert(
+    fixture.manifest.source_scene_revision === fixtureSnapshot.manifest.source_scene_revision &&
+      fixture.manifest.validated_for_scene_revision === fixture.revision,
+    "Magnetic texture Apply must retain the mesh build and advance its scene validation.",
+  );
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
   const transactionMutationCount = mutationRequests.filter(
@@ -4701,8 +4706,7 @@ async function installInspectorFixtureApi(page, fixture) {
       if (!object) return fulfillJson(route, { error: { code: "inspector_fixture_object_missing" } }, 404);
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
+      fixture.manifest.validated_for_scene_revision = fixture.revision;
       if (asset) {
         fixture.scene.magnetization_assets = [
           ...(fixture.scene.magnetization_assets ?? []).filter((existing) => existing.id !== asset.id),

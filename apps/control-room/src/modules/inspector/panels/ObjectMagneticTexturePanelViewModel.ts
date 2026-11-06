@@ -20,7 +20,7 @@ export function commitMagneticTextureApply(
       throw new Error("The scene changed before Apply. Review the refreshed texture and try again.");
     }
     return api.model.applyMagnetization(target, { baseRevision, sessionScopeKey });
-  });
+  }, undefined, { expectedSceneRevision: baseRevision });
 }
 
 export function magneticTextureApplyMessage(

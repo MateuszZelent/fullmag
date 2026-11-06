@@ -16,6 +16,7 @@ import { sessionRequestScopeKey, sessionResourceIdentityKey } from "@/kernel/res
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
   publishCommittedSceneResource,
+  SCENE_RESOURCE_KEY,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -990,7 +991,10 @@ export function ObjectMagneticTexturePanel({
 
     const submittedDraft = draft;
     const mutationContext = captureAuthoringMutationFence(
-      createCommandContext("inspector", kernel, { sessionScopeKey }),
+      createCommandContext("inspector", kernel, {
+        resourceData: { [SCENE_RESOURCE_KEY]: scene.data },
+        sessionScopeKey,
+      }),
     );
     const isCurrentSession = () => mutationContext.isCurrentSessionScope?.() === true;
     mutationInFlight.current = true;
