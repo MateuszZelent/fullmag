@@ -128,7 +128,12 @@ fn run_spec(device: &str) -> RunSpecification {
             device: device.into(),
             precision: "double".into(),
             mode: "strict".into(),
-            minimum_resources: None,
+            minimum_resources: Some(RequestedResourceBudget {
+                cpu_millis: 100,
+                memory_bytes: 1 << 20,
+                gpu_memory_bytes: if device == "gpu" { 1 << 20 } else { 0 },
+                storage_bytes: 1 << 20,
+            }),
         },
     )
 }
