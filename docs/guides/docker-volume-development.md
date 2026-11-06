@@ -243,6 +243,25 @@ lease `iteration` i przed zatrzymaniem którejkolwiek usługi; błąd tej kontro
 zostawia grupę działającą i nie tworzy próby. Grupa bez kwarantanny namespace
 ma `BuildControl.namespace == ""` i używa subpath `runtime-control`.
 
+#### Odtworzenie Linux DEV po utracie katalogu stanu
+
+Użyj tej ścieżki tylko dla istniejącej grupy `fullmag-master` w profilu
+`linux-native-v1`, gdy w katalogu stanu na WSL zostało wyłącznie potwierdzenie
+zwolnienia writera. Wymagana jest udana operacja `stop-diagnostic-volume`
+dla bieżącej inkarnacji backendu. Przypnij identyfikator tej operacji
+i SHA-256 surowego pliku `stop-diagnostic/attempts/<stop>/terminal.json`
+z wolumenu kontrolnego.
+
+```text
+just docker-dev-recreate-lost-state <development> <config-sha256> <source> <stop>@<terminal-sha256> <port>
+```
+
+Launcher sprawdza kontenery, brak dodatkowych konsumentów i zwolnienie
+wszystkich rezerwacji w ledgerze przed usunięciem starej pary. Zachowuje
+pozostały katalog stanu, archiwizuje runtime i ledger w tym samym prywatnym
+wolumenie oraz uruchamia nową pustą sesję w tej samej grupie. Skrypty i Zarr na
+hoście pozostają dostępne. Uruchomienie skryptu jest oddzielną operacją.
+
 #### Zapis pustej sesji UI przed restartem
 
 Zwykłą, aktywną sesję `ui_authoring` w stanie `awaiting_command`, bez bieżącego
