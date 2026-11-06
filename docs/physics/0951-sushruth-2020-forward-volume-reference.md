@@ -962,6 +962,82 @@ autorów ani wszystkich możliwych różnic modelu. Wynik pozostaje diagnostyką
 nie dowodem reprodukcji lub błędu publikacji. Domyślny Re(T) jest niezmieniony.
 Pełne ekstrema i dowody: [raport obserwabli](../superpowers/plans/2026-11-06-sushruth-voltage-observable-audit.md).
 
+
+(sushruth-complex-square-normalization)=
+## Kontrola zespolonego kwadratu i normalizacji GS — 06.11.2026
+
+<!-- DOC-ANCHOR:sushruth-complex-square-normalization -->
+
+Równania9–10 publikacji zapisują kwadrat widma, podczas gdy nasz wzorzec
+używa modułu kwadratowego. Dla konkretnych idealnych widm6–8 oba zapisy
+dają tę samą unormowaną odpowiedź, jeżeli licznik i mianownik stosują
+tę samą konwencję. Nie jest to ogólna zamiana dla dowolnego zespolonego
+profilu lub dowolnej pary anten.
+
+Dla niezerowego, stałego w k współczynnika $\lambda$ definiujemy pomocniczy
+normalizator zespolonego kwadratu $Q_\lambda$ i odpowiedź $\widetilde T_\lambda$:
+
+```{math}
+:label: eq-sushruth-complex-square-normalization
+
+ Q_\lambda=\int_{-\infty}^{\infty}[\lambda h(k)]^2\,dk,\qquad
+ \widetilde T_\lambda=
+ \frac{\int_{-\infty}^{\infty}[\lambda h(k)]^2
+       \chi_{xx}(\omega,k)e^{-ikr}\,dk}{Q_\lambda}
+ =\widetilde T_1.
+```
+
+Dla widma GS z równania7 zachodzi $h(k)=i\,a(k)$ z rzeczywistym $a(k)$.
+Wtedy $Q_1=-D$, a licznik ma ten sam dodatkowy minus. Dla S i GSG
+widma są rzeczywiste, więc $Q_1=D$. Dlatego użycie modułu kwadratowego
+w obu miejscach nie wprowadza samo w sobie przeciwnej fazy GS.
+Ta algebra dotyczy konwencji zapisu tej znormalizowanej całki;
+nie usuwa fizycznej fazy osobnego źródła, względnej orientacji odbiornika
+lub polaryzacji portu. Nie wolno na tej podstawie obracać danych pomiarowych.
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $\lambda$ | niezerowy, wspólny stały współczynnik reprezentacji widma w liczniku i mianowniku | $1$ |
+| $Q_\lambda$ | pomocnicza całka zespolonego kwadratu widma | $\mathrm{m^{-1}}$ |
+| $\widetilde T_\lambda$ | znormalizowana odpowiedź przy tym samym współczynniku w obu całkach | $1$ |
+| $a(k)$ | rzeczywista funkcja taka, że idealne widmo GS wynosi $i a(k)$ | $1$ |
+
+Pozostałe symbole, domena, jednostki i założenia pozostają w powyższych
+równaniach wzorca. Odpowiednik $\widetilde R$ otrzymuje się dla $r=0$.
+Warunkiem dzielenia jest niezerowe $Q_\lambda$; dla trzech badanych widm
+całka jest niezerowa. To diagnostyka bez nowego publicznego API,
+ProblemIR, źródła, bazy, solvera lub kontraktu runtime. Macierz czterech
+realizacji FEM/FDM CPU/GPU pozostaje not-applicable jako dowód wykonania.
+
+### Dowód numeryczny i granica wniosku
+
+scripts/test_sushruth_response_normalization.py::signed_integrals buduje
+zespolone widma bez wywoływania antenna_spectra: z sum przesuniętych
+prostokątnych pasków i podpisanej zmiennej q. Podatność zapisuje w cyklach/s,
+nie przez film_susceptibility. Porównanie dotyczy niezmienionego
+scripts/reference_sushruth_2020_response.py::inductive_response.
+
+Parametry materiałowe i geometryczne odpowiadają powyższej TableI/Fig.3:
+b_e0,25T, b_M0,89T, gamma/(2pi)30GHz/T, t20nm, L200nm, g250nm,
+s30nm i r2µm. Test używa q od−80 do80,65536 przedziałów Simpsona,
+trzech częstotliwości7,8/8,175/8,355GHz, alfa0,01/0,1 i antenS/GS/GSG.
+To18 kombinacji i36 porównań zespolonych R/T. Zachowano wcześniejszy
+próg2e−6+2e−5|reference|; nie jest to próg zgodności z publikacją.
+
+Dwa testy PASS: równoważność obu konsekwentnych normalizacji oraz
+skracanie globalnej fazy dla lambda1,−1,i,−i i exp(0,37i).
+Kontrolny, celowo niespójny wariant GS z kwadratem tylko w liczniku
+i dodatnim D w mianowniku odwraca wynik; nie jest używany w produkcji.
+Nie zmieniono kernela, parametrów, wykresów lub historycznych wyników.
+Log: verification/sushruth-complex-square-normalization-20261106/
+w prywatnym control volume grupy3203. Test trwał2,586s,1CPU/AS2GiB,
+bez native meshera, prepare lub Solve.
+
+Wniosek: wykluczono konkretną hipotezę dodatkowego minusa wynikającego
+wyłącznie z czynnika i i poprawnej normalizacji GS. Nie ustalono przyczyny
+rozbieżnych ekstremów Fig.3, nie wyjaśniono całej relacji czerwonej/czarnej
+krzywej i nie uznano publikacji za odtworzoną.
+
 (scientific-bibliography)=
 ## Bibliografia
 
@@ -998,3 +1074,5 @@ Pełne ekstrema i dowody: [raport obserwabli](../superpowers/plans/2026-11-06-su
 | scripts/test_sushruth_k0_rf_demodulation.py | class SushruthK0RfDemodulationTests | Znany sygnał trójtonowy i negatywne kontrole fazy, jednostek, braków oraz niefinitych danych. |
 | scripts/reference_sushruth_2020_voltage_observable.py | faraday_emf_proxy | Ustalona pochodna Faradaya dla zachowanej konwencji czasowej; bez kalibracji i zmiany domyślnego T. |
 | scripts/test_sushruth_voltage_observable.py | class SushruthVoltageObservableTests | Niezależna rzeczywista pochodna strumienia, jednostki i odmowy. |
+| scripts/test_sushruth_response_normalization.py | signed_integrals | Niezależne widma z położeń pasków i podpisana całka, bez użycia integrandu implementacji. |
+| scripts/test_sushruth_response_normalization.py | class ResponseNormalizationTests | Konsekwentna normalizacja zespolonego kwadratu, wspólna faza i negatywna kontrola mieszanego mianownika. |

@@ -168,6 +168,22 @@
         "sushruth-faraday",
         "sushruth-faraday-tests"
       ]
+    },
+    {
+      "id": "eq-sushruth-complex-square-normalization",
+      "symbols": [
+        "phase-lambda",
+        "phase-normalizer",
+        "phase-response",
+        "h",
+        "k",
+        "chi",
+        "r"
+      ],
+      "sources": [
+        "sushruth-phase-integral",
+        "sushruth-phase-tests"
+      ]
     }
   ],
   "symbols": [
@@ -464,6 +480,30 @@
       "latex": "i",
       "meaning": "jednostka urojona",
       "si_unit": "1"
+    },
+    {
+      "id": "phase-lambda",
+      "latex": "\\lambda",
+      "meaning": "niezerowy, wspólny stały współczynnik reprezentacji widma w liczniku i mianowniku",
+      "si_unit": "1"
+    },
+    {
+      "id": "phase-normalizer",
+      "latex": "Q_\\lambda",
+      "meaning": "pomocnicza całka zespolonego kwadratu widma",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "phase-response",
+      "latex": "\\widetilde T_\\lambda",
+      "meaning": "znormalizowana odpowiedź przy tym samym współczynniku w obu całkach",
+      "si_unit": "1"
+    },
+    {
+      "id": "phase-real-gs",
+      "latex": "a(k)",
+      "meaning": "rzeczywista funkcja taka, że idealne widmo GS wynosi $i a(k)$",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -607,6 +647,18 @@
       "path": "scripts/test_sushruth_voltage_observable.py",
       "symbol": "class SushruthVoltageObservableTests",
       "responsibility": "Niezależna rzeczywista pochodna strumienia, jednostki i odmowy."
+    },
+    {
+      "id": "sushruth-phase-integral",
+      "path": "scripts/test_sushruth_response_normalization.py",
+      "symbol": "signed_integrals",
+      "responsibility": "Niezależna kontrola konwencji kwadratu z położeń pasków i podpisanej kwadratury."
+    },
+    {
+      "id": "sushruth-phase-tests",
+      "path": "scripts/test_sushruth_response_normalization.py",
+      "symbol": "class ResponseNormalizationTests",
+      "responsibility": "Równoważność normalizacji, wspólna faza i negatywny przykład hybrydowy."
     }
   ],
   "public_api": {
