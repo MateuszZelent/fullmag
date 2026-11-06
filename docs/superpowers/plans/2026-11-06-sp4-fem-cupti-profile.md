@@ -535,3 +535,19 @@ odmówił przed startem usług: operacja nie odziedziczyła prywatnego layoutu.
 Oryginalny helper potwierdził READY/LOGGED i czeka z blokadą na terminal.
 Naprawa wymaga zachowania jego własności oraz failure-only finalizacji;
 wyniki, usługi i poprzednie pokwitowania pozostają zachowane.
+
+Finalizacja odmowy jest zaimplementowana w
+`917f58524256cad5d3c390f6b7e6436979ea1eb7`: 74 testy przeszły, w tym rzeczywisty
+flock/CAS, ponowienie częściowej publikacji, zachowanie verified oraz odmowy
+przy zmianie dowodów. Preview i apply przypiętego żądania
+`8c7d6e6cbe61110b0ce9f4397937e6ead7a193e190b180956ef88ec273f5c68b`
+zakończyły się kodem0. Wynik operacji to `failed-confirmed`; oryginalny helper
+sam zwolnił active i zakończył się. Pokwitowanie na WSL:
+`sp4-diagnostics/resume-layout-refusal-2222ee63f8964ff3951b395593d9606f.json`,
+SHA `570564713b16a1650c0ffc6815ec8222e6859f94ea2479ce3cc91c4162b5fe1b`.
+
+Plain resume dziedziczy teraz zapisany layout przed frontend seed i startem
+usług. Test pełnego dispatchera najpierw odtworzył dokładną odmowę (RED),
+następnie sprawdził utrwalenie group-volume-v1 i start obu usług (GREEN).
+Ten sam test zachowuje wariant legacy i odrzuca brakujący/nieznany pin grupy;
+16 testów pending-resume przeszło. Nie jest to jeszcze dowód startu runtime.
