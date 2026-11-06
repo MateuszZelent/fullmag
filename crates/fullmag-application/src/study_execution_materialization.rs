@@ -111,7 +111,6 @@ fn materialize_input(
     layers: Vec<ExecutionRequestLayerIR>,
     lookup: impl FnMut(&str, &str) -> Result<ExecutionProfileIR, String>,
 ) -> Result<(ProblemIR, MaterializedExecutionRequestIR), String> {
-    problem.validate().map_err(|errors| errors.join("; "))?;
     let snapshot = crate::materialize_referenced_execution(
         &reference.profile_id,
         &reference.version,
