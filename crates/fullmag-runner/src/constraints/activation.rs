@@ -343,6 +343,49 @@ impl FrozenStageContextV1 {
         Ok(())
     }
 
+    /// Resolve the authored root or an unchanged CUDA FP64 stage continuation.
+    /// The native constructor takes its reference from the initial magnetization,
+    /// so a continuation must prove that the selected values already match it.
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn cuda_frozen_stage_state(
+        &self,
+        source_plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+        target: &fullmag_ir::ResolvedFrozenSpinsPlanIR,
+        active_mask: Option<&[bool]>,
+        initial_m: &[[f64; 3]],
+    ) -> Result<fullmag_engine::FrozenSpinsState, crate::types::RunError> {
+        self.validate(Some(target))?;
+        if self.entry_kind == FrozenStageEntryKind::FreshAuthoredRoot {
+            let state = fullmag_engine::FrozenSpinsState::capture_at_activation(
+                target, active_mask, initial_m,
+            ).map_err(|error| stage_context_error(error.to_string()))?;
+            if state.constraint_activation_epochs() != &self.prepared_activation_set.constraint_activation_epochs
+                || state.resolved_constraint_set_revision() != self.prepared_activation_set.resolved_constraint_set_revision
+            {
+                return Err(stage_context_error("CUDA frozen root activation differs from admission"));
+            }
+            return Ok(state);
+        }
+
+        let child = self.previous_frozen_child.as_ref()
+            .ok_or_else(|| stage_context_error("CUDA frozen continuation requires an active source checkpoint"))?;
+        if source_plan != Some(target) || self.previous_activation_set != self.prepared_activation_set
+            || child.backend != "fdm_cuda" || child.device != "cuda" || child.precision != "double"
+        {
+            return Err(stage_context_error("CUDA frozen continuation requires the same FP64 lane and unchanged constraint"));
+        }
+        let state = child.restore_engine_state(target)
+            .map_err(|error| stage_context_error(error.to_string()))?;
+        if child.magnetization.len() != initial_m.len()
+            || child.magnetization.iter().flatten().zip(initial_m.iter().flatten())
+                .any(|(expected, actual)| expected.to_bits() != actual.to_bits())
+        {
+            return Err(stage_context_error("CUDA frozen source magnetization differs from stage input"));
+        }
+        require_cuda_frozen_reference(&state, initial_m)?;
+        Ok(state)
+    }
+
     /// Consume the prepared lifecycle before the first solve on a local backend.
     /// Source-plan validation remains separate from target-plan validation.
     pub(crate) fn install_before_solve(
@@ -402,6 +445,22 @@ impl FrozenStageContextV1 {
     }
 }
 
+
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn require_cuda_frozen_reference(
+    state: &fullmag_engine::FrozenSpinsState,
+    magnetization: &[[f64; 3]],
+) -> Result<(), crate::types::RunError> {
+    if state.len() != magnetization.len()
+        || state.mask().iter().zip(state.reference()).zip(magnetization).any(
+            |((&frozen, reference), observed)| frozen && reference.iter().zip(observed)
+                .any(|(expected, actual)| expected.to_bits() != actual.to_bits()),
+        )
+    {
+        return Err(stage_context_error("CUDA frozen reference differs from accepted magnetization"));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

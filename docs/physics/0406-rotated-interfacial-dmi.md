@@ -284,9 +284,17 @@ we wszystkich wspieranych integratorach i relaksacji. Magnetyzacja, maska,
 PBC, coefficient i redukcje pozostają na urządzeniu w hot loop. Pełne
 transfery pola, hostowe obliczenie operatora i CPU fallback są błędem.
 
-Natywna ścieżka CUDA nadal odrzuca pola materiałowe per-cell. Walidacja lokalnego
-$A$ w plannerze nie oznacza dodania obsługi przestrzennie zmiennego współczynnika
-wymiany do tej ścieżki.
+CUDA single-grid FP64 dopuszcza przestrzennie zmienne $M_s$ w istniejącym
+kontrakcie pól materiałowych, przy jednorodnym współczynniku wymiany $A$.
+Pole rDMI w danym ogniwie używa jego lokalnego $M_s$ w mianowniku, w
+jednostkach $\mathrm{A\,m^{-1}}$. Zmiana dotyczy zarówno kroku integratora,
+jak i niezależnego odczytu pola rDMI. Energia zachowuje postać sumy po
+aktywnych wiązaniach i nie otrzymuje czynnika $M_s$. Pozostałe blokady
+dotyczące niejednorodnych materiałów, w tym zmienne $A$ i zmienne $M_s$
+dla rDMI w FP32, obowiązują nadal. Kontrakt Python i ProblemIR pozostaje
+taki sam. Walidacja wymaga porównania pola dla identycznej magnetyzacji
+i dwóch wartości $M_s$ na GPU oraz porównania składowej energii w J.
+Stan tego wariantu przed testem urządzenia to `NOT VERIFIED`.
 
 ### FEM CPU/MFEM
 
@@ -473,6 +481,7 @@ w macierzy wsparcia.
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | implemented, source test; runtime not verified |
 | FEM reference telemetry | `crates/fullmag-runner/src/fem_reference.rs` | `rotated_dmi_energy_from_magnetization` | rozdzielenie energii rDMI w live/relaxation stats | FEM CPU | implemented, source test; runtime not verified |
 | FEM equilibrium identity | `crates/fullmag-runner/src/fem/equilibrium_identity.rs` | `validate_supported_relax_source` | odrzucenie DMI poza zakresem tożsamości modalnej | FEM | implemented, source test |
+| Odczyt pola z lokalnym Ms | `backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu` | `rotated_interfacial_dmi_field_kernel` | lokalny mianownik w odczycie niezależnym od kroku | FDM GPU FP64 | managed runtime not verified |
 | CUDA rDMI workspace | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_ensure_rotated_dmi_workspace` | transakcyjne alokacje i retry accounting | FDM GPU | implemented, managed runtime not verified |
 | multilayer snapshot telemetry | `crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs` | `observed_snapshot_vector_field_count` | licznik transferów D2H zgodny z obecnością pola rDMI | FDM GPU | implemented, source test |
 | CLI live transport | `crates/fullmag-cli/src/live_workspace.rs` | `scalar_row_from_stats_with_active_runtime` | przeniesienie komponentu `e_rotated_dmi` | FDM/FEM | implemented, source test |

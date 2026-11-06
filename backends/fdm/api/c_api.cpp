@@ -1663,7 +1663,8 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             owner = "thermal";
         } else if (ctx->has_zhang_li_stt || ctx->has_slonczewski_stt || ctx->has_sot) {
             owner = "spin_torque";
-        } else if (reserve_rotated_dmi && plan->ms_field != nullptr) {
+        } else if (reserve_rotated_dmi && plan->ms_field != nullptr &&
+                   plan->precision != FULLMAG_FDM_PRECISION_DOUBLE) {
             owner = "rotated_dmi_variable_ms";
         }
         if (owner == nullptr && plan->a_field != nullptr &&

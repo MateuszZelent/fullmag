@@ -1924,6 +1924,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
+        "selections",
+        "magnetization_constraints",
         "antenna_port_modes",
         "antenna_field_solve_stages",
         "antenna_target_projections",

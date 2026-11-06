@@ -115,6 +115,8 @@
     }
   ],
   "sources": [
+    {"id": "cuda_centered_xy_admission", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "centered_periodic_xy_images", "responsibility": "Check the expanded and compact host memory bounds and preserve explicit XY image counts."},
+    {"id": "centered_xy_tensor", "path": "crates/fullmag-fdm-demag/src/shifted_kernel.rs", "symbol": "try_compute_periodic_xy_kernel", "responsibility": "Build centered Newell tensor spectra for XY image truncation and open Z."},
     {
       "id": "cudaExchangeUniformLutLaunch",
       "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
