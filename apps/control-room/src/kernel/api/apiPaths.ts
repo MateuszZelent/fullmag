@@ -998,9 +998,13 @@ export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/execution",
 );
 
-// Owning route is registered in router_v2/mod.rs and exported in openapi_v2.rs.
-// Use the generated path once managed API export is available.
-export const SIMULATION_STAGES_RESULTS_PATH = "/v2/sessions/current/simulation/stages/results";
+export const SIMULATION_STAGES_RESULTS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results",
+);
+
+export const SIMULATION_STAGES_RESULTS_SCALARS_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/stages/results/scalars",
+);
 
 export const SIMULATION_STAGE_HYSTERESIS_PLAN_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan",

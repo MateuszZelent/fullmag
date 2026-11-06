@@ -2156,7 +2156,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 
   try {
     await page.waitForFunction(
-      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes("Magnetic texture saved."),
+      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes(
+        "Magnetic texture applied. Initial magnetization is pending.",
+      ),
       undefined,
       { timeout: 5_000 },
     );
@@ -4672,7 +4674,17 @@ async function installInspectorFixtureApi(page, fixture) {
           transaction_kind: body.kind,
         });
       }
-      if (body.kind !== "patch_magnetization" || body.object_id !== "film") {
+      const target = body.target;
+      const operationId = body.operation_id;
+      const headers = request.headers();
+      if (
+        body.kind !== "apply_magnetization" ||
+        target?.kind !== "object" || target.object_id !== "film" ||
+        body.base_revision !== fixture.revision ||
+        !/^[a-f0-9]{32}$/.test(operationId) ||
+        headers["idempotency-key"] !== operationId ||
+        !headers["x-fullmag-session-scope"]
+      ) {
         fixture.unknownMutationPaths.push(request.method() + " " + path + url.search);
         return fulfillJson(
           route,
@@ -4684,20 +4696,30 @@ async function installInspectorFixtureApi(page, fixture) {
       if (fixture.texturePatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
       }
-      const asset = body.asset ?? null;
+      const asset = target.asset;
+      const object = fixture.scene.objects.find((candidate) => candidate.id === target.object_id);
+      if (!object) return fulfillJson(route, { error: { code: "inspector_fixture_object_missing" } }, 404);
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
       fixture.manifest.source_scene_revision = fixture.revision;
       fixture.visualization.revision = fixture.revision;
-      fixture.scene.magnetization_assets = asset ? [asset] : [];
-      fixture.scene.objects[0] = {
-        ...fixture.scene.objects[0],
-        magnetization_ref: body.magnetization_ref ?? null,
-      };
+      if (asset) {
+        fixture.scene.magnetization_assets = [
+          ...(fixture.scene.magnetization_assets ?? []).filter((existing) => existing.id !== asset.id),
+          asset,
+        ];
+      }
+      object.magnetization_ref = asset?.id ?? null;
       return fulfillJson(route, {
         committed_scene: fixture.scene,
         scene_revision: fixture.revision,
         transaction_kind: body.kind,
+        magnetization_apply: {
+          operation_id: operationId,
+          scene_revision: fixture.revision,
+          scopes: [{ object_id: target.object_id }],
+          status: "initial_state_pending",
+        },
       });
     }
     if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
