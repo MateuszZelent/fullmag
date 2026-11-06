@@ -479,6 +479,31 @@ class ProjectInventoryScopeTests(unittest.TestCase):
                     return module._inspect_transaction_helper(
                         control, "helper", "script", root, "ledger-volume", ledger_subpath)
             self.assertEqual(check(row), CONTAINER)
+            if os.name != "nt":
+                # Docker Desktop rewrites both inspect sources to the same
+                # opaque WSL alias. Only actual directory identity admits it.
+                aliases = root / "aliases"
+                alias = aliases / "Ubuntu2" / ("a" * 64)
+                alias.parent.mkdir(parents=True)
+                alias.symlink_to(root, target_is_directory=True)
+                desktop_source = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+                aliased = deepcopy(row)
+                aliased["HostConfig"]["Mounts"][1]["Source"] = desktop_source
+                aliased["Mounts"][1]["Source"] = desktop_source
+                with patch("docker_dev_browser_qa.LOCAL_WSL_BIND_MOUNT_ROOT", aliases):
+                    self.assertEqual(check(aliased), CONTAINER)
+                    alias.unlink()
+                    alias.mkdir()
+                    with self.assertRaises(BuildControlError): check(aliased)
+                    alias.rmdir()
+                    with self.assertRaises(BuildControlError): check(aliased)
+                    alias.symlink_to(root, target_is_directory=True)
+                    for location in ("host", "runtime"):
+                        changed = deepcopy(aliased)
+                        mount = changed["HostConfig"]["Mounts"][1] if location == "host" else changed["Mounts"][1]
+                        mount["Source"] = desktop_source + "/../" + "a" * 64
+                        with self.subTest(location=location), self.assertRaises(BuildControlError):
+                            check(changed)
             private = deepcopy(row)
             private["HostConfig"]["Mounts"][2]["VolumeOptions"]["Subpath"] = "private/ledger"
             self.assertEqual(check(private, "private/ledger"), CONTAINER)

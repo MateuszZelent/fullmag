@@ -1528,7 +1528,17 @@ def _inspect_transaction_helper(control, helper_name: str, script: str,
     def store_source_matches(value: object) -> bool:
         if not isinstance(value, str) or not value or not os.path.isabs(value):
             return False
-        return host_path(value) == store_root.resolve()
+        if host_path(value) == store_root.resolve():
+            return True
+        from docker_dev_browser_qa import DESKTOP_WSL_BIND_ALIAS_RE, LOCAL_WSL_BIND_MOUNT_ROOT
+        match = DESKTOP_WSL_BIND_ALIAS_RE.fullmatch(value)
+        if match is None:
+            return False
+        alias = LOCAL_WSL_BIND_MOUNT_ROOT.joinpath(*match.groups())
+        try:
+            return alias.is_dir() and store_root.is_dir() and alias.samefile(store_root)
+        except OSError:
+            return False
 
     rows = json.loads(docker_capture("inspect", helper_name).stdout)
     if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
