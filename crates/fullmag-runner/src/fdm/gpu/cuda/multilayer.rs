@@ -4072,11 +4072,9 @@ fn execute_native_stacked_cuda_multilayer(
         execution_engine: "cuda_native_multilayer_single_grid".to_string(),
         precision: precision_name(native.combined_plan.precision).to_string(),
         fdm_fft_execution,
-        demag_operator_kind: if native.combined_plan.enable_demag {
-            Some("tensor_fft_newell".to_string())
-        } else {
-            None
-        },
+        demag_operator_kind: crate::fdm::gpu::cuda::native::single_grid_demag_operator_kind(
+            &native.combined_plan,
+        )?,
         fft_backend: if native.combined_plan.enable_demag {
             Some("cuFFT".to_string())
         } else {
