@@ -12,6 +12,14 @@
 
 namespace fullmag::fem {
 
+/// Scaled local L2 norm. The scalar scratch may alias values[0].
+cudaError_t fullmag_cuda_demag_validation_norm(
+    const double *values,
+    int rows,
+    double *device_scalar,
+    double &norm,
+    cudaStream_t stream);
+
 /// Device Poisson demag RHS: b = Bx mx + By my + Bz mz.
 void fullmag_cuda_demag_rhs_csr(
     const uint32_t *csr_row_offsets,
