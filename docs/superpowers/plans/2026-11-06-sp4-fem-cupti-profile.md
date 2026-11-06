@@ -581,3 +581,51 @@ fence, oryginalne bajty OWNER/LAUNCH/config/process i zatrzymany frontend;
 zachować natywny format V5 oraz pełne piny terminal/held/history. Samo
 odzyskanie kontrolera nie kwalifikuje symulacji. SP4 on/off z poprawionym
 zegarem, przyspieszenie i pełne porównanie fizyki pozostają NOT VERIFIED.
+
+## Kontynuacja po diagnostycznym stopie
+
+Inwentaryzacja bieżącego store zmienia wcześniejsze założenie o V5: jest
+21 runów terminalnych (19 succeeded, 2 failed), bez held-manual i bez historii
+retry. Wszystkie 21 lease solvera i 21 preparation są released; epoki wynoszą1.
+Właściwy istniejący request native to V3 z pełną listą terminalną. Nie wolno
+tworzyć pustych list held/history, aby wymusić V4/V5.
+
+- [x] `docker_volume_bootstrap_recovery.py`: wspólny, tylko odczytowy walidator
+  jawnie przypiętego stopu. Wiąże terminal operacji, preflight, oryginalny
+  proces/fence, resume/development/Compose oraz cztery surowe dokumenty native.
+  Zachowuje rozróżnienie hash surowego sidecaru / hash kanonicznego terminala.
+  Testy mutacji dowodów, obcych tożsamości i niepełnego stopu.
+- [ ] Zarządzany stop dokładnej inkarnacji frontendu pod blokadą grupy:
+  niezmienny intent przed sygnałem, kontrola ID/StartedAt/backendu i dowodów
+  przed/po, ponowienie przez obserwację. Brak modyfikacji OWNER lub receiptów
+  native. Pełny store/ledger census musi przejść przed usuwaniem kontenerów.
+- [x] Jawny wariant hostowego abrupt proof z dodatkowym dowodem bootstrap.
+  Ten sam walidator przy przygotowaniu, odczycie, ponowieniu i granicy mutacji;
+  zwykła walidacja `service_owner` pozostaje obowiązkowa w starych wariantach.
+  Request native V3, bez zmiany semantyki zakończonych runów lub limitów CAS.
+- [ ] Review, regresje i managed preview/apply na dokładnej grupie. Dopiero
+  potem build/start oraz nowy pomiar GPU ON/OFF z pełnym Zarr i zgodnością
+  energii/torque. Nigdy nie zastępować odzyskania nowym pustym store.
+
+Oryginalne dowody stopu wyeksportowano do WSL:
+`sp4-diagnostics/bootstrap-stop-2d620c62dcac467aa638d63400133604`.
+SHA surowego stop-terminal: `d207ad238492ce3f9a826eb7d0d676e40db44a34bf01ff86fe987709c43292e6`.
+SHA operation-terminal: `cf24d4ca959ed45c349e301bd9fc754f3a8741a9e49115085a7909f1ee462a76`.
+Zachowany OWNER nadal ma SHA `aa01987d1b38f8f1246f424879380889472ad789350ad6096fe306ed1a73aeac`.
+
+Stan źródłowy proof/preparer: 22 testy bootstrap, 11 preparera, 16 ogólnego
+container recovery i 39 abrupt recovery przeszły. Review wykryło dwa błędy
+przed mutacją: hybrydowy journal pod starszą autoryzacją oraz błędny LAUNCH
+odrzucany dopiero przez native. Poprawiono je i dodano regresje. Wyjątek wymaga
+autoryzacji abrupt, a LAUNCH musi mieć stan spawned/ready i dokładny PID ownera.
+
+Odczytowe sprawdzenie rzeczywistego store/ledgera przeszło: 3476 plików,
+21 terminalnych runów, snapshot ledgera
+`06fc27705d67c06db72dc2ced68df9c510618aa047708edfc260b848ba891df6`.
+To niezależny wynik; pełna izolacja od obcych konsumentów nadal blokuje mutację.
+Poprawkę wyboru worktree w resolverze zapisano jako
+`77c93411a677634959e85580582b354822754245` (39 testów i review, push do PR408).
+Kolejna warstwa sondy fizycznej ma jawne ograniczenie do mastera. Wśród
+niezakwalifikowanych konsumentów są działające usługi `containers_admin2`
+oraz starsze zatrzymane grupy Fullmag. Nie zatrzymano ich i nie zmieniono
+ich receiptów; trwa implementacja jawnego kontekstu worktree dla tej sondy.

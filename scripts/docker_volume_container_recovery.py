@@ -51,6 +51,7 @@ TERMINAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v3"
 HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
 ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
 ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA = "fullmag.docker-abrupt-stop-proof.v3"
+ABRUPT_PROOF_BOOTSTRAP_SCHEMA = "fullmag.docker-abrupt-stop-proof.v4"
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
@@ -1859,6 +1860,9 @@ def _is_abrupt(authorization: Mapping[str, object]) -> bool:
 def _assert_request_matches_abrupt_retained_pins(
     request: Mapping[str, object], proof: Mapping[str, object]
 ) -> None:
+    if (proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA
+            and request.get("schema_version") != TERMINAL_REQUEST_SCHEMA):
+        _fail("bootstrap stop proof requires native terminal recovery v3")
     if request.get("retained_terminal_runs") != proof.get("retained_terminal_runs"):
         _fail("prepared request terminal pins differ from abrupt proof")
     if proof.get("schema") in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
@@ -2193,7 +2197,8 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
-    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None
+    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
+    bootstrap_stop_reference=None
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -2202,6 +2207,14 @@ def prepare_abrupt_stop_proof(
     stop journal, modifies OWNER/process-tree, removes containers, or runs Solve.
     """
     pins = _abrupt_pins(authorization_pins)
+    bootstrap = None
+    if bootstrap_stop_reference is not None:
+        if retained_held_manual_runs is not None or retained_attempt_histories is not None:
+            _fail("bootstrap stop proof supports only terminal recovery v3")
+        expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA,
+                                   "retained_terminal_runs": retained_terminal_runs})
+        from docker_volume_bootstrap_recovery import collect
+        bootstrap = collect(control, bootstrap_stop_reference)
     engine_sha = _docker_engine_sha()
     if retained_terminal_runs is not None:
         retained_terminal_runs = [dict(item) for item in retained_terminal_runs]
@@ -2228,7 +2241,8 @@ def prepare_abrupt_stop_proof(
     owner, owner_raw, owner_sha = _runtime_owner(control)
     launch, launch_raw, launch_sha = _runtime_launch(control)
     config, config_raw, config_sha = _runtime_config(control)
-    _validate_process_receipt_owner(process, owner)
+    if bootstrap is None:
+        _validate_process_receipt_owner(process, owner)
     _validate_owner_host(owner, backend)
     raw_records = {}
     for key, raw, sha, path in (
@@ -2240,6 +2254,11 @@ def prepare_abrupt_stop_proof(
             _fail(f"abrupt {key} bytes differ from operator pins")
         raw_records[key] = {"path": RUNTIME_CONTROL_RELATIVE + "/" + path,
                             "raw_utf8": raw.decode("utf-8"), "sha256": sha}
+    if bootstrap is not None:
+        from docker_volume_bootstrap_recovery import validate
+        validated = validate(bootstrap, pins, raw_records, backend, control=control)
+        if frontend.get("State", {}).get("StartedAt") != validated["frontend_started_at"]:
+            _fail("bootstrap recovery frontend incarnation differs from failed resume")
     _assert_no_foreign_storage_consumers(control, backend, frontend, compose)
     storage_proof = _ledger_and_store_snapshot(control, backend, compose=compose,
                                               retained_terminal_runs=retained_terminal_runs,
@@ -2255,6 +2274,8 @@ def prepare_abrupt_stop_proof(
              "network": _abrupt_network(backend, frontend, control.project),
              "storage_proof": storage_proof,
              "retained_terminal_runs": copy.deepcopy(retained_terminal_runs)}
+    if bootstrap is not None:
+        proof.update(schema=ABRUPT_PROOF_BOOTSTRAP_SCHEMA, bootstrap_stop=bootstrap)
     if retained_held_manual_runs is not None:
         proof["retained_held_manual_runs"] = copy.deepcopy(retained_held_manual_runs)
     if retained_attempt_histories is not None:
@@ -2273,10 +2294,12 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     legacy_fields = {"schema", "authorization_pins", "docker_engine_id_sha256", "raw_records", "containers", "network", "storage_proof", "retained_terminal_runs"}
     held_fields = legacy_fields | {"retained_held_manual_runs"}
     history_fields = held_fields | {"retained_attempt_histories"}
+    bootstrap_fields = legacy_fields | {"bootstrap_stop"}
     if ((proof_schema == ABRUPT_PROOF_SCHEMA and set(proof) != legacy_fields)
             or (proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA and set(proof) != held_fields)
             or (proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA and set(proof) != history_fields)
-            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}):
+            or (proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and set(proof) != bootstrap_fields)
+            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA}):
         _fail("abrupt stop proof does not match its frozen schema")
     if proof["authorization_pins"] != _abrupt_authorization_pins(authorization):
         _fail("abrupt proof operator pins differ")
@@ -2284,6 +2307,11 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     terminal_pins = proof["retained_terminal_runs"]
     held_pins = proof.get("retained_held_manual_runs")
     history_pins = proof.get("retained_attempt_histories")
+    if proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA:
+        expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA, "retained_terminal_runs": terminal_pins})
+        storage = _require_mapping(proof.get("storage_proof"), "bootstrap storage proof")
+        if storage.get("run_records") != sorted(terminal_pins, key=lambda item: item["run_id"]):
+            _fail("bootstrap storage proof does not cover its terminal pin inventory")
     if proof_schema in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
         if terminal_pins is None or held_pins is None:
             _fail("v2 abrupt proof must carry both v4 retained pin arrays")
@@ -2322,7 +2350,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     if process.get("schema") != "fullmag.docker-process-tree.v1" or process.get("state") not in {"ready", "shutdown_unknown"} or "startup_activation" in process:
         _fail("abrupt archived process state is unsupported")
     owner = _owner_for_native(decoded["owner"])
-    _validate_process_receipt_owner(process, owner)
+    _validate_proof_process_owner(process, owner, proof, authorization, control=control)
     containers = _require_mapping(proof["containers"], "abrupt archived containers")
     if set(containers) != {"backend", "frontend"}:
         _fail("abrupt archived service inventory differs")
@@ -2844,6 +2872,28 @@ def _validate_process_receipt_owner(
         _fail("runtime-service process receipt owner differs from OWNER.json")
 
 
+def _validate_proof_process_owner(process, owner, proof, authorization, *, control=None):
+    if proof.get("schema") != ABRUPT_PROOF_BOOTSTRAP_SCHEMA:
+        _validate_process_receipt_owner(process, owner)
+        return
+    if not _is_abrupt(authorization):
+        _fail("bootstrap proof requires explicit abrupt operator authorization")
+    # Selection is by the explicitly authenticated proof variant, never by the
+    # absence of service_owner. All ordinary variants keep their owner check.
+    from docker_volume_bootstrap_recovery import validate
+    containers = _require_mapping(proof.get("containers"), "bootstrap containers")
+    records = _require_mapping(proof.get("raw_records"), "bootstrap runtime records")
+    result = validate(proof.get("bootstrap_stop"), _abrupt_authorization_pins(authorization),
+                      records, containers.get("backend"), control=control)
+    if (process != _parse_json(records["process_receipt"]["raw_utf8"].encode("utf-8"), "bootstrap process")
+            or owner != _parse_json(records["owner"]["raw_utf8"].encode("utf-8"), "bootstrap owner")):
+        _fail("bootstrap process/owner differ from frozen native records")
+    frontend = _require_mapping(containers.get("frontend"), "bootstrap frontend")
+    frontend_state = _require_mapping(frontend.get("State"), "bootstrap frontend State")
+    if frontend_state.get("StartedAt") != result["frontend_started_at"]:
+        _fail("bootstrap frontend incarnation differs from failed resume")
+
+
 def _revalidate_recovery_boundary(
     control: BuildControl,
     authorization: Mapping[str, object],
@@ -2929,7 +2979,7 @@ def _revalidate_recovery_boundary(
         _fail("runtime-service owner changed before the destructive boundary")
     if _owner_identity_key(owner) != _owner_identity_key(expected_owner):
         _fail("runtime-service owner identity changed before the destructive boundary")
-    _validate_process_receipt_owner(process_receipt, owner)
+    _validate_proof_process_owner(process_receipt, owner, journal, authorization, control=control)
     _validate_owner_host(owner, backend)
     launch, _, launch_sha = _runtime_launch(control)
     runtime_config, _, config_sha = _runtime_config(control)
@@ -3195,7 +3245,7 @@ def recover(args: argparse.Namespace) -> None:
     owner, owner_raw, observed_owner_sha = _runtime_owner(control)
     if observed_owner_sha != authorization["owner_sha256"]:
         _fail("runtime-service owner bytes differ from operator authorization")
-    _validate_process_receipt_owner(process_receipt, owner)
+    _validate_proof_process_owner(process_receipt, owner, journal, authorization, control=control)
     _validate_owner_host(owner, backend)
     launch, launch_raw, launch_sha = _runtime_launch(control)
     runtime_config, runtime_config_raw, config_sha = _runtime_config(control)

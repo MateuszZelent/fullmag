@@ -115,6 +115,18 @@ class PreparationTests(unittest.TestCase):
             module.prepare(self.control,self.pins,{},retained_attempt_histories=[])
         self.builder.assert_not_called()
 
+    def test_bootstrap_stop_reference_is_reobserved_under_lease(self):
+        reference = {"attempt": "a" * 32, "sha256": "b" * 64}
+        terminal = [{"run_id": "terminal"}]
+        result = module.prepare(self.control, self.pins, {}, retained_terminal_runs=terminal,
+                                bootstrap_stop_reference=reference, publish=True)
+        self.assertEqual(self.builder.call_count, 2)
+        for call in self.builder.call_args_list:
+            self.assertEqual(call.kwargs["bootstrap_stop_reference"], reference)
+            self.assertEqual(call.kwargs["retained_terminal_runs"], terminal)
+        self.assertFalse(result["application_started"])
+        self.assertFalse(result["compute_started"])
+
     def test_v4_held_input_requires_explicit_terminal_array_even_when_empty(self):
         held=[{'run_id':'held-run','run_intent_sha256':'a'*64,'run_catalog_sha256':'b'*64,'start_release':'absent'}]
         with self.assertRaisesRegex(BuildControlError,'retained-terminal-runs'):
