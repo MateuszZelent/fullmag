@@ -16,6 +16,8 @@ import docker_volume_preowner_drained as base
 from docker_build_control import BuildControl, BuildControlError, canonical, bounded_capture, docker_capture
 
 VARIANT = 'cold-memory-increase-restore-stored-budget'
+import docker_volume_resumed_budget_proof as resumed
+VARIANTS = (VARIANT, resumed.VARIANT)
 SCHEMA = 'fullmag.cold-stored-budget-stop.v1'
 INTENT_SCHEMA = 'fullmag.cold-stored-budget-intent.v1'
 PHASE = 'cold-stored-budget-stop'
@@ -76,7 +78,7 @@ def overlay_budget(document, budget):
                FULLMAG_DOCKER_MEMORY_BYTES=str(memory))
 
 
-def _ledger(control, document, backend):
+def _ledger(control, document, backend, *, resumed_startup=False):
     from docker_volume_linux_supervision_stop import readonly_mount
     import docker_group_ledger as ledger
     expected = ledger.retained_profile(document, backend['Image'])
@@ -85,12 +87,14 @@ def _ledger(control, document, backend):
                   and mounts[0].get('Type') == 'volume', 'group ledger mount identity differs')
     script = base._LEDGER_PROBE.replace("'/ledger/ledger'", "'/host-ledger/ledger'").replace(
         "'total_budget':budget}", "'total_budget':budget,'policy':policy}")
+    if resumed_startup:
+        script = resumed.ledger_probe()
     args = base._python_helper_args(control, 'python3 -I -B -c ' + shlex.quote(script), backend['Image'])
     index = args.index('--entrypoint')
     args[index:index] = ['--mount', readonly_mount(backend, '/host-ledger')]
-    result = bounded_capture(args, data=b'', timeout=45, maximum=64 * 1024)
+    result = bounded_capture(args, data=b'', timeout=45, maximum=1024 * 1024)
     base._require(result.returncode == 0, 'full stored policy could not be observed')
-    full = base._json(result.stdout, 'full stored policy', maximum=64 * 1024)
+    full = base._json(result.stdout, 'full stored policy', maximum=1024 * 1024)
     base._require(full.get('schema') == 'fullmag.preowner-ledger-policy.v1'
                   and isinstance(full.get('policy'), dict) and isinstance(full.get('ledger_sha256'), str)
                   and base.SHA.fullmatch(full['ledger_sha256'])
@@ -98,7 +102,7 @@ def _ledger(control, document, backend):
     return full
 
 
-def _cold(backend_id, document, ledger):
+def _cold(backend_id, document, ledger, *, startup=None):
     result = docker_capture('exec', backend_id, 'python3', '-I', '-B', '-c', base._COLD_PROBE, timeout=35)
     base._require(result.returncode == 0, 'cold diagnostic namespace probe failed')
     guest = base._json(result.stdout, 'cold diagnostic probe', maximum=base.MAX_PROBE_BYTES)
@@ -116,7 +120,11 @@ def _cold(backend_id, document, ledger):
     base._require(all(isinstance(guest.get(key), str) and base.SHA.fullmatch(guest[key]) for key in (
         'processes_sha256', 'api_instance_sha256', 'failure_fence_sha256', 'owner_sha256',
         'process_tree_sha256', 'native_config_sha256')), 'cold API digest is invalid')
-    budget = restore_budget(guest.get('requested_policy'), ledger['policy'], document)
+    if startup is not None:
+        guest['limits_witness'] = resumed.limits_observation(backend_id, startup)
+        budget = resumed.projected_budget(guest, ledger, document)
+    else:
+        budget = restore_budget(guest.get('requested_policy'), ledger['policy'], document)
     return guest, budget
 
 
@@ -159,7 +167,7 @@ def _catalogs(control, backend):
     return _state_probe(control, backend, CATALOG_PROBE, 'terminal run catalogs')
 
 
-def _history(control, previous, iteration, fence):
+def _history(control, previous, iteration, fence, *, recreate_attempt=None):
     base._require(isinstance(iteration, str) and base.ATTEMPT.fullmatch(iteration), 'invalid historical drain attempt')
     root = 'iteration/attempts/' + iteration
     hashes = {}
@@ -171,16 +179,21 @@ def _history(control, previous, iteration, fence):
     receipt_raw, _ = record(root + '/receipt.json')
     _, compose = record(root + '/compose.json')
     _, drain = record(root + '/backend-drain.json')
-    base._require(terminal_raw == receipt_raw and terminal.get('schema') == 'fullmag.docker-build-operation.v1'
-                  and terminal.get('state') == 'succeeded' and terminal.get('phase') == 'iteration'
-                  and terminal.get('attempt') == iteration and terminal.get('idle_backend_stopped') is True
-                  and terminal.get('compose_project') == control.project and terminal.get('control_volume') == control.volume
-                  and terminal.get('inputs', {}).get('source_root') == previous.get('inputs', {}).get('source_root')
-                  and terminal.get('state_root') == previous.get('state_root')
-                  and terminal.get('config_sha256') == base._sha(canonical(compose))
-                  and compose.get('name') == control.project
-                  and compose['services']['backend'].get('image') == terminal.get('inputs', {}).get('image_id'),
-                  'historical iteration is not the exact successful idle drain')
+    if recreate_attempt is None:
+        base._require(terminal_raw == receipt_raw and terminal.get('schema') == 'fullmag.docker-build-operation.v1'
+                      and terminal.get('state') == 'succeeded' and terminal.get('phase') == 'iteration'
+                      and terminal.get('attempt') == iteration and terminal.get('idle_backend_stopped') is True
+                      and terminal.get('compose_project') == control.project and terminal.get('control_volume') == control.volume
+                      and terminal.get('inputs', {}).get('source_root') == previous.get('inputs', {}).get('source_root')
+                      and terminal.get('state_root') == previous.get('state_root')
+                      and terminal.get('config_sha256') == base._sha(canonical(compose))
+                      and compose.get('name') == control.project
+                      and compose['services']['backend'].get('image') == terminal.get('inputs', {}).get('image_id'),
+                      'historical iteration is not the exact successful idle drain')
+    else:
+        base._require(terminal_raw == receipt_raw, 'historical rebuild receipt is not terminal')
+        resumed.load_bridge(control, previous, terminal, compose, iteration=iteration,
+                            recreate_attempt=recreate_attempt, record=record)
     process_raw, process = record('runtime-control/runtime-service/process-tree.json')
     _, owner = record('runtime-control/runtime-services/OWNER.json', False)
     _, config = record('runtime-control/runtime-service/docker-all.json')
@@ -222,9 +235,12 @@ def _history(control, previous, iteration, fence):
     base._require(base._sha(raw) == fence['failure_fence_sha256'] and failure.get('stage') == 'runtime_startup'
                   and failure.get('schema') == 'fullmag.api-runtime-failure-fence.v1'
                   and failure.get('reason') == fence['failure_reason'], 'failure fence changed')
-    return {'control_hashes': hashes, 'iteration': iteration, 'historical_budget_environment': {
+    result = {'control_hashes': hashes, 'iteration': iteration, 'historical_budget_environment': {
         key: old_env[key] for key in ('FULLMAG_DOCKER_CPU_MILLIS', 'FULLMAG_DOCKER_MEMORY_BYTES')},
         'native_policy': policy, 'native_config_sha256': hashes['runtime-control/runtime-service/docker-all.json']}
+    if recreate_attempt is not None:
+        result['recreate_attempt'] = recreate_attempt
+    return result
 
 
 def _containers(control, identity, previous, document, backend_id, image_id, *, running):
@@ -271,15 +287,23 @@ def _wait_backend_stop(backend_id, pin, *, timeout=60):
         time.sleep(.25)
 
 
-def _collect(control, identity, selected, previous, document, layout, iteration, *, running, cold=None, removed_actual=None, helper_id=None):
-    args = previous['inputs']; backend_id = previous['worker_cgroup']['container_id']
+def _collect(control, identity, selected, previous, document, layout, iteration, *, running, cold=None, removed_actual=None, helper_id=None, recovery=None):
+    args = previous['inputs']
+    startup = previous
+    startup_hashes = None
+    if recovery is not None:
+        base._require(set(recovery) == {'resume_attempt', 'recreate_attempt'}, 'invalid resumed recovery pins')
+        startup, startup_hashes, parent_raw, compose_raw = resumed.load_startup(
+            control, previous, document, source_root=str(selected), resume_attempt=recovery['resume_attempt'])
+    backend_id = startup['worker_cgroup']['container_id']
     base._require(document.get('services', {}).get('backend', {}).get('environment', {}).get(
         'FULLMAG_STARTUP_ENABLED') != '1', 'cold restore cannot retain startup Solve activation')
-    _, parent_raw, compose_raw, _ = base._load_parent(control, previous, document, selected=selected,
-        attempt=previous['attempt'], config_sha256=previous['config_sha256'], image_id=args['image_id'],
-        backend_container_id=backend_id, allow_legacy_root_namespace=True)
+    if recovery is None:
+        _, parent_raw, compose_raw, _ = base._load_parent(control, previous, document, selected=selected,
+            attempt=previous['attempt'], config_sha256=previous['config_sha256'], image_id=args['image_id'],
+            backend_container_id=backend_id, allow_legacy_root_namespace=True)
     if removed_actual is None:
-        ids, actual = _containers(control, identity, previous, document, backend_id, args['image_id'], running=running)
+        ids, actual = _containers(control, identity, startup, document, backend_id, args['image_id'], running=running)
         _group_inventory(control, ids, helper_id)
     else:
         # The recreate consumer has authenticated the immutable retained
@@ -291,17 +315,19 @@ def _collect(control, identity, selected, previous, document, layout, iteration,
         ids = {name: row['Id'] for name, row in actual.items()}
         base._require(ids['backend'] == backend_id, 'removed backend differs from parent')
         _removed_inventory(control)
-    base._require(actual['backend']['State'].get('StartedAt') == previous.get('backend_started_at'),
+    base._require(actual['backend']['State'].get('StartedAt') == startup.get('backend_started_at'),
                   'backend StartedAt differs from failed development')
-    ledger = _ledger(control, document, actual['backend'])
+    ledger = _ledger(control, document, actual['backend'], **({'resumed_startup': True} if recovery else {}))
     if running:
-        cold, budget = _cold(backend_id, document, ledger)
+        cold, budget = _cold(backend_id, document, ledger, **({'startup': startup} if recovery else {}))
     else:
         base._require(isinstance(cold, dict), 'missing pinned cold observation')
-        budget = restore_budget(cold.get('requested_policy'), ledger['policy'], document)
-    base._require(previous.get('error') == 'Runtime startup failed; diagnostic API retained: ' + cold['failure_reason'].removesuffix('\n'),
+        budget = (resumed.projected_budget(cold, ledger, document) if recovery else
+                  restore_budget(cold.get('requested_policy'), ledger['policy'], document))
+    base._require(startup.get('error') == 'Runtime startup failed; diagnostic API retained: ' + cold['failure_reason'].removesuffix('\n'),
                   'failed development differs from exact cold fence')
-    history = _history(control, previous, iteration, cold)
+    history_args = {'recreate_attempt': recovery['recreate_attempt']} if recovery else {}
+    history = _history(control, previous, iteration, cold, **history_args)
     hashes = history['control_hashes']
     base._require(all(cold[key] == hashes[path] for key, path in (
         ('native_config_sha256', 'runtime-control/runtime-service/docker-all.json'),
@@ -319,16 +345,25 @@ def _collect(control, identity, selected, previous, document, layout, iteration,
                   and released.get('active_count') == 0 and isinstance(released.get('reservations'), list)
                   and isinstance(released.get('leases'), list), 'released inventory is incomplete')
     result = {'parent_terminal_sha256': base._sha(parent_raw), 'compose_sha256': base._sha(compose_raw),
-            'attempt': previous['attempt'], 'config_sha256': previous['config_sha256'], 'source_root': str(selected),
+            'attempt': previous['attempt'], 'config_sha256': base._sha(canonical(document)), 'source_root': str(selected),
             'control_namespace': control.namespace, 'cold_api': cold, 'budget': budget, 'ledger': ledger,
             'history': history, 'released': released, 'run_pins': _run_pins(control, actual['backend']),
             'terminal_catalogs': _catalogs(control, actual['backend']),
             'owner_lock': base._owner_lock_identity(control, args['image_id']),
             'certificate': base._certificate(selected, layout, previous, document),
             'containers': {name: base._container_pin(row) for name, row in actual.items()}}
-    base._require(_ledger(control, document, actual['backend']) == ledger
-                  and _history(control, previous, iteration, cold) == history,
+    base._require(_ledger(control, document, actual['backend'], **({'resumed_startup': True} if recovery else {})) == ledger
+                  and _history(control, previous, iteration, cold, **history_args) == history,
                   'ledger or historical native evidence changed during collection')
+    if recovery:
+        fresh_startup, fresh_hashes, _, _ = resumed.load_startup(
+            control, previous, document, source_root=str(selected), resume_attempt=recovery['resume_attempt'])
+        base._require(fresh_startup == startup and fresh_hashes == startup_hashes,
+                      'resume authority changed during collection')
+        if running:
+            base._require(_cold(backend_id, document, ledger, startup=startup) == (cold, budget),
+                          'cold startup or cgroup limits changed during collection')
+        result['resumed_authority'] = dict(recovery, control_hashes=startup_hashes)
     return result, actual
 
 
@@ -350,7 +385,43 @@ def _paths(backend_id):
     return root + '.json', root + '.intent.json'
 
 
+
+def _recovery_args(args):
+    variant = getattr(args, 'variant', VARIANT)
+    base._require(variant in VARIANTS, 'unknown cold restore variant')
+    pins = {key: getattr(args, key, None) for key in ('resume_attempt', 'recreate_attempt')}
+    if variant == resumed.VARIANT:
+        base._require(all(isinstance(v, str) and base.ATTEMPT.fullmatch(v) for v in pins.values()),
+                      'resumed restore requires exact resume and recreate attempts')
+        return pins
+    base._require(not any(v is not None for v in pins.values()), 'resume pins are forbidden for legacy restore')
+    return None
+
+
+def _observed_recovery(observation, variant):
+    authority = observation.get('resumed_authority')
+    if variant == VARIANT:
+        base._require(authority is None, 'legacy restore cannot carry resume authority')
+        return None
+    base._require(variant == resumed.VARIANT and isinstance(authority, dict)
+                  and set(authority) == {'resume_attempt', 'recreate_attempt', 'control_hashes'},
+                  'missing typed resume authority')
+    pins = {key: authority[key] for key in ('resume_attempt', 'recreate_attempt')}
+    base._require(all(isinstance(v, str) and base.ATTEMPT.fullmatch(v) for v in pins.values()),
+                  'invalid journal resume/recreate pins')
+    return pins
+
+
+def _controller_sha(variant):
+    if variant == VARIANT:
+        return base._sha(Path(__file__).read_bytes())
+    names = ('docker_volume_cold_budget_restore.py', 'docker_volume_resumed_budget_proof.py',
+             'docker_volume_resumed_budget_projection.py', 'docker_volume_preowner_drained.py')
+    return base._sha(canonical({name: base._sha(Path(__file__).with_name(name).read_bytes()) for name in names}))
+
 def stop(args):
+    recovery = _recovery_args(args)
+    variant = resumed.VARIANT if recovery else VARIANT
     from docker_dev import _select_source, _compose_identity
     from docker_dev_host import require_host
     require_host()
@@ -366,19 +437,21 @@ def stop(args):
     if getattr(args, 'continue_intent_sha256', None) is not None:
         return _continue(control, identity, selected, layout, args, journal_path, intent_path)
     inputs = {key: getattr(args, key) for key in ('attempt', 'config_sha256', 'image_id', 'backend_container_id', 'drain_attempt')}
-    inputs.update(source_root=str(selected), variant=VARIANT, controller_sha256=base._sha(Path(__file__).read_bytes()))
+    inputs.update(source_root=str(selected), variant=variant, controller_sha256=_controller_sha(variant))
+    if recovery:
+        inputs.update(recovery)
     with control.operation(PHASE if apply else PHASE + '-preview', inputs) as operation:
         base._require(control.read_bytes(journal_path, optional=True) is None
                       and control.read_bytes(intent_path, optional=True) is None, 'stop already has intent/journal; no replay')
         root = 'development/attempts/' + args.attempt
         _, previous, _ = base._record(control, root + '/terminal.json', canonical_record=True)
         _, document, _ = base._record(control, root + '/compose.json', canonical_record=True)
-        base._require(previous.get('config_sha256') == args.config_sha256
+        base._require((previous.get('config_sha256', base._sha(canonical(document))) if recovery else previous.get('config_sha256')) == args.config_sha256
                       and previous.get('inputs', {}).get('image_id') == args.image_id
-                      and previous.get('worker_cgroup', {}).get('container_id') == args.backend_container_id,
+                      and (previous.get('backend_container') if recovery else previous.get('worker_cgroup', {}).get('container_id')) == args.backend_container_id,
                       'operator pins differ from failed development')
-        observation, before = _collect(control, identity, selected, previous, document, layout, args.drain_attempt, running=True)
-        plan = dict(schema=SCHEMA, variant=VARIANT, observation=observation, controller_sha256=inputs['controller_sha256'])
+        observation, before = _collect(control, identity, selected, previous, document, layout, args.drain_attempt, running=True, **({'recovery': recovery} if recovery else {}))
+        plan = dict(schema=SCHEMA, variant=variant, observation=observation, controller_sha256=inputs['controller_sha256'])
         plan_sha = base._sha(canonical(plan)); control.write(operation['root'] + '/plan.json', plan)
         if not apply:
             result = {'state': 'preview-passed', 'plan_sha256': plan_sha}
@@ -394,10 +467,10 @@ def stop(args):
         base._require(result.returncode == 0, 'SIGTERM result is unknown; retain intent and observe only')
         _wait_backend_stop(before['backend']['Id'], observation['containers']['backend'])
         after_observation, after = _collect(control, identity, selected, previous, document, layout,
-                                           args.drain_attempt, running=False, cold=observation['cold_api'])
+                                           args.drain_attempt, running=False, cold=observation['cold_api'], **({'recovery': recovery} if recovery else {}))
         base._require(after_observation == observation, 'inventory changed during cold stop')
         stopped = {'backend': base._stopped_state(after['backend'], observation['containers']['backend'])}
-        journal = {'schema': SCHEMA, 'state': 'stopped-confirmed', 'variant': VARIANT,
+        journal = {'schema': SCHEMA, 'state': 'stopped-confirmed', 'variant': variant,
                    'intent_relative': intent_path, 'intent_sha256': intent_sha, 'plan_sha256': plan_sha,
                    'operation': intent['operation'], 'observation': observation, 'stopped': stopped,
                    'native_drain_performed': False, 'data_preserved': True}
@@ -418,14 +491,16 @@ def authenticate_journal(control, metadata):
                   and base.SHA.fullmatch(metadata['journal_sha256']), 'invalid restore journal pointer')
     _, journal, _ = base._record(control, path, expected=metadata['journal_sha256'], canonical_record=True)
     _, intent, _ = base._record(control, _paths(match[1])[1], expected=journal.get('intent_sha256'), canonical_record=True)
+    variant = journal.get('variant')
+    base._require(variant in VARIANTS, 'unknown journal restore variant')
     plan = intent.get('plan', {})
     op = journal.get('operation', {})
     base._require(journal.get('schema') == SCHEMA and journal.get('state') == 'stopped-confirmed'
-                  and journal.get('variant') == VARIANT and journal.get('native_drain_performed') is False
+                  and journal.get('variant') == variant and journal.get('native_drain_performed') is False
                   and journal.get('data_preserved') is True and intent.get('schema') == INTENT_SCHEMA
                   and intent.get('state') == 'stop-authorized' and journal.get('intent_relative') == _paths(match[1])[1]
                   and journal.get('plan_sha256') == intent.get('plan_sha256') == base._sha(canonical(plan))
-                  and plan.get('schema') == SCHEMA and plan.get('variant') == VARIANT
+                  and plan.get('schema') == SCHEMA and plan.get('variant') == variant
                   and plan.get('observation') == journal.get('observation')
                   and intent.get('operation') == op and op.get('phase') == PHASE
                   and isinstance(op.get('attempt'), str) and base.ATTEMPT.fullmatch(op['attempt'])
@@ -441,7 +516,7 @@ def authenticate_journal(control, metadata):
                   and operation.get('inputs', {}).get('attempt') == observed.get('attempt')
                   and operation['inputs'].get('config_sha256') == observed.get('config_sha256')
                   and operation['inputs'].get('drain_attempt') == observed.get('history', {}).get('iteration')
-                  and operation['inputs'].get('variant') == VARIANT
+                  and operation['inputs'].get('variant') == variant
                   and operation['inputs'].get('source_root') == observed.get('source_root')
                   and operation['inputs'].get('controller_sha256') == plan.get('controller_sha256')
                   and observed.get('control_namespace') == control.namespace
@@ -450,9 +525,22 @@ def authenticate_journal(control, metadata):
     parent_root = 'development/attempts/' + observed['attempt']
     _, parent, _ = base._record(control, parent_root + '/terminal.json', expected=observed['parent_terminal_sha256'], canonical_record=True)
     _, document, _ = base._record(control, parent_root + '/compose.json', expected=observed['compose_sha256'], canonical_record=True)
-    base._require(parent.get('config_sha256') == observed['config_sha256'] == base._sha(canonical(document))
-                  and restore_budget(observed['cold_api']['requested_policy'], observed['ledger']['policy'], document)
-                  == observed['budget'], 'restore budget/source no longer matches authenticated policy')
+    recovery = _observed_recovery(observed, variant)
+    if recovery:
+        startup, hashes, _, _ = resumed.load_startup(control, parent, document,
+            source_root=observed['source_root'], resume_attempt=recovery['resume_attempt'], current=False)
+        base._require(hashes == observed['resumed_authority']['control_hashes']
+                      and all(operation['inputs'].get(key) == value for key, value in recovery.items())
+                      and observed['history'].get('recreate_attempt') == recovery['recreate_attempt']
+                      and startup['backend_started_at'] == observed['containers']['backend']['started_at']
+                      and startup['backend_container'] == match[1], 'journal resume authority differs')
+        budget = resumed.projected_budget(observed['cold_api'], observed['ledger'], document)
+        resumed.authenticate_archived_history(control, parent, observed)
+    else:
+        base._require(parent.get('config_sha256') == observed['config_sha256'], 'legacy parent digest differs')
+        budget = restore_budget(observed['cold_api']['requested_policy'], observed['ledger']['policy'], document)
+    base._require(observed['config_sha256'] == base._sha(canonical(document))
+                  and budget == observed['budget'], 'restore budget/source no longer matches authenticated policy')
     return journal
 
 
@@ -469,6 +557,7 @@ def retained_context(control, previous, document, actual, *, fresh_state=False, 
     base._require(not fresh_state, 'cold restore requires retained stopped services')
     metadata = {'journal_relative': path, 'journal_sha256': base._sha(raw)}
     journal = authenticate_journal(control, metadata); observed = journal['observation']
+    recovery = _observed_recovery(observed, journal['variant'])
     from docker_dev import _select_source, _compose_identity
     selected, layout = _select_source(Path(observed['source_root']), Path(observed['source_root']))
     if removed_container_proof is not None:
@@ -482,7 +571,8 @@ def retained_context(control, previous, document, actual, *, fresh_state=False, 
                       'removed recreation proof differs from cold restore source')
     fresh, rows = _collect(control, _compose_identity(layout), selected, previous, document, layout,
                            observed['history']['iteration'], running=False, cold=observed['cold_api'],
-                           removed_actual=actual if removed_container_proof is not None else None)
+                           removed_actual=actual if removed_container_proof is not None else None,
+                           **({'recovery': recovery} if recovery else {}))
     base._require(fresh == observed, 'retained cold restore inventory changed')
     base._require(set(journal['stopped']) == {'backend'}, 'cold stop unexpectedly stopped another service')
     base._require(base._stopped_state(rows['backend'], observed['containers']['backend']) == journal['stopped']['backend'],
@@ -598,14 +688,16 @@ def _wait_original_publication(control, op, terminal_raw, *, timeout=30):
 
 
 def _continue(control, identity, selected, layout, args, journal_path, intent_path):
+    recovery = _recovery_args(args)
+    variant = resumed.VARIANT if recovery else VARIANT
     base._require(args.apply is True and isinstance(args.continue_intent_sha256, str)
                   and base.SHA.fullmatch(args.continue_intent_sha256), 'continuation requires explicit apply and exact intent SHA')
     _, intent, _ = base._record(control, intent_path, expected=args.continue_intent_sha256, canonical_record=True)
     plan = intent.get('plan', {}); observed = plan.get('observation', {}); op = intent.get('operation', {})
     base._require(intent.get('schema') == INTENT_SCHEMA and intent.get('state') == 'stop-authorized'
-                  and plan.get('schema') == SCHEMA and plan.get('variant') == VARIANT
+                  and plan.get('schema') == SCHEMA and plan.get('variant') == variant
                   and intent.get('plan_sha256') == args.expected_plan_sha256 == base._sha(canonical(plan))
-                  and plan.get('controller_sha256') == base._sha(Path(__file__).read_bytes())
+                  and plan.get('controller_sha256') == _controller_sha(variant)
                   and op.get('phase') == PHASE and isinstance(op.get('attempt'), str)
                   and base.ATTEMPT.fullmatch(op['attempt']) and op.get('root') == PHASE + '/attempts/' + op['attempt']
                   and observed.get('attempt') == args.attempt and observed.get('config_sha256') == args.config_sha256
@@ -613,6 +705,7 @@ def _continue(control, identity, selected, layout, args, journal_path, intent_pa
                   and observed.get('containers', {}).get('backend', {}).get('container_id') == args.backend_container_id
                   and observed['containers']['backend'].get('image_id') == args.image_id,
                   'continuation intent/plan/operator pins differ')
+    base._require(_observed_recovery(observed, variant) == recovery, 'continuation recovery pins differ')
     root = 'development/attempts/' + args.attempt
     _, previous, _ = base._record(control, root + '/terminal.json', expected=observed['parent_terminal_sha256'], canonical_record=True)
     _, document, _ = base._record(control, root + '/compose.json', expected=observed['compose_sha256'], canonical_record=True)
@@ -637,13 +730,14 @@ def _continue(control, identity, selected, layout, args, journal_path, intent_pa
                       and original.get('phase') == PHASE and original.get('attempt') == op['attempt']
                       and original.get('compose_project') == control.project and original.get('control_volume') == control.volume
                       and original.get('inputs', {}).get('controller_sha256') == plan['controller_sha256']
-                      and original['inputs'].get('variant') == VARIANT
+                      and original['inputs'].get('variant') == variant
                       and original['inputs'].get('attempt') == args.attempt
                       and original['inputs'].get('config_sha256') == args.config_sha256
                       and original['inputs'].get('backend_container_id') == args.backend_container_id
                       and original['inputs'].get('image_id') == args.image_id
                       and original['inputs'].get('source_root') == str(selected)
-                      and original['inputs'].get('drain_attempt') == args.drain_attempt,
+                      and original['inputs'].get('drain_attempt') == args.drain_attempt
+                      and all(original['inputs'].get(key) == value for key, value in (recovery or {}).items()),
                       'original stop operation is not the exact interrupted owner')
         if archive_raw is not None and receipt_raw != archive_raw:
             prepared_raw, _, _ = base._record(control, op['root'] + '/cold-restore-continuation/result.json')
@@ -653,10 +747,10 @@ def _continue(control, identity, selected, layout, args, journal_path, intent_pa
     # This wait sends no signal, including when the first signal's ack was lost.
     _wait_backend_stop(args.backend_container_id, observed['containers']['backend'])
     fresh, actual = _collect(control, identity, selected, previous, document, layout, args.drain_attempt,
-                             running=False, cold=observed['cold_api'], helper_id=helper_id)
+                             running=False, cold=observed['cold_api'], helper_id=helper_id, **({'recovery': recovery} if recovery else {}))
     base._require(fresh == observed, 'continuation inventory differs from the exact stop intent')
     stopped = {'backend': base._stopped_state(actual['backend'], observed['containers']['backend'])}
-    journal = {'schema': SCHEMA, 'state': 'stopped-confirmed', 'variant': VARIANT,
+    journal = {'schema': SCHEMA, 'state': 'stopped-confirmed', 'variant': variant,
                'intent_relative': intent_path, 'intent_sha256': args.continue_intent_sha256,
                'plan_sha256': intent['plan_sha256'], 'operation': op, 'observation': observed,
                'stopped': stopped, 'native_drain_performed': False, 'data_preserved': True}
