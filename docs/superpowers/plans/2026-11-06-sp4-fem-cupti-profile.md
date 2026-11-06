@@ -390,3 +390,119 @@ tej blokady ponowiona kwalifikowana retencja `0f4416e500fb4117b428ec42ff4c0793`
 zakończyła się `succeeded`, exit 0; zachowano aktywną grupę i wyniki.
 CI dla wysłanego `15ae60b04e8c29ec7dc7555dba2547626d725dfe` ma cztery zielone
 workflow; nie obejmuje późniejszego merge997 ani obecnych zmian diagnostyki.
+
+## Dostarczone próbki presji i hipoteza okresowego flush
+
+Commit `2c8e5b66cddcb7027073fec0d291cd5b04701681` został zbudowany przez
+iteration `c3f8f0b3edab4cdf94dc542e499b45e3`, snapshot
+`807c898216f84e5dbf874ab953e8ee6c4ff34b42a0e418b8e03b4f0028d1fb94`.
+Bramka GPU `93cb9945226a4eb8a53420fa44794bbc` przeszła bez strat. Próba
+`71a9ce6c0ef1400d8056584c6ee2ec12` ukończyła 7 kroków / 50 fs; Zarr,
+sąsiedni skrypt, pola i provenance zachowano. Jej ślad pozostał partial:
+289598 rekordów, 152864150 B, 224550 odmów, bez błędów API/I/O i limit flags.
+
+Tym razem rekord schedulera powiązany z run/task/receipt został odczytany
+i zachowany na WSL w `cuda-buffer-pressure.json` (SHA
+`945317a63891a31f887d549d3a284addf607183968c10c6232d6e4c1fcee6654`).
+Wszystkie 18 próbek miało 8 slotów FILLING, 0 READY, 0 PROCESSING oraz
+completed=processed=20. Po końcowym flush przetworzono 28 buforów,
+29357248 surowych bajtów; łączny czas przetwarzania wyniósł 0,933931105 s.
+W obserwowanych momentach buforami zarządzało CUPTI, bez kolejki do writera.
+Nie jest to dowód rozkładu stanów przez cały capture ani przyczyny CUDA719.
+
+Następna hipoteza: `cuptiActivityFlushPeriod(10)` omija heurystyki budzenia
+workera i zwraca pełne, skompletowane bufory okresowo. Pula pozostaje 8 × 1 MiB;
+solver nie dostaje nowej jawnej synchronizacji CUDA. Teardown przywraca `0`,
+również po błędzie startu; błąd przywrócenia oznacza api_error i poison.
+Review nie wykazało blokujących uwag. Skuteczność wymaga kolejnej natywnej
+bramki i kompletnego, ograniczonego capture SP4, z zerową utratą i zachowanym
+Zarr. Nie jest jeszcze potwierdzona i nie stanowi przyspieszenia solvera.
+
+CI dla `2c8e5b66` ujawniło błąd fixture nowego testu prefiksów: kontynuacja
+literału Rust usuwała testowaną spację. Pozostałe 87 testów runtime-service
+przeszło. Fixture zastąpiono jawnie łączonymi literałami `concat!`; nowy wynik
+CI pozostaje wymagany. Zachowanie produkcyjnego filtra nie wymagało zmiany.
+
+## Wynik próby okresowego flush — hipoteza niewystarczająca
+
+Iteration `4af8319981f949f39069e4eba74eb71c` zbudowała snapshot
+`d9e47b99053b325790f6eb0fbc9a686f202c558dcad42dc813cc2beaa0565a59`.
+Bramka `4654e8205ec84d0e99c56a927d56396c` przeszła, w tym 112513 rekordów
+gęstego testu bez strat. Wszystkie cztery workflow CI commita
+`1975961e1891580c9e07323309352649e6dc8e48` zakończyły się sukcesem.
+
+Próba `a066ece62e694dbba84817459688dd0d`, run
+`run-live-b5cd253944a2fb5e0679057c6732acc1737d399d6c5d1755aafe1642159c5b6c`,
+ukończyła 7 kroków / 50 fs; strict GPU qualification przeszła, a Zarr,
+sąsiedni skrypt i pola/provenance zostały zachowane. Profil pozostał partial:
+289601 rekordów, 153387349 B, 224542 odmowy bufora. Pozostałe liczniki błędów
+i limitów wynoszą zero. Sterownik kwalifikacji zwrócił exit 3, solver exit 0.
+Wszystkie 18 próbek ponownie pokazuje FILLING=8, READY=PROCESSING=0 oraz
+completed=processed=20. Końcowo przetworzono 28 buforów i 29357488 B,
+w czasie 1,061491420 s. Ustawienie FlushPeriod(10) nie wystarczyło.
+
+Następna hipoteza po review: zwykły `FlushAll(0)` z istniejącego watchdoga,
+ponieważ może zwracać także częściowo pełne bufory z kompletnymi rekordami.
+FILLING nie dowodzi kompletności rekordów. Watchdog ma pozostać jedynym
+właścicielem zwykłego i końcowego flush; nie może trzymać mutexów podczas
+wywołania CUPTI. Stop czeka na już trwający flush i standardowy teardown;
+błąd przerywa capture i zachowuje api_error. Regresja musi wykazać dostarczenie
+rekordu z małego workloadu przed Stop, z ograniczonym czasem oczekiwania.
+Następnie wymagane są dotychczasowe bramki natywne oraz SP4 bez strat.
+To plan kolejnego doświadczenia, nie potwierdzona poprawka ani zysk GPU.
+
+Retencja etapu `d3bc984cd1164a3e8a23dceab3a407bb` zakończyła się sukcesem.
+Zachowano wyniki, aktualny pakiet, rollback i aktywną grupę Compose.
+
+Implementacja kolejnego doświadczenia zastępuje FlushPeriod zwykłym
+FlushAll(0) co 10 ms w istniejącym watchdogu. Nie zmienia puli ani ABI.
+Diagnostyka końcowa zawiera liczbę, błędy i czas zwykłych flush. Review wykryło
+wyścig Stop/deadline; klasyfikację przywrócono pod wspólny wait_mutex,
+zachowując wywołania CUPTI poza blokadą. Ponowne review potwierdziło poprawkę.
+Nowa polityka wymaga wykonania bramki natywnej i nowego capture SP4;
+dotychczasowe zielone CI nie potwierdza jej działania.
+
+## Watchdog: odzyskanie grupy, kompletność danych i błąd zegara
+
+Naprawy odzyskiwania zapisano w commitach `36ccfddae106514ae1e47f1f4c886fc2a25f8426`,
+`4ff8d5b2a` i `6467227cc06a79f391a1387009194996d4545c88`. Zakres: osierocony
+restart idle, prywatny ledger, uwierzytelnienie współdzielonych konsumentów oraz
+aliasów WSL przez tożsamość katalogu. 85 testów przeszło; cztery workflow CI
+commita646 zakończyły się sukcesem. Oddzielna poprawka inwentarza historii
+zachowuje referencje i hash piny rootu `host-device-reattest` (20 testów).
+
+Offline recovery `15d8774e0c0c47a9b249bf6ab39a0c91` zwolniło wyłącznie
+osierocony active, bez zmiany pierwotnego outcome i wyników. Development
+`ea617af18421428f8b38e457d11c64a9` opublikował snapshot
+`fc4b3151b4b14fce1e02d63f0ff25ea85f0942459e69e01edc9fa23b391f63e4` oraz
+bibliotekę `ffeb417a4d9ebcc5f537a50741ce55253fed5946712bcad10f3b3dfc3e95b965`.
+Native contract `4466fc899ae740d1aa1807db1e489e81` przeszedł w 2,334529 s:
+rekord kernela dostarczony przed Stop, 112513 rekordów gęstego testu bez strat.
+Retencja `a35216a7918841ecbb23a8a6b4a1358c` zachowała current i rollback.
+
+Run `run-live-870ef66608a750f17169c4aa0b05eda3b61a698ad5676461120c574ebf76d1f9`
+ukończył 7 kroków / 50 fs w strict GPU double. Zarr, sąsiedni `main.py`, pola,
+receipty i ślad zachowano na WSL w `sp4-diagnostics/gpu-cupti-probe-1e050d0487474d52ae1526f98d1629dd`.
+Ślad SHA `33d84b5612139ee9435e709da4b73202ad124bc8b31d136c4f53676eebf8a55d`
+ma 513396 rekordów, 272200276 B, zero strat, błędów API/I/O i limit flags.
+To potwierdza kompletność zapisu po zmianie flush, nie poprawność osi czasu.
+
+Analiza wykryła skoki CPU timestampów −54,735600 s i +57,465048 s w tym samym
+wątku CUDA. 30376 rekordów wypada poza zapisanym oknem; ostatni kernel accept
+leży 1,150 s po końcu capture. Niezależny monotoniczny czas callbacków
+potwierdza niezgodność zegara, a kolejność kernel→stream synchronize przeczy
+interpretacji jako rzeczywistej kolejki GPU. Czasów przyciętej osi nie wolno
+używać do kwalifikacji ani twierdzeń o wykorzystaniu GPU/przyspieszeniu.
+
+Zliczenia według jednoznacznych korelacji reset→accept potwierdzają 408–522
+wywołania cudaStreamSynchronize i 618–790 małych kopii D2H na krok. Ich koszt
+wymaga powtórzenia pomiaru po naprawie zegara. CUPTI12.9 używa domyślnie
+CLOCK_REALTIME na Linux; następna poprawka zarejestruje CLOCK_MONOTONIC_RAW
+przed enable i użyje tego samego zegara dla granic capture, z osobną bramką
+zgodności czasu. Referencja: https://docs.nvidia.com/cupti/12.9/api/group__CUPTI__ACTIVITY__API.html
+
+Kolejny restart hosta zatrzymał obie usługi z exit255 (2026-11-06 20:14 UTC).
+Próba kontrolna trace-off nie ma nowej aktywacji ani katalogu wynikowego;
+ostatnia aktywacja nadal wskazuje zakończony trace-on. Matched on/off, koszt
+synchronizacji i przyspieszenie pozostają NOT VERIFIED. Pełne SP4 A/B czterech
+solverów i porównanie z MuMax3 GPU nie są ukończone.

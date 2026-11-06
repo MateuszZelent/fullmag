@@ -29,6 +29,7 @@ namespace {
 
 constexpr size_t kBufferCount = 8;
 constexpr size_t kBufferBytes = 1024 * 1024;
+constexpr uint32_t kBufferFlushPeriodMs = 10;
 constexpr size_t kNameBytes = 2048;
 constexpr size_t kLineBytes = 16384;
 constexpr uint64_t kMinBytes = FULLMAG_FEM_CUDA_TRACE_MIN_BYTES;
@@ -84,6 +85,9 @@ struct ActivityTrace {
     std::atomic<uint64_t> buffers_processed{0};
     std::atomic<uint64_t> buffer_bytes_processed{0};
     std::atomic<uint64_t> buffer_processing_ns{0};
+    std::atomic<uint64_t> normal_flush_calls{0};
+    std::atomic<uint64_t> normal_flush_errors{0};
+    std::atomic<uint64_t> normal_flush_ns{0};
     // One unique callback owns each power-of-two occurrence. Read only after
     // all callbacks have returned and both collector threads have joined.
     std::array<BufferPressureSample, 64> pressure_samples{};
@@ -748,16 +752,38 @@ void disable_and_flush(ActivityTrace &trace) {
 }
 
 void watchdog_loop(ActivityTrace &trace, std::chrono::steady_clock::time_point deadline) {
-    {
-        std::unique_lock<std::mutex> lock(trace.wait_mutex);
-        const bool stopped = trace.changed.wait_until(
-            lock, deadline, [&trace] {
+    while (!trace.stop_requested.load(std::memory_order_acquire)) {
+        const auto wake = std::min(deadline, std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(kBufferFlushPeriodMs));
+        {
+            std::unique_lock<std::mutex> lock(trace.wait_mutex);
+            const bool stopped = trace.changed.wait_until(lock, wake, [&trace] {
                 return trace.stop_requested.load(std::memory_order_acquire);
             });
-        if (!stopped) {
-            trace.counts.limit_flags.fetch_or(FULLMAG_FEM_CUDA_TRACE_LIMIT_DURATION,
-                                              std::memory_order_relaxed);
-            trace.stop_requested.store(true, std::memory_order_release);
+            if (stopped) break;
+            if (std::chrono::steady_clock::now() >= deadline) {
+                trace.counts.limit_flags.fetch_or(FULLMAG_FEM_CUDA_TRACE_LIMIT_DURATION,
+                                                  std::memory_order_relaxed);
+                trace.stop_requested.store(true, std::memory_order_release);
+                break;
+            }
+        }
+        // Unlike FlushPeriod, normal FlushAll also delivers partially filled
+        // buffers whose records are complete. Do not hold collector locks in
+        // this blocking CUPTI call. Stop joins this thread before closing FD;
+        // this thread alone owns normal and final flushes during capture.
+        const auto started = std::chrono::steady_clock::now();
+        increment(trace.normal_flush_calls);
+        const CUptiResult result = g_cupti.cuptiActivityFlushAll(0);
+        increment(trace.normal_flush_ns, static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started).count()));
+        if (result != CUPTI_SUCCESS) {
+            increment(trace.normal_flush_errors);
+            increment(trace.counts.api_errors);
+            trace.collector_poisoned.store(true, std::memory_order_release);
+            request_stop(trace);
+            break;
         }
     }
     disable_and_flush(trace);
@@ -787,6 +813,9 @@ void reset_capture(ActivityTrace &trace) {
     trace.buffers_processed.store(0);
     trace.buffer_bytes_processed.store(0);
     trace.buffer_processing_ns.store(0);
+    trace.normal_flush_calls.store(0);
+    trace.normal_flush_errors.store(0);
+    trace.normal_flush_ns.store(0);
     trace.pressure_samples.fill(BufferPressureSample{});
     trace.active.store(false);
     trace.callbacks_accepting.store(false);
@@ -876,13 +905,17 @@ void report_buffer_pressure(const ActivityTrace &trace) {
     }
     std::fprintf(stderr,
                  "cuda_activity_trace: buffer_processing pool_exhaustions=%llu closed_requests=%llu "
-                 "completed=%llu processed=%llu raw_bytes=%llu processing_ns=%llu\n",
+                 "completed=%llu processed=%llu raw_bytes=%llu processing_ns=%llu "
+                 "normal_flush_calls=%llu normal_flush_errors=%llu normal_flush_ns=%llu\n",
                  static_cast<unsigned long long>(read_count(trace.pool_exhaustions)),
                  static_cast<unsigned long long>(read_count(trace.closed_buffer_requests)),
                  static_cast<unsigned long long>(read_count(trace.buffers_completed)),
                  static_cast<unsigned long long>(read_count(trace.buffers_processed)),
                  static_cast<unsigned long long>(read_count(trace.buffer_bytes_processed)),
-                 static_cast<unsigned long long>(read_count(trace.buffer_processing_ns)));
+                 static_cast<unsigned long long>(read_count(trace.buffer_processing_ns)),
+                 static_cast<unsigned long long>(read_count(trace.normal_flush_calls)),
+                 static_cast<unsigned long long>(read_count(trace.normal_flush_errors)),
+                 static_cast<unsigned long long>(read_count(trace.normal_flush_ns)));
 }
 
 constexpr CUpti_ActivityKind kKinds[] = {

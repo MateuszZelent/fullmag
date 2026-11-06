@@ -88,26 +88,36 @@ struct TempTrace {
 bool launch_probe_kernel_with_name(const std::string &kernel_name) {
     CUmodule module = nullptr;
     CUfunction function = nullptr;
+    cudaStream_t stream = nullptr;
+    if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) return false;
     const std::string ptx = probe_ptx(kernel_name);
     CUresult result = cuModuleLoadData(&module, ptx.c_str());
-    if (result != CUDA_SUCCESS) return false;
+    if (result != CUDA_SUCCESS) {
+        cudaStreamDestroy(stream);
+        return false;
+    }
     result = cuModuleGetFunction(&function, module, kernel_name.c_str());
     if (result != CUDA_SUCCESS) {
         cuModuleUnload(module);
+        cudaStreamDestroy(stream);
         return false;
     }
     int *device_output = nullptr;
     if (cudaMalloc(reinterpret_cast<void **>(&device_output), sizeof(int)) != cudaSuccess) {
         cuModuleUnload(module);
+        cudaStreamDestroy(stream);
         return false;
     }
     void *arguments[] = {&device_output};
-    result = cuLaunchKernel(function, 1, 1, 1, 1, 1, 1, 0, nullptr, arguments, nullptr);
-    const cudaError_t sync_result = cudaDeviceSynchronize();
+    result = cuLaunchKernel(function, 1, 1, 1, 1, 1, 1, 0,
+                            reinterpret_cast<CUstream>(stream), arguments, nullptr);
+    const cudaError_t sync_result = cudaStreamSynchronize(stream);
     const cudaError_t free_result = cudaFree(device_output);
     const CUresult unload_result = cuModuleUnload(module);
+    const cudaError_t stream_result = cudaStreamDestroy(stream);
     return result == CUDA_SUCCESS && sync_result == cudaSuccess &&
-           free_result == cudaSuccess && unload_result == CUDA_SUCCESS;
+           free_result == cudaSuccess && unload_result == CUDA_SUCCESS &&
+           stream_result == cudaSuccess;
 }
 
 std::string long_probe_kernel_name(size_t length) {
@@ -224,6 +234,35 @@ bool stats_match_file_size(int fd, uint64_t bytes_written) {
     struct stat info{};
     return fstat(fd, &info) == 0 && info.st_size >= 0 &&
            static_cast<uint64_t>(info.st_size) == bytes_written;
+}
+
+bool has_complete_named_kernel_record(int fd, const std::string &kernel_name) {
+    struct stat info{};
+    if (fstat(fd, &info) != 0 || info.st_size <= 0 ||
+        static_cast<uint64_t>(info.st_size) > 4ULL * 1024 * 1024) return false;
+
+    std::string contents(static_cast<size_t>(info.st_size), '\0');
+    size_t bytes_read = 0;
+    while (bytes_read < contents.size()) {
+        const ssize_t count = pread(fd, contents.data() + bytes_read,
+                                    contents.size() - bytes_read,
+                                    static_cast<off_t>(bytes_read));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) return false;
+        bytes_read += static_cast<size_t>(count);
+    }
+
+    const std::string quoted_name = "\"name\":\"" + kernel_name + "\"";
+    size_t line_start = 0;
+    while (true) {
+        const size_t line_end = contents.find('\n', line_start);
+        if (line_end == std::string::npos) return false;
+        const std::string line = contents.substr(line_start, line_end - line_start);
+        if (line.size() >= 2 && line.front() == '{' && line.back() == '}' &&
+            line.find("\"kind\":\"kernel\"") != std::string::npos &&
+            line.find(quoted_name) != std::string::npos) return true;
+        line_start = line_end + 1;
+    }
 }
 
 bool run_dense_cuda_workload(std::string &failure) {
@@ -373,6 +412,10 @@ int enabled_contract() {
         FULLMAG_FEM_ERR_INVALID) return fail("non-empty output file was not rejected");
     if (!trace.reset()) return fail("could not reset output file");
 
+    const std::string live_delivery_kernel_name = "fullmag_trace_live_delivery_probe";
+    if (!launch_probe_kernel_with_name(live_delivery_kernel_name))
+        return fail("CUDA context warmup kernel failed before live-delivery capture");
+
     uint64_t token = 0;
     if (fullmag_fem_cuda_trace_start_v1(trace.fd, FULLMAG_FEM_CUDA_TRACE_MAX_BYTES, 30000, &token) !=
         FULLMAG_FEM_OK || token == 0) return fail("valid capture did not start");
@@ -385,6 +428,39 @@ int enabled_contract() {
     uint64_t second_token = 0;
     if (fullmag_fem_cuda_trace_start_v1(competing_trace.fd, 4096, 1000, &second_token) !=
         FULLMAG_FEM_ERR_INVALID) return fail("second concurrent start was not rejected");
+
+    const int live_reader_fd = open(trace.path, O_RDONLY | O_CLOEXEC);
+    if (live_reader_fd < 0) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("could not open independent reader for live-delivery capture");
+    }
+    if (!launch_probe_kernel_with_name(live_delivery_kernel_name)) {
+        close(live_reader_fd);
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("live-delivery CUDA workload failed");
+    }
+    const auto live_delivery_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    bool live_kernel_delivered = false;
+    while (std::chrono::steady_clock::now() < live_delivery_deadline) {
+        if (has_complete_named_kernel_record(live_reader_fd, live_delivery_kernel_name)) {
+            live_kernel_delivered = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    close(live_reader_fd);
+    std::cerr << "cuda_activity_trace_contract: phase=live_delivery"
+              << " capture_active=true kernel=" << live_delivery_kernel_name
+              << " delivered=" << (live_kernel_delivered ? "true" : "false")
+              << " timeout_ms=2000 reader=independent_pread\n" << std::flush;
+    if (!live_kernel_delivered) {
+        fullmag_fem_cuda_trace_stats_v1 ignored{};
+        fullmag_fem_cuda_trace_stop_v1(token, &ignored);
+        return fail("complete named kernel NDJSON record was not delivered before stop");
+    }
 
     if (!run_cuda_workload()) {
         fullmag_fem_cuda_trace_stats_v1 ignored{};
