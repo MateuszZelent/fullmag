@@ -830,7 +830,7 @@ mod tests {
             reimported.catalog.entries()[1].problem().object_regions[0]
                 .texture_override.as_ref().unwrap().initial_magnetization, local,
         );
-        let StudyPipelineNode::Primitive { enabled: enabled_b, .. } =
+        let crate::script_stage_contract::StudyPipelineNode::Primitive { enabled: enabled_b, .. } =
             &mut config.study_pipeline.as_mut().unwrap().nodes[1] else { panic!("expected B"); };
         *enabled_b = false;
 
