@@ -1055,6 +1055,31 @@ Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
 
 
+## Osierocony restart z zachowanymi wynikami
+
+`reconcile-offline-volume` obsługuje zatrzymaną grupę, której osierocona iteracja
+pozostała w stanie `starting` albo `restarting-idle-backend`. Dla drugiego stanu
+porównuje również identyfikator i czas startu backendu z oryginalnym receiptem.
+Sama nazwa stanu nie upoważnia do odzyskania: wymagane są nieobecny helper,
+zatrzymana para usług, terminalny owner i procesy, zwolnione rezerwacje oraz
+niezmienione dane sesji i dokładne piny konfiguracji.
+
+Odczyt ledgeru zachowuje topologię grupy: osobny starszy wolumen albo
+`private/ledger` w kanonicznym wolumenie kontrolnym. Ten sam podkatalog jest
+montowany tylko do odczytu podczas kwalifikacji oraz ponownej kontroli pod
+`operation.lock`. Nie wolno zastępować go rootem wolumenu ani podkatalogiem
+innej roli lub przestrzeni nazw.
+
+Najpierw wykonaj podgląd `reconcile-offline-volume` z przypiętymi
+`--attempt`, `--config-sha256`, `--source-root`, `--port` i nowym
+`--operation-attempt`. Wykonanie wymaga `--apply --expected-plan-sha256`
+z dokładnym hashem otrzymanego planu. Operacja zapisuje oddzielny dowód
+odzyskania i usuwa wyłącznie zgodny, osierocony wskaźnik `active` pod blokadą.
+Zachowuje oryginalny receipt, brak jego terminala, ostatni zweryfikowany pakiet,
+sesje i wyniki. Wynik starej iteracji pozostaje `interrupted-retained`; nie jest
+to potwierdzenie kompilacji, testu CUDA ani symulacji. Dalsze odtworzenie grupy
+konsumuje ten dowód przez `--offline-reconciliation` i nie powtarza starego Solve.
+
 ## Authored input after accepted recovery
 
 Accepted live runs retain the authored SceneDocument in the immutable project

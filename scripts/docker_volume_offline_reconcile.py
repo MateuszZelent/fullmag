@@ -246,7 +246,11 @@ def _validate_operation_phase(record: object) -> str:
     phase, state = record.get("phase"), record.get("state")
     if phase == "activation" and state == "outcome-unknown-resources-retained":
         return "activation"
-    if phase == "iteration" and state == "starting":
+    # An idle restart can persist this state before observation is interrupted
+    # (for example by a Docker daemon restart). The stopped namespace, drained
+    # owner, absent helper and operation-lock proofs below still apply. Keep the
+    # original receipt and its unknown build outcome; this is not publication.
+    if phase == "iteration" and state in ("starting", "restarting-idle-backend"):
         return "iteration"
     raise _fail("Only an unknown activation or interrupted iteration control lease is eligible")
 
@@ -842,8 +846,11 @@ def _read_operation(control, active_raw: bytes, *, development_attempt: str,
     if phase == "activation":
         if inputs.get("backend_container") != backend_id:
             raise _fail("Unknown activation belongs to another backend incarnation")
-    elif record.get("state") != "starting":
-        raise _fail("Only an interrupted iteration start receipt is eligible")
+    elif record.get("state") == "restarting-idle-backend":
+        if (record.get("backend_container") != backend_id
+                or not isinstance(record.get("backend_started_at"), str)
+                or not record["backend_started_at"]):
+            raise _fail("Interrupted idle restart has no exact backend incarnation")
     terminal_path = f"{phase}/attempts/{token}/terminal.json"
     terminal_raw = _control_raw(control, terminal_path, optional=True)
     if terminal_raw is not None:
@@ -1038,10 +1045,17 @@ def _document_port(document: Mapping[str, Any]) -> int:
 
 
 def _group_ledger_volume(document: Mapping[str, Any], project: str) -> tuple[str, str]:
-    from docker_volume_empty_quarantine import _group_ledger_mount
+    import docker_group_ledger as group_ledger
     try:
-        return _group_ledger_mount(dict(document), project)
-    except (BuildControlError, KeyError, TypeError, ValueError) as error:
+        if document.get("name") != project:
+            raise group_ledger.GroupLedgerError("Retained ledger belongs to another Compose project")
+        profile = group_ledger.retained_profile(document, document["services"]["backend"]["image"])
+        volume, subpath = profile["volume_name"], profile.get("ledger_subpath", "")
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", volume) is None or subpath not in ("", "private/ledger"):
+            raise group_ledger.GroupLedgerError("Offline repair requires the unnamespaced group's own ledger")
+        suffix = ",volume-subpath=" + subpath if subpath else ""
+        return volume, "type=volume,src=" + volume + ",dst=/ledger,readonly,volume-nocopy" + suffix
+    except (group_ledger.GroupLedgerError, KeyError, TypeError, ValueError) as error:
         raise _fail("Retained Compose group-ledger mount is invalid: " + str(error)) from error
 
 
@@ -1066,6 +1080,13 @@ def _resolve_state_root(state_root: object, selected: Path) -> Path:
         return storage.validate_path(Path(state_root), layout["runtime_root"], "retained DEV state root")
     except (OSError, ValueError, KeyError, storage.StorageError) as error:
         raise _fail("Retained DEV state root is not resolver-owned: " + str(error)) from error
+
+
+def _validate_iteration_incarnation(original: Mapping[str, Any], backend: Mapping[str, Any]) -> None:
+    if (original.get("state") == "restarting-idle-backend"
+            and (backend.get("id") != original.get("backend_container")
+                 or backend.get("started_at") != original.get("backend_started_at"))):
+        raise _fail("Stopped backend incarnation differs from the interrupted idle restart")
 
 
 def _collect_context(args) -> dict[str, Any]:
@@ -1164,6 +1185,7 @@ def _collect_context(args) -> dict[str, Any]:
     )
     if pair["containers"]["backend"]["id"] != backend_id:
         raise _fail("Stopped backend ID differs from the successful development attempt")
+    _validate_iteration_incarnation(original, pair["containers"]["backend"])
     plan = {
         "schema": SCHEMA,
         "state": "planned",
@@ -1431,18 +1453,22 @@ printf 'COMPLETED\\n'
     return script, preamble
 
 
-def _transaction_mounts(args: list[str], *, store_root: Path, ledger_volume: str) -> None:
+def _transaction_mounts(args: list[str], *, store_root: Path, ledger_volume: str,
+                        ledger_subpath: str = "") -> None:
     if "," in str(store_root):
         raise _fail("Session-store path cannot contain a Docker --mount delimiter")
+    if ledger_subpath not in ("", "private/ledger"):
+        raise _fail("Offline transaction ledger subpath is not canonical")
+    suffix = ",volume-subpath=" + ledger_subpath if ledger_subpath else ""
     index = args.index("--entrypoint")
     args[index:index] = [
         "--mount", "type=bind,src=" + str(store_root) + ",dst=/store,readonly",
-        "--mount", "type=volume,src=" + ledger_volume + ",dst=/ledger,readonly,volume-nocopy",
+        "--mount", "type=volume,src=" + ledger_volume + ",dst=/ledger,readonly,volume-nocopy" + suffix,
     ]
 
 
 def _inspect_transaction_helper(control, helper_name: str, script: str,
-                                store_root: Path, ledger_volume: str) -> str:
+                                store_root: Path, ledger_volume: str, ledger_subpath: str = "") -> str:
     from run_managed_browser import host_path
 
     def store_source_matches(value: object) -> bool:
@@ -1497,7 +1523,8 @@ def _inspect_transaction_helper(control, helper_name: str, script: str,
                     if target == "/store" else mount.get("Source") != source)
                 or bool(mount.get("ReadOnly", False)) is not readonly
                 or (mount_type == "volume" and (not isinstance(options, Mapping)
-                                                   or options.get("NoCopy") is not True))):
+                    or options.get("NoCopy") is not True
+                    or options.get("Subpath", "") != (ledger_subpath if target == "/ledger" else "")))):
             raise _fail("Offline transaction helper has an unexpected mount at " + target)
     runtime_mounts = row.get("Mounts")
     if not isinstance(runtime_mounts, list) or len(runtime_mounts) != 3:
@@ -2072,7 +2099,10 @@ def _run_transaction(context: Mapping[str, Any], args) -> dict[str, Any]:
         lock_external=True,
     )
     command = control.helper_args(script, name=helper_name)
-    _transaction_mounts(command, store_root=context["store_root"], ledger_volume=context["ledger_volume"])
+    # Use the same authenticated subpath in the observer and under operation.lock.
+    ledger_subpath = "private/ledger" if context["ledger_mount"].endswith(",volume-subpath=private/ledger") else ""
+    _transaction_mounts(command, store_root=context["store_root"], ledger_volume=context["ledger_volume"],
+                        ledger_subpath=ledger_subpath)
     try:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT)
@@ -2087,6 +2117,7 @@ def _run_transaction(context: Mapping[str, Any], args) -> dict[str, Any]:
         _read_locked_helper(process, "LOCKED")
         helper_id = _inspect_transaction_helper(
             control, helper_name, script, context["store_root"], context["ledger_volume"],
+            ledger_subpath=ledger_subpath,
         )
         _current_live_plan(context, helper_name, helper_id)
         line, code = _release_helper(process, commit=True)
