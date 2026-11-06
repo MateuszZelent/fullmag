@@ -336,10 +336,6 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
     }
     let snapshot =
         build_snapshot(&state.current_workspace_root, &loaded).map_err(|error| error.to_string())?;
-    if loaded.started_at_unix_ms.is_some() {
-        crate::live_command_journal::recover(state, &snapshot)
-            .await.map_err(|error| format!("accepted-run command journal recovery failed: {}", error.message))?;
-    }
     {
         let mut current = state.current_live_state.write().await;
         state

@@ -5356,7 +5356,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(
-      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest)",
+      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest, preparedSource)",
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
@@ -5943,8 +5943,8 @@ describe("useViewport3DSceneModel", () => {
     );
     // Other field-vector consumers have no banner and keep the default toast.
     expect(
-      source.match(/VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n/g),
-    ).toHaveLength(2);
+      source.match(/\bVIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS\b/g),
+    ).toHaveLength(3);
     expect(source).toContain(": hudStatus,");
   });
 

@@ -11,7 +11,8 @@ import type { KernelApi } from "@/kernel/types";
 import { createInspectorEditSessionStore, InspectorEditSessionProvider } from "../../InspectorEditSession";
 import { SharedDomainMeshPolicySection } from "./SharedDomainMeshPolicySection";
 
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+vi.mock("@/kernel/resources/geometryLifecycleResources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/geometryLifecycleResources")>()),
   useMeshSemanticsResource: () => ({
     data: { revision: 4, shared_domain_config: { hmax: "1e-9", hmin: "0.25e-9", growth_rate: "1.3" } },
   }),
@@ -22,7 +23,8 @@ vi.mock("@/kernel/resources/meshPolicyResourceCache", () => ({
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useRuntimeCommandControlResourceData: () => ({}),
 }));
-vi.mock("@/kernel/resources/useSessionStatus", () => ({
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
   useSessionResourceIdentity: () => ({ sessionId: "mesh", sessionEpoch: "1", requestScopeEpoch: "1" }),
 }));
 vi.mock("../../primitives/FormField", () => ({

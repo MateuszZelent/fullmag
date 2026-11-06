@@ -5125,7 +5125,7 @@ pub async fn get_field_vector(
 }
 
 async fn get_field_vector_unfenced(
-    state: &AppState,
+    state: &Arc<AppState>,
     headers: &HeaderMap,
     quantity_id: &str,
     query: &FieldVectorQuery,
@@ -5234,7 +5234,7 @@ async fn get_field_vector_unfenced(
                 )));
             }
             validate_hysteresis_snapshot_stage_scope(
-                &state,
+                state,
                 query.stage_id.as_deref(),
                 snapshot_id,
             )

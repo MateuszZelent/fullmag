@@ -21,7 +21,8 @@ const RECEIPT: MagnetizationApplyReceipt = {
   },
 };
 
-vi.mock("@/kernel/resources/useSessionStatus", () => ({
+vi.mock("@/kernel/resources/useSessionStatus", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/kernel/resources/useSessionStatus")>()),
   useSessionResourceIdentity: () => ({ sessionId: "A", sessionEpoch: "1", requestScopeEpoch: "1" }),
 }));
 

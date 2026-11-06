@@ -16,7 +16,7 @@ use crate::router_v2::handlers::analysis::hysteresis::{
     read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
     read_hysteresis_settle_trace_if_available,
 };
-use crate::schemas::commands::CommandFailureRequest;
+use crate::schemas::commands::{CommandFailureRequest, RuntimeCommandTarget};
 use crate::schemas::hysteresis::{
     HysteresisBookmarkSchema, HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
