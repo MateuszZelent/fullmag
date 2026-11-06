@@ -296,18 +296,18 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
         RelaxationAlgorithmIR::NonlinearCg,
         [0.1, 0.0, 0.0],
     );
-    let first_plan = materialize_accepted_worker_execution_plan(&store, &first).unwrap();
-    let (authored, mut predecessor_bytes) = execute(&first, &first_plan, "relax-a");
-    let mut expected_start = authored.values.clone();
-
-    for (source_stage, target) in [("relax-a", &mut second), ("relax-b", &mut third)] {
-        let previous = decode_state("state", &predecessor_bytes);
+    let continue_from = |source_stage: &str,
+                         target: &mut AcceptedWorkerStep,
+                         predecessor_bytes: &[u8],
+                         expected_start: &[[f64; 3]],
+                         case: &str| {
+        let previous = decode_state("state", predecessor_bytes);
         // The transverse field must move the state enough to detect a mistaken reset or skipped stage.
         assert!(
             previous
                 .values
                 .iter()
-                .zip(&expected_start)
+                .zip(expected_start)
                 .any(|(final_m, initial_m)| {
                     final_m
                         .iter()
@@ -317,7 +317,7 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
             "{source_stage} did not produce a distinguishable final state"
         );
         let artifact_id = format!("{source_stage}-final");
-        let object_ref = store.cas().put(&predecessor_bytes).unwrap();
+        let object_ref = store.cas().put(predecessor_bytes).unwrap();
         target.study_inputs.push(StudyInputPort {
             port_id: "initial_state".into(),
             data_kind: StudyPortDataKind::State,
@@ -345,7 +345,7 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
             },
         );
         let bound = materialize_accepted_worker_execution_plan(&store, target).unwrap();
-        let (initial, final_bytes) = execute(target, &bound, &target.step_id);
+        let (initial, final_bytes) = execute(target, &bound, case);
         assert_eq!(initial.layout, previous.layout);
         assert_eq!(samples(bound), previous.values, "{}", target.step_id);
         assert_eq!(initial.values.len(), previous.values.len());
@@ -360,9 +360,24 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
                 target.step_id
             );
         }
-        expected_start = initial.values;
-        predecessor_bytes = final_bytes;
-    }
+        (initial, final_bytes)
+    };
+    let first_plan = materialize_accepted_worker_execution_plan(&store, &first).unwrap();
+    let (authored, first_final) = execute(&first, &first_plan, "relax-a");
+    let (second_initial, second_final) = continue_from(
+        "relax-a",
+        &mut second,
+        &first_final,
+        &authored.values,
+        "relax-b",
+    );
+    continue_from(
+        "relax-b",
+        &mut third,
+        &second_final,
+        &second_initial.values,
+        "relax-c",
+    );
 
     // Repeating the original uniform texture is a distinct authored input for B.
     second.study_inputs[0].source = StudyInputSource::AuthoredInitialState {
@@ -372,10 +387,23 @@ fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_r
     second.study_inputs[0].data_kind = StudyPortDataKind::InitialState;
     second.resolved_input.inputs.clear();
     let reset_plan = materialize_accepted_worker_execution_plan(&store, &second).unwrap();
-    let (reset, _) = execute(&second, &reset_plan, "relax-b-authored-reset");
+    let (reset, reset_final) = execute(&second, &reset_plan, "relax-b-authored-reset");
     assert_eq!(samples(reset_plan), authored.values);
     assert_eq!(reset.layout, authored.layout);
     assert_eq!(reset.values, authored.values);
+
+    let mut third_after_reset = make_step(
+        "relax-c",
+        RelaxationAlgorithmIR::NonlinearCg,
+        [0.1, 0.0, 0.0],
+    );
+    continue_from(
+        "relax-b",
+        &mut third_after_reset,
+        &reset_final,
+        &reset.values,
+        "relax-c-after-authored-reset",
+    );
 }
 
 #[test]
