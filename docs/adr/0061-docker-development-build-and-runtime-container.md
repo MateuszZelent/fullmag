@@ -1182,3 +1182,14 @@ Regresje wymagają odrzucenia zmienionych hashy, ownera, fence, inkarnacji,
 Implementacja walidatora i testy źródłowe nie stanowią dowodu odzyskania
 instancji ani wykonania symulacji. Managed recovery i następujące po nim
 profilowanie wymagają osobnych pokwitowań.
+
+`stop-bootstrap-frontend-volume` przygotowuje zatrzymaną parę po takim stopie.
+Preview sprawdza wyłącznie istniejący wolumen i dowody. Jawne apply wymaga
+SHA planu, kwalifikuje go przed `prepare`, a następnie pod blokadą grupy zapisuje
+niezmienny intent i ponownie odczytuje komplet dowodów przed SIGTERM do dokładnego
+ID frontendu. Nie wymusza zakończenia procesu. Po sygnale kontroluje tę samą
+inkarnację, zatrzymany backend oraz niezmienione dokumenty native. Już zatrzymanej
+inkarnacji nie sygnalizuje ponownie. Stop nie jest drain ani zgodą na teardown:
+obowiązują późniejsze pełne bramki recovery. Timeout zachowuje unknown i helper
+operacji; zwykłe ponowienie apply nie rozlicza takiej blokady. Wymaga ona osobnej
+kwalifikowanej finalizacji, bez ponownego wysyłania niepewnego sygnału.

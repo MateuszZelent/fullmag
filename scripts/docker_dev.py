@@ -2804,6 +2804,18 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--resume-attempt", required=True)
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend = subparsers.add_parser(
+        "stop-bootstrap-frontend-volume",
+        help="Qualify and stop the exact frontend after a preserved diagnostic bootstrap stop",
+    )
+    stop_bootstrap_frontend.add_argument("--attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--config-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--source-root", type=Path, required=True)
+    stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--apply", action="store_true")
+    stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
     recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
@@ -3182,6 +3194,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-bootstrap-volume":
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-bootstrap-frontend-volume":
+            from docker_volume_bootstrap_frontend_stop import run as stop_bootstrap_frontend
+            result = stop_bootstrap_frontend(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
             if args.lost_state_stop and (not args.fresh_state or any((

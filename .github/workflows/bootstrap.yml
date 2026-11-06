@@ -958,6 +958,7 @@ jobs:
           python -B scripts/test_runtime_service_snapshot.py -v
           python -B scripts/test_docker_volume_abrupt_stop_recovery.py -v
           python -B scripts/test_docker_volume_bootstrap_recovery.py -v
+          python -B scripts/test_docker_volume_bootstrap_frontend_stop.py -v
           python -B scripts/test_docker_windows_bind_isolation.py -v
           python -B scripts/test_docker_prepare_container_recovery.py -v
           python -B scripts/test_docker_foreign_bind_identity.py -v

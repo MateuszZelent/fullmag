@@ -629,3 +629,15 @@ Kolejna warstwa sondy fizycznej ma jawne ograniczenie do mastera. Wśród
 niezakwalifikowanych konsumentów są działające usługi `containers_admin2`
 oraz starsze zatrzymane grupy Fullmag. Nie zatrzymano ich i nie zmieniono
 ich receiptów; trwa implementacja jawnego kontekstu worktree dla tej sondy.
+
+Etap proof/preparer zapisano jako `d661ec8f8e3eb063171e0d7747fd735b36a45486`.
+Stop frontendu ma 10 zielonych testów i review; poprawiono mutujący preview,
+rozróżnienie sieci działającego frontendu i zatrzymanej pary oraz ponowną
+kontrolę pełnego planu bezpośrednio przed sygnałem. Rzeczywisty preview zakończył
+się kodem0, przy backendzie stopped i frontendzie running. Plan SHA:
+`d0708dd57ccbad56ff21f71521b535adb104ad55ad6a1be7da55feba75a11bb5`,
+plik preview SHA `7966b092883335c598a3fd02abf861853ff310dbc3b5e7c4040dfd5453b6b6ee`.
+Apply jeszcze nie wykonano; nie jest to dowód stopu ani odzyskania runtime.
+Terminalne piny 21 runów zapisano na WSL w
+`sp4-diagnostics/bootstrap-recovery-terminal-pins-eb1d8729372ab090.json`,
+SHA `eb1d8729372ab090b2e15f3f021959d54955bcc0105253f661857e9ea9c21193`.
