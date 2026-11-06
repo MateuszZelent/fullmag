@@ -17,7 +17,9 @@ use crate::fdm::gpu::cuda::artifacts::{
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::live_observations::FdmLiveObservationScheduler;
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsMode, NativeStatsPolicy};
+use crate::fdm::gpu::cuda::native::{
+    centered_periodic_xy_images, NativeFdmBackend, NativeStatsMode, NativeStatsPolicy,
+};
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::spin_transport::{
     GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
@@ -854,7 +856,9 @@ pub(crate) fn execute_cuda_fdm(
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
         },
-        demag_operator_kind: if plan.enable_demag {
+        demag_operator_kind: if centered_periodic_xy_images(plan, false)?.is_some() {
+            Some("tensor_fft_newell_periodic_xy_centered".to_string())
+        } else if plan.enable_demag {
             Some("tensor_fft_newell".to_string())
         } else {
             None

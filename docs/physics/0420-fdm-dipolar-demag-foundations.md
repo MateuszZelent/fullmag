@@ -520,6 +520,31 @@ Precision policy:
   precision/capability policy,
 - provenance must record kernel precision, FFT precision, padding shape, and calibration profile.
 
+For CUDA FP64 single-grid with explicit XY truncated-image demagnetization and open Z,
+the runner checks the memory cost of the legacy expanded image tensor before
+creating the native context. If the expanded six-component FP64 tensor exceeds
+the runner's 8 GiB guard, it uses the centered XY Newell implementation shared
+with the periodic multilayer operator. This computes a symmetric finite image
+sum around the nearest periodic lag and uses FFT shape
+`[N_x, N_y, 2N_z]`. Here `N_x, N_y, N_z` are the dimensionless physical grid counts.
+The kernel uses the existing near-cell Newell and far-cell point-dipole terms.
+The requested image counts, open Z, and cell sizes in metres are unchanged.
+This backend decision does not depend on whether Frozen Spins are active.
+The CUDA receipt identifies the centered operator as
+`tensor_fft_newell_periodic_xy_centered`. Small legacy CUDA requests,
+FDM CPU, and FEM keep their previous realization.
+
+The qualification target is a resolved XY FP64 case above the expanded-memory
+limit and the corresponding native periodic multilayer calculation on identical
+aligned cells. Compare the active-cell field in A/m and the demagnetization
+energy in J at a common initial state. With a frozen mask also require unchanged
+frozen vectors and verify that the unconstrained cells are advanced. Selection
+and allocation-bound tests alone do not qualify the GPU calculation.
+The implementation anchors are `centered_periodic_xy_images` in
+`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` and
+`try_compute_periodic_xy_kernel` in
+`crates/fullmag-fdm-demag/src/shifted_kernel.rs`.
+
 #### 3.1.6 Nonuniform materials and region boundaries
 
 For FDM, the dipolar operator acts on
