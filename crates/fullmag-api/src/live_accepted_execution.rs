@@ -942,6 +942,7 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
         source_script_path,
         None,
         None,
+        None,
     )
     .await?;
     // The existing command path already owns the transition fence. The
@@ -978,6 +979,7 @@ pub(crate) async fn prepare_live_study_with_asset_root(
         source_script_path.clone(),
         source_script_path,
         None,
+        None,
     )
     .await
 }
@@ -992,6 +994,7 @@ pub(crate) async fn prepare_live_study_with_asset_root_and_progress(
     asset_root: Option<PathBuf>,
     source_script_path: Option<PathBuf>,
     progress_sender: tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>,
+    solver_profile: Option<serde_json::Value>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     prepare_live_study_with_source_paths(
         state,
@@ -1004,6 +1007,7 @@ pub(crate) async fn prepare_live_study_with_asset_root_and_progress(
         source_script_path.clone(),
         source_script_path,
         Some(progress_sender),
+        Some(solver_profile),
     )
     .await
 }
@@ -1019,6 +1023,7 @@ async fn prepare_live_study_with_source_paths(
     source_script_path: Option<PathBuf>,
     source_path: Option<PathBuf>,
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
+    explicit_profile: Option<Option<serde_json::Value>>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     validate_live_scene_for_context(state, context, &scene).await?;
     let Some(store_root) = state.submit_store_root.clone() else {
@@ -1033,7 +1038,10 @@ async fn prepare_live_study_with_source_paths(
     let api_instance_id = state.request_scope_instance_id.clone();
     let backlog_limit = state.submit_backlog_limit;
     let captured_context = context.clone();
-    let solver_profile = next_solver_profile_admission_config(state, context).await?;
+    let solver_profile = match explicit_profile {
+        Some(value) => value,
+        None => next_solver_profile_admission_config(state, context).await?,
+    };
     let prepared = tokio::task::spawn_blocking(move || {
         prepare_live_accepted(
             &repo_root,
@@ -1840,7 +1848,7 @@ fn prepare_live_accepted(
     source_script_path: Option<PathBuf>,
     submission: LiveAcceptedSubmission,
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
-    solver_profile: Option<fullmag_runner::SolverProfileConfig>,
+    solver_profile: Option<serde_json::Value>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     // Script-backed scenes retain relative native mesh references after the
     // startup request. Resolve them with the same original asset parent.
@@ -2477,11 +2485,11 @@ fn prepare_live_accepted(
         parameters["live_workspace"]["request_receipt"] = serde_json::to_value(receipt)
             .map_err(|error| ApiError::internal(format!("encode live Compute receipt: {error}")))?;
     }
-    if let Some(config) = solver_profile {
-        parameters.as_object_mut().expect("RunSpec parameters object").insert(
-            crate::accepted_solver_profile::PARAMETER.into(),
-            crate::accepted_solver_profile::parameter(config)
-                .map_err(|error| ApiError::unprocessable(error.to_string()))?);
+    if let Some(value) = solver_profile {
+        crate::accepted_solver_profile::request_digest(&value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_solver_profile", error.to_string()))?;
+        parameters.as_object_mut().expect("RunSpec parameters object")
+            .insert(crate::accepted_solver_profile::PARAMETER.into(), value);
     }
     if let Some(initial_state) = initial_state {
         parameters["live_workspace"]
@@ -2501,7 +2509,7 @@ fn prepare_live_accepted(
                 }),
             );
     }
-    crate::accepted_solver_profile::validate_study_profile(&parameters, &study)
+    crate::accepted_solver_profile::validate_study_profile(&parameters, &study, &catalog)
         .map_err(|error| ApiError::unprocessable_with_code("accepted_solver_profile_unsupported", error.to_string()))?;
     let intent_id = if let Some(receipt) = request_receipt {
         format!("live-http-v2-{}", receipt.key_sha256)
@@ -4136,7 +4144,7 @@ fn has_closed_loop_inspection_pipeline(scene: &fullmag_authoring::SceneDocument)
 
 async fn next_solver_profile_admission_config(state: &Arc<crate::types::AppState>,
     context: &crate::types::CurrentLiveRequestContext,
-) -> Result<Option<fullmag_runner::SolverProfileConfig>, crate::error::ApiError> {
+) -> Result<Option<serde_json::Value>, crate::error::ApiError> {
     let fallback_config = {
         let guard = state.current_live_state.read().await;
         let snapshot = guard.as_ref().ok_or_else(|| crate::error::ApiError::not_found("no current workspace"))?;
@@ -4167,7 +4175,7 @@ async fn next_solver_profile_admission_config(state: &Arc<crate::types::AppState
         .map_err(|error| crate::error::ApiError::internal(error.to_string()))?;
     if !configuration.enabled { return Ok(None); }
     let value = crate::accepted_solver_profile::parameter(configuration).map_err(|error| crate::error::ApiError::unprocessable(error.to_string()))?;
-    let mut parameters = serde_json::Map::new();
-    parameters.insert(crate::accepted_solver_profile::PARAMETER.into(), value);
-    crate::accepted_solver_profile::config(&serde_json::Value::Object(parameters)).map_err(|error| crate::error::ApiError::unprocessable(error.to_string()))
+    crate::accepted_solver_profile::request_digest(&value)
+        .map_err(|error| crate::error::ApiError::unprocessable(error.to_string()))?;
+    Ok(Some(value))
 }

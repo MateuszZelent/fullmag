@@ -3,8 +3,10 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DomainMetaResource, PlanarFieldMetaResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 
 import FieldMapModule from "./FieldMapModule";
 import { getRegisteredFieldMapCapture } from "./fieldMapCaptureRegistry";
@@ -16,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   projectionStatus: vi.fn((meta: { fold_count: number; non_injective: boolean; overlap_count: number }) =>
     meta.non_injective || meta.fold_count > 0 || meta.overlap_count > 0 ? "ambiguous" : "resolved"),
   metaAvailable: true,
+  domain: null as DomainMetaResource | null,
+  section: null as PlanarFieldMetaResource["section"] | null,
   probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
@@ -134,6 +138,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
                 },
             overlap_count: 0,
             resolution: [256, 128],
+            section: mocks.section,
             sample_token: "planar-sample-v3:current",
             sampling_execution: "cpu",
           },
@@ -173,7 +178,11 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  useDomainMetaResource: () => ({ data: null, error: null, status: "idle" }),
+  useDomainMetaResource: () => ({
+    data: mocks.domain,
+    error: null,
+    status: mocks.domain ? "ready" : "idle",
+  }),
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
@@ -210,6 +219,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 describe("FieldMapModule planar state ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fieldMapSurfaceStore.reset();
     mocks.metaData.clear();
     mocks.renderModel.mockReset();
     mocks.visualization.data = null;
@@ -218,6 +228,8 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
     mocks.metaAvailable = true;
+    mocks.domain = null;
+    mocks.section = null;
     mocks.scalarPending = false;
     mocks.metaPending = false;
     mocks.sourceDefinitionHash = null;
@@ -345,6 +357,94 @@ describe("FieldMapModule planar state ownership", () => {
         expect.any(Object),
         { enabled: true },
       );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("publishes base sample Airbox geometry instead of the magnetic domain grid", async () => {
+    const airboxPlanar = {
+      colormap: "viridis",
+      component: "magnitude",
+      default_slice: {
+        operator: { kind: "plane_sample" },
+        plane: "xy",
+        position_fraction: 0.5,
+      },
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: {
+        boundaries: false,
+        bounds: true,
+        contours: false,
+        mesh: true,
+        points: false,
+        probes: false,
+        raster: true,
+        vectors: false,
+      },
+      point_style: { color: "#ffffff", opacity: 1, size: 1 },
+      quality: "interactive",
+      quantity_id: "m",
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      source: { kind: "default" },
+      vector_style: {
+        color_mode: "orientation",
+        length_mode: "uniform",
+        monochrome_color: "#ffffff",
+        opacity: 1,
+        scale: 1,
+        thickness: 1,
+      },
+      view_scope: { kind: "airbox" },
+      viewport_colorbar_visible: true,
+      visible: true,
+      wireframe_style: { color: "#ffffff", opacity: 1 },
+    } satisfies NonNullable<VisualizationStateResource["planar"]>;
+    mocks.visualization.data = {
+      planar: airboxPlanar,
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    mocks.domain = {
+      bounds: { min: [0, 0, 10e-9], max: [100e-9, 100e-9, 40e-9] },
+      discretization: "fdm",
+      grid: {
+        origin: [0, 0, 10e-9],
+        shape: [40, 40, 12],
+        spacing: [2.5e-9, 2.5e-9, 2.5e-9],
+      },
+    } as unknown as DomainMetaResource;
+    mocks.section = {
+      cut_element_count: null,
+      layer_count: 26,
+      layer_index: 12,
+      layer_spacing_m: 2.5e-9,
+      layer_stops_m: [],
+      navigation_step_kind: "fdm_cell",
+      navigation_step_m: 2.5e-9,
+      normal_axis: "z",
+      normal_max_m: 60e-9,
+      normal_min_m: -5e-9,
+      plane: "xy",
+      requested_coordinate_m: 27.5e-9,
+      requested_fraction: 0.5,
+      resolved_coordinate_m: 26.25e-9,
+      stops_kind: "fdm_cell_layers",
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<FieldMapModule />));
+
+      expect(fieldMapSurfaceStore.get().sectionGeometry).toMatchObject({
+        normalMin: -5e-9,
+        normalMax: 60e-9,
+        layerCount: 26,
+        layerSpacing: 2.5e-9,
+        nativeResolution: null,
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

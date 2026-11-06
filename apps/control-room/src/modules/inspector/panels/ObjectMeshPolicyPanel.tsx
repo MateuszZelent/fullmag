@@ -317,7 +317,7 @@ export function FdmObjectMeshPolicySection({
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorMetricStrip
         metrics={[
-          { label: "Lane", value: "FDM", tone: "accent" },
+          { label: "Lane", value: "FDM", tone: "neutral" },
           { label: "Grid shape", value: model.shape?.join(" × ") ?? "not materialized" },
           { label: "Total cells", value: model.totalCells?.toLocaleString("en-US") ?? "not materialized" },
           { label: "Status", value: model.status },
@@ -1394,7 +1394,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel" data-mesh-policy-draft="object">
       <InspectorMetricStrip
         metrics={[
-          { label: "Lane", value: "FEM", tone: "accent" },
+          { label: "Lane", value: "FEM", tone: "neutral" },
           { label: "Policy", value: draft.present ? "custom override" : "inherited" },
           { label: "Topology", value: draft.topology || "inherited" },
           {

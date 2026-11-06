@@ -422,6 +422,65 @@ describe("field-map commands", () => {
     }
   });
 
+  it("keeps an explicit monitor export on the server path even when another captured view is registered", async () => {
+    const sessionScopeKey = "session=session-1&epoch=session-1%401";
+    const capture = vi.fn();
+    const unregister = registerFieldMapCapture(sessionScopeKey, capture);
+    const click = vi.fn();
+    const createObjectURL = vi.fn(() => "blob:explicit-monitor");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("document", { createElement: vi.fn(() => ({ click, download: "", href: "" })) });
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const visualizationState = vi.fn().mockResolvedValue({
+      planar: {
+        component: "magnitude",
+        field_overlays: [{ id: "object:ferromagnet", raster_visible: true, vectors_visible: true }],
+        layers: { mesh: false },
+        quantity_id: "m",
+        resolution: { height: 256, vector_budget: 64, width: 512 },
+        source: { kind: "default" },
+        view_scope: { kind: "monitor_target" },
+      },
+    });
+    const meta = vi.fn().mockResolvedValue({ field_revision: 9, canonical_unit: "A/m" });
+    const monitor = vi.fn().mockResolvedValue({ monitor: { name: "Explicit monitor" } });
+    const renderPng = vi.fn().mockResolvedValue({ data: new ArrayBuffer(4), status: "ready" });
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-png");
+
+    try {
+      const result = await command?.run({
+        api: {
+          data: { fields: { planar: { meta, renderPng } } },
+          model: { planarMonitors: { get: monitor } },
+          visualization: { state: visualizationState },
+        } as never,
+        input: { monitorId: "plane-explicit" },
+        sessionScopeKey,
+        source: "test",
+      });
+
+      expect(result).toMatchObject({ status: "completed" });
+      expect(capture).not.toHaveBeenCalled();
+      expect(meta).toHaveBeenCalledWith(
+        "m",
+        { kind: "monitor", monitorId: "plane-explicit" },
+        expect.objectContaining({ quality: "export" }),
+        { sessionScopeKey },
+      );
+      expect(monitor).toHaveBeenCalledWith("plane-explicit", { sessionScopeKey });
+      expect(renderPng).toHaveBeenCalledWith(
+        "m",
+        { kind: "monitor", monitorId: "plane-explicit" },
+        expect.objectContaining({ quality: "export" }),
+        { sessionScopeKey },
+      );
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:explicit-monitor");
+    } finally {
+      unregister();
+    }
+  });
+
   it("refuses a base-only server export when the inactive view has visible field overlays", async () => {
     const visualizationState = vi.fn().mockResolvedValue({
       planar: {

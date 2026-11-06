@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 
+#[path = "accepted_profile_admission.rs"]
+mod profile_admission;
+
 #[path = "owned_worker_process.rs"]
 mod owned_worker_process;
 #[path = "compute_operator_env.rs"]
@@ -421,6 +424,62 @@ pub(crate) fn archive_reaped_supervisor_slot(
         || receipts[0].status_success || receipts[0].timed_out || receipts[0].stop_requested {
         bail!("slot archive process-exit proof differs from the released attempt");
     }
+    archive_validated_supervisor_slot(store, claim, request_id, pin)
+}
+
+pub(crate) fn archive_interrupted_supervisor_slot(
+    store: &SessionStore,
+    claim: &fullmag_application::TaskClaim,
+    request_id: &str,
+    pin: &ReapedSupervisorSlotPin,
+    receipt: &fullmag_session::host_resource_ledger::ClaimedWorkerInterruptionReceipt,
+    released: &fullmag_session::host_resource_ledger::HostResourceReservation,
+) -> Result<()> {
+    use fullmag_session::{FmsTaskLifecycle, FmsResourceLeaseState};
+    use fullmag_session::host_resource_ledger::{HostResourceReservationState, HostReservationOwner};
+    receipt.validate()?;
+    let request = &receipt.request;
+    if store.read_claimed_worker_interruption(claim.run_id.as_str(), request_id)?.as_ref() != Some(receipt)
+        || request.request_id != request_id
+        || request.identity.store_id != fullmag_session::host_resource_ledger::HostResourceLedger::store_id(store.root())?
+        || released.state != HostResourceReservationState::Released || released.release_proof_sha256.is_none()
+        || released.identity.run_id != claim.run_id.as_str()
+        || released.identity.task_id != claim.task_id.as_str()
+        || released.identity.lease_token != claim.lease.lease_token.as_str()
+        || released.identity.resource_id != claim.lease.resource_id
+        || released.identity.owner != (HostReservationOwner::Solver {
+            attempt_id: claim.attempt_id.as_str().into(), ownership_epoch: claim.ownership_epoch.value(),
+        })
+        || pin.owner_sha256 != request.pins.supervisor_slot_sha256
+    {
+        bail!("interrupted slot archive lacks its exact operational release chain");
+    }
+    let _writer = store.write_transaction()?;
+    let catalog = store.read_run_catalog(claim.run_id.as_str())?.context("interrupted catalog missing")?;
+    let mut expected = request.expected_task.clone();
+    expected.lifecycle = FmsTaskLifecycle::Interrupted;
+    expected.readiness = fullmag_session::FmsTaskReadiness::Blocked {
+        reason: fullmag_session::host_resource_ledger::CLAIMED_WORKER_INTERRUPTION_REASON.into(),
+    };
+    expected.observation = Some(fullmag_session::FmsObservationState::Disconnected);
+    if catalog.tasks.iter().find(|task| task.task_id == expected.task_id) != Some(&expected) {
+        bail!("interrupted slot archive terminal task differs");
+    }
+    let lease = store.read_resource_lease(claim.run_id.as_str(), &claim.lease.resource_id,
+        claim.lease.lease_token.as_str())?.context("interrupted slot archive lease missing")?;
+    if lease.state != FmsResourceLeaseState::Released || lease.attempt_id != claim.attempt_id.as_str()
+        || lease.ownership_epoch != claim.ownership_epoch.value()
+        || lease.heartbeat_sequence != claim.lease.heartbeat_sequence
+    {
+        bail!("interrupted slot archive lease differs");
+    }
+    archive_validated_supervisor_slot(store, claim, request_id, pin)
+}
+
+fn archive_validated_supervisor_slot(
+    store: &SessionStore, claim: &fullmag_application::TaskClaim,
+    request_id: &str, pin: &ReapedSupervisorSlotPin,
+) -> Result<()> {
     let (active, archived) = validate_reaped_supervisor_slot(store, claim, request_id, pin)?;
     if active.try_exists()? {
         let parent_relative = format!("reaped-worker-recovery/{request_id}");
@@ -948,6 +1007,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
     let linux_cgroup = None;
     let mut active_lease = lease;
     let mut pending_heartbeat = None;
+    let fem_step_profile = profile_admission::fem_child_enabled(store, run_id, task_id)?;
     let host_launch_token = match host
         .map(|host| authorize_host_worker_launch(host, store, &active_lease))
         .transpose()
@@ -964,6 +1024,7 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
         &cpu_ids,
         &cpu_thread_environment,
         host_launch_token.as_deref(),
+        fem_step_profile,
         cpu_rate_limit,
         linux_cgroup,
         worker_timeout,
@@ -1620,6 +1681,7 @@ fn spawn_worker<H, C>(
     cpu_ids: &BTreeSet<u32>,
     cpu_thread_environment: &[(&'static str, String)],
     host_launch_token: Option<&str>,
+    fem_step_profile: bool,
     cpu_rate_limit: Option<u32>,
     linux_cgroup: Option<owned_worker_process::LinuxWorkerCgroup>,
     worker_timeout: Duration,
@@ -1641,6 +1703,7 @@ where
         bail!("accepted worker executable must be a regular file");
     }
     let mut command = Command::new(worker_executable);
+    profile_admission::configure_child(&mut command, fem_step_profile);
     compute_operator_env::remove_local_compute_operator_token(&mut command);
     for (name, value) in worker_environment(gpu_uuid, host_launch_token.is_some()) {
         if let Some(value) = value {
@@ -4194,6 +4257,7 @@ mod tests {
             &BTreeSet::new(),
             &[],
             None,
+            false,
             None,
             None,
             Duration::from_secs(5),
@@ -4304,6 +4368,7 @@ mod tests {
             &BTreeSet::new(),
             &[],
             None,
+            false,
             None,
             None,
             Duration::from_secs(5),

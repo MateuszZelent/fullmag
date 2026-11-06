@@ -243,6 +243,25 @@ lease `iteration` i przed zatrzymaniem którejkolwiek usługi; błąd tej kontro
 zostawia grupę działającą i nie tworzy próby. Grupa bez kwarantanny namespace
 ma `BuildControl.namespace == ""` i używa subpath `runtime-control`.
 
+#### Odtworzenie Linux DEV po utracie katalogu stanu
+
+Użyj tej ścieżki tylko dla istniejącej grupy `fullmag-master` w profilu
+`linux-native-v1`, gdy w katalogu stanu na WSL zostało wyłącznie potwierdzenie
+zwolnienia writera. Wymagana jest udana operacja `stop-diagnostic-volume`
+dla bieżącej inkarnacji backendu. Przypnij identyfikator tej operacji
+i SHA-256 surowego pliku `stop-diagnostic/attempts/<stop>/terminal.json`
+z wolumenu kontrolnego.
+
+```text
+just docker-dev-recreate-lost-state <development> <config-sha256> <source> <stop>@<terminal-sha256> <port>
+```
+
+Launcher sprawdza kontenery, brak dodatkowych konsumentów i zwolnienie
+wszystkich rezerwacji w ledgerze przed usunięciem starej pary. Zachowuje
+pozostały katalog stanu, archiwizuje runtime i ledger w tym samym prywatnym
+wolumenie oraz uruchamia nową pustą sesję w tej samej grupie. Skrypty i Zarr na
+hoście pozostają dostępne. Uruchomienie skryptu jest oddzielną operacją.
+
 #### Zapis pustej sesji UI przed restartem
 
 Zwykłą, aktywną sesję `ui_authoring` w stanie `awaiting_command`, bez bieżącego
@@ -418,6 +437,78 @@ Nadzór startu odczytuje receipt PID 1 przez kanoniczne `runtime_service.process
 
 Każdy wariant wymaga zakończonego API, braku żywych procesów i aktywnych lease’ów oraz zwolnionych rezerwacji hosta. Bezpośrednio przed zapisem journalu komenda ponownie pobiera dowody i porównuje receipt oraz surowe piny `OWNER`; drift przerywa operację. Po zatrzymaniu weryfikuje niezmienionego ownera. Sam stop nie odzyskuje GPU, nie zmienia ownera i nie powtarza skryptu; dalszy start nadal podlega natywnym bramkom recovery. Obserwacja nieznana lub aktywne zasoby blokują komendę.
 Stara komenda odtwarzania przez hostowy receipt DEV odmawia wykonania.
+
+#### Diagnostyczny stop po udanym przygotowaniu, bez Start
+
+Gdy przygotowanie FEM zakończyło się exit 0, lecz runtime jest Failed przed
+Start i oryginalny helper aktywacji nadal trzyma swój lease, użyj wyłącznie
+jawnego wariantu `prepared-unclaimed-v1` w `docker_volume_stop_failed.py`.
+Recepta `docker-dev-stop-prepared-unclaimed` wymaga pełnych pinów źródeł,
+kontenera, obrazu, process receipt, aktywacji oraz pliku target z jego SHA.
+Domyślny preview nie zatrzymuje backendu. Apply wymaga odczytanego SHA planu;
+kontynuacja wymaga SHA już utrwalonego signal-intent i nie powtarza TERM.
+
+Ten wariant zachowuje udane przygotowanie i niezależnie dowodzi NoStart.
+Wymaga pasującego Released lease i host release proof oraz braku aktywnych
+rezerwacji, workerów i obcych procesów. Nie przerabia intencji automatycznego
+startu na ręczne wstrzymanie. Oryginalny helper zwalnia swój marker dopiero po
+technicznie terminalnym handshake; nie usuwa go operator ani nowy helper.
+Stop zapisuje odrębny journal i quarantine `cancellation-required`, z ownerem
+Failed oraz `healthy_drain=false`.
+
+Quarantine dopuszcza następnie tylko dopasowane natywne maintenance
+`cancel-unclaimed-volume --prepared-quarantine-sha256 <sha>` bez API/Solve.
+Jeśli dokładne `--resume-maintenance-attempt <attempt>` blokuje nieaktualny
+cache obrazów po zmianie wejść helperów, operator najpierw przygotowuje je przez
+zarządzane `just docker-dev-images` w tym samym checkoutcie i projekcie Compose.
+Następnie odczytuje pełny immutable ID backendu z aktualnego, zweryfikowanego
+receiptu `image-backend` i podaje `--resume-backend-image-id sha256:<64 hex>`.
+Bez tego opcjonalnego pinu resume nadal wymaga obrazu historycznego maintenance;
+pin nie wybiera dowolnego obrazu ani nie uruchamia automatycznego rebuilda.
+Pełna walidacja bieżących źródeł, toolchaina, receiptów i etykiet pozostaje
+obowiązkowa. Inputs nowej operacji zachowują przejście obrazu, attempt i source
+digest zweryfikowanego receiptu oraz odnośnik do niezmienionej historii requestu;
+stary store i jego certyfikat pozostają związane z oryginalnym obrazem runtime.
+Ta kontynuacja nadal nie uruchamia API ani solvera. Faktyczny runtime z nowym
+pinem pozostaje **NOT VERIFIED** do odrębnej próby i kontroli jej receiptów.
+
+Prepared maintenance i fresh archive zachowują dokładne limity backendu z
+uwierzytelnionego witness (`Memory`, `NanoCpus`, `MemorySwap`), także przy innej
+bieżącej konfiguracji `.env`. Preflight sprawdza live quarantine/admission,
+Docker capacity, native contracts i allowlist przed cache, ledgerem i rotacją
+certyfikatu; końcowy render nadal przechodzi dokładny guard. Zapisany budget
+nadal wymaga prawidłowej historii, ale nie zastępuje retained limits. Wyłącznie
+zaobserwowana odmowa `prepared recovery changed backend resource budget` przed
+Compose/start może kontynuować z dokładnego parenta błędu ścieżki: własny before,
+request i witness muszą się zgadzać, pełny chain stop/removal oraz archiwa są
+kopiowane do nowej operacji z pinami pochodzenia. Dla tego boundary częściowo
+obrócony certyfikat może wskazywać oryginalny obraz albo dokładny obraz failed
+maintenance; pozostałe kontrole właściciela, store, inode, profilu i engine
+pozostają obowiązkowe. Nie przywracaj markerów ani historycznych receiptów.
+
+Dopiero po potwierdzonym Cancelled osobny
+`recreate-volume --fresh-state --prepared-quarantine-sha256 <sha>` może
+zarchiwizować stary runtime-control/ledger i uruchomić nową generację przez
+zwykłe bramki managed build/admission. Zwykły start, zachowanie starego namespace
+przez `recover-cancelled-volume` oraz odtworzenie przed anulowaniem są
+odrzucane. Żaden etap nie ponawia starego skryptu ani nie usuwa sesji, wyników
+lub oryginalnego Zarr.
+
+Przerwanie po zakończonym archive przed publikacją końcowych potwierdzeń
+domyka wyłącznie dopasowany wariant `resume-interrupted-fresh-archive`.
+Wymaga on pary `--prepared-quarantine-sha256` oraz
+`--prepared-archive-terminal-sha256`; pojedynczy pin jest odrzucany.
+Musi zweryfikować istniejący intent i terminal archiwum, Unknown receipt
+oryginalnej operacji, quarantine i zgodny anchor generacji group ledger.
+Brak lub stary anchor odmawia kontynuacji; sam archive terminal nie wystarcza.
+Nie ponawia fizycznej archiwizacji,
+Solve ani sygnałów i nie wymaga odtworzenia usuniętych starych kontenerów.
+Oryginalny helper odtworzenia zwalnia własny lease po terminalnym handshake.
+
+Kontrakt i warunki rollback opisuje
+[ADR 0061](../adr/0061-docker-development-build-and-runtime-container.md#awaria-runtime-po-udanym-przygotowaniu-przed-start-05112026).
+Stan runtime: **NOT VERIFIED**, dopóki rzeczywiste stop, anulowanie, archiwizacja
+i admission nie mają osobnych, dopasowanych receiptów.
 
 ### Aktywacja skryptu w już działającym Workspace
 
@@ -713,6 +804,41 @@ Nie powstaje fikcyjny receipt zwiększenia zasobów ani nowy ledger. Wymagany
 native contract, explicit untracked inputs i brak startup Solve pozostają
 przypięte. Zdrowe API, bieżący native owner i fizyczne wykonanie solvera są
 oddzielnymi bramkami; pozytywny preview nie dowodzi ich ukończenia.
+
+### Odmowa po wznowieniu nieudanego buildu
+
+Wariant `cold-resume-restore-stored-budget` obejmuje odmowę polityki podczas
+`resume` po nieudanym development buildzie. Parent development pozostaje
+niezmienny; aktualne container ID, StartedAt, cgroup-ready i odmowa pochodzą
+z osobno uwierzytelnionego, bieżącego terminala resume. Zakończony native drain
+może należeć do iteracji, której późniejszy rebuild się nie powiódł. Wtedy
+wymagany jest również zakończony retained recreate, który usunął dokładnie
+historyczną parę kontenerów i zachował state root.
+
+```bash
+python3 -B scripts/docker_dev.py --repo-root <source> stop-preowner-policy-volume \
+  --variant cold-resume-restore-stored-budget \
+  --source-root <source> --attempt <parent-development-uuid> \
+  --resume-attempt <failed-resume-uuid> \
+  --config-sha256 <compose-sha256> --backend-container-id <full-container-id> \
+  --image-id <sha256:image-id> --drain-attempt <drained-then-failed-rebuild-uuid> \
+  --recreate-attempt <completed-historical-recreate-uuid>
+```
+
+Dozwolona różnica polityki obejmuje CPU i RAM wynikające z Compose oraz
+rzeczywistych limitów cgroup. SHA topologii musi dać się odtworzyć z dokładnego
+snapshotu CAS ledgeru i zmiany wyłącznie quota CPU. Serializacja odpowiada
+`CanonicalInventory` Rust. Affinity, fizyczna topologia CPU/GPU, host, epoch,
+revision i pozostałe budżety pozostają identyczne. Nieznana hierarchia cgroup,
+brak CAS, zmieniony owner/lease/run lub niezgodny hash odmawia operacji.
+
+Apply oraz kontynuacja używają wszystkich tych samych pinów i parametrów
+opisanych wyżej. Journal wiąże także resume i historyczny recreate; nie daje
+uprawnienia do odzyskania ownera. Kolejne odtworzenie korzysta ze zwykłego
+`recreate-volume`, bez `fresh-state` i bez skryptu aktywującego Solve.
+Zachowuje zapisany budżet, native contract i allowlist wejść. Późniejszy
+konsument budżetu weryfikuje archiwalne receipty drain/recreate; nowy poprawnie
+uruchomiony owner nie musi nadal mieć stanu historycznego `drained`.
 
 ## Zatrzymanie zbędnej kontroli rollbacków przed API
 

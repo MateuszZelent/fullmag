@@ -90,6 +90,7 @@ class IdleStopFixture:
             project=PROJECT, volume="fullmag-control-master", identity=self.identity, namespace="",
         )
         self.control.read.side_effect = self.read
+        self.control.read_bytes.side_effect = self.read_bytes
         self.control.write.side_effect = self.write
         self.control.operation.side_effect = lambda *args, **kwargs: _Operation(self.events)
 
@@ -107,6 +108,11 @@ class IdleStopFixture:
         if optional:
             return None
         raise AssertionError(f"unexpected control read: {relative}")
+
+    def read_bytes(self, relative, *, optional=False):
+        self.events.append(("read_bytes", relative, optional))
+        value = self.read(relative, optional=optional)
+        return None if value is None else json.dumps(value, sort_keys=True).encode()
 
     def write(self, relative, value):
         self.events.append(("write", relative))
@@ -254,6 +260,7 @@ class DockerVolumeIdleStopTests(unittest.TestCase):
         finish = entered[-1]
         recreate = entered[-2]
         self.assertIsNone(result)
+        self.assertIn(("read_bytes", "prepared-unclaimed/current.json", True), fixture.events)
         self.assertTrue(fixture.control.operation.called)
         drain_index = fixture.events.index(("write", "development/attempts/" + ATTEMPT + "/iteration/backend-drain.json"))
         exit_index = next(index for index, event in enumerate(fixture.events) if event[0] == "exit")

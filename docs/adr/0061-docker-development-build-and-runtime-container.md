@@ -1053,6 +1053,78 @@ i blokuje jego wykonanie. Source review i parser nie zastępują wykonania
 zarządzanej ścieżki; runtime pozostaje NOT VERIFIED do zapisania receiptu.
 
 
+### Awaria runtime po udanym przygotowaniu, przed Start (05.11.2026)
+
+Udane przygotowanie FEM może opublikować receipt i zwolnić lokalny lease oraz
+rezerwację hosta, po czym scheduler kończy się błędem, zanim zostanie
+opublikowany Start. Taki przypadek nie jest błędem przygotowania, zdrowym drain
+ani WorkerNoSpawn z istniejącym lease solvera. Intencja automatycznego startu
+skryptu nie staje się ręcznie wstrzymanym modelem tylko dlatego, że wewnętrzna
+polityka `accepted_run_start` ma wartość `manual`.
+
+Dopuszczamy odrębny wariant `prepared-unclaimed-v1` managed failed-stop.
+Oryginalny klient aktywacji musi mieć trwały wynik Unknown oraz READY/LOGGED;
+jego przypięty helper nadal posiada własny lease operacji. Osobny observer
+używa tylko swojej blokady obserwacji w tej samej inkarnacji helpera. Nie
+przejmuje `operation.lock`, nie aktualizuje kodu żywego helpera i nie usuwa
+jego markera aktywności. Zgodność ze starszym helperem wymaga wykazanego
+kontraktu jego terminalnego handshake; sama zmiana źródeł na hoście go nie
+aktualizuje.
+
+Przed sygnałem wymagane są dokładne piny kontenera, obrazu, StartedAt,
+konfiguracji, failed ownera, zakończonych schedulerów i diagnostycznego API.
+Pod blokadami store i ledgera trzeba niezależnie wykazać brak Start, claim,
+admission, lease i workera solvera, zgodność request/API/session/epoch oraz
+autentyczny exit 0 przygotowania z pasującym Released lease i host release
+proof. Wszystkie rezerwacje tej grupy muszą być Released. Aktywny lub nieznany
+zasób, obcy proces i drift blokują operację; nie są naprawiane przez hosta.
+
+Preview nie wysyła sygnału. Apply wymaga SHA planu i przed pojedynczym TERM
+utrwala create-only signal-intent. Kontynuacja z jego dokładnym SHA służy
+wyłącznie ponownej obserwacji i domknięciu tych samych dowodów; nie powtarza
+sygnału i nie eskaluje do KILL. Po zatrzymaniu pozostają prawdziwe
+`shutdown_unknown`, owner Failed i `healthy_drain=false`. Nowy journal
+`fullmag.stop-failed-unclaimed-prepared.v1` oraz quarantine
+`fullmag.docker-prepared-unclaimed-quarantine.v1` zapisują
+`cancellation-required`. Techniczny terminal oryginalnej aktywacji jest
+publikowany ostatni, po trwałym zapisie i odczycie dowodów; helper sam zwalnia
+własny lease. Oryginalne request, Unknown receipt, katalogi, przygotowanie,
+wyniki i Zarr pozostają zachowane.
+
+Quarantine blokuje zwykły start API, wznowienie starej generacji i replay
+requestu. Dalsza ścieżka wymaga jawnego SHA quarantine: istniejący maintenance
+`cancel-unclaimed-volume` wykonuje natywne anulowanie dokładnego zadania bez
+API lub Solve. Dopiero autentyczny terminal Cancelled i dopasowane dowody
+maintenance dopuszczają osobne `recreate-volume --fresh-state`, które archiwizuje
+stary runtime-control i ledger przez istniejącego właściciela archiwizacji.
+Sam stop, quarantine albo zakończenie maintenance nie są dowodem archiwum ani
+gotowości nowego API. Nowa generacja przechodzi zwykły managed build/admission.
+Starsze konsumery nie mogą interpretować nowego journalu jako starego drain.
+
+Przerwanie po trwałym zakończeniu archiwizacji, przed publikacją quarantine
+lub terminala odtworzenia, ma odrębny wariant istniejącego
+`resume-interrupted-fresh-archive`. Przypina oryginalny Unknown receipt,
+quarantine oraz istniejący intent i terminal dokładnie tego archiwum.
+Wymaga również zgodnego, kanonicznego anchoru generacji group ledger;
+sam terminal opublikowany przed tym anchorem nie oznacza ukończonego archive.
+Weryfikuje już zakończone archiwum bez ponawiania rename, Solve lub wymogu
+istnienia usuniętych starych kontenerów. Publikacje są idempotentne i CAS;
+końcowy terminal zwalnia lease przez oryginalny helper odtworzenia. Brak lub
+drift dowodu, obcy helper i nieznany stan odmawiają kontynuacji. Nie rozszerza
+to wcześniejszego wariantu opartego na błędzie konsumenta group ledger.
+Niekompletna publikacja metadanych generacji pozostaje odrzucona i zachowana;
+ten wariant nie dorabia brakującego anchoru ani nie naprawia fizycznego archive.
+
+Właściciel: Docker DEV launcher, w szczególności
+`docker_volume_linux_supervision_stop.py`, `docker_volume_activation_reconcile.py`
+oraz istniejący konsumenci anulowania, fresh archive i
+`docker_volume_interrupted_fresh_archive.py`. Nie zmienia to fizyki,
+Python/ProblemIR, publicznego OpenAPI ani wyboru CPU/GPU. Rollback zachowuje
+quarantine i wszystkie dane, blokując uruchomienie do odtworzenia zgodnego
+konsumenta. Testy źródeł, handshake i fixtures nie kwalifikują rzeczywistego
+stop/cancel/archive. Stan runtime tej ścieżki: **NOT VERIFIED** do zachowania
+osobnych receiptów wszystkich etapów.
+
 ### Zachowanie przygotowanych modeli z ręcznym startem (28.10.2026)
 
 Po nagłym zatrzymaniu runtime store może zawierać jednocześnie runy terminalne

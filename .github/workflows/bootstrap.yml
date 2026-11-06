@@ -111,6 +111,13 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Check periodic Airbox observation contracts
+        # cargo check type-checks the CUDA Rust path without linking a native
+        # library. The actual cuFFT operator is qualified on the managed GPU.
+        run: |
+          cargo test --locked -p fullmag-runner --lib periodic_airbox_provenance
+          FULLMAG_FDM_LIB_DIR=/usr/lib cargo check --locked -p fullmag-runner --features cuda --tests
+
       - name: Run closed-loop volume inspection policy contracts
         run: |
           cargo test -p fullmag-ir --lib closed_loop_direct_budget_
@@ -148,8 +155,12 @@ jobs:
         env:
           RUST_MIN_STACK: 8388608
         run: |
+          cargo check --locked -p fullmag-api --bins
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
@@ -191,7 +202,9 @@ jobs:
 
       - name: Verify read-only saved FDM/FEM playback and binary frame routes
         run: |
-          cargo test --locked -p fullmag-workspace-inspect --lib
+          # Writer-gate tests launch a child that can briefly inherit unrelated
+          # manifest locks from other test threads before exec.
+          cargo test --locked -p fullmag-workspace-inspect --lib -- --test-threads=1
           cargo test --locked -p fullmag-api --bin fullmag-api saved_playback_
 
       - name: Run instance discovery contracts (ADR 0069)
@@ -240,6 +253,11 @@ jobs:
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
+      - name: Run periodic XY multilayer PG-BB contracts
+        run: |
+          cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
+          cargo test --locked -p fullmag-plan --lib fdm_multilayer_periodic_xy_
+
       - name: Run local material coefficient regressions
         run: |
           cargo test --locked -p fullmag-engine --lib spatial_ms_anisotropy_tests
@@ -247,6 +265,12 @@ jobs:
           cargo test --locked -p fullmag-plan --lib fem_planner_elementwise_material_legality_distinguishes_a_from_ms
           cargo test --locked -p fullmag-plan --lib fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::torque_
+
+      - name: Run FDM Airbox target membership contracts
+        run: |
+          cargo test --locked -p fullmag-api --bin fullmag-api fdm_airbox_membership
+          cargo test --locked -p fullmag-api --bin fullmag-api multilayer_airbox
+          cargo test --locked -p fullmag-api --bin fullmag-api airbox_scope_is_derived_from_resolved_field_carrier
 
       - name: Run FDM region exchange operator contracts
         run: |
@@ -421,6 +445,7 @@ jobs:
         run: |
           cargo test -p fullmag-api --bin fullmag-api accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_writer_retry_retries_typed_busy_but_not_other_errors
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-fem-preparer preparation_launch_wait_ --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_fem_
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler typed_writer_busy_retry_preserves_preparation_launch_identity
           cargo test -p fullmag-api --bin fullmag-api-accepted-fem-preparation-scheduler pre_admission_snapshot_deferral_classifies_only_typed_busy
@@ -907,6 +932,14 @@ jobs:
           python -B scripts/test_docker_candidate_retirement.py -v
           python -B scripts/test_docker_operator_capability.py -v
           python -B scripts/test_docker_build_control_cache_admission.py -v
+          python -B scripts/test_docker_activation_history_policy.py -v
+          python -B scripts/test_docker_activation_history_reader.py -v
+          python -B scripts/test_docker_activation_history_storage.py -v
+          python -B scripts/test_docker_activation_history_inventory.py -v
+          python -B scripts/test_docker_activation_history_cli.py -v
+          python -B scripts/test_docker_activation_history_admission.py -v
+          python -B scripts/test_docker_activation_history_output.py -v
+          python -B scripts/test_docker_activation_history_references.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_linux_native_device_preparation.py -v
@@ -936,11 +969,15 @@ jobs:
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
+          python -B scripts/test_docker_volume_lost_state.py -v
           python -B scripts/test_docker_volume_oom_snapshot_identity.py -v
           python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_no_spawn_loader_reconcile.py -v
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
+          python -B scripts/test_docker_volume_cancelled_recovery_archive.py -v
           python -B scripts/test_docker_volume_cold_budget_restore.py -v
+          python -B scripts/test_docker_volume_resumed_budget_proof.py -v
+          python -B scripts/test_docker_volume_resumed_budget_projection.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
           python -B scripts/test_docker_volume_offline_reconcile.py -v
           python -B scripts/test_docker_stopped_network.py -v
@@ -988,6 +1025,7 @@ jobs:
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v
           python -B scripts/test_docker_volume_retained_device_lifecycle.py -v
+          python -B scripts/test_docker_volume_unclaimed_cancellation_replay.py -v
           python -B scripts/test_docker_volume_native_init_successor.py -v
           python -B scripts/test_docker_volume_checks.py -v
           python -B scripts/test_docker_accepted_reattach.py -v
@@ -1044,6 +1082,9 @@ jobs:
 
       - name: Verify canonical source snapshot identity
         run: python -m pytest -q scripts/test_capture_source_snapshot_identity.py
+
+      - name: Verify managed Make native contract ordering
+        run: python -B -m pytest -q scripts/test_backend_dev_build_policy.py
 
       - name: Run real Gmsh exact-layer airbox grading regressions
         run: |

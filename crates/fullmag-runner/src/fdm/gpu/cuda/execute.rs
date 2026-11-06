@@ -1783,8 +1783,9 @@ pub(crate) fn execute_cuda_fdm(
 #[cfg(all(test, feature = "cuda"))]
 mod adaptive_batch_tests {
     use super::{
-        adaptive_batch_target, cap_cuda_target_to_drive_event, cuda_drive_event_schedule,
-        execute_cuda_fdm, record_cuda_initial_scalar, resolve_observation_policy, OutputSchedule,
+        adaptive_batch_execution_eligible, adaptive_batch_target, cap_cuda_target_to_drive_event,
+        cuda_drive_event_schedule, execute_cuda_fdm, record_cuda_initial_scalar,
+        resolve_observation_policy, should_refresh_cuda_terminal_stats, OutputSchedule,
     };
     use crate::artifact_pipeline::ArtifactRecorder;
     use crate::fdm::gpu::cuda::native::NativeStatsMode;

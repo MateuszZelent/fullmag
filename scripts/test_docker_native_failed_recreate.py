@@ -585,9 +585,14 @@ class CompletedRecreationContinuationTests(unittest.TestCase):
                 return None
             raise AssertionError('unexpected required control read: ' + relative)
         self.control.read.side_effect=read_control
+        def read_control_bytes(relative, *, optional=False):
+            value=read_control(relative, optional=optional)
+            return None if value is None else dev.canonical(value)+b'\n'
+        self.control.read_bytes.side_effect=read_control_bytes
         with patch.object(cli,'_require_native_windows'),patch.object(cli,'_select_source',return_value=(self.selected,{'runtime_root':self.root})),patch.object(cli,'_compose_identity',return_value={}),patch.object(build,'toolchain_configuration',return_value={'services':{'fem-gpu-toolchain':{'build':{'args':{'FULLMAG_CUDA_BASE_IMAGE':'fixture'}}}}}),patch.object(dev,'BuildControl',return_value=self.control),patch.object(dev,'_operator_probe_record_from_retained',return_value={}),patch.object(dev,'_completed_recreation_start_context',return_value={'reuse_state':{'state':self.state},**self.recovery}),patch.object(dev,'start',return_value='continued') as start,patch.object(dev,'compose_capture') as compose,patch.object(cancelled,'_read_control_bytes',return_value=None) as read_cancelled:
             result=dev._retained_operation(self.args,recreate_services=True)
         self.assertEqual(result,'continued');start.assert_called_once();compose.assert_not_called();self.assertEqual(self.args.gpu_access,'required')
+        self.control.read_bytes.assert_called_once_with('prepared-unclaimed/current.json',optional=True)
         read_cancelled.assert_called_once_with(self.control,cancelled.RECORD,optional=True)
     def test_fixed_shell_recipe_preserves_both_continuation_pins_with_spaces(self):
         import subprocess

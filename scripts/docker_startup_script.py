@@ -60,6 +60,18 @@ STARTUP_REJECTION_TRUNCATION_MARKER = "\n...[message middle truncated]...\n"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+SOLVER_PROFILE_SCHEMA = "accepted_solver_profile.v1"
+SOLVER_PROFILE_PRESET = {
+    "schema_version": SOLVER_PROFILE_SCHEMA,
+    "config": {
+        "enabled": True,
+        "sample_every": 1,
+        "sample_interval_wall_ms": 0,
+        "max_samples": 128,
+        "emit_engine_log": False,
+        "persist_artifact": True,
+    },
+}
 STARTUP_RECEIPT_KEY_ENV = "FULLMAG_STARTUP_RECEIPT_KEY"
 STARTUP_RECEIPT_ROOT = Path("/opt/fullmag/control/backend")
 PROVENANCE_SHA256_ENV = "FULLMAG_STARTUP_PROVENANCE_SHA256"
@@ -76,6 +88,7 @@ SCRIPT_REJECTION_CODES = frozenset({
     "accepted_study_step_unsupported", "accepted_study_step_ambiguous",
     "accepted_script_capture_invalid", "accepted_script_capture_required",
     "accepted_script_compilation_failed",
+    "invalid_solver_profile", "accepted_solver_profile_unsupported",
     # Output mapping validation is pure and precedes durable run admission.
     "docker_startup_output_mapping_required", "docker_startup_output_mapping_invalid",
 })
@@ -298,9 +311,10 @@ class StartupScriptAuthorization:
     container_script_path: str
     request_id: str
     source_commit: str | None = None
+    solver_profile: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "schema": AUTHORIZATION_SCHEMA,
             "authorization": AUTHORIZATION_KIND,
             "source_root": str(self.source_root),
@@ -320,6 +334,9 @@ class StartupScriptAuthorization:
                 "legacy_cli": False,
             },
         }
+        if self.solver_profile is not None:
+            value["solver_profile"] = dict(self.solver_profile)
+        return value
 
 
 def prepare(
@@ -329,9 +346,12 @@ def prepare(
     request_id: str,
     source_commit: str | None = None,
     container_source_root: str = "/opt/fullmag/source",
+    solver_profile: bool = False,
 ) -> StartupScriptAuthorization:
     """Admit a regular Python file relative to one readonly checkout."""
 
+    if type(solver_profile) is not bool:
+        raise StartupScriptError("solver profile opt-in must be a boolean")
     root = _no_reparse_path(Path(source_root), "startup source checkout", require_directory=True)
     candidate = Path(script_path).expanduser()
     if not candidate.is_absolute():
@@ -361,7 +381,41 @@ def prepare(
         container_source_root=container_source_root,
         container_script_path=_container_script_path(relative),
         request_id=_validate_request_id(request_id),
+        solver_profile=_solver_profile_wrapper() if solver_profile else None,
     )
+
+
+def _solver_profile_wrapper() -> dict[str, Any]:
+    return {
+        "schema_version": SOLVER_PROFILE_SCHEMA,
+        "config": dict(SOLVER_PROFILE_PRESET["config"]),
+    }
+
+
+def _validate_solver_profile(value: object, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"schema_version", "config"}:
+        raise StartupScriptError(f"{label} solver profile wrapper is invalid")
+    if value.get("schema_version") != SOLVER_PROFILE_SCHEMA:
+        raise StartupScriptError(f"{label} solver profile schema is unsupported")
+    config = value.get("config")
+    expected = SOLVER_PROFILE_PRESET["config"]
+    if not isinstance(config, Mapping) or set(config) != set(expected):
+        raise StartupScriptError(f"{label} solver profile config is invalid")
+    for key, expected_value in expected.items():
+        observed = config.get(key)
+        if type(observed) is not type(expected_value) or observed != expected_value:
+            raise StartupScriptError(f"{label} solver profile preset differs at {key}")
+    return _solver_profile_wrapper()
+
+
+def solver_profile_sha256(value: object) -> str:
+    """Hash the complete profile wrapper using the Rust canonical JSON rules."""
+
+    wrapper = _validate_solver_profile(value, "solver profile")
+    payload = json.dumps(
+        wrapper, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _pinned_parent(path: Path):
@@ -664,7 +718,7 @@ def build_activation_request(authorization: Mapping[str, Any]) -> dict[str, Any]
         not isinstance(source_commit, str) or not COMMIT_RE.fullmatch(source_commit)
     ):
         raise StartupScriptError("startup authorization commit is invalid")
-    return {
+    request = {
         "schema": REQUEST_SCHEMA,
         "authorization": AUTHORIZATION_KIND,
         "request_id": request_id,
@@ -683,6 +737,11 @@ def build_activation_request(authorization: Mapping[str, Any]) -> dict[str, Any]
             "legacy_cli": False,
         },
     }
+    if "solver_profile" in authorization:
+        request["solver_profile"] = _validate_solver_profile(
+            authorization["solver_profile"], "startup authorization"
+        )
+    return request
 
 
 def _assert_no_active_session(
@@ -1373,6 +1432,13 @@ def validate_activation_response(
         raise StartupScriptError("startup activation response request fence mismatch")
     if response.get("source_sha256") != authorization.get("source_sha256"):
         raise StartupScriptError("startup activation response source hash mismatch")
+    if "solver_profile" in authorization:
+        expected_profile_sha256 = solver_profile_sha256(authorization["solver_profile"])
+        observed_profile_sha256 = response.get("solver_profile_sha256")
+        if (not isinstance(observed_profile_sha256, str)
+                or not SHA256_RE.fullmatch(observed_profile_sha256)
+                or observed_profile_sha256 != expected_profile_sha256):
+            raise StartupScriptError("startup activation response solver profile digest mismatch")
     for field in ("session_id", "run_id"):
         value = response.get(field)
         if not isinstance(value, str) or not value.strip():
@@ -1773,6 +1839,8 @@ __all__ = [
     "StartupScriptAuthorization",
     "StartupScriptError",
     "StartupScriptRejected",
+    "SOLVER_PROFILE_SCHEMA",
+    "SOLVER_PROFILE_PRESET",
     "StartupActivationOutcomeUnknown",
     "RetirementOutcomeUnknown",
     "RetirementRefused",
@@ -1782,6 +1850,7 @@ __all__ = [
     "activation_receipt_path_for_key",
     "build_activation_request",
     "prepare",
+    "solver_profile_sha256",
     "run_from_environment",
     "retire_current_workspace",
     "read_retirement_receipt",

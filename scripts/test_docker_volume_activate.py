@@ -92,6 +92,40 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(helper.prepare(), "selected-helper")
         self.assertEqual(hashes["docker_startup_script.py"], startup_digest)
 
+    def test_legacy_startup_helper_prepare_keeps_its_original_call_signature(self) -> None:
+        calls = []
+
+        def prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script, request_id, source_commit))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=prepare)
+        result = activate._prepare_startup_authorization(
+            helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-1", source_commit="a" * 40, solver_profile=False,
+        )
+        self.assertEqual(result, "legacy-authorization")
+        self.assertEqual(calls, [(Path("/checkout"), Path("examples/model.py"), "request-1", "a" * 40)])
+
+    def test_profile_opt_in_rejects_old_pinned_helper_before_retirement(self) -> None:
+        calls = []
+
+        def old_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=old_prepare, solver_profile_sha256=lambda _value: "b" * 64)
+        with self.assertRaisesRegex(BuildControlError, "cannot accept solver profile"):
+            activate._require_solver_profile_support(helper)
+        self.assertEqual(calls, [])
+
+        source = Path(__file__).with_name("docker_volume_activate.py").read_text(encoding="utf-8")
+        support_check = source.index(
+            "profile_digest = _require_solver_profile_support(startup_helper) if solver_profile else None"
+        )
+        retirement = source.index("retained_retirement = _retained_retirement_context(")
+        self.assertLess(support_check, retirement)
+
     def test_activation_contract_comes_from_selected_helper(self) -> None:
         helper = SimpleNamespace(
             STARTUP_ACTIVATION_TIMEOUT_SECONDS=17.0,
@@ -183,6 +217,32 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(inputs["development_attempt"], "d" * 32)
         self.assertNotIn("attempt", inputs)
 
+    def test_activation_inputs_bind_the_optional_solver_profile_digest(self) -> None:
+        base = {
+            "development_attempt": "d" * 32,
+            "config_sha256": "c" * 64,
+            "source_root": "C:/git/fullmag",
+            "image": "sha256:" + "a" * 64,
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": "request-1",
+            "provenance_sha256": "e" * 64,
+            "backend_container": "f" * 64,
+            "activation_receipt_key": "1" * 64,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-"
+                + "1" * 64
+                + "/activation.json"
+            ),
+        }
+        legacy = activate._activation_operation_inputs(**base)
+        profiled = activate._activation_operation_inputs(
+            **base, solver_profile_sha256="2" * 64
+        )
+        self.assertNotIn("solver_profile_sha256", legacy)
+        self.assertEqual(profiled["solver_profile_sha256"], "2" * 64)
+        self.assertNotEqual(legacy, profiled)
+
     def test_rejected_activation_is_terminal_failure_with_own_attempt(self) -> None:
         operation = {
             "daemon_pending": True,
@@ -221,6 +281,52 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(operation["receipt"]["state"], "succeeded")
         self.assertEqual(operation["receipt"]["activation_state"], "activated")
         self.assertEqual(operation["receipt"]["session_id"], "session-1")
+
+    def test_profiled_activation_requires_the_accepted_profile_digest(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {
+                "attempt": "a" * 32,
+                "inputs": {"solver_profile_sha256": "2" * 64},
+            },
+        }
+        with self.assertRaisesRegex(BuildControlError, "solver profile digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {"session_id": "session-1", "run_id": "run-1"}},
+            )
+        self.assertTrue(operation["daemon_pending"])
+        self.assertNotIn("state", operation["receipt"])
+
+        activate._record_activation_result(
+            operation,
+            {"state": "activated", "response": {
+                "session_id": "session-1", "run_id": "run-1",
+                "solver_profile_sha256": "2" * 64,
+            }},
+        )
+        self.assertFalse(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["state"], "succeeded")
+
+    def test_profiled_rejection_is_retained_without_acceptance_digest(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {
+                "attempt": "a" * 32,
+                "inputs": {"solver_profile_sha256": "2" * 64},
+            },
+        }
+        with self.assertRaisesRegex(BuildControlError, "activation was rejected"):
+            activate._record_activation_result(
+                operation,
+                {"state": "rejected", "rejection": {
+                    "http_status": 422,
+                    "code": "accepted_solver_profile_unsupported",
+                    "message": "profile unsupported for this study",
+                }},
+            )
+        self.assertFalse(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["state"], "failed-confirmed")
 
     def _linked_receipt_fixture(self, phase: str = "resume"):
         original_attempt = "a" * 32

@@ -28,6 +28,14 @@ OBSERVER_RETRIES = 2
 MAX_OBSERVER_OUTPUT_BYTES = 256 * 1024
 CANCEL_TIMEOUT_SECONDS = 30
 
+
+def _activation_error_message(error: BaseException) -> str:
+    # Retain the concrete admission/transport cause while keeping an unknown
+    # outcome unknown. Diagnostics never authorize a retry or cancellation.
+    detail = " ".join(str(error).split())[:2048]
+    return ("Activation outcome is unknown; services remain running and no retry was attempted. "
+            + "Cause: " + type(error).__name__ + ": " + detail)
+
 # Fixed image-side observer and exact-run Stop client. Identity inputs are passed as argv
 # environment values to a validated backend container; no shell or user source
 # is interpolated into this program.
@@ -393,6 +401,7 @@ def run_script(
     attempt: str | None = None,
     config_sha256: str | None = None,
     headless: bool = False,
+    solver_profile: bool = False,
     cancel_requested: Callable[[], bool] | None = None,
     output: Callable[[str], None] = _terminal_output,
 ) -> dict[str, Any]:
@@ -414,6 +423,8 @@ def run_script(
         return _result("rejected", "invalid_request_id", 2, status="not_started")
     if type(headless) is not bool:
         return _result("rejected", "invalid_headless_mode", 2, status="not_started")
+    if type(solver_profile) is not bool:
+        return _result("rejected", "invalid_solver_profile", 2, status="not_started")
     if cancel_requested is not None and not callable(cancel_requested):
         return _result("rejected", "invalid_cancel_callback", 2, status="not_started")
 
@@ -525,6 +536,7 @@ def run_script(
             script=Path(script),
             request_id=request_id,
             headless=headless,
+            solver_profile=solver_profile,
         ))
     except KeyboardInterrupt:
         return _result(
@@ -577,9 +589,9 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
-    except (ControlOutcomeUnknown, OSError, ValueError):
+    except (ControlOutcomeUnknown, OSError, ValueError) as error:
         return _result(
             "unknown",
             "activation_outcome_unknown",
@@ -588,7 +600,7 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
 
     response = activation.get("response") if isinstance(activation, Mapping) else None

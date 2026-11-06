@@ -148,9 +148,14 @@ export type FdmSingleGridFieldVectorQuery =
       scope_id?: string | null;
       scope_kind: "airbox";
     });
-export type FdmMultilayerFieldVectorQuery = FdmIdentifiedFieldVectorQueryBase & {
-  scope_kind: "airbox" | "layer" | "object";
-};
+export type FdmMultilayerFieldVectorQuery =
+  | (FdmIdentifiedFieldVectorQueryBase & {
+      scope_kind: "layer" | "object";
+    })
+  | (Omit<FdmIdentifiedFieldVectorQueryBase, "geometry_scope"> & {
+      geometry_scope?: "full" | "surface";
+      scope_kind: "airbox";
+    });
 export type FdmScopedFieldVectorQuery =
   | FdmSingleGridFieldVectorQuery
   | FdmMultilayerFieldVectorQuery;

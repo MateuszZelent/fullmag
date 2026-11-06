@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import type {
-  DomainMetaResource,
   PlanarFieldMetaResource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -12,7 +11,7 @@ import {
   fullThicknessSlabOperator,
   matchObjectLayer,
   objectLayerSlice,
-  resolvePlanarSectionGeometry,
+  resolvePlanarSectionGeometryFromMeta,
   resolvedSectionCoordinate,
   sectionLayerCount,
   sectionLayerFraction,
@@ -20,7 +19,6 @@ import {
   sectionReduction,
   sectionStopPosition,
   stepSectionFraction,
-  withSectionStops,
   type ObjectSectionLayer,
   type PlanarSectionPlane,
   type PlanarSectionReduction,
@@ -53,14 +51,12 @@ const FREE_SECTION = "__free_section__";
  */
 export function PlanarSectionStrip({
   defaultSlice,
-  domain,
   objectLayers = [],
   section = null,
   shownCoordinate = null,
   onChange,
 }: {
   defaultSlice: DefaultSlice;
-  domain: DomainMetaResource | null | undefined;
   /** Realized objects along the current normal; each is a named slab layer. */
   objectLayers?: readonly ObjectSectionLayer[];
   /** Backend section of the current sample; supplies FEM node-plane stops. */
@@ -70,7 +66,7 @@ export function PlanarSectionStrip({
   onChange: (next: DefaultSlice) => void;
 }) {
   const plane = defaultSlice.plane as PlanarSectionPlane;
-  const geometry = withSectionStops(resolvePlanarSectionGeometry(domain, plane), section);
+  const geometry = resolvePlanarSectionGeometryFromMeta(section, plane);
   const reduction = sectionReduction(defaultSlice.operator, geometry);
   const objectLayer = matchObjectLayer(defaultSlice, geometry, objectLayers);
   const layerCount = sectionLayerCount(geometry);
@@ -141,11 +137,15 @@ export function PlanarSectionStrip({
         value={plane}
         onValueChange={(value) => {
           setDraft(null);
-          const nextGeometry = resolvePlanarSectionGeometry(domain, value);
+          const nextGeometry = resolvePlanarSectionGeometryFromMeta(section, value);
           change({
             plane: value,
-            ...(reduction === "average" && nextGeometry
-              ? { operator: fullThicknessSlabOperator(nextGeometry) }
+            ...(reduction === "average"
+              ? {
+                  operator: nextGeometry
+                    ? fullThicknessSlabOperator(nextGeometry)
+                    : { kind: "plane_sample" as const },
+                }
               : {}),
           });
         }}

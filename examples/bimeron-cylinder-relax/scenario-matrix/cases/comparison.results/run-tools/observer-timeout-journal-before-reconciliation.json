@@ -1,0 +1,203 @@
+{
+  "cases": [
+    {
+      "activation_entered": true,
+      "activation_started_at_utc": "2026-11-05T15:20:21.301+00:00",
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_plus_x",
+      "request_id": "1c2e5ebe-d520-43ba-9297-30993ca41ecd",
+      "result": {
+        "error_type": "TimeoutError",
+        "message": "",
+        "outcome": "runner_exception",
+        "state": "unknown"
+      },
+      "run_id": null,
+      "runtime_pins": {
+        "attempt": "ce6502ecea824a559b56ced56aee3ee6",
+        "backend_container_id_sha256": "60cc8caff4a6663a08f4a7d0075770bb48d3f9caf004a5575f92fc2aa013b94f",
+        "config_sha256": "ed81ab29e73b7c561ea8d603bc1658b71e45bd739057ef83b2b24dea2874de2d",
+        "port": 3342
+      },
+      "source_sha256": "160ee602c7f30805c36f7100559cfe2415cdf9126a7996d458e37f54d2bb077b",
+      "state": "stopped",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "path": "telemetry/material_rdmi_current__film_bimeron__cylinder_plus_x.jsonl",
+        "scope": "device_total",
+        "state": "not_measured"
+      },
+      "wall_end_to_end_s": 0.25088380702072755
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_bimeron__cylinder_minus_x",
+      "request_id": "3ac4ace0-3840-46b8-9182-a91701e6631d",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "4c90ff2380d0ab2a24aab2c087c218c812779241095c748c7dc7ce622d2ab479",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "46a0bd8b-6d5a-4126-a096-fa1a5db25976",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "b7aaa8413bb6d22111ea27244388ec4a359afda81a91a0e9b694dfc5f1ca590f",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_rdmi_current__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "708bbb4d-0b7a-4c83-a586-3825e97ce8b4",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "d9847904125b339ae51a61cc31901801041b43dcc548b03de6dbba254fb44c00",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_bimeron__cylinder_plus_x",
+      "request_id": "db803ca1-e0bc-4d5c-997e-0c7cbb1439f2",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "8ca15a09b33a2499cfe713acc98651ac7b0a97ea7224e66e6ed021a1e657cf0e",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_bimeron__cylinder_minus_x",
+      "request_id": "495cd78c-75c8-4c28-9626-98f32e7e3978",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "e6771f5a5f7ca8d7d1f69c73bb281801706a2d1db64bbaa0e9f517b789183e80",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "72d44053-5c9a-4f1e-a4ce-a48dc2984dd7",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "f9c209782f84377868e6c42ebdb4786b0221571187866f19e97f5de2a4472418",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_yig__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "ad01d4d2-6970-4c68-a952-df62189a84bf",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "6a22c21c64e7c2d168541e6f9cee30efbe22cdfa9c8e192813b19147cc2f8fb2",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_bimeron__cylinder_plus_x",
+      "request_id": "eea57c05-2ce9-461a-aee1-a4c4db60b44d",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "c3384abca9dba05804ce29f6e890b6091d1bea01981d974f42483359bb68c540",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_bimeron__cylinder_minus_x",
+      "request_id": "cc9160d7-10e5-4ff6-b436-a98209c1bf0f",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "05562e998de5199843c5e409ae84208b6f9b322b11c933f082e8393ec9e31e78",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_plus_x",
+      "request_id": "868977cf-be47-4cec-a8e5-80d99a042813",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "45f7835587e03f7089074707a39fa710883501ee4d5e1a62fd4c256029ac3276",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    },
+    {
+      "activation_entered": false,
+      "case_id": "material_permalloy__film_uniform_plus_x__cylinder_minus_x",
+      "request_id": "7c9e4f1b-fc4e-415a-9f2b-6ab5d20db2b9",
+      "result": null,
+      "run_id": null,
+      "source_sha256": "007b6b8911301eb0fbbd93e06d58ebb3a37eed19ee8a7b6b1e3e8e626ac950f8",
+      "state": "not_started",
+      "telemetry": {
+        "exclusive_to_case": false,
+        "scope": "device_total",
+        "state": "not_measured"
+      }
+    }
+  ],
+  "created_at_utc": "2026-11-05T15:20:12.211+00:00",
+  "manifest_path": "/home/kkingstoun/git/fullmag/fullmag/examples/bimeron-cylinder-relax/scenario-matrix/manifest.json",
+  "manifest_sha256": "f91f41959ab6ed23866c98180d1247478ba1c02cd0c7e02d8fd52592db74db25",
+  "max_steps": 3000,
+  "port": 3342,
+  "repo_root": "/home/kkingstoun/git/fullmag/fullmag",
+  "requested_execution": {
+    "backend": "fdm",
+    "device": "gpu",
+    "fallback_cpu": false,
+    "precision": "double"
+  },
+  "runtime_group": "fullmag-master",
+  "schema_version": "fullmag.bimeron-matrix-execution-journal.v1",
+  "source_head": "b2896445fef381a2f912f675c4418579caa7deaf",
+  "state": "stopped",
+  "updated_at_utc": "2026-11-05T15:20:21.601+00:00"
+}

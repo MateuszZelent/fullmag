@@ -238,7 +238,8 @@ def cancel(args):
     from docker_development_inputs import select_checkout
     from docker_dev_host import require_host
     from docker_compose_identity import compose_project_identity,validate_source_labels
-    from docker_volume_dev import _validate_retained_service
+    from docker_volume_dev import _validate_retained_service, docker_text
+    import docker_group_ledger
     import fullmag_storage as storage
     require_host();selected=select_checkout(args.repo_root,args.source_root).resolve(strict=True)
     identity=compose_project_identity(storage.resolve_layout(selected,'docker-all-gpu'))
@@ -265,9 +266,13 @@ def cancel(args):
         actual=actual[0];validate_source_labels(actual,identity)
         require(actual.get('Image')==args.image_id and actual.get('State',{}).get('Running')is True,'backend is not the retained running image')
         _validate_retained_service(document,actual,'backend',image['Config'])
-        require(any(m.get('Destination')=='/host-ledger' and m.get('Type')=='volume'
-                    and m.get('Name','').startswith('fullmag-dev-group-ledger-v1-') for m in actual.get('Mounts',[])),
-                'requires a private DEV group ledger')
+        try:
+            ledger = docker_group_ledger.retained_profile(document, args.image_id)
+            require(not ledger.get('ledger_subpath') or ledger['volume_name'] == control.volume,
+                    'private DEV ledger does not belong to the selected control volume')
+            docker_group_ledger.validate_container(actual, ledger, docker_text)
+        except docker_group_ledger.GroupLedgerError as error:
+            raise BuildControlError('No-spawn cancellation: ' + str(error)) from error
         if first is not None:require((actual['State']['StartedAt'],fingerprint(actual))==first,'backend restarted or changed')
         require(control.read_bytes('development/current.json')==previous_raw
                 and control.read_bytes(base+'/terminal.json')==previous_raw

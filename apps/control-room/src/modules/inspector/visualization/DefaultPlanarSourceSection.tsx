@@ -1,10 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import type {
-  DomainMetaResource,
-  PlanarFieldMetaResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -13,9 +11,9 @@ import {
   fractionFromLayerIndex,
   fullThicknessSlabOperator,
   layerIndexFromFraction,
-  resolvePlanarSectionGeometry,
   resolvedSectionCoordinate,
   sectionReduction,
+  type PlanarSectionGeometry,
   type PlanarSectionPlane,
   type PlanarSectionReduction,
 } from "@/kernel/visualization/planarSectionModel";
@@ -24,12 +22,10 @@ import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { positionFractionFromCoordinate } from "./defaultPlanarSourceModel";
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type DefaultSlice = PlanarState["default_slice"];
 type PlanarPatch = NonNullable<VisualizationStatePatch["planar"]>;
-type PlanarSection = NonNullable<PlanarFieldMetaResource["section"]>;
 
 const PLANES = [
   { label: "XY", value: "xy" },
@@ -44,27 +40,25 @@ const REDUCTIONS = [
 
 export function DefaultPlanarSourceSection({
   defaultSlice,
-  domain,
+  geometry,
   patch,
-  section = null,
 }: {
   defaultSlice: DefaultSlice;
-  domain: DomainMetaResource | null | undefined;
+  /** Current base sample's authoritative section geometry; null while unavailable. */
+  geometry: PlanarSectionGeometry | null;
   patch: (next: PlanarPatch) => void;
-  /** Section resolved by the backend for the current sample (requested vs. resolved). */
-  section?: PlanarSection | null;
 }) {
   const [error, setError] = useState<string | null>(null);
   const plane = defaultSlice.plane as PlanarSectionPlane;
-  const geometry = useMemo(
-    () => resolvePlanarSectionGeometry(domain, plane),
-    [domain, plane],
-  );
+  const currentGeometry = geometry?.plane === plane ? geometry : null;
   const positionFraction = defaultSlice.position_fraction;
-  const reduction = sectionReduction(defaultSlice.operator, geometry);
-  const axis = geometry?.normal ?? (plane === "xy" ? "z" : plane === "xz" ? "y" : "x");
-  const coordinate = geometry ? resolvedSectionCoordinate(geometry, positionFraction) : null;
-  const layerCount = geometry?.layerCount ?? null;
+  const reduction = sectionReduction(defaultSlice.operator, currentGeometry);
+  const axis = currentGeometry?.normal ?? (plane === "xy" ? "z" : plane === "xz" ? "y" : "x");
+  const coordinate = currentGeometry ? resolvedSectionCoordinate(currentGeometry, positionFraction) : null;
+  const requestedCoordinate = currentGeometry
+    ? currentGeometry.normalMin + positionFraction * currentGeometry.normalExtent
+    : null;
+  const layerCount = currentGeometry?.layerCount ?? null;
   const layerIndex = layerCount !== null
     ? layerIndexFromFraction(positionFraction, layerCount)
     : null;
@@ -75,7 +69,7 @@ export function DefaultPlanarSourceSection({
   const setReduction = (next: PlanarSectionReduction) => {
     setError(null);
     if (next === "average") {
-      if (geometry) patchSlice({ operator: fullThicknessSlabOperator(geometry) });
+      if (currentGeometry) patchSlice({ operator: fullThicknessSlabOperator(currentGeometry) });
       return;
     }
     patchSlice({ operator: { kind: "plane_sample" } });
@@ -103,19 +97,15 @@ export function DefaultPlanarSourceSection({
 
   const updateCoordinate = (raw: string) => {
     const value = Number(raw);
-    if (!domain || !Number.isFinite(value)) {
+    if (!currentGeometry || !Number.isFinite(value)) {
       setError("Coordinate must be a finite SI value.");
       return;
     }
     setError(null);
     patchSlice({
-      position_fraction: positionFractionFromCoordinate(
-        {
-          min: [domain.bounds.min[0], domain.bounds.min[1], domain.bounds.min[2]],
-          max: [domain.bounds.max[0], domain.bounds.max[1], domain.bounds.max[2]],
-        },
-        plane,
-        value,
+      position_fraction: Math.min(
+        1,
+        Math.max(0, (value - currentGeometry.normalMin) / currentGeometry.normalExtent),
       ),
     });
   };
@@ -141,13 +131,12 @@ export function DefaultPlanarSourceSection({
           value={plane}
           onValueChange={(value) => {
             setError(null);
-            // A full-thickness slab depends on the normal extent, so it is
-            // recomputed for the new plane instead of carried over.
-            const nextGeometry = resolvePlanarSectionGeometry(domain, value);
             patchSlice({
               plane: value,
-              ...(reduction === "average" && nextGeometry
-                ? { operator: fullThicknessSlabOperator(nextGeometry) }
+              // The next plane's base metadata is not available yet. Do not
+              // preserve a slab thickness calculated for another normal.
+              ...(reduction === "average"
+                ? { operator: { kind: "plane_sample" as const } }
                 : {}),
             });
           }}
@@ -160,18 +149,18 @@ export function DefaultPlanarSourceSection({
           columns={2}
           options={REDUCTIONS.map((option) => ({
             ...option,
-            disabled: option.value === "average" && geometry === null,
+            disabled: option.value === "average" && currentGeometry === null,
           }))}
           value={reduction}
           onValueChange={setReduction}
         />
       </div>
-      {section && reduction !== "average" ? (
+      {requestedCoordinate !== null && coordinate !== null && reduction !== "average" ? (
         <FieldRow
           label="Requested → resolved"
-          value={`${section.normal_axis} ${formatSectionLength(section.requested_coordinate_m)} → ${formatSectionLength(section.resolved_coordinate_m)}${
-            section.layer_index != null && section.layer_count != null
-              ? ` (cell layer ${section.layer_index} / ${section.layer_count - 1})`
+          value={`${axis} ${formatSectionLength(requestedCoordinate)} → ${formatSectionLength(coordinate)}${
+            layerIndex !== null && layerCount !== null
+              ? ` (cell layer ${layerIndex} / ${layerCount - 1})`
               : " (continuous)"
           }`}
         />
@@ -212,7 +201,7 @@ export function DefaultPlanarSourceSection({
                 onChange={(event) => updateFraction(event.currentTarget.value)}
               />
               <FormField
-                disabled={!domain}
+                disabled={!currentGeometry}
                 error={error ?? undefined}
                 label={`Coordinate (${axis})`}
                 unit="m"
@@ -232,17 +221,14 @@ export function DefaultPlanarSourceSection({
               if (value === "plane_sample") {
                 patchSlice({ operator: { kind: "plane_sample" } });
               } else if (value === "slab_average") {
-                patchSlice({
-                  operator: {
-                    kind: "slab_average",
-                    thickness_m: geometry?.layerSpacing ?? 1e-9,
-                  },
-                });
+                if (currentGeometry) {
+                  patchSlice({ operator: fullThicknessSlabOperator(currentGeometry) });
+                }
               }
             }}
           >
             <option value="plane_sample">Plane sample</option>
-            <option value="slab_average">Slab average</option>
+            <option disabled={!currentGeometry} value="slab_average">Slab average</option>
           </FormField>
           {defaultSlice.operator.kind === "slab_average" ? (
             <FormField

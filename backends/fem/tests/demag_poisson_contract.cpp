@@ -10,6 +10,8 @@
 #include "core/demag_linear_solve_validation.hpp"
 #include "core/demag_solver_policy.hpp"
 #include "core/fem_material_runtime.hpp"
+#include "cuda_demag_residual_fixture.hpp"
+#include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
@@ -2064,7 +2066,7 @@ void periodic_poisson_remains_explicit_p1_node_class_space() {
     fullmag::fem::context_destroy_poisson(ctx);
 }
 
-void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
+void check_poisson_dependency_invalidation(bool reuse_cached_field) {
     mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
@@ -2095,20 +2097,23 @@ void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
     ctx.demag.cache_valid = true;
     ctx.demag.cached_xyz = {1.0, 2.0, 3.0};
     ctx.demag.cached_visual_xyz = {4.0, 5.0, 6.0};
+    ctx.demag.field_refresh.has_demag_interval_s = 1;
+    ctx.demag.field_refresh.demag_interval_s = 1.0;
+    ctx.demag.last_refresh_time = ctx.state.current_time;
+    check(!fullmag::fem::demag_poisson_should_refresh_field(ctx),
+          "Poisson dependency fixture would reuse a frozen field");
 
-    std::vector<double> h_demag;
+    std::vector<double> h_demag(3, 0.0);
     double demag_energy = 0.0;
     error.clear();
+    const auto compute = reuse_cached_field
+        ? fullmag::fem::compute_demag_field_for_magnetization
+        : fullmag::fem::context_compute_demag_poisson;
     check(
-        !fullmag::fem::context_compute_demag_poisson(
-            ctx,
-            {},
-            h_demag,
-            demag_energy,
-            false,
-            nullptr,
-            error),
-        "Poisson public solve fails closed after mesh mutation");
+        !compute(ctx, {}, h_demag, demag_energy, false, nullptr, error),
+        "Poisson apply fails closed after mesh mutation");
+    check(h_demag == std::vector<double>(3, 0.0),
+          "Poisson dependency failure does not publish a field");
     check(
         error.find("dependencies changed") != std::string::npos,
         "Poisson dependency failure names the changed dependencies");
@@ -2124,6 +2129,11 @@ void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
           "Poisson receipt retains the last published key for diagnostics");
 
     fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation() {
+    check_poisson_dependency_invalidation(false);
+    check_poisson_dependency_invalidation(true);
 }
 
 void nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves() {
@@ -2825,12 +2835,28 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     check(cudaDeviceSynchronize() == cudaSuccess,
           "mixed-P1 Robin device Hypre step must synchronize for test readback");
     const auto after = fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    const auto control_bytes = after.hot_loop_control_scalar_d2h_bytes -
+                               before.hot_loop_control_scalar_d2h_bytes;
+    const auto control_fences = after.hot_loop_control_scalar_host_sync_count -
+                                before.hot_loop_control_scalar_host_sync_count;
+    std::fprintf(stderr,
+                 "mixed-P1 GPU validation readbacks: bc=%d control_bytes=%llu control_fences=%llu\n",
+                 ctx.demag.realization,
+                 static_cast<unsigned long long>(control_bytes),
+                 static_cast<unsigned long long>(control_fences));
+    // Aggregate counters include the explicitly classified scalar readbacks.
+    // Each of the two solves can read at most the RHS and residual norms.
+    check(control_fences <= 4u && control_bytes == control_fences * sizeof(double),
+          "mixed-P1 GPU validation may read only one scalar per required norm");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
-              after.hot_loop_d2h_bytes == before.hot_loop_d2h_bytes &&
-              after.hot_loop_host_sync_count == before.hot_loop_host_sync_count &&
+              after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&
+              after.hot_loop_host_sync_count - before.hot_loop_host_sync_count == control_fences &&
               after.hot_loop_compute_h2d_bytes == before.hot_loop_compute_h2d_bytes &&
               after.hot_loop_compute_d2h_bytes == before.hot_loop_compute_d2h_bytes &&
-              after.hot_loop_compute_host_sync_count == before.hot_loop_compute_host_sync_count,
+              after.hot_loop_compute_host_sync_count == before.hot_loop_compute_host_sync_count &&
+              after.hot_loop_exchange_h2d_bytes == before.hot_loop_exchange_h2d_bytes &&
+              after.hot_loop_exchange_d2h_bytes == before.hot_loop_exchange_d2h_bytes &&
+              after.hot_loop_exchange_host_sync_count == before.hot_loop_exchange_host_sync_count,
           "mixed-P1 device Hypre field step must have zero bulk hot-loop transfer/sync delta");
 
     std::vector<double> gpu_field;
@@ -2892,6 +2918,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
     fullmag::fem::context_destroy_poisson(ctx);
     }
+    fullmag::fem::test::check_gpu_hypre_demag_residual(check);
 }
 #endif
 

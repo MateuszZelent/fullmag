@@ -17,6 +17,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import docker_volume_cancelled_activation_guard as cancelled_guard
+import docker_volume_cancelled_activation as cancelled_activation
 import docker_volume_unclaimed_cancellation as unclaimed_cancellation
 from docker_build_control import BuildControlError, canonical
 
@@ -121,6 +122,58 @@ def _record_fixture() -> tuple[FakeControl, dict[str, object]]:
     return control, record
 
 
+def _resume_recovery_record(control: FakeControl, original_receipt: bytes) -> dict[str, object]:
+    proof = {
+        "selected": SOURCE_ROOT,
+        "identity": {"project_name": control.project},
+        "control": control,
+        "previous": {"attempt": DEVELOPMENT_ATTEMPT},
+        "pin": {"attempt": "b" * 32},
+        "receipt": {"attempt": ACTIVATION_ATTEMPT},
+        "config_sha256": CONFIG_SHA256,
+        "source_root": SOURCE_ROOT,
+        "image_id": IMAGE_ID,
+        "backend": {"Id": BACKEND_ID},
+        "frontend": {"Id": FRONTEND_ID},
+        "backend_started_at": BACKEND_STARTED_AT,
+        "frontend_started_at": "2026-10-25T10:11:13.123456789Z",
+        "state_root": STATE_ROOT,
+        "request_id": "request-cancelled-activation-17",
+        "source_sha256": "5" * 64,
+        "receipt_sha256": hashlib.sha256(original_receipt).hexdigest(),
+        "helper_id": "6" * 64,
+        "process_raw": b"original Ready process receipt\n",
+        "current_raw": b"original activation current pointer\n",
+        "result_raw": None,
+        "runtime_phase": "resume",
+        "cancellation": {
+            "run_id": "run-cancelled-activation-17",
+            "session_id": "session-cancelled-activation-17",
+            "task_id": "task-cancelled-activation-17",
+        },
+    }
+    plan = cancelled_activation._plan(proof)
+    return cancelled_activation._record_from_journal({
+        "plan": plan,
+        "drain": {},
+        "journal_path": "verification/cancelled-activation-" + ACTIVATION_ATTEMPT + "/journal.json",
+        "drain_confirmed_at": "2026-10-25T10:11:14Z",
+    })
+
+
+def _bind_record(control: FakeControl, record: dict[str, object]) -> None:
+    record_raw = _raw(record)
+    recovery_sha256 = hashlib.sha256(record_raw).hexdigest()
+    control.raw_files[cancelled_guard.RECORD] = record_raw
+    control.raw_files[
+        f"verification/cancelled-activation-{ACTIVATION_ATTEMPT}/terminal.json"
+    ] = record_raw
+    terminal_path = f"activation/attempts/{ACTIVATION_ATTEMPT}/terminal.json"
+    terminal = control.files[terminal_path]
+    assert isinstance(terminal, dict)
+    terminal["cancelled_recovery_sha256"] = recovery_sha256
+
+
 def _archive_root(attempt: str) -> str:
     return "recreate-services/attempts/" + attempt
 
@@ -216,6 +269,104 @@ def _valid_backend(record: dict[str, object]) -> dict[str, object]:
     }
 
 
+class CancelledActivationRotationTests(unittest.TestCase):
+    def setUp(self):
+        self.control, self.record = _record_fixture()
+        generation = _install_archive(self.control, self.record, ARCHIVE_ATTEMPT_A)
+        anchor = {
+            "schema": "fullmag.cancelled-activation-archive.v1",
+            "recovery_sha256": hashlib.sha256(canonical(self.record)).hexdigest(),
+            "generation": generation,
+        }
+        self.anchor_path = "cancelled-activation-recovery/archives/" + ACTIVATION_ATTEMPT + ".json"
+        self.control.files[self.anchor_path] = anchor
+        self.control.raw_files[self.anchor_path] = _raw(anchor)
+        self.old_raw = self.control.raw_files[cancelled_guard.RECORD]
+        self.old_sha = hashlib.sha256(self.old_raw).hexdigest()
+        self.reader = patch.object(cancelled_guard, "_read_control_bytes", side_effect=_read_control_bytes)
+        self.reader.start()
+        self.addCleanup(self.reader.stop)
+
+    def pin(self):
+        return cancelled_guard.qualified_previous(self.control, self.old_sha, "b" * 32)
+
+    def preserve(self, pin):
+        def publish(control, path, raw):
+            if path in control.raw_files and control.raw_files[path] != raw:
+                raise BuildControlError("immutable conflict")
+            control.raw_files[path] = raw
+            control.files[path] = json.loads(raw)
+        with patch.object(unclaimed_cancellation, "_publish_immutable", side_effect=publish):
+            cancelled_guard.preserve_previous(self.control, pin)
+
+    def test_rotation_requires_exact_sha_and_immutable_verified_archive_anchor(self):
+        self.assertEqual(self.pin()["recovery_sha256"], self.old_sha)
+        for sha in ["f" * 64, "bad"]:
+            with self.assertRaises(BuildControlError):
+                cancelled_guard.qualified_previous(self.control, sha, "b" * 32)
+        with self.assertRaises(BuildControlError):
+            cancelled_guard.qualified_previous(self.control, self.old_sha, ACTIVATION_ATTEMPT)
+        archive_path = "recreate-services/attempts/" + ARCHIVE_ATTEMPT_A + "/runtime-control-archive-terminal.json"
+        self.control.files[archive_path]["state"] = "failed"
+        with self.assertRaises(BuildControlError):
+            self.pin()
+        self.control.files[archive_path]["state"] = "succeeded"
+        del self.control.raw_files[self.anchor_path]
+        with self.assertRaises(BuildControlError):
+            self.pin()
+
+    def test_history_preserves_raw_bytes_and_fences_request_and_state_without_scan(self):
+        pin = self.pin()
+        self.preserve(pin)
+        self.assertEqual(self.control.raw_files[pin["history_path"]], self.old_raw)
+        cancelled_guard.validate_retired(self.control, pin)
+        # Current changes to an authenticated successor; historical indexes
+        # must remain authoritative for both identities after rotation.
+        with patch.object(cancelled_guard, "read_record", return_value=None):
+            for kw in [{"request_id": self.record["request_id"]},
+                       {"reuse_state": {"state": self.record["state_root"]}}]:
+                with self.assertRaises(BuildControlError):
+                    cancelled_guard.assert_start_allowed(self.control, **kw)
+        self.assertEqual(self.control.raw_files[cancelled_guard.RECORD], self.old_raw)
+
+    def test_changed_archive_or_corrupt_or_missing_index_refuses(self):
+        pin = self.pin()
+        self.preserve(pin)
+        for path in [pin["request_index_path"], pin["state_index_path"], pin["history_path"], self.anchor_path]:
+            saved = self.control.raw_files.pop(path)
+            with self.assertRaises(BuildControlError):
+                cancelled_guard.validate_retired(self.control, pin)
+            self.control.raw_files[path] = b"{}\n"
+            with self.assertRaises(BuildControlError):
+                cancelled_guard.validate_retired(self.control, pin)
+            self.control.raw_files[path] = saved
+
+    def test_no_flag_still_blocks_and_producer_plan_binds_exact_prior(self):
+        with patch.object(cancelled_activation, "_read_control_bytes", side_effect=_read_control_bytes):
+            with self.assertRaises(BuildControlError):
+                cancelled_activation._require_recovery_current_clear(self.control, "b" * 32)
+            pin = cancelled_activation._require_recovery_current_clear(self.control, "b" * 32, self.old_sha)
+        self.assertEqual(pin, self.pin())
+
+    def test_partial_history_publication_can_resume_without_changing_current(self):
+        pin = self.pin()
+        interrupted = [False]
+        def publish(control, path, raw):
+            if path in control.raw_files and control.raw_files[path] != raw:
+                raise BuildControlError("immutable collision")
+            control.raw_files[path] = raw
+            control.files[path] = json.loads(raw)
+            if path == pin["request_index_path"] and not interrupted[0]:
+                interrupted[0] = True
+                raise BuildControlError("publication response lost")
+        with patch.object(unclaimed_cancellation, "_publish_immutable", side_effect=publish):
+            with self.assertRaises(BuildControlError):
+                cancelled_guard.preserve_previous(self.control, pin)
+            self.assertEqual(self.control.raw_files[cancelled_guard.RECORD], self.old_raw)
+            cancelled_guard.preserve_previous(self.control, pin)
+        cancelled_guard.validate_retired(self.control, pin)
+
+
 class CancelledActivationRecoveryGuardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.read_bytes_patch = patch.object(cancelled_guard, "_read_control_bytes", _read_control_bytes)
@@ -294,6 +445,37 @@ class CancelledActivationRecoveryGuardTests(unittest.TestCase):
                 control.files[path] = anchor
                 with self.assertRaisesRegex(BuildControlError, "archive anchor differs"):
                     cancelled_guard.has_archive(control, record)
+
+    def test_resume_record_passes_read_and_archive_gate_but_rejects_anchor_hash_tampering(self) -> None:
+        control, _fixture_record = _record_fixture()
+        original_receipt = control.raw_files[
+            f"activation/attempts/{ACTIVATION_ATTEMPT}/receipt.json"
+        ]
+        record = _resume_recovery_record(control, original_receipt)
+        self.assertEqual(record["runtime_phase"], "resume")
+        _bind_record(control, record)
+        generation = _install_archive(control, record, ARCHIVE_ATTEMPT_A)
+        anchor_path = (
+            "cancelled-activation-recovery/archives/"
+            + ACTIVATION_ATTEMPT
+            + ".json"
+        )
+        control.files[anchor_path] = {
+            "schema": "fullmag.cancelled-activation-archive.v1",
+            "recovery_sha256": hashlib.sha256(canonical(record)).hexdigest(),
+            "generation": generation,
+        }
+
+        self.assertEqual(cancelled_guard.read_record(control), record)
+        self.assertIsNone(
+            cancelled_guard.assert_start_allowed(control, request_id="new-request-id")
+        )
+
+        anchor = control.files[anchor_path]
+        assert isinstance(anchor, dict)
+        anchor["recovery_sha256"] = "0" * 64
+        with self.assertRaisesRegex(BuildControlError, "archive anchor differs"):
+            cancelled_guard.assert_start_allowed(control, request_id="new-request-id")
 
     def test_old_request_replay_and_old_state_reuse_are_blocked(self) -> None:
         control, record = _record_fixture()

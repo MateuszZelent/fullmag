@@ -596,6 +596,18 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
 
+    def test_dispatches_only_exact_activation_history_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'activation-history'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'activation-history'])
+        for invalid in (recipe + '; printf injected', recipe.replace('activation-history', 'activation-history-extra')):
+            rejected = self.dispatch(invalid)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(rejected.stdout.strip())
+
     def test_dispatches_literal_field_map_scope_as_fixed_argv(self):
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
                   "--source-root '/selected' --scope 'frontend-field-map'")

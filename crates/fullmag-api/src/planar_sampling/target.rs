@@ -360,6 +360,7 @@ pub(crate) fn resolve_spatial_target(
             origin_m,
             cell_size_m,
             carrier_fingerprint,
+            air_membership,
             ..
         } => {
             if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
@@ -377,13 +378,12 @@ pub(crate) fn resolve_spatial_target(
                     "empty_target: Airbox carrier is legal only for a domain monitor target",
                 ));
             }
-            let selected = vec![true; cell_count(*cells)?];
             build_fdm_target(
                 field,
                 *cells,
                 *origin_m,
                 *cell_size_m,
-                selected,
+                air_membership.to_vec(),
                 carrier_fingerprint,
                 target,
                 None,

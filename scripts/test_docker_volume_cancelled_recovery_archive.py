@@ -98,6 +98,132 @@ class ResumedArchiveTests(unittest.TestCase):
                 with self.subTest(field=field),self.assertRaises(BuildControlError):
                     recovery._cancellation_archive_attempt(control,'b'*32,invalid)
 
+    def test_terminal_run_pin_producer_preserves_artifact_catalog_hash_or_true_absence(self):
+        import tempfile
+        import docker_volume_container_recovery as native
+        from docker_build_control import canonical
+        for artifact in (None, b'{"artifacts":[],"run_id":"run"}\n'):
+            with self.subTest(artifact_present=artifact is not None), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                run = state / recovery.RUN_STORE_RELATIVE / 'runs/run'
+                run.mkdir(parents=True)
+                (run / 'run_intent.json').write_bytes(canonical({'run_id': 'run'}) + b'\n')
+                (run / 'run_catalog.json').write_bytes(canonical({'run_id': 'run', 'revision': 3,
+                    'tasks': [{'task_id': 'task', 'lifecycle': 'cancelled'}]}) + b'\n')
+                if artifact is not None: (run / 'artifact_catalog.json').write_bytes(artifact)
+                request = {'run_id': 'run', 'task_id': 'task',
+                           'expected_task': {'task_id': 'task', 'lifecycle': 'accepted'}}
+                pins = recovery._retained_run_pins(state, request, {'catalog_revision': 3}, terminal_artifacts=True)
+                self.assertEqual(pins[0]['artifact_catalog_sha256'],
+                                 hashlib.sha256(artifact).hexdigest() if artifact is not None else None)
+                self.assertEqual(native.expected_recovery_outcome({
+                    'schema_version': native.TERMINAL_REQUEST_SCHEMA, 'retained_terminal_runs': pins}),
+                    'retained_terminal_runs_recovered')
+                legacy = recovery._retained_run_pins(state, request, {'catalog_revision': 3})
+                self.assertEqual(set(legacy[0]), {'run_id', 'run_intent_sha256', 'run_catalog_sha256'})
+
+    def test_terminal_run_pin_producer_refuses_invalid_artifact_catalog(self):
+        import tempfile
+        from docker_build_control import canonical
+        for kind in ('directory', 'symlink', 'malformed-json'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                run = state / recovery.RUN_STORE_RELATIVE / 'runs/run'
+                run.mkdir(parents=True)
+                (run / 'run_intent.json').write_bytes(canonical({'run_id': 'run'}) + b'\n')
+                (run / 'run_catalog.json').write_bytes(canonical({'run_id': 'run', 'revision': 3,
+                    'tasks': [{'task_id': 'task', 'lifecycle': 'cancelled'}]}) + b'\n')
+                path = run / 'artifact_catalog.json'
+                if kind == 'directory': path.mkdir()
+                if kind == 'symlink': path.symlink_to(run / 'missing.json')
+                if kind == 'malformed-json': path.write_bytes(b'{invalid')
+                request = {'run_id': 'run', 'task_id': 'task',
+                           'expected_task': {'task_id': 'task', 'lifecycle': 'accepted'}}
+                with self.assertRaises((BuildControlError, ValueError, OSError, recovery.storage.StorageError)):
+                    recovery._retained_run_pins(state, request, {'catalog_revision': 3}, terminal_artifacts=True)
+
+    def local_archive_fixture(self):
+        # Use the actual resume writer to produce b201 -> budget refusal ->
+        # original path-error shapes, including all eight copied proof records.
+        from test_docker_volume_unclaimed_layout import PreparedPathResumeTests
+        case = PreparedPathResumeTests()
+        case.setUp()
+        files, _, operation, _ = case.full_resume(
+            backend_pin='sha256:' + '9' * 64, budget_boundary=True,
+            certificate_image='sha256:' + '9' * 64)
+        attempt = '6' * 32
+        terminal = {**operation['receipt'], 'schema': 'fullmag.docker-build-operation.v1',
+            'state': 'succeeded', 'phase': 'development', 'attempt': attempt,
+            'compose_project': 'project', 'control_volume': 'volume'}
+        return case.control, files, attempt, terminal
+
+    def test_self_contained_archive_uses_own_complete_proof_without_recursive_fallback(self):
+        import docker_volume_unclaimed_cancellation as cancellation
+        control, files, attempt, terminal = self.local_archive_fixture()
+        original = dict(files)
+        read = lambda control, path, **kwargs: files.get(path)
+        with patch.object(recovery, '_read_raw', side_effect=read), \
+                patch.object(cancellation, '_control_raw', side_effect=read):
+            self.assertEqual(recovery._cancellation_archive_attempt(control, attempt, terminal), attempt)
+        self.assertEqual(files, original)
+
+    def test_direct_legacy_parent_stays_the_archive_even_if_new_copies_exist(self):
+        from test_docker_volume_unclaimed_layout import PreparedPathResumeTests
+        case = PreparedPathResumeTests(); case.setUp()
+        files, _, operation, _ = case.full_resume()
+        terminal = {**operation['receipt'], 'compose_project': 'project', 'control_volume': 'volume'}
+        with patch.object(recovery, '_read_raw', side_effect=lambda control, path, **kw: files.get(path)):
+            self.assertEqual(recovery._cancellation_archive_attempt(case.control, '6' * 32, terminal), 'b' * 32)
+
+    def test_self_contained_archive_rejects_missing_or_changed_local_proof(self):
+        import docker_volume_unclaimed_cancellation as cancellation
+        for name in ('unclaimed-cancellation-before.json', 'unclaimed-cancellation-stopped.json',
+                     'unclaimed-cancellation-removed.json', 'prior-runtime-config.json',
+                     'prior-runtime-owner.json', 'prior-process-tree.json',
+                     'backend-docker-logs.txt', 'frontend-docker-logs.txt'):
+            for missing in (False, True):
+                with self.subTest(name=name, missing=missing):
+                    control, files, attempt, terminal = self.local_archive_fixture()
+                    path = 'development/attempts/' + attempt + '/' + name
+                    if missing: del files[path]
+                    else: files[path] = b'changed'
+                    read = lambda control, path, **kwargs: files.get(path)
+                    with patch.object(recovery, '_read_raw', side_effect=read), \
+                            patch.object(cancellation, '_control_raw', side_effect=read):
+                        with self.assertRaises(BuildControlError):
+                            recovery._cancellation_archive_attempt(control, attempt, terminal)
+
+    def test_self_contained_archive_rejects_origin_parent_or_hashchain_drift(self):
+        import docker_volume_unclaimed_cancellation as cancellation
+        for case in ('origin-attempt', 'origin-terminal', 'archive-hash', 'parent-cas',
+                     'parent-source', 'parent-error', 'checkpoint-chain', 'checkpoint-bindings'):
+            with self.subTest(case=case):
+                control, files, attempt, terminal = self.local_archive_fixture()
+                origin = terminal['unclaimed_cancellation_checkpoint_origin']
+                if case == 'origin-attempt': origin['attempt'] = '0' * 32
+                if case == 'origin-terminal': origin['terminal_sha256'] = '0' * 64
+                if case == 'archive-hash': origin['archive_sha256']['prior-runtime-config.json'] = '0' * 64
+                if case == 'parent-cas': terminal['unclaimed_cancellation_resume']['failed_terminal_sha256'] = '0' * 64
+                if case in ('parent-source', 'parent-error'):
+                    path = 'development/attempts/' + 'c' * 32 + '/terminal.json'
+                    parent = json.loads(files[path])
+                    if case == 'parent-source': parent['inputs']['source_root'] = '/foreign'
+                    else: parent['error'] = 'unknown'
+                    files[path] = cancellation.canonical(parent) + b'\n'
+                    terminal['unclaimed_cancellation_resume']['failed_terminal_sha256'] = cancellation._sha256(files[path])
+                if case == 'checkpoint-chain':
+                    path = 'development/attempts/' + attempt + '/unclaimed-cancellation-removed.json'
+                    removed = json.loads(files[path]); removed['stopped_sha256'] = '0' * 64
+                    files[path] = cancellation.canonical(removed) + b'\n'
+                    origin['removed_sha256'] = cancellation._sha256(files[path])
+                    terminal['unclaimed_cancellation_removed'] = removed
+                if case == 'checkpoint-bindings': terminal['unclaimed_cancellation_stopped'] = {}
+                read = lambda control, path, **kwargs: files.get(path)
+                with patch.object(recovery, '_read_raw', side_effect=read), \
+                        patch.object(cancellation, '_control_raw', side_effect=read):
+                    with self.assertRaises(BuildControlError):
+                        recovery._cancellation_archive_attempt(control, attempt, terminal)
+
     def test_non_resumed_keeps_own_archive(self):
         self.assertEqual(recovery._cancellation_archive_attempt(None,'a'*32,{}),'a'*32)
 

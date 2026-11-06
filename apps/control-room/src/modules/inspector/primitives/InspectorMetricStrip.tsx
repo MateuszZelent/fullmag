@@ -32,7 +32,7 @@ export interface InspectorMetricStripProps {
 }
 
 const toneClasses: Record<InspectorMetricTone, string> = {
-  accent: "text-[color:var(--fm-accent-text)]",
+  accent: "text-fm-accent",
   danger: "text-fm-danger",
   degraded: "text-fm-degraded",
   neutral: "text-fm-primary",

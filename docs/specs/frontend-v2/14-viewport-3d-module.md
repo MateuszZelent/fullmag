@@ -144,7 +144,18 @@ Layers may share render-model inputs, but one layer cannot own another layer's d
 
 Object and airbox layers resolve display settings through the target visualization registry. A target can independently enable/disable shader surface, wireframe, points, vector glyphs, visibility, and opacity. The renderer applies those settings per manifest object/part where the backend supplies object/part mapping; otherwise it falls back to the domain-level target and marks the display as degraded.
 
+For multilayer FDM, Airbox owns cells whose centres are outside the active
+native magnetic layers. The field API applies this mask before sampling and
+computing statistics. The same ownership applies to planar Airbox samples and
+3D Airbox geometry. Magnetic objects use their own native masks. The outer
+Airbox bounds still describe the full observation volume.
+
 Airbox wireframe has a different visual contract from magnetic-object wireframe. `geometryScope: "surface"` may show only boundary surface edges. `geometryScope: "full"` must show the airbox volume/bounds edge set as an overlay that is not hidden by the translucent airbox surface. Full mode uses the procedural interior volume/bounds overlay as the primary wireframe, even when backend mesh edge geometry exists, because backend-provided or fallback edge geometry can otherwise make the full airbox collapse visually to a surface-only display. Airbox surface opacity must not attenuate airbox wireframe opacity; those are separate display controls.
+
+The multilayer FDM Airbox uses the explicit View quantity color range when
+its quantity and component match the Airbox scalar or vector color mode.
+The same finite limits and palette can be selected for the 2D Airbox slice.
+Each view retains its own automatic scaling when no manual range is selected.
 
 ## 8. Picking
 

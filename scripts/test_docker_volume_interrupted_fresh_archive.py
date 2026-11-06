@@ -132,6 +132,244 @@ def fixtures():
     return identity, compose, previous, receipt, retained, recovery_record, pins
 
 
+class PreparedCompletedArchiveTests(unittest.TestCase):
+    def setUp(self):
+        import json
+        from types import SimpleNamespace
+        import docker_volume_linux_supervision_stop as prepared
+        from docker_volume_fresh_runtime import _archive_mapping
+        identity, compose, previous, receipt, retained, _, pins = fixtures()
+        self.root = 'recreate-services/attempts/' + RECREATE
+        self.docs = {}
+        self.publications = []
+        self.fault = None
+        self.on_publish = None
+        self.put = lambda path, value: self.docs.__setitem__(path, canonical(value) + b'\n')
+        quarantine = {'schema': prepared.PREPARED_QUARANTINE_SCHEMA, 'state': 'cancellation-required',
+                      'scope': {'state_root': STATE}, 'target': {'run_id': 'run-target', 'task_id': 'task-target', 'request_id': 'old-request'}}
+        self.put(prepared.PREPARED_QUARANTINE, quarantine)
+        quarantine_sha = recovery._sha(self.docs[prepared.PREPARED_QUARANTINE])
+        for path in ('development/current.json', 'development/verified.json', 'development/attempts/' + PRIOR + '/terminal.json'):
+            self.put(path, previous)
+        constraints = {'quarantine_sha256': quarantine_sha, 'target': quarantine['target']}
+        witness = {'schema': 'fullmag.docker-prepared-cancelled-fresh-admission.v1',
+                   'quarantine_sha256': quarantine_sha,
+                   'cancellation_terminal_sha256': recovery._sha(self.docs['development/current.json']),
+                   'constraints': constraints}
+        receipt['error'] = 'Prepared archive quarantine publication acknowledgement was lost'
+        receipt['prepared_cancelled_fresh_admission'] = witness
+        self.put(self.root + '/receipt.json', receipt)
+        self.put(self.root + '/retained-containers.json', retained)
+        intent = {'schema': 'fullmag.docker-fresh-runtime-archive-intent.v1', 'operation_attempt': RECREATE,
+                  'compose_project': PROJECT, 'control_volume': CONTROL_VOLUME, 'control_namespace': '',
+                  'source_root': SOURCE, 'previous_state_root': STATE,
+                  'removed_containers': {'backend': BACKEND, 'frontend': FRONTEND},
+                  'mapping': _archive_mapping(RECREATE, private_ledger=False), 'runtime_control_device_inode': '1:10'}
+        self.put(self.root + '/runtime-control-archive-intent.json', intent)
+        archive = {'schema': 'fullmag.docker-fresh-runtime-archive-terminal.v1', 'state': 'succeeded',
+                   'operation_attempt': RECREATE, 'compose_project': PROJECT, 'control_volume': CONTROL_VOLUME,
+                   'control_namespace': '', 'intent_sha256': recovery._sha(self.docs[self.root + '/runtime-control-archive-intent.json']),
+                   'mapping': intent['mapping'], 'removed_containers': intent['removed_containers'],
+                   'preserved_group_ledger_volume': CONTROL_VOLUME,
+                   'preserved_runtime_control_device_inode': '1:10', 'fresh_runtime_control_device_inode': '1:11'}
+        self.put(self.root + '/runtime-control-archive-terminal.json', archive)
+        self.put('group-ledger-generation.json', {
+            'schema': 'fullmag.docker-group-ledger-generation.v1', 'compose_project': PROJECT,
+            'generation': RECREATE, 'preserved_volume': CONTROL_VOLUME,
+            'archive_terminal_path': self.root + '/runtime-control-archive-terminal.json',
+            'archive_terminal_sha256': recovery._sha(canonical(archive))})
+        pins.update(unknown_receipt_sha256=recovery._sha(self.docs[self.root + '/receipt.json']),
+                    prepared_quarantine_sha256=quarantine_sha,
+                    prepared_archive_terminal_sha256=recovery._sha(self.docs[self.root + '/runtime-control-archive-terminal.json']))
+        self.args = SimpleNamespace(**pins, apply=False, expected_plan_sha256=None)
+        self.docs['active'] = RECREATE.encode() + b'\n'
+        def read_bytes(path, optional=False, **kwargs):
+            if optional:
+                return self.docs.get(path)
+            if path not in self.docs:
+                raise BuildControlError('Required retained evidence is missing: ' + path)
+            return self.docs[path]
+        self.control = SimpleNamespace(project=PROJECT, volume=CONTROL_VOLUME, namespace='', identity=identity,
+                                       read_bytes=read_bytes, read=lambda path, **kw: json.loads(read_bytes(path, **kw)),
+                                       _active_operation=None)
+        self.validated = ({'native_result': {'disposition': 'cancelled'}}, b'', b'',
+                          {'run_id': 'run-target', 'task_id': 'task-target'}, b'',
+                          {'prepared_unclaimed_quarantine': constraints}, b'', compose, b'')
+        def cas(control, path, raw, expected):
+            current = self.docs.get(path)
+            actual = 'ABSENT' if current is None else recovery._sha(current)
+            if actual != expected and current != raw:
+                raise BuildControlError('CAS changed: ' + path)
+            self.publications.append(path)
+            self.docs[path] = raw
+            if self.on_publish is not None:
+                self.on_publish(path)
+            if path == self.root + '/terminal.json':
+                self.docs.pop('active', None)
+            if self.fault == path:
+                self.fault = None
+                raise BuildControlError('lost publication acknowledgement')
+        def immutable(control, path, raw):
+            cas(control, path, raw, 'ABSENT')
+        def quarantine_cas(control, path, value, *, expected_raw):
+            cas(control, path, canonical(value) + b'\n', 'ABSENT' if expected_raw is None else recovery._sha(expected_raw))
+            return canonical(value) + b'\n'
+        self.observers = []
+        def start_observer(*args):
+            process = subprocess.Popen(['/bin/cat'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.observers.append(process)
+            return process
+        def wait_release(control, helper_id, observer):
+            observer.stdin.close()
+            return observer.wait(timeout=5)
+        def cleanup():
+            for process in self.observers:
+                if process.stdin and not process.stdin.closed:
+                    process.stdin.close()
+                process.wait(timeout=5)
+        self.addCleanup(cleanup)
+        patches = [patch.object(recovery, '_prepare_control', return_value=self.control),
+                   patch.object(recovery, '_assert_engine'), patch.object(recovery, '_check_host_writer_processes'),
+                   patch.object(recovery, '_inspect_pinned_helper'), patch.object(recovery, '_assert_active_marker'),
+                   patch.object(recovery, '_assert_logged'), patch.object(recovery, '_start_observer', side_effect=start_observer),
+                   patch.object(recovery, '_wait_original_release', side_effect=wait_release),
+                   patch.object(recovery, '_cas_publish', side_effect=cas),
+                   patch.object(recovery, '_publish_immutable', side_effect=immutable),
+                   patch('docker_volume_cancelled_activation._publish_cas', side_effect=quarantine_cas),
+                   patch('docker_volume_cancelled_recovery._validate_operation', side_effect=lambda *a: self.validated),
+                   patch('docker_volume_fresh_runtime._assert_exact_absence'),
+                   patch('docker_volume_fresh_runtime._operation_helper', return_value=(HELPER_ID, {})),
+                   patch('docker_volume_fresh_runtime._archive_runtime_control', return_value={
+                       'preserved_runtime_control_device_inode': '1:10', 'fresh_runtime_control_device_inode': '1:11'}),
+                   patch('docker_volume_fresh_runtime.archive_runtime_control', side_effect=AssertionError('physical archive must never repeat'))]
+        for item in patches:
+            mock = item.start()
+            self.addCleanup(item.stop)
+            if item.attribute == '_archive_runtime_control':
+                self.verify = mock
+
+    def apply_from_preview(self):
+        self.args.apply = False
+        self.args.expected_plan_sha256 = None
+        preview = recovery.prepared_completed_archive(self.args)
+        self.args.apply = True
+        self.args.expected_plan_sha256 = preview['plan_sha256']
+        return recovery.prepared_completed_archive(self.args)
+
+    def test_completed_physical_archive_before_quarantine_cas_is_finished_without_inspecting_old_live_ids(self):
+        original = recovery.strict_object(self.docs[self.root + '/receipt.json'], 'real recreate receipt shape')
+        self.assertEqual(original['inputs'], {'attempt': PRIOR, 'config_sha256': CONFIG_SHA})
+        result = self.apply_from_preview()
+        self.assertEqual(result['state'], 'succeeded')
+        self.assertFalse(result['services_started'])
+        self.assertFalse(result['solve_replayed'])
+        self.assertEqual(self.publications[-1], self.root + '/terminal.json')
+        self.assertTrue(self.observers)
+        for call in self.verify.call_args_list:
+            self.assertIs(call.kwargs['verify_only'], True)
+        for path in ('receipt.json', 'terminal.json'):
+            self.assertEqual(self.docs[self.root + '/' + path], self.docs['recreate-services/current.json'])
+
+    def test_quarantine_already_published_before_operation_terminal_is_idempotent(self):
+        import docker_volume_linux_supervision_stop as prepared
+        receipt = recovery.strict_object(self.docs[self.root + '/receipt.json'], 'original')
+        prepared.pin_prepared_fresh_archive(self.control, {'root': self.root, 'receipt': receipt}, receipt['prepared_cancelled_fresh_admission'])
+        result = self.apply_from_preview()
+        self.assertEqual(result['state'], 'succeeded')
+
+    def test_interrupted_finisher_after_quarantine_or_receipt_publication_resumes_exact_bytes(self):
+        import docker_volume_linux_supervision_stop as prepared
+        for path in (prepared.PREPARED_QUARANTINE, self.root + '/receipt.json', self.root + '/terminal.json'):
+            with self.subTest(path=path):
+                # Each fault case uses independent complete boundary evidence.
+                case = PreparedCompletedArchiveTests('test_completed_physical_archive_before_quarantine_cas_is_finished_without_inspecting_old_live_ids')
+                case.setUp()
+                try:
+                    case.fault = path
+                    with self.assertRaisesRegex(BuildControlError, 'lost publication'):
+                        case.apply_from_preview()
+                    result = case.apply_from_preview()
+                    self.assertIn(result['state'], ('succeeded', 'already-succeeded'))
+                    for call in case.verify.call_args_list:
+                        self.assertIs(call.kwargs['verify_only'], True)
+                finally:
+                    case.doCleanups()
+
+    def test_missing_or_foreign_completed_terminal_refuses_before_any_publication(self):
+        path = self.root + '/runtime-control-archive-terminal.json'
+        original = self.docs.pop(path)
+        with self.assertRaisesRegex(BuildControlError, 'missing'):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+        self.docs[path] = original
+        self.docs[path] = canonical({'schema': 'foreign', 'state': 'succeeded'})
+        with self.assertRaises(BuildControlError):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+        self.assertFalse(self.observers)
+
+    def test_inode_drift_or_deferred_native_cancellation_refuses_before_writes(self):
+        self.verify.return_value = {'preserved_runtime_control_device_inode': 'changed'}
+        with self.assertRaisesRegex(BuildControlError, 'inode evidence drifted'):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+        self.verify.return_value = {}
+        self.validated[0]['native_result']['disposition'] = 'cancellation_requested_projection_deferred'
+        with self.assertRaisesRegex(BuildControlError, 'canonical native cancellation'):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+
+    def test_archive_source_drift_cannot_be_authorized_by_new_digest_alone(self):
+        intent_path = self.root + '/runtime-control-archive-intent.json'
+        terminal_path = self.root + '/runtime-control-archive-terminal.json'
+        intent = recovery.strict_object(self.docs[intent_path], 'intent')
+        intent['source_root'] = '/foreign/source'
+        self.put(intent_path, intent)
+        terminal = recovery.strict_object(self.docs[terminal_path], 'terminal')
+        terminal['intent_sha256'] = recovery._sha(self.docs[intent_path])
+        self.put(terminal_path, terminal)
+        self.args.prepared_archive_terminal_sha256 = recovery._sha(self.docs[terminal_path])
+        with self.assertRaisesRegex(BuildControlError, 'this exact operation'):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+
+    def test_missing_or_stale_group_ledger_generation_is_unsupported_partial_archive(self):
+        original = self.docs.pop('group-ledger-generation.json')
+        with self.assertRaisesRegex(BuildControlError, 'missing'):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+        generation = recovery.strict_object(original, 'generation')
+        generation['generation'] = 'a' * 32
+        self.put('group-ledger-generation.json', generation)
+        with self.assertRaises(BuildControlError):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+
+    def test_generation_drift_after_preview_cannot_finish_or_publish(self):
+        preview = recovery.prepared_completed_archive(self.args)
+        generation = recovery.strict_object(self.docs['group-ledger-generation.json'], 'generation')
+        generation['archive_terminal_sha256'] = '0' * 64
+        self.put('group-ledger-generation.json', generation)
+        self.args.apply = True
+        self.args.expected_plan_sha256 = preview['plan_sha256']
+        with self.assertRaises(BuildControlError):
+            recovery.prepared_completed_archive(self.args)
+        self.assertEqual(self.publications, [])
+
+    def test_generation_drift_during_finalization_cannot_publish_terminal(self):
+        def change_generation(path):
+            if path == self.root + '/receipt.json':
+                generation = recovery.strict_object(self.docs['group-ledger-generation.json'], 'generation')
+                generation['archive_terminal_sha256'] = '0' * 64
+                self.put('group-ledger-generation.json', generation)
+        self.on_publish = change_generation
+        with self.assertRaisesRegex(BuildControlError, 'generation drifted'):
+            self.apply_from_preview()
+        self.assertNotIn(self.root + '/terminal.json', self.docs)
+        for call in self.verify.call_args_list:
+            self.assertIs(call.kwargs['verify_only'], True)
+
+
 class InterruptedFreshArchiveTests(unittest.TestCase):
     def test_record_budget_is_accepted_by_the_real_control_reader(self):
         control_read_script("/control/recreate-services/current.json", recovery.MAX_RECORD_BYTES)

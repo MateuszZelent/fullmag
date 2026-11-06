@@ -5,6 +5,7 @@
 //! not a conversion performed by this adapter.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use fullmag_quantities::{quantity_spec, QuantityComponent, QuantityLocation, QuantityShape};
 use fullmag_runner::FemMeshPayload;
@@ -158,6 +159,8 @@ pub(crate) enum SpatialFieldCarrier<'a> {
         cell_size_m: [f64; 3],
         grid_revision: u64,
         carrier_fingerprint: String,
+        /// Airbox cells whose centres are outside all active native layers.
+        air_membership: Arc<[bool]>,
     },
     FdmNativeLayerCells {
         layer_id: String,
@@ -421,6 +424,7 @@ impl ResolvedSpatialField<'static> {
         cells: [u32; 3],
         origin_m: [f64; 3],
         cell_size_m: [f64; 3],
+        air_membership: Vec<bool>,
         carrier_fingerprint: String,
         quantity_revision: u64,
         grid_revision: u64,
@@ -474,6 +478,7 @@ impl ResolvedSpatialField<'static> {
                 cell_size_m,
                 grid_revision,
                 carrier_fingerprint,
+                air_membership: air_membership.into(),
             },
         };
         field.validate_contract()?;
@@ -618,12 +623,14 @@ impl ResolvedSpatialField<'_> {
                 cell_size_m,
                 grid_revision,
                 carrier_fingerprint,
+                air_membership,
             } => {
                 validate_grid_count(*cells, local_count, &self.quantity_id)?;
                 if origin_m.iter().any(|value| !value.is_finite())
                     || cell_size_m
                         .iter()
                         .any(|value| !value.is_finite() || *value <= 0.0)
+                    || air_membership.len() != local_count
                     || *grid_revision == 0
                     || carrier_fingerprint.is_empty()
                 {
@@ -2765,6 +2772,7 @@ mod tests {
             [1, 1, 1],
             [0.0, 0.0, 0.0],
             [1.0e-9, 1.0e-9, 1.0e-9],
+            vec![true],
             "airbox-grid-7".to_string(),
             11,
             4,
@@ -2779,6 +2787,7 @@ mod tests {
             cell_size_m,
             grid_revision,
             carrier_fingerprint,
+            air_membership,
         } = &field.carrier
         else {
             panic!("H_demag should preserve the validated Airbox carrier");
@@ -2788,6 +2797,7 @@ mod tests {
         assert_eq!(*cell_size_m, [1.0e-9, 1.0e-9, 1.0e-9]);
         assert_eq!(*grid_revision, 4);
         assert_eq!(carrier_fingerprint, "airbox-grid-7");
+        assert_eq!(air_membership.as_ref(), &[true]);
         assert_eq!(field.quantity_id, "H_demag");
         assert_eq!(field.quantity_kind, QuantityShape::VectorField);
         assert_eq!(field.canonical_unit, "A/m");
@@ -2804,6 +2814,7 @@ mod tests {
             [1, 1, 1],
             [0.0, 0.0, 0.0],
             [1.0e-9, 1.0e-9, 1.0e-9],
+            vec![true],
             "airbox-grid-7".to_string(),
             11,
             4,

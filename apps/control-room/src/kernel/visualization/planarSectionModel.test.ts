@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { DomainMetaResource } from "@/kernel/api/apiTypes";
+import type {
+  DomainMetaResource,
+  PlanarFieldMetaResource,
+} from "@/kernel/api/apiTypes";
 
 import {
   fractionFromLayerIndex,
@@ -10,8 +13,10 @@ import {
   nativePlanarResolution,
   planarGridResolutionPresets,
   resolvePlanarSectionGeometry,
+  resolvePlanarSectionGeometryFromMeta,
   resolvedSectionCoordinate,
   sectionReduction,
+  sectionLayerCount,
 } from "./planarSectionModel";
 
 function fdmDomain(): DomainMetaResource {
@@ -76,6 +81,89 @@ describe("planarSectionModel", () => {
       [16, 16],
     ]);
     expect(planarGridResolutionPresets(resolvePlanarSectionGeometry(femDomain(), "xy"))).toEqual([]);
+  });
+});
+
+describe("base planar section metadata", () => {
+  const airboxSection = {
+    cut_element_count: null,
+    layer_count: 26,
+    layer_index: 12,
+    layer_spacing_m: 2.5e-9,
+    layer_stops_m: [],
+    navigation_step_kind: "fdm_cell",
+    navigation_step_m: 2.5e-9,
+    normal_axis: "z",
+    normal_max_m: 60e-9,
+    normal_min_m: -5e-9,
+    plane: "xy",
+    requested_coordinate_m: 27.5e-9,
+    requested_fraction: 0.5,
+    resolved_coordinate_m: 26.25e-9,
+    stops_kind: "fdm_cell_layers",
+  } as NonNullable<PlanarFieldMetaResource["section"]>;
+
+  it("uses the Airbox section's 26 FDM centers and never the magnetic grid", () => {
+    const magneticDomain = {
+      bounds: { min: [0, 0, 10e-9], max: [100e-9, 100e-9, 40e-9] },
+      discretization: "fdm",
+      grid: {
+        origin: [0, 0, 10e-9],
+        shape: [40, 40, 12],
+        spacing: [2.5e-9, 2.5e-9, 2.5e-9],
+      },
+    } as unknown as DomainMetaResource;
+    const magneticGeometry = resolvePlanarSectionGeometry(magneticDomain, "xy")!;
+    const airboxGeometry = resolvePlanarSectionGeometryFromMeta(airboxSection, "xy")!;
+
+    expect(magneticGeometry).toMatchObject({
+      normalMin: 10e-9,
+      normalMax: 40e-9,
+      layerCount: 12,
+    });
+    expect(airboxGeometry).toMatchObject({
+      normalMin: -5e-9,
+      normalMax: 60e-9,
+      layerCount: 26,
+      layerSpacing: 2.5e-9,
+      nativeResolution: null,
+    });
+    expect(sectionLayerCount(airboxGeometry)).toBe(26);
+    for (let index = 0; index < 26; index += 1) {
+      const fraction = fractionFromLayerIndex(index, 26);
+      expect(resolvedSectionCoordinate(airboxGeometry, fraction)).toBeCloseTo(
+        -5e-9 + (index + 0.5) * 2.5e-9,
+        20,
+      );
+    }
+    expect(resolvedSectionCoordinate(airboxGeometry, 0.5)).toBeCloseTo(26.25e-9, 20);
+  });
+
+  it("preserves FEM stops and reports unavailable or mismatched section geometry", () => {
+    const fem = resolvePlanarSectionGeometryFromMeta({
+      ...airboxSection,
+      layer_count: null,
+      layer_index: null,
+      layer_spacing_m: null,
+      layer_stops_m: [-5e-9, 2e-9, 10e-9, 35e-9, 60e-9],
+      navigation_step_kind: "median_element_height",
+      navigation_step_m: 8e-9,
+      stops_kind: "fem_node_planes",
+    }, "xy");
+    expect(fem?.stops).toEqual([-5e-9, 2e-9, 10e-9, 35e-9, 60e-9]);
+    expect(fem?.normalMin).toBe(-5e-9);
+    expect(fem?.normalMax).toBe(60e-9);
+
+    expect(resolvePlanarSectionGeometryFromMeta(null, "xy")).toBeNull();
+    expect(resolvePlanarSectionGeometryFromMeta(airboxSection, "xz")).toBeNull();
+    expect(resolvePlanarSectionGeometryFromMeta({
+      ...airboxSection,
+      layer_spacing_m: null,
+    }, "xy")).toBeNull();
+    expect(resolvePlanarSectionGeometryFromMeta({
+      ...airboxSection,
+      normal_max_m: -5e-9,
+    }, "xy")).toBeNull();
   });
 });
 

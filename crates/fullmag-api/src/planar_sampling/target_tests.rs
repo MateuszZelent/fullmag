@@ -452,6 +452,7 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
         [1, 1, 1],
         [0.0, 0.0, 0.0],
         [1.0, 1.0, 1.0],
+        vec![true],
         "airbox-carrier".to_string(),
         17,
         19,
@@ -476,6 +477,50 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
     )
     .unwrap_err();
     assert!(error.message.contains("airbox"));
+}
+
+#[test]
+fn multilayer_airbox_planar_sampler_excludes_magnetic_cells() {
+    let field = ResolvedSpatialField::from_airbox(
+        "H_demag",
+        "H_demag",
+        "A/m",
+        3,
+        vec![100.0, 0.0, 0.0, 0.0, 3.0, 4.0],
+        [2, 1, 1],
+        [0.0; 3],
+        [1.0; 3],
+        vec![false, true],
+        "airbox-carrier".to_string(),
+        17,
+        19,
+        23,
+        SpatialFieldSourceKind::Persisted,
+    )
+    .unwrap();
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Airbox { scope_id: None },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    assert_eq!(target.selected_entity_ids(), &[1]);
+    let mut request = request(
+        explicit_frame(
+            [0.0, 0.0, 0.5],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 2.0, 0.0, 1.0],
+        ),
+        PlanarOperatorIR::PlaneSample,
+        [2, 1],
+    );
+    request.component = PlanarComponent::Magnitude;
+    let sample = sample_resolved_target(&target, &request).unwrap();
+    assert!(sample.scalar_values[0].is_nan());
+    assert_eq!(sample.scalar_values[1], 5.0);
 }
 
 #[test]
@@ -507,6 +552,7 @@ fn fdm_airbox_carrier_has_no_implicit_magnetic_extent() {
         [1, 1, 1],
         [0.0, 0.0, 0.0],
         [1.0, 1.0, 1.0],
+        vec![true],
         "airbox-carrier".to_string(),
         17,
         19,
