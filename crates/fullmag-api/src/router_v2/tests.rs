@@ -22262,7 +22262,9 @@ async fn authoring_region_patch_commits_name_without_mesh_dirty() {
 }
 
 #[tokio::test]
-async fn authoring_region_rename_does_not_change_mesh_identity() {
+async fn authoring_primary_region_rebinding_invalidates_mesh_and_realization() {
+    // Legacy region_name is the primary region key used by geometry and overrides.
+    // A label-only rename uses object.name or an authored subregion name instead.
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 22;
@@ -22305,9 +22307,9 @@ async fn authoring_region_rename_does_not_change_mesh_identity() {
         .unwrap();
     assert_eq!(regions_response.status(), StatusCode::OK);
     let regions = body_json(regions_response).await;
-    assert_eq!(regions["region_membership_revision"], 41);
-    assert_eq!(regions["region_coefficients_revision"], 42);
-    assert_eq!(regions["region_initial_state_revision"], 43);
+    assert_eq!(regions["region_membership_revision"], 42);
+    assert_eq!(regions["region_coefficients_revision"], 43);
+    assert_eq!(regions["region_initial_state_revision"], 44);
 
     let status_response = app
         .clone()
@@ -22321,7 +22323,7 @@ async fn authoring_region_rename_does_not_change_mesh_identity() {
         .await
         .unwrap();
     let status = body_json(status_response).await;
-    assert_eq!(status["resources"]["mesh_revision"], 31);
+    assert_eq!(status["resources"]["mesh_revision"], 32);
 }
 
 #[tokio::test]
@@ -22646,6 +22648,7 @@ fm.run(1e-10)
         let snapshot = current.as_mut().unwrap();
         snapshot.scene_document = Some(before);
         snapshot.session.script_path.clear();
+        snapshot.session.status = "awaiting_command".into();
         snapshot.metadata = Some(serde_json::json!({
             "execution_plan": plan, "artifact_layout": layout,
         }).into());
@@ -22685,8 +22688,9 @@ fm.run(1e-10)
         .header("idempotency-key", operation_id)
         .body(Body::from(payload.clone())).unwrap();
     let response = app.clone().oneshot(request()).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let receipt = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{receipt:#}");
     assert_eq!(receipt["scene_revision"], 31);
     assert_eq!(receipt["magnetization_apply"]["status"], "initial_state_ready");
     assert_eq!(receipt["committed_scene"]["objects"][0]["regions"][0]["texture_override"],
@@ -43957,6 +43961,11 @@ async fn topological_charge_computes_uniform_fem_object_from_native_layer_faces(
             }
         }))
         .expect("mock FEM m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);
@@ -44021,6 +44030,11 @@ async fn topological_charge_computes_analytic_neel_skyrmion_from_fem_layer_profi
             }
         }))
         .expect("analytic FEM skyrmion m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [1250, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);
@@ -44088,6 +44102,11 @@ async fn topological_charge_reports_degenerate_support_when_no_volume_sampler_is
             }
         }))
         .expect("mock FEM m field should deserialize");
+        admit_test_latest_fields_from_physical_step(
+            snapshot,
+            physical_test_live_state(1, 1.0e-12, [8, 1, 1], None),
+        )
+        .expect("FEM magnetization should bind to its physical observation");
     }
 
     let app = build_v2_router().with_state(state);

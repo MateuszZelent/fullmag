@@ -3863,6 +3863,8 @@ mod tests {
             }
         })).unwrap();
         let mut snapshot = default_current_live_state(&request);
+        // The default constructor derives session metadata but does not apply the run.
+        snapshot.run = request.run;
         snapshot.session.run_id = "relax-a".into();
         snapshot.stage_execution = Some(crate::session::accepted_initial_stage_execution(
             &["stage-a".into()], "waiting_for_compute",

@@ -300,6 +300,22 @@ mod tests {
     }
 
     #[test]
+    fn changing_primary_region_key_invalidates_realization_lanes() {
+        let before = scene();
+        let mut after = before.clone();
+        after.objects[0].region_name = Some("another-primary-region".into());
+        assert_eq!(
+            classify_region_realization_impact(&before, &after),
+            RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            }
+        );
+    }
+
+    #[test]
     fn replacing_native_mesh_archive_advances_topology_only() {
         let mut before = scene();
         before.study.fem_domain_mesh = Some(crate::SceneFemDomainMeshReference {
