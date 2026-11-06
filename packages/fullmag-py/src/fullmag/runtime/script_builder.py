@@ -450,6 +450,14 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     airbox_hint = visualization_hint.get("airbox")
     if airbox_hint is not None:
         draft["visualization_hint"] = {"airbox": copy.deepcopy(airbox_hint)}
+    if authored_problem.selections:
+        draft["selections"] = [selection.to_ir() for selection in authored_problem.selections]
+    constraints = authored_problem._collect_magnetization_constraints()
+    if constraints:
+        draft["magnetization_constraints"] = [
+            constraint.to_ir(selections=authored_problem.selections)
+            for constraint in constraints
+        ]
     return draft
 
 
@@ -2493,6 +2501,12 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
             if params.get(key) is not None:
                 kwargs[key] = params[key]
         expression = f"fm.ImportedGeometry({_python_keyword_args(kwargs)})"
+    elif kind == "translate":
+        base = params.get("base")
+        translation = _scene_float_sequence(params.get("translation"), count=3)
+        if not isinstance(base, Mapping) or translation is None:
+            raise ValueError("Translate geometry requires a base and three finite coordinates.")
+        return f"({_render_shape_expression(base)}).translate({_python_literal(translation)})"
     elif kind in {"difference", "union", "intersection"}:
         operands = ("base", "tool") if kind == "difference" else ("a", "b")
         operator = {"difference": "-", "union": "+", "intersection": "&"}[kind]
@@ -4362,6 +4376,7 @@ def _render_region_shape_expr_from_payload(
         params = {
             "radius": shape.get("radius"),
             "height": shape.get("height"),
+            "translation": shape.get("center"),
         }
         return _render_geometry_expr_from_override(
             "Cylinder",
