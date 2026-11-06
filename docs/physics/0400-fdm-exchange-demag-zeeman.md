@@ -528,6 +528,31 @@ should use FFT-based convolution:
 7. divide by the FFT normalization convention,
 8. write `H_demag` in `A/m`.
 
+For CUDA FP64 single-grid with explicit XY truncated-image demagnetization and open Z,
+the runner checks the memory cost of the legacy expanded image tensor before
+creating the native context. If the expanded six-component FP64 tensor exceeds
+the runner's 8 GiB guard, it uses the centered XY Newell implementation shared
+with the periodic multilayer operator. This computes a symmetric finite image
+sum around the nearest periodic lag and uses FFT shape
+`[N_x, N_y, 2N_z]`. Here `N_x, N_y, N_z` are the dimensionless physical grid counts.
+The kernel uses the existing near-cell Newell and far-cell point-dipole terms.
+The requested image counts, open Z, and cell sizes in metres are unchanged.
+This backend decision does not depend on whether Frozen Spins are active.
+The CUDA receipt identifies the centered operator as
+`tensor_fft_newell_periodic_xy_centered`. Small legacy CUDA requests,
+FDM CPU, and FEM keep their previous realization.
+
+The qualification target is a resolved XY FP64 case above the expanded-memory
+limit and the corresponding native periodic multilayer calculation on identical
+aligned cells. Compare the active-cell field in A/m and the demagnetization
+energy in J at a common initial state. With a frozen mask also require unchanged
+frozen vectors and verify that the unconstrained cells are advanced. Selection
+and allocation-bound tests alone do not qualify the GPU calculation.
+The implementation anchors are `centered_periodic_xy_images` in
+`crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` and
+`try_compute_periodic_xy_kernel` in
+`crates/fullmag-fdm-demag/src/shifted_kernel.rs`.
+
 In Fourier space the operator is simply
 
 $$
@@ -1014,6 +1039,8 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Runner observable assembly | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Assembles same-state observables and reconstructs active/airbox effective fields. | FDM CPU | source-level owner; no terminal-batch qualification |
 | Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
 | Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_cached_grid_preview_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| CUDA centered XY admission | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs` | `centered_periodic_xy_images` | Bound the expanded and compact allocations. | FDM GPU FP64 | selection tests; managed parity pending |
+| Centered XY tensor | `crates/fullmag-fdm-demag/src/shifted_kernel.rs` | `try_compute_periodic_xy_kernel` | Assemble the finite-image tensor spectra. | FDM GPU FP64 | shared kernel; single-grid managed parity pending |
 | CUDA external-energy reduction | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_external_energy_fp64` | Reduces uniform, sampled, and regional external fields with partial-cell volume weighting. | FDM GPU | source-level contract; runtime parity `NOT VERIFIED` |
 | CUDA exchange field (uniform-table branch) | `backends/fdm/gpu/cuda/interactions/exchange_fp64.cu` | `exchange_field_fp64_kernel` | fp64 exchange field; the standard launch takes the uniform-Laplacian branch when every region-pair entry equals A. | FDM GPU | kernel timing and field difference measured by `scripts/benchmarks/cuda_exchange_region_bench.cu` |
 | CUDA uniform exchange-table flag | `backends/fdm/api/c_api.cpp` | `fullmag_fdm_backend_create_impl` | Builds the region-pair table and sets `Context::exchange_lut_uniform`. | FDM GPU | source-visible; exercised by the FDM GPU hot-loop benchmark runs |

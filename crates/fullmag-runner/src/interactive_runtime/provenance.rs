@@ -109,11 +109,9 @@ pub(crate) fn cuda_execution_provenance(
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
         },
-        demag_operator_kind: if plan.enable_demag {
-            Some("tensor_fft_newell".to_string())
-        } else {
-            None
-        },
+        demag_operator_kind: crate::fdm::gpu::cuda::native::single_grid_demag_operator_kind(
+            plan,
+        )?,
         fft_backend: if plan.enable_demag {
             Some("cuFFT".to_string())
         } else {

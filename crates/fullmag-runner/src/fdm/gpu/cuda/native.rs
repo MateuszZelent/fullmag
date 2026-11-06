@@ -485,7 +485,7 @@ fn validate_multilayer_stage_telemetry_impl(
 /// Use the existing centered XY operator when the six expanded real tensors
 /// alone exceed the host budget. Observation requests always use it.
 #[cfg(feature = "cuda")]
-pub(super) fn centered_periodic_xy_images(
+fn centered_periodic_xy_images(
     plan: &fullmag_ir::FdmPlanIR,
     observation: bool,
 ) -> Result<Option<[u32; 2]>, RunError> {
@@ -530,6 +530,17 @@ pub(super) fn centered_periodic_xy_images(
         });
     }
     Ok(Some([ix, iy]))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn single_grid_demag_operator_kind(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<Option<String>, RunError> {
+    Ok(if centered_periodic_xy_images(plan, false)?.is_some() {
+        Some("tensor_fft_newell_periodic_xy_centered".to_string())
+    } else {
+        plan.enable_demag.then(|| "tensor_fft_newell".to_string())
+    })
 }
 
 #[cfg(feature = "cuda")]
