@@ -1194,9 +1194,13 @@ odmawiają odrębnego typu; nie traktują go jako zwykłego M ani FEM state.
 Typed inspection i oba CAS walkers muszą rozpoznać strict envelope bez refs i
 fail closed dla nieznanych embedded references; brak ref nie znosi budżetu bytes.
 
-FDM CPU: planowane, source-only, bez runtime qualification. FDM GPU, FEM CPU,
-FEM GPU: poza mostem, odmowa, bez fallbacku. Publiczny ExactResume pozostaje
-Unsupported; szersze wymagania M1/M2 i atomowego composite restore są otwarte.
+FDM CPU zachowuje własną ścieżkę. Zaakceptowany worker FDM CUDA FP64 ma
+źródłową obsługę mostu V3 dla aktywnej maski i niezmienionego ograniczenia
+między etapami, bez transportu. CUDA w tym zakresie wymaga zgodności
+bitowej stanu wejściowego z terminalnym stanem poprzednika. Weryfikacja
+runtime pozostaje otwarta. FEM CPU, FEM GPU oraz CUDA ze zmianą maski
+pozostają poza tym zakresem. Publiczny ExactResume i samodzielny CUDA
+headless zachowują dotychczasowe bramki.
 
 Wymagane bramki: parser/strict schema, missing-null-unknown/duplicate kluczy,
 source owner/port/case/hash/count, aktywna i nieaktywna historia, overlap reference

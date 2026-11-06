@@ -331,14 +331,14 @@ fn mark_field_materialization_error(
 }
 
 #[cfg(feature = "cuda")]
-fn frozen_spins_checkpoint_value(
+fn frozen_spins_checkpoint(
     plan: &FdmPlanIR,
     frozen_state: Option<&fullmag_engine::FrozenSpinsState>,
     magnetization: &[[f64; 3]],
     step: u64,
     time_s: f64,
     dt: f64,
-) -> Result<Option<serde_json::Value>, RunError> {
+) -> Result<Option<FrozenSpinsCheckpointV1>, RunError> {
     let (Some(frozen_plan), Some(frozen_state)) = (plan.frozen_spins.as_ref(), frozen_state) else {
         return Ok(None);
     };
@@ -362,10 +362,21 @@ fn frozen_spins_checkpoint_value(
     let plan_bytes = serde_json::to_vec(plan).map_err(|error| RunError {
         message: format!("serializing CUDA FDM plan identity: {error}"),
     })?;
-    let checkpoint =
-        checkpoint.with_problem_sha256(format!("sha256:{:x}", Sha256::digest(plan_bytes)));
-    serde_json::to_value(checkpoint)
-        .map(Some)
+    Ok(Some(checkpoint.with_problem_sha256(format!("sha256:{:x}", Sha256::digest(plan_bytes)))))
+}
+
+#[cfg(feature = "cuda")]
+fn frozen_spins_checkpoint_value(
+    plan: &FdmPlanIR,
+    frozen_state: Option<&fullmag_engine::FrozenSpinsState>,
+    magnetization: &[[f64; 3]],
+    step: u64,
+    time_s: f64,
+    dt: f64,
+) -> Result<Option<serde_json::Value>, RunError> {
+    frozen_spins_checkpoint(plan, frozen_state, magnetization, step, time_s, dt)?
+        .map(serde_json::to_value)
+        .transpose()
         .map_err(|error| RunError {
             message: format!("serializing CUDA Frozen Spins checkpoint: {error}"),
         })
@@ -734,7 +745,24 @@ pub(crate) fn execute_cuda_fdm(
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    mut terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    let accepted_frozen_state = terminal
+        .as_ref()
+        .map(|context| {
+            let target = plan.frozen_spins.as_ref().filter(|_| {
+                plan.precision == fullmag_ir::ExecutionPrecision::Double
+                    && plan.spin_transport_plans.is_empty()
+                    && plan.fdm_gpu_charge_transports.is_empty()
+            }).ok_or_else(|| RunError {
+                message: "CUDA frozen terminal context requires single-grid FP64 with active frozen spins and no transport".into(),
+            })?;
+            context.frozen.cuda_frozen_stage_state(
+                context.source_frozen_plan, target, plan.active_mask.as_deref(),
+                &plan.initial_magnetization,
+            )
+        })
+        .transpose()?;
     let has_dynamic_drive = plan
         .regional_field_drive_bases
         .iter()
@@ -822,10 +850,11 @@ pub(crate) fn execute_cuda_fdm(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
-    let frozen_spins_state = plan
-        .frozen_spins
-        .as_ref()
-        .map(|frozen_plan| {
+    let frozen_spins_state = if let Some(state) = accepted_frozen_state {
+        crate::constraints::require_cuda_frozen_reference(&state, &initial_magnetization)?;
+        Some(state)
+    } else {
+        plan.frozen_spins.as_ref().map(|frozen_plan| {
             fullmag_engine::FrozenSpinsState::capture_at_activation(
                 frozen_plan,
                 plan.active_mask.as_deref(),
@@ -834,8 +863,8 @@ pub(crate) fn execute_cuda_fdm(
             .map_err(|error| RunError {
                 message: format!("CUDA Frozen Spins activation: {error}"),
             })
-        })
-        .transpose()?;
+        }).transpose()?
+    };
     let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
         None
     } else {
@@ -955,14 +984,16 @@ pub(crate) fn execute_cuda_fdm(
     let mut live_observations = live
         .as_ref()
         .map(|_| FdmLiveObservationScheduler::new(plan, plan.grid.cells));
-    let mut final_frozen_checkpoint = frozen_spins_checkpoint_value(
-        plan,
-        frozen_spins_state.as_ref(),
-        &initial_magnetization,
-        current_stats.step,
-        current_stats.time,
-        current_stats.dt,
-    )?;
+    // The accepted observer does not consume continuation checkpoints. The
+    // stage handoff is published once, after the terminal sample is drained.
+    let mut final_frozen_checkpoint = if terminal.is_none() {
+        frozen_spins_checkpoint_value(
+            plan, frozen_spins_state.as_ref(), &initial_magnetization,
+            current_stats.step, current_stats.time, current_stats.dt,
+        )?
+    } else {
+        None
+    };
 
     if let Some(direct_minimizer) = direct_minimizer_control(plan.relaxation.as_ref()) {
         let outcome = crate::fdm::gpu::cuda::direct_minimizer::execute_direct_minimizer(
@@ -1178,7 +1209,7 @@ pub(crate) fn execute_cuda_fdm(
             }
             // The checkpoint exists only for frozen-spin plans; without one this
             // device-to-host copy of m on every live step had no consumer.
-            if live.is_some() && frozen_spins_state.is_some() {
+            if terminal.is_none() && live.is_some() && frozen_spins_state.is_some() {
                 let frozen_magnetization = backend.copy_m(cell_count)?;
                 final_frozen_checkpoint = frozen_spins_checkpoint_value(
                     plan,
@@ -1523,17 +1554,21 @@ pub(crate) fn execute_cuda_fdm(
         &mut artifacts,
     )?;
 
-    final_frozen_checkpoint = frozen_spins_checkpoint_value(
-        plan,
-        frozen_spins_state.as_ref(),
-        &final_magnetization,
-        latest_stats.as_ref().map_or(0, |stats| stats.step),
-        latest_stats.as_ref().map_or(0.0, |stats| stats.time),
-        latest_stats.as_ref().map_or(0.0, |stats| stats.dt),
-    )?;
     let terminal_capture = latest_stats
         .clone()
         .unwrap_or_else(|| current_stats.clone());
+    let terminal_frozen_child = if terminal.is_some() {
+        frozen_spins_checkpoint(
+            plan, frozen_spins_state.as_ref(), &final_magnetization,
+            terminal_capture.step, terminal_capture.time, terminal_capture.dt,
+        )?
+    } else {
+        final_frozen_checkpoint = frozen_spins_checkpoint_value(
+            plan, frozen_spins_state.as_ref(), &final_magnetization,
+            terminal_capture.step, terminal_capture.time, terminal_capture.dt,
+        )?;
+        None
+    };
     let mut terminal_stats = terminal_capture;
     if let Some(scheduler) = live_observations.as_mut() {
         let terminal_display_state = live
@@ -1704,6 +1739,9 @@ pub(crate) fn execute_cuda_fdm(
         Ok(()),
     )?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    if let Some(context) = terminal.as_mut() {
+        (context.drain_writer)()?;
+    }
     let status = if cancelled {
         RunStatus::Cancelled
     } else {
@@ -1722,7 +1760,32 @@ pub(crate) fn execute_cuda_fdm(
         },
     );
 
-    let mut auxiliary_artifacts: Vec<_> = final_frozen_checkpoint
+    let mut auxiliary_artifacts = Vec::new();
+    if let Some(context) = terminal.filter(|_| status == RunStatus::Completed) {
+        let frozen = frozen_spins_state.as_ref().expect("validated active frozen stage");
+        crate::constraints::require_cuda_frozen_reference(frozen, &final_magnetization)?;
+        let child = terminal_frozen_child.ok_or_else(|| RunError {
+            message: "CUDA terminal frozen stage has no checkpoint".into(),
+        })?;
+        let clock = ObservationClock {
+            accepted_step: child.step,
+            time_seconds: child.time_s,
+            dt_seconds: (child.dt > 0.0).then_some(child.dt),
+        };
+        let lifecycle = crate::constraints::FrozenOutputLifecycleV1 {
+            schema_version: "fullmag.frozen_output_lifecycle.v1".into(),
+            frozen_spins: Some(child),
+            frozen_activation_set: context.frozen.prepared_activation_set.clone(),
+        };
+        lifecycle.validate(plan.frozen_spins.as_ref(), clock, &final_magnetization)?;
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "solver/frozen_output_lifecycle.v1.json".into(),
+            bytes: serde_json::to_vec(&lifecycle).map_err(|error| RunError {
+                message: format!("serializing CUDA frozen lifecycle: {error}"),
+            })?,
+        });
+    }
+    auxiliary_artifacts.extend(final_frozen_checkpoint
         .map(|checkpoint| {
             serde_json::to_vec_pretty(&checkpoint)
                 .map(|bytes| crate::types::AuxiliaryArtifact {
@@ -1733,9 +1796,7 @@ pub(crate) fn execute_cuda_fdm(
                     message: format!("serializing CUDA Frozen Spins checkpoint artifact: {error}"),
                 })
         })
-        .transpose()?
-        .into_iter()
-        .collect();
+        .transpose()?);
     if let Some(snapshot) = accepted_state_snapshot {
         auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
             relative_path: FDM_GPU_ACCEPTED_STATE_SNAPSHOT_FILE.to_string(),
@@ -1770,6 +1831,7 @@ pub(crate) fn execute_cuda_fdm(
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,
     _artifact_writer: Option<ArtifactPipelineSender>,
+    _terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     Err(RunError {
         message:
@@ -2358,6 +2420,7 @@ mod adaptive_batch_tests {
             &plan,
             2.0e-14,
             &outputs,
+            None,
             None,
             None,
         )

@@ -729,6 +729,7 @@ closed. Users do not need to author a backend-specific demag realization to ente
 
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
 |---------|-----|-----|--------|------|-------|
+| Frozen Spins stage handoff in the accepted worker | Single-grid CUDA FP64 source-visible | separate | unsupported | **unqualified** | Uses the existing typed state codec with active, unchanged constraints and a bitwise-matching predecessor. Transport, changed constraints, and standalone CUDA headless are outside this scope. |
 | `Box` geometry | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Box→grid lowering for FDM and Box→mesh lowering for FEM |
 | `Cylinder` geometry | planned | planned | planned | semantic-only | Requires active-mask voxelizer for accurate curved-boundary FDM execution |
 | `Sphere`, `Ellipsoid`, `Union`, `Intersection` geometry (FDM) | implemented | n/a (mesh path) | planned | **implemented but unqualified** (FDM) | The FDM planner voxelizes these shapes with the compiled selection predicate (cell-centre membership) on the single-grid and multilayer paths. Before this change every FDM `Sphere`/`Ellipsoid` and every `Union`/`Intersection` failed planning. They have no signed distance, so `boundary_correction` T0/T1 rejects them. Managed runs on 2026-10-31 matched the analytic volumes within staircase error; no scientific qualification is claimed. |

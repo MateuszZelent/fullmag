@@ -1222,7 +1222,7 @@ pub fn materialize_accepted_worker_execution_plan(
         let bytes = if resolved_input.frozen_stage_context.is_some() {
             store.cas().get_bounded(
                 &artifact.object_ref,
-                crate::frozen_stage_lifecycle::MAX_CONTEXT_BYTES
+                crate::frozen_stage_lifecycle::MAX_FROZEN_STATE_ENVELOPE_BYTES
                     .min(accepted_step.claim.lease.budget.storage_bytes),
             )?
         } else {
