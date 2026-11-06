@@ -21,6 +21,8 @@ mod charge_transport;
 mod eigen;
 mod frequency_domain;
 mod plan;
+#[cfg(any(test, feature = "fem-gpu", feature = "fem-native"))]
+mod object_average;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 mod indexed_geometry;
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -1196,6 +1198,7 @@ pub(crate) struct NativeFemBackend {
     cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     object_weights: Vec<(String, f64)>,
     object_node_indices: Vec<(String, Vec<u32>)>,
+    object_element_indices: Option<HashMap<String, Vec<u32>>>,
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
@@ -3014,6 +3017,13 @@ impl NativeFemBackend {
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
         let backend_create_started = std::time::Instant::now();
+        // Resolve ownership before runtime marker normalization can merge
+        // authored domain markers into magnetic/nonmagnetic attributes.
+        let object_element_indices = plan
+            .ms_element_field
+            .as_ref()
+            .map(|_| object_average::object_element_indices(plan))
+            .transpose()?;
         configure_managed_openmpi_environment();
         let inferred_element_markers = normalized_native_runtime_element_markers(plan)?;
         let runtime_plan;
@@ -3815,6 +3825,7 @@ impl NativeFemBackend {
                 }
             },
             object_node_indices: native_fem_object_node_indices(plan),
+            object_element_indices,
             demag_solver: demag_policy.as_ref().map(|policy| policy.solver.clone()),
             demag_preconditioner: demag_policy.map(|policy| policy.preconditioner),
             adaptive_max_error: plan
@@ -4200,7 +4211,15 @@ impl NativeFemBackend {
             return Ok(());
         }
         for (object_id, node_indices) in &self.object_node_indices {
-            let Some([mx, my, mz]) = self.average_m_for_nodes(node_indices)? else {
+            let average = if let Some(elements_by_object) = &self.object_element_indices {
+                let elements = elements_by_object.get(object_id).ok_or_else(|| RunError {
+                    message: format!("FEM DG0 average has no element ownership for '{object_id}'"),
+                })?;
+                self.average_m_for_elements(elements)?
+            } else {
+                self.average_m_for_nodes(node_indices)?
+            };
+            let Some([mx, my, mz]) = average else {
                 continue;
             };
             let values = stats
@@ -10446,8 +10465,9 @@ mod tests {
             "\n    pub fn step_interruptible(",
         );
         assert!(
-            body.contains("self.average_m_for_nodes(node_indices)?"),
-            "per-object mx/my/mz must come from native node-index reductions"
+            body.contains("self.average_m_for_nodes(node_indices)?")
+                && body.contains("self.average_m_for_elements(elements)?"),
+            "per-object mx/my/mz must use element ownership for DG0 and node lists otherwise"
         );
         assert!(
             body.contains("values.insert(\"mx\".to_string(), mx)")

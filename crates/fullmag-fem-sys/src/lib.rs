@@ -3611,6 +3611,14 @@ extern "C" {
         out_len: u64,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_average_m_for_elements_f64(
+        handle: *mut fullmag_fem_backend,
+        element_indices: *const u32,
+        element_count: u64,
+        out_xyz: *mut f64,
+        out_len: u64,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_begin_field_snapshot(
         handle: *mut fullmag_fem_backend,
         observable: fullmag_fem_observable,

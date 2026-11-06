@@ -872,16 +872,21 @@ average is the exact P1/DG0 moment-weighted mean:
 
 Here `E` is the set of active magnetic elements, `V_e [m^3]` is the element
 volume, and `m` is the dimensionless P1 reduced magnetization. The per-object
-reduction (`fullmag_fem_backend_average_m_for_nodes_f64`) uses the same
-formula. Its `E_O` contains the active elements whose four vertices all belong
-to the object node set `N_O`. It does not use a lumped nodal `Ms` weight, which
+reduction (`fullmag_fem_backend_average_m_for_elements_f64`) uses the same
+formula. Its `E_O` contains exactly the active elements selected by the
+object's resolved element markers or element ranges. Shared interface nodes
+do not transfer element ownership. It does not use a lumped nodal `Ms` weight, which
 is undefined for DG0. For two equal-volume tetrahedra with
 `Ms = 400 kA/m` and `m = +x`, and `Ms = 800 kA/m` and `m = -x`, the object that
 contains both has `<m_x> = (400 - 800)/1200 = -1/3`. Each one-tetrahedron object
-has `<m_x> = +1` or `-1`. Limitation: when objects share interface nodes, a
-foreign tetrahedron whose four vertices all lie on that interface also enters
-`E_O`. An element-indexed per-object reduction ABI would remove this case and is
-deferred. Nodal and scalar `Ms` keep the existing lumped-mass weighting.
+has `<m_x> = +1` or `-1`. A regression must also exclude a foreign tetrahedron
+whose four vertices are shared with the selected object. The legacy node-set
+ABI retains its induced-node-set semantics; the runner must not use it for
+DG0 per-object observables. Duplicate element indices have set semantics,
+out-of-range indices are rejected, and inactive elements contribute nothing.
+Nodal and scalar `Ms` keep the existing lumped-mass weighting. This change
+requires native/runner contract tests and a managed-runtime check before it
+can be considered qualified; source inspection alone is not runtime evidence.
 
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
@@ -1380,6 +1385,8 @@ must include:
 | FEM transport Ms | `crates/fullmag-plan/src/fem.rs` | `fem_spin_transport_ms_realization_error` | Planner rejection of DG0 or heterogeneous nodal `Ms` with the scalar-`M_s` transport descriptor. |
 | FEM transport Ms | `crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs` | `validate_transport_ms_realization` | Runner preflight of the same rule before any native transport call. |
 | FEM transport Ms | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `validate_transport_stage_ms_realization` | Native rejection before the reciprocal stage-transport torque is installed. |
-| FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_nodes_f64` | Per-object average `m`; with DG0 `Ms` it uses the element moment-weighted reduction. |
-| FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_node_set` | Exact P1/DG0 moment reduction over the elements whose vertices all lie in a node set. |
+| FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_elements_f64` | DG0 per-object average `m` over explicit owned elements. |
+| FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
+| FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
+| FEM shared-node regression fixture | `backends/fem/tests/element_dg0_workflow_contract.cpp` | `make_dg0_shared_node_plan` | Analytical ABI regression with unequal volumes: selected elements give 0.5; the induced node set gives 9/14. The initial-state average contract runs separately from MFEM dynamics in CI. |
 | FEM Ms regressions | `crates/fullmag-plan/src/tests.rs` | `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient` | Planner rejection table for transport with spatial `Ms`. |

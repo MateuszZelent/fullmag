@@ -4007,6 +4007,19 @@ FULLMAG_FEM_API int fullmag_fem_backend_average_m_for_nodes_f64(
     uint64_t out_len
 );
 
+/* Exact element-set average for element-DG0 Ms. Element indices are zero-based
+ * positions in the cell_types/CSR arrays, not cell_global_ordinals.
+ * Inactive elements are ignored and duplicate
+ * indices have set semantics. Requires a non-empty element set and an
+ * element-DG0 Ms realization. */
+FULLMAG_FEM_API int fullmag_fem_backend_average_m_for_elements_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
+    double *out_xyz,
+    uint64_t out_len
+);
+
 /*
  * Begin a native FEM field snapshot.
  *

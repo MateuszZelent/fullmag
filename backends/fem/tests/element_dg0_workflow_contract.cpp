@@ -275,6 +275,109 @@ fullmag_fem_plan_desc make_dg0_pair_plan() {
     return plan;
 }
 
+const std::array<double, 24> kSharedNodeTetNodes = {
+    0.0, 0.0, 0.0,
+    kEdge, 0.0, 0.0,
+    0.0, kEdge, 0.0,
+    0.0, 0.0, kEdge,
+    kEdge, kEdge, kEdge,
+    -kEdge, 0.0, 0.0,
+    0.0, -kEdge, 0.0,
+    0.0, 0.0, -kEdge,
+};
+const std::array<std::uint32_t, 20> kSharedNodeTetElements = {
+    0u, 1u, 2u, 3u,
+    1u, 2u, 3u, 4u,
+    0u, 3u, 2u, 5u,
+    0u, 1u, 3u, 6u,
+    0u, 2u, 1u, 7u,
+};
+const std::array<std::uint32_t, 5> kSharedNodeTetCellTypes = {
+    FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+    FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4,
+};
+const std::array<std::uint32_t, 6> kSharedNodeTetCellOffsets = {
+    0u, 4u, 8u, 12u, 16u, 20u,
+};
+const std::array<std::uint64_t, 5> kSharedNodeTetCellOrdinals = {0u, 1u, 2u, 3u, 4u};
+const std::array<std::uint32_t, 5> kSharedNodeTetElementMarkers = {1u, 1u, 1u, 1u, 1u};
+const std::array<std::uint32_t, 5> kSharedNodeTetInactiveMarkers = {1u, 0u, 0u, 0u, 0u};
+const std::array<std::uint32_t, 36> kSharedNodeTetBoundaryFaces = {
+    1u, 2u, 4u, 1u, 3u, 4u, 2u, 3u, 4u,
+    0u, 3u, 5u, 0u, 2u, 5u, 3u, 2u, 5u,
+    0u, 1u, 6u, 0u, 3u, 6u, 1u, 3u, 6u,
+    0u, 2u, 7u, 0u, 1u, 7u, 2u, 1u, 7u,
+};
+const std::array<std::uint32_t, 12> kSharedNodeTetBoundaryMarkers = {
+    1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u, 1u,
+};
+const std::array<std::uint32_t, 12> kSharedNodeTetFacetTypes = {
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+    FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_TRI3,
+};
+const std::array<std::uint32_t, 12> kSharedNodeTetFacetRoles = {
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    FULLMAG_FEM_FACET_ROLE_EXTERIOR, FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+};
+const std::array<std::uint32_t, 13> kSharedNodeTetFacetOffsets = {
+    0u, 3u, 6u, 9u, 12u, 15u, 18u, 21u, 24u, 27u, 30u, 33u, 36u,
+};
+const std::array<std::uint64_t, 12> kSharedNodeTetFacetOrdinals = {
+    0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u,
+};
+const std::array<double, 24> kSharedNodeTetInitialM = {
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+    1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+    -1.0, 0.0, 0.0,
+};
+const std::array<double, 5> kSharedNodeTetElementMs = {
+    8.0e5, 4.0e5, 4.0e5, 4.0e5, 4.0e5,
+};
+
+fullmag_fem_plan_desc make_dg0_shared_node_plan() {
+    fullmag_fem_plan_desc plan = make_dg0_plan();
+    plan.mesh.nodes_xyz = kSharedNodeTetNodes.data();
+    plan.mesh.nodes_xyz_len = kSharedNodeTetNodes.size();
+    plan.mesh.cell_types = kSharedNodeTetCellTypes.data();
+    plan.mesh.cell_types_len = kSharedNodeTetCellTypes.size();
+    plan.mesh.cell_offsets = kSharedNodeTetCellOffsets.data();
+    plan.mesh.cell_offsets_len = kSharedNodeTetCellOffsets.size();
+    plan.mesh.cell_nodes = kSharedNodeTetElements.data();
+    plan.mesh.cell_nodes_len = kSharedNodeTetElements.size();
+    plan.mesh.cell_global_ordinals = kSharedNodeTetCellOrdinals.data();
+    plan.mesh.cell_global_ordinals_len = kSharedNodeTetCellOrdinals.size();
+    plan.mesh.cell_markers = kSharedNodeTetElementMarkers.data();
+    plan.mesh.cell_markers_len = kSharedNodeTetElementMarkers.size();
+    plan.mesh.facet_types = kSharedNodeTetFacetTypes.data();
+    plan.mesh.facet_types_len = kSharedNodeTetFacetTypes.size();
+    plan.mesh.facet_roles = kSharedNodeTetFacetRoles.data();
+    plan.mesh.facet_roles_len = kSharedNodeTetFacetRoles.size();
+    plan.mesh.facet_offsets = kSharedNodeTetFacetOffsets.data();
+    plan.mesh.facet_offsets_len = kSharedNodeTetFacetOffsets.size();
+    plan.mesh.facet_nodes = kSharedNodeTetBoundaryFaces.data();
+    plan.mesh.facet_nodes_len = kSharedNodeTetBoundaryFaces.size();
+    plan.mesh.facet_global_ordinals = kSharedNodeTetFacetOrdinals.data();
+    plan.mesh.facet_global_ordinals_len = kSharedNodeTetFacetOrdinals.size();
+    plan.mesh.facet_markers = kSharedNodeTetBoundaryMarkers.data();
+    plan.mesh.facet_markers_len = kSharedNodeTetBoundaryMarkers.size();
+    plan.initial_magnetization_xyz = kSharedNodeTetInitialM.data();
+    plan.initial_magnetization_len = kSharedNodeTetInitialM.size();
+    plan.ms_element_field = kSharedNodeTetElementMs.data();
+    plan.ms_element_field_len = kSharedNodeTetElementMs.size();
+    return plan;
+}
+
 void check_average_m(
     fullmag_fem_backend *backend,
     const std::uint32_t *nodes,
@@ -327,13 +430,133 @@ void per_object_average_m_uses_element_moment_weights() {
     fullmag_fem_backend_destroy(backend);
 }
 
+void element_set_average_excludes_a_foreign_tet_inside_the_object_node_set() {
+    auto plan = make_dg0_shared_node_plan();
+    fullmag_fem_backend *backend = fullmag_fem_backend_create(&plan);
+    if (backend == nullptr) {
+        std::fprintf(stderr, "shared-node DG0 backend creation error: %s\n", last_error(nullptr));
+        fail("shared-node DG0 backend creation must succeed for the element-set oracle");
+    }
+
+    // The central foreign tetra uses nodes 0-3. Each of the four selected
+    // exterior tetrahedra shares one central face, so their ordinary object
+    // node set also contains all four central-tetra vertices. The legacy
+    // node-set predicate therefore includes the foreign tetra.
+    const std::array<std::uint32_t, 8> object_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u};
+    check_average_m(
+        backend,
+        object_nodes.data(),
+        object_nodes.size(),
+        9.0 / 14.0,
+        "node-set reduction oracle must include the central foreign tetra");
+
+    const std::array<std::uint32_t, 4> selected_elements = {1u, 2u, 3u, 4u};
+    const auto check_element_average = [&](
+        const std::uint32_t *elements,
+        std::uint64_t element_count,
+        double expected_mx,
+        const char *message) {
+        std::array<double, 3> average = {0.0, 0.0, 0.0};
+        const int status = fullmag_fem_backend_average_m_for_elements_f64(
+            backend, elements, element_count, average.data(), average.size());
+        if (status != FULLMAG_FEM_OK) {
+            std::fprintf(stderr, "element-set average error: %s\n", last_error(backend));
+            fail(message);
+        }
+        check(
+            std::abs(average[0] - expected_mx) <= 1.0e-12 &&
+                std::abs(average[1]) <= 1.0e-12 &&
+                std::abs(average[2]) <= 1.0e-12,
+            message);
+    };
+    // Element 1 has twice the volume of the other tetrahedra. The shared face
+    // vertices are +x and the outer apexes are -x, so each selected P1 element
+    // averages to +0.5. Including the central element gives
+    // (2 * 1 + 5 * 0.5) / (2 + 5) = 9/14 with Ms V weights.
+    check_element_average(
+        selected_elements.data(), selected_elements.size(), 0.5,
+        "exact element-set reduction must exclude the central foreign tetra");
+    const std::array<std::uint32_t, 6> duplicated_selection = {0u, 0u, 1u, 2u, 3u, 4u};
+    check_element_average(
+        duplicated_selection.data(), duplicated_selection.size(), 9.0 / 14.0,
+        "duplicate element indices must have set semantics");
+
+    std::array<double, 3> average = {1.0, 1.0, 1.0};
+    int status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, nullptr, 0u, average.data(), average.size());
+    check(status == FULLMAG_FEM_ERR_INVALID,
+        "an empty element set must be rejected");
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        nullptr,
+        selected_elements.data(),
+        selected_elements.size(),
+        average.data(),
+        average.size());
+    check(status == FULLMAG_FEM_ERR_INVALID, "a null backend handle must be rejected");
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, nullptr, 1u, average.data(), average.size());
+    check(status == FULLMAG_FEM_ERR_INVALID &&
+            std::strstr(last_error(backend), "null element_indices") != nullptr,
+        "a null element array with positive count must be rejected");
+    const std::array<std::uint32_t, 1> out_of_range = {5u};
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, out_of_range.data(), out_of_range.size(), average.data(), average.size());
+    check(status == FULLMAG_FEM_ERR_INVALID &&
+            std::strstr(last_error(backend), "element index out of range") != nullptr,
+        "an out-of-range element ordinal must be rejected");
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, selected_elements.data(), selected_elements.size(), nullptr, 3u);
+    check(status == FULLMAG_FEM_ERR_INVALID, "a null output vector must be rejected");
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, selected_elements.data(), selected_elements.size(), average.data(), 2u);
+    check(status == FULLMAG_FEM_ERR_INVALID, "a short output vector must be rejected");
+    fullmag_fem_backend_destroy(backend);
+
+    auto inactive_plan = make_dg0_shared_node_plan();
+    inactive_plan.mesh.cell_markers = kSharedNodeTetInactiveMarkers.data();
+    backend = fullmag_fem_backend_create(&inactive_plan);
+    if (backend == nullptr) {
+        std::fprintf(stderr, "inactive DG0 backend creation error: %s\n", last_error(nullptr));
+        fail("inactive-element DG0 backend creation must succeed");
+    }
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, selected_elements.data(), selected_elements.size(), average.data(), average.size());
+    check(
+        status == FULLMAG_FEM_OK && average[0] == 0.0 &&
+            average[1] == 0.0 && average[2] == 0.0,
+        "a set containing only inactive elements must reduce to zero");
+    fullmag_fem_backend_destroy(backend);
+
+    auto uniform_plan = make_dg0_plan();
+    uniform_plan.ms_element_field = nullptr;
+    uniform_plan.ms_element_field_len = 0u;
+    backend = fullmag_fem_backend_create(&uniform_plan);
+    check(backend != nullptr, "uniform-Ms backend creation for element-average rejection");
+    const std::array<std::uint32_t, 1> one_element = {0u};
+    status = fullmag_fem_backend_average_m_for_elements_f64(
+        backend, one_element.data(), one_element.size(), average.data(), average.size());
+    check(status == FULLMAG_FEM_ERR_UNAVAILABLE &&
+            std::strstr(last_error(backend), "element-DG0 Ms") != nullptr,
+        "element-set average must remain unavailable without element-DG0 Ms");
+    fullmag_fem_backend_destroy(backend);
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+    // Initial-state observables also run in the dependency-free ABI build.
+    // Keep the full time-integration workflow as the default MFEM contract.
+    if (argc == 2 && std::strcmp(argv[1], "--object-averages-only") == 0) {
+        per_object_average_m_uses_element_moment_weights();
+        element_set_average_excludes_a_foreign_tet_inside_the_object_node_set();
+        return 0;
+    }
+    check(argc == 1, "unknown DG0 workflow contract argument");
     ordinary_cpu_rk_remains_executable();
     reusable_time_handle_rejects_every_direct_relaxation_algorithm();
     llg_overdamped_plan_rejects_at_backend_creation();
     prescribed_sot_plan_rejects_at_backend_creation();
     per_object_average_m_uses_element_moment_weights();
+    element_set_average_excludes_a_foreign_tet_inside_the_object_node_set();
     return 0;
 }
