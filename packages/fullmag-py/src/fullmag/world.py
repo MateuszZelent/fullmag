@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import json
 import asyncio
 import math
 import threading
@@ -2048,7 +2049,7 @@ class GeometryMeshHandle:
             )
         """
         self._owner._assert_active_context()
-        self._owner._mesh_spec.size_fields.append({"kind": kind, "params": dict(params)})
+        self._owner._mesh_spec.size_fields.append({"kind": kind, "params": json.loads(json.dumps(params, allow_nan=False))})
         return self
 
     def build(self) -> "GeometryMeshHandle":
