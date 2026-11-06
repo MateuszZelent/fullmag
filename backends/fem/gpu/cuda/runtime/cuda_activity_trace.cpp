@@ -57,6 +57,15 @@ struct AtomicStats {
     std::atomic<uint64_t> limit_flags{0};
 };
 
+struct BufferPressureSample {
+    uint64_t occurrence = 0;
+    std::array<size_t, 4> observed_states{};
+    uint64_t completed = 0;
+    uint64_t processed = 0;
+    uint64_t records_written = 0;
+    uint64_t bytes_written = 0;
+};
+
 struct ActivityTrace {
     BufferSlot slots[kBufferCount];
     AtomicStats counts;
@@ -69,6 +78,15 @@ struct ActivityTrace {
     std::atomic<bool> collector_poisoned{false};
     std::atomic<bool> reported_closed_buffer_request{false};
     std::atomic<bool> reported_exhausted_buffer_request{false};
+    std::atomic<uint64_t> pool_exhaustions{0};
+    std::atomic<uint64_t> closed_buffer_requests{0};
+    std::atomic<uint64_t> buffers_completed{0};
+    std::atomic<uint64_t> buffers_processed{0};
+    std::atomic<uint64_t> buffer_bytes_processed{0};
+    std::atomic<uint64_t> buffer_processing_ns{0};
+    // One unique callback owns each power-of-two occurrence. Read only after
+    // all callbacks have returned and both collector threads have joined.
+    std::array<BufferPressureSample, 64> pressure_samples{};
     std::atomic<int> output_fd{-1};
     std::atomic<uint64_t> max_bytes{0};
     std::atomic<uint64_t> start_timestamp_ns{0};
@@ -129,6 +147,7 @@ void CUPTIAPI buffer_requested(uint8_t **buffer, size_t *size, size_t *max_recor
     *size = 0;
     *max_records = 0;
     if (!g_trace.callbacks_accepting.load(std::memory_order_acquire)) {
+        increment(g_trace.closed_buffer_requests);
         if (!g_trace.reported_closed_buffer_request.exchange(true, std::memory_order_relaxed)) {
             // Keep a bounded breadcrumb even if CUPTI faults before stop can write its receipt.
             constexpr char message[] = "cuda_activity_trace: refusing buffer: collection closed\n";
@@ -143,6 +162,7 @@ void CUPTIAPI buffer_requested(uint8_t **buffer, size_t *size, size_t *max_recor
         }
         return;
     }
+    std::array<size_t, 4> observed_states{};
     for (auto &slot : g_trace.slots) {
         uint8_t expected = kFree;
         if (slot.state.compare_exchange_strong(expected, kFilling,
@@ -152,9 +172,22 @@ void CUPTIAPI buffer_requested(uint8_t **buffer, size_t *size, size_t *max_recor
             *size = kBufferBytes;
             return;
         }
+        // Reuse the failed CAS observation. Concurrent transitions mean this
+        // one-pass sample is not a coherent snapshot of the complete pool.
+        if (expected < observed_states.size()) ++observed_states[expected];
     }
     increment(g_trace.counts.buffer_starvations);
     increment(g_trace.counts.dropped_records);
+    const uint64_t occurrence =
+        g_trace.pool_exhaustions.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (occurrence != 0 && (occurrence & (occurrence - 1)) == 0) {
+        size_t index = 0;
+        for (uint64_t value = occurrence; value > 1; value >>= 1) ++index;
+        g_trace.pressure_samples[index] = BufferPressureSample{
+            occurrence, observed_states, read_count(g_trace.buffers_completed),
+            read_count(g_trace.buffers_processed), read_count(g_trace.counts.records_written),
+            read_count(g_trace.counts.bytes_written)};
+    }
     if (!g_trace.reported_exhausted_buffer_request.exchange(true, std::memory_order_relaxed)) {
         constexpr char message[] = "cuda_activity_trace: refusing buffer: all 8 slots occupied\n";
         (void)::write(STDERR_FILENO, message, sizeof(message) - 1);
@@ -202,6 +235,7 @@ void CUPTIAPI buffer_completed(CUcontext, uint32_t, uint8_t *buffer, size_t, siz
         increment(g_trace.counts.dropped_records);
         return;
     }
+    increment(g_trace.buffers_completed);
     g_trace.changed.notify_one();
 }
 
@@ -645,7 +679,13 @@ void writer_loop(ActivityTrace &trace) {
             uint8_t expected = kReady;
             if (!slot.state.compare_exchange_strong(expected, kProcessing,
                                                     std::memory_order_acq_rel)) continue;
+            const auto processing_started = std::chrono::steady_clock::now();
             process_buffer(trace, slot);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - processing_started).count();
+            increment(trace.buffer_processing_ns, static_cast<uint64_t>(elapsed));
+            increment(trace.buffer_bytes_processed, slot.valid_size);
+            increment(trace.buffers_processed);
             slot.valid_size = 0;
             slot.state.store(kFree, std::memory_order_release);
             processed = true;
@@ -741,6 +781,13 @@ void reset_capture(ActivityTrace &trace) {
     trace.stop_requested.store(false);
     trace.reported_closed_buffer_request.store(false);
     trace.reported_exhausted_buffer_request.store(false);
+    trace.pool_exhaustions.store(0);
+    trace.closed_buffer_requests.store(0);
+    trace.buffers_completed.store(0);
+    trace.buffers_processed.store(0);
+    trace.buffer_bytes_processed.store(0);
+    trace.buffer_processing_ns.store(0);
+    trace.pressure_samples.fill(BufferPressureSample{});
     trace.active.store(false);
     trace.callbacks_accepting.store(false);
     trace.flush_complete.store(false);
@@ -807,6 +854,35 @@ void register_callbacks_once() {
     std::call_once(g_callback_registration_once, [] {
         g_callback_registration = g_cupti.cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed);
     });
+}
+
+void report_buffer_pressure(const ActivityTrace &trace) {
+    // Outside callbacks and after joins: no new allocation, formatting or I/O
+    // is added to CUPTI's buffer-request path. Samples are selected moments,
+    // not a frequency distribution. Processing includes decode, JSON, writes
+    // and the CUPTI dropped-record query; it is not CPU-only serialization time.
+    for (const auto &sample : trace.pressure_samples) {
+        if (sample.occurrence == 0) continue;
+        std::fprintf(stderr,
+                     "cuda_activity_trace: buffer_pressure occurrence=%llu sampled_free=%zu "
+                     "sampled_filling=%zu sampled_ready=%zu sampled_processing=%zu "
+                     "completed=%llu processed=%llu records_written=%llu bytes_written=%llu\n",
+                     static_cast<unsigned long long>(sample.occurrence), sample.observed_states[kFree],
+                     sample.observed_states[kFilling], sample.observed_states[kReady],
+                     sample.observed_states[kProcessing], static_cast<unsigned long long>(sample.completed),
+                     static_cast<unsigned long long>(sample.processed),
+                     static_cast<unsigned long long>(sample.records_written),
+                     static_cast<unsigned long long>(sample.bytes_written));
+    }
+    std::fprintf(stderr,
+                 "cuda_activity_trace: buffer_processing pool_exhaustions=%llu closed_requests=%llu "
+                 "completed=%llu processed=%llu raw_bytes=%llu processing_ns=%llu\n",
+                 static_cast<unsigned long long>(read_count(trace.pool_exhaustions)),
+                 static_cast<unsigned long long>(read_count(trace.closed_buffer_requests)),
+                 static_cast<unsigned long long>(read_count(trace.buffers_completed)),
+                 static_cast<unsigned long long>(read_count(trace.buffers_processed)),
+                 static_cast<unsigned long long>(read_count(trace.buffer_bytes_processed)),
+                 static_cast<unsigned long long>(read_count(trace.buffer_processing_ns)));
 }
 
 constexpr CUpti_ActivityKind kKinds[] = {
@@ -945,6 +1021,7 @@ extern "C" int fullmag_fem_cuda_trace_stop_v1(
     g_trace.changed.notify_all();
     if (g_trace.writer.joinable()) g_trace.writer.join();
 
+    report_buffer_pressure(g_trace);
     const int output_fd = g_trace.output_fd.load();
     if (output_fd >= 0) {
         if (fsync(output_fd) != 0) increment(g_trace.counts.io_errors);

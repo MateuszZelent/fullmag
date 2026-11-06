@@ -454,6 +454,7 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker common_host_launch_gate_
           cargo test -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_worker_claim_retry_tests::
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::reaped_child_receipt_survives_unacknowledged_final_heartbeat -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::cuda_trace_diagnostics_ --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api-accepted-scheduler accepted_study_supervisor::tests::host_bound_pre_spawn_retries_writer_busy_without_re_admission -- --exact
           cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_preserves_missing_sample_reason_as_typed_error -- --exact
           cargo test -p fullmag-runtime-control --lib host_runtime::recovery_tests::required_current_snapshot_keeps_configured_owner_mismatch_fatal -- --exact

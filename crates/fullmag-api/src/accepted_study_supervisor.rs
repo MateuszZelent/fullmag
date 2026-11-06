@@ -1088,6 +1088,25 @@ pub(crate) fn run_supervised_accepted_worker_with_host(
             "accepted worker process failed"
         );
     }
+    if let Some(diagnostics) = successful_cuda_activity_trace_diagnostics(
+        process_exit_receipt.status_success,
+        &outcome.output.stderr,
+    ) {
+        // The standalone scheduler has no tracing subscriber; runtime_service_main::logged_command
+        // persists its stderr in the API's compute log.
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "accepted_compute_scheduler",
+                "level": "INFO",
+                "message": "accepted worker emitted CUDA activity trace diagnostics",
+                "run_id": &process_exit_receipt.run_id,
+                "task_id": &process_exit_receipt.task_id,
+                "receipt_id": &process_exit_receipt.receipt_id,
+                "diagnostics": diagnostics,
+            })
+        );
+    }
     accepted_supervisor_test_fail_after_process_exit_receipt()?;
     match final_heartbeat_result {
         Ok(FinalHeartbeatReconciliation::Reconciled) => {}
@@ -3063,6 +3082,69 @@ const WORKER_FAILURE_REPORT_BYTES: usize = 2816;
 const WORKER_FAILURE_EDGE_BYTES: usize = 1408;
 const WORKER_FAILURE_STDOUT_BYTES: usize = 640;
 const WORKER_STDERR_LOG_EDGE_BYTES: usize = 32 * 1024;
+const CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX: &[u8] = b"cuda_activity_trace: buffer_pressure ";
+const CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX: &[u8] = b"cuda_activity_trace: buffer_processing ";
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES: usize = 65;
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES: usize = 1024;
+const CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES: usize = 32 * 1024;
+
+fn successful_cuda_activity_trace_diagnostics(
+    worker_status_success: bool,
+    stderr: &[u8],
+) -> Option<String> {
+    if !worker_status_success {
+        return None;
+    }
+
+    let mut diagnostics = String::new();
+    let mut line_count = 0;
+    for raw_line in stderr.split(|byte| *byte == b'\n') {
+        if line_count == CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES {
+            break;
+        }
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        let prefix_bytes = if line.starts_with(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX) {
+            CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX.len()
+        } else if line.starts_with(CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX) {
+            CUDA_ACTIVITY_TRACE_PROCESSING_PREFIX.len()
+        } else {
+            continue;
+        };
+
+        let separator_bytes = if diagnostics.is_empty() { 0 } else { 1 };
+        let remaining_bytes = CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES
+            .saturating_sub(diagnostics.len() + separator_bytes);
+        if remaining_bytes < prefix_bytes {
+            break;
+        }
+        let line_byte_limit = CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES.min(remaining_bytes);
+        let safe_end = utf8_safe_prefix_len(line, line_byte_limit);
+        let bounded_line = String::from_utf8_lossy(&line[..safe_end]);
+        let bounded_line = bounded_head(&bounded_line, line_byte_limit);
+        if bounded_line.len() < prefix_bytes {
+            break;
+        }
+
+        if !diagnostics.is_empty() {
+            diagnostics.push('\n');
+        }
+        diagnostics.push_str(bounded_line);
+        line_count += 1;
+    }
+
+    (!diagnostics.is_empty()).then_some(diagnostics)
+}
+
+fn utf8_safe_prefix_len(bytes: &[u8], limit: usize) -> usize {
+    let mut end = bytes.len().min(limit);
+    if end == bytes.len() {
+        return end;
+    }
+    while end > 0 && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    end
+}
 
 fn bounded_head(text: &str, limit: usize) -> &str {
     let mut end = text.len().min(limit);
@@ -3541,6 +3623,166 @@ mod tests {
         assert_eq!(bounded_tail("ab", 5), "ab");
         assert_eq!(bounded_head_and_tail("abcdef", 3), "abcdef");
         assert_eq!(bounded_head_and_tail("ąbcdeź", 2), "ą ... ź");
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_ignore_unrelated_success_stderr() {
+        let stderr = b"worker initialized\nsolver completed\nordinary shutdown\n";
+        assert_eq!(successful_cuda_activity_trace_diagnostics(true, stderr), None);
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_require_exact_line_prefixes() {
+        let stderr = b"noise cuda_activity_trace: buffer_pressure occurrence=1\n\
+cuda_activity_trace: buffer_pressure_suffix occurrence=2\n\
+cuda_activity_trace: buffer_processingx completed=3\n\
+ cuda_activity_trace: buffer_pressure occurrence=4\n\
+cuda_activity_trace: buffer_pressure occurrence=5\n\
+cuda_activity_trace: buffer_processing completed=6\n";
+
+        assert_eq!(
+            successful_cuda_activity_trace_diagnostics(true, stderr).as_deref(),
+            Some(
+                "cuda_activity_trace: buffer_pressure occurrence=5\n\
+cuda_activity_trace: buffer_processing completed=6"
+            )
+        );
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_select_native_lines_amid_unrelated_stderr() {
+        let pressure = "cuda_activity_trace: buffer_pressure occurrence=1 sampled_free=4";
+        let processing = "cuda_activity_trace: buffer_processing pool_exhaustions=2 processed=3";
+        let stderr = format!(
+            "startup noise\n{pressure}\nsolver note\n{processing}\nshutdown noise\n"
+        );
+        let expected = format!("{pressure}\n{processing}");
+
+        assert_eq!(
+            successful_cuda_activity_trace_diagnostics(true, stderr.as_bytes()).as_deref(),
+            Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_preserve_all_current_native_lines_within_caps() {
+        let sample = "cuda_activity_trace: buffer_pressure occurrence=18446744073709551615 sampled_free=18446744073709551615 sampled_filling=18446744073709551615 sampled_ready=18446744073709551615 sampled_processing=18446744073709551615 completed=18446744073709551615 processed=18446744073709551615 records_written=18446744073709551615 bytes_written=18446744073709551615";
+        let summary = "cuda_activity_trace: buffer_processing pool_exhaustions=18446744073709551615 closed_requests=18446744073709551615 completed=18446744073709551615 processed=18446744073709551615 raw_bytes=18446744073709551615 processing_ns=18446744073709551615";
+        let expected = std::iter::repeat(sample)
+            .take(64)
+            .chain(std::iter::once(summary))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let diagnostics = successful_cuda_activity_trace_diagnostics(true, expected.as_bytes())
+            .expect("all 64 samples and their summary fit the diagnostic bounds");
+
+        assert_eq!(diagnostics, expected);
+        assert!(diagnostics.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_enforce_line_and_total_byte_caps() {
+        let long_line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "x".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2)
+        );
+        let bounded_line = successful_cuda_activity_trace_diagnostics(true, long_line.as_bytes())
+            .expect("recognized line is retained");
+        assert!(bounded_line.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+
+        let mut invalid_line = CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX.to_vec();
+        invalid_line.extend(std::iter::repeat(0xff).take(
+            CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2,
+        ));
+        let bounded_invalid_line =
+            successful_cuda_activity_trace_diagnostics(true, &invalid_line)
+                .expect("recognized line with invalid UTF-8 is retained lossily");
+        assert!(bounded_invalid_line.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+        assert!(bounded_invalid_line.starts_with(
+            std::str::from_utf8(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX).unwrap()
+        ));
+        assert!(std::str::from_utf8(bounded_invalid_line.as_bytes()).is_ok());
+
+        let lines = (0..CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES + 5)
+            .map(|index| format!("cuda_activity_trace: buffer_pressure occurrence={index}"))
+            .collect::<Vec<_>>();
+        let diagnostics =
+            successful_cuda_activity_trace_diagnostics(true, lines.join("\n").as_bytes())
+                .expect("recognized lines are retained");
+        assert_eq!(
+            diagnostics.lines().count(),
+            CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES
+        );
+        assert!(!diagnostics.contains("occurrence=69"));
+
+        let wide_line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "x".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES - 41)
+        );
+        let wide_lines = std::iter::repeat(wide_line)
+            .take(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES)
+            .collect::<Vec<_>>();
+        let bounded_total = successful_cuda_activity_trace_diagnostics(
+            true,
+            wide_lines.join("\n").as_bytes(),
+        )
+        .expect("recognized lines are retained within the total cap");
+        assert!(bounded_total.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+        assert!(std::str::from_utf8(bounded_total.as_bytes()).is_ok());
+
+        let mut invalid_stderr = Vec::new();
+        for _ in 0..CUDA_ACTIVITY_TRACE_DIAGNOSTIC_MAX_LINES {
+            invalid_stderr.extend_from_slice(CUDA_ACTIVITY_TRACE_PRESSURE_PREFIX);
+            invalid_stderr.extend(std::iter::repeat(0xff).take(
+                CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES * 2,
+            ));
+            invalid_stderr.push(b'\n');
+        }
+        let bounded_invalid_total =
+            successful_cuda_activity_trace_diagnostics(true, &invalid_stderr)
+                .expect("recognized invalid UTF-8 lines are retained lossily");
+        assert!(bounded_invalid_total.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_TOTAL_BYTES);
+        assert!(std::str::from_utf8(bounded_invalid_total.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn cuda_trace_diagnostics_truncate_on_utf8_boundaries() {
+        let line = format!(
+            "cuda_activity_trace: buffer_pressure {}",
+            "ą".repeat(CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES)
+        );
+        let diagnostics = successful_cuda_activity_trace_diagnostics(true, line.as_bytes())
+            .expect("recognized line is retained");
+
+        assert!(diagnostics.len() <= CUDA_ACTIVITY_TRACE_DIAGNOSTIC_LINE_BYTES);
+        assert!(diagnostics.is_char_boundary(diagnostics.len()));
+        assert!(!diagnostics.ends_with('�'));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cuda_trace_diagnostics_leave_failed_worker_logging_unselected() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let stderr = b"cuda_activity_trace: buffer_pressure occurrence=1 sampled_free=1\n\
+accepted worker failed: execute accepted worker Start: controlled failure\n";
+        assert_eq!(successful_cuda_activity_trace_diagnostics(false, stderr), None);
+
+        let failure_reason = worker_failure_reason(&ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: Vec::new(),
+                stderr: stderr.to_vec(),
+            },
+            timed_out: false,
+            stop_requested: false,
+            process_id: 7,
+            process_start_token: None,
+            control_failure_reason: None,
+        });
+        assert!(failure_reason.contains(
+            "accepted worker failed: execute accepted worker Start: controlled failure"
+        ));
     }
 
     fn temporary_store(name: &str) -> (PathBuf, SessionStore) {

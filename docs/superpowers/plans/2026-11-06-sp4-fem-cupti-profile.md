@@ -319,3 +319,74 @@ zakończyła się zgodnie z przypiętymi planami. Oba receipty potwierdzają
 Poprawka rejestru przeszła 8 testów referencji, 12 testów admission oraz
 niezależne review bez blokujących uwag. Starsze relaksacje, których layout
 nie jest obsługiwany przez tę ścieżkę archiwizacji, pozostawiono nietknięte.
+
+## Diagnoza presji buforów po API28
+
+Branch zaktualizowano do mastera `d7eb6fc848c890c2ca42c3dacacdc04f77f6087b`
+przez merge `997cc51b6fa0dc7553c04a8a2a337f28ddb3602c`; 8 testów nowej
+ścieżki odzyskiwania brakującego stanu przeszło. Zapisane próby nadal odnoszą
+się do swojego wcześniejszego, jawnego snapshotu.
+
+Jednoprzebiegowy odczyt partial potwierdził SHA i 289490 rekordów. Zawiera
+97998 kerneli, 164172 runtime API, 18070 transferów oraz tylko 4 kernele reset
+i 3 accept, mimo 7 ukończonych kroków. Są to dolne granice zaobserwowanych
+zdarzeń, nie pełne koszty ani wykorzystanie GPU. Sam NDJSON nie wyjaśnia,
+który właściciel przetrzymuje osiem buforów.
+
+Według [API CUPTI12.9.1](https://docs.nvidia.com/cupti/12.9.1/api/group__CUPTI__ACTIVITY__API.html)
+zwracanie gotowych buforów może zależeć od heurystyk workera. Domyślny tryb
+per-thread jest wyłączony; nie należy przypisywać awarii liczbie wątków bez
+pomiaru. Writer Fullmaga ma ograniczone oczekiwanie 2 ms, więc nie znaleziono
+trwałego zablokowania wyłącznie przez utratę powiadomienia.
+
+Instrumentacja nie zmienia wielkości puli, ABI, publicznych liczników, formatu
+śladu, ani żadnych wywołań CUDA/CUPTI. Rejestruje osobno pełną pulę i odmowy
+po zamknięciu capture. Przy potęgach dwójki liczby odmów zapisuje obserwacje
+stanów z istniejących nieudanych CAS do stałej tablicy 64 próbek; log powstaje
+dopiero po zakończeniu callbacków i join wątków. Liczniki gotowych/przetworzonych
+buforów oraz czas `process_buffer` mają rozróżnić CUPTI-owned `FILLING` od
+kolejki `READY` po stronie writera. Czas obejmuje dekodowanie, JSON, zapis i
+odczyt licznika strat CUPTI, więc nie izoluje kosztu serializacji. Próbki nie
+są atomowymi snapshotami ani rozkładem częstości.
+
+Review nie wykazało blokujących uwag. Wymagane następne dowody: managed build,
+istniejąca bramka natywna, jedna instrumentowana próba z zachowaniem Zarr,
+a dopiero po odczycie stanów wybór poprawki. Nie należy automatycznie zwiększać
+puli ani powtarzać zakończonych prób bez nowej hipotezy i przypiętego snapshotu.
+
+## Próba instrumentowana i utrwalanie diagnostyki
+
+Managed iteration `d4782c5b6225408b9fcceb95f9beae63` zbudowała snapshot
+`e39ca6b8634abc364b06badc81b8caf273d65986b947c3f2031acda712410611`.
+Bramka GPU `fcdb452f57634a04ace5c8a323016f66` przeszła: 112513 rekordów
+gęstego testu, brak strat/błędów, zakończony test odmowy bufora. Potwierdzenia
+pakietu, log bramki i ich hashe zachowano w katalogu diagnostycznym na WSL.
+
+Jedna próba `4c62138efd0449feba46c4004b2bca00`, run
+`run-live-c18d7d1a9b6e916da22a64c65661e0ecdb3f422c68e191e915afd713a63abf14`,
+zakończyła 7 kroków / 50 fs i walidację strict FEM GPU double bez fallbacku.
+Zarr, sąsiedni `main.py`, natywne pola oraz provenance są zachowane.
+Ślad ponownie jest partial: 289600 rekordów, 153202435 B, 224560 odmów;
+API/I/O/unknown/truncated/incomplete/limit flags wynoszą zero. Sterownik
+kwalifikacji zwrócił exit 3 z powodu partial, proces solvera zakończył się exit 0.
+
+Ta próba **nie rozstrzyga właściciela zajętych buforów**. Nowe próbki wypisane
+na stderr nie zostały utrwalone: `accepted_study_supervisor` zbiera stderr,
+ale loguje go tylko po nieudanym procesie. Ponadto osobny scheduler nie
+inicjalizuje subskrybenta `tracing`. Korekta dostarczenia diagnostyki musi więc
+przekazać wyłącznie ograniczone, rozpoznane wiersze `buffer_pressure` oraz
+`buffer_processing` do istniejącego stderr schedulera, z run/task/receipt ID.
+`runtime_service_main::logged_command` zachowuje ten strumień w
+`runtime-services/<token>/compute.stderr.log`. Zwykłe udane biegi bez tych
+wierszy pozostają ciche; obsługa błędów solvera pozostaje bez zmian.
+Przed kolejną próbą wymagane są regresje filtrowania/limitów, managed rebuild
+i sprawdzenie rzeczywistego logu. Nie uznano utraconej diagnostyki za pomiar.
+
+Archiwizacja starej aktywacji `8911aa047f8c484fb55fb7a6ecf7939a` zwolniła
+jeden slot bez kasowania rekordów lub powtórzenia Solve. Ostatnia retencja
+cache `dfbc123997934acda05cafc2b0dcb90d` odmówiła z exit 75, ponieważ lock
+runtime cache był zajęty. Po zakończeniu biegu i odczycie pustej listy właścicieli
+tej blokady ponowiona kwalifikowana retencja `0f4416e500fb4117b428ec42ff4c0793`
+zakończyła się `succeeded`, exit 0; zachowano aktywną grupę i wyniki.
+CI dla wysłanego `15ae60b04e8c29ec7dc7555dba2547626d725dfe` ma cztery zielone
+workflow; nie obejmuje późniejszego merge997 ani obecnych zmian diagnostyki.
