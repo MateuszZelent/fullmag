@@ -492,6 +492,45 @@ class AbruptStopTests(unittest.TestCase):
             with self.assertRaisesRegex(r.ContainerRecoveryError, 'control/ledger'):
                 r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
 
+    def test_windows_junction_dispatch_requires_separate_complete_proof(self):
+        from docker_windows_bind_isolation import WindowsExternalJunctionDetected
+        proof, _, compose = self.fixture()
+        backend, frontend = proof['containers'].values()
+        source = r'C:\foreign\worktree'
+        foreign = {'Id': 'a'*64, 'Mounts': [
+            {'Type': 'bind', 'Source': source, 'Destination': '/source', 'RW': False}]}
+        for outcome in ('qualified', 'invalid', 'protected-volume'):
+            current = copy.deepcopy(foreign)
+            if outcome == 'protected-volume':
+                backend['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': r.CONTROL_ROOT})
+                current['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': '/foreign-control'})
+            with self.subTest(outcome=outcome), \
+                 patch.object(r, 'docker_capture', side_effect=[
+                     SimpleNamespace(stdout=current['Id'].encode()),
+                     SimpleNamespace(stdout=json.dumps([current]).encode())]), \
+                 patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
+                 patch('docker_windows_bind_isolation.prove_windows_bind_disjoint',
+                       side_effect=WindowsExternalJunctionDetected('external junction')), \
+                 patch('docker_windows_bind_isolation.prove_windows_junction_bind_disjoint',
+                       return_value={'typed': 'junction-proof'}) as prove, \
+                 patch('docker_windows_bind_isolation.validate_windows_junction_bind_disjoint_proof',
+                       side_effect=ValueError('target proof invalid') if outcome == 'invalid' else None) as validate, \
+                 patch('docker_windows_absent_bind_isolation.prove_absent_stopped_windows_bind',
+                       side_effect=ValueError('candidate exists')) as absent:
+                if outcome == 'qualified':
+                    r._assert_no_foreign_storage_consumers(
+                        SimpleNamespace(project=compose['name']), backend, frontend, compose)
+                    absent.assert_not_called()
+                else:
+                    with self.assertRaisesRegex(r.ContainerRecoveryError,
+                            'target proof invalid' if outcome == 'invalid' else 'control/ledger'):
+                        r._assert_no_foreign_storage_consumers(
+                            SimpleNamespace(project=compose['name']), backend, frontend, compose)
+                prove.assert_called_once_with(
+                    unittest.mock.ANY, backend, current, source, Path('/retained/state'))
+                validate.assert_called_once_with(
+                    {'typed': 'junction-proof'}, source=source, container_id=current['Id'])
+
     def test_owner_host_and_identity_cannot_be_fabricated(self):
         proof,auth,_=self.fixture()
         for key in ('host','owner_token'):

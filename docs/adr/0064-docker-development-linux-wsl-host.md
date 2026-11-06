@@ -128,6 +128,25 @@ backendu. Taka kontynuacja wymaga osobnego dowodu manifestu i autorytatywnej
 absencji; bez niego odmawia, zachowując dane. Implementacja i regresje źródłowe
 nie dowodzą przejścia pełnej kontroli wszystkich konsumentów na danym hoście.
 
+### Zewnętrzne junctiony w obcym bindzie Windows
+
+Ścisły dowód Windows v2 nadal wymaga zawarcia celów linków w źródle bindu.
+Osobny wariant dla junctionów może kwalifikować najwyżej osiem zewnętrznych
+celów. Nie ma listy zaufanych ścieżek: każdy cel musi mieć pełny dowód
+tożsamości native Windows i mapowania DrvFs oraz rozłączności od wszystkich
+trzech chronionych backingów WSL/Docker. Cel musi być zwykłym katalogiem
+na NTFS/ReFS; kolejne zewnętrzne junctiony, nieznane linki i niepełna
+inwentaryzacja powodują odmowę. Błędów ani braku celu nie uznaje się za dowód.
+
+Nowy schemat wiąże dokładny zbiór junctionów z inwentaryzacją rootu,
+surowym celem DrvFs i identyfikatorami linków. Wszystkie pozostałe linki
+podlegają dotychczasowej kwalifikacji. Pełne obserwacje przed i po muszą
+być równe, łącznie z inkarnacjami kontenerów i chronionymi backingami.
+Walidacja zapisanego dowodu nie zastępuje świeżej obserwacji przed mutacją.
+Obsługa jest wyłącznie odczytowa i nie zmienia obcych worktree, dowiązań
+ani kontenerów. Kwalifikacja runtime wymaga rzeczywistego przejścia całej
+kontroli konsumentów; testy syntetyczne tego nie dowodzą.
+
 ## Domknięcie refreshu po udanym odtworzeniu frontendu
 
 Docker Desktop może przedstawiać ten sam bind WSL innym zapisem niż host.

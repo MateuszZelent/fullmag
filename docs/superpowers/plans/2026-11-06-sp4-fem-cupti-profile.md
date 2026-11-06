@@ -658,3 +658,27 @@ Nie usunięto ani nie zmieniono tego kontenera, worktree lub junctiona.
 Powtórna niezależna kontrola store/ledgera nadal wykazała21 terminalnych runów,
 3476 plików i ten sam snapshot ledgera. Następny krok to identyfikacja
 konkretnego junctiona i kwalifikacja jego celu; apply stopu SP4 nadal czeka.
+
+Etap sondy worktree zapisano jako `6c18dac8ec8e29b33a2c2f74dfc749c389f29cec`
+i wysłano razem z dwiema poprzednimi poprawkami do PR408. Remote master
+pozostaje `914c04ac93b64d16268c62978b44b155c0609f10`, już zintegrowany.
+CI nowego HEAD trwa; nie jest jeszcze dowodem ukończenia integracji.
+
+Rzeczywista odczytowa sonda istniejącej funkcji
+`docker_volume_network_failure_reconcile._observe_present_windows_bind`
+zakwalifikowała oba cele obcego worktree. `.fullmag` prowadzi do runtime
+na E: (76 wpisów, 2 zawarte linki), a `target` do pustego katalogu Cargo
+na E:. Każdy cel ma niezależny native proof chronionych backingów i dokładne
+mapowanie DrvFs. Root Ubuntu2 ma device2096, źródło Windows device75,
+cele device77; sama różnica urządzeń nie była kryterium kwalifikacji.
+Dowód dotyczy jednej ścieżki, bez kontroli inkarnacji kontenera i bez recovery.
+Trwa dodanie osobnego schematu pełnego Windows junction proof oraz podpięcie
+go do kontroli wszystkich konsumentów. Nie zastosowano jeszcze stopu frontendu.
+
+Nowy wariant junction proof ma64 zielone testy, integracja abrupt recovery40,
+a istniejąca ścieżka network failure reconcile18 (łącznie122). Review wykryło
+niedopasowanie parsera do rzeczywistego komunikatu PowerShell z CRLF i wierszem
+`+ ... throw`; poprawka rozpoznaje dokładny pierwszy komunikat, a near-miss
+nadal odmawia. Repro z rzeczywistym logiem zamknęło uwagę. Pierwszy live
+preflight potwierdził tę odmowę i zachowanie tego samego store/ledgera;
+po poprawce ponowiono całą obserwację bez mutacji.
