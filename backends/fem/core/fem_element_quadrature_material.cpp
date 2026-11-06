@@ -1,5 +1,6 @@
 #include "core/fem_element_quadrature_material.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -150,6 +151,8 @@ P1TetrahedralMaterialRealization::P1TetrahedralMaterialRealization(
       ms_(std::move(ms)),
       a_(std::move(a))
 {
+    active_element_ordinals_sorted_ = std::is_sorted(
+        active_element_ordinals_.begin(), active_element_ordinals_.end());
     if (node_count_ == 0u) {
         throw std::invalid_argument("material realization requires node_count > 0");
     }
@@ -350,7 +353,7 @@ MsWeightedAos3AverageReduction
 P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction(
     const std::vector<double> &aos3_nodal_values) const
 {
-    return reduce_ms_weighted_aos3_average(aos3_nodal_values, nullptr);
+    return reduce_ms_weighted_aos3_average(aos3_nodal_values, nullptr, nullptr);
 }
 
 MsWeightedAos3AverageReduction
@@ -364,13 +367,33 @@ P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction_for_node_se
             std::to_string(node_member_mask.size()) +
             " but expected node_count=" + std::to_string(node_count_));
     }
-    return reduce_ms_weighted_aos3_average(aos3_nodal_values, &node_member_mask);
+    return reduce_ms_weighted_aos3_average(aos3_nodal_values, &node_member_mask, nullptr);
+}
+
+MsWeightedAos3AverageReduction
+P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction_for_element_set(
+    const std::vector<double> &aos3_nodal_values,
+    std::vector<std::size_t> element_ordinals) const
+{
+    for (const std::size_t element : element_ordinals) {
+        if (element >= elements_.size()) {
+            throw std::invalid_argument(
+                "element-set membership contains an element outside element_count=" +
+                std::to_string(elements_.size()));
+        }
+    }
+    std::sort(element_ordinals.begin(), element_ordinals.end());
+    element_ordinals.erase(
+        std::unique(element_ordinals.begin(), element_ordinals.end()),
+        element_ordinals.end());
+    return reduce_ms_weighted_aos3_average(aos3_nodal_values, nullptr, &element_ordinals);
 }
 
 MsWeightedAos3AverageReduction
 P1TetrahedralMaterialRealization::reduce_ms_weighted_aos3_average(
     const std::vector<double> &aos3_nodal_values,
-    const std::vector<std::uint8_t> *node_member_mask) const
+    const std::vector<std::uint8_t> *node_member_mask,
+    const std::vector<std::size_t> *element_ordinals) const
 {
     if (ms_.location != MaterialCoefficientLocation::element_dg0) {
         throw std::logic_error(
@@ -385,7 +408,7 @@ P1TetrahedralMaterialRealization::reduce_ms_weighted_aos3_average(
     }
 
     MsWeightedAos3AverageReduction result;
-    for (const std::size_t element : active_element_ordinals_) {
+    const auto accumulate_element = [&](const std::size_t element) {
         if (node_member_mask != nullptr) {
             bool inside = true;
             for (const std::uint64_t node : elements_[element].node_ids) {
@@ -393,7 +416,7 @@ P1TetrahedralMaterialRealization::reduce_ms_weighted_aos3_average(
                     (*node_member_mask)[static_cast<std::size_t>(node)] != 0u;
             }
             if (!inside) {
-                continue;
+                return;
             }
         }
         const double element_weight =
@@ -412,6 +435,23 @@ P1TetrahedralMaterialRealization::reduce_ms_weighted_aos3_average(
                 result.weighted_component_integrals[component] +=
                     nodal_weight * value;
             }
+        }
+    };
+    if (element_ordinals != nullptr) {
+        for (const std::size_t element : *element_ordinals) {
+            const bool active = active_element_ordinals_sorted_
+                ? std::binary_search(
+                    active_element_ordinals_.begin(), active_element_ordinals_.end(), element)
+                : std::find(
+                    active_element_ordinals_.begin(), active_element_ordinals_.end(), element) !=
+                    active_element_ordinals_.end();
+            if (active) {
+                accumulate_element(element);
+            }
+        }
+    } else {
+        for (const std::size_t element : active_element_ordinals_) {
+            accumulate_element(element);
         }
     }
     return result;

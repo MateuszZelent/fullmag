@@ -1865,6 +1865,8 @@ target_include_directories(fem_element_dg0_workflow_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_element_dg0_workflow_contract COMMAND fem_element_dg0_workflow_contract)
+add_test(NAME fem_element_dg0_average_contract
+    COMMAND fem_element_dg0_workflow_contract --object-averages-only)
 
 add_executable(
     fem_element_quadrature_material_contract
