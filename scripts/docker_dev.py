@@ -2850,6 +2850,8 @@ def _parser() -> argparse.ArgumentParser:
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
     )
+    recreate_volume.add_argument("--lost-state-stop", metavar="ATTEMPT@SHA256",
+                                 help="Fresh Linux master only: bind the exact successful diagnostic-stop terminal when host state is lost")
     recreate_volume.add_argument("--fresh-state", action="store_true", help="Preserve the previous session and archive its runtime state before starting an empty session")
     recreate_volume.set_defaults(profile="dev", image=None, toolchain_image=None, source_manifest=None,
                                  include_untracked=None, script=None)
@@ -3170,6 +3172,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = stop_bootstrap(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
+            if args.lost_state_stop and (not args.fresh_state or any((
+                    args.retire_only, args.resume_recreation, args.recovery_authorization,
+                    args.migrate_host_capacity, args.completed_recreation_attempt,
+                    args.drained_successor_proof, args.terminal_observation_proof,
+                    args.prepared_quarantine_sha256, args.offline_reconciliation,
+                    args.helper_source_root, args.helper_source_commit))):
+                raise _fail("Lost state requires plain fresh recreation with one diagnostic stop pin")
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
                 raise _fail("Terminal observation requires paired proof and SHA-256")
             if args.terminal_observation_proof and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):

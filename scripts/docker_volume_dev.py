@@ -8106,11 +8106,25 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             pre_activation_stop = stop_path
         state = storage.validate_path(Path(previous["state_root"]), layout["runtime_root"], "retained Windows sessions")
         certificate_path = _certificate_path(state)
-        certificate = _retained_certificate(state, document)
         owner_path = state / _session_host().OWNER_NAME
-        if certificate.get("image_id") != image:
-            raise BuildControlError("Retained storage image differs")
         fresh_state = bool(getattr(args, "fresh_state", False))
+        lost_state_pin = getattr(args, "lost_state_stop", None)
+        lost_state = None
+        if lost_state_pin is not None:
+            from docker_volume_lost_state import assert_lost_state_consumers, validate_lost_linux_state
+            from docker_volume_stop_diagnostic import _port_matches
+
+            if not fresh_state or retire_only or os.name == "nt" or args.script is not None:
+                raise BuildControlError("Lost state requires fresh Linux recreation without script activation")
+            _port_matches(document, args.port)
+            _assert_private_restart_network(actual, ids, control.project)
+            assert_lost_state_consumers(control, ids)
+            lost_state = validate_lost_linux_state(control, lost_state_pin, previous, document, actual, state)
+            certificate = None
+        else:
+            certificate = _retained_certificate(state, document)
+            if certificate.get("image_id") != image:
+                raise BuildControlError("Retained storage image differs")
         # A fresh session archives its entire old runtime namespace below.
         # It must not carry permissions to recover or restore the old owner.
         recovery_context = {} if fresh_state else _retained_recovery_context(
@@ -8703,6 +8717,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 control.write_bytes(operation["root"] + "/retirement-native-drain.json", leased_drain_raw)
                 operation["receipt"].update(retire_only=True,
                     retirement_native_drain_sha256=hashlib.sha256(leased_drain_raw).hexdigest())
+            if lost_state is not None:
+                _assert_private_restart_network(actual, ids, control.project)
+                assert_lost_state_consumers(control, ids, operation["helper_container_id"])
+                if validate_lost_linux_state(control, lost_state_pin, previous, document, actual, state) != lost_state:
+                    raise BuildControlError("Lost-state evidence changed under the recreation lease")
+                operation["receipt"]["lost_linux_state"] = lost_state
             _probe_retained_device_access(retained_device_access, image, control.project)
             control.write(operation["root"] + "/retained-containers.json", actual)
             if pre_activation_stop is not None:
@@ -8736,6 +8756,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 )
                 if stopped_admission != prepared_fresh_archive:
                     raise BuildControlError('Prepared cancellation proof changed after managed frontend stop')
+            if lost_state is not None:
+                _assert_private_restart_network(stopped_actual, ids, control.project)
+                assert_lost_state_consumers(control, ids, operation["helper_container_id"])
+                if validate_lost_linux_state(control, lost_state_pin, previous, document, stopped_actual, state) != lost_state:
+                    raise BuildControlError("Lost-state evidence changed before container removal")
             snapshot_record = (control.namespace_registry or {}).get("retirement", {})
             if fresh_state and snapshot_record.get("schema") == "fullmag.docker-isolated-session-snapshot.v1":
                 from docker_volume_stop_unadmitted import _read_terminal_process_receipt
