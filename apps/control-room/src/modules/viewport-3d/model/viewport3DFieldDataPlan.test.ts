@@ -676,6 +676,27 @@ describe("viewport3DFieldDataPlan", () => {
     },
   );
 
+  it("keeps other scoped field demand when live magnetization is unavailable", () => {
+    const plan = resolveViewport3DScopedPartVectorFieldDemandPlan({
+      getPartSettings: ({ id }) => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: id === "part-m" ? "m" : "H_eff",
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      }),
+      liveMagnetizationAvailable: false,
+      maxVectorGlyphs: 256,
+      magneticParts: [
+        { part: { id: "part-m", label: "Magnetization" } },
+        { part: { id: "part-h", label: "Effective field" } },
+      ],
+      vectorDomain: "full",
+    });
+    expect(plan.requests.has("part-m")).toBe(false);
+    expect(plan.requests.get("part-h")?.quantityId).toBe("H_eff");
+  });
+
   it("owns the primary, scoped part, target quantity, and airbox request planners", () => {
     const primary = resolveViewport3DPrimaryFieldDemandPlan({
       fdmInstanceModelNeedsFieldVector: false,

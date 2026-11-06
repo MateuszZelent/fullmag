@@ -2216,6 +2216,8 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   );
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  assert(!mutationRequests.some((entry) => entry.includes("/data/fields/m/samples/vector")),
+    "Viewport requested magnetization vectors while the applied initial state was pending.");
   const transactionMutationCount = mutationRequests.filter(
     (entry) => entry === "POST /v2/sessions/current/model/transactions",
   ).length;
@@ -2227,6 +2229,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     `Magnetic texture request budget did not contain exactly one model transaction and sync: ${JSON.stringify(mutationRequests)}.`,
   );
   fixture.texturePatchDelayMs = 0;
+  fixture.textureInitialStatePending = false;
   fixture.manifest = fixtureSnapshot.manifest;
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
@@ -4282,6 +4285,7 @@ function createInspectorFixture() {
     scene,
     topology,
     texturePatchDelayMs: 0,
+    textureInitialStatePending: false,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
     geometryMutationBodies: [],
@@ -4707,6 +4711,7 @@ async function installInspectorFixtureApi(page, fixture) {
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
       fixture.manifest.validated_for_scene_revision = fixture.revision;
+      fixture.textureInitialStatePending = true;
       if (asset) {
         fixture.scene.magnetization_assets = [
           ...(fixture.scene.magnetization_assets ?? []).filter((existing) => existing.id !== asset.id),
@@ -5278,6 +5283,7 @@ async function installInspectorFixtureApi(page, fixture) {
     }
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path, fixture));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
+      if (fixture.textureInitialStatePending) return fulfillEmpty(route, 204);
       const fieldVector = inspectorFieldVector(path, fixture);
       return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
     }
@@ -5527,6 +5533,9 @@ function inspectorDomainMeta(fixture) {
 }
 
 function inspectorFieldCatalog(fixture) {
+  if (fixture.textureInitialStatePending) {
+    return { domain_generation_id: 1, quantities: [], revision: fixture.revision };
+  }
   return {
     domain_generation_id: 1,
     quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({

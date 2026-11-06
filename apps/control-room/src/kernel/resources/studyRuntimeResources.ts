@@ -1122,7 +1122,8 @@ export function useArtifactsResource({
 
 export function useMeshPeriodicPairsResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
+  pauseLoad = false,
+}: RuntimeResourceOptions & { pauseLoad?: boolean } = {}) {
   const { api } = useKernel();
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     MESHING_PERIODIC_PAIRS_PATH,
@@ -1143,6 +1144,7 @@ export function useMeshPeriodicPairsResource({
     // viewport-wide resource failure notification. Other failures remain
     // visible to the global error surface.
     notifyOnError: shouldNotifyMeshPeriodicPairsFailure,
+    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });

@@ -3487,6 +3487,13 @@ export function useViewport3DSceneModel({
     () => resolveViewport3DAvailableFieldQuantityIds(fieldCatalog.data),
     [fieldCatalog.data],
   );
+  const currentFieldSelection = !analysisOverlay && !pinnedObservationActive &&
+    !preparedSource && !selectedSnapshotId && !selectedSnapshotQuery;
+  const liveMagnetizationUnavailable = currentFieldSelection && fieldCatalog.status === "ready" &&
+    availableFieldQuantityIds !== null && !availableFieldQuantityIds.has("m");
+  const waitingForAuthoredFieldCatalog = currentFieldSelection &&
+    (fieldCatalog.status === "stale" || fieldCatalog.status === "loading") &&
+    typeof fieldCatalog.revision === "string" && fieldCatalog.revision.startsWith("scene:");
   const publishedModelQuantityIds = useMemo(
     () => liveViewportResourcesEnabled
       ? resolveViewport3DPublishedModelQuantityIds(
@@ -3496,12 +3503,16 @@ export function useViewport3DSceneModel({
     [liveViewportResourcesEnabled, availableFieldQuantityIds, quantityCatalog.data, scene.data],
   );
   const availableQuantityIdsForPlanning = useMemo(
-    () =>
-      mergeViewport3DQuantityCapabilityIds(
+    () => {
+      const quantities = mergeViewport3DQuantityCapabilityIds(
         availableFieldQuantityIds,
         quantityCatalog.data,
-      ) ?? EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS,
-    [availableFieldQuantityIds, quantityCatalog.data],
+      ) ?? EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS;
+      return liveMagnetizationUnavailable
+        ? new Set([...quantities].filter((id) => id !== "m"))
+        : quantities;
+    },
+    [availableFieldQuantityIds, liveMagnetizationUnavailable, quantityCatalog.data],
   );
   const fdmRegionMembership = useFdmRegionMembershipResource({
     enabled: liveViewportResourcesEnabled && fdmLaneActive,
@@ -3775,12 +3786,15 @@ export function useViewport3DSceneModel({
   });
   const topologyCurrent = domainRenderLane.topologyCurrent;
   const topologyRenderable = domainRenderLane.topologyRenderable;
+  // Keep the cached certificate while the retained mesh is revalidated. A
+  // stale scene must still hide the overlay until topology is current.
   const periodicPairs = useMeshPeriodicPairsResource({
-    enabled: liveViewportResourcesEnabled && topologyCurrent,
+    enabled: liveViewportResourcesEnabled && topologyRenderable,
+    pauseLoad: !topologyCurrent,
   });
   const periodicOverlayModel = useMemo(
     () =>
-      femLaneActive
+      topologyCurrent
         ? buildPeriodicOverlayModel({
             currentMeshRevision: sharedDomainManifest.data?.revision ?? null,
             currentTopologyFingerprint: sharedDomainTopologyFingerprint,
@@ -3793,7 +3807,7 @@ export function useViewport3DSceneModel({
       sharedDomainManifest.data?.revision,
       sharedDomainTopologyFingerprint,
       topology.data,
-      femLaneActive,
+      topologyCurrent,
     ],
   );
   const regionMembershipIds = useMemo(
@@ -4724,6 +4738,7 @@ export function useViewport3DSceneModel({
         getPartSettings: (part) => getPartSettings(part as Viewport3DMeshPart),
         maxVectorGlyphs: maxInteractiveVectorGlyphs,
         magneticParts: fieldCompatibleTopologyRenderModel?.magneticParts ?? [],
+        liveMagnetizationAvailable: !liveMagnetizationUnavailable,
         selectedSnapshotQuery,
         vectorDomain,
       }),
@@ -4731,6 +4746,7 @@ export function useViewport3DSceneModel({
       fieldCompatibleTopologyRenderModel?.magneticParts,
       getPartSettings,
       maxInteractiveVectorGlyphs,
+      liveMagnetizationUnavailable,
       selectedSnapshotQuery,
       vectorDomain,
     ],
@@ -4839,12 +4855,12 @@ export function useViewport3DSceneModel({
     magneticPartFieldQueries,
     liveViewportResourcesEnabled &&
       preparedPreviewAvailable && femLaneActive && magneticPartFieldQueries.size > 0,
-    { preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
+    { pauseLoad: waitingForAuthoredFieldCatalog, preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldRequests,
     liveViewportResourcesEnabled && preparedPreviewAvailable && targetQuantityFieldDemandActive,
-    { preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
+    { pauseLoad: waitingForAuthoredFieldCatalog, preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
@@ -5360,7 +5376,11 @@ export function useViewport3DSceneModel({
     liveViewportResourcesEnabled &&
       fieldVectorEnabled &&
       !pinnedObservationActive,
-    { ...VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS, preparedSource },
+    {
+      ...VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,
+      pauseLoad: waitingForAuthoredFieldCatalog,
+      preparedSource,
+    },
   );
   const observationFieldVector = useViewport3DObservationFrameMagnetization(
     pinnedObservationSource?.frameId,
