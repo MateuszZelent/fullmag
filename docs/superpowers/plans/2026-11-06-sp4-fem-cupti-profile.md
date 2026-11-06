@@ -641,3 +641,20 @@ Apply jeszcze nie wykonano; nie jest to dowód stopu ani odzyskania runtime.
 Terminalne piny 21 runów zapisano na WSL w
 `sp4-diagnostics/bootstrap-recovery-terminal-pins-eb1d8729372ab090.json`,
 SHA `eb1d8729372ab090b2e15f3f021959d54955bcc0105253f661857e9ea9c21193`.
+
+Stop frontendu zapisano jako `dfe11717337ef8e3f281c8eec25b43b92ef0366c`.
+Nowa sonda worktree ma 25 testów, a integracja wyboru grupy39; review pierwszej
+próby zamknęło uwagi dotyczące aliasu control volume, normalizacji Source,
+HostConfig/subpath, obu etykiet własnej grupy i restartu tego samego backendu.
+Świeża sonda jest wymagana przed mutacją; sama walidacja archiwum nie wystarcza.
+Prepared retry po usunięciu backendu pozostaje jawnie niekwalifikowane.
+
+Rzeczywisty odczytowy preflight przeszedł dalej niż wcześniejsza odmowa
+master-only, ale nie zakończył pełnej izolacji. Zatrzymany frontend innego
+worktree (`27d11a9c2a4617cfd568473515eb059a3ee566cd88ae03dbebe05a52a88cb0dc`,
+`fdm-unbounded-regions-20261101-62e04547a0029dcd`) ma Windows source bind,
+dla którego istniejąca sonda zgłosiła `junction target escapes candidate root`.
+Nie usunięto ani nie zmieniono tego kontenera, worktree lub junctiona.
+Powtórna niezależna kontrola store/ledgera nadal wykazała21 terminalnych runów,
+3476 plików i ten sam snapshot ledgera. Następny krok to identyfikacja
+konkretnego junctiona i kwalifikacja jego celu; apply stopu SP4 nadal czeka.

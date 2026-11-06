@@ -30,6 +30,7 @@ import docker_wsl_bind
 PROBE_SCHEMA = "fullmag.docker-bind-overlap-probe.v1"
 PROOF_SCHEMA = "fullmag.docker-bind-overlap-proof.v1"
 FOREIGN_PROOF_SCHEMA = "fullmag.foreign-bind-disjoint-proof.v1"
+WORKTREE_FOREIGN_PROOF_SCHEMA = "fullmag.worktree-foreign-bind-disjoint-proof.v1"
 OWNER_MARKER = ".fullmag-linux-native-owner.json"
 MAX_MARKER_BYTES = 1024 * 1024
 MAX_MOUNTINFO_BYTES = 4 * 1024 * 1024
@@ -53,6 +54,14 @@ _FOREIGN_PROOF_FIELDS = {
     "schema", "decision", "container_id", "image_id", "started_at", "status",
     "running", "pid", "inspection_sha256", "candidate_alias_sha256",
     "reference_root_sha256", "kernel_proof",
+}
+_WORKTREE_FOREIGN_PROOF_FIELDS = _FOREIGN_PROOF_FIELDS | {"worktree_context"}
+_WORKTREE_CONTEXT_FIELDS = {
+    "compose_project", "worktree_id", "source_project_id", "source_root_sha256",
+    "compose_sha256", "backend_container_id", "backend_image_id", "control_volume",
+    "control_namespace", "ledger_volume", "ledger_subpath", "reference_root_sha256",
+    "reference_device", "reference_inode", "engine_id", "certificate_sha256",
+    "owner_marker_sha256",
 }
 _KERNEL_PROOF_FIELDS = {
     "schema", "decision", "probe_schema", "candidate_alias_sha256",
@@ -720,6 +729,13 @@ def prove_disjoint_bind(control, backend, *, alias, reference_root,
     expected_marker = _sha256(reference_marker_sha256, "reference_marker_sha256")
     selected_alias = _safe_alias(alias)
     image = _backend_image(control, backend)
+    return _prove_disjoint_bind_with_image(
+        control, image, selected_alias, reference_root, expected_marker)
+
+
+def _prove_disjoint_bind_with_image(control, image, selected_alias, reference_root,
+                                    expected_marker):
+    """Run the shared kernel probe after the caller qualifies its backend image."""
     root = _canonical_reference_root(reference_root)
     host_before = _host_reference_identity(root)
     if host_before["marker_sha256"] != expected_marker:
@@ -791,7 +807,7 @@ def _validate_master_probe_backend(control, backend):
     return image, identifier, control_mount["Name"], ledger_mount["Name"]
 
 
-def _foreign_container_pin(container, alias):
+def _foreign_container_pin_snapshot(container, alias):
     if not isinstance(container, Mapping):
         raise BuildControlError("foreign bind consumer inspect record is missing")
     identifier = container.get("Id")
@@ -801,10 +817,6 @@ def _foreign_container_pin(container, alias):
         raise BuildControlError("foreign bind consumer has no exact full ID and immutable image")
     config = container.get("Config")
     labels = config.get("Labels") if isinstance(config, Mapping) else None
-    if (isinstance(labels, Mapping)
-            and labels.get("com.docker.compose.project") == "fullmag-master"
-            and labels.get("com.docker.compose.service") in {"backend", "frontend"}):
-        raise BuildControlError("selected master application container cannot use foreign-alias fallback")
     mounts = container.get("Mounts")
     if not isinstance(mounts, list) or any(not isinstance(item, Mapping) for item in mounts):
         raise BuildControlError("foreign bind consumer has no complete Mounts inventory")
@@ -848,6 +860,51 @@ def _foreign_container_pin(container, alias):
         encoded = canonical(snapshot)
     except (TypeError, ValueError) as error:
         raise BuildControlError("foreign bind consumer snapshot is not canonical JSON") from error
+    return {**snapshot, "sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _foreign_container_pin(container, alias):
+    """Keep the legacy master fallback's own-application exclusion unchanged."""
+    if not isinstance(container, Mapping):
+        raise BuildControlError("foreign bind consumer inspect record is missing")
+    config = container.get("Config")
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    if (isinstance(labels, Mapping)
+            and labels.get("com.docker.compose.project") == "fullmag-master"
+            and labels.get("com.docker.compose.service") in {"backend", "frontend"}):
+        raise BuildControlError("selected master application container cannot use foreign-alias fallback")
+    return _foreign_container_pin_snapshot(container, alias)
+
+
+def _worktree_foreign_container_pin(container, alias, selected_project):
+    """Pin a labelled consumer while allowing master to be foreign to a worktree."""
+    if not isinstance(container, Mapping):
+        raise BuildControlError("foreign bind consumer inspect record is missing")
+    config = container.get("Config")
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    if not isinstance(labels, Mapping):
+        raise BuildControlError("worktree foreign consumer has no Compose project labels")
+    project = labels.get("com.docker.compose.project")
+    service = labels.get("com.docker.compose.service")
+    if not isinstance(project, str) or not project or not isinstance(service, str) or not service:
+        raise BuildControlError("worktree foreign consumer has an incomplete Compose identity")
+    org_project = labels.get("org.fullmag.compose.project")
+    if project == selected_project or org_project == selected_project:
+        raise BuildControlError("selected worktree project container cannot use foreign-alias fallback")
+    pin = _foreign_container_pin_snapshot(container, alias)
+    mount_matches = [item for item in pin["mounts"]
+                     if item.get("Type") == "bind" and item.get("Source") == alias]
+    if len(mount_matches) != 1:
+        raise BuildControlError("worktree foreign bind alias is missing or ambiguous")
+    snapshot = {key: value for key, value in pin.items() if key != "sha256"}
+    snapshot.update(compose_project=project, compose_service=service,
+                    org_fullmag_project=org_project,
+                    source_project_id=labels.get("org.fullmag.source.project-id"),
+                    source_worktree_id=labels.get("org.fullmag.source.worktree-id"))
+    try:
+        encoded = canonical(snapshot)
+    except (TypeError, ValueError) as error:
+        raise BuildControlError("worktree foreign consumer snapshot is not canonical JSON") from error
     return {**snapshot, "sha256": hashlib.sha256(encoded).hexdigest()}
 
 
@@ -900,12 +957,65 @@ def _archive_foreign_proof(control, proof):
         raise BuildControlError("foreign bind proof could not be durably archived") from error
 
 
+def _validate_worktree_context_record(context, proof, container_id):
+    if not isinstance(context, Mapping) or set(context) != _WORKTREE_CONTEXT_FIELDS:
+        raise BuildControlError("worktree alias proof has no exact retained context")
+    project = context.get("compose_project")
+    if (not isinstance(project, str)
+            or re.fullmatch(r"fullmag-worktree-[a-z0-9_-]+", project) is None):
+        raise BuildControlError("worktree alias proof Compose identity is invalid")
+    for name in ("worktree_id", "source_project_id"):
+        value = context.get(name)
+        if (not isinstance(value, str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", value) is None):
+            raise BuildControlError("worktree alias proof identity is malformed: " + name)
+    for name in ("source_root_sha256", "compose_sha256", "reference_root_sha256",
+                 "certificate_sha256", "owner_marker_sha256"):
+        value = context.get(name)
+        if not isinstance(value, str) or _SHA256.fullmatch(value) is None or value == "0" * 64:
+            raise BuildControlError("worktree alias proof digest is malformed: " + name)
+    backend_id = context.get("backend_container_id")
+    if (not isinstance(backend_id, str) or re.fullmatch(r"[0-9a-f]{64}", backend_id) is None
+            or backend_id == container_id):
+        raise BuildControlError("worktree alias proof backend identity is invalid")
+    if (not isinstance(context.get("backend_image_id"), str)
+            or _IMAGE_ID.fullmatch(context["backend_image_id"]) is None):
+        raise BuildControlError("worktree alias proof backend image is invalid")
+    try:
+        from bootstrap_docker_toolchain import control_volume_name
+        expected_volume = control_volume_name(project)
+    except (TypeError, ValueError) as error:
+        raise BuildControlError("worktree alias proof control volume is invalid") from error
+    namespace = context.get("control_namespace")
+    if (not isinstance(namespace, str)
+            or (namespace and re.fullmatch(r"namespaces/[0-9a-f]{32}", namespace) is None)):
+        raise BuildControlError("worktree alias proof control namespace is invalid")
+    ledger_subpath = "/".join(part for part in (namespace, "private/ledger") if part)
+    if (context.get("control_volume") != expected_volume
+            or context.get("ledger_volume") != expected_volume
+            or context.get("ledger_subpath") != ledger_subpath):
+        raise BuildControlError("worktree alias proof ADR 0076 volume role differs")
+    device, inode = context.get("reference_device"), context.get("reference_inode")
+    if (type(device) is not int or device < 0 or device > 2**64 - 1
+            or type(inode) is not int or inode <= 0 or inode > 2**64 - 1):
+        raise BuildControlError("worktree alias proof reference inode identity is invalid")
+    engine_id = context.get("engine_id")
+    if (not isinstance(engine_id, str) or not engine_id or len(engine_id) > 256
+            or any(ord(character) < 0x20 or ord(character) == 0x7f for character in engine_id)):
+        raise BuildControlError("worktree alias proof Docker engine identity is invalid")
+
+
 def validate_foreign_alias_disjoint_proof(proof, *, alias, container_id):
-    """Validate the exact typed fallback proof before a caller skips one bind."""
+    """Validate either exact master or worktree evidence before skipping a bind."""
     expected_alias_sha = hashlib.sha256(_safe_alias(alias).encode("utf-8")).hexdigest()
-    if not isinstance(proof, Mapping) or set(proof) != _FOREIGN_PROOF_FIELDS:
+    if not isinstance(proof, Mapping):
         raise BuildControlError("foreign alias proof does not match its typed schema")
-    if (proof.get("schema") != FOREIGN_PROOF_SCHEMA or proof.get("decision") != "disjoint"
+    worktree = proof.get("schema") == WORKTREE_FOREIGN_PROOF_SCHEMA
+    expected_fields = _WORKTREE_FOREIGN_PROOF_FIELDS if worktree else _FOREIGN_PROOF_FIELDS
+    if set(proof) != expected_fields:
+        raise BuildControlError("foreign alias proof does not match its typed schema")
+    expected_schema = WORKTREE_FOREIGN_PROOF_SCHEMA if worktree else FOREIGN_PROOF_SCHEMA
+    if (proof.get("schema") != expected_schema or proof.get("decision") != "disjoint"
             or proof.get("container_id") != container_id
             or not isinstance(proof.get("image_id"), str)
             or _IMAGE_ID.fullmatch(proof["image_id"]) is None
@@ -929,6 +1039,14 @@ def validate_foreign_alias_disjoint_proof(proof, *, alias, container_id):
     for name in ("reference_marker_sha256", "mountinfo_sha256"):
         if not isinstance(kernel.get(name), str) or _SHA256.fullmatch(kernel[name]) is None:
             raise BuildControlError("foreign alias kernel evidence digest is malformed: " + name)
+    if worktree:
+        context = proof.get("worktree_context")
+        _validate_worktree_context_record(context, proof, container_id)
+        if (context["reference_root_sha256"] != proof["reference_root_sha256"]
+                or context["owner_marker_sha256"] != kernel["reference_marker_sha256"]
+                or kernel["reference_stat"].get("device") != context["reference_device"]
+                or kernel["reference_stat"].get("inode") != context["reference_inode"]):
+            raise BuildControlError("worktree alias kernel and retained context evidence differ")
     return proof
 
 
@@ -997,5 +1115,411 @@ def prove_foreign_alias_disjoint(control, backend, container, alias, reference_r
         "reference_root_sha256": kernel["reference_root_sha256"],
         "kernel_proof": kernel,
     }
+    _archive_foreign_proof(control, proof)
+    return proof
+
+
+def _inspect_exact_container(identifier, label):
+    try:
+        observed = docker_capture("inspect", identifier, timeout=60)
+        documents = json.loads(observed.stdout.decode("utf-8", "strict"),
+                               object_pairs_hook=_reject_duplicate_keys)
+    except (BuildControlError, OSError, subprocess.SubprocessError, UnicodeDecodeError,
+            json.JSONDecodeError, ValueError, TypeError, AttributeError) as error:
+        raise BuildControlError(label + " could not be re-inspected") from error
+    if (not isinstance(documents, list) or len(documents) != 1
+            or not isinstance(documents[0], Mapping) or documents[0].get("Id") != identifier):
+        raise BuildControlError(label + " inspect is not one exact container")
+    return documents[0]
+
+
+def _strict_stopped_backend_observation(backend):
+    """Require one exact stopped incarnation and normalize unordered mounts."""
+    import docker_volume_container_recovery as recovery
+
+    try:
+        recovery._strict_stopped(backend)
+        return recovery._stable_container_observation(backend)
+    except (BuildControlError, KeyError, TypeError, ValueError) as error:
+        raise BuildControlError("selected worktree backend is not strictly stopped") from error
+
+
+def _worktree_reference_pin(root, compose):
+    """Pin no-follow Linux certificate bytes and their root/engine identity."""
+    import docker_volume_dev as volume_dev
+    import linux_native_host as host
+
+    root = _canonical_reference_root(root)
+    try:
+        identity_before = _host_reference_identity(root)
+        certificate_path = volume_dev._certificate_path(root)
+        owner_path = root / host.OWNER_NAME
+        certificate_raw_before = host.read_owned_regular(certificate_path)
+        owner_raw_before = host.read_owned_regular(owner_path)
+        certificate = volume_dev._retained_certificate(root, compose)
+        certificate_raw_after = host.read_owned_regular(certificate_path)
+        owner_raw_after = host.read_owned_regular(owner_path)
+        identity_after = _host_reference_identity(root)
+        certificate_document = json.loads(
+            certificate_raw_after.decode("utf-8", "strict"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+        owner_document = json.loads(
+            owner_raw_after.decode("utf-8", "strict"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except BuildControlError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError, UnicodeDecodeError,
+            json.JSONDecodeError) as error:
+        raise BuildControlError("retained Linux certificate or owner marker is unavailable") from error
+    if (identity_before != identity_after
+            or certificate_raw_before != certificate_raw_after
+            or owner_raw_before != owner_raw_after
+            or certificate_document != certificate or owner_document != certificate
+            or not isinstance(certificate, Mapping)):
+        raise BuildControlError("retained Linux certificate, marker or root changed during observation")
+    if (certificate.get("schema") != host.HOST_SCHEMA
+            or certificate.get("storage_profile") != host.PROFILE
+            or certificate.get("role") != "session"
+            or certificate.get("owner_scope") != "docker-linux"
+            or certificate.get("host_root") != str(root)
+            or certificate.get("host_inode") != identity_after["root_inode"]
+            or certificate.get("host_device") != identity_after["root_device"]
+            or not isinstance(certificate.get("engine_id"), str)
+            or not certificate["engine_id"]):
+        raise BuildControlError("retained Linux certificate does not attest the exact root and engine")
+    marker_sha = hashlib.sha256(owner_raw_after).hexdigest()
+    if (marker_sha != identity_after["marker_sha256"]
+            or certificate.get("host_inode") != identity_after["root_inode"]):
+        raise BuildControlError("retained Linux owner marker bytes or root inode differ")
+    return {
+        "reference_device": identity_after["root_device"],
+        "reference_inode": identity_after["root_inode"],
+        "engine_id": certificate["engine_id"],
+        "certificate_sha256": hashlib.sha256(certificate_raw_after).hexdigest(),
+        "owner_marker_sha256": marker_sha,
+    }
+
+
+def _inspect_worktree_control_volume(control, backend, compose, namespace):
+    import docker_group_storage as group_storage
+
+    expected_subpath = group_storage.role_subpath(control, "control")
+    if expected_subpath != namespace:
+        raise BuildControlError("selected BuildControl namespace differs from its role resolver")
+    descriptor = group_storage.volume_declaration(control)
+    compose_volumes = compose.get("volumes")
+    if not isinstance(compose_volumes, Mapping):
+        raise BuildControlError("retained Compose has no control volume declarations")
+    service = compose.get("services", {}).get("backend", {})
+    declared = [item for item in service.get("volumes", [])
+                if isinstance(item, Mapping) and item.get("target") == "/opt/fullmag/control"]
+    source_alias = declared[0].get("source") if len(declared) == 1 else None
+    if (len(declared) != 1 or declared[0].get("type") != "volume"
+            or not isinstance(source_alias, str) or compose_volumes.get(source_alias) != descriptor
+            or declared[0].get("read_only", False) is not False):
+        raise BuildControlError("retained backend control mount is not the selected writable volume")
+    options = declared[0].get("volume")
+    if (not isinstance(options, Mapping) or options.get("nocopy") is not True
+            or set(options) - {"nocopy", "subpath"}
+            or options.get("subpath", "") != expected_subpath):
+        raise BuildControlError("retained backend control mount namespace differs")
+
+    mounted = _backend_mount(backend, "/opt/fullmag/control")
+    if (mounted.get("Type") != "volume" or mounted.get("Name") != control.volume
+            or mounted.get("RW") is not True or mounted.get("Driver") != "local"):
+        raise BuildControlError("selected backend control mount differs from its stable volume")
+    try:
+        observed = docker_capture("volume", "inspect", control.volume, timeout=30)
+        documents = json.loads(observed.stdout.decode("utf-8", "strict"),
+                               object_pairs_hook=_reject_duplicate_keys)
+    except (BuildControlError, OSError, subprocess.SubprocessError, UnicodeDecodeError,
+            json.JSONDecodeError, ValueError, TypeError, AttributeError) as error:
+        raise BuildControlError("selected BuildControl volume could not be inspected") from error
+    labels = documents[0].get("Labels") if isinstance(documents, list) and len(documents) == 1 else None
+    shared_labels = getattr(control, "shared_labels", None)
+    if not isinstance(shared_labels, Mapping):
+        labels_source = getattr(control, "labels", None)
+        shared_labels = ({key: value for key, value in labels_source.items()
+                          if isinstance(key, str) and key.startswith("org.fullmag.")}
+                         if isinstance(labels_source, Mapping) else None)
+    if (not isinstance(documents, list) or len(documents) != 1
+            or not isinstance(labels, Mapping) or not isinstance(shared_labels, Mapping)
+            or documents[0].get("Name") != control.volume
+            or documents[0].get("Driver") != "local"
+            or documents[0].get("Options") not in (None, {})
+            or any(labels.get(key) != value for key, value in shared_labels.items())):
+        raise BuildControlError("selected BuildControl volume ownership or driver differs")
+    mountpoint = documents[0].get("Mountpoint")
+    if (not isinstance(mountpoint, str) or not mountpoint.startswith("/")
+            or ".." in PurePosixPath(mountpoint).parts
+            or str(PurePosixPath(mountpoint)) != mountpoint):
+        raise BuildControlError("selected BuildControl volume mountpoint is not canonical")
+    import docker_backend_volume_cache as backend_cache
+    try:
+        backend_cache._validate_control_mount_subpath(
+            backend, mounted, "/opt/fullmag/control", control.volume,
+            expected_subpath,
+            {backend_cache.CONTROL_VOLUME_ROLE: documents[0]},
+        )
+    except (backend_cache.BackendVolumeCacheError, KeyError, TypeError, ValueError) as error:
+        raise BuildControlError("selected backend control source does not match its exact namespace") from error
+    return descriptor
+
+
+def _worktree_probe_context(control, backend, compose, reference_root):
+    """Qualify a registered worktree backend and all retained proof inputs."""
+    if os.name == "nt" or not sys.platform.startswith("linux"):
+        raise BuildControlError("worktree bind overlap proof requires a Linux/WSL host")
+    try:
+        identity = getattr(control, "identity", None)
+        if not isinstance(identity, Mapping):
+            raise BuildControlError("worktree probe BuildControl has no registered identity")
+        project = identity.get("project_name")
+        if (identity.get("checkout_kind") != "worktree"
+                or not isinstance(project, str) or project == "fullmag-master"
+                or getattr(control, "project", None) != project):
+            raise BuildControlError("worktree probe requires its exact registered worktree group")
+        from docker_development_inputs import select_checkout
+        import fullmag_storage as storage
+        import docker_compose_identity
+        selected = select_checkout(Path(__file__).resolve().parents[1],
+                                   Path(identity.get("source_root", "")))
+        selected = Path(selected).resolve(strict=True)
+        derived_identity = docker_compose_identity.compose_project_identity(
+            storage.resolve_layout(selected))
+        if (dict(derived_identity) != dict(identity)
+                or identity.get("source_root") != str(selected)):
+            raise BuildControlError("BuildControl identity differs from its registered Git checkout")
+        if (not isinstance(compose, Mapping) or compose.get("name") != project
+                or compose.get("services", {}).get("backend") is None):
+            raise BuildControlError("retained Compose name differs from the selected worktree")
+        if getattr(control, "volume", None) is None:
+            raise BuildControlError("worktree BuildControl volume is missing")
+        import docker_group_storage as group_storage
+        control_volume_descriptor = group_storage.volume_declaration(control)
+        namespace = group_storage.role_subpath(control, "control")
+        from docker_volume_dev import (
+            _control_namespace_from_document,
+            _validate_retained_service,
+        )
+        if _control_namespace_from_document(compose) != namespace:
+            raise BuildControlError("retained Compose control namespace differs from BuildControl")
+        service = compose["services"]["backend"]
+        if not isinstance(service, Mapping):
+            raise BuildControlError("retained Compose backend service is malformed")
+        config = backend.get("Config") if isinstance(backend, Mapping) else None
+        labels = config.get("Labels") if isinstance(config, Mapping) else None
+        identifier = backend.get("Id") if isinstance(backend, Mapping) else None
+        image_id = backend.get("Image") if isinstance(backend, Mapping) else None
+        if (not isinstance(identifier, str) or re.fullmatch(r"[0-9a-f]{64}", identifier) is None
+                or not isinstance(image_id, str) or _IMAGE_ID.fullmatch(image_id) is None):
+            raise BuildControlError("selected worktree backend lacks its exact container and image IDs")
+        if (not isinstance(labels, Mapping)
+                or labels.get("com.docker.compose.project") != project
+                or labels.get("com.docker.compose.service") != "backend"):
+            raise BuildControlError("selected backend Compose identity differs from the worktree")
+        try:
+            docker_compose_identity.validate_source_labels(backend, identity)
+        except (TypeError, ValueError) as error:
+            raise BuildControlError("selected backend source labels differ from the registered checkout") from error
+        compose_image = service.get("image")
+        if not isinstance(compose_image, str) or not compose_image:
+            raise BuildControlError("retained Compose backend image is missing")
+        try:
+            image_result = docker_capture("image", "inspect", compose_image, timeout=90)
+            image_documents = json.loads(image_result.stdout.decode("utf-8", "strict"),
+                                         object_pairs_hook=_reject_duplicate_keys)
+        except (BuildControlError, OSError, subprocess.SubprocessError, UnicodeDecodeError,
+                json.JSONDecodeError, ValueError, TypeError, AttributeError) as error:
+            raise BuildControlError("retained Compose backend image could not be inspected") from error
+        if (not isinstance(image_documents, list) or len(image_documents) != 1
+                or image_documents[0].get("Id") != image_id
+                or not isinstance(image_documents[0].get("Config"), Mapping)):
+            raise BuildControlError("retained Compose backend image differs from the selected container")
+        try:
+            _validate_retained_service(compose, backend, "backend", image_documents[0]["Config"])
+        except (BuildControlError, KeyError, TypeError, ValueError) as error:
+            raise BuildControlError("selected worktree backend differs from retained Compose") from error
+
+        root = _canonical_reference_root(reference_root)
+        state_mounts = [item for item in service.get("volumes", [])
+                        if isinstance(item, Mapping) and item.get("target") == "/state"]
+        source_mounts = [item for item in service.get("volumes", [])
+                         if isinstance(item, Mapping) and item.get("target") == "/opt/fullmag/source"]
+        if (len(state_mounts) != 1 or state_mounts[0].get("type") != "bind"
+                or state_mounts[0].get("source") != str(root)
+                or len(source_mounts) != 1 or source_mounts[0].get("type") != "bind"
+                or source_mounts[0].get("source") != str(selected)):
+            raise BuildControlError("retained Compose state or source bind differs from canonical paths")
+        actual_state = _backend_mount(backend, "/state")
+        actual_source = _backend_mount(backend, "/opt/fullmag/source")
+        daemon_binds = service.get("x-fullmag-daemon-binds")
+        if (actual_state.get("Type") != "bind" or actual_state.get("RW") is not True
+                or not isinstance(daemon_binds, Mapping)
+                or daemon_binds.get("/state") != actual_state.get("Source")):
+            raise BuildControlError("backend canonical state bind differs from its exact daemon alias")
+        state_alias = _safe_alias(actual_state["Source"])
+        if state_alias != daemon_binds["/state"]:
+            raise BuildControlError("backend state alias differs from the retained daemon pin")
+        if (actual_source.get("Type") != "bind" or actual_source.get("RW") is not False):
+            raise BuildControlError("backend registered source mount is not readonly")
+        from docker_linux_native_readmission import live_bind_path
+        try:
+            if (live_bind_path(actual_state["Source"]) != root
+                    or live_bind_path(actual_source["Source"]) != selected):
+                raise BuildControlError("backend state/source alias resolves to another checkout or root")
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            raise BuildControlError("backend state/source alias could not be resolved") from error
+
+        _inspect_worktree_control_volume(control, backend, compose, namespace)
+        import docker_group_ledger as group_ledger
+        from docker_volume_container_recovery import _ledger_snapshot_mount
+        try:
+            ledger_snapshot_mount, _ = _ledger_snapshot_mount(control, backend, compose)
+            ledger_profile = group_ledger.retained_profile(compose, image_id)
+            ledger_subpath = group_ledger._validate_expected_storage(ledger_profile)
+            expected_ledger_subpath = group_storage.role_subpath(control, "ledger")
+        except (BuildControlError, group_ledger.GroupLedgerError, KeyError, TypeError, ValueError) as error:
+            raise BuildControlError("selected group ledger role/subpath is not authenticated") from error
+        expected_snapshot = ("type=volume,src=" + control.volume
+                             + ",dst=/host-ledger,readonly,volume-nocopy,volume-subpath="
+                             + expected_ledger_subpath)
+        actual_ledger = _backend_mount(backend, "/host-ledger")
+        if (ledger_profile.get("volume_name") != control.volume
+                or ledger_subpath != expected_ledger_subpath
+                or not ledger_subpath.endswith("private/ledger")
+                or ledger_snapshot_mount != expected_snapshot
+                or actual_ledger.get("Type") != "volume"
+                or actual_ledger.get("Name") != control.volume
+                or actual_ledger.get("RW") is not True
+                or actual_ledger.get("Driver") != "local"):
+            raise BuildControlError("retained group ledger differs from ADR 0076 role storage")
+
+        reference_pin = _worktree_reference_pin(root, compose)
+        return {
+            "compose_project": project,
+            "worktree_id": identity["worktree_id"],
+            "source_project_id": identity["project_id"],
+            "source_root_sha256": hashlib.sha256(str(selected).encode("utf-8")).hexdigest(),
+            "compose_sha256": hashlib.sha256(canonical(compose)).hexdigest(),
+            "backend_container_id": identifier,
+            "backend_image_id": image_id,
+            "control_volume": control_volume_descriptor["name"],
+            "control_namespace": namespace,
+            "ledger_volume": ledger_profile["volume_name"],
+            "ledger_subpath": ledger_subpath,
+            "reference_root_sha256": hashlib.sha256(str(root).encode("utf-8")).hexdigest(),
+            **reference_pin,
+        }
+    except BuildControlError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError, KeyError, ImportError) as error:
+        raise BuildControlError("registered worktree bind proof context could not be qualified") from error
+
+
+def validate_worktree_foreign_alias_disjoint_proof(
+    proof, *, alias, container_id, control, backend, compose, reference_root,
+):
+    """Rebind a worktree proof to current backend, Compose, owner and consumer evidence."""
+    validate_foreign_alias_disjoint_proof(proof, alias=alias, container_id=container_id)
+    if proof.get("schema") != WORKTREE_FOREIGN_PROOF_SCHEMA:
+        raise BuildControlError("worktree proof validator requires the worktree proof schema")
+    expected_context = proof["worktree_context"]
+    backend_observation = _strict_stopped_backend_observation(backend)
+    if _worktree_probe_context(control, backend, compose, reference_root) != expected_context:
+        raise BuildControlError("worktree retained context changed since the foreign alias proof")
+    fresh_backend = _inspect_exact_container(expected_context["backend_container_id"],
+                                             "selected worktree backend")
+    if _strict_stopped_backend_observation(fresh_backend) != backend_observation:
+        raise BuildControlError("selected worktree backend incarnation changed since the proof")
+    if _worktree_probe_context(control, fresh_backend, compose, reference_root) != expected_context:
+        raise BuildControlError("selected worktree backend changed since the foreign alias proof")
+    fresh_foreign = _inspect_exact_container(container_id, "worktree foreign consumer")
+    current = _worktree_foreign_container_pin(fresh_foreign, _safe_alias(alias), control.project)
+    if (current["sha256"] != proof["inspection_sha256"]
+            or current["image"] != proof["image_id"]
+            or current["state"]["StartedAt"] != proof["started_at"]
+            or current["state"]["Status"] != proof["status"]
+            or current["state"]["Running"] is not proof["running"]
+            or current["state"]["Pid"] != proof["pid"]):
+        raise BuildControlError("worktree foreign consumer incarnation changed since its proof")
+    return proof
+
+
+def prove_worktree_foreign_alias_disjoint(control, backend, container, alias,
+                                          reference_root, *, compose):
+    """Prove a foreign alias against one exact registered worktree state root."""
+    selected_alias = _safe_alias(alias)
+    backend_observation = _strict_stopped_backend_observation(backend)
+    context = _worktree_probe_context(control, backend, compose, reference_root)
+    backend_id = context["backend_container_id"]
+    admission_backend = _inspect_exact_container(backend_id, "selected worktree backend")
+    if _strict_stopped_backend_observation(admission_backend) != backend_observation:
+        raise BuildControlError("selected worktree backend incarnation changed at proof admission")
+    if _worktree_probe_context(control, admission_backend, compose, reference_root) != context:
+        raise BuildControlError("selected worktree backend changed at proof admission")
+    if not isinstance(container, Mapping) or container.get("Id") == backend_id:
+        raise BuildControlError("selected worktree backend cannot be a foreign alias consumer")
+    before = _worktree_foreign_container_pin(container, selected_alias, control.project)
+    if before["id"] == backend_id:
+        raise BuildControlError("selected worktree backend cannot be a foreign alias consumer")
+    for mount in container["Mounts"]:
+        if (mount.get("Type") == "volume"
+                and mount.get("Name") in {context["control_volume"], context["ledger_volume"]}):
+            raise BuildControlError("foreign consumer references the selected protected group volume")
+    observed_before = _inspect_exact_container(before["id"], "worktree foreign consumer")
+    fresh_before = _worktree_foreign_container_pin(observed_before, selected_alias, control.project)
+    changed = sorted(key for key in before if key != "sha256" and before[key] != fresh_before[key])
+    if changed and changed != ["state"]:
+        raise BuildControlError("foreign consumer identity changed before overlap proof: "
+                                + ",".join(changed))
+    before = fresh_before
+
+    for observation in range(MAX_FOREIGN_LIFECYCLE_PROOFS):
+        try:
+            kernel = _prove_disjoint_bind_with_image(
+                control, context["backend_image_id"], selected_alias, reference_root,
+                context["owner_marker_sha256"],
+            )
+        except BuildControlError:
+            raise
+        except (OSError, TypeError, ValueError) as error:
+            raise BuildControlError("worktree foreign alias kernel proof could not be established") from error
+        observed_after = _inspect_exact_container(before["id"], "worktree foreign consumer")
+        after = _worktree_foreign_container_pin(observed_after, selected_alias, control.project)
+        if after == before:
+            break
+        changed = sorted(key for key in before if key != "sha256" and before[key] != after[key])
+        if changed != ["state"]:
+            raise BuildControlError("foreign consumer identity changed during overlap proof: "
+                                    + ",".join(changed))
+        if observation + 1 == MAX_FOREIGN_LIFECYCLE_PROOFS:
+            raise BuildControlError("foreign consumer lifecycle remained unstable during overlap proof")
+        before = after
+
+    fresh_backend = _inspect_exact_container(backend_id, "selected worktree backend")
+    if _strict_stopped_backend_observation(fresh_backend) != backend_observation:
+        raise BuildControlError("selected worktree backend lifecycle changed during proof")
+    if _worktree_probe_context(control, fresh_backend, compose, reference_root) != context:
+        raise BuildControlError("selected worktree source, mounts, certificate or Compose changed during proof")
+    proof = {
+        "schema": WORKTREE_FOREIGN_PROOF_SCHEMA,
+        "decision": "disjoint",
+        "container_id": before["id"],
+        "image_id": before["image"],
+        "started_at": before["state"]["StartedAt"],
+        "status": before["state"]["Status"],
+        "running": before["state"]["Running"],
+        "pid": before["state"]["Pid"],
+        "inspection_sha256": before["sha256"],
+        "candidate_alias_sha256": kernel["candidate_alias_sha256"],
+        "reference_root_sha256": kernel["reference_root_sha256"],
+        "kernel_proof": kernel,
+        "worktree_context": context,
+    }
+    validate_foreign_alias_disjoint_proof(
+        proof, alias=selected_alias, container_id=before["id"])
     _archive_foreign_proof(control, proof)
     return proof

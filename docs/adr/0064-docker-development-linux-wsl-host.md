@@ -106,6 +106,28 @@ Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
 Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
 istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
 
+### Sonda obcych aliasów dla istniejącego backendu worktree
+
+Pierwsza próba abrupt recovery w zarejestrowanym worktree może kwalifikować
+nieznany alias WSL niezależną sondą fizyczną. Jawne wejście
+`prove_worktree_foreign_alias_disjoint` wiąże tożsamość Git/BuildControl,
+utrwalony Compose, obraz i mounty, certyfikat Linux oraz surowy marker ownera.
+Kontrola control volume i namespace uwzględnia deklarację backendu oraz
+rzeczywisty `HostConfig` z subpath; ledger zachowuje reguły ADR0076.
+
+Sonda używa istniejącego nieuprzywilejowanego helpera z mountami tylko do
+odczytu. Nazwa aliasu ani różne urządzenia nie dowodzą rozłączności. Własne
+kontenery odrzuca według obu etykiet projektu. Stary backend musi nadal istnieć
+i być zatrzymany; jego pełna stabilna obserwacja oraz inkarnacja obcego
+konsumenta są sprawdzane przed pomiarem i po nim. Archiwalny dowód jest
+materiałem audytowym: walidator metadanych nie zastępuje nowej sondy fizycznej
+przy granicy mutacji. Ścieżka master zachowuje swój dotychczasowy schemat.
+
+Ten wariant nie kwalifikuje kontynuacji `prepared` po usunięciu starego
+backendu. Taka kontynuacja wymaga osobnego dowodu manifestu i autorytatywnej
+absencji; bez niego odmawia, zachowując dane. Implementacja i regresje źródłowe
+nie dowodzą przejścia pełnej kontroli wszystkich konsumentów na danym hoście.
+
 ## Domknięcie refreshu po udanym odtworzeniu frontendu
 
 Docker Desktop może przedstawiać ten sam bind WSL innym zapisem niż host.

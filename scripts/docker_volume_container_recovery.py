@@ -1988,9 +1988,12 @@ def _retained_compose_state_root(backend, compose, *, project="fullmag-master"):
 
 
 def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose):
-    from docker_bind_overlap_probe import prove_foreign_alias_disjoint
+    from docker_bind_overlap_probe import prove_foreign_alias_disjoint, prove_worktree_foreign_alias_disjoint
     state_root = _retained_compose_state_root(backend, compose, project=control.project)
-    return prove_foreign_alias_disjoint(control, backend, container, alias, state_root)
+    if control.project == "fullmag-master":
+        return prove_foreign_alias_disjoint(control, backend, container, alias, state_root)
+    return prove_worktree_foreign_alias_disjoint(
+        control, backend, container, alias, state_root, compose=compose)
 
 
 def _posix_paths_overlap(left, right):

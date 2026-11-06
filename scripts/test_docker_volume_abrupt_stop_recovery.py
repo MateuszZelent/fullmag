@@ -435,10 +435,10 @@ class AbruptStopTests(unittest.TestCase):
             foreign = {'Id': 'a' * 64}
             with patch.object(r, 'docker_capture', return_value=SimpleNamespace(stdout=json.dumps([image]).encode())), \
                  patch('docker_volume_dev._validate_retained_service'), \
-                 patch('docker_bind_overlap_probe.prove_foreign_alias_disjoint', return_value={'qualified': True}) as probe:
+                 patch('docker_bind_overlap_probe.prove_worktree_foreign_alias_disjoint', return_value={'qualified': True}) as probe:
                 self.assertEqual(r._prove_foreign_alias_for_abrupt(
                     control, backend, foreign, '/daemon/foreign-alias', compose), {'qualified': True})
-                probe.assert_called_once_with(control, backend, foreign, '/daemon/foreign-alias', Path(state))
+                probe.assert_called_once_with(control, backend, foreign, '/daemon/foreign-alias', Path(state), compose=compose)
                 control.project = 'fullmag-master'
                 with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
                     r._prove_foreign_alias_for_abrupt(control, backend, foreign, '/daemon/foreign-alias', compose)
