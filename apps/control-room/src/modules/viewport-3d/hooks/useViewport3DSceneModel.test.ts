@@ -5936,7 +5936,7 @@ describe("useViewport3DSceneModel", () => {
       notifyOnError: false,
     });
     expect(source).toMatch(
-      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{ \.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS, preparedSource \},\n {2}\);/,
+      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{\s*\.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\s*pauseLoad: waitingForAuthoredFieldCatalog,\s*preparedSource,?\s*\},\s*\);/,
     );
     expect(source).toMatch(
       /const observationFieldVector = useViewport3DObservationFrameMagnetization\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
