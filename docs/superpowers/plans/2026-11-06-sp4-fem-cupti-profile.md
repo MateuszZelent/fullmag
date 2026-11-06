@@ -16,7 +16,7 @@
 - Profil domyślnie nieaktywny; kompilacja obsługi przy dostępnych CUDA/CUPTI nie aktywuje API. CPU i nieobsługiwana wersja CUPTI mają jawny wynik unavailable.
 - Nie zmieniać modelu, materiałów, siatki, m0, integratora, tolerancji, timestepów, operatorów ani zapisu naukowego. Nie dodawać `cudaDeviceSynchronize` dla pomiaru.
 - Accepted trace wymaga native FEM strict/double z jawnym GPU i bez fallbacku; weryfikacja przed acceptance i ponownie po materializacji planu.
-- Osobny wrapper `accepted_cuda_trace.v1`: `max_bytes=67108864`, `max_duration_ms=60000`; CLI preset, limity ABI 4096..268435456 B i 1..120000 ms. Osiem prealokowanych buforów po1MiB.
+- Osobny wrapper `accepted_cuda_trace.v1`: pierwotny CLI preset64MiB; po pomiarze SP4 podnieść domyślny limit do128MiB, zachowując walidację i niezmienione hashe historycznych wrapperów64MiB. `max_duration_ms=60000`; limity ABI4096..268435456 B i1..120000ms. Osiem prealokowanych buforów po1MiB.
 - Wynik: ograniczony NDJSON `worker_cuda_trace.v1.ndjson` oraz immutable `worker_cuda_trace.v1.json` w dokładnym attempt output directory. Żadnych serializowanych wskaźników do CUPTI; adresy alokacji tylko jako liczby diagnostyczne.
 - Receipt wiąże config digest, accepted attempt identity, PID, GPU UUID, outcome solvera, status/limity/dropped/overhead i SHA pliku. Brak receipt albo przekroczony limit oznacza partial/failed trace, nie pełny dowód.
 - Wszystkie buildy w stałym backendzie właściwej grupy przez launcher; wejścia44, Zarr, ledger i cudze zmiany pozostają chronione.
@@ -109,3 +109,65 @@ workera; nie zmieniano uprawnień istniejących plików. Dodano regresję Rust.
 Ta korekta wymaga kolejnego buildu przed SP4. Testy Rust w CI i accepted
 trace-on/off z oryginalnym Zarr są nadal do wykonania. Brak pomiaru
 przyspieszenia solvera.
+
+## Pierwsza para accepted SP4 — 06.11.2026
+
+Commit `011a37da31a6bf9a97e16d5d3ce3c930310ea796` przeszedł wszystkie
+cztery workflow CI PR408. Log potwierdza wykonanie nowych testów Rust w obu
+binariach API, w tym regresji grupowego dostępu do NDJSON.
+
+Zarządzana iteracja `1819e86b12c649c2aee71034270cad26` zbudowała snapshot
+`f92f25ea5b622278c1c43e7a762628946587b64495bada7cd43041efe74ebcca` i bibliotekę
+`fe546e9710afc2ba98055bb4b2136a0d55bbe1f6573443c570f82b8c2627d4a6`.
+Native contract `d02abd5d88b2418ca155358404be05af` przeszedł z kodem0.
+
+Oba accepted workery FEM GPU strict/double ukończyły7 kroków do50fs.
+Zachowano oryginalne Zarr (table-only), sąsiednie `main.py`, native, identity,
+provenance oraz hashe na WSL. Wejścia i biblioteka były identyczne.
+
+- Trace-off: `run-live-a36f951390422c3b4cd626a703cb25bbb7e80cf7e866c4575c4227101def6bf5`.
+- Trace-on: `run-live-fe3b8310e7ac6c69eefbfd104c9d5842a1ffa9bd77bccb56cef64597b565c3b4`.
+- Magnetyzacja18529 aktywnych wektorów: max/rms różnicy0.
+- Osiem energii i torque: różnica0.
+- Mediana kroków3–7: off0,586621s, on0,604162s. Jedna para; opis narzutu,
+  bez wniosku o przyspieszeniu solvera.
+
+Ślad on jest **partial**, poprawnie odrzucony jako pełny dowód: zapisano
+138712 rekordów /67108535B, osiągnięto limit64MiB, odrzucono6586 rekordów,
+832 rekordy były nierozpoznane/bez timestampów,342 nazwy ucięto. Błędy API,
+I/O i brak wolnych buforów:0. Solver zakończył się poprawnie; nie powtarzano
+tej aktywacji. Wymagane przed merge: poprawa dekodowania/nazw, większy
+ograniczony preset z kompatybilnością historycznych digestów, testy i nowy
+matched capture. Pełne SP4 CPU/GPU i MuMax3 pozostają poza dowodem50fs.
+
+## Korekta kompletności śladu i błąd bramki natywnej
+
+Czytnik rozróżnia teraz metadane CUDA event bez czasu wykonania od niepełnych
+rekordów czasowych. Limit nazwy wzrósł do 2048 bajtów, a preset CLI do 128 MiB;
+historyczny preset 64 MiB zachowuje swój digest i możliwość odczytu.
+Testy źródeł: 157 testów launchera i 8 analizatora przeszło; analiza całego
+historycznego śladu 138712 rekordów daje identyczny wynik jak poprzedni czytnik.
+
+Build snapshotu `13b512a132dd2a0d9d0023907a6513c31a37f9b292533c1ee41f18b9b08287bd`
+zakończył kompilację, lecz bramka `3f79a673daf5453da2a71cecc420d24d` odrzuciła
+start capture. Publikacja została zatrzymana, kandydat i log zachowane.
+Poprawka próbowała jawnie włączać `CUPTI_ACTIVITY_KIND_CUDA_EVENT`; w tej
+generacji API metadane przychodzą z `SYNCHRONIZATION`, a osobne włączanie jest
+niedozwolone ([CUPTI Activity API](https://docs.nvidia.com/cupti/12.8.1/api/group__CUPTI__ACTIVITY__API.html)).
+Przywrócono siedem jawnie włączanych rodzajów, zachowując dekodowanie metadanych;
+dodano ograniczony komunikat kind/result przy błędzie włączenia. Test natywny
+wymaga rzeczywistego rekordu event oraz nieuciętej długiej nazwy kernela.
+Ponowny managed build przeszedł: resume `412b084ba8bf449a818edff429b1afb5`,
+snapshot `15bf5f412e60c5b8e4627c6c3ec99748d7efa7267b9d191452b513672a07b049`,
+biblioteka `041153fc88ebaf7a0ffcf671cbe173f34895855f49329811d38d1f7ab978cb5a`.
+Native gate `b34991744a0c4ecb889297dd4960de13` zakończył się kodem 0
+(test 4,369 s). Preflight potwierdził ten pakiet i dokładny powiązany resume;
+nie uruchomiono kolejnego Solve.
+
+Analiza rekordów poprzedniego śladu według timestampów między kernelami
+`reset_attempt_control_packet` wykazała 23 130 850 B przed pierwszą próbą
+i 36 711 181 B w pierwszej próbie. Estymacja siedmiu takich kroków to
+280 441 429 B, przed narzutem nowych pól. Nie jest to pomiar kompletnego
+capture. Limit 128 MiB jest za mały; przed kolejną parą trzeba zwiększyć
+ograniczony budżet i zachować zgodność poprzednich wrapperów. Accepted capture
+poprawionej wersji pozostaje do weryfikacji.

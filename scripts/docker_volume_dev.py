@@ -3436,7 +3436,7 @@ def rejected_startup_marker(status,identity):
                     or set(trace)!={"schema_version","max_bytes","max_duration_ms"}
                     or trace.get("schema_version")!="accepted_cuda_trace.v1"
                     or type(trace.get("max_bytes")) is not int
-                    or trace.get("max_bytes")!=67108864
+                    or trace.get("max_bytes") not in {67108864,134217728}
                     or type(trace.get("max_duration_ms")) is not int
                     or trace.get("max_duration_ms")!=60000):
                 raise RuntimeError("startup authorization cuda trace differs from the supported preset")

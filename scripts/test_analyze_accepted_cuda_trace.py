@@ -96,6 +96,41 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.receipt["status"] = "complete"; self.save_receipt()
         with self.assertRaises(TraceError): self.read()
 
+    def test_cuda_event_metadata_has_no_timing_or_loss_and_legacy_remains_readable(self):
+        self.publish([self.event("kernel", 110, 180)])
+        self.assertEqual(self.read()["status"], "complete")
+        self.header["activity_kinds"].append("cuda_event_metadata")
+        metadata = self.event("cuda_event_metadata", 0, 0, "cuda_event_record",
+            timestamps_valid=False, timestamp_status="not_applicable", activity_kind=36,
+            context_id=3, stream_id=4, event_id=5)
+        self.publish([metadata, self.event("kernel", 110, 180, timestamp_status="valid")])
+        result = self.read()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["kinds"]["cuda_event_metadata"]["count"], 1)
+        self.assertEqual(result["kinds"]["cuda_event_metadata"]["union_ns"], 0)
+        self.assertEqual(result["observed_gpu_union_ns"], 70)
+        for change in ({"timestamps_valid": True}, {"timestamp_status": "incomplete"},
+            {"start_ns": 1}, {"event_id": None}, {"context_id": None}, {"activity_kind": 10}):
+            self.publish([metadata | change])
+            with self.subTest(change=change), self.assertRaises(TraceError): self.read()
+        self.publish([self.event("kernel", 0, 0, timestamps_valid=False, timestamp_status="not_applicable")])
+        with self.assertRaises(TraceError): self.read()
+        self.publish([self.event("kernel", 110, 80, duration_ns=0,
+            timestamps_valid=False, timestamp_status="incomplete")])
+        with self.assertRaises(TraceError): self.read()
+        self.receipt["native"]["stats"]["incomplete_records"] = 1
+        self.receipt["status"] = "partial"; self.save_receipt()
+        self.assertEqual(self.read()["observed_gpu_union_ns"], 0)
+
+    def test_long_escaped_kernel_names_fit_bounded_lines(self):
+        name = "\x01" * 2048
+        self.publish([self.event("kernel", 110, 180, name)])
+        self.assertEqual(self.read()["names"]["kernel"][name]["count"], 1)
+        self.publish([self.event("kernel", 110, 180, name, padding="x" * 4096)])
+        with self.assertRaisesRegex(TraceError, "oversized or incomplete NDJSON line"): self.read()
+        self.publish([self.event("kernel", 110, 180, "x" * 2049)])
+        with self.assertRaises(TraceError): self.read()
+
     def test_clipped_durations_apply_to_rankings_and_truncation_is_counted(self):
         self.publish([self.event("kernel", 50, 500), self.event("kernel", 400, 450)])
         result = self.read()

@@ -30,11 +30,12 @@ int fail(const char *message) {
 
 #if defined(FULLMAG_FEM_CUDA_TRACE_TEST_ENABLED)
 
-constexpr const char *kProbePtx = R"ptx(
+std::string probe_ptx(const std::string &kernel_name) {
+    return std::string(R"ptx(
 .version 6.0
 .target sm_52
 .address_size 64
-.visible .entry fullmag_trace_probe(.param .u64 output_ptr)
+.visible .entry )ptx") + kernel_name + R"ptx((.param .u64 output_ptr)
 {
     .reg .b64 %rd1;
     .reg .b32 %r1;
@@ -44,6 +45,7 @@ constexpr const char *kProbePtx = R"ptx(
     ret;
 }
 )ptx";
+}
 
 struct TempTrace {
     char path[64] = "/tmp/fullmag-cupti-trace-XXXXXX";
@@ -67,12 +69,13 @@ struct TempTrace {
     }
 };
 
-bool launch_probe_kernel() {
+bool launch_probe_kernel_with_name(const std::string &kernel_name) {
     CUmodule module = nullptr;
     CUfunction function = nullptr;
-    CUresult result = cuModuleLoadData(&module, kProbePtx);
+    const std::string ptx = probe_ptx(kernel_name);
+    CUresult result = cuModuleLoadData(&module, ptx.c_str());
     if (result != CUDA_SUCCESS) return false;
-    result = cuModuleGetFunction(&function, module, "fullmag_trace_probe");
+    result = cuModuleGetFunction(&function, module, kernel_name.c_str());
     if (result != CUDA_SUCCESS) {
         cuModuleUnload(module);
         return false;
@@ -91,19 +94,35 @@ bool launch_probe_kernel() {
            free_result == cudaSuccess && unload_result == CUDA_SUCCESS;
 }
 
+std::string long_probe_kernel_name(size_t length) {
+    constexpr char prefix[] = "fullmag_trace_long_";
+    if (length <= sizeof(prefix) - 1) return prefix;
+    return std::string(prefix) + std::string(length - (sizeof(prefix) - 1), 'x');
+}
+
+bool launch_probe_kernel() {
+    return launch_probe_kernel_with_name("fullmag_trace_probe");
+}
+
 bool run_cuda_workload() {
     constexpr size_t kBytes = 4096;
     unsigned char *device = nullptr;
     unsigned char host[kBytes]{};
     cudaStream_t stream = nullptr;
+    cudaEvent_t event = nullptr;
     bool ok = cudaStreamCreate(&stream) == cudaSuccess;
     if (ok) ok = cudaMalloc(reinterpret_cast<void **>(&device), kBytes) == cudaSuccess;
+    if (ok) ok = cudaEventCreate(&event) == cudaSuccess;
     if (ok) ok = cudaMemcpyAsync(device, host, kBytes, cudaMemcpyHostToDevice, stream) == cudaSuccess;
     if (ok) ok = cudaMemsetAsync(device, 0x2a, kBytes, stream) == cudaSuccess;
     if (ok) ok = cudaMemcpyAsync(host, device, kBytes, cudaMemcpyDeviceToHost, stream) == cudaSuccess;
+    if (ok) ok = cudaEventRecord(event, stream) == cudaSuccess;
+    if (ok) ok = cudaEventSynchronize(event) == cudaSuccess;
     if (ok) ok = cudaStreamSynchronize(stream) == cudaSuccess;
     if (ok) ok = launch_probe_kernel();
+    if (ok) ok = launch_probe_kernel_with_name(long_probe_kernel_name(600));
     if (device != nullptr && cudaFree(device) != cudaSuccess) ok = false;
+    if (event != nullptr && cudaEventDestroy(event) != cudaSuccess) ok = false;
     if (stream != nullptr && cudaStreamDestroy(stream) != cudaSuccess) ok = false;
     return ok;
 }
@@ -113,6 +132,27 @@ bool file_contains(const char *path, const char *needle) {
     const std::string contents((std::istreambuf_iterator<char>(input)),
                                std::istreambuf_iterator<char>());
     return input.good() || input.eof() ? contents.find(needle) != std::string::npos : false;
+}
+
+bool file_contains_cuda_event_metadata(const char *path) {
+    std::ifstream input(path, std::ios::binary);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.find("\"kind\":\"cuda_event_metadata\"") != std::string::npos &&
+            line.find("\"activity_kind\":36") != std::string::npos &&
+            line.find("\"timestamp_status\":\"not_applicable\"") != std::string::npos &&
+            line.find("\"timestamps_valid\":false") != std::string::npos &&
+            line.find("\"start_ns\":0,\"end_ns\":0,\"duration_ns\":0") != std::string::npos &&
+            line.find("\"event_id\":") != std::string::npos &&
+            line.find("\"event_id\":null") == std::string::npos &&
+            line.find("\"correlation_id\":") != std::string::npos &&
+            line.find("\"correlation_id\":null") == std::string::npos &&
+            line.find("\"context_id\":") != std::string::npos &&
+            line.find("\"context_id\":null") == std::string::npos &&
+            line.find("\"stream_id\":") != std::string::npos &&
+            line.find("\"stream_id\":null") == std::string::npos) return true;
+    }
+    return false;
 }
 
 bool stats_match_file_size(int fd, uint64_t bytes_written) {
@@ -163,10 +203,15 @@ int enabled_contract() {
     if (stats.schema_version != FULLMAG_FEM_CUDA_TRACE_SCHEMA_VERSION ||
         stats.cupti_version == 0 || stats.records_written == 0 ||
         stats.bytes_written > 4 * 1024 * 1024 || stats.io_errors != 0 ||
+        stats.dropped_records != 0 || stats.buffer_starvations != 0 ||
+        stats.unknown_records != 0 || stats.truncated_names != 0 ||
+        stats.incomplete_records != 0 || stats.api_errors != 0 || stats.limit_flags != 0 ||
         !stats_match_file_size(trace.fd, stats.bytes_written))
-        return fail("capture statistics are invalid");
+        return fail("normal capture statistics report loss or are invalid");
 
     if (!file_contains(trace.path, "worker_cuda_trace.v1") ||
+        !file_contains(trace.path, "\"activity_kinds\":[\"driver_api\",\"runtime_api\",\"kernel\",\"memcpy\",\"memset\",\"synchronization\",\"memory\",\"cuda_event_metadata\"]") ||
+        !file_contains(trace.path, "\"timestamp_status\":\"valid\"") ||
         !file_contains(trace.path, "\"kind\":\"runtime_api\"") ||
         !file_contains(trace.path, "\"kind\":\"driver_api\"") ||
         !file_contains(trace.path, "\"kind\":\"kernel\"") ||
@@ -179,7 +224,9 @@ int enabled_contract() {
         !file_contains(trace.path, "\"kind\":\"synchronization\"") ||
         !file_contains(trace.path, "\"name\":\"stream_synchronize\"") ||
         !file_contains(trace.path, "\"operation_kind\":3") ||
-        !file_contains(trace.path, "\"kind\":\"memory\""))
+        !file_contains(trace.path, "\"kind\":\"memory\"") ||
+        !file_contains(trace.path, long_probe_kernel_name(600).c_str()) ||
+        !file_contains_cuda_event_metadata(trace.path))
         return fail("trace omitted one or more required activity classes");
 
     if (!trace.reset()) return fail("could not reset output for byte-limit case");

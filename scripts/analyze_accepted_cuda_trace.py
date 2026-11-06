@@ -20,7 +20,9 @@ import sys
 MAX_BYTES = 268435456
 MAX_RECORDS = 1000000
 MAX_NAMES = 2048
-KINDS = ("driver_api", "runtime_api", "kernel", "memcpy", "memset", "synchronization", "memory")
+MAX_LINE_BYTES = 16384
+LEGACY_KINDS = ("driver_api", "runtime_api", "kernel", "memcpy", "memset", "synchronization", "memory")
+KINDS = (*LEGACY_KINDS, "cuda_event_metadata")
 LOSS_FIELDS = ("dropped_records", "buffer_starvations", "unknown_records", "truncated_names", "incomplete_records", "limit_flags")
 COUNTERS = (*LOSS_FIELDS, "records_written", "bytes_written", "api_errors", "io_errors")
 
@@ -150,25 +152,28 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     with regular(root / receipt["trace_file"], config["max_bytes"]) as (stream, actual_size):
         require(actual_size == size, "trace size mismatch")
         total = line_index = 0
-        while raw := stream.readline(4097):
-            require(len(raw) <= 4096 and raw.endswith(b"\n"), "oversized or incomplete NDJSON line")
+        declared_kinds = ()
+        while raw := stream.readline(MAX_LINE_BYTES + 1):
+            require(len(raw) <= MAX_LINE_BYTES and raw.endswith(b"\n"), "oversized or incomplete NDJSON line")
             total += len(raw)
             require(total <= size, "trace changed during reading")
             digest.update(raw)
             event = parse(raw)
             if line_index == 0:
-                require(event == expected_header, "trace header differs from admitted capture")
+                require(event == expected_header or event == expected_header | {"activity_kinds": list(LEGACY_KINDS)},
+                    "trace header differs from admitted capture")
+                declared_kinds = tuple(event["activity_kinds"])
                 line_index += 1
                 continue
             require(isinstance(event, dict) and event.get("type") == "activity", "invalid activity record")
             kind = event.get("kind")
-            require(kind in (*KINDS, "unknown"), "unsupported activity kind")
+            require(kind in (*declared_kinds, "unknown"), "unsupported activity kind")
             require(event.get("timestamp_domain") == "cupti_activity_ns", "mixed timestamp domains")
             count += 1
             require(count <= MAX_RECORDS, "trace record limit exceeded")
             for key in ("start_ns", "end_ns", "duration_ns", "correlation_id", "runtime_correlation_id", "activity_kind"):
                 uint(event.get(key), key)
-            for key in ("process_id", "thread_id", "device_id", "context_id", "stream_id", "bytes", "address", "return_value", "operation_kind"):
+            for key in ("process_id", "thread_id", "device_id", "context_id", "stream_id", "event_id", "bytes", "address", "return_value", "operation_kind"):
                 if event.get(key) is not None:
                     uint(event[key], key)
             require(event.get("process_id") in (None, worker_pid), "record belongs to another worker PID")
@@ -177,6 +182,21 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
                 observed_devices.add(event["device_id"])
                 require(len(observed_devices) <= 1, "multiple CUDA devices in a single-GPU accepted capture")
             require(type(event.get("timestamps_valid")) is bool and type(event.get("name_truncated")) is bool, "invalid activity flags")
+            timestamp_status = event.get("timestamp_status", "valid" if event["timestamps_valid"] else "incomplete")
+            metadata = kind == "cuda_event_metadata"
+            if metadata:
+                # CUPTI API24 CUpti_ActivityCudaEvent describes an event identity,
+                # not a measured interval; it has no timestamp fields in the SDK.
+                require(timestamp_status == "not_applicable" and not event["timestamps_valid"]
+                    and event["activity_kind"] == 36
+                    and event["start_ns"] == event["end_ns"] == event["duration_ns"] == 0,
+                    "CUDA event metadata cannot claim a timed interval")
+                uint(event.get("event_id"), "CUDA event ID")
+                require(event.get("context_id") is not None and event.get("stream_id") is not None,
+                    "CUDA event metadata lacks context or stream")
+            else:
+                require(timestamp_status == ("valid" if event["timestamps_valid"] else "incomplete"),
+                    "timed activity timestamp status differs from its validity")
             truncated_names += int(event["name_truncated"])
             name = event.get("name")
             require(isinstance(name, str) and len(name.encode()) <= 2048, "invalid or oversized activity name")
@@ -196,7 +216,7 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
                         devices[event["device_id"]].append((left, right))
             else:
                 require(event["duration_ns"] == 0, "invalid timestamps have nonzero duration")
-                invalid += 1
+                invalid += int(not metadata)
             for target in (counts[kind], names[kind][name]):
                 target["count"] += 1
                 target["summed_duration_ns"] += duration

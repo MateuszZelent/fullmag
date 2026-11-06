@@ -33,8 +33,8 @@ namespace {
 
 constexpr size_t kBufferCount = 8;
 constexpr size_t kBufferBytes = 1024 * 1024;
-constexpr size_t kNameBytes = 256;
-constexpr size_t kLineBytes = 4096;
+constexpr size_t kNameBytes = 2048;
+constexpr size_t kLineBytes = 16384;
 constexpr uint64_t kMinBytes = FULLMAG_FEM_CUDA_TRACE_MIN_BYTES;
 constexpr uint64_t kMaxBytes = FULLMAG_FEM_CUDA_TRACE_MAX_BYTES;
 constexpr uint32_t kMinDurationMs = FULLMAG_FEM_CUDA_TRACE_MIN_DURATION_MS;
@@ -270,6 +270,7 @@ struct Event {
     uint64_t end_ns = 0;
     uint64_t correlation_id = 0;
     uint64_t runtime_correlation_id = 0;
+    uint64_t event_id = 0;
     uint64_t bytes = 0;
     uint64_t address = 0;
     uint64_t return_value = 0;
@@ -283,6 +284,7 @@ struct Event {
     bool has_bytes = false;
     bool has_address = false;
     bool has_return_value = false;
+    bool has_event_id = false;
     bool has_activity_kind = false;
     bool has_operation_kind = false;
     bool has_process_id = false;
@@ -290,10 +292,15 @@ struct Event {
     bool has_device_id = false;
     bool has_context_id = false;
     bool has_stream_id = false;
+    bool timestamps_applicable = true;
     bool timestamp_valid = true;
 };
 
 void note_timestamp(ActivityTrace &trace, Event *event) {
+    if (!event->timestamps_applicable) {
+        event->timestamp_valid = false;
+        return;
+    }
     if (event->start_ns == 0 || event->end_ns == 0 || event->end_ns < event->start_ns) {
         event->timestamp_valid = false;
         increment(trace.counts.incomplete_records);
@@ -318,6 +325,7 @@ void write_event(ActivityTrace &trace, const Event &event) {
     char bytes[32]{};
     char address[32]{};
     char return_value[32]{};
+    char event_id[32]{};
     char activity_kind[32]{};
     char operation_kind[32]{};
     char process_id[32]{};
@@ -331,6 +339,8 @@ void write_event(ActivityTrace &trace, const Event &event) {
     else std::strcpy(address, "null");
     if (event.has_return_value) std::snprintf(return_value, sizeof(return_value), "%llu", static_cast<unsigned long long>(event.return_value));
     else std::strcpy(return_value, "null");
+    if (event.has_event_id) std::snprintf(event_id, sizeof(event_id), "%llu", static_cast<unsigned long long>(event.event_id));
+    else std::strcpy(event_id, "null");
     if (event.has_activity_kind) std::snprintf(activity_kind, sizeof(activity_kind), "%lld", static_cast<long long>(event.activity_kind));
     else std::strcpy(activity_kind, "null");
     if (event.has_operation_kind) std::snprintf(operation_kind, sizeof(operation_kind), "%lld", static_cast<long long>(event.operation_kind));
@@ -345,14 +355,16 @@ void write_event(ActivityTrace &trace, const Event &event) {
     else std::strcpy(context_id, "null");
     if (event.has_stream_id) std::snprintf(stream_id, sizeof(stream_id), "%lld", static_cast<long long>(event.stream_id));
     else std::strcpy(stream_id, "null");
+    const char *timestamp_status = !event.timestamps_applicable
+        ? "not_applicable" : event.timestamp_valid ? "valid" : "incomplete";
 
     char line[kLineBytes]{};
     const uint64_t duration = event.timestamp_valid ? event.end_ns - event.start_ns : 0;
     const int length = std::snprintf(
         line, sizeof(line),
         "{\"type\":\"activity\",\"kind\":\"%s\",\"timestamp_domain\":\"cupti_activity_ns\","
-        "\"start_ns\":%llu,\"end_ns\":%llu,\"duration_ns\":%llu,\"timestamps_valid\":%s,"
-        "\"correlation_id\":%llu,\"runtime_correlation_id\":%llu,\"process_id\":%s,"
+        "\"start_ns\":%llu,\"end_ns\":%llu,\"duration_ns\":%llu,\"timestamps_valid\":%s,\"timestamp_status\":\"%s\","
+        "\"correlation_id\":%llu,\"runtime_correlation_id\":%llu,\"event_id\":%s,\"process_id\":%s,"
         "\"thread_id\":%s,\"device_id\":%s,\"context_id\":%s,\"stream_id\":%s,"
         "\"bytes\":%s,\"address\":%s,\"return_value\":%s,"
         "\"activity_kind\":%s,\"operation_kind\":%s,\"name\":%s,\"name_truncated\":%s}\n",
@@ -361,9 +373,10 @@ void write_event(ActivityTrace &trace, const Event &event) {
         static_cast<unsigned long long>(event.end_ns),
         static_cast<unsigned long long>(duration),
         event.timestamp_valid ? "true" : "false",
+        timestamp_status,
         static_cast<unsigned long long>(event.correlation_id),
         static_cast<unsigned long long>(event.runtime_correlation_id),
-        process_id, thread_id, device_id, context_id, stream_id,
+        event_id, process_id, thread_id, device_id, context_id, stream_id,
         bytes, address, return_value,
         activity_kind, operation_kind, quoted_name,
         name_truncated ? "true" : "false");
@@ -530,6 +543,20 @@ void process_record(ActivityTrace &trace, CUpti_Activity *record) {
             event.has_context_id = true;
             event.stream_id = item->streamId;
             event.has_stream_id = true;
+            break;
+        }
+        case CUPTI_ACTIVITY_KIND_CUDA_EVENT: {
+            const auto *item = reinterpret_cast<const CUpti_ActivityCudaEvent *>(record);
+            event.kind = "cuda_event_metadata";
+            event.name = "cuda_event_record";
+            event.timestamps_applicable = false;
+            event.correlation_id = item->correlationId;
+            event.context_id = item->contextId;
+            event.has_context_id = true;
+            event.stream_id = item->streamId;
+            event.has_stream_id = true;
+            event.event_id = item->eventId;
+            event.has_event_id = true;
             break;
         }
         case CUPTI_ACTIVITY_KIND_MEMORY2: {
@@ -728,7 +755,7 @@ bool append_header(ActivityTrace &trace, uint64_t max_bytes, uint32_t duration_m
         "\"timestamp_domain\":\"cupti_activity_ns\",\"cupti_api_version\":24,"
         "\"max_bytes\":%llu,\"max_duration_ms\":%u,"
         "\"activity_kinds\":[\"driver_api\",\"runtime_api\",\"kernel\",\"memcpy\","
-        "\"memset\",\"synchronization\",\"memory\"]}\n",
+        "\"memset\",\"synchronization\",\"memory\",\"cuda_event_metadata\"]}\n",
         static_cast<unsigned long long>(max_bytes), duration_ms);
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(header) ||
         static_cast<uint64_t>(length) > max_bytes) return false;
@@ -780,6 +807,8 @@ constexpr CUpti_ActivityKind kKinds[] = {
     CUPTI_ACTIVITY_KIND_SYNCHRONIZATION,
     CUPTI_ACTIVITY_KIND_MEMORY2,
 };
+// CUPTI Activity API 24 emits CUDA_EVENT metadata with SYNCHRONIZATION.
+// CUDA_EVENT itself cannot be passed to ActivityEnable/ActivityDisable.
 
 void terminate_failed_start(ActivityTrace &trace) {
     request_stop(trace);
@@ -863,6 +892,8 @@ extern "C" int fullmag_fem_cuda_trace_start_v1(
     for (size_t index = 0; index < std::size(kKinds); ++index) {
         const CUptiResult result = cuptiActivityEnable(kKinds[index]);
         if (result != CUPTI_SUCCESS) {
+            std::fprintf(stderr, "cuda_activity_trace: enable kind=%u failed: CUPTI result=%u\n",
+                         static_cast<unsigned>(kKinds[index]), static_cast<unsigned>(result));
             increment(g_trace.counts.api_errors);
             terminate_failed_start(g_trace);
             ::close(duplicate);
