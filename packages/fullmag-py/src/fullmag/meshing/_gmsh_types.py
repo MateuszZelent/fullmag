@@ -2157,9 +2157,32 @@ class MeshData:
     mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None
     # Retained mesh-owner labels, not authentication or a solved-field certificate.
     vertex_identity: Mapping[str, object] | None = None
+    # Mesher execution evidence only; never a solved-field certificate.
+    size_field_realization: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "nodes", np.asarray(self.nodes, dtype=np.float64))
+        if self.size_field_realization is not None:
+            report = json.loads(json.dumps(dict(self.size_field_realization), allow_nan=False))
+            if (set(report) != {"schema_version", "fields"}
+                    or report["schema_version"] != "mesh_size_field_realization.v1"
+                    or not isinstance(report["fields"], list)
+                    or any(not isinstance(item, dict) for item in report["fields"])):
+                raise ValueError("size_field_realization must use mesh_size_field_realization.v1")
+            keys = {"id", "role", "kind", "target", "status", "source", "reason",
+                    "gmsh_field_id", "params"}
+            for item in report["fields"]:
+                field_id = item.get("gmsh_field_id")
+                if (set(item) != keys
+                        or any(not isinstance(item.get(key), str) or not item[key]
+                               for key in ("id", "kind", "status", "source"))
+                        or item["role"] not in {"upper_target", "lower_bound"}
+                        or not isinstance(item["params"], dict)
+                        or any(item[key] is not None and not isinstance(item[key], str)
+                               for key in ("target", "reason"))
+                        or (field_id is not None and (type(field_id) is not int or field_id <= 0))):
+                    raise ValueError("invalid mesh size-field realization entry")
+            object.__setattr__(self, "size_field_realization", report)
         object.__setattr__(
             self, "vertex_identity", _owned_vertex_identity(self.vertex_identity, len(self.nodes))
         )
@@ -3023,6 +3046,7 @@ class MeshData:
         realization_report: MeshRealizationReport | None = None,
         mixed_layer_topology_certificate: MixedLayerTopologyCertificateLike | None = None,
         vertex_identity: Mapping[str, object] | None = None,
+        size_field_realization: Mapping[str, object] | None = None,
     ) -> "MeshData":
         """Normalize the explicit legacy tet4/tri3 boundary into canonical CSR."""
         tet = np.asarray(elements, dtype=np.int32)
@@ -3056,6 +3080,7 @@ class MeshData:
             realization_report=realization_report,
             mixed_layer_topology_certificate=mixed_layer_topology_certificate,
             vertex_identity=vertex_identity,
+            size_field_realization=size_field_realization,
             cell_mesh_parts=np.asarray([], dtype=np.str_),
         )
 
@@ -3490,6 +3515,7 @@ class MeshData:
             realization_report=self.realization_report,
             mixed_layer_topology_certificate=None,
             vertex_identity=self.vertex_identity,
+            size_field_realization=self.size_field_realization,
         )
 
     def save(self, path: str | Path) -> None:
@@ -3501,6 +3527,7 @@ class MeshData:
                     {
                         "mesh_name": target.stem,
                         "vertex_identity": _vertex_identity_to_dict(self.vertex_identity),
+                        "size_field_realization": self.size_field_realization,
                         "nodes": self.nodes.tolist(),
                         "cell_types": self.cell_types.tolist(),
                         "cell_offsets": self.cell_offsets.tolist(),
@@ -3542,6 +3569,7 @@ class MeshData:
             target,
             nodes=self.nodes,
             vertex_identity_json=np.asarray(json.dumps(_vertex_identity_to_dict(self.vertex_identity))),
+            size_field_realization_json=np.asarray(json.dumps(self.size_field_realization, allow_nan=False)),
             cell_types=self.cell_types,
             cell_offsets=self.cell_offsets,
             cell_nodes=self.cell_nodes,
@@ -3773,6 +3801,10 @@ class MeshData:
                 )
         payload = {name: data[name] for name in data.files if not name.endswith("_json")}
         payload.update(
+            size_field_realization=(
+                json.loads(str(data["size_field_realization_json"]))
+                if "size_field_realization_json" in data.files else None
+            ),
             vertex_identity=(
                 json.loads(str(data["vertex_identity_json"]))
                 if "vertex_identity_json" in data.files else None
@@ -3800,6 +3832,7 @@ class MeshData:
         common = dict(
             nodes=payload["nodes"],
             vertex_identity=payload.get("vertex_identity"),
+            size_field_realization=payload.get("size_field_realization"),
             element_markers=payload["element_markers"],
             boundary_markers=payload["boundary_markers"],
             periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],

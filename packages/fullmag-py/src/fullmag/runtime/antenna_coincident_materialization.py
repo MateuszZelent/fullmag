@@ -144,8 +144,8 @@ def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretizat
         if (ports[0].schema_version != "antenna_port_mode.v3" or ports[0].normalization is None
                 or ports[0].normalization.source_cut_ref != closure.source_cuts[0].source_cut_id):
             raise ValueError("coincident source requires explicit port v3 normalization bound to its sourcecut")
-        independent_workflow = {key: value for key, value in (mesh_workflow or {}).items()
-            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}}
+        independent_workflow = copy.deepcopy({key: value for key, value in (mesh_workflow or {}).items()
+            if key not in {"domain_mesh_source", "domain_region_markers", "domain_object_region_markers"}})
         raw_meshes = {}
         recipes = {magnet.geometry.geometry_name: magnet.mesh for magnet in problem.magnets
                    if magnet.geometry.geometry_name == geometry.geometry_name and isinstance(magnet.mesh, PerObjectMeshRecipe)}
@@ -182,13 +182,19 @@ def materialize_antenna_coincident_loops(problem, ir, *, geometries, discretizat
         payload["boundaries"] = []
         replacements[transport.name] = payload
         object_assets = [asset for asset in object_assets if asset["geometry_name"] != geometry.geometry_name]
+        mesh_ir = prepared.mesh.to_ir(geometry.geometry_name)
+        mesh_statistics = mesh_ir.pop("mesh_statistics", None)
         object_assets.append({"geometry_name": geometry.geometry_name, "mesh_source": None,
-                             "mesh": prepared.mesh.to_ir(geometry.geometry_name)})
+                             "mesh": mesh_ir})
         receipt = dict(prepared.receipt, input_digest=digest, mesh_revision=mesh_digest,
             geometry_digest=tagged_json_digest(geometry.to_ir()), materials_digest=materials_digest,
             source_cut_digest=tagged_json_digest(_exact_identity_preimage(closure_body)),
             authored_intent=closure.to_ir(), terminal_observation_count=len(observations),
             prepared_mesh_workflow=copy.deepcopy(independent_workflow),
+            prepared_mesh_statistics=mesh_statistics,
+            prepared_size_field_realization={
+                "status": "recorded" if raw.size_field_realization is not None else "not_recorded",
+                "report": copy.deepcopy(raw.size_field_realization)},
             prepared_per_object_recipes={name: recipe.to_ir() for name, recipe in recipes.items()})
         receipts.append({"current_transport_id": transport.name, "object_id": owner,
                          "geometry_id": geometry.geometry_name, "preparation": receipt})

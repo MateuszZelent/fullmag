@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
+import copy
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -148,7 +149,8 @@ def split_coincident_sourcecut(mesh, *, seam_faces, stable_vertex_ids, normal_wo
     result = MeshData.from_legacy_tet4(nodes=result_nodes, elements=cells,
         element_markers=np.array(mesh.element_markers, copy=True), boundary_faces=np.asarray(boundary),
         boundary_markers=np.asarray(markers), vertex_identity=None,
-        quality=mesh.quality, per_domain_quality=mesh.per_domain_quality)
+        quality=mesh.quality, per_domain_quality=mesh.per_domain_quality,
+        size_field_realization=mesh.size_field_realization)
     cut = ConservativeCurrentSourceCut(source_cut_id, (0.0, 0.0, 0.0), potential_jump_v, pairs,
                                       closure_operator_version="fem_closed_current_geometry.v2")
     return result, new_ids, cut
@@ -205,7 +207,10 @@ def realize_antenna_coincident_loop_mesh(closure, *, geometry, object_id, hmax_m
             raise ValueError("Gmsh did not create the authored sourcecut surface")
         gmsh.model.addPhysicalGroup(2, selected, tag=2)
         gmsh.model.setPhysicalName(2, 2, "sourcecut")
-        options = mesh_options or MeshOptions()
+        options = (replace(mesh_options,
+            size_fields=copy.deepcopy(mesh_options.size_fields),
+            lower_bound_fields=copy.deepcopy(mesh_options.lower_bound_fields))
+            if mesh_options is not None else MeshOptions())
         if options.mesh_strategy not in {None, "auto", "free_tetrahedral"} or options.periodic_pair_ids:
             raise ValueError("coincident loop supports only nonperiodic free Tet4 meshing")
         _apply_mesh_options(gmsh, hmax_m * scale, 1, options, hscale=scale)
@@ -216,7 +221,11 @@ def realize_antenna_coincident_loop_mesh(closure, *, geometry, object_id, hmax_m
                                  quality=quality, per_domain_quality=per_domain)
     finally:
         gmsh.finalize()
-    return replace(raw, nodes=raw.nodes / scale,
+    from .mesh_build_report import _realized_size_field_report
+    field_report = {"schema_version": "mesh_size_field_realization.v1",
+                    "fields": _realized_size_field_report(options.size_fields,
+                        lower_bound_fields=options.lower_bound_fields)}
+    return replace(raw, nodes=raw.nodes / scale, size_field_realization=field_report,
         quality=_quality_volumes_in_si(raw.quality, scale),
         per_domain_quality=(
             {marker: _quality_volumes_in_si(report, scale)
