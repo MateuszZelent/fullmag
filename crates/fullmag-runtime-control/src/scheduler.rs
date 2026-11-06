@@ -290,6 +290,8 @@ fn step_is_ready(
     {
         return Ok(false);
     }
+    let authored_state_ready =
+        crate::study::validate_accepted_authored_initial_state(accepted, study_step)?;
     // Retry the short writer transaction, not the expensive immutable Study
     // load. Re-read task ownership under that writer after every wait so a
     // concurrent cancellation or claim cannot leave a stale ready frontier.
@@ -329,6 +331,7 @@ fn step_is_ready(
                 run_id.as_str(),
                 &study_step.inputs,
                 &catalog,
+                authored_state_ready,
             )?)
     })
 }
@@ -706,7 +709,7 @@ pub fn resume_next_admitted_accepted_task_with_host(
         let resolved_inputs = crate::resolve_accepted_study_inputs(
             store,
             run_id.as_str(),
-            &accepted.study.steps,
+            &accepted,
             study_step,
             captured_inputs.clone(),
             &current_catalog,
@@ -1295,8 +1298,15 @@ fn inputs_are_automatically_resolvable(
     run_id: &str,
     inputs: &[fullmag_authoring::StudyInputPort],
     catalog: &fullmag_session::FmsRunCatalog,
+    authored_state_ready: bool,
 ) -> Result<bool> {
     for input in inputs.iter().filter(|input| input.required) {
+        if matches!(&input.source, StudyInputSource::AuthoredInitialState { .. }) {
+            if !authored_state_ready {
+                return Ok(false);
+            }
+            continue;
+        }
         // A content-pinned state (live continuation, ADR 0068 F5) is ready
         // once its exact CAS object is present.
         if let StudyInputSource::PinnedArtifact { content_sha256, .. } = &input.source {

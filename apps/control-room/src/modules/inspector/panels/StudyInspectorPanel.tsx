@@ -12,9 +12,13 @@ import {
   Square,
   Upload,
 } from "lucide-react";
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+
+import { flushSync } from "react-dom";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { CommandResult } from "@/kernel/commands/commandTypes";
+import { studyComputeDraftBlockedReason } from "@/kernel/authoring/studyComputeDraftGuard";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { runFdmGridRefreshOperation } from "@/kernel/authoring/geometryLifecycleCommandContributions";
 import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
@@ -30,9 +34,11 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
+  SIMULATION_STAGES_RESULTS_PATH,
 } from "@/kernel/api/apiPaths";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
+  AuthoringTransactionResponse,
   CheckpointEntry,
   FrequencyDomainManifestResource,
   LiveStatusResource,
@@ -95,7 +101,7 @@ import {
 } from "@/shared/ui/Dialog";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { useRegisterInspectorEditSession, type InspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
@@ -114,9 +120,11 @@ import {
   type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 import {
+  buildStudyPipelineStageMergePatch,
   buildStudyStagesMergePatch,
   createDefaultStudyStageDraft,
   createStudyStageDrafts,
+  readStageTextureAssignments,
   validateStudyStageDraft,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -147,6 +155,10 @@ import {
 import type { K0ModalExecutionReadiness } from "./StudyStageAuthoringModel";
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import { StudyProgressBar } from "./StudyProgressBar";
+import type { StageInitialStateChoice } from "@/kernel/runtime/studyStageInitialState";
+
+import { captureStudyComputeInput } from "@/kernel/runtime/studyComputeInput";
+import { executeStageAfterApply, type StageApplyRunPin } from "./studyStageApplyAndRun";
 
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 
@@ -189,7 +201,7 @@ type StudyInspectorPanelAction =
       signature: string;
     }
   | { type: "acceptGlobalDraft" }
-  | { type: "acceptStageDrafts" }
+  | { type: "acceptStageDrafts"; submittedDrafts: StudyStageDraft[]; committedPipelineDraft?: StudyStageDraft }
   | { type: "revertGlobalDraft" }
   | { type: "revertStageDrafts" }
   | {
@@ -269,7 +281,9 @@ export function studyInspectorPanelReducer(
         authoringFeedback: null,
         authoringFeedbackScope: null,
         baselineGlobalDraft: action.globalDraft,
-        baselineStageDrafts: action.drafts,
+        baselineStageDrafts: action.preserveStageDrafts?.some((draft) => draft.pipelineNodeId)
+          ? state.baselineStageDrafts
+          : action.drafts,
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
         globalDraft: action.preserveGlobalDraft ?? action.globalDraft,
@@ -281,8 +295,22 @@ export function studyInspectorPanelReducer(
       };
     case "acceptGlobalDraft":
       return { ...state, baselineGlobalDraft: state.globalDraft };
-    case "acceptStageDrafts":
-      return { ...state, baselineStageDrafts: state.stageDrafts };
+    case "acceptStageDrafts": {
+      const committed = action.committedPipelineDraft;
+      if (!committed) return { ...state, baselineStageDrafts: action.submittedDrafts };
+      const submitted = action.submittedDrafts.find((draft) => draft.pipelineNodeId === committed.pipelineNodeId);
+      return {
+        ...state,
+        baselineStageDrafts: action.submittedDrafts.map((draft) =>
+          draft === submitted ? committed : draft,
+        ),
+        stageDrafts: state.stageDrafts.map((draft) => {
+          if (draft.pipelineNodeId !== committed.pipelineNodeId) return draft;
+          if (JSON.stringify(draft) === JSON.stringify(submitted)) return committed;
+          return { ...draft, rawStage: committed.rawStage };
+        }),
+      };
+    }
     case "revertGlobalDraft":
       return {
         ...state,
@@ -300,6 +328,9 @@ export function studyInspectorPanelReducer(
           state.baselineStageDrafts,
         ),
         stageDrafts: state.baselineStageDrafts,
+        authoringDraftsInitialized: state.baselineStageDrafts.some((draft) => draft.pipelineNodeId)
+          ? false
+          : state.authoringDraftsInitialized,
       };
     case "updateGlobalDraft":
       return {
@@ -599,6 +630,11 @@ type StudyInspectorRuntimeStatus = {
     | "mesh_build_revision"
     | "mesh_revision"
     | "commands_revision"
+    | "domain_generation_id"
+    | "region_coefficients_revision"
+    | "region_initial_state_revision"
+    | "region_membership_revision"
+    | "region_topology_revision"
     | "scalars_revision"
     | "scene_revision"
     | "stages_revision"
@@ -625,6 +661,11 @@ function selectStudyInspectorRuntimeStatus(status: {
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
       commands_revision: status.data.resources.commands_revision,
+      domain_generation_id: status.data.resources.domain_generation_id,
+      region_coefficients_revision: status.data.resources.region_coefficients_revision,
+      region_initial_state_revision: status.data.resources.region_initial_state_revision,
+      region_membership_revision: status.data.resources.region_membership_revision,
+      region_topology_revision: status.data.resources.region_topology_revision,
       scalars_revision: status.data.resources.scalars_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
@@ -684,6 +725,11 @@ export function studyInspectorRuntimeStatusEquals(
       next.resources.mesh_build_revision &&
     previous.resources.mesh_revision === next.resources.mesh_revision &&
     previous.resources.commands_revision === next.resources.commands_revision &&
+    previous.resources.domain_generation_id === next.resources.domain_generation_id &&
+    previous.resources.region_coefficients_revision === next.resources.region_coefficients_revision &&
+    previous.resources.region_initial_state_revision === next.resources.region_initial_state_revision &&
+    previous.resources.region_membership_revision === next.resources.region_membership_revision &&
+    previous.resources.region_topology_revision === next.resources.region_topology_revision &&
     previous.resources.scalars_revision === next.resources.scalars_revision &&
     previous.resources.scene_revision === next.resources.scene_revision &&
     previous.resources.stages_revision === next.resources.stages_revision &&
@@ -737,6 +783,10 @@ export function useStudyInspectorPanelController(
   selection: InspectorPanelProps["selection"],
 ) {
   const kernel = useKernel();
+  const commands = kernel.commands;
+  const subscribeCommands = useCallback((listener: () => void) => commands.subscribe(listener), [commands]);
+  const getCommandVersion = useCallback(() => commands.getVersion(), [commands]);
+  useSyncExternalStore(subscribeCommands, getCommandVersion, getCommandVersion);
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const [state, dispatch] = useReducer(
     studyInspectorPanelReducer,
@@ -858,6 +908,11 @@ export function useStudyInspectorPanelController(
   const sceneRevision = sceneRevisionValue(scene.data);
   const authoringScopeKey = `${sessionScopeKey ?? "no-session"}:${kernel.api.resourceCacheScope}`;
   const acknowledgedSceneRevisionRef = useRef<number | null>(null);
+  const stageSaveInFlight = useRef(false);
+  const stageApplyRun = useRef<{
+    pin: StageApplyRunPin;
+    receipt: AuthoringTransactionResponse | null;
+  } | null>(null);
   const authoritativeSceneRef = useRef<SceneResource | null>(scene.data);
   const authoritativeScopeRef = useRef(authoringScopeKey);
   const authoritativeSnapshotScopeRef = useRef<string | null>(
@@ -1051,22 +1106,50 @@ export function useStudyInspectorPanelController(
       ? null
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
+  const buildStudyProgress = commands.isActive("study.build-and-run", commandContext)
+    ? commandDisabledReason("study.build-and-run") ?? "An existing Build + Study is pending. Check it again to continue."
+    : null;
   const commitStageDraftsImpl = async () => {
+    const launch = stageApplyRun.current;
+    const submittedDrafts = state.stageDrafts;
+    const textureEdits = submittedDrafts.filter((draft, index) =>
+      JSON.stringify(draft.stageMagnetizationAssignments) !==
+        JSON.stringify(state.baselineStageDrafts[index]?.stageMagnetizationAssignments),
+    );
     const currentScene = await readAuthoritativeScene();
-    if (!currentScene) {
+    const expectedRevision = launch?.pin.scene_revision ??
+      (textureEdits.length > 0 ? numericSceneRevision(sceneRevision) : undefined);
+    if (!currentScene || (expectedRevision !== undefined && currentScene.revision !== expectedRevision)) {
       dispatch({
         type: "setAuthoringFeedback",
         scope: "stages",
         feedback: {
           kind: "error",
-          message: "Could not read the current scene revision. Refresh the scene before saving stages.",
+          message: launch || textureEdits.length > 0
+            ? "The Study changed before saving. Review the stage draft and try again."
+            : "Could not read the current scene revision. Refresh the scene before saving stages.",
         },
       });
       return false;
     }
+    const isCanonical = readStudyStageSource(asRecord(currentScene.scene)?.study).kind === "pipeline";
+    const changed = isCanonical
+      ? submittedDrafts.filter((draft, index) =>
+          JSON.stringify(draft) !== JSON.stringify(state.baselineStageDrafts[index]),
+        )
+      : [];
+    const pipelineDraft = changed.length === 1 ? changed[0] : null;
+    if (isCanonical && !pipelineDraft) {
+      dispatch({
+        type: "setAuthoringFeedback",
+        scope: "stages",
+        feedback: { kind: "error", message: "Save one edited canonical Run or Relax stage at a time." },
+      });
+      return false;
+    }
     if (
-      hasStudyExecutionProfile(currentScene.scene) &&
-      hasChangeDeviceStudyStage(currentScene.scene, state.stageDrafts)
+      !isCanonical && hasStudyExecutionProfile(currentScene.scene) &&
+      hasChangeDeviceStudyStage(currentScene.scene, submittedDrafts)
     ) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -1079,8 +1162,9 @@ export function useStudyInspectorPanelController(
       });
       return false;
     }
-    const localIssues = state.stageDrafts.flatMap((draft, index) =>
-      validateStudyStageDraft(draft, {
+    const localIssues = submittedDrafts.flatMap((draft, index) => {
+      if (pipelineDraft && pipelineDraft !== draft) return [];
+      return validateStudyStageDraft(draft, {
         activeLane: runtimeStatus?.capabilities.active_lane ?? null,
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -1092,15 +1176,28 @@ export function useStudyInspectorPanelController(
       }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
-      })),
-    );
-    const workflowIssues = validateStudyWorkflow(state.stageDrafts).map(
-      (issue) => ({
+      }));
+    });
+    const workflowIssues = validateStudyWorkflow(submittedDrafts)
+      .filter((issue) => !pipelineDraft || submittedDrafts[issue.index] === pipelineDraft)
+      .map((issue) => ({
         ...issue,
         message: `Stage ${issue.index + 1}: ${issue.message}`,
+      }));
+    const textureTargetsValid = textureEdits.every((draft) =>
+      (readStageTextureAssignments(draft.stageMagnetizationAssignments) ?? []).every((assignment) => {
+        const object = currentScene.scene.objects?.find((candidate) =>
+          candidate.id === assignment.object_id && candidate.role === "magnet",
+        );
+        return object && (assignment.region_id === null ||
+          object.regions?.some((region) => region.region_id === assignment.region_id));
       }),
     );
     const issues = [...localIssues, ...workflowIssues];
+    if (!textureTargetsValid) issues.push({
+      message: "A stage texture target is no longer present in the saved scene.",
+      severity: "error",
+    });
     const errors = issues.filter((issue) => issue.severity === "error");
     if (errors.length > 0) {
       dispatch({
@@ -1123,28 +1220,61 @@ export function useStudyInspectorPanelController(
         mutationContext,
         "Edit study stages",
         () => kernel.api.model.commitTransaction(
-          buildStudyStagesMergePatch(state.stageDrafts, baseRevision, currentScene.scene),
+          pipelineDraft
+            ? buildStudyPipelineStageMergePatch(pipelineDraft, baseRevision, currentScene.scene)
+            : buildStudyStagesMergePatch(submittedDrafts, baseRevision, currentScene.scene),
           sessionScopeKey ? { sessionScopeKey } : undefined,
         ),
       );
       if (mutationContext.isCurrentSessionScope() === false) return false;
       const revision = response.scene_revision;
+      const acknowledgedSource = pipelineDraft
+        ? readStudyStageSource(asRecord(response.committed_scene)?.study)
+        : null;
+      const committedEntry = acknowledgedSource?.kind === "pipeline"
+        ? acknowledgedSource.entries.find((entry) => entry.queueId === pipelineDraft?.pipelineNodeId)
+        : undefined;
+      const committedPipelineDraft = committedEntry && committedEntry.stageKind === pipelineDraft?.kind
+        ? createPipelineStudyStageDrafts([committedEntry])[0]
+        : undefined;
+      if (pipelineDraft && (!committedPipelineDraft || response.committed_scene?.revision !== revision)) {
+        scene.refetch();
+        throw new Error("The save response did not confirm the edited canonical stage. Review the refreshed scene before retrying.");
+      }
       acknowledgedSceneRevisionRef.current = revision;
+      if (response.committed_scene?.revision === revision) {
+        authoritativeSceneRef.current = response.committed_scene;
+        authoritativeSnapshotScopeRef.current = authoringScopeKey;
+      }
       kernel.resources.invalidate(MODEL_SCENE_PATH, revision);
       kernel.resources.invalidate(MODEL_READINESS_PATH, revision);
       kernel.resources.invalidate(MODEL_STUDY_PATH, revision);
       kernel.resources.invalidate(SESSION_STATUS_RESOURCE_KEY, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_EXECUTION_PATH, revision);
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
+      kernel.resources.invalidate(SIMULATION_STAGES_RESULTS_PATH, revision);
+      kernel.resources.invalidatePrefix?.(`${SIMULATION_STAGES_RESULTS_PATH}?`, revision);
       dispatch({
         type: "setAuthoringFeedback",
         scope: "stages",
         feedback: {
           kind: "success",
-          message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
+          message: pipelineDraft
+            ? `Saved stage ${pipelineDraft.stageId}.`
+            : `Committed ${submittedDrafts.length} study stage${submittedDrafts.length === 1 ? "" : "s"}.`,
         },
       });
-      dispatch({ type: "acceptStageDrafts" });
+      if (launch) {
+        launch.receipt = response;
+        // Make the submitted baseline visible to the shared guard before the
+        // explicit Apply-and-Run gesture continues. Newer edits remain dirty.
+        flushSync(() => {
+          dispatch({ type: "acceptStageDrafts", submittedDrafts, committedPipelineDraft });
+          dispatch({ type: "setAuthoringBusy", busy: false });
+        });
+      } else {
+        dispatch({ type: "acceptStageDrafts", submittedDrafts, committedPipelineDraft });
+      }
       return true;
     } catch (error) {
       if (mutationContext.isCurrentSessionScope() === false) return false;
@@ -1439,11 +1569,126 @@ export function useStudyInspectorPanelController(
     commitGlobalDraft: commitGlobalDraftImpl,
     commitExecutionProfile: commitExecutionProfileImpl,
   };
-  const commitStageDrafts = owner.commitStageDrafts;
+  const commitStageDrafts = async () => {
+    if (stageSaveInFlight.current) return false;
+    stageSaveInFlight.current = true;
+    try {
+      return await owner.commitStageDrafts();
+    } finally {
+      stageSaveInFlight.current = false;
+    }
+  };
+
+  const stageRunDisabledReason = (
+    stageId: string,
+    applyDraft: boolean,
+    form: InspectorEditSession | null,
+  ): string | null => {
+    if (stageApplyRun.current || stageSaveInFlight.current || state.authoringBusy) {
+      return "Wait for the stage save to finish.";
+    }
+    if (!applyDraft) {
+      const context = { ...commandContext, input: { stageId } };
+      return commands.isEnabled("study.execute-stage", context)
+        ? null
+        : commands.get("study.execute-stage")?.disabledReason?.(context) ?? "Stage execution is unavailable.";
+    }
+
+    const selectedCount = state.stageDrafts.filter((draft) => draft.stageId === stageId).length;
+    const baselineCount = state.baselineStageDrafts.filter((draft) => draft.stageId === stageId).length;
+    if (selectedCount !== 1 || baselineCount !== 1) {
+      return "Save the Study first so the selected stage has a unique committed ID.";
+    }
+    const otherDraftsChanged = state.stageDrafts.length !== state.baselineStageDrafts.length ||
+      state.stageDrafts.some((draft, index) => {
+        const baseline = state.baselineStageDrafts[index];
+        return (draft.stageId !== stageId || baseline.stageId !== stageId) &&
+          JSON.stringify(draft) !== JSON.stringify(baseline);
+      });
+    if (otherDraftsChanged) return "Apply or discard changes to other Study stages first.";
+    const geometryReason = studyComputeDraftBlockedReason({ ...commandContext, pendingForms: undefined });
+    if (geometryReason) return geometryReason;
+
+    const forms = kernel.pendingForms;
+    const pending = forms?.getTransitionSnapshot();
+    if (!form || !forms || !pending || forms.current() !== form || !form.dirty) {
+      return "Wait for the stage draft to be available.";
+    }
+    if (pending.dirtyOwnerCount !== 1) return "Apply or discard the other Inspector changes first.";
+    if (!forms.canApply()) {
+      return pending.blockedReason ?? "Resolve stage draft validation errors before applying.";
+    }
+    if (!runtimeStatus || numericSceneRevision(sceneRevision) !== runtimeStatus.resources.scene_revision) {
+      return "Wait for the displayed Study to refresh before saving and starting.";
+    }
+    return null;
+  };
+
+  const runStage = async (
+    stageId: string,
+    applyDraft: boolean,
+    form: InspectorEditSession | null,
+    initialState?: StageInitialStateChoice,
+  ): Promise<CommandResult> => {
+    const reason = stageRunDisabledReason(stageId, applyDraft, form);
+    if (reason) return { message: reason, status: "failed" };
+    if (!applyDraft) {
+      return commands.execute("study.execute-stage", commandContext, {
+        stageId,
+        initialState: initialState ?? { kind: "default_for_target" },
+      });
+    }
+
+    if (initialState?.kind === "prepared") {
+      return { message: "Save the stage first, then choose a prepared magnetization for the saved scene.", status: "failed" };
+    }
+    const baseRevision = numericSceneRevision(sceneRevision);
+    const forms = kernel.pendingForms;
+    if (!forms || !runtimeStatus || baseRevision === null) {
+      return { message: "The stage draft has no committed Study revision.", status: "failed" };
+    }
+    const launch = {
+      pin: {
+        ...captureStudyComputeInput(runtimeStatus),
+        scene_revision: baseRevision,
+      },
+      receipt: null as AuthoringTransactionResponse | null,
+    };
+    stageApplyRun.current = launch;
+    let scopeCurrent = true;
+    const unsubscribe = commands.subscribeSessionScope(() => {
+      if (commandContext.isCurrentSessionScope?.() === false) scopeCurrent = false;
+    });
+    try {
+      return await executeStageAfterApply({
+        api: kernel.api,
+        apply: async () => {
+          const result = await forms.apply();
+          return result.status === "completed" ? launch.receipt : null;
+        },
+        execute: (input, resources) => commands.execute("study.execute-stage", {
+          ...commandContext,
+          resourceData: { ...commandContext.resourceData, ...resources },
+        }, input),
+        isCurrent: () => scopeCurrent &&
+          commandContext.isCurrentSessionScope?.() !== false &&
+          kernel.selection.get().nodeId === selection.nodeId &&
+          forms.current() === form,
+        initialState,
+        pin: launch.pin,
+        requestOptions: sessionScopeKey ? { sessionScopeKey } : undefined,
+        stageId,
+      });
+    } finally {
+      unsubscribe();
+      stageApplyRun.current = null;
+    }
+  };
   const commitGlobalDraft = owner.commitGlobalDraft;
   const commitExecutionProfile = owner.commitExecutionProfile;
   return {
     activeStageIndex,
+    buildStudyProgress,
     checkpointCatalog,
     checkpoints,
     commandDetail,
@@ -1459,8 +1704,11 @@ export function useStudyInspectorPanelController(
     latestCheckpoint,
     k0ModalReadinessFor,
     model,
+    modelReadiness,
     runtimeStatus,
     runCommand,
+    runStage,
+    stageRunDisabledReason,
     scene,
     sceneHasPayload,
     sceneMagneticObjectCount,
@@ -1489,6 +1737,7 @@ export function StudyInspectorPanel({
   sectionScope?: StudyInspectorSectionScope;
 }) {
   const {
+    buildStudyProgress,
     activeStageIndex,
     checkpointCatalog,
     checkpoints,
@@ -1674,6 +1923,7 @@ export function StudyInspectorPanel({
 
         {showRuntime ? (
           <StudyRuntimeSection
+            buildStudyProgress={buildStudyProgress}
             commandDisabledReason={commandDisabledReason}
             model={model}
             onOpenCommand={(commandId) =>
@@ -1935,6 +2185,7 @@ function stageExecutionFeedback(
 }
 
 export function StudyRuntimeSection({
+  buildStudyProgress,
   commandDisabledReason,
   model,
   onOpenCommand,
@@ -1942,6 +2193,7 @@ export function StudyRuntimeSection({
   stageExecution,
   stepValue,
 }: {
+  buildStudyProgress?: string | null;
   commandDisabledReason: StudyCommandDisabledReason;
   model: StudyInspectorModel;
   onOpenCommand: (commandId: string) => void;
@@ -2051,6 +2303,7 @@ export function StudyRuntimeSection({
         </>
       ) : null}
       <FieldRow label="Step" value={stepValue} />
+      {buildStudyProgress ? <p role="status">{buildStudyProgress}</p> : null}
       <StudyProgressBar
         label="Current study progress"
         value={model.runtime.progressPercent}
@@ -2063,6 +2316,23 @@ export function StudyRuntimeSection({
           label="Compute"
           onRun={runCommand}
         />
+        <StudyCommandButton
+          commandId="study.build-and-run"
+          disabledReason={commandDisabledReason("study.build-and-run")}
+          icon={<Play size={13} />}
+          label="Build + Study"
+          onRun={runCommand}
+        />
+        {buildStudyProgress ? (
+          <StudyCommandButton
+            commandId="study.cancel-build-and-run"
+            disabledReason={commandDisabledReason("study.cancel-build-and-run")}
+            icon={<Square size={13} />}
+            label="Cancel Build + Study"
+            onRun={runCommand}
+            variant="ghost"
+          />
+        ) : null}
         <StudyCommandButton
           commandId="study.pause"
           disabledReason={commandDisabledReason("study.pause")}

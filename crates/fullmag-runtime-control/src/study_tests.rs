@@ -1,4 +1,6 @@
-use super::validate_requested_execution;
+use super::{
+    materialize_accepted_worker_execution_plan, validate_requested_execution, AcceptedWorkerStep,
+};
 use fullmag_application::{
     ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget, RunSpecification,
     StudyId, StudyReference,
@@ -129,6 +131,235 @@ fn run_spec(device: &str) -> RunSpecification {
             minimum_resources: None,
         },
     )
+}
+
+#[test]
+fn relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset() {
+    use fullmag_application::{
+        decode_study_artifact_bytes, materialize_fdm_preparation_from_problem,
+        DecodedStudyArtifact, PreparationBinding, ResolvedInput, ResolvedStudyArtifact,
+        ResolvedTaskInput, ResourceBudget, ResourceKind, ResourceLease, TaskRecord,
+        RESOLVED_TASK_INPUT_SCHEMA, STUDY_MAGNETIZATION_CODEC_ID,
+        STUDY_MAGNETIZATION_CODEC_VERSION,
+    };
+    use fullmag_authoring::{StudyInputPort, StudyInputSource, StudyPortDataKind};
+    use fullmag_ir::{
+        BackendPlanIR, EnergyTermIR, ExecutionPlanIR, InitialMagnetizationIR, RelaxStopIR,
+        RelaxationAlgorithmIR, StudyIR,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = fullmag_session::SessionStore::open(directory.path().join("store")).unwrap();
+    let run = run_spec("cpu");
+    let make_step = |step_id: &str, algorithm, field_tesla| {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        });
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            json!({"device": "cpu", "precision": "double", "source": "qualification_fixture"}),
+        );
+        problem
+            .energy_terms
+            .push(EnergyTermIR::Zeeman { b: field_tesla });
+        let StudyIR::TimeEvolution { dynamics, sampling } = problem.study else {
+            panic!("expected the bootstrap dynamics fixture");
+        };
+        problem.study = StudyIR::Relaxation {
+            algorithm,
+            dynamics: (algorithm == RelaxationAlgorithmIR::LlgOverdamped).then_some(dynamics),
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1e-4),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+            sampling,
+        };
+        let execution_plan = fullmag_plan::plan(&problem).unwrap();
+        let receipt = materialize_fdm_preparation_from_problem(
+            format!("prep-{step_id}"),
+            1,
+            &problem,
+            &json!({}),
+        )
+        .unwrap();
+        let mut task = TaskRecord::new(run.run_id.clone(), "a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        let claim = task
+            .claim(
+                ResourceLease::new(
+                    "cpu-test",
+                    ResourceKind::Cpu,
+                    ResourceBudget {
+                        cpu_millis: 100,
+                        memory_bytes: 1 << 20,
+                        gpu_memory_bytes: 0,
+                        storage_bytes: 1 << 20,
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let resolved_input = ResolvedTaskInput {
+            schema_version: RESOLVED_TASK_INPUT_SCHEMA.into(),
+            run_id: claim.run_id.clone(),
+            task_id: claim.task_id.clone(),
+            attempt_id: claim.attempt_id.clone(),
+            ownership_epoch: claim.ownership_epoch,
+            specification_fingerprint: run.fingerprint().unwrap(),
+            plan_fingerprint: fullmag_session::canonical_json_sha256(
+                &serde_json::to_value(&execution_plan).unwrap(),
+            ),
+            requested_execution: run.requested_execution.clone(),
+            preparation: PreparationBinding::from_receipt(&receipt).unwrap(),
+            inputs: Default::default(),
+            frozen_stage_context: None,
+        };
+        AcceptedWorkerStep {
+            claim,
+            step_id: step_id.into(),
+            study_inputs: vec![],
+            initial_state_overlay: None,
+            problem,
+            execution_plan,
+            until_seconds: None,
+            resolved_input,
+        }
+    };
+    let samples = |plan: ExecutionPlanIR| {
+        let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+            panic!("expected FDM")
+        };
+        fdm.initial_magnetization
+    };
+    let decode_state = |kind, bytes: &[u8]| {
+        let DecodedStudyArtifact::MagnetizationState(state) = decode_study_artifact_bytes(
+            kind,
+            STUDY_MAGNETIZATION_CODEC_ID,
+            STUDY_MAGNETIZATION_CODEC_VERSION,
+            bytes,
+        )
+        .unwrap() else {
+            panic!("expected the runner magnetization codec");
+        };
+        state
+    };
+    let execute = |step: &AcceptedWorkerStep, plan: &ExecutionPlanIR, case: &str| {
+        let output_dir = directory.path().join(case);
+        let result = fullmag_runner::run_planned_problem(&step.problem, plan, 1e-12, &output_dir)
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(
+            result.status,
+            fullmag_runner::RunStatus::Completed,
+            "{case}"
+        );
+        let initial = std::fs::read(output_dir.join("m_initial.json")).unwrap();
+        let initial = decode_state("initial_state", &initial);
+        assert_eq!(initial.step, 0);
+        assert_eq!(initial.time_s, 0.0);
+        assert_eq!(initial.provenance["execution_engine"], "cpu_reference");
+        (
+            initial,
+            std::fs::read(output_dir.join("m_final.json")).unwrap(),
+        )
+    };
+    let first = make_step(
+        "relax-a",
+        RelaxationAlgorithmIR::LlgOverdamped,
+        [0.0, 0.1, 0.0],
+    );
+    let mut second = make_step(
+        "relax-b",
+        RelaxationAlgorithmIR::ProjectedGradientBb,
+        [0.0, 0.0, 0.1],
+    );
+    let mut third = make_step(
+        "relax-c",
+        RelaxationAlgorithmIR::NonlinearCg,
+        [0.1, 0.0, 0.0],
+    );
+    let first_plan = materialize_accepted_worker_execution_plan(&store, &first).unwrap();
+    let (authored, mut predecessor_bytes) = execute(&first, &first_plan, "relax-a");
+    let mut expected_start = authored.values.clone();
+
+    for (source_stage, target) in [("relax-a", &mut second), ("relax-b", &mut third)] {
+        let previous = decode_state("state", &predecessor_bytes);
+        // The transverse field must move the state enough to detect a mistaken reset or skipped stage.
+        assert!(
+            previous
+                .values
+                .iter()
+                .zip(&expected_start)
+                .any(|(final_m, initial_m)| {
+                    final_m
+                        .iter()
+                        .zip(initial_m)
+                        .any(|(after, before)| (after - before).abs() > 1e-5)
+                }),
+            "{source_stage} did not produce a distinguishable final state"
+        );
+        let artifact_id = format!("{source_stage}-final");
+        let object_ref = store.cas().put(&predecessor_bytes).unwrap();
+        target.study_inputs.push(StudyInputPort {
+            port_id: "initial_state".into(),
+            data_kind: StudyPortDataKind::State,
+            required: true,
+            source: StudyInputSource::StepOutput {
+                step_id: source_stage.into(),
+                port: "final_state".into(),
+                case_id: "default".into(),
+            },
+        });
+        let unresolved = materialize_accepted_worker_execution_plan(&store, target).unwrap_err();
+        assert!(unresolved.to_string().contains("has no resolved artifact"));
+        target.resolved_input.inputs.insert(
+            "initial_state".into(),
+            ResolvedInput {
+                source: artifact_id.clone(),
+                content_sha256: object_ref.clone(),
+                study_artifact: Some(ResolvedStudyArtifact {
+                    artifact_id,
+                    object_ref,
+                    data_kind: "state".into(),
+                    codec_id: STUDY_MAGNETIZATION_CODEC_ID.into(),
+                    codec_version: STUDY_MAGNETIZATION_CODEC_VERSION.into(),
+                }),
+            },
+        );
+        let bound = materialize_accepted_worker_execution_plan(&store, target).unwrap();
+        let (initial, final_bytes) = execute(target, &bound, &target.step_id);
+        assert_eq!(initial.layout, previous.layout);
+        assert_eq!(samples(bound), previous.values, "{}", target.step_id);
+        assert_eq!(initial.values.len(), previous.values.len());
+        // The CPU state constructor normalizes unit vectors again. Compare each component.
+        for (index, (actual, expected)) in initial.values.iter().zip(&previous.values).enumerate() {
+            assert!(
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(a, b)| (a - b).abs() <= 1e-12),
+                "{} sample {index} differs from the predecessor's final state",
+                target.step_id
+            );
+        }
+        expected_start = initial.values;
+        predecessor_bytes = final_bytes;
+    }
+
+    // Repeating the original uniform texture is a distinct authored input for B.
+    second.study_inputs[0].source = StudyInputSource::AuthoredInitialState {
+        reference: fullmag_plan::authored_initial_state_reference(&second.step_id, &second.problem)
+            .unwrap(),
+    };
+    second.study_inputs[0].data_kind = StudyPortDataKind::InitialState;
+    second.resolved_input.inputs.clear();
+    let reset_plan = materialize_accepted_worker_execution_plan(&store, &second).unwrap();
+    let (reset, _) = execute(&second, &reset_plan, "relax-b-authored-reset");
+    assert_eq!(samples(reset_plan), authored.values);
+    assert_eq!(reset.layout, authored.layout);
+    assert_eq!(reset.values, authored.values);
 }
 
 #[test]

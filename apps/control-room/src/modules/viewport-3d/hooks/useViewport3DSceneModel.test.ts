@@ -2911,7 +2911,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
-    expect(source).toContain('(pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
+    expect(source).toContain('(pinnedObservationActive || preparedSource ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
@@ -5907,7 +5907,7 @@ describe("useViewport3DSceneModel", () => {
       notifyOnError: false,
     });
     expect(source).toMatch(
-      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
+      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{ \.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS, preparedSource \},\n {2}\);/,
     );
     expect(source).toMatch(
       /const observationFieldVector = useViewport3DObservationFrameMagnetization\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,

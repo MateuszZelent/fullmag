@@ -99,10 +99,11 @@ describe("PendingFormRegistry", () => {
     const registry = new PendingFormRegistry();
     const owner = Symbol("form");
     registry.register(owner, form());
-    registry.update(owner, form({ dirty: false }));
+    expect(registry.update(owner, form({ dirty: false }))).toBe(true);
     expect(registry.getSnapshot()).toMatchObject({ canApply: false, dirty: false });
 
     registry.unregister(owner);
+    expect(registry.update(owner, form())).toBe(false);
     expect(registry.getSnapshot()).toMatchObject({
       active: false,
       canApply: false,

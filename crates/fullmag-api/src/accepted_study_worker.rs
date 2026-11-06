@@ -30,6 +30,9 @@ pub(crate) mod accepted_antenna_progress;
 #[path = "completed_inspection_recovery.rs"]
 pub(crate) mod completed_inspection_recovery;
 
+#[path = "accepted_scalar_history.rs"]
+pub(crate) mod scalar_history;
+
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 use accepted_worker_execution_receipt::{
@@ -71,6 +74,9 @@ const ACCEPTED_LIVE_HEADER_MAX_BYTES: u64 = 256 * 1024;
 const ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES: usize = 256;
 
 /// Bounded live observation header written by an accepted worker attempt.
+/// The accepted worker dispatcher admits one case per ordinary Live task.
+pub(crate) const DEFAULT_ACCEPTED_CASE_ID: &str = "default";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedLiveObservationHeader {
@@ -599,16 +605,31 @@ fn validate_accepted_worker_parameters(
             "execution_input",
             "command_id",
             "request_idempotency_key",
+            "request_receipt",
             "step_id",
             "command",
             "startup_source_sha256",
             "initial_state_source",
+            "study_history_parent",
         ];
         if let Some(key) = live_workspace
             .keys()
             .find(|key| !ALLOWED_LIVE_WORKSPACE_KEYS.contains(&key.as_str()))
         {
             bail!("accepted worker has no binding for live_workspace field `{key}`");
+        }
+        if let Some(value) = live_workspace.get("study_history_parent") {
+            crate::live_execution_binding::parse_study_history_parent(value)?;
+        }
+        if let Some(value) = live_workspace.get("request_receipt") {
+            let receipt: fullmag_session::LiveComputeRequestReceipt = serde_json::from_value(value.clone())
+                .context("accepted worker received an invalid live Compute receipt")?;
+            receipt.validate()?;
+            if live_workspace.get("command_id").and_then(serde_json::Value::as_str)
+                != Some(receipt.command_id.as_str())
+            {
+                bail!("accepted worker live Compute receipt has a different command ID");
+            }
         }
         for key in ["api_instance_id", "session_id"] {
             if live_workspace
@@ -2644,6 +2665,12 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
+    crate::live_stage_initial_state::validate_worker_initial_state_binding(
+        specification,
+        &accepted.study,
+        accepted_step,
+    )
+    .context("validate accepted live initial state before dispatch")?;
     let immutable_problem = accepted
         .catalog
         .entries()
@@ -2956,6 +2983,14 @@ fn execute_accepted_worker_start_with_snapshot(
         if let Some(storage) = &mut storage {
             storage.finish(true, &attempt_output_dir)?;
         }
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            if let Err(error) = scalar_history::prepare_scalar_history(
+                store, &attempt_output_dir, accepted_step, &receipt_identity, &outputs,
+            ) {
+                tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                    "solver scalar history could not be archived");
+            }
+        }
         persist_completed_worker_execution_with_terminal(
             store,
             &attempt_output_dir,
@@ -3031,7 +3066,7 @@ fn validate_inspection_run_parameters(
         "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
         "request_idempotency_key", "step_id", "command", "startup_source_sha256",
     ].into_iter().collect();
-    if live.keys().map(String::as_str).filter(|key| *key != "execution_input")
+    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent"))
         .collect::<BTreeSet<_>>() != expected_keys {
         bail!("inspection live workspace binding has unsupported fields");
     }
@@ -3322,6 +3357,14 @@ fn execute_accepted_fem_worker_start(
                 }).cloned();
                 if let Some(storage) = &mut storage {
                     storage.finish(true, &execution.attempt_output_dir)?;
+                }
+                if accepted.run.specification.parameters.get("live_workspace").is_some() {
+                    if let Err(error) = scalar_history::prepare_scalar_history(
+                        store, &execution.attempt_output_dir, accepted_step, &receipt_identity, &execution.outputs,
+                    ) {
+                        tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                            "solver scalar history could not be archived");
+                    }
                 }
                 persist_completed_worker_execution(
                     store,
@@ -3883,7 +3926,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         Some(&control.interrupt_requested),
     );
     let execution = match execution {
@@ -3909,7 +3952,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         None,
     )
     .context("recover completed worker receipt before publication")?;
@@ -3926,6 +3969,12 @@ fn apply_accepted_start_effect(
     // Evaluate immutable terminal observables while this process still owns
     // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
     if !control.interrupt_requested.load(Ordering::Acquire) {
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            let receipt = worker_execution_receipt_identity(start, &accepted_step, DEFAULT_ACCEPTED_CASE_ID)?;
+            scalar_history::publish_scalar_history(
+                store, &durable_execution.attempt_output_dir, &accepted_step, &receipt, &durable_execution.outputs,
+            ).context("publish accepted scalar history")?;
+        }
         crate::accepted_field_materialization_worker::prepare_and_publish(
             store, accepted, &accepted_step, &durable_execution,
         )

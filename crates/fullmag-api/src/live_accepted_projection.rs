@@ -164,6 +164,7 @@ struct ProjectionCursor {
 struct VerifiedOutput {
     task_order: usize,
     step_id: String,
+    case_id: String,
     object_ref: String,
     data_kind: String,
     accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
@@ -181,15 +182,15 @@ struct DurableProjection {
     accepted_runtime_mode: Option<fullmag_ir::ExecutionMode>,
     accepted_runtime_problem: Option<fullmag_ir::ProblemIR>,
     command_id: Option<String>,
+    recovered_compute: Option<crate::types::TrackedCommandRecord>,
     preclaim_cancellations: Vec<(String, String)>,
-    /// The run executes one interactive command (not a startup script).
-    interactive_command: bool,
     /// Runtime capabilities of the finished step, including the resolved
     /// quantity registry that admits its published fields for reading.
     resolved_capabilities: Option<fullmag_runner::BackendCapabilities>,
     latest_state: Option<VerifiedOutput>,
     latest_total_energy: Option<fullmag_application::StudyScalarArtifact>,
-    terminal_stats: Option<fullmag_runner::StepStats>,
+    terminal_stats: Option<(fullmag_runner::StepStats, crate::types::AcceptedLiveScalarIdentity)>,
+    active_scalar_series: Option<crate::types::AcceptedLiveScalarIdentity>,
     latest_output_identity: Option<String>,
     live_observation: Option<(usize, crate::accepted_study_worker::AcceptedLiveObservation)>,
     live_observation_identity: Option<String>,
@@ -479,7 +480,7 @@ async fn capture_context(state: &AppState) -> Result<Option<ProjectionContext>, 
         let Some(snapshot) = current.as_ref() else {
             return Ok(None);
         };
-        if snapshot.runtime_status.code == "imported_read_only" {
+        if !snapshot_accepts_live_projection(snapshot) {
             return Ok(None);
         }
         let Some(run) = snapshot.run.as_ref() else {
@@ -721,6 +722,25 @@ fn load_durable_projection(
         })
         .filter_map(|task| task_order.get(&task.task_id).map(|order| (*order, task)))
         .max_by_key(|(order, task)| observation_priority(task.lifecycle, *order));
+    let active_scalar_series = active_task.and_then(|(order, task)| {
+        let step = &accepted.lowered.steps[order];
+        use fullmag_authoring::{StudyPrimitiveStageKind, StudyStepKind};
+        if !matches!(&step.kind, StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax,
+        }) || !matches!(task.lifecycle,
+            fullmag_session::FmsTaskLifecycle::Running | fullmag_session::FmsTaskLifecycle::Stopping)
+        {
+            return None;
+        }
+        Some(crate::types::AcceptedLiveScalarIdentity {
+            run_id: context.run_id.clone(),
+            task_id: task.task_id.clone(),
+            step_id: step.step_id.clone(),
+            case_id: crate::accepted_study_worker::DEFAULT_ACCEPTED_CASE_ID.into(),
+            attempt_id: task.attempt_id.clone()?,
+            ownership_epoch: task.ownership_epoch?,
+        })
+    });
     let mut live_observation_identity = None;
     let mut live_observation_sequence = None;
     let mut live_magnetization_sequence = None;
@@ -956,11 +976,6 @@ fn load_durable_projection(
             preclaim_cancellations.push((task.task_id.clone(), cancellation.cancellation_id));
         }
     }
-    let interactive_command = intent
-        .specification
-        .pointer("/parameters/live_workspace/command/kind")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| kind != "startup_script");
     // Provider truth belongs to the resolved plan, not to the run lifecycle.
     // A prepared session waiting for Compute installs it too, so the catalog
     // offers every active quantity instead of only the prepared m. A running
@@ -1005,12 +1020,13 @@ fn load_durable_projection(
         accepted_runtime_mode: None,
         accepted_runtime_problem,
         command_id,
+        recovered_compute: crate::live_compute_request::accepted_command_readback(&store, &intent, status)?,
         preclaim_cancellations,
-        interactive_command,
         resolved_capabilities,
         latest_state,
         latest_total_energy,
         terminal_stats,
+        active_scalar_series,
         latest_output_identity,
         live_observation,
         live_observation_identity,
@@ -1384,6 +1400,7 @@ fn refresh_current_scalar_source_state(
     if current.public_source.is_none()
         && current.accepted_live_identity.is_none()
         && current.active_live_identity.is_none()
+        && current.series.is_none()
     {
         *source_state = None;
     } else {
@@ -1526,6 +1543,7 @@ mod current_scalar_source_identity_tests {
 
     fn pinned_source(identity: AcceptedLiveScalarIdentity, revision: u64) -> CurrentScalarSourceState {
         CurrentScalarSourceState {
+            series: None,
             public_source: Some(crate::schemas::scalars::ScalarObservationSource {
                 session_id: "session".into(),
                 run_id: "run".into(),
@@ -1640,6 +1658,7 @@ mod current_scalar_source_identity_tests {
     fn active_runtime_without_a_live_header_clears_a_terminal_only_pin() {
         let row = scalar_row();
         let mut state = Some(CurrentScalarSourceState {
+            series: None,
             public_source: Some(crate::schemas::scalars::ScalarObservationSource {
                 session_id: "session".into(),
                 run_id: "run".into(),
@@ -1680,6 +1699,7 @@ mod current_scalar_source_identity_tests {
     fn terminal_scalar_pin_keeps_non_live_dedup_semantics() {
         let row = scalar_row();
         let source = CurrentScalarSourceState {
+            series: None,
             public_source: Some(crate::schemas::scalars::ScalarObservationSource {
                 session_id: "session".into(),
                 run_id: "run".into(),
@@ -2050,15 +2070,11 @@ fn accepted_step_capabilities(
     }
 }
 
-/// The session's public status for a projected run. A run that executed one
-/// interactive command (a live `run`/`relax`/... from the Control Room or a
-/// `fm.connect()` script) ends that command, not the session: the session
-/// returns to `awaiting_command` so the next command, which continues from
-/// this run's final state, is admitted. A startup-script run ends the session.
-fn session_status_after_projection(run_status: &'static str, interactive_command: bool) -> &'static str {
+/// Accepted runs projected into an editable workspace have their own
+/// lifecycle. Completing one of them makes the workspace ready for edits.
+fn session_status_after_projection(run_status: &'static str) -> &'static str {
     match run_status {
-        "waiting_for_solve" => "awaiting_command",
-        "completed" | "failed" | "cancelled" if interactive_command => "awaiting_command",
+        "waiting_for_solve" | "completed" | "failed" | "cancelled" => "awaiting_command",
         status => status,
     }
 }
@@ -2193,15 +2209,8 @@ fn load_verified_outputs(
             .get(manifest_ref)
             .map_err(|error| ApiError::internal(format!("read accepted output manifest: {error}")))?
             .ok_or_else(|| ApiError::conflict("accepted output manifest is missing from CAS"))?;
-        let manifest: fullmag_session::FmsStudyOutputManifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|error| {
-                ApiError::conflict(format!("accepted output manifest is invalid: {error}"))
-            })?;
-        manifest.validate().map_err(|error| {
-            ApiError::conflict(format!(
-                "accepted output manifest failed validation: {error}"
-            ))
-        })?;
+        let manifest = fullmag_runtime_control::read_study_output_manifest_projection(&manifest_bytes)
+            .map_err(|error| ApiError::conflict(format!("accepted output manifest is invalid: {error}")))?;
         if manifest.run_id != run_catalog.run_id
             || manifest.task_id != task.task_id
             || manifest.attempt_id != attempt_id
@@ -2259,6 +2268,7 @@ fn load_verified_outputs(
             outputs.push(VerifiedOutput {
                 task_order,
                 step_id: step_id.clone(),
+                case_id: output.case_id,
                 object_ref,
                 data_kind: output.data_kind,
                 accepted_state_ref: accepted_state_ref.clone(),
@@ -2283,7 +2293,7 @@ fn terminal_stats_from_pinned_artifact(
     task_order: &std::collections::BTreeMap<String, usize>,
     output: &VerifiedOutput,
     final_state: &fullmag_application::MagnetizationStateArtifact,
-) -> Option<fullmag_runner::StepStats> {
+) -> Option<(fullmag_runner::StepStats, crate::types::AcceptedLiveScalarIdentity)> {
     let accepted_state_ref = output.accepted_state_ref.as_ref()?;
     let task = run_catalog.tasks.iter().find(|task| {
         task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
@@ -2341,7 +2351,14 @@ fn terminal_stats_from_pinned_artifact(
             "terminal scalar artifact does not match the pinned final state; scalar row remains unknown");
         return None;
     }
-    Some(stats.stats)
+    Some((stats.stats, crate::types::AcceptedLiveScalarIdentity {
+        run_id: run_catalog.run_id.clone(),
+        task_id: task.task_id.clone(),
+        step_id: output.step_id.clone(),
+        case_id: output.case_id.clone(),
+        attempt_id: attempt_id.into(),
+        ownership_epoch,
+    }))
 }
 
 fn terminal_completion_from_pinned_artifact(
@@ -2352,67 +2369,29 @@ fn terminal_completion_from_pinned_artifact(
     output: &VerifiedOutput,
     final_state: &fullmag_application::MagnetizationStateArtifact,
 ) -> Option<fullmag_ir::StageCompletionIR> {
-    if artifact_catalog.run_id != run_catalog.run_id { return None; }
-    let accepted_state_ref = output.accepted_state_ref.as_ref()?;
+    if artifact_catalog.run_id != run_catalog.run_id {
+        return None;
+    }
     let task = run_catalog.tasks.iter().find(|task| {
         task.lifecycle == fullmag_session::FmsTaskLifecycle::Succeeded
             && task_order.get(&task.task_id) == Some(&output.task_order)
     })?;
-    let attempt_id = task.attempt_id.as_deref()?;
-    let ownership_epoch = task.ownership_epoch?;
-    if accepted_state_ref.id.run_id != run_catalog.run_id
-        || accepted_state_ref.id.stage_id.as_deref() != Some(output.step_id.as_str())
-        || accepted_state_ref.generation.runtime_epoch != ownership_epoch
-        || accepted_state_ref.id.accepted_step != final_state.step
+    let record = crate::accepted_field_materialization_worker::terminal_completion_for_final_state(
+        store,
+        artifact_catalog,
+        task,
+        &output.step_id,
+        output.accepted_state_ref.as_ref()?,
+        &output.object_ref,
+    )?;
+    if record.clock.accepted_step != final_state.step
+        || record.clock.time_seconds.to_bits() != final_state.time_s.to_bits()
+        || record.solver_dt_s.to_bits() != final_state.solver_dt_s.to_bits()
     {
-        tracing::warn!(task_id = %task.task_id,
-            "terminal completion artifact source does not match the final accepted state identity");
+        tracing::warn!(task_id = %task.task_id, "terminal completion clock differs from decoded final state");
         return None;
     }
-    let mut matches = artifact_catalog.entries.iter().filter(|entry| {
-        task.artifact_ids.contains(&entry.artifact_id)
-            && entry.task_id == task.task_id
-            && entry.attempt_id == attempt_id
-            && entry.ownership_epoch == ownership_epoch
-            && entry.artifact_type == crate::accepted_field_materialization_worker::TERMINAL_COMPLETION_ARTIFACT_TYPE
-            && entry.status == fullmag_session::FmsArtifactStatus::Published
-    });
-    let Some(entry) = matches.next() else { return None; };
-    if matches.next().is_some() {
-        tracing::warn!(task_id = %task.task_id,
-            "terminal completion artifact pin is ambiguous; stage completion remains unknown");
-        return None;
-    }
-    let stats = match crate::accepted_field_materialization_worker::read_terminal_completion(store, entry) {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::warn!(task_id = %task.task_id, error = %error,
-                "terminal completion artifact is invalid; stage completion remains unknown");
-            return None;
-        }
-    };
-    if stats.source != *accepted_state_ref
-        || stats.source.id.run_id != run_catalog.run_id
-        || stats.source.id.stage_id.as_deref() != Some(output.step_id.as_str())
-        || stats.source.generation.runtime_epoch != ownership_epoch
-        || stats.state_object_ref != output.object_ref
-        || stats.input_fingerprint != task.input_fingerprint
-        || stats.resolved_input_fingerprint != task.resolved_input_fingerprint
-        || stats.run_id != run_catalog.run_id
-        || stats.task_id != task.task_id
-        || stats.step_id != output.step_id
-        || stats.attempt_id != attempt_id
-        || stats.ownership_epoch != ownership_epoch
-        || stats.clock.accepted_step != final_state.step
-        || stats.clock.time_seconds.to_bits() != final_state.time_s.to_bits()
-        || stats.solver_dt_s.to_bits() != final_state.solver_dt_s.to_bits()
-        || crate::accepted_field_materialization_worker::validate_completion(&stats.completion).is_err()
-    {
-        tracing::warn!(task_id = %task.task_id,
-            "terminal completion artifact does not match the pinned final state; stage completion remains unknown");
-        return None;
-    }
-    Some(stats.completion)
+    Some(record.completion)
 }
 
 #[derive(Debug, Clone)]
@@ -2739,7 +2718,7 @@ fn validate_live_magnetization_domain(
     Ok(())
 }
 
-fn validate_accepted_state_domain(
+pub(crate) fn validate_accepted_state_domain(
     state: &fullmag_application::MagnetizationStateArtifact,
     execution_plan: &fullmag_ir::ExecutionPlanIR,
     plan_fingerprint: &str,
@@ -2928,12 +2907,18 @@ async fn clear_stale_magnetization(
     crate::publish_current_live_realtime_batch_changed(state, &realtime_state, true, 100).await
 }
 
+fn snapshot_accepts_live_projection(snapshot: &SessionStateResponse) -> bool {
+    snapshot.runtime_status.code != "imported_read_only"
+        && !matches!(snapshot.session.status.as_str(), "closing" | "closed")
+}
+
 fn ensure_projection_context(
     state: &AppState,
     context: &ProjectionContext,
     snapshot: &SessionStateResponse,
 ) -> Result<(), ApiError> {
-    if snapshot.session.session_id != context.session_id
+    if !snapshot_accepts_live_projection(snapshot)
+        || snapshot.session.session_id != context.session_id
         || snapshot.run.as_ref().map(|run| run.run_id.as_str()) != Some(context.run_id.as_str())
         || snapshot.scene_document.as_ref().map(|scene| scene.revision)
             != Some(context.scene_revision)
@@ -2981,6 +2966,9 @@ async fn apply_projection(
         .cloned()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     ensure_projection_context(state, context, &next)?;
+    if crate::live_authored_initial_state::supersedes_run(&next, &context.run_id) {
+        return Ok(());
+    }
     let publication_fence = ProjectionPublicationFence::capture(&next)?;
     let display_revision = state.current_display_selection.read().await.revision;
     // Revisions before this projection: the realtime batch names only the
@@ -3051,8 +3039,7 @@ async fn apply_projection(
             }
         }
     }
-    let public_status =
-        session_status_after_projection(projection.status, projection.interactive_command);
+    let public_status = session_status_after_projection(projection.status);
     if next.session.status != public_status {
         next.session.status = public_status.to_string();
         changed = true;
@@ -3073,8 +3060,8 @@ async fn apply_projection(
             changed = true;
         }
     }
-    if terminal && !projection.interactive_command && next.session.finished_at_unix_ms == 0 {
-        next.session.finished_at_unix_ms = unix_time_millis_now();
+    if public_status == "awaiting_command" && next.session.finished_at_unix_ms != 0 {
+        next.session.finished_at_unix_ms = 0;
         changed = true;
     }
 
@@ -3182,6 +3169,14 @@ async fn apply_projection(
             crate::types::AcceptedLiveScalarIdentity::from_header(&observation.header)
         })
     };
+    let scalar_series = if terminal {
+        projection.terminal_stats.as_ref().map(|(_, series)| series)
+    } else {
+        projection.active_scalar_series.as_ref()
+    };
+    if crate::session::select_current_accepted_scalar_series(&mut next, &context.run_id, scalar_series) {
+        changed = true;
+    }
     let request_scope_epoch = format!("{}:{}", context.api_instance_id, context.session_epoch);
     if refresh_current_scalar_source_state(
         &mut next.latest_scalar_source,
@@ -3195,43 +3190,15 @@ async fn apply_projection(
     }
 
     let scalar_stats = if matches!(projection.status, "completed" | "failed" | "cancelled") {
-        projection.terminal_stats.as_ref()
+        projection.terminal_stats.as_ref().map(|(stats, _)| stats)
     } else {
-        projection.live_observation.as_ref().and_then(|(_, observation)| observation.header.stats.as_ref())
+        projection.live_observation.as_ref()
+            .filter(|_| active_live_scalar_identity.as_ref().is_some_and(|live| Some(live) == scalar_series))
+            .and_then(|(_, observation)| observation.header.stats.as_ref())
     };
     if let Some(stats) = scalar_stats {
         if stats.kind.is_physical_observation() {
-            let row = crate::types::ScalarRow {
-                kind: stats.kind.clone(),
-                solver_progress: stats.solver_progress.clone(),
-                observation_frame: None,
-                step: stats.step,
-                time: stats.time,
-                solver_dt: stats.dt,
-                error_estimate: stats.error_estimate,
-                max_error: stats.max_error,
-                dt_suggested: stats.dt_suggested,
-                rejected_attempts: stats.rejected_attempts,
-                pseudo_time_s: stats.pseudo_time_s,
-                active_runtime_s: None,
-                mx: stats.mx,
-                my: stats.my,
-                mz: stats.mz,
-                e_ex: stats.e_ex,
-                e_demag: stats.e_demag,
-                e_ext: stats.e_ext,
-                e_ani: stats.e_ani,
-                e_dmi: stats.e_dmi,
-                e_rotated_dmi: Some(stats.e_rotated_dmi),
-                e_total: stats.e_total,
-                max_dm_dt: stats.max_dm_dt,
-                max_h_eff: stats.max_h_eff,
-                max_h_demag: stats.max_h_demag,
-                max_torque_Apm: stats.max_torque_Apm,
-                max_torque_T: stats.max_torque_T,
-                per_object_scalars: stats.per_object_scalars.clone(),
-                table_expressions: Vec::new(),
-            };
+            let row = crate::types::ScalarRow::from_accepted_stats(stats);
             // Repeated headers may retain the same physical row. Deduplicate
             // only for the same accepted attempt identity; equal clocks and
             // values from a changed task/attempt must refresh the current pin.
@@ -3248,21 +3215,10 @@ async fn apply_projection(
             );
             if row.is_physical_observation() && !already_projected {
                 let scalar_revision = next.scalar_revision;
-                // A run's latest durable row never moves backwards, so an
-                // earlier step means a new step lineage: a run started from a
-                // fresh model in the same session (fm.reset(), a sweep point).
-                // The append-only table would reject every row of that run and
-                // keep reporting the previous run's final state.
-                if next.scalar_rows.last().is_some_and(|last| row.step < last.step) {
-                    next.scalar_rows.clear();
-                }
-                crate::session::apply_current_live_scalar_frame(
-                    &mut next,
-                    crate::types::CurrentLiveScalarFrameRequest {
-                        session_id: context.session_id.clone(),
-                        latest_scalar_row: Some(row),
-                    },
-                )?;
+                let series = scalar_series.ok_or_else(|| {
+                    ApiError::conflict("accepted scalar sample has no verified series")
+                })?;
+                crate::session::apply_current_live_accepted_scalar_row(&mut next, series, row)?;
                 if next.scalar_revision != scalar_revision {
                     let source_state = next.latest_scalar_source
                         .get_or_insert_with(crate::types::CurrentScalarSourceState::default);
@@ -3521,6 +3477,10 @@ async fn apply_projection(
             ));
         }
     }
+    let journal_before = state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire);
+    if let Some(record) = projection.recovered_compute {
+        crate::live_command_journal::recover_accepted_compute(state, &next, record).await?;
+    }
     // A run that failed or was cancelled before publishing outputs still ends
     // its bound command; otherwise its client would wait forever.
     if terminal {
@@ -3533,9 +3493,13 @@ async fn apply_projection(
         )
         .await?;
     }
-    // Terminal command reconciliation is idempotent even when the snapshot
-    // was already projected; do not publish an unchanged snapshot again.
-    if !changed && previous_status == public_status {
+    let journal_changed = journal_before !=
+        state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire);
+    if journal_changed {
+        realtime_state =
+            crate::current_live_realtime_state_from_snapshot(state, &next, display_revision).await;
+    }
+    if !changed && previous_status == public_status && !journal_changed {
         drop(transition);
         return Ok(());
     }
@@ -3767,7 +3731,7 @@ mod tests {
                 values: vec![[0.0,0.0,1.0]], native_state_snapshot: None, native_node_map: None,
             };
             let output = VerifiedOutput {
-                task_order: 0, step_id: record.step_id.clone(), object_ref: record.state_object_ref.clone(),
+                task_order: 0, step_id: record.step_id.clone(), case_id: "default".into(), object_ref: record.state_object_ref.clone(),
                 data_kind: "state".into(), accepted_state_ref: Some(record.source.clone()),
                 decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(final_state.clone()), completion: None,
             };
@@ -3797,13 +3761,13 @@ mod tests {
     }
 
     #[test]
-    fn finished_interactive_commands_return_the_session_to_awaiting_command() {
-        for status in ["completed", "failed", "cancelled"] {
-            assert_eq!(session_status_after_projection(status, true), "awaiting_command");
-            assert_eq!(session_status_after_projection(status, false), status);
+    fn accepted_run_lifecycle_keeps_the_live_workspace_open() {
+        for status in ["completed", "failed", "cancelled", "waiting_for_solve"] {
+            assert_eq!(session_status_after_projection(status), "awaiting_command");
         }
-        assert_eq!(session_status_after_projection("running", true), "running");
-        assert_eq!(session_status_after_projection("waiting_for_solve", false), "awaiting_command");
+        for status in ["running", "waiting_for_compute"] {
+            assert_eq!(session_status_after_projection(status), status);
+        }
     }
 
     #[test]
@@ -4420,7 +4384,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preclaim_cancellation_completes_live_session_and_bound_mesh_command() {
+    async fn preclaim_cancellation_completes_bound_command_and_keeps_workspace_open() {
         let (directory, store, context, _catalog) = preclaim_cancelled_fixture();
         let projection = load_durable_projection(store.root(), &context, None, &mut None).unwrap().unwrap();
         let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
@@ -4463,9 +4427,10 @@ mod tests {
         apply_projection(&state, &context, projection).await.unwrap();
         let current = state.current_live_state.read().await;
         let snapshot = current.as_ref().unwrap();
-        assert_eq!(snapshot.session.status, "cancelled");
+        assert_eq!(snapshot.session.status, "awaiting_command");
         assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
-        assert!(snapshot.session.finished_at_unix_ms > 0);
+        assert_eq!(snapshot.runtime_status.code, "awaiting_command");
+        assert_eq!(snapshot.session.finished_at_unix_ms, 0);
         let ledger = state.current_command_ledger.lock().await;
         assert_eq!(ledger[0].status, crate::types::CommandLifecycleState::Completed);
         assert_eq!(ledger[0].completion_status, Some(crate::types::CommandCompletionState::Cancelled));
@@ -4525,7 +4490,7 @@ mod tests {
         {
             let current = state.current_live_state.read().await;
             let snapshot = current.as_ref().unwrap();
-            assert_eq!(snapshot.session.status, "cancelled");
+            assert_eq!(snapshot.session.status, "awaiting_command");
             assert_eq!(snapshot.run.as_ref().unwrap().status, "cancelled");
         }
         let ledger = state.current_command_ledger.lock().await;
@@ -4605,9 +4570,10 @@ mod tests {
         assert_eq!(state.current_command_ledger.lock().await[0].completed_at_unix_ms, Some(completed_at));
         let current = state.current_live_state.read().await;
         let snapshot = current.as_ref().unwrap();
-        assert_eq!(snapshot.session.status, "failed");
+        assert_eq!(snapshot.session.status, "awaiting_command");
         assert_eq!(snapshot.run.as_ref().unwrap().status, "failed");
-        assert!(snapshot.session.finished_at_unix_ms > 0);
+        assert_eq!(snapshot.runtime_status.code, "awaiting_command");
+        assert_eq!(snapshot.session.finished_at_unix_ms, 0);
         assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
     }
 
@@ -4788,6 +4754,7 @@ mod tests {
             VerifiedOutput {
                 task_order,
                 step_id: "step".into(),
+                case_id: "default".into(),
                 object_ref: object_ref.into(),
                 data_kind: "state".into(),
                 accepted_state_ref: None,

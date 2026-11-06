@@ -434,7 +434,7 @@ impl AcceptedStudySnapshot {
         let resolved_inputs = resolve_accepted_study_inputs(
             store,
             run_id,
-            &self.study.steps,
+            self,
             study_step,
             inputs,
             &catalog,
@@ -711,7 +711,7 @@ fn queue_accepted_study_task_locked(
     let resolved_inputs = resolve_accepted_study_inputs(
         store,
         run_id.as_str(),
-        &accepted.study.steps,
+        accepted,
         study_step,
         inputs,
         &catalog,
@@ -778,6 +778,7 @@ pub struct AcceptedWorkerStep {
     pub claim: TaskClaim,
     pub step_id: String,
     pub study_inputs: Vec<StudyInputPort>,
+    pub initial_state_overlay: Option<fullmag_authoring::StudyInitialStateOverlay>,
     pub problem: ProblemIR,
     pub execution_plan: ExecutionPlanIR,
     pub until_seconds: Option<f64>,
@@ -789,6 +790,7 @@ struct PrevalidatedAcceptedWorkerStep {
     preparation_envelope: FmsTaskPreparationReceipt,
     step_id: String,
     study_inputs: Vec<StudyInputPort>,
+    initial_state_overlay: Option<fullmag_authoring::StudyInitialStateOverlay>,
     problem: ProblemIR,
     execution_plan: ExecutionPlanIR,
     until_seconds: Option<f64>,
@@ -985,6 +987,7 @@ fn prevalidate_accepted_worker_step(
         preparation_envelope,
         step_id: step_id.to_owned(),
         study_inputs: study_step.inputs.clone(),
+        initial_state_overlay: study_step.initial_state_overlay.clone(),
         problem,
         execution_plan: execution_plan.clone(),
         until_seconds: execution_step.until_seconds,
@@ -1066,7 +1069,7 @@ fn load_accepted_worker_step_locked(
     let resolved_inputs = resolve_accepted_study_inputs(
         store,
         run_id,
-        &accepted.study.steps,
+        accepted,
         study_step,
         resolved_input.inputs.clone(),
         &run_catalog,
@@ -1128,6 +1131,7 @@ fn load_accepted_worker_step_locked(
         claim: current_claim,
         step_id: prepared.step_id,
         study_inputs: prepared.study_inputs,
+        initial_state_overlay: prepared.initial_state_overlay,
         problem: prepared.problem,
         execution_plan: prepared.execution_plan,
         until_seconds: prepared.until_seconds,
@@ -1142,6 +1146,9 @@ pub fn materialize_accepted_worker_execution_plan(
     accepted_step: &AcceptedWorkerStep,
 ) -> Result<ExecutionPlanIR> {
     let resolved_input = &accepted_step.resolved_input;
+    if accepted_step.initial_state_overlay.is_some() && resolved_input.frozen_stage_context.is_some() {
+        bail!("magnetization overlay cannot alter a frozen full-history continuation");
+    }
     resolved_input
         .validate()
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1160,6 +1167,9 @@ pub fn materialize_accepted_worker_execution_plan(
         bail!("accepted worker inputs differ from the pinned execution plan");
     }
 
+    fullmag_plan::validate_authored_initial_state(
+        &accepted_step.step_id, &accepted_step.study_inputs, &accepted_step.problem,
+    )?;
     let mut declared = std::collections::BTreeMap::<&str, &StudyInputPort>::new();
     for port in &accepted_step.study_inputs {
         fullmag_session::repository_path::validate_store_id(&port.port_id)
@@ -1188,6 +1198,9 @@ pub fn materialize_accepted_worker_execution_plan(
         let port = declared.get(port_id.as_str()).with_context(|| {
             format!("resolved input `{port_id}` is not declared by the accepted study")
         })?;
+        if matches!(&port.source, StudyInputSource::AuthoredInitialState { .. }) {
+            bail!("authored initial state port `{port_id}` cannot bind a resolved artifact");
+        }
         input
             .validate()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -1247,10 +1260,12 @@ pub fn materialize_accepted_worker_execution_plan(
             }
             _ => bail!("accepted state input `{port_id}` decoded to a non-state artifact"),
         };
-        execution_plan = fullmag_runner::materialize_study_magnetization_input(
+        execution_plan = fullmag_runner::materialize_study_magnetization_input_with_overlay(
             &execution_plan,
             &state.layout,
             &state.values,
+            accepted_step.initial_state_overlay.as_ref()
+                .map(|overlay| (&accepted_step.problem, overlay.scopes())),
         )
         .with_context(|| {
             format!("materialize accepted state input `{port_id}` into runner plan")
@@ -1258,6 +1273,9 @@ pub fn materialize_accepted_worker_execution_plan(
         materialized_state = true;
     }
 
+    if accepted_step.initial_state_overlay.is_some() && !materialized_state {
+        bail!("accepted magnetization overlay requires a resolved predecessor state");
+    }
     Ok(execution_plan)
 }
 
@@ -2822,6 +2840,14 @@ fn validate_study_input_dependencies(
         }
     }
     for port in ports {
+        if matches!(&port.source, StudyInputSource::AuthoredInitialState { .. }) {
+            if resolved_inputs.contains_key(&port.port_id) {
+                bail!("authored initial state port `{}` cannot bind a resolved artifact", port.port_id);
+            }
+            // Catalog qualification precedes dependency resolution. The
+            // authored initializer is already embedded in the pinned plan.
+            continue;
+        }
         if port.required && !resolved_inputs.contains_key(&port.port_id) {
             bail!(
                 "required study input `{}` has not been resolved",
@@ -2974,14 +3000,28 @@ fn resolve_pinned_state_inputs(
 
 /// Resolve the exact accepted step's declared inputs from durable artifact and
 /// run catalogs. This read-only projection does not create or claim a task.
+pub(crate) fn validate_accepted_authored_initial_state(
+    accepted: &AcceptedStudySnapshot,
+    step: &StudyStep,
+) -> Result<bool> {
+    if !step.inputs.iter().any(|port| matches!(&port.source, StudyInputSource::AuthoredInitialState { .. })) {
+        return Ok(false);
+    }
+    let entry = accepted.catalog.entries().iter()
+        .find(|entry| entry.step_id() == step.step_id)
+        .context("accepted authored initial state has no immutable ProblemIR")?;
+    Ok(entry.validate_authored_initial_state(&step.inputs)?)
+}
+
 pub fn resolve_accepted_study_inputs(
     store: &SessionStore,
     run_id: &str,
-    accepted_steps: &[StudyStep],
+    accepted: &AcceptedStudySnapshot,
     study_step: &StudyStep,
     supplied_inputs: std::collections::BTreeMap<String, ResolvedInput>,
     catalog: &fullmag_session::FmsRunCatalog,
 ) -> Result<std::collections::BTreeMap<String, ResolvedInput>> {
+    validate_accepted_authored_initial_state(accepted, study_step)?;
     let artifact_catalog = store.read_artifact_catalog(run_id)?;
     let mut resolved_inputs = resolve_step_output_inputs(
         run_id,
@@ -2993,7 +3033,7 @@ pub fn resolve_accepted_study_inputs(
     bind_step_output_manifests(
         store,
         run_id,
-        accepted_steps,
+        &accepted.study.steps,
         &study_step.inputs,
         &mut resolved_inputs,
         catalog,
@@ -3342,6 +3382,7 @@ pub(crate) fn cold_accepted_worker_step(store: &SessionStore,
     let plan = lowered.execution_plan.clone().context("cold source has no resolved execution plan")?;
     resolved.validate_execution_for_problem(&accepted.run.specification, &problem)?;
     Ok(AcceptedWorkerStep { claim: checkpoint.claim, step_id: stage.into(), study_inputs: authored.inputs.clone(),
+        initial_state_overlay: authored.initial_state_overlay.clone(),
         problem, execution_plan: plan, until_seconds: lowered.until_seconds, resolved_input: resolved })
 }
 

@@ -665,6 +665,48 @@ mod tests {
     }
 
     #[test]
+    fn held_start_cannot_release_after_the_first_durable_replacement_cancellation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("session-store")).unwrap();
+        let tasks = vec![unclaimed_task("task-cancel-a"), unclaimed_task("task-cancel-b")];
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: "run-cancel".into(),
+            revision: 1,
+            updated_at: Utc::now(),
+            tasks: tasks.clone(),
+        }).unwrap();
+        let intent = crate::FmsRunIntent::new(
+            "run-cancel",
+            "intent-held",
+            serde_json::json!({
+                "run_id": "run-cancel",
+                "parameters": {
+                    (crate::ACCEPTED_RUN_START_POLICY_KEY): {
+                        "schema_version": "accepted_run_start_policy.v1", "mode": "manual",
+                    }
+                }
+            }),
+        );
+        store.commit_run_intent(&intent).unwrap();
+        store.request_task_cancellation_intent(
+            "run-cancel", &tasks[0].task_id, "replace-task", 1,
+            "held Study replaced by an explicit live command",
+        ).unwrap();
+        drop(store);
+
+        let reopened = SessionStore::open_existing(directory.path().join("session-store")).unwrap();
+        assert!(!reopened.accepted_run_start_permitted("run-cancel").unwrap());
+        assert!(reopened.release_accepted_run_start(
+            "run-cancel", &intent.payload_sha256, "late-compute",
+        ).is_err());
+        assert_eq!(reopened.read_run_catalog("run-cancel").unwrap().unwrap().tasks, tasks);
+        assert!(reopened.read_task_cancellation_intent(
+            "run-cancel", &tasks[1].task_id,
+        ).unwrap().is_none());
+    }
+
+    #[test]
     fn records_and_replays_the_same_request_without_replacing_its_timestamp() {
         let (_directory, store, task) = store_with_catalog(1);
         let (first_disposition, first, first_revision) = store

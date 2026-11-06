@@ -894,6 +894,25 @@ nowych profili Cancelled/Interrupted. Wynik terminalny nie zastępuje walidacji
 artefaktów i renderu. Nowe delty wymagają odrębnego odbioru runtime; nie
 przypisuje się im wcześniejszego udanego uruchomienia CoFeB.
 
+Dla zakończonego Compute z API dowód terminal-observation v2 wiąże
+potwierdzenie żądania z tym samym RunIntent, ID instancji źródłowej,
+sesją i epoką. Run z automatyczną polityką Start nie ma pliku ręcznego
+zwolnienia. Odtworzenie wymaga rewizji sceny zgodnej z ostatnim RunIntent.
+Nowsza edycja wymaga osobnego dowodu odtworzenia modelu. Dowód v1 nadal
+obejmuje start ze skryptu oraz ręczne zwolnienie
+przygotowanego Study z potwierdzeniem Compute. Odtworzenie API zachowuje
+pierwotny czas startu sesji i uzupełnia brakujące potwierdzenie terminalne
+w pamięci na podstawie kwalifikowanego katalogu.
+
+`just docker-dev-capture-terminal <attempt> <config_sha256> <source_root> <port>`
+wykonuje zarządzane zatrzymanie. Przed wygaszeniem zapisuje pin natywnego
+odczytu, właściciela, RunIntent i katalogu w obrębie próby zatrzymania.
+`just docker-dev-restore-terminal <attempt> <config_sha256> <source_root> <stop_attempt> <port>`
+używa ID zakończonej próby zatrzymania jako źródła dowodu. Pod blokadą
+odtworzenia sprawdza ponownie tożsamość zatrzymanych kontenerów oraz
+skróty RunIntent, katalogu i ewentualnego ręcznego zwolnienia Start
+przed wymianą usług.
+
 Przy odmowie startupu przed utworzeniem nowego native ownera osobny
 `preowner-drained-stop` może zatrzymać wyłącznie dokładnie przypięte usługi
 backend/frontend. Wymaga autentycznego wcześniejszego nativeDrained i proofu

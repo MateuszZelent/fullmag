@@ -654,6 +654,8 @@ const studyTab: RibbonTabContent = {
         { id: "study.compute-fields", icon: icon(Activity), label: "Compute Fields", iconColor: C.sapphire, tooltip: "Compute Fields: materialize field quantities for the current magnetization without running the study" },
         { id: "study.compute-energies", icon: icon(Sigma), label: "Compute Energies", iconColor: C.lavender, tooltip: "Compute Energies: evaluate energy terms for the current magnetization without running the study" },
         { id: "study.prepare-live", icon: icon(Layers3), label: "Prepare", iconColor: C.blue, tooltip: "Materialize the current Live scene preparation receipt without starting the solver" },
+        { id: "study.build-and-run", icon: icon(Zap), label: "Build + Study", iconColor: C.green, tooltip: "Build the saved model's domain and start the whole Study after verifying its publication." },
+        { id: "study.cancel-build-and-run", icon: icon(Square), label: "Cancel Build + Study", iconColor: C.red },
         { id: "study.run",   icon: icon(Play,        { fill: "currentColor" }), label: "Compute", shortcut: "F5", accent: true, iconColor: C.green, tooltip: "Compute Study: run the study stages on the solver (same as Study > Compute Study, F5)" },
         { id: "study.pause", icon: icon(Pause,       { fill: "currentColor" }), label: "Pause",                  iconColor: C.yellow },
         { id: "study.resume",icon: icon(Play,        { fill: "currentColor" }), label: "Resume",                 iconColor: C.green },

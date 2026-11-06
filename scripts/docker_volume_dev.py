@@ -3522,7 +3522,7 @@ else:
             or run.get("session_id")!=identity[0]
             or status.get("run",{}).get("run_id")!=run_id
             or status.get("solver",{}).get("state") not in
-                (terminal|{"idle"}|({"awaiting_command"} if prepared else set()))):
+                (terminal|{"idle","awaiting_command"})):
         raise RuntimeError("terminal run differs from the current session")
     queue=get("/v2/platform/compute/queue")
     runtime=get("/v2/platform/runtime-service")
@@ -3560,7 +3560,8 @@ else:
             or after_run.get("run_id")!=run_id
             or after_run.get("session_id")!=identity[0]
             or after_run.get("status")!=run.get("status")
-            or after_run.get("revision")!=run.get("revision")):
+            or after_run.get("revision")!=run.get("revision")
+            or (after.get("resources") or {}).get("scene_revision")!=(status.get("resources") or {}).get("scene_revision")):
         raise RuntimeError("terminal session changed before drain")
     if prepared and any((after.get("resources") or {}).get(key)!=(status.get("resources") or {}).get(key)
             for key in ("scene_revision","mesh_revision","stages_revision","commands_revision",
@@ -3573,6 +3574,9 @@ else:
         "api_instance_id":instance,"session_id":identity[0],"session_epoch":identity[1],
         "request_scope_epoch":identity[2],"run":run,"compute_queue":queue,
         "runtime_service":runtime}
+    scene_revision=(status.get("resources") or {}).get("scene_revision")
+    if type(scene_revision) is int and scene_revision>=0:
+        result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
     print(json.dumps(result,sort_keys=True))
 '''
@@ -7501,6 +7505,11 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    capture_terminal = getattr(args, "capture_terminal_observation", False)
+    if capture_terminal and (not restart_idle_service or not stop_after_drain
+            or getattr(args, "saved_authoring_checkpoint", None)
+            or getattr(args, "saved_authoring_checkpoint_sha256", None)):
+        raise BuildControlError("Terminal observation capture requires a plain managed stop-only operation")
     if retire_only and (not recreate_services or restart_idle_service or stop_after_drain
             or resume_recreation_id is not None or refresh_frontend_service
             or getattr(args, "fresh_state", False) is not True
@@ -7591,7 +7600,8 @@ def _retained_operation(
         and not refresh_frontend_service and resume_recreation_id is None
     )
     if (retained_terminal_observation
-            and not getattr(args, "terminal_observation_proof", None)
+            and not (getattr(args, "terminal_observation_proof", None)
+                     or getattr(args, "terminal_observation_stop", None))
             and not terminal_observation_exit
             and not terminal_observation_failed_resume):
         raise BuildControlError(
@@ -7632,7 +7642,11 @@ def _retained_operation(
     observation_sha = getattr(args, "terminal_observation_proof_sha256", None)
     if bool(observation_path) != bool(observation_sha):
         raise BuildControlError("Terminal observation requires paired proof pins")
-    if observation_path and (not recreate_services or getattr(args, "fresh_state", False)
+    observation_stop = getattr(args, "terminal_observation_stop", None)
+    if observation_stop and (not isinstance(observation_stop, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", observation_stop) or observation_path):
+        raise BuildControlError("Terminal observation requires one exact stop attempt or one proof")
+    if (observation_path or observation_stop) and (not recreate_services or getattr(args, "fresh_state", False)
             or args.script is not None or successor_path or resume_recreation_id is not None
             or getattr(args, "completed_recreation_attempt", None)
             or getattr(args, "recovery_authorization", None)):
@@ -7726,7 +7740,7 @@ def _retained_operation(
         certificate = _retained_certificate(state, document)
         environment = document["services"]["backend"]["environment"]
         startup_enabled = _retained_startup_enabled(actual["backend"])
-        if startup_enabled:
+        if startup_enabled and not capture_terminal:
             raise BuildControlError("Startup activation requires dedicated recovery; idle restart will not repeat Solve")
         if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
             raise BuildControlError("Original accepted activation helper still holds the control lease")
@@ -7803,7 +7817,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Diagnostic process changed before stop archival")
                     control.write_bytes(operation["root"] + "/diagnostic-terminal-process-before.json", diagnostic_process)
                 elif active_session is True:
-                    if startup_enabled:
+                    if startup_enabled and not capture_terminal:
                         raise BuildControlError("Backend has an active session; idle restart refused")
                     terminal_session = _terminal_session_restart_probe(
                         ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
@@ -7813,6 +7827,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
                             canonical(terminal_session)
                         ).hexdigest()
+                    elif capture_terminal:
+                        raise BuildControlError("There is no terminal run to capture")
                     else:
                         cancelled_activation = _validate_cancelled_activation_preflight(
                             control, previous_root, previous, document, selected, args.config_sha256,
@@ -7824,6 +7840,21 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         )
                 elif active_session is not False:
                     raise BuildControlError("Backend has an active or unknown session; idle restart refused")
+                if capture_terminal:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Terminal observation capture requires a healthy current terminal run")
+                    from docker_volume_terminal_observation import capture_terminal_observation
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
+                    )
+                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
+                    if _terminal_session_restart_probe(
+                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                    ) != terminal_session:
+                        raise BuildControlError("Terminal session changed during native capture")
+                    capture_raw = canonical(native_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)
+                    operation["receipt"]["terminal_native_observation_sha256"] = hashlib.sha256(capture_raw).hexdigest()
                 if saved_authoring:
                     # The operator window is explicit; repeat archive, API, ledger and
                     # service pins immediately before crossing the backend stop boundary.
@@ -8027,16 +8058,26 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "accepted_reattach_metadata": accepted_pins,
             }
         terminal_observation = None
-        if observation_path:
+        if observation_path or observation_stop:
             if accepted_reattach_context or reconciliation is not None:
                 raise BuildControlError("Terminal observation cannot combine with accepted run reattach")
-            from docker_volume_terminal_observation import prepare_context
-            terminal_observation = prepare_context(
-                control, proof_relative=observation_path, proof_sha256=observation_sha,
-                store_root=state / "runs" / "docker-all" / "session-store",
-                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
-                actual=actual,
+            from docker_volume_terminal_observation import prepare_captured_context, prepare_context
+            store_root = storage.validate_path(
+                state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
             )
+            observation_context = {
+                "store_root": store_root, "source_root": str(selected), "attempt": args.attempt,
+                "config_sha256": args.config_sha256, "actual": actual,
+            }
+            if observation_stop:
+                terminal_observation = prepare_captured_context(
+                    control, stop_attempt=observation_stop, **observation_context,
+                )
+            else:
+                terminal_observation = prepare_context(
+                    control, proof_relative=observation_path, proof_sha256=observation_sha,
+                    **observation_context,
+                )
         native_recovery_context = dict(recovery_context)
         post_build_generation = None
         # A validated pre-API cancellation pins byte-identical native config;
@@ -8346,8 +8387,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if terminal_observation is not None:
                     from docker_volume_terminal_observation import revalidate_context
                     preowner_successor = revalidate_context(
-                        control, terminal_observation, source_root=str(selected),
-                        attempt=args.attempt, config_sha256=args.config_sha256, actual=leased_actual,
+                        control, terminal_observation, store_root=observation_context["store_root"],
+                        source_root=str(selected), attempt=args.attempt,
+                        config_sha256=args.config_sha256, actual=leased_actual,
                     )
                     if preowner_successor is not None:
                         context_key = ("terminal_diagnostic_successor"

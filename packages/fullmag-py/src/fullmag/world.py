@@ -2716,8 +2716,15 @@ class _CaptureState:
 
 def _record_magnetization_assignment(object_id: str, region_id: str | None, initializer: Any) -> None:
     capture = _capture_binding.current()
-    if capture.enabled and capture.has_physical_stage:
-        capture.pending_magnetization_assignments.append(
+    if capture.enabled:
+        if capture.has_physical_stage:
+            capture.pending_magnetization_assignments.append(
+                MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+            )
+        return
+    session = _state._live_session
+    if session is not None and not session.closed:
+        session.record_magnetization_assignment(
             MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
         )
 
@@ -4056,8 +4063,7 @@ def reset() -> None:
     if session is not None and not getattr(session, "closed", True) and not _capture_binding.current().enabled:
         _state._live_session = session
         _state._live_auto_attempted = True
-        session.state = _state.current()
-        session.baseline = None
+        session.reset_authored_world(_state.current())
 
 
 def begin_script_capture(source_root: str | Path | None = None) -> None:
@@ -10197,10 +10203,10 @@ def run(until: float) -> Any:
     live = _live_session_or_none()
     if live is not None:
         _require_live_timestep(problem)
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=until)
         )
-        return live.submit_stage("run", len(_state._live_stages) - 1, until_seconds=float(until))
+        return live.submit_stage("run", stage_index, until_seconds=float(until))
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
             _capture_magnetization_assignments(
@@ -10227,8 +10233,10 @@ def _append_live_loop_stage(*, relax: bool, chunk_time: float) -> int:
         problem = _build_problem(study_kind="time_evolution")
         stage = CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=chunk_time)
     _require_live_timestep(problem)
-    _state._live_stages.append(stage)
-    return len(_state._live_stages) - 1
+    live = _live_session_or_none()
+    if live is None:
+        raise RuntimeError("live loop stages require an active session")
+    return live.author_physical_stage(stage)
 
 
 def _require_live_timestep(problem: Any) -> None:
@@ -10565,12 +10573,12 @@ def relax(
 
     live = _live_session_or_none()
     if live is not None:
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_relax", default_until_seconds=None)
         )
         return live.submit_stage(
             "relax",
-            len(_state._live_stages) - 1,
+            stage_index,
             **_drop_none_values(
                 {
                     "relax_algorithm": algorithm,

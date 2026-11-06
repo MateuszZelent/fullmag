@@ -616,6 +616,22 @@ describe("study runtime command resource bundles", () => {
     expect(studyRuntimeCommandSessionStatusEquals(previous, next)).toBe(false);
   });
 
+  it.each([
+    "region_topology_revision",
+    "region_membership_revision",
+    "region_coefficients_revision",
+    "region_initial_state_revision",
+  ] as const)("publishes %s changes to both runtime command selectors", (key) => {
+    const previous = statusWith({ resources: { [key]: 3 } }) as LiveStatusResource;
+    const next = statusWith({ resources: { [key]: 4 } }) as LiveStatusResource;
+    const previousStudy = selectStudyRuntimeCommandSessionStatus({ data: previous });
+    const nextStudy = selectStudyRuntimeCommandSessionStatus({ data: next });
+
+    expect(nextStudy?.resources[key]).toBe(4);
+    expect(studyRuntimeCommandSessionStatusEquals(previousStudy, nextStudy)).toBe(false);
+    expect(runtimeCommandControlSessionStatusEquals(previous, next)).toBe(false);
+  });
+
   it("treats domain generation changes as full runtime command state changes", () => {
     const previous = selectStudyRuntimeCommandSessionStatus({
       data: statusWith({

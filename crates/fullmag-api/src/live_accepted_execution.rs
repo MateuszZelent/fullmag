@@ -16,13 +16,16 @@ use axum::http::StatusCode;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
-use crate::schemas::commands::RuntimeCommandTarget;
-use crate::types::{AppState, CurrentLiveRequestContext, SessionCommand};
+use crate::schemas::commands::{
+    RuntimeAuthoredInitialStateSource, RuntimeCommandTarget, RuntimeInitialStateRequest,
+};
+use crate::types::{AppState, CurrentLiveRequestContext, SessionCommand, SessionStateResponse};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AcceptedLiveExecution {
     pub run_id: String,
     pub step_id: String,
+    pub selected_step_id: Option<String>,
 }
 
 /// Durable identity returned when a startup script submits its complete
@@ -78,6 +81,7 @@ pub(crate) struct PreparedLiveAcceptedStudy {
     project_id: fullmag_application::ProjectId,
     validated_commit: crate::run_intent_persistence::PreparedRunIntentCommit<'static>,
     pub(crate) step_ids: Vec<String>,
+    selected_step_id: Option<String>,
     migrated_profile_to_publish: Option<fullmag_ir::ExecutionProfileIR>,
 }
 
@@ -92,8 +96,11 @@ enum LiveAcceptedSubmission {
     Command {
         command: SessionCommand,
         request_idempotency_key: Option<String>,
+        request_receipt: Option<fullmag_session::LiveComputeRequestReceipt>,
         /// The session's latest live run (a hint for state continuation, ADR 0068 F5).
         previous_run_id: Option<String>,
+        geometry_reuse: Option<crate::live_geometry_mesh_build::GeometryReuseReference>,
+        prepared_capture: Option<crate::live_stage_initial_state::PreparedStateCapture>,
     },
     Startup {
         request_id: String,
@@ -125,7 +132,9 @@ pub(crate) async fn submit_live_command(
         crate::get_or_load_current_live_scene_document_for_context(state, context).await?;
     }
     let _transition = state.current_live_session_transition.lock().await;
-    submit_live_command_with_transition(state, command, context, request_idempotency_key).await
+    submit_live_command_with_transition(state, command, context, request_idempotency_key, None)
+        .await
+        .map(|accepted| accepted.map(|(execution, _)| execution))
 }
 
 /// Submit while the caller already owns the live transition fence. The
@@ -136,8 +145,9 @@ pub(crate) async fn submit_live_command_with_transition(
     command: &SessionCommand,
     context: &CurrentLiveRequestContext,
     request_idempotency_key: Option<String>,
-) -> Result<Option<AcceptedLiveExecution>, ApiError> {
-    let (scene, source_script_path, previous_run_id) = {
+    request_receipt: Option<fullmag_session::LiveComputeRequestReceipt>,
+) -> Result<Option<(AcceptedLiveExecution, SessionStateResponse)>, ApiError> {
+    let (scene, source_script_path, previous_run_id, geometry_reuse, prepared_capture) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -152,10 +162,29 @@ pub(crate) async fn submit_live_command_with_transition(
         if let Some(error) = accepted_preparation_recovery_error(snapshot) {
             return Err(error);
         }
+        if matches!(command.kind.as_str(), "run" | "relax" | "solve")
+            && snapshot.scene_document.as_ref().is_some_and(|scene| {
+                scene.study.requested_backend.eq_ignore_ascii_case("fem")
+                    && crate::live_geometry_mesh_build::bound_geometry_mesh_is_current(snapshot, scene)
+                        == Some(false)
+            })
+        {
+            return Err(ApiError::conflict_with_code(
+                "accepted_fem_geometry_mesh_stale",
+                "Build a current shared-domain mesh before running.",
+            ));
+        }
         let source_script_path = (!snapshot.session.script_path.is_empty())
             .then(|| PathBuf::from(snapshot.session.script_path.clone()));
         let previous_run_id = snapshot.run.as_ref().map(|run| run.run_id.clone());
-        (snapshot.scene_document.clone(), source_script_path, previous_run_id)
+        let geometry_reuse = crate::live_geometry_mesh_build::geometry_reuse_reference(snapshot, context);
+        if let Some(scene) = snapshot.scene_document.as_ref() {
+            validate_compute_target(command, scene.revision)?;
+        }
+        let prepared_capture = crate::live_stage_initial_state::prepared_request(command.initial_state.as_ref())
+            .map(|request| crate::live_stage_initial_state::PreparedStateCapture::capture(snapshot, request))
+            .transpose()?;
+        (snapshot.scene_document.clone(), source_script_path, previous_run_id, geometry_reuse, prepared_capture)
     };
 
     let scene = match scene {
@@ -167,59 +196,73 @@ pub(crate) async fn submit_live_command_with_transition(
         }
     };
 
-    // A startup script with wait_for_solve already owns one immutable whole
-    // Study RunIntent. The first interactive Run/Relax command releases that
-    // accepted run; it must not create a second run or silently discard later
-    // authored stages.
+    if matches!(command.kind.as_str(), "run" | "relax" | "solve")
+        && matches!(command.target.as_ref(), Some(RuntimeCommandTarget::CommandId { .. }))
+    {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_compute_target_unsupported",
+            "Compute requires a Study, stage, or run target",
+        ));
+    }
+    validate_compute_target(command, scene.revision)?;
+    let mut superseded_start = None;
     if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume") {
-        // `waiting_for_compute` is also the read-model status used by an
-        // accepted run whose manual start gate is still held. Check the
-        // durable gate before preparing anything new; otherwise the same
-        // authored Study can receive a second RunIntent while its first run
-        // is merely waiting for Compute. In Docker API-only runtime this one
-        // decision covers both `waiting_for_compute` and `waiting_for_solve`,
-        // so the `waiting_for_solve` fallback below cannot release a gate
-        // whose preparation is still pending.
         if docker_api_only_runtime() {
-            match current_live_waiting_for_compute_gate(state, context).await? {
-                Some(ExistingAcceptedRunGate::Held(_run_id)) => {
-                    crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
-                        state, context, command,
-                    )
-                    .await?;
-                    return release_accepted_live_study_with_transition(
-                        state,
-                        context,
-                        &command.command_id,
-                    )
-                    .await;
-                }
-                Some(ExistingAcceptedRunGate::Pending(run_id)) => {
-                    return Err(ApiError::with_status_and_code(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "accepted_preparation_pending",
-                        format!(
-                            "accepted run `{run_id}` preparation is not ready; Compute remains held"
-                        ),
-                    ));
+            match current_live_waiting_for_compute_gate(state, context, &scene).await? {
+                Some(ExistingAcceptedRunGate::Held {
+                    run_id, preparation_ready, input_matches, cancellation_pending,
+                }) => {
+                    if matches!(command.target.as_ref(),
+                        Some(RuntimeCommandTarget::Run { run_id: Some(requested) }) if requested != &run_id
+                    ) {
+                        return Err(ApiError::conflict_with_code(
+                            "accepted_compute_target_mismatch",
+                            "Compute target differs from the held live run",
+                        ));
+                    }
+                    if input_matches && !cancellation_pending && command_releases_held_study(command, &run_id) {
+                        if !preparation_ready {
+                            return Err(ApiError::with_status_and_code(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "accepted_preparation_pending",
+                                format!("accepted run `{run_id}` preparation is not ready; Compute remains held"),
+                            ));
+                        }
+                        let admission = crate::router_v2::handlers::simulation::commands::accepted_command_admission_snapshot(
+                            state, context, command,
+                        ).await?;
+                        return release_accepted_live_study_with_request(
+                            state, context, &command.command_id, request_receipt,
+                        ).await.map(|accepted| accepted.map(|execution| (execution, admission)));
+                    }
+                    if command.kind == "resume" {
+                        return Err(ApiError::conflict_with_code(
+                            "accepted_resume_scope_mismatch",
+                            "Resume cannot replace a held Study",
+                        ));
+                    }
+                    let request_id = supersession_request_id(
+                        &scene, command, request_idempotency_key.as_deref(),
+                    )?;
+                    superseded_start = Some((run_id, request_id));
                 }
                 Some(ExistingAcceptedRunGate::Released(run_id)) => {
                     return Err(ApiError::conflict_with_code(
                         "accepted_run_already_active",
-                        format!(
-                            "accepted live run `{run_id}` has already released its compute gate"
-                        ),
+                        format!("accepted live run `{run_id}` has already released its compute gate"),
                     ));
                 }
                 None => {}
             }
-        }
-        if current_live_run_waits_for_solve(state).await? {
-            crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
+        } else if current_live_run_waits_for_solve(state).await?
+            && previous_run_id.as_ref().is_some_and(|run_id| command_releases_held_study(command, run_id))
+        {
+            let admission = crate::router_v2::handlers::simulation::commands::accepted_command_admission_snapshot(
                 state, context, command,
-            )
-            .await?;
-            return release_waiting_live_study_with_transition(state, context, &command.command_id).await;
+            ).await?;
+            return release_waiting_live_study_with_transition(state, context, &command.command_id)
+                .await
+                .map(|accepted| accepted.map(|execution| (execution, admission)));
         }
     }
 
@@ -272,7 +315,7 @@ pub(crate) async fn submit_live_command_with_transition(
     // This is intentionally before any RunIntent/CAS write. The transition
     // fence held above keeps the journal preconditions and capacity stable
     // through the durable accepted publication.
-    crate::router_v2::handlers::simulation::commands::validate_accepted_command_admission(
+    let admission = crate::router_v2::handlers::simulation::commands::accepted_command_admission_snapshot(
         state, context, command,
     )
     .await?;
@@ -291,6 +334,9 @@ pub(crate) async fn submit_live_command_with_transition(
     let backlog_limit = state.submit_backlog_limit;
     let captured_context = context.clone();
     let command = command.clone();
+    let prepared_fence = prepared_capture.clone();
+    let domain_fence = command.precondition.as_ref()
+        .and_then(|precondition| precondition.domain_generation_id.clone());
 
     let solver_profile = next_solver_profile_admission_config(state, context).await?;
     let prepared = tokio::task::spawn_blocking(move || {
@@ -307,7 +353,10 @@ pub(crate) async fn submit_live_command_with_transition(
             LiveAcceptedSubmission::Command {
                 command,
                 request_idempotency_key,
+                request_receipt,
                 previous_run_id,
+                geometry_reuse,
+                prepared_capture,
             },
             None,
             solver_profile,
@@ -323,17 +372,52 @@ pub(crate) async fn submit_live_command_with_transition(
     // commits RunIntent/CAS so a replaced workspace cannot publish a detached
     // accepted run after an HTTP cancellation.
     validate_live_scene_for_context(state, context, &prepared.scene).await?;
+    if prepared_fence.is_some() || domain_fence.is_some() {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::router_v2::handlers::simulation::commands::validate_command_domain_precondition(
+            snapshot, domain_fence.as_deref(),
+        )?;
+        if let Some(fence) = prepared_fence {
+            fence.validate(snapshot)?;
+        }
+    }
+    if let Some((run_id, request_id)) = superseded_start {
+        retire_superseded_live_start(
+            state, &context.session_id, context.session_epoch, &run_id, &request_id,
+        ).await?;
+        validate_live_scene_for_context(state, context, &prepared.scene).await?;
+    }
+    let step_id = prepared.step_ids.first().cloned()
+        .ok_or_else(|| ApiError::internal("accepted live command has no materialized step"))?;
+    let mut current = state.current_live_state.write().await;
+    let snapshot = current.as_mut()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    crate::router_v2::handlers::simulation::commands::validate_command_domain_precondition(
+        snapshot, domain_fence.as_deref(),
+    )?;
+    let mut next = crate::router_v2::handlers::simulation::commands::prepare_accepted_live_compute_snapshot(
+        snapshot,
+        context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        &prepared.run_id,
+        &prepared.step_ids,
+    )?;
     let accepted = commit_prepared_live_accepted(&prepared)?;
+    // The projector must follow the committed run even if the HTTP future is
+    // dropped or journal publication fails. Install the prevalidated view
+    // under the same guards as the durable commit, before the next await.
     if let Some(preparation_error) = accepted.preparation_error.as_ref() {
-        publish_accepted_live_study_with_preparation_failure_under_transition(
-            state,
-            context,
-            &accepted.run_id,
-            &accepted.step_ids,
-            "waiting_for_compute",
-            preparation_error,
-        )
-        .await?;
+        next.metadata = Some(accepted_preparation_failure_metadata(
+            &next, &accepted.run_id, &accepted.step_ids, preparation_error,
+        ).into());
+        let realtime_snapshot = next.clone();
+        *snapshot = next;
+        drop(current);
+        if let Err(error) = publish_preparation_failure_realtime(state, &realtime_snapshot).await {
+            tracing::warn!(run_id = %accepted.run_id, error = %error, "failed to publish Compute recovery status");
+        }
         return Err(ApiError::unprocessable_with_code(
             "accepted_run_recovery_required",
             format!(
@@ -342,16 +426,12 @@ pub(crate) async fn submit_live_command_with_transition(
             ),
         ));
     }
-
-    let step_id = accepted
-        .step_ids
-        .first()
-        .cloned()
-        .ok_or_else(|| ApiError::internal("accepted live command has no materialized step"))?;
-    Ok(Some(AcceptedLiveExecution {
+    *snapshot = next;
+    Ok(Some((AcceptedLiveExecution {
         run_id: accepted.run_id,
         step_id,
-    }))
+        selected_step_id: prepared.selected_step_id,
+    }, admission)))
 }
 
 fn accepted_preparation_recovery_error(
@@ -409,9 +489,91 @@ async fn current_live_run_waits_for_solve(state: &Arc<AppState>) -> Result<bool,
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExistingAcceptedRunGate {
-    Held(String),
-    Pending(String),
+    Held {
+        run_id: String,
+        preparation_ready: bool,
+        input_matches: bool,
+        cancellation_pending: bool,
+    },
     Released(String),
+}
+
+fn targets_stage(target: Option<&RuntimeCommandTarget>) -> bool {
+    matches!(target, Some(
+        RuntimeCommandTarget::StageId { .. } | RuntimeCommandTarget::StageIndex { .. }
+        | RuntimeCommandTarget::CurrentStage { .. }
+    ))
+}
+
+fn validate_compute_target(command: &SessionCommand, scene_revision: u64) -> Result<(), ApiError> {
+    if command.kind == "solve" && targets_stage(command.target.as_ref()) {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_compute_target_unsupported",
+            "use Run or Relax to execute a selected stage",
+        ));
+    }
+    if crate::live_stage_initial_state::prepared_request(command.initial_state.as_ref()).is_some()
+        && (!matches!(command.kind.as_str(), "run" | "relax") || !targets_stage(command.target.as_ref()))
+    {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_compute_target_unsupported",
+            "prepared magnetization requires a selected Run or Relax stage",
+        ));
+    }
+    crate::live_stage_initial_state::validate_live_initial_state_request(
+        command.initial_state.as_ref(),
+        scene_revision,
+        command.kind == "solve" || matches!(command.target.as_ref(), Some(RuntimeCommandTarget::Study)),
+    )
+}
+
+fn command_releases_held_study(command: &SessionCommand, run_id: &str) -> bool {
+    let targets_existing_study = match command.target.as_ref() {
+        None | Some(RuntimeCommandTarget::Study) => true,
+        Some(RuntimeCommandTarget::Run { run_id: target }) => {
+            target.as_deref().is_none_or(|target| target == run_id)
+        }
+        _ => false,
+    };
+    targets_existing_study
+        && matches!(
+            command.initial_state.as_ref(),
+            None | Some(RuntimeInitialStateRequest::DefaultForTarget)
+                | Some(RuntimeInitialStateRequest::AuthoredInitialState {
+                    source: RuntimeAuthoredInitialStateSource::Study { .. },
+                })
+        )
+        && command.until_seconds.is_none()
+        && command.max_steps.is_none()
+        && command.torque_tolerance.is_none()
+        && command.energy_tolerance.is_none()
+        && command.integrator.is_none()
+        && command.fixed_timestep.is_none()
+        && command.max_error.is_none()
+        && command.solver_policy.is_none()
+        && command.relax_algorithm.is_none()
+        && command.relax_alpha.is_none()
+        && command.state_path.is_none()
+}
+
+fn supersession_request_id(
+    scene: &fullmag_authoring::SceneDocument,
+    command: &SessionCommand,
+    idempotency_key: Option<&str>,
+) -> Result<String, ApiError> {
+    let mut command = serde_json::to_value(command)
+        .map_err(|error| ApiError::internal(format!("encode held replacement request: {error}")))?;
+    let fields = command.as_object_mut().expect("SessionCommand serializes as an object");
+    for field in ["seq", "command_id", "created_at_unix_ms", "requested_at_unix_ms", "precondition"] {
+        fields.remove(field);
+    }
+    let digest = fullmag_session::canonical_json_sha256(&json!({
+        "schema": "live-held-replacement.v1",
+        "execution_input": crate::live_execution_binding::input_identity(scene)?,
+        "idempotency_key": idempotency_key,
+        "command": command,
+    }));
+    Ok(format!("replace-live-{digest}"))
 }
 
 pub(crate) fn accepted_frontier_preparation_is_ready(
@@ -474,6 +636,7 @@ pub(crate) fn accepted_frontier_preparation_is_ready(
 async fn current_live_waiting_for_compute_gate(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
+    scene: &fullmag_authoring::SceneDocument,
 ) -> Result<Option<ExistingAcceptedRunGate>, ApiError> {
     let (run_id, preparation_ready) = {
         let current = state.current_live_state.read().await;
@@ -512,29 +675,39 @@ async fn current_live_waiting_for_compute_gate(
             "cannot resolve the existing accepted run start gate without durable execution storage",
         ));
     };
-    let gate_run_id = run_id.clone();
-    let gate_released = tokio::task::spawn_blocking(move || {
+    let execution_input = crate::live_execution_binding::input_identity(scene)?;
+    let scene_revision = scene.revision;
+    let session_id = context.session_id.clone();
+    let session_epoch = context.session_epoch;
+    let gate = tokio::task::spawn_blocking(move || {
         let store = open_submit_store(&store_root)?;
-        store
-            .accepted_run_start_permitted(&gate_run_id)
-            .map_err(|error| {
-                ApiError::conflict_with_code(
-                    "accepted_run_start_gate_unavailable",
-                    format!("existing accepted run start gate cannot be read: {error:#}"),
-                )
-            })
+        ensure_live_run_belongs_to_session(&store, &run_id, &session_id, session_epoch)?;
+        let gate_error = |error: anyhow::Error| ApiError::conflict_with_code(
+            "accepted_run_start_gate_unavailable", format!("existing accepted run gate: {error:#}"),
+        );
+        if store.accepted_run_start_permitted(&run_id).map_err(gate_error)? {
+            return Ok(ExistingAcceptedRunGate::Released(run_id));
+        }
+        let intent = store.read_run_intent(&run_id).map_err(gate_error)?
+            .ok_or_else(|| ApiError::conflict("held run intent is unavailable"))?;
+        let input_matches = match crate::live_execution_binding::validate_input_binding(
+            &intent.specification, &execution_input, scene_revision,
+        ) {
+            Ok(()) => true,
+            Err(error) if matches!(error.code.as_deref(),
+                Some("accepted_execution_input_mismatch" | "accepted_execution_input_legacy_revision")
+            ) => false,
+            Err(error) => return Err(error),
+        };
+        let cancellation_pending = !store.list_task_cancellation_intents(&run_id)
+            .map_err(gate_error)?.is_empty();
+        Ok(ExistingAcceptedRunGate::Held { run_id, preparation_ready, input_matches, cancellation_pending })
     })
     .await
     .map_err(|error| {
         ApiError::internal(format!("accepted run start gate lookup task failed: {error}"))
     })??;
-    Ok(Some(if gate_released {
-        ExistingAcceptedRunGate::Released(run_id)
-    } else if preparation_ready {
-        ExistingAcceptedRunGate::Held(run_id)
-    } else {
-        ExistingAcceptedRunGate::Pending(run_id)
-    }))
+    Ok(Some(gate))
 }
 
 /// Release the existing accepted Study after an interactive Solve command.
@@ -560,6 +733,15 @@ pub(crate) async fn release_accepted_live_study_with_transition(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
     request_id: &str,
+) -> Result<Option<AcceptedLiveExecution>, ApiError> {
+    release_accepted_live_study_with_request(state, context, request_id, None).await
+}
+
+async fn release_accepted_live_study_with_request(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    request_id: &str,
+    request_receipt: Option<fullmag_session::LiveComputeRequestReceipt>,
 ) -> Result<Option<AcceptedLiveExecution>, ApiError> {
     let (run_id, scene_revision, execution_input) = {
         let current = state.current_live_state.read().await;
@@ -646,11 +828,15 @@ pub(crate) async fn release_accepted_live_study_with_transition(
         // for recovery instead of becoming runnable and only then surfacing
         // an API error.
         retry_accepted_start_writer_operation(|| {
-            store.release_accepted_run_start(
-                typed_run_id.as_str(),
-                &intent.payload_sha256,
-                &release_request_id,
-            )
+            if let Some(receipt) = &request_receipt {
+                store.release_accepted_run_start_for_live_request(
+                    typed_run_id.as_str(), &intent.payload_sha256, &release_request_id, receipt,
+                )
+            } else {
+                store.release_accepted_run_start(
+                    typed_run_id.as_str(), &intent.payload_sha256, &release_request_id,
+                )
+            }
         })
             .map_err(|error| {
                 ApiError::conflict_with_code(
@@ -685,6 +871,7 @@ pub(crate) async fn release_accepted_live_study_with_transition(
     crate::validate_current_live_request_context(state, context).await?;
     Ok(Some(AcceptedLiveExecution {
         run_id,
+        selected_step_id: None,
         step_id: released_steps
             .first()
             .cloned()
@@ -939,7 +1126,7 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     context: &CurrentLiveRequestContext,
     command_id: &str,
 ) -> Result<CurrentLiveRequestContext, ApiError> {
-    let (scene, current_run_id) = {
+    let (scene, current_run_id, current_run_terminal) = {
         let current = state.current_live_state.read().await;
         let snapshot = current
             .as_ref()
@@ -963,7 +1150,10 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
             .as_ref()
             .map(|run| run.run_id.clone())
             .unwrap_or_else(|| snapshot.session.run_id.clone());
-        (scene, current_run_id)
+        let terminal = snapshot.run.as_ref().is_some_and(|run| matches!(
+            run.status.as_str(), "completed" | "succeeded" | "failed" | "cancelled" | "stopped" | "closed"
+        ));
+        (scene, current_run_id, terminal)
     };
     let Some(store_root) = state.submit_store_root.clone() else {
         return Err(ApiError::with_status_and_code(
@@ -973,7 +1163,12 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
         ));
     };
     let run_id_for_lookup = current_run_id.clone();
+    let execution_input = crate::live_execution_binding::input_identity(&scene)?;
+    let scene_revision = scene.revision;
     let existing_accepted = tokio::task::spawn_blocking(move || {
+        if current_run_terminal {
+            return Ok(false);
+        }
         let store = open_submit_store(&store_root)?;
         let Some(intent) = store.read_run_intent(&run_id_for_lookup).map_err(|error| {
             ApiError::conflict_with_code(
@@ -987,6 +1182,17 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
             return Err(ApiError::conflict_with_code(
                 "accepted_execution_run_identity_conflict",
                 "durable live RunIntent identity differs from the current run",
+            ));
+        }
+        crate::live_execution_binding::validate_input_binding(
+            &intent.specification, &execution_input, scene_revision,
+        )?;
+        if !store.list_task_cancellation_intents(&run_id_for_lookup).map_err(|error| {
+            ApiError::conflict(format!("accepted live run cancellation lookup failed: {error:#}"))
+        })?.is_empty() {
+            return Err(ApiError::conflict_with_code(
+                "accepted_held_supersession_pending",
+                "the existing Study is being cancelled; retry preparation after cancellation",
             ));
         }
         let typed_run_id = fullmag_application::RunId::parse(run_id_for_lookup.clone())
@@ -1083,11 +1289,30 @@ async fn publish_accepted_live_study_with_preparation_failure_under_transition(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let mut metadata = snapshot
-        .metadata
-        .take()
-        .map(crate::shared_json::SharedJson::into_value)
-        .unwrap_or_else(|| json!({}));
+    let metadata = accepted_preparation_failure_metadata(snapshot, run_id, step_ids, preparation_error);
+    crate::router_v2::handlers::simulation::commands::apply_accepted_live_study_snapshot(
+        snapshot,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+        run_id,
+        step_ids,
+        status,
+        Some(metadata),
+    )?;
+    let realtime_snapshot = snapshot.clone();
+    drop(current);
+    publish_preparation_failure_realtime(state, &realtime_snapshot).await
+}
+
+fn accepted_preparation_failure_metadata(
+    snapshot: &SessionStateResponse,
+    run_id: &str,
+    step_ids: &[String],
+    preparation_error: &AcceptedLiveStudyPreparationError,
+) -> serde_json::Value {
+    let mut metadata = snapshot.metadata.as_deref().cloned().unwrap_or_else(|| json!({}));
     if !metadata.is_object() {
         metadata = json!({"previous_metadata": metadata});
     }
@@ -1105,28 +1330,17 @@ async fn publish_accepted_live_study_with_preparation_failure_under_transition(
             "preparation_error": preparation_error.message.clone(),
         }),
     );
-    crate::router_v2::handlers::simulation::commands::apply_accepted_live_study_snapshot(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-        run_id,
-        step_ids,
-        status,
-        Some(metadata),
-    )?;
-    let realtime_snapshot = snapshot.clone();
-    drop(current);
-    // The accepted run and its recovery marker are already bound atomically
-    // before this first publication await. A realtime failure therefore
-    // cannot expose an accepted run that is still retryable.
+    metadata
+}
+
+async fn publish_preparation_failure_realtime(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+) -> Result<(), ApiError> {
     let display_revision = state.current_display_selection.read().await.revision;
     let realtime_state =
-        crate::current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
-            .await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
-    Ok(())
+        crate::current_live_realtime_state_from_snapshot(state, snapshot, display_revision).await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await
 }
 
 /// Persist a Docker live Stop against the exact accepted run. Running or
@@ -1254,6 +1468,104 @@ fn ensure_live_run_belongs_to_session(
     Ok(())
 }
 
+const HELD_REPLACEMENT_CANCELLATION_REASON: &str = "held Study replaced by an explicit live command";
+
+fn live_task_cancellation_id(command_id: &str, run_id: &str, task_id: &str) -> String {
+    let scope = format!("{command_id}\0{run_id}\0{task_id}");
+    format!("cancel-live-{}", fullmag_session::hex_sha256(scope.as_bytes()))
+}
+
+/// Retire an unreleased run under the same writer that can release it. Once
+/// the supersession is durable, a retry with the same request can finish a
+/// partial cancellation without making the old run eligible again.
+pub(crate) async fn retire_superseded_live_start(
+    state: &AppState,
+    session_id: &str,
+    session_epoch: u64,
+    run_id: &str,
+    request_id: &str,
+) -> Result<(), ApiError> {
+    let store_root = state.submit_store_root.clone()
+        .ok_or_else(|| ApiError::conflict("held replacement requires durable execution storage"))?;
+    let session_id = session_id.to_owned();
+    let run_id = run_id.to_owned();
+    let request_id = request_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let store = open_submit_store(&store_root)?;
+        let conflict = |error: anyhow::Error| ApiError::conflict_with_code(
+            "accepted_held_supersession_conflict", format!("held run `{run_id}`: {error:#}"),
+        );
+        let read_catalog = || {
+            store.read_run_catalog(&run_id).map_err(&conflict)?
+                .ok_or_else(|| ApiError::conflict("held replacement requires a durable run catalog"))
+        };
+        {
+            let _writer = retry_accepted_start_writer_operation(|| store.write_transaction())
+                .map_err(&conflict)?;
+            ensure_live_run_belongs_to_session(&store, &run_id, &session_id, session_epoch)?;
+            if store.accepted_run_start_permitted(&run_id).map_err(&conflict)? {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_run_already_active",
+                    "the held Study was released before replacement",
+                ));
+            }
+            let catalog = read_catalog()?;
+            if catalog.tasks.is_empty() || catalog.tasks.iter().any(|task| {
+                !matches!(task.lifecycle,
+                    fullmag_session::FmsTaskLifecycle::Accepted
+                    | fullmag_session::FmsTaskLifecycle::Queued
+                    | fullmag_session::FmsTaskLifecycle::Cancelled
+                )
+                || task.attempt_id.is_some() || task.resource_id.is_some()
+                || task.ownership_epoch.is_some()
+            }) {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_held_supersession_conflict",
+                    "held replacement requires unclaimed Study tasks",
+                ));
+            }
+            let cancellations = store.list_task_cancellation_intents(&run_id).map_err(&conflict)?;
+            if cancellations.iter().any(|cancellation| {
+                cancellation.cancellation_id != live_task_cancellation_id(
+                    &request_id, &run_id, &cancellation.task.task_id,
+                )
+                    || cancellation.reason != HELD_REPLACEMENT_CANCELLATION_REASON
+            }) {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_held_supersession_conflict",
+                    "the held Study already has a different cancellation request",
+                ));
+            }
+            request_accepted_stop_for_catalog(
+                &store, &run_id, &request_id, HELD_REPLACEMENT_CANCELLATION_REASON, catalog,
+            )?;
+        }
+
+        // The host cancellation projector owns fencing and releasing any
+        // preparation owner. Do not wait while holding the session writer.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let catalog = read_catalog()?;
+            if catalog.tasks.iter().all(|task| task.lifecycle == fullmag_session::FmsTaskLifecycle::Cancelled)
+                && !store.list_active_preparation_resource_leases().map_err(&conflict)?
+                    .iter().any(|lease| lease.run_id == run_id)
+            {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(ApiError::with_status_and_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "accepted_held_supersession_pending",
+                    "held Study cancellation is still being confirmed; retry the same command",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("held replacement task failed: {error}")))?
+}
+
 fn request_accepted_stop_for_catalog(
     store: &fullmag_session::SessionStore,
     run_id: &str,
@@ -1264,12 +1576,7 @@ fn request_accepted_stop_for_catalog(
     let mut catalog_revision = catalog.revision;
     let mut affected = Vec::new();
     for task in catalog.tasks {
-        let cancellation_id = format!(
-            "cancel-live-{}",
-            fullmag_session::hex_sha256(
-                format!("{}\0{}\0{}", command_id, run_id, task.task_id).as_bytes(),
-            )
-        );
+        let cancellation_id = live_task_cancellation_id(command_id, run_id, &task.task_id);
         let cancellation_expected_revision = match task.lifecycle {
             fullmag_session::FmsTaskLifecycle::Preparing
             | fullmag_session::FmsTaskLifecycle::Running => None,
@@ -1646,39 +1953,33 @@ fn prepare_live_accepted(
         )
     })?;
 
-    let mut selected_step_index = None;
-    let selected_step_id = match &submission {
+    crate::script::select_scene_pipeline_tasks(&mut study);
+    let selected_step_index = match &submission {
         LiveAcceptedSubmission::Command { command, .. } => {
-            if command.kind == "solve" {
+            validate_compute_target(command, scene.revision)?;
+            if command.kind == "solve" || matches!(command.target.as_ref(), Some(RuntimeCommandTarget::Study)) {
                 None
             } else {
-                let step_index = select_live_step(&study, command)?;
-                let selected_step_id = study.steps[step_index].step_id.clone();
-                for (index, step) in study.steps.iter_mut().enumerate() {
-                    step.enabled = index == step_index;
-                }
+                let index = select_live_step(&study, &command.kind, command.target.as_ref())?;
                 if let Some(until_seconds) = command.until_seconds {
-                    study.steps[step_index].until_seconds = Some(until_seconds);
+                    study.steps[index].until_seconds = Some(until_seconds);
                 }
-                // Publish the final m so the next live command can continue from it.
-                crate::live_accepted_continuation::declare_final_state_output(
-                    &mut study.steps[step_index],
-                );
-                selected_step_index = Some(step_index);
-                Some(selected_step_id)
+                crate::live_accepted_continuation::declare_final_state_output(&mut study.steps[index]);
+                Some(index)
             }
         }
         LiveAcceptedSubmission::Startup { .. } => None,
     };
+    let selected_step_id = selected_step_index.map(|index| study.steps[index].step_id.clone());
     apply_live_accepted_observation_output_defaults(&mut study);
-    study.validate_for_execution().map_err(|error| {
-        ApiError::unprocessable_with_code(
-            "accepted_study_plan_invalid",
-            format!("authored live study is not executable: {error}"),
-        )
-    })?;
 
     let closed_loop = has_closed_loop_inspection_pipeline(scene);
+    if selected_step_index.is_some() && closed_loop {
+        return Err(ApiError::unprocessable_with_code(
+            "accepted_study_step_unsupported",
+            "single-stage execution requires a physical Run/Relax pipeline",
+        ));
+    }
     // Keep this guard in the preparation scope until the final
     // capture.verify_unchanged() and immutable source-asset copy below.
     // The authored scene remains the original full-content transition fence.
@@ -1740,7 +2041,34 @@ fn prepare_live_accepted(
             "accepted_script_source_changed", format!("source changed during scene preparation: {error:#}")))?;
         Some((capture, config))
     } else { None };
-    let mut inputs = if let Some((_, config)) = &closed_capture {
+    let reused_inputs = if let LiveAcceptedSubmission::Command {
+        geometry_reuse: Some(reference), ..
+    } = &submission {
+        if closed_capture.is_none() && effective_scene.study.requested_backend.eq_ignore_ascii_case("fem")
+            && effective_scene.study.fem_domain_mesh.is_none()
+        {
+            let reused = crate::live_geometry_mesh_build::load_geometry_reuse_asset(
+                &store, &effective_scene, reference,
+            ).and_then(|asset| match asset {
+                Some(asset) => crate::script::try_reuse_live_geometry_for_study(
+                    repo_root, workspace_root, asset_root, &effective_scene, &requested_execution,
+                    &study, &asset, &reference.provenance(),
+                ),
+                None => Ok(None),
+            });
+            match reused {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    tracing::warn!(error = %error.message, "using native preparation after mesh reuse evidence failed");
+                    None
+                }
+            }
+        } else { None }
+    } else { None };
+    let used_published_mesh = reused_inputs.is_some();
+    let mut inputs = if let Some(inputs) = reused_inputs {
+        inputs
+    } else if let Some((_, config)) = &closed_capture {
         vec![fullmag_application::StudyStepExecutionInput {
             step_id: study.steps.iter().find(|step| step.enabled).ok_or_else(|| ApiError::unprocessable("closed-loop study has no enabled step"))?.step_id.clone(),
             problem: config.ir.clone(), layers: effective_scene.study.execution_layers.clone(),
@@ -1766,7 +2094,11 @@ fn prepare_live_accepted(
     };
     report_progress(
         "Validating materialized Study inputs",
-        "Python/Gmsh preparation finished. Validating the materialized Study inputs and resolving execution plans; no solver has started.",
+        if used_published_mesh {
+            "Reusing the qualified Build Mesh asset. Validating the Study inputs and resolving execution plans."
+        } else {
+            "Python/Gmsh preparation finished. Validating the materialized Study inputs and resolving execution plans; no solver has started."
+        },
     );
     apply_docker_output_storage_binding(
         &mut inputs,
@@ -1857,21 +2189,28 @@ fn prepare_live_accepted(
             ))
         }
     };
-    // A continued command pins its initial state, which changes the StudyPlan
-    // digest the catalog is bound to; keep the inputs to rebuild it.
-    let rebind_inputs: Option<Vec<fullmag_application::StudyStepExecutionInput>> =
-        selected_step_index.map(|_| {
-            inputs
-                .iter()
-                .map(|input| fullmag_application::StudyStepExecutionInput {
-                    step_id: input.step_id.clone(),
-                    problem: input.problem.clone(),
-                    layers: input.layers.clone(),
-                })
-                .collect()
-        });
+    if closed_capture.is_none() {
+        fullmag_application::bind_scene_study_physical_state_flow(
+            &mut study,
+            effective_scene.study.study_pipeline.as_ref(),
+            &inputs,
+        ).map_err(|error| ApiError::unprocessable_with_code(
+            "accepted_study_state_flow_invalid",
+            format!("canonical Study state flow could not be bound: {error:#}"),
+        ))?;
+    }
+    for step in study.steps.iter_mut().filter(|step| step.enabled) {
+        use fullmag_authoring::{StudyPortDataKind, StudyPrimitiveStageKind, StudyStepKind};
+        if matches!(&step.kind, StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax,
+        }) && !step.outputs.iter().any(|output| output.data_kind == StudyPortDataKind::State)
+        {
+            crate::live_accepted_continuation::declare_final_state_output(step);
+        }
+    }
     let mut script_assets = None;
-    let mut catalog = if let Some((capture, config)) = closed_capture.take() {
+    let mut prepared_state_asset = None;
+    let (mut catalog, mut initial_state) = if let Some((capture, config)) = closed_capture.take() {
         let layers = inputs.first().ok_or_else(|| ApiError::unprocessable("closed-loop migration input missing"))?.layers.clone();
         let bound = fullmag_application::materialize_captured_study_input(
             "script-base", config.ir, &defaults.execution_profile, layers.clone(),
@@ -1900,29 +2239,65 @@ fn prepare_live_accepted(
             format!("canonical closed-loop compilation failed: {error:#}")))?;
         study = compiled.study;
         script_assets = Some((capture, compiled.source_bytes, compiled.source_reference));
-        compiled.catalog
+        (compiled.catalog, None)
+    } else if let (
+        LiveAcceptedSubmission::Command { command, previous_run_id, prepared_capture, .. },
+        Some(index),
+    ) = (&submission, selected_step_index) {
+        let mut entries = fullmag_application::bind_study_execution_entries(
+            &study, inputs, profile_lookup,
+        ).map_err(|error| ApiError::unprocessable_with_code(
+            "accepted_execution_materialization_failed", error,
+        ))?;
+        let decision = crate::live_stage_initial_state::resolve_requested_live_initial_state(
+            &store, context, scene, &mut study, &mut entries, index, command,
+            targets_stage(command.target.as_ref()), previous_run_id.as_deref(),
+            prepared_capture.as_ref(),
+        )?;
+        let selected_id = &study.steps[index].step_id;
+        entries.retain(|entry| entry.step_id() == selected_id);
+        let problem = entries.first()
+            .ok_or_else(|| ApiError::unprocessable("selected stage has no bound ProblemIR"))?
+            .problem();
+        crate::live_stage_initial_state::restrict_live_study_to_selected_step(
+            &mut study, index, problem, &decision,
+        )?;
+        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, entries)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_study_plan_invalid",
+                format!("selected StudyPlan input could not be bound: {error}"),
+            ))?;
+        let binding = crate::live_stage_initial_state::selected_initial_state_binding(
+            &study.steps[index], &decision, command.initial_state.as_ref(),
+        )?;
+        if let crate::live_accepted_continuation::InitialStateDecision::Prepared(state) = decision {
+            prepared_state_asset = Some(state);
+        }
+        (catalog, Some(binding))
     } else {
-        fullmag_application::materialize_study_execution(
-        &study,
-        inputs,
-        |profile_id, version| {
-            if profile_id == published_profile.profile_id && version == published_profile.version {
-                Ok(published_profile.clone())
-            } else {
-                Err(format!(
-                    "execution profile `{profile_id}/{version}` is not the pinned live profile"
-                ))
-            }
-        },
-    )
-    .map_err(|error| {
-        ApiError::unprocessable_with_code(
-            "accepted_execution_materialization_failed",
-            format!("StudyPlan execution materialization failed: {error}"),
-        )
-        })?
-
+        let catalog = fullmag_application::materialize_study_execution(&study, inputs, profile_lookup)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_execution_materialization_failed",
+                format!("StudyPlan execution materialization failed: {error}"),
+            ))?;
+        (catalog, None)
     };
+    if script_assets.is_none() && selected_step_index.is_none() {
+        catalog = fullmag_application::bind_scene_study_authored_initial_states(&mut study, catalog)
+            .map_err(|error| ApiError::unprocessable_with_code(
+                "accepted_study_state_flow_invalid",
+                format!("authored Study initial state could not be bound: {error:#}"),
+            ))?;
+    }
+    if selected_step_index.is_none() {
+        if let LiveAcceptedSubmission::Command { command, .. } = &submission {
+            if let Some(request) = command.initial_state.as_ref() {
+                initial_state = Some(crate::live_stage_initial_state::study_initial_state_binding(
+                    &study, request,
+                )?);
+            }
+        }
+    }
     let entries = catalog.entries();
     let requested_gpu = requested_execution.device.eq_ignore_ascii_case("gpu");
     let mut run_budget = None;
@@ -2017,59 +2392,6 @@ fn prepare_live_accepted(
         ));
     }
 
-    // Continuation (ADR 0068 F5): start from the previous live command's final
-    // m when the accepted plan has exactly the same magnetization layout.
-    let initial_state = match (&submission, selected_step_index) {
-        (LiveAcceptedSubmission::Command { previous_run_id, .. }, Some(step_index)) => {
-            let step_id = study.steps[step_index].step_id.clone();
-            let plan = lowered
-                .steps
-                .iter()
-                .find(|step| step.step_id == step_id)
-                .and_then(|step| step.execution_plan.as_ref());
-            let decision = match plan {
-                Some(plan) => crate::live_accepted_continuation::decide_initial_state(
-                    &store,
-                    previous_run_id.as_deref(),
-                    &context.session_id,
-                    context.session_epoch,
-                    plan,
-                ),
-                None => crate::live_accepted_continuation::InitialStateDecision::Authored {
-                    reason: "selected step has no execution plan".into(),
-                },
-            };
-            if let crate::live_accepted_continuation::InitialStateDecision::Continuation(source) =
-                &decision
-            {
-                crate::live_accepted_continuation::declare_pinned_initial_state(
-                    &mut study.steps[step_index],
-                    source,
-                );
-                study.validate_for_execution().map_err(|error| {
-                    ApiError::unprocessable_with_code(
-                        "accepted_study_plan_invalid",
-                        format!("continued live study is not executable: {error}"),
-                    )
-                })?;
-                let inputs = rebind_inputs.expect("selected live step keeps its inputs");
-                catalog = fullmag_application::materialize_study_execution(
-                    &study,
-                    inputs,
-                    profile_lookup,
-                )
-                .map_err(|error| {
-                    ApiError::unprocessable_with_code(
-                        "accepted_execution_materialization_failed",
-                        format!("continued StudyPlan materialization failed: {error}"),
-                    )
-                })?;
-            }
-            Some(decision.provenance())
-        }
-        _ => None,
-    };
-
     // Keep the authored document identical to the execution_input pin. The
     // derived legacy profile belongs to the accepted Study, not the editable
     // scene restored after a restart.
@@ -2097,6 +2419,12 @@ fn prepare_live_accepted(
         .map_err(|error| ApiError::unprocessable_with_code("accepted_project_invalid", error.to_string()))?;
 
     let mut asset_paths = BTreeMap::new();
+    if let Some(prepared) = prepared_state_asset {
+        let path = "project/assets/initial-state/prepared-m.json";
+        definition.assets.push(fullmag_application::OpaqueAsset::new(path, prepared.bytes, None)
+            .map_err(|error| ApiError::unprocessable(error.to_string()))?);
+        asset_paths.insert(prepared.artifact_id, path.into());
+    }
     if let Some((capture, source_bytes, source_reference)) = script_assets {
         capture.verify_unchanged().map_err(|error| ApiError::conflict_with_code(
             "accepted_script_source_changed", format!("source changed before accepted capture: {error:#}")))?;
@@ -2130,11 +2458,25 @@ fn prepare_live_accepted(
             "execution_input": execution_input,
             "command_id": &command_id,
             "request_idempotency_key": &request_idempotency_key,
-            "step_id": selected_step_id,
+            "step_id": &selected_step_id,
             "command": &command_value,
             "startup_source_sha256": &startup_source_sha256,
         }
     });
+    if let Some(parent) = crate::live_execution_binding::next_study_history_parent(
+        &store, context, project_id.as_str(),
+    )? {
+        parameters["live_workspace"]["study_history_parent"] = serde_json::to_value(parent)
+            .map_err(|error| ApiError::internal(format!("encode Study history parent: {error}")))?;
+    }
+    let request_receipt = match &submission {
+        LiveAcceptedSubmission::Command { request_receipt, .. } => request_receipt.as_ref(),
+        _ => None,
+    };
+    if let Some(receipt) = request_receipt {
+        parameters["live_workspace"]["request_receipt"] = serde_json::to_value(receipt)
+            .map_err(|error| ApiError::internal(format!("encode live Compute receipt: {error}")))?;
+    }
     if let Some(config) = solver_profile {
         parameters.as_object_mut().expect("RunSpec parameters object").insert(
             crate::accepted_solver_profile::PARAMETER.into(),
@@ -2161,10 +2503,14 @@ fn prepare_live_accepted(
     }
     crate::accepted_solver_profile::validate_study_profile(&parameters, &study)
         .map_err(|error| ApiError::unprocessable_with_code("accepted_solver_profile_unsupported", error.to_string()))?;
-    let intent_id = request_idempotency_key
-        .as_deref()
-        .map(|key| format!("live-http-{}", fullmag_session::hex_sha256(key.as_bytes())))
-        .unwrap_or_else(|| format!("live-command-{identity_digest}"));
+    let intent_id = if let Some(receipt) = request_receipt {
+        format!("live-http-v2-{}", receipt.key_sha256)
+    } else {
+        request_idempotency_key
+            .as_deref()
+            .map(|key| format!("live-http-{}", fullmag_session::hex_sha256(key.as_bytes())))
+            .unwrap_or_else(|| format!("live-command-{identity_digest}"))
+    };
     let authored = fullmag_application::RunIntentAuthoring {
         run_id: fullmag_application::RunId::parse(run_id.clone())
             .map_err(|error| ApiError::internal(format!("live run identity is invalid: {error}")))?,
@@ -2221,6 +2567,7 @@ fn prepare_live_accepted(
         project_id,
         validated_commit,
         step_ids,
+        selected_step_id,
         migrated_profile_to_publish,
     })
 }
@@ -2319,12 +2666,17 @@ fn bounded_recovery_error(message: String) -> String {
 
 fn select_live_step(
     study: &fullmag_authoring::StudyPlan,
-    command: &SessionCommand,
+    command_kind: &str,
+    target: Option<&RuntimeCommandTarget>,
 ) -> Result<usize, ApiError> {
-    let expected_kind = if command.kind == "run" {
-        fullmag_authoring::StudyPrimitiveStageKind::Run
-    } else {
-        fullmag_authoring::StudyPrimitiveStageKind::Relax
+    use fullmag_authoring::StudyPrimitiveStageKind;
+    let expected_kind = match command_kind {
+        "run" => StudyPrimitiveStageKind::Run,
+        "relax" => StudyPrimitiveStageKind::Relax,
+        _ => return Err(ApiError::unprocessable_with_code(
+            "accepted_compute_target_unsupported",
+            "selected stage execution requires Run or Relax",
+        )),
     };
     let candidates = study
         .steps
@@ -2341,12 +2693,16 @@ fn select_live_step(
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
 
-    let requested_index = match command.target.as_ref() {
+    let requested_index = match target {
         Some(RuntimeCommandTarget::StageIndex { stage_index }) => Some(*stage_index as usize),
         Some(RuntimeCommandTarget::StageId { stage_id })
         | Some(RuntimeCommandTarget::CurrentStage {
             stage_id: Some(stage_id),
-        }) => study.steps.iter().position(|step| step.step_id == *stage_id),
+        }) => Some(study.steps.iter().position(|step| step.step_id == *stage_id)
+            .ok_or_else(|| ApiError::not_found_with_code(
+                "stage_target_not_found",
+                format!("the requested live stage '{stage_id}' does not exist"),
+            ))?),
         _ => None,
     };
     if let Some(index) = requested_index {
@@ -2883,6 +3239,55 @@ mod tests {
         assert!(super::validate_generated_scene_round_trip(&authored, &changed).is_err());
     }
 
+    #[test]
+    fn only_an_unchanged_study_command_releases_a_held_run() {
+        use super::{command_releases_held_study, RuntimeCommandTarget, SessionCommand};
+
+        let mut command: SessionCommand = serde_json::from_value(serde_json::json!({
+            "seq": 1, "command_id": "compute", "kind": "solve", "created_at_unix_ms": 1,
+            "target": {"kind": "study"},
+        })).unwrap();
+        assert!(command_releases_held_study(&command, "held"));
+        command.target = Some(RuntimeCommandTarget::StageId { stage_id: "relax".into() });
+        assert!(!command_releases_held_study(&command, "held"));
+        command.target = Some(RuntimeCommandTarget::Run { run_id: Some("foreign".into()) });
+        assert!(!command_releases_held_study(&command, "held"));
+        command.target = Some(RuntimeCommandTarget::Study);
+        command.until_seconds = Some(1e-12);
+        assert!(!command_releases_held_study(&command, "held"));
+    }
+
+    #[test]
+    fn explicit_unknown_live_stage_never_falls_back_to_the_only_matching_stage() {
+        use fullmag_authoring::{StudyPlan, StudyPrimitiveStageKind, StudyStepKind};
+        use super::{select_live_step, RuntimeCommandTarget};
+
+        let study = StudyPlan {
+            schema_version: "study_plan.v2".into(),
+            study_id: "study:test".into(),
+            revision: 1,
+            source_pipeline_version: None,
+            steps: vec![live_step(
+                "actual-relax",
+                true,
+                StudyStepKind::Primitive { stage_kind: StudyPrimitiveStageKind::Relax },
+                Vec::new(),
+            )],
+        };
+        for target in [
+            RuntimeCommandTarget::StageId { stage_id: "missing".into() },
+            RuntimeCommandTarget::CurrentStage { stage_id: Some("missing".into()) },
+        ] {
+            let error = select_live_step(&study, "relax", Some(&target)).unwrap_err();
+            assert_eq!(error.status.as_u16(), 404);
+            assert_eq!(error.code.as_deref(), Some("stage_target_not_found"));
+        }
+        let target = RuntimeCommandTarget::StageId { stage_id: "actual-relax".into() };
+        assert_eq!(select_live_step(&study, "relax", Some(&target)).unwrap(), 0);
+        assert!(select_live_step(&study, "solve", Some(&target)).is_err());
+        assert_eq!(select_live_step(&study, "relax", None).unwrap(), 0);
+    }
+
     fn live_step(
         step_id: &str,
         enabled: bool,
@@ -2914,6 +3319,7 @@ mod tests {
             },
             until_seconds: None,
             inputs: Vec::new(),
+            initial_state_overlay: None,
             completion_dependencies: Vec::new(),
             outputs,
             acceptance: fullmag_authoring::StudyAcceptancePolicy::Any,

@@ -21,6 +21,7 @@ import {
 } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../../InspectorEditSession";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FormField } from "../../primitives/FormField";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -48,7 +49,7 @@ export function SharedDomainMeshPolicySection() {
   const { api, commands, resources } = kernel;
   const sessionScopeKey = sessionRequestScopeKey(useSessionResourceIdentity());
   const semanticsResource = useMeshSemanticsResource();
-  const resource = useMemo<SharedDomainResourceLike>(() => {
+  const observedPolicy = useMemo<SharedDomainResourceLike>(() => {
     const data = semanticsResource.data as Record<string, unknown> | null;
     const sharedConfig =
       data?.shared_domain_config &&
@@ -63,12 +64,21 @@ export function SharedDomainMeshPolicySection() {
     };
   }, [semanticsResource.data]);
 
+  const identityKey = sessionScopeKey ?? "no-session";
+  const [acknowledged, setAcknowledged] = useState<{
+    identityKey: string;
+    policy: SharedDomainResourceLike & { revision: number };
+  } | null>(null);
+  const resource = acknowledged?.identityKey === identityKey &&
+    acknowledged.policy.revision > (observedPolicy.revision ?? 0)
+    ? acknowledged.policy
+    : observedPolicy;
   const baseDraft = useMemo(
     () => draftFromSharedDomainResource(resource),
     [resource],
   );
-  const baseKey = `${sessionScopeKey ?? "no-session"}:${resource.revision ?? 0}:${formatPolicyJson(resource.config)}`;
-  const identityKey = "shared-domain-policy";
+  const baseKey = `${identityKey}:${resource.revision ?? 0}:${formatPolicyJson(resource.config)}`;
+  const draftEditVersion = useRef(0);
 
   const [draftState, setDraftState] = useState<
     InspectorDraftState<SharedDomainPolicyDraft>
@@ -111,6 +121,7 @@ export function SharedDomainMeshPolicySection() {
 
   const updateField = useCallback(
     (patch: Partial<SharedDomainPolicyDraft>) => {
+      draftEditVersion.current += 1;
       const merged: SharedDomainPolicyDraft = {
         ...draft,
         ...patch,
@@ -133,10 +144,11 @@ export function SharedDomainMeshPolicySection() {
         }),
       );
     },
-    [baseDraft, baseKey, draft],
+    [baseDraft, baseKey, draft, identityKey],
   );
 
   const loadEffectiveDefaults = () => {
+    draftEditVersion.current += 1;
     const seeded = draftFromEffectiveSharedDomainResource(resource);
     setDraftState({
       baseKey,
@@ -152,6 +164,7 @@ export function SharedDomainMeshPolicySection() {
   };
 
   const revert = () => {
+    draftEditVersion.current += 1;
     setDraftState(
       initialInspectorDraftState({ baseDraft, baseKey, identityKey }),
     );
@@ -162,7 +175,7 @@ export function SharedDomainMeshPolicySection() {
   const validationError = validation.ok ? null : validation.error;
 
   const applyPolicy = async ({ silent = false } = {}) => {
-    if (!sessionScopeKey) {
+    if (!sessionScopeKey || commandContext.isCurrentSessionScope?.() === false) {
       if (!silent) {
         setFeedback({
           kind: "error",
@@ -177,18 +190,36 @@ export function SharedDomainMeshPolicySection() {
       return false;
     }
     const opId = ++operationGuard.current;
+    const submittedEditVersion = draftEditVersion.current;
+    const isCurrentOperation = () => operationGuard.current === opId &&
+      commandContext.isCurrentSessionScope?.() !== false;
     setPending(true);
     try {
       const next = await api.meshing.sharedDomain.replacePolicy(
         { config: checked.config },
         { sessionScopeKey },
       );
-      if (operationGuard.current !== opId) return false;
-      publishCommittedMeshPolicyResource?.(
+      if (!isCurrentOperation()) return false;
+      const policy = { ...next, effective_config: next.config };
+      setAcknowledged({ identityKey, policy });
+      const draftWasEdited = draftEditVersion.current !== submittedEditVersion;
+      if (draftWasEdited) {
+        // An edit can match the old baseline while the new one is in flight.
+        setDraftState((current) => ({ ...current, dirty: true }));
+      } else {
+        setDraftState(initialInspectorDraftState({
+          baseDraft: draftFromSharedDomainResource(policy),
+          baseKey: `${identityKey}:${policy.revision}:${formatPolicyJson(policy.config)}`,
+          identityKey,
+        }));
+        acknowledgePolicyDraft();
+      }
+      publishCommittedMeshPolicyResource(
         resources,
         MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
         sessionScopeKey,
         next,
+        api.resourceCacheScope,
       );
       resources.invalidate(
         MESH_SHARED_DOMAIN_POLICY_RESOURCE_KEY,
@@ -205,7 +236,9 @@ export function SharedDomainMeshPolicySection() {
       // drafts and the build dialog's mesh_revision precondition stay current.
       resources.invalidate(SCENE_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
       resources.invalidate(SESSION_STATUS_RESOURCE_KEY, `mesh-policy:shared-domain:${next.revision}`);
-      if (!silent) {
+      if (draftWasEdited) {
+        setFeedback({ kind: "warning", message: "Shared-domain policy saved. Newer draft edits still need Apply or Revert." });
+      } else if (!silent) {
         setFeedback({
           kind: "success",
           message:
@@ -214,7 +247,7 @@ export function SharedDomainMeshPolicySection() {
       }
       return true;
     } catch (error) {
-      if (operationGuard.current !== opId) return false;
+      if (!isCurrentOperation()) return false;
       setFeedback({
         kind: "error",
         message:
@@ -226,18 +259,31 @@ export function SharedDomainMeshPolicySection() {
     }
   };
 
+  const acknowledgePolicyDraft = useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    sessionScopeKey !== null && validationError === null,
+    undefined,
+    applyPolicy,
+    revert,
+  );
+
   const buildSharedDomain = async () => {
     if (!sessionScopeKey || pending || buildPending) return;
     setBuildPending(true);
     try {
       if (dirty) {
+        const submittedEditVersion = draftEditVersion.current;
         const saved = await applyPolicy({ silent: true });
-        if (!saved) return;
+        if (!saved || draftEditVersion.current !== submittedEditVersion) return;
       }
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       const result = await commands.execute(
         "mesh.build-shared-domain",
         commandContext,
       );
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       setFeedback({
         kind:
           result.status === "completed"
@@ -252,6 +298,7 @@ export function SharedDomainMeshPolicySection() {
             : "Shared-domain mesh build submitted."),
       });
     } catch (error) {
+      if (commandContext.isCurrentSessionScope?.() === false) return;
       setFeedback({
         kind: "error",
         message:
@@ -290,7 +337,7 @@ export function SharedDomainMeshPolicySection() {
       ) : null}
       <div className="fm-inspector-toolbar">
         <Button
-          disabled={!sessionScopeKey || pending || validationError !== null}
+          disabled={!sessionScopeKey || pending || !dirty || validationError !== null}
           size="sm"
           type="button"
           variant="primary"

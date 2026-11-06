@@ -148,7 +148,6 @@ export function FdmGridInspectorPanelView({
 
   const isDescriptorRoot =
     detail.scope === "descriptor" ||
-    detail.scope === "grid" ||
     detail.scope === "mask" ||
     detail.scope === "provenance";
 

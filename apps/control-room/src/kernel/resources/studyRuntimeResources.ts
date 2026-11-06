@@ -272,6 +272,10 @@ const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
   "domain_generation_id",
   "mesh_build_revision",
   "mesh_revision",
+  "region_coefficients_revision",
+  "region_initial_state_revision",
+  "region_membership_revision",
+  "region_topology_revision",
   "scene_revision",
   "stages_revision",
 ] as const satisfies ReadonlyArray<keyof LiveStatusResource["resources"]>;
@@ -286,13 +290,7 @@ type StudyRuntimeCommandSessionStatus = {
     LiveStatusResource["resources"],
     | "artifact_revision"
     | "artifacts_revision"
-    | "command_completion_revision"
-    | "commands_revision"
-    | "domain_generation_id"
-    | "mesh_build_revision"
-    | "mesh_revision"
-    | "scene_revision"
-    | "stages_revision"
+    | (typeof RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS)[number]
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
   session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
@@ -331,6 +329,10 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       domain_generation_id: status.data.resources.domain_generation_id,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
+      region_coefficients_revision: status.data.resources.region_coefficients_revision,
+      region_initial_state_revision: status.data.resources.region_initial_state_revision,
+      region_membership_revision: status.data.resources.region_membership_revision,
+      region_topology_revision: status.data.resources.region_topology_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
     },
@@ -370,16 +372,9 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.artifact_revision === next.resources.artifact_revision &&
     previous.resources.artifacts_revision === next.resources.artifacts_revision &&
-    previous.resources.command_completion_revision ===
-      next.resources.command_completion_revision &&
-    previous.resources.commands_revision === next.resources.commands_revision &&
-    previous.resources.domain_generation_id ===
-      next.resources.domain_generation_id &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision &&
-    previous.resources.scene_revision === next.resources.scene_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision &&
+    RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS.every(
+      (key) => previous.resources[key] === next.resources[key],
+    ) &&
     previous.run?.run_id === next.run?.run_id &&
     previous.session.session_id === next.session.session_id &&
     previous.session.session_epoch === next.session.session_epoch
@@ -2945,12 +2940,36 @@ export function useModelReadinessResource({
     [api],
   );
 
-  return useSessionScopedResource<ModelReadinessResource>({
+  const preparedFieldRevision = useSessionStatusSelector(({ data }) => {
+    const solver = data?.lifecycle?.solver;
+    if (!data || (solver !== "ready" && solver !== "idle" && solver !== "awaiting_command")) {
+      return null;
+    }
+    return JSON.stringify([
+      data.session.session_id,
+      data.session.session_epoch,
+      data.resources.domain_generation_id,
+      data.resources.region_initial_state_revision,
+      data.resources.fields_revision,
+    ]);
+  }, { enabled });
+  const resource = useSessionScopedResource<ModelReadinessResource>({
     enabled,
     load,
     resolveRevision: (data) => data.scene_revision,
     resourceKey: MODEL_READINESS_PATH,
   });
+  const { refetch } = resource;
+  const lastPreparedFieldRevision = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled) return;
+    const previous = lastPreparedFieldRevision.current;
+    lastPreparedFieldRevision.current = preparedFieldRevision;
+    if (previous !== undefined && preparedFieldRevision !== null && previous !== preparedFieldRevision) {
+      refetch();
+    }
+  }, [enabled, preparedFieldRevision, refetch]);
+  return resource;
 }
 
 export function readyCommandResourceData<T>(

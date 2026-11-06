@@ -998,6 +998,10 @@ export const SIMULATION_STAGES_EXECUTION_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/execution",
 );
 
+// Owning route is registered in router_v2/mod.rs and exported in openapi_v2.rs.
+// Use the generated path once managed API export is available.
+export const SIMULATION_STAGES_RESULTS_PATH = "/v2/sessions/current/simulation/stages/results";
+
 export const SIMULATION_STAGE_HYSTERESIS_PLAN_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/plan",
 );
@@ -1131,6 +1135,14 @@ export const PROJECT_RUN_MATERIALIZATION_PATH = openApiV2Path(
 export const PROJECT_RUN_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}",
 );
+
+// The Study result routes are registered in the API and await managed OpenAPI export.
+export const PROJECT_STUDY_RESULTS_PATH = "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results";
+export const PROJECT_STUDY_RESULT_STATE_PATH = `${PROJECT_STUDY_RESULTS_PATH}/{artifact_id}` as const;
+export const PROJECT_STUDY_RESULT_MAGNETIZATION_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/magnetization` as const;
+export const PROJECT_STUDY_RESULT_TOPOLOGY_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/topology` as const;
+export const PROJECT_STUDY_RESULT_SUPPORT_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/support` as const;
+export const PROJECT_STUDY_RESULT_SCALARS_PATH = `${PROJECT_STUDY_RESULT_STATE_PATH}/scalars` as const;
 
 export const PROJECT_SOLUTION_SET_DISCOVERY_PATH = openApiV2Path(
   "/v2/persistence/projects/{project_id}/runs/{run_id}/solution-sets",

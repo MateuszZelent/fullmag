@@ -479,6 +479,7 @@ async fn finish_startup_acceptance(
             &state,
             &accepted_context,
             "startup",
+            None,
         )
         .await;
 
@@ -1629,6 +1630,7 @@ async fn publish_startup_result(
         None => serde_json::Map::new(),
     };
     let artifact_dir = snapshot.session.artifact_dir.clone();
+    crate::session::select_current_accepted_scalar_series(snapshot, &run_id, None);
     snapshot.session.run_id = run_id.clone();
     // The accepted run keeps the durable wait gate, while the current live
     // read model remains command-capable. `waiting_for_solve` is a run-level

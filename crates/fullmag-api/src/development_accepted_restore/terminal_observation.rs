@@ -5,6 +5,7 @@ use super::*;
 pub(super) const ENV: &str = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN";
 const SCHEMA: &str = "fullmag.development-terminal-observation-input.v1";
 const PROOF_SCHEMA: &str = "fullmag.development-terminal-observation-proof.v1";
+const COMPUTE_PROOF_SCHEMA: &str = "fullmag.development-terminal-observation-proof.v2";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,14 +59,30 @@ struct Proof {
     catalog_revision: u64,
     native_config_sha256: String,
     terminal_evidence_sha256: String,
-    start_release_sha256: String,
-    source_request_id: String,
-    source_sha256: String,
+    start_release_sha256: Option<String>,
+    source_request_id: Option<String>,
+    source_sha256: Option<String>,
+    compute: Option<ComputeProof>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComputeProof {
+    command_id: String,
+    receipt_sha256: String,
 }
 
 struct Loaded {
     hydration: SnapshotHydration,
     identity: AcceptedRunReattachIdentity,
+}
+
+struct TerminalInstallation {
+    proof_root: std::path::PathBuf,
+    proof_sha256: String,
+    receipt: Value,
+    outcome: String,
+    command: Option<crate::types::TrackedCommandRecord>,
 }
 
 fn raw(root: &Path, relative: &str, expected: &str) -> Result<Vec<u8>> {
@@ -105,13 +122,69 @@ fn equal(value: &Value, field: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_source(
+    proof: &Proof,
+    intent: &fullmag_session::FmsRunIntent,
+    specification: &RunSpecification,
+    live: &Value,
+) -> Result<(String, String)> {
+    let command = live.get("command").context("terminal observation has no immutable command")?;
+    match (
+        proof.schema.as_str(), proof.start_release_sha256.as_deref(),
+        proof.source_request_id.as_deref(), proof.source_sha256.as_deref(), proof.compute.as_ref(),
+    ) {
+        (PROOF_SCHEMA, Some(release_sha), Some(source_id), Some(source_sha), None) => {
+            validate_digest(release_sha, "terminal observation Start release")?;
+            fullmag_session::repository_path::validate_store_id(source_id)?;
+            validate_digest(source_sha, "terminal observation startup source")?;
+            for (field, expected) in [
+                ("command_id", source_id), ("request_idempotency_key", source_id),
+                ("startup_source_sha256", source_sha),
+            ] {
+                equal(live, field, expected)?;
+            }
+            equal(command, "kind", "startup_script")?;
+            equal(command, "request_id", source_id)?;
+            equal(command, "source_sha256", source_sha)?;
+            Ok((source_id.into(), source_sha.into()))
+        }
+        (COMPUTE_PROOF_SCHEMA, None, None, None, Some(compute)) => {
+            validate_digest(&compute.receipt_sha256, "terminal observation Compute receipt")?;
+            fullmag_session::repository_path::validate_store_id(&compute.command_id)?;
+            let manual = specification.parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY)
+                .map(fullmag_session::accepted_run_start_policy_is_manual).transpose()?.unwrap_or(false);
+            if manual || live.get("startup_source_sha256").is_some_and(|value| !value.is_null()) {
+                bail!("terminal observation Compute must have its automatic Start binding");
+            }
+            let receipt = crate::live_compute_request::receipt_from_intent(intent)
+                .map_err(|error| anyhow::anyhow!("{error}"))?
+                .context("terminal observation Compute has no durable request receipt")?;
+            let kind = string(command, "kind")?;
+            let value = live.get("request_receipt").context("terminal observation Compute receipt is absent")?;
+            if !matches!(kind, "solve" | "run" | "relax")
+                || receipt.command_kind.as_deref() != Some(kind)
+                || receipt.command_id != compute.command_id
+                || receipt.client_intent_id.as_deref() != command.get("client_intent_id").and_then(Value::as_str)
+                || receipt.requested_target.is_none()
+                || fullmag_session::canonical_json_sha256(value) != compute.receipt_sha256
+            {
+                bail!("terminal observation Compute receipt differs from its command or proof");
+            }
+            equal(live, "request_idempotency_key", &receipt.key_sha256)?;
+            equal(command, "command_id", &compute.command_id)?;
+            Ok((receipt.request_id.unwrap_or(receipt.command_id), receipt.request_sha256))
+        }
+        _ => bail!("terminal observation source proof schema or fields differ"),
+    }
+}
+
 /// No run, admission, Start or lease transitions. Canonical writer fences may
 /// update their own lock-owner metadata. Both the original
 /// native drain and exact durable accepted run are independently checked.
 fn restore(
     state: &AppState,
     input: Input,
-) -> Result<()> {
+) -> Result<TerminalInstallation> {
     if input.schema != SCHEMA {
         bail!("terminal observation input schema differs");
     }
@@ -131,7 +204,7 @@ fn restore(
     // Do not resolve original authority documents through the private input root.
     let control_root = Path::new(RUNTIME_PROVENANCE_ROOT);
     let proof: Proof = serde_json::from_slice(&raw(&proof_root, &input.proof_path, &input.proof_sha256)?)?;
-    if proof.schema != PROOF_SCHEMA {
+    if !matches!(proof.schema.as_str(), PROOF_SCHEMA | COMPUTE_PROOF_SCHEMA) {
         bail!("terminal observation proof schema differs");
     }
     validate_digest(&input.launch_sha256, "terminal observation launch binding")?;
@@ -158,13 +231,13 @@ fn restore(
     if proof.session_epoch == 0 || proof.catalog_revision == 0 {
         bail!("terminal observation has a zero epoch or catalog revision");
     }
-    for id in [&proof.run_id, &proof.project_id, &proof.session_id, &proof.source_request_id] {
+    for id in [&proof.run_id, &proof.project_id, &proof.session_id] {
         fullmag_session::repository_path::validate_store_id(id)?;
     }
     validate_image_id(&proof.image_id, "terminal observation image")?;
     for (value, name) in [
         (&proof.config_sha256, "config"), (&proof.definition_sha256, "definition"),
-        (&proof.specification_sha256, "specification"), (&proof.source_sha256, "source"),
+        (&proof.specification_sha256, "specification"),
         (&proof.native_config_sha256, "native runtime config"),
         (&proof.terminal_evidence_sha256, "canonical terminal evidence"),
     ] {
@@ -335,23 +408,19 @@ fn restore(
         bail!("terminal observation immutable accepted identity differs");
     }
     let live = specification.parameters.get("live_workspace").context("accepted observation has no live binding")?;
-    for (field, expected) in [
-        ("api_instance_id", old_api), ("session_id", proof.session_id.as_str()),
-        ("command_id", proof.source_request_id.as_str()),
-        ("request_idempotency_key", proof.source_request_id.as_str()),
-        ("startup_source_sha256", proof.source_sha256.as_str()),
-    ] {
-        equal(live, field, expected)?;
-    }
+    equal(live, "api_instance_id", old_api)?;
+    equal(live, "session_id", &proof.session_id)?;
     if live.get("session_epoch").and_then(Value::as_u64) != Some(proof.session_epoch)
         || live.get("scene_revision").and_then(Value::as_u64) != Some(proof.scene_revision)
     {
         bail!("terminal observation live epoch or scene differs");
     }
-    let command = live.get("command").context("terminal observation has no immutable command")?;
-    equal(command, "kind", "startup_script")?;
-    equal(command, "request_id", &proof.source_request_id)?;
-    equal(command, "source_sha256", &proof.source_sha256)?;
+    let (source_request_id, source_sha256) = validate_source(&proof, &accepted.run.intent, specification, live)?;
+    if proof.schema == COMPUTE_PROOF_SCHEMA
+        && preflight.get("scene_revision").and_then(Value::as_u64) != Some(proof.scene_revision)
+    {
+        bail!("terminal observation would replace a newer editable scene");
+    }
     let scene = scene_from_definition(&accepted.run.definition_bytes, specification)?;
     if scene.revision != proof.scene_revision {
         bail!("terminal observation scene revision differs");
@@ -393,7 +462,7 @@ fn restore(
         bail!("terminal observation requires a fresh API workspace");
     }
     let fence_run_id = proof.run_id.clone();
-    let installed = ledger.with_terminal_run_evidence_fence(&store, &fence_run_id, |host_snapshot, evidence_sha256| {
+    let (receipt, command, outcome) = ledger.with_terminal_run_evidence_fence(&store, &fence_run_id, |host_snapshot, evidence_sha256| {
     if evidence_sha256 != proof.terminal_evidence_sha256 {
         bail!("terminal observation canonical terminal evidence changed");
     }
@@ -420,9 +489,14 @@ fn restore(
     if catalog.revision != proof.catalog_revision || terminal_outcome != expected_outcome {
         bail!("terminal observation catalog differs from the hash-bound public run outcome");
     }
-    raw(store.root(), &format!("{relative}/start_release.json"), &proof.start_release_sha256)?;
-    if !store.accepted_run_start_permitted(&proof.run_id)? {
-        bail!("terminal observation has no canonical Start release");
+    if let Some(release_sha256) = proof.start_release_sha256.as_deref() {
+        raw(store.root(), &format!("{relative}/start_release.json"), release_sha256)?;
+    }
+    let release_present = store.read_accepted_run_start_release(&proof.run_id)?.is_some();
+    if release_present != proof.start_release_sha256.is_some()
+        || !store.accepted_run_start_permitted(&proof.run_id)?
+    {
+        bail!("terminal observation Start evidence differs from its immutable policy");
     }
     let mut planned_inputs = std::collections::BTreeMap::new();
     for step in accepted.lowered.steps.iter().filter(|step| step.enabled
@@ -459,6 +533,8 @@ fn restore(
         }
         ensure_terminal_run_has_no_active_leases(&store, held_id)?;
     }
+    let command = crate::live_compute_request::accepted_command_readback(&store, &accepted.run.intent, terminal_outcome)
+        .map_err(|error| anyhow::anyhow!("terminal Compute journal readback: {error}"))?;
     let installed = json!({
         "schema": "fullmag.terminal-observation-restored.v1",
         "api_instance_id": state.request_scope_instance_id,
@@ -482,7 +558,7 @@ fn restore(
         hydration: SnapshotHydration {
             run_id, project_id, specification: specification.clone(), scene,
             logical_session_id: proof.session_id, session_epoch: proof.session_epoch,
-            source_request_id: proof.source_request_id, source_sha256: proof.source_sha256,
+            source_request_id, source_sha256,
             startup_provenance_sha256: None, config_sha256: proof.config_sha256,
             proof_sha256: input.proof_sha256.clone(), total_steps: catalog.tasks.len(),
             terminal_outcome: Some(terminal_outcome.into()), preparation_failure: None,
@@ -490,21 +566,17 @@ fn restore(
             metadata_schema: SCHEMA, started_at_unix_ms: Some(session_started_at),
         },
     };
-    let snapshot = build_snapshot_from_hydration(&state.current_workspace_root, &loaded.hydration)?;
+    let mut snapshot = build_snapshot_from_hydration(&state.current_workspace_root, &loaded.hydration)?;
+    if proof.schema == COMPUTE_PROOF_SCHEMA {
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::refresh_runtime_status(&mut snapshot);
+    }
     state.current_live_session_epoch.store(loaded.identity.session_epoch, Ordering::Release);
     *rebind = Some(loaded.identity);
     *current = Some(snapshot);
-    Ok(installed)
+    Ok((installed, command, terminal_outcome.to_owned()))
     })?;
-    // Only publish after the real in-process installation. Never create an
-    // activation/predecessor ACK or a numerical/native-exit receipt.
-    validate_api_instance_id(&state.request_scope_instance_id, "restored API instance")?;
-    let relative = format!("terminal-observation/{}/installed-{}.json",
-        input.proof_sha256, state.request_scope_instance_id);
-    let mut bytes = fullmag_session::canonical_json_bytes(&installed);
-    bytes.push(b'\n');
-    publish_immutable_restore_bytes(&proof_root, &relative, &bytes)?;
-    Ok(())
+    Ok(TerminalInstallation { proof_root, proof_sha256: input.proof_sha256, receipt, outcome, command })
 }
 
 pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), String> {
@@ -525,9 +597,33 @@ pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
     let input: Input = serde_json::from_slice(&bytes)
         .map_err(|error| format!("terminal observation input is invalid: {error}"))?;
     let state_for_load = Arc::clone(state);
-    tokio::task::spawn_blocking(move || restore(&state_for_load, input))
+    let restored = tokio::task::spawn_blocking(move || restore(&state_for_load, input))
         .await.map_err(|error| format!("terminal observation task failed: {error}"))?
-        .map_err(|error| format!("terminal observation validation failed: {error:#}"))
+        .map_err(|error| format!("terminal observation validation failed: {error:#}"))?;
+
+    let _transition = state.current_live_session_transition.lock().await;
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| "terminal observation lost its installed workspace".to_owned())?;
+    crate::live_command_journal::recover(state, &snapshot)
+        .await.map_err(|error| format!("terminal observation command journal recovery failed: {error}"))?;
+    if let Some(command) = restored.command {
+        crate::live_command_journal::project_terminal_compute(state, &snapshot, command, &restored.outcome)
+            .await.map_err(|error| format!("terminal observation command projection failed: {error}"))?;
+    }
+    drop(_transition);
+
+    // Publish only after both read models are installed. No Start, native
+    // lease, or numerical receipt is written by this path.
+    validate_api_instance_id(&state.request_scope_instance_id, "restored API instance")
+        .map_err(|error| error.to_string())?;
+    let relative = format!("terminal-observation/{}/installed-{}.json",
+        restored.proof_sha256, state.request_scope_instance_id);
+    let mut bytes = fullmag_session::canonical_json_bytes(&restored.receipt);
+    bytes.push(b'\n');
+    tokio::task::spawn_blocking(move || publish_immutable_restore_bytes(&restored.proof_root, &relative, &bytes))
+        .await.map_err(|error| format!("terminal observation receipt task failed: {error}"))?
+        .map(|_| ())
+        .map_err(|error| format!("terminal observation receipt publication failed: {error:#}"))
 }
 
 #[cfg(test)]

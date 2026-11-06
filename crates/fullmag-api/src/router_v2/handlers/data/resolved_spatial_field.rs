@@ -275,6 +275,67 @@ pub(crate) fn full_field_publication_carrier_identity(
     Some(identity)
 }
 
+/// An authored multilayer field is a concatenation of native layer carriers.
+/// Its aggregate identity binds that partition and ordering without claiming
+/// that the flattened payload lives on the common convolution grid.
+pub(crate) fn authored_multilayer_publication_carrier_identity(
+    field: &ResolvedSpatialField<'_>,
+) -> Option<FieldPublicationCarrierIdentity> {
+    let SpatialFieldCarrier::FdmCells {
+        cells,
+        multilayer_scope: Some(scope),
+        ..
+    } = &field.carrier
+    else {
+        return None;
+    };
+    let (fingerprint, point_count) = multilayer_native_carrier_fingerprint(scope.artifact_layout)?;
+    let cell_count = cells.iter().try_fold(1u64, |count, axis| {
+        count.checked_mul(u64::from(*axis))
+    })?;
+    if point_count != cell_count {
+        return None;
+    }
+    Some(FieldPublicationCarrierIdentity {
+        scope_kind: "full".to_owned(),
+        scope_id: None,
+        carrier_id: format!("fdm-multilayer:{fingerprint}:full"),
+        carrier_fingerprint: fingerprint.clone(),
+        topology_hash: fingerprint,
+    })
+}
+
+pub(crate) fn multilayer_native_carrier_fingerprint(
+    layout: &serde_json::Value,
+) -> Option<(String, u64)> {
+    if layout.get("backend")?.as_str()? != "fdm_multilayer" {
+        return None;
+    }
+    let layers = layout.get("layers")?.as_array()?;
+    let mut expected_offset = 0u64;
+    let mut native_carriers = Vec::with_capacity(layers.len());
+    for layer in layers {
+        let layer_id = layer.get("layer_id")?.as_str()?;
+        let grid_fingerprint = layer.get("native_grid_fingerprint")?.as_str()?;
+        let offset = layer.get("value_offset")?.as_u64()?;
+        let count = layer.get("value_count")?.as_u64()?;
+        if layer_id.is_empty()
+            || !canonical_sha256(grid_fingerprint)
+            || offset != expected_offset
+            || count == 0
+        {
+            return None;
+        }
+        expected_offset = offset.checked_add(count)?;
+        native_carriers.push((layer_id, grid_fingerprint, count));
+    }
+    if native_carriers.is_empty() {
+        return None;
+    }
+    let binding = serde_json::to_vec(&("fdm-multilayer-native-carriers.v1", native_carriers)).ok()?;
+    Some((format!("sha256:{:x}", Sha256::digest(binding)), expected_offset))
+}
+
 impl ResolvedSpatialField<'static> {
     pub(crate) fn from_artifact_samples(
         quantity_id: &str, values: Vec<f64>,

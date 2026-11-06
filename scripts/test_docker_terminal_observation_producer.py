@@ -199,6 +199,119 @@ class ProducerTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.build()
 
+    def use_compute_intent(self):
+        target = {"kind": "stage_id", "stage_id": "relax-b"}
+        receipt = {"key_sha256": "3" * 64, "request_sha256": "4" * 64,
+                   "command_id": "command-from-ui", "request_id": None, "command_kind": "relax",
+                   "client_intent_id": "study:relax:fixture", "requested_target": target}
+
+        def update(intent):
+            intent["idempotency_key"] = "live-http-v2-" + receipt["key_sha256"]
+            live = intent["specification"]["parameters"]["live_workspace"]
+            live.update(command_id=receipt["command_id"], startup_source_sha256=None,
+                        request_idempotency_key=receipt["key_sha256"], request_receipt=receipt,
+                        command={"kind": "relax", "command_id": receipt["command_id"],
+                                 "client_intent_id": receipt["client_intent_id"], "target": target})
+
+        self.mutate(f"runs/{RUN}/run_intent.json", update, self.store)
+        del self.store[f"runs/{RUN}/start_release.json"]
+        self.change_preflight(lambda preflight: preflight.update(scene_revision=1))
+        return receipt
+
+    def test_automatic_compute_has_a_separate_receipt_pinned_proof(self):
+        receipt = self.use_compute_intent()
+        proof = self.build()
+        self.assertEqual(proof["schema"], "fullmag.development-terminal-observation-proof.v2")
+        self.assertEqual(proof["compute"], {"command_id": receipt["command_id"],
+                                          "receipt_sha256": producer.sha(producer.canonical(receipt))})
+        self.assertEqual(proof["session_id"], "fixture-session")
+        self.assertNotIn("start_release_sha256", proof)
+        self.assertNotIn("source_request_id", proof)
+
+    def test_automatic_compute_rejects_mismatched_key_target_or_manual_policy(self):
+        for failure in ("key", "target", "kind", "client_intent", "manual"):
+            with self.subTest(failure=failure):
+                self.store = dict(self.records)
+                self.use_compute_intent()
+                def change(intent):
+                    params = intent["specification"]["parameters"]
+                    live = params["live_workspace"]
+                    if failure == "key":
+                        intent["idempotency_key"] = "live-http-v2-" + "5" * 64
+                    elif failure == "target":
+                        live["command"]["target"]["stage_id"] = "relax-a"
+                    elif failure == "kind":
+                        live["command"]["kind"] = "run"
+                    elif failure == "client_intent":
+                        live["command"]["client_intent_id"] = "other-intent"
+                    else:
+                        params["fullmag.accepted_run_start"] = {
+                            "schema_version": "accepted_run_start_policy.v1", "mode": "manual"}
+                self.mutate(f"runs/{RUN}/run_intent.json", change, self.store)
+                with self.assertRaises(ValueError):
+                    self.build()
+
+    def test_compute_proof_cannot_replace_newer_editable_scene(self):
+        self.use_compute_intent()
+        self.change_preflight(lambda preflight: preflight.update(scene_revision=2))
+        with self.assertRaisesRegex(ValueError, "editable scene changed"):
+            self.build()
+
+    def test_held_startup_release_with_compute_receipt_keeps_legacy_proof_shape(self):
+        relative = f"runs/{RUN}/start_release.json"
+        self.mutate(relative, lambda grant: grant.update(
+            schema_version="accepted_run_start_release.v2",
+            live_request={"command_id": "release-command", "key_sha256": "7" * 64,
+                          "request_sha256": "8" * 64, "request_id": None, "command_kind": "solve"},
+        ), self.store)
+        proof = self.build()
+        self.assertEqual(proof["schema"], producer.PROOF_SCHEMA)
+        self.assertEqual(proof["start_release_sha256"], producer.sha(self.store[relative]))
+        self.assertEqual(proof["source_request_id"], "fixture-request")
+        self.assertNotIn("compute", proof)
+
+    def test_captured_stop_builds_proof_without_external_digest_input(self):
+        self.use_compute_intent()
+        preflight = producer.decode(self.control[BASE + "terminal-session-preflight.json"])
+        capture = producer.capture_binding(self.store.__getitem__, preflight, {
+            "schema_version": "runtime_service_terminal_run_evidence.v1",
+            "run_id": RUN, "terminal_evidence_sha256": "b" * 64,
+            "mutations_applied": False, "solve_replayed": False,
+        }, "a" * 64, producer.decode(self.control[BASE + "backend-drain.json"])["process_receipt"]["service_owner"])
+        native_raw = producer.canonical(capture) + b"\n"
+        self.control[BASE + "terminal-native-observation.json"] = native_raw
+        for name in ("terminal.json", "receipt.json"):
+            self.mutate(BASE + name, lambda value: value.update(
+                idle_backend_stopped=True, terminal_native_observation_sha256=producer.sha(native_raw)))
+        proof = producer.build_captured_proof(
+            self.control.__getitem__, self.store.__getitem__, iteration=ITERATION, scope=self.scope,
+        )
+        self.assertEqual(proof, self.build())
+        self.assertEqual(proof["schema"], producer.COMPUTE_PROOF_SCHEMA)
+
+        self.mutate(f"runs/{RUN}/run_catalog.json",
+                    lambda value: value.update(revision=8), self.store)
+        with self.assertRaisesRegex(ValueError, "changed after native capture"):
+            producer.build_captured_proof(
+                self.control.__getitem__, self.store.__getitem__, iteration=ITERATION, scope=self.scope,
+            )
+
+        self.control[BASE + "terminal-native-observation.json"] = native_raw + b" "
+        with self.assertRaises(ValueError):
+            producer.build_captured_proof(
+                self.control.__getitem__, self.store.__getitem__, iteration=ITERATION, scope=self.scope,
+            )
+
+    def test_native_capture_rejects_replay_or_a_different_run(self):
+        self.use_compute_intent()
+        preflight = producer.decode(self.control[BASE + "terminal-session-preflight.json"])
+        evidence = {"schema_version": "runtime_service_terminal_run_evidence.v1",
+                    "run_id": RUN, "terminal_evidence_sha256": "b" * 64,
+                    "mutations_applied": False, "solve_replayed": False}
+        for change in ({"solve_replayed": True}, {"mutations_applied": True}, {"run_id": "other-run"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                producer.capture_binding(self.store.__getitem__, preflight, {**evidence, **change}, "a" * 64, {})
+
     def test_duplicate_keys_are_rejected(self):
         with self.assertRaises(ValueError):
             producer.decode(b'{"run_id":"one","run_id":"two"}')

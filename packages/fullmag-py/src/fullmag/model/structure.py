@@ -455,9 +455,15 @@ class ObjectRegion:
         return self
 
     def _assign_texture_override(self, override: RegionTextureOverride | None) -> None:
-        self.texture_override = override
-        if self._texture_assignment_callback is not None:
-            self._texture_assignment_callback(self)
+        callback = self._texture_assignment_callback
+        if callback is None:
+            self.texture_override = override
+            return
+        from fullmag.live._hooks import dsl_call
+
+        with dsl_call():
+            self.texture_override = override
+            callback(self)
 
     def set_material(
         self,

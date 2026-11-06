@@ -104,6 +104,7 @@ import {
   crossSectionFramePreviewToClip,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { resolvePreparedMagnetizationAvailability } from "@/kernel/workspace/observationSourceWorkspace";
 import { useObservationSourceWorkspaceSelector } from "@/kernel/workspace/useObservationSourceWorkspace";
 import { observationFrameMagnetizationResourceKey } from "@/kernel/resources/observationFrameResources";
 import {
@@ -1752,6 +1753,16 @@ export function resolveViewport3DRegionTargetsForMembershipOwnerParts({
   return targets;
 }
 
+function showPreparedMagnetizationOnTarget<T extends VisualizationTargetSettings>(settings: T): T {
+  return {
+    ...settings,
+    activeQuantityId: "m",
+    tensorProjection: null,
+    visible: true,
+    vectorsVisible: settings.vectorsVisible || !settings.shaderVisible || settings.surfaceColorSource === "solid",
+  };
+}
+
 export function resolveViewport3DPrimitiveVisualizationSettings(
   input: Parameters<typeof resolveTargetVisualization>[0],
 ): VisualizationTargetSettings {
@@ -3265,9 +3276,30 @@ export function useViewport3DSceneModel({
   const fdmLaneActive = viewportDataDiscretization === "fdm";
   const femLaneActive = viewportDataDiscretization === "fem";
   const sessionIdentity = useSessionResourceIdentity();
-  const pinnedObservationSource = useObservationSourceWorkspaceSelector(
-    (state) => state.pinned,
+  const { pinned: pinnedObservationSource, prepared } = useObservationSourceWorkspaceSelector(
+    (state) => state,
   );
+  const preparedPreview = analysisOverlay || !liveViewportResourcesEnabled ? null : prepared;
+  const preparedSource = preparedPreview?.source ?? null;
+  const preparedObjectId = preparedPreview?.objectId;
+  const preparedRegionId = preparedPreview?.regionId;
+  const currentDomainGenerationId = useSessionStatusSelector((status) =>
+    status.data?.resources.domain_generation_id ?? null,
+  );
+  const previewSceneRevision = useSessionStatusSelector(({ data }) =>
+    data?.resources.scene_revision ?? null,
+    { enabled: preparedSource !== null },
+  );
+  const previewFieldMeta = useFieldMetaResource({
+    enabled: preparedSource !== null,
+    quantityId: "m",
+  });
+  const previewAvailability = preparedSource ? resolvePreparedMagnetizationAvailability(
+    preparedSource,
+    { domainGenerationId: currentDomainGenerationId, sceneRevision: previewSceneRevision },
+    previewFieldMeta,
+  ) : null;
+  const preparedPreviewAvailable = !preparedSource || previewAvailability === "current";
   const pinnedObservationActive =
     pinnedObservationSource !== null && analysisOverlay === null;
   const renderingState = visualizationState.data;
@@ -3290,16 +3322,16 @@ export function useViewport3DSceneModel({
     layers: renderingState?.layers,
   });
   const selectedSnapshotId = useMemo(
-    () => resolveViewport3DSelectedSnapshotId(selection),
-    [selection],
+    () => preparedSource ? null : resolveViewport3DSelectedSnapshotId(selection),
+    [preparedSource, selection],
   );
   const selectedSnapshotQuery = useMemo(
-    () => resolveViewport3DSelectedSnapshotQuery(selection),
-    [selection],
+    () => preparedSource ? null : resolveViewport3DSelectedSnapshotQuery(selection),
+    [preparedSource, selection],
   );
   const hysteresisReplayTarget = useMemo(
-    () => resolveHysteresisStepViewportTarget(selection),
-    [selection],
+    () => preparedSource ? null : resolveHysteresisStepViewportTarget(selection),
+    [preparedSource, selection],
   );
   const hysteresisReplayGlyphModel = useMemo<HysteresisReplayGlyphModel | null>(
     () => buildHysteresisReplayGlyphModel(hysteresisReplayTarget),
@@ -3426,7 +3458,7 @@ export function useViewport3DSceneModel({
     quantityId, quantityCatalog.data, scene.data?.objects ?? null,
   ), [quantityId, quantityCatalog.data, scene.data]);
   const primaryFieldQuantityId = analysisOverlay?.fieldId ??
-    (pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);
+    (pinnedObservationActive || preparedSource ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);
   const getObjectContext = useCallback((objectId: string | null): VisualizationObjectContext => ({
     object: objectId ? sceneObjectsById.get(canonicalVisualizationSceneObjectId(objectId)) ?? null : null,
     quantityCatalog: quantityCatalog.data,
@@ -4312,12 +4344,14 @@ export function useViewport3DSceneModel({
       target: fdmTarget,
       visualizationState: renderingState,
     }).effectiveSettings;
-    return resolveFdmViewportVisualizationSettings(
-      resolved,
-      fdmMembershipCurrent,
-    );
+    const settings = resolveFdmViewportVisualizationSettings(resolved, fdmMembershipCurrent);
+    return preparedSource && fdmTargetDefinitionsResult.status !== "ready"
+      ? showPreparedMagnetizationOnTarget(settings)
+      : settings;
   }, [
     domainMeta.data?.domain_id,
+    fdmTargetDefinitionsResult.status,
+    preparedSource,
     fallbackSettings,
     fdmMembershipCurrent,
     fdmDomain,
@@ -4328,9 +4362,7 @@ export function useViewport3DSceneModel({
     const settingsById = new Map<string, VisualizationTargetSettings>();
     for (const domain of fdmNativeLayerDomains) {
       const target = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
-      settingsById.set(
-        domain.layerId,
-        resolveViewport3DFdmNativeLayerSettings({
+      const settings = resolveViewport3DFdmNativeLayerSettings({
           activeMaskReady:
             !domain.activeMaskPresent ||
             domain.activeCellCount === domain.totalCells ||
@@ -4343,11 +4375,17 @@ export function useViewport3DSceneModel({
           snapshot: objectVisualizationSnapshot,
           target,
           visualizationState: renderingState,
-        }),
+        });
+      settingsById.set(
+        domain.layerId,
+        preparedObjectId && domain.objectId === preparedObjectId
+          ? showPreparedMagnetizationOnTarget(settings)
+          : settings,
       );
     }
     return settingsById;
   }, [
+    preparedObjectId,
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     getObjectContext,
@@ -4373,8 +4411,8 @@ export function useViewport3DSceneModel({
   const nativeLayerFieldVectors = useViewport3DQuantityFieldVectors(
     nativeLayerFieldRequests,
     liveViewportResourcesEnabled &&
-      fdmLaneActive && nativeLayerFieldRequests.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId },
+      preparedPreviewAvailable && fdmLaneActive && nativeLayerFieldRequests.size > 0,
+    { preparedSource, selectedTargetId: selectedVisualizationTargetId },
   );
   const fdmTargetSettingsById = useMemo(() => {
     const settingsById = new Map<string, VisualizationTargetSettings>();
@@ -4390,10 +4428,11 @@ export function useViewport3DSceneModel({
         target: definition.target,
         visualizationState: renderingState,
       }).effectiveSettings;
-      settingsById.set(
-        definition.target.id,
-        resolveFdmViewportVisualizationSettings(resolved, true),
-      );
+      const settings = resolveFdmViewportVisualizationSettings(resolved, true);
+      const objectMatches = preparedObjectId &&
+        definition.target.id === visualizationTargetIdForSceneObject(preparedObjectId);
+      settingsById.set(definition.target.id,
+        objectMatches && !preparedRegionId ? showPreparedMagnetizationOnTarget(settings) : settings);
     }
     for (const definition of fdmTargetDefinitionsResult.definitions) {
       if (definition.target.kind !== "region") continue;
@@ -4406,13 +4445,16 @@ export function useViewport3DSceneModel({
         target: definition.target,
         visualizationState: renderingState,
       }).effectiveSettings;
-      settingsById.set(
-        definition.target.id,
-        resolveFdmViewportVisualizationSettings(resolved, true),
-      );
+      const settings = resolveFdmViewportVisualizationSettings(resolved, true);
+      const regionMatches = preparedObjectId && preparedRegionId &&
+        definition.target.id === visualizationTargetIdForSceneObject(preparedObjectId, preparedRegionId);
+      settingsById.set(definition.target.id,
+        regionMatches ? showPreparedMagnetizationOnTarget(settings) : settings);
     }
     return settingsById;
   }, [
+    preparedObjectId,
+    preparedRegionId,
     fdmMembershipCurrent,
     fdmTargetDefinitionsResult,
     globalObjectBaseSettings,
@@ -4485,21 +4527,30 @@ export function useViewport3DSceneModel({
       availableQuantityIdsForPlanning,
     );
   const getPartSettings = useCallback(
-    (part: Viewport3DMeshPart) =>
-      applyAnalysisOverlayAppearance(
-        resolveViewport3DPartVisualizationSettings({
-          objectVisualizationSnapshot,
-          part,
-          regionTarget: regionTargetByPartId.get(part.id),
-          renderingState,
-          sceneObjectIds,
-          sceneObjectsById,
-          quantityCatalog: quantityCatalog.data,
-        }),
-        analysisOverlay?.appearance,
-      ),
+    (part: Viewport3DMeshPart) => {
+      const regionTarget = regionTargetByPartId.get(part.id);
+      const settings = resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot,
+        part,
+        regionTarget,
+        renderingState,
+        sceneObjectIds,
+        sceneObjectsById,
+        quantityCatalog: quantityCatalog.data,
+      });
+      const ownerMatches = preparedObjectId && settings.target.kind !== "airbox" &&
+        (settings.target.id === visualizationTargetIdForSceneObject(preparedObjectId) ||
+          visualizationObjectIdForMeshPartLike(part) === preparedObjectId);
+      if (ownerMatches && (!preparedRegionId || !regionTarget ||
+          regionTarget.id === visualizationTargetIdForSceneObject(preparedObjectId, preparedRegionId))) {
+        return showPreparedMagnetizationOnTarget(settings);
+      }
+      return applyAnalysisOverlayAppearance(settings, analysisOverlay?.appearance);
+    },
     [
       analysisOverlay?.appearance,
+      preparedObjectId,
+      preparedRegionId,
       objectVisualizationSnapshot,
       regionTargetByPartId,
       renderingState,
@@ -4753,13 +4804,13 @@ export function useViewport3DSceneModel({
   const magneticPartFieldVectors = useViewport3DPartFieldVectors(
     magneticPartFieldQueries,
     liveViewportResourcesEnabled &&
-      femLaneActive && magneticPartFieldQueries.size > 0,
-    { selectedTargetId: selectedVisualizationTargetId, tracker },
+      preparedPreviewAvailable && femLaneActive && magneticPartFieldQueries.size > 0,
+    { preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const targetQuantityFieldVectors = useViewport3DQuantityFieldVectors(
     targetQuantityFieldRequests,
-    liveViewportResourcesEnabled && targetQuantityFieldDemandActive,
-    { selectedTargetId: selectedVisualizationTargetId, tracker },
+    liveViewportResourcesEnabled && preparedPreviewAvailable && targetQuantityFieldDemandActive,
+    { preparedSource, selectedTargetId: selectedVisualizationTargetId, tracker },
   );
   const airboxFieldVectors = useViewport3DAirboxFieldVectors(
     airboxSettings.activeQuantityId,
@@ -4883,7 +4934,7 @@ export function useViewport3DSceneModel({
   );
   const partScalarRanges = useViewport3DPartScalarRanges(
     partScalarRangeRequests,
-    liveViewportResourcesEnabled && partScalarRangeRequests.size > 0,
+    liveViewportResourcesEnabled && !preparedSource && partScalarRangeRequests.size > 0,
   );
   const resolvedFieldRenderOptions = useMemo(
     () => {
@@ -5004,7 +5055,7 @@ export function useViewport3DSceneModel({
     Boolean(primaryFieldQuantityId) &&
     !analysisFieldIntent &&
     Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&
-    (Boolean(analysisOverlay) ||
+    (Boolean(analysisOverlay || preparedSource) ||
       (viewport3DFieldQuantityAvailable(
         primaryFieldQuantityId,
         availableQuantityIdsForPlanning,
@@ -5126,8 +5177,8 @@ export function useViewport3DSceneModel({
   ]);
   const liveFieldVectorResourceKey = useMemo(
     () =>
-      resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest),
-    [primaryFieldRequest],
+      resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest, preparedSource),
+    [preparedSource, primaryFieldRequest],
   );
   const fieldVectorResourceKey = pinnedObservationActive
     ? observationFrameMagnetizationResourceKey(pinnedObservationSource.frameId)
@@ -5144,7 +5195,7 @@ export function useViewport3DSceneModel({
     ],
   );
   const fieldVectorEnabled =
-    liveViewportResourcesEnabled &&
+    liveViewportResourcesEnabled && preparedPreviewAvailable &&
     // Published fields belong to the published domain, including the initial
     // magnetization before Compute resolves a runtime lane. This opens the
     // published-field data path; execution, availability and topology stay fenced.
@@ -5163,7 +5214,7 @@ export function useViewport3DSceneModel({
     fieldVectorEnabled && primaryFieldRenderOptions.scalarColorsVisible !== false;
   const primaryFieldMetaEnabled =
     scalarRangeStatsEnabled &&
-    !pinnedObservationActive &&
+    !pinnedObservationActive && !preparedSource &&
     !isAnalysisFieldQuantityId(primaryFieldQuantityId) &&
     viewport3DFieldQuantityAvailable(
       primaryFieldQuantityId,
@@ -5275,7 +5326,7 @@ export function useViewport3DSceneModel({
     liveViewportResourcesEnabled &&
       fieldVectorEnabled &&
       !pinnedObservationActive,
-    VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,
+    { ...VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS, preparedSource },
   );
   const observationFieldVector = useViewport3DObservationFrameMagnetization(
     pinnedObservationSource?.frameId,
@@ -5402,7 +5453,7 @@ export function useViewport3DSceneModel({
   ]);
   const fieldRefresh = useMemo<Viewport3DFieldRefreshState>(
     () => ({
-      enabled: !pinnedObservationActive && computeRunning && fieldVectorEnabled,
+      enabled: !pinnedObservationActive && !preparedSource && computeRunning && fieldVectorEnabled,
       payloadRevision: fieldVector.payloadRevision ?? null,
       quantityId: primaryFieldQuantityId,
       resourceKey: fieldVectorResourceKey,
@@ -5418,6 +5469,7 @@ export function useViewport3DSceneModel({
       fieldVectorEnabled,
       fieldVectorResourceKey,
       pinnedObservationActive,
+      preparedSource,
       primaryFieldQuantityId,
     ],
   );
@@ -7646,6 +7698,16 @@ export function useViewport3DSceneModel({
     fdmVectorSegments: savedSelectionActive ? null : fdmVectorSegments,
     femDomain: effectiveViewportFemDomain,
     fieldDataIssue: savedSelectionActive ? null : (fieldDataIssue ?? fieldDomainIssue),
+    preparedMagnetizationLabel: preparedPreview && previewAvailability ? (
+      previewAvailability === "current"
+        ? `Initial magnetization · ${preparedPreview.regionId ?? preparedPreview.objectId}`
+        : {
+          checking: "Checking initial magnetization…",
+          "earlier-domain": "Prepared magnetization belongs to an earlier domain.",
+          superseded: "Prepared magnetization has been replaced.",
+          unavailable: "Could not verify the prepared magnetization.",
+        }[previewAvailability]
+    ) : null,
     fieldPresentationFreshness:
       savedSelectionActive || !fieldVectorEnabled ? null : fieldPresentationFreshness,
     fieldRefresh: savedSelectionActive

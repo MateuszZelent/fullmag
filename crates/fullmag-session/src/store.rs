@@ -88,7 +88,7 @@ fn is_not_found(error: &anyhow::Error) -> bool {
 #[path = "accepted_start_gate.rs"]
 mod accepted_start_gate;
 pub use accepted_start_gate::{
-    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, accepted_run_start_policy_is_manual,
+    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, LiveComputeRequestReceipt, accepted_run_start_policy_is_manual,
 };
 mod development_commit;
 mod development_completion;
@@ -3717,6 +3717,9 @@ impl SessionStore {
                         "study_output_manifest"
                             | "accepted_quantity_bundle"
                             | "accepted_terminal_scalar_stats"
+                            | FMS_ACCEPTED_TERMINAL_LAYOUT_ARTIFACT_TYPE
+                            | FMS_ACCEPTED_SCALAR_HISTORY_INDEX_ARTIFACT_TYPE
+                            | FMS_ACCEPTED_SCALAR_HISTORY_PAGE_ARTIFACT_TYPE
                             | FMS_OBSERVATION_SNAPSHOT_ARTIFACT_TYPE
                             | FMS_OBSERVATION_STATE_ARTIFACT_TYPE
                             | "accepted_primary_carrier"
@@ -9736,6 +9739,16 @@ mod tests {
                 case_id: "late".into(),
             }),
         };
+        let late_layout = FmsArtifactCatalogEntry {
+            artifact_type: FMS_ACCEPTED_TERMINAL_LAYOUT_ARTIFACT_TYPE.into(),
+            required: false,
+            study_output: None,
+            ..late_entry.clone()
+        };
+        let error = store
+            .append_artifact_catalog_entries_for_lease(&lease, &[late_layout])
+            .unwrap_err();
+        assert!(error.to_string().contains("immutable allow-list"));
         assert!(
             store
                 .append_artifact_catalog_entries_for_lease(&lease, &[late_entry])

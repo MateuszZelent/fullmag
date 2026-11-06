@@ -63,6 +63,210 @@ pub enum StudyPipelineNode {
     },
 }
 
+pub(crate) const MAGNETIZATION_ASSIGNMENTS_KEY: &str = "magnetization_assignments";
+pub(crate) const STAGE_MAGNETIZATION_ASSIGNMENTS_KEY: &str = "stage_magnetization_assignments";
+const MAGNETIZATION_ASSIGNMENTS_SCHEMA: &str = "fullmag.magnetization-assignments.v1";
+const MAX_MAGNETIZATION_ASSIGNMENTS: usize = 4096;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptMagnetizationAssignment {
+    pub object_id: String,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub region_id: Option<String>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub initializer: Option<fullmag_ir::InitialMagnetizationIR>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptMagnetizationAssignments {
+    schema_version: String,
+    assignments: Vec<ScriptMagnetizationAssignment>,
+}
+
+pub(crate) struct StageMagnetizationAssignments {
+    pub(crate) ordered: Vec<ScriptMagnetizationAssignment>,
+    independent_count: usize,
+}
+
+impl StageMagnetizationAssignments {
+    pub(crate) fn new(
+        mut independent: Vec<ScriptMagnetizationAssignment>,
+        local: Vec<ScriptMagnetizationAssignment>,
+    ) -> Self {
+        let independent_count = independent.len();
+        independent.extend(local);
+        Self { ordered: independent, independent_count }
+    }
+
+    pub(crate) fn independent(&self) -> &[ScriptMagnetizationAssignment] {
+        &self.ordered[..self.independent_count]
+    }
+
+    pub(crate) fn local(&self) -> &[ScriptMagnetizationAssignment] {
+        &self.ordered[self.independent_count..]
+    }
+}
+
+pub(crate) fn parse_magnetization_assignment_batch(
+    value: &Value,
+    count: &mut usize,
+) -> anyhow::Result<Vec<ScriptMagnetizationAssignment>> {
+    let batch: ScriptMagnetizationAssignments = serde_json::from_value(value.clone())?;
+    if batch.schema_version != MAGNETIZATION_ASSIGNMENTS_SCHEMA || batch.assignments.is_empty() {
+        anyhow::bail!("invalid script magnetization assignment batch");
+    }
+    *count = count.saturating_add(batch.assignments.len());
+    if *count > MAX_MAGNETIZATION_ASSIGNMENTS {
+        anyhow::bail!("script magnetization assignment limit exceeded");
+    }
+    if batch.assignments.iter().any(|assignment| {
+        assignment.object_id.trim().is_empty()
+            || assignment.region_id.as_deref().is_some_and(|id| id.trim().is_empty())
+    }) {
+        anyhow::bail!("magnetization assignment requires an object and nonempty optional region ID");
+    }
+    Ok(batch.assignments)
+}
+
+impl StudyPipelineDocument {
+    /// Lower independent declarations to the next enabled physical stage. A
+    /// disabled stage does not consume an independent authored assignment.
+    /// An assignment owned by a stage applies only while that stage is enabled.
+    pub(crate) fn magnetization_assignments_by_stage(
+        &self,
+    ) -> anyhow::Result<BTreeMap<String, StageMagnetizationAssignments>> {
+        let versioned = match self.version.as_str() {
+            "study_pipeline.v1" => false,
+            "study_pipeline.v2" => true,
+            version => anyhow::bail!("unsupported study pipeline version '{version}'"),
+        };
+        fn visit(
+            nodes: &[StudyPipelineNode],
+            groups_enabled: bool,
+            versioned: bool,
+            pending: &mut Vec<ScriptMagnetizationAssignment>,
+            assignments_by_stage: &mut BTreeMap<String, StageMagnetizationAssignments>,
+            count: &mut usize,
+        ) -> anyhow::Result<()> {
+            for node in nodes {
+                match node {
+                    StudyPipelineNode::Group { enabled, children, .. } => visit(
+                        children,
+                        groups_enabled && *enabled,
+                        versioned,
+                        pending,
+                        assignments_by_stage,
+                        count,
+                    )?,
+                    StudyPipelineNode::Primitive { id, enabled, stage_kind, payload, .. } => {
+                        let physical = matches!(stage_kind.as_str(), "relax" | "run");
+                        let independent = payload.get(MAGNETIZATION_ASSIGNMENTS_KEY);
+                        let local = payload.get(STAGE_MAGNETIZATION_ASSIGNMENTS_KEY);
+                        if (independent.is_some() || local.is_some()) && (!versioned || !physical) {
+                            anyhow::bail!("magnetization assignments require a v2 Run or Relax node");
+                        }
+                        if let Some(value) = independent {
+                            let assignments = parse_magnetization_assignment_batch(value, count)?;
+                            if groups_enabled {
+                                pending.extend(assignments);
+                            }
+                        }
+                        let local = local.map(|value| parse_magnetization_assignment_batch(value, count))
+                            .transpose()?.unwrap_or_default();
+                        if groups_enabled && *enabled && physical && (!pending.is_empty() || !local.is_empty()) {
+                            let assignments = StageMagnetizationAssignments::new(std::mem::take(pending), local);
+                            if assignments_by_stage.insert(id.clone(), assignments).is_some() {
+                                anyhow::bail!("duplicate physical stage with magnetization assignments");
+                            }
+                        }
+                    }
+                    StudyPipelineNode::Macro { config, .. } => {
+                        if config.contains_key(MAGNETIZATION_ASSIGNMENTS_KEY)
+                            || config.contains_key(STAGE_MAGNETIZATION_ASSIGNMENTS_KEY)
+                        {
+                            anyhow::bail!("magnetization assignments cannot be attached to a macro");
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        let mut by_stage = BTreeMap::new();
+        let mut pending = Vec::new();
+        let mut count = 0;
+        visit(&self.nodes, true, versioned, &mut pending, &mut by_stage, &mut count)?;
+        Ok(by_stage)
+    }
+}
+
+impl ScriptMagnetizationAssignment {
+    fn magnet_index(&self, problem: &ProblemIR) -> anyhow::Result<usize> {
+        problem
+            .magnets
+            .iter()
+            .position(|magnet| magnet.object_id.as_deref().unwrap_or(&magnet.name) == self.object_id)
+            .ok_or_else(|| anyhow::anyhow!("magnetization assignment targets unknown object '{}'", self.object_id))
+    }
+
+    fn region_index(&self, problem: &ProblemIR, region_id: &str) -> anyhow::Result<usize> {
+        problem
+            .object_regions
+            .iter()
+            .position(|region| region.owner_object == self.object_id && region.region_id == region_id)
+            .ok_or_else(|| anyhow::anyhow!("magnetization assignment targets unknown region '{region_id}' on '{}'", self.object_id))
+    }
+
+    fn object_initializer(&self) -> fullmag_ir::InitialMagnetizationIR {
+        self.initializer.clone().unwrap_or(fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        })
+    }
+
+    pub(crate) fn apply(&self, problem: &mut ProblemIR) -> anyhow::Result<()> {
+        let magnet = self.magnet_index(problem)?;
+        if let Some(region_id) = &self.region_id {
+            let region = self.region_index(problem, region_id)?;
+            problem.object_regions[region].texture_override = self.initializer.clone().map(
+                |initial_magnetization| fullmag_ir::RegionTextureOverrideIR { initial_magnetization },
+            );
+        } else {
+            problem.magnets[magnet].initial_magnetization = Some(self.object_initializer());
+        }
+        Ok(())
+    }
+
+    /// Qualify the declared operations against the capture. The last write to
+    /// each scope determines the value pinned in this stage's ProblemIR.
+    pub(crate) fn captures_full_reset(
+        assignments: &[Self],
+        problem: &ProblemIR,
+    ) -> anyhow::Result<bool> {
+        let mut last_by_scope = BTreeMap::new();
+        for assignment in assignments {
+            let magnet = assignment.magnet_index(problem)?;
+            let region = assignment.region_id.as_deref()
+                .map(|region_id| assignment.region_index(problem, region_id)).transpose()?;
+            last_by_scope.insert((magnet, region), assignment);
+        }
+        for ((magnet, region), assignment) in &last_by_scope {
+            let matches = if let Some(region) = region {
+                problem.object_regions[*region].texture_override.as_ref()
+                    .map(|texture| &texture.initial_magnetization) == assignment.initializer.as_ref()
+            } else {
+                problem.magnets[*magnet].initial_magnetization.as_ref()
+                    == Some(&assignment.object_initializer())
+            };
+            if !matches {
+                anyhow::bail!("magnetization assignment differs from the captured initializer");
+            }
+        }
+        Ok(!problem.magnets.is_empty()
+            && (0..problem.magnets.len()).all(|magnet| last_by_scope.contains_key(&(magnet, None))))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScriptExecutionConfig {
     pub ir: ProblemIR,
@@ -119,7 +323,7 @@ where
     Ok(inventory)
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScriptExecutionStageAction {
     AntennaFieldSolve {

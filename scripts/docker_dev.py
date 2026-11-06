@@ -2645,6 +2645,10 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
     idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     idle_restart.add_argument(
+        "--capture-terminal-observation", action="store_true",
+        help="capture native evidence for a completed or failed run during a managed stop-only drain",
+    )
+    idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
     )
@@ -2824,6 +2828,7 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
@@ -3141,7 +3146,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "recreate-volume":
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
                 raise _fail("Terminal observation requires paired proof and SHA-256")
-            if args.terminal_observation_proof and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
+            if args.terminal_observation_stop and args.terminal_observation_proof:
+                raise _fail("Choose one terminal observation source")
+            if (args.terminal_observation_proof or args.terminal_observation_stop) and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
                 raise _fail("Terminal observation requires plain retained recreation without another restore or recovery request")
             if bool(args.completed_recreation_attempt) != bool(args.completed_recreation_sha256):
                 raise _fail("completed recreation requires both attempt and terminal SHA-256")

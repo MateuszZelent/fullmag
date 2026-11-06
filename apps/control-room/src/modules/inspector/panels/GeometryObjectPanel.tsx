@@ -794,7 +794,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
           {
             label: "State",
             value: inspectorDirty ? "modified" : "clean",
-            tone: inspectorDirty ? "warning" : "default",
+            tone: inspectorDirty ? "warning" : "neutral",
           },
         ]}
       />
