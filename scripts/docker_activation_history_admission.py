@@ -134,11 +134,15 @@ def validate_backend_control_mounts(control, row):
 
 
 @contextmanager
-def writer_barriers(store_root, ledger_root):
+def writer_barriers(store_root, ledger_root, host_ledger_roots_root=None):
     """Hold the same shared locks as offline recovery through the rename.
 
     No lock is created or replaced. Independent native/API writers take these
     exact inodes exclusively; a JSON owner record alone is insufficient.
+
+    Production history transactions pass the host-ledger-roots registry root
+    first, matching the Rust registry -> ledger -> session-store lock order.
+    The optional root preserves existing isolated unit fixtures.
 
     HOST_INVENTORY_OWNER.lock is deliberately not acquired: it is a lifetime
     owner fence, not a write transaction. Inventory sampling, owner acquisition,
@@ -149,12 +153,18 @@ def writer_barriers(store_root, ledger_root):
     """
     import fcntl
     store_root, ledger_root = _directory(store_root), _directory(ledger_root)
-    # Match HostResourceLedger::with_terminal_run_evidence_fence lock order.
-    paths = [ledger_root / "WRITER.lock", store_root / "WRITER.lock"]
+    paths = []
+    if host_ledger_roots_root is not None:
+        registry_root = _directory(host_ledger_roots_root)
+        paths.append(registry_root / "WRITER.lock")
+    # Match host registry -> HostResourceLedger -> SessionStore lock order.
+    paths.extend([ledger_root / "WRITER.lock", store_root / "WRITER.lock"])
     with ExitStack() as stack:
         held = []
         for path in paths:
             before = path.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise HistoryError("History writer lock is linked, nonregular or replaced")
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             stack.callback(os.close, descriptor)
             opened = os.fstat(descriptor)

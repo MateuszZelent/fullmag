@@ -148,7 +148,10 @@ def guest(request):
     required_mode = "ro" if request["action"] == "preview" else "rw"
     if not any(parts[4] == "/control" and required_mode in parts[5].split(",") for parts in mounts):
         raise HistoryError("History control mount mode differs")
-    with writer_barriers(store_root, root / "private/ledger/ledger") as barrier_check:
+    with writer_barriers(
+            store_root,
+            root / "private/ledger/ledger",
+            root / "runtime-control/host-ledger-roots") as barrier_check:
         return _guest_transaction(request, root, source_root, store_root, output_root, barrier_check)
 
 

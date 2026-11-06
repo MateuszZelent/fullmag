@@ -150,9 +150,13 @@ class WriterBarrierTests(unittest.TestCase):
         self.root = Path(temp.name).resolve()
         self.store, self.ledger = self.root / "store", self.root / "ledger"
         self.store.mkdir(); self.ledger.mkdir()
+        self.registry = self.root / "host-ledger-roots"
+        self.registry.mkdir()
         self.locks = [self.store / "WRITER.lock", self.ledger / "WRITER.lock"]
         for path in self.locks:
             path.touch()
+        self.registry_lock = self.registry / "WRITER.lock"
+        self.registry_lock.touch()
 
     def test_existing_writer_refuses_without_creating_or_replacing_any_lock(self):
         import fcntl
@@ -184,6 +188,37 @@ class WriterBarrierTests(unittest.TestCase):
                 self.locks[0].rename(self.store / "old-lock")
                 self.locks[0].touch()
                 check()
+
+    def test_registry_writer_is_first_barrier_and_blocks_before_ledger_or_store(self):
+        import fcntl
+        with self.registry_lock.open("rb") as registry_writer, \
+                self.locks[1].open("rb") as ledger_writer:
+            fcntl.flock(registry_writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(ledger_writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(HistoryError, "host-ledger-roots/WRITER.lock"):
+                with writer_barriers(self.store, self.ledger, self.registry):
+                    self.fail("registry writer must block before ledger/store barriers")
+
+    def test_linked_registry_writer_lock_is_refused_before_open(self):
+        self.registry_lock.unlink()
+        self.registry_lock.symlink_to(self.locks[0])
+        with self.assertRaisesRegex(HistoryError, "linked, nonregular or replaced"):
+            with writer_barriers(self.store, self.ledger, self.registry):
+                self.fail("linked registry lock must not be admitted")
+
+    def test_registry_barrier_is_held_for_transaction_and_replacement_is_detected(self):
+        import fcntl
+        with self.assertRaisesRegex(HistoryError, "inode changed"):
+            with writer_barriers(self.store, self.ledger, self.registry) as check:
+                check()
+                for path in [self.registry_lock, *self.locks]:
+                    with path.open("rb") as writer, self.assertRaises(BlockingIOError):
+                        fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                old_lock = self.registry / "WRITER.lock.old"
+                self.registry_lock.rename(old_lock)
+                self.registry_lock.touch()
+                check()
+
     def test_healthy_inventory_owner_lifetime_fence_does_not_block_archival(self):
         import fcntl
         inventory = self.ledger / "HOST_INVENTORY_OWNER.lock"
