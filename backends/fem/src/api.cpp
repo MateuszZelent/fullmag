@@ -76,6 +76,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 void fullmag_fem_set_global_error(const std::string &message);
@@ -5485,6 +5486,113 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
         out_xyz[2] = sum[2] * inv;
     }
     return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_average_m_for_elements_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
+    double *out_xyz,
+    uint64_t out_len
+) {
+    if (handle == nullptr) {
+        try {
+            fullmag_fem_set_global_error(
+                "fullmag_fem_backend_average_m_for_elements_f64 received null handle");
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    try {
+        if (out_xyz == nullptr || out_len < 3u) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires out_xyz[3]");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        if (element_count == 0u) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires a non-empty element set");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        if (element_indices == nullptr) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 received null element_indices");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+
+        handle->last_error.clear();
+        const auto &material_runtime = handle->context.material_fields.runtime;
+        if (!material_runtime.has_value() || !material_runtime->has_elementwise_ms()) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires element-DG0 Ms");
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+
+        const std::size_t available_elements =
+            material_runtime->realization().element_count();
+        std::vector<std::size_t> selected_elements;
+        if (element_count > selected_elements.max_size()) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 element_count exceeds supported size");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        selected_elements.reserve(static_cast<std::size_t>(element_count));
+        for (uint64_t i = 0; i < element_count; ++i) {
+            const std::size_t element = static_cast<std::size_t>(element_indices[i]);
+            if (element >= available_elements) {
+                fullmag_fem_set_handle_error(
+                    handle,
+                    "fullmag_fem_backend_average_m_for_elements_f64 received element index out of range");
+                return FULLMAG_FEM_ERR_INVALID;
+            }
+            selected_elements.push_back(element);
+        }
+
+        if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
+                handle->context,
+                handle->last_error)) {
+            fullmag_fem_set_handle_error(handle, handle->last_error);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+
+        const fullmag::fem::MsWeightedAos3AverageReduction reduction =
+            material_runtime->ms_weighted_aos3_average_reduction_for_element_set(
+                handle->context.state.m_xyz,
+                std::move(selected_elements));
+        if (!(std::isfinite(reduction.denominator) && reduction.denominator > 0.0)) {
+            out_xyz[0] = 0.0;
+            out_xyz[1] = 0.0;
+            out_xyz[2] = 0.0;
+        } else {
+            const double inv = 1.0 / reduction.denominator;
+            out_xyz[0] = reduction.weighted_component_integrals[0] * inv;
+            out_xyz[1] = reduction.weighted_component_integrals[1] * inv;
+            out_xyz[2] = reduction.weighted_component_integrals[2] * inv;
+        }
+        return FULLMAG_FEM_OK;
+    } catch (const std::exception &exception) {
+        try {
+            fullmag_fem_set_handle_error(
+                handle,
+                std::string("fullmag_fem_backend_average_m_for_elements_f64 failed: ") +
+                    exception.what());
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INTERNAL;
+    } catch (...) {
+        try {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 failed with an unknown exception");
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
 }
 
 fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
