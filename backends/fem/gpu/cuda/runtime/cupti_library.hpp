@@ -16,11 +16,11 @@ namespace fullmag::fem {
 // for process lifetime so callbacks and borrowed activity names remain valid.
 struct CuptiLibrary {
     decltype(&::cuptiGetVersion) cuptiGetVersion = nullptr;
-    decltype(&::cuptiGetTimestamp) cuptiGetTimestamp = nullptr;
     decltype(&::cuptiActivityEnable) cuptiActivityEnable = nullptr;
     decltype(&::cuptiActivityDisable) cuptiActivityDisable = nullptr;
     decltype(&::cuptiActivityFlushAll) cuptiActivityFlushAll = nullptr;
     decltype(&::cuptiActivityRegisterCallbacks) cuptiActivityRegisterCallbacks = nullptr;
+    decltype(&::cuptiActivityRegisterTimestampCallback) cuptiActivityRegisterTimestampCallback = nullptr;
     decltype(&::cuptiActivityGetNextRecord) cuptiActivityGetNextRecord = nullptr;
     decltype(&::cuptiActivityGetNumDroppedRecords) cuptiActivityGetNumDroppedRecords = nullptr;
     decltype(&::cuptiGetCallbackName) cuptiGetCallbackName = nullptr;
@@ -43,11 +43,11 @@ struct CuptiLibrary {
             return false; \
         }
         FULLMAG_LOAD_CUPTI(cuptiGetVersion)
-        FULLMAG_LOAD_CUPTI(cuptiGetTimestamp)
         FULLMAG_LOAD_CUPTI(cuptiActivityEnable)
         FULLMAG_LOAD_CUPTI(cuptiActivityDisable)
         FULLMAG_LOAD_CUPTI(cuptiActivityFlushAll)
         FULLMAG_LOAD_CUPTI(cuptiActivityRegisterCallbacks)
+        FULLMAG_LOAD_CUPTI(cuptiActivityRegisterTimestampCallback)
         FULLMAG_LOAD_CUPTI(cuptiActivityGetNextRecord)
         FULLMAG_LOAD_CUPTI(cuptiActivityGetNumDroppedRecords)
         FULLMAG_LOAD_CUPTI(cuptiGetCallbackName)

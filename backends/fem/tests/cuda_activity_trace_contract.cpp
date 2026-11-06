@@ -22,6 +22,7 @@
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 extern char **environ;
 #endif
@@ -265,6 +266,40 @@ bool has_complete_named_kernel_record(int fd, const std::string &kernel_name) {
     }
 }
 
+uint64_t independent_raw_timestamp() {
+    timespec now{};
+    if (clock_gettime(CLOCK_MONOTONIC_RAW, &now) != 0 || now.tv_sec < 0) return 0;
+    return static_cast<uint64_t>(now.tv_sec) * 1000000000ULL +
+        static_cast<uint64_t>(now.tv_nsec);
+}
+
+bool timestamps_match_capture(const char *path, const fullmag_fem_cuda_trace_stats_v1 &stats,
+                              uint64_t before_start, uint64_t before_stop, uint64_t after_stop) {
+    if (before_start == 0 || before_stop < before_start || after_stop < before_stop ||
+        stats.start_timestamp_ns < before_start || stats.start_timestamp_ns > before_stop ||
+        stats.end_timestamp_ns < before_stop || stats.end_timestamp_ns > after_stop) return false;
+    std::ifstream file(path);
+    std::string line;
+    if (!std::getline(file, line) ||
+        line.find("\"clock_source\":\"clock_monotonic_raw\"") == std::string::npos ||
+        line.find("\"timestamp_callback_registered\":true") == std::string::npos) return false;
+    size_t checked = 0;
+    while (std::getline(file, line)) {
+        if (line.find("\"timestamps_valid\":true") == std::string::npos) continue;
+        const auto start = line.find("\"start_ns\":");
+        const auto end = line.find("\"end_ns\":");
+        if (start == std::string::npos || end == std::string::npos) return false;
+        try {
+            const uint64_t first = std::stoull(line.substr(start + 11));
+            const uint64_t last = std::stoull(line.substr(end + 9));
+            if (first < stats.start_timestamp_ns || last > stats.end_timestamp_ns || last < first)
+                return false;
+        } catch (...) { return false; }
+        ++checked;
+    }
+    return file.eof() && checked > 0;
+}
+
 bool run_dense_cuda_workload(std::string &failure) {
     constexpr int kLaunchCount = 50000;
     constexpr int kEventInterval = 8;
@@ -416,6 +451,7 @@ int enabled_contract() {
     if (!launch_probe_kernel_with_name(live_delivery_kernel_name))
         return fail("CUDA context warmup kernel failed before live-delivery capture");
 
+    const uint64_t before_capture = independent_raw_timestamp();
     uint64_t token = 0;
     if (fullmag_fem_cuda_trace_start_v1(trace.fd, FULLMAG_FEM_CUDA_TRACE_MAX_BYTES, 30000, &token) !=
         FULLMAG_FEM_OK || token == 0) return fail("valid capture did not start");
@@ -469,8 +505,12 @@ int enabled_contract() {
     }
 
     fullmag_fem_cuda_trace_stats_v1 stats{};
+    const uint64_t before_stop = independent_raw_timestamp();
     if (fullmag_fem_cuda_trace_stop_v1(token, &stats) != FULLMAG_FEM_OK)
         return fail("capture did not stop cleanly");
+    const uint64_t after_stop = independent_raw_timestamp();
+    if (!timestamps_match_capture(trace.path, stats, before_capture, before_stop, after_stop))
+        return fail("capture timestamps differ from the independent monotonic clock window");
     fullmag_fem_cuda_trace_stats_v1 repeated{};
     if (fullmag_fem_cuda_trace_stop_v1(token, &repeated) != FULLMAG_FEM_OK ||
         std::memcmp(&stats, &repeated, sizeof(stats)) != 0)
@@ -509,6 +549,7 @@ int enabled_contract() {
               << " max_bytes=" << FULLMAG_FEM_CUDA_TRACE_MAX_BYTES
               << " max_duration_ms=30000 launches=50000 kernel_name_bytes=1800\n" << std::flush;
     token = 0;
+    const uint64_t before_dense = independent_raw_timestamp();
     if (fullmag_fem_cuda_trace_start_v1(trace.fd, FULLMAG_FEM_CUDA_TRACE_MAX_BYTES, 30000, &token) !=
         FULLMAG_FEM_OK || token == 0)
         return fail("dense capture did not start");
@@ -519,11 +560,17 @@ int enabled_contract() {
               << " workload=" << (dense_workload_ok ? "complete" : "failed")
               << " detail=" << (dense_failure.empty() ? "none" : dense_failure) << '\n' << std::flush;
     fullmag_fem_cuda_trace_stats_v1 dense_stats{};
+    const uint64_t before_dense_stop = independent_raw_timestamp();
     const int dense_stop_status = fullmag_fem_cuda_trace_stop_v1(token, &dense_stats);
+    const uint64_t after_dense_stop = independent_raw_timestamp();
     print_dense_capture_stats(dense_stop_status, trace.fd, dense_stats);
     if (!dense_workload_ok) return fail("dense CUDA test workload failed");
     if (dense_stop_status != FULLMAG_FEM_OK)
         return fail("dense capture did not stop cleanly");
+    if (!timestamps_match_capture(trace.path, dense_stats, before_dense, before_dense_stop, after_dense_stop))
+        return fail("dense timestamps differ from the independent monotonic clock window");
+    std::cerr << "cuda_activity_trace_contract: phase=clock_domain source=clock_monotonic_raw"
+              << " callback_registered=true all_timed_records_in_capture=true\n" << std::flush;
     if (dense_stats.schema_version != FULLMAG_FEM_CUDA_TRACE_SCHEMA_VERSION ||
         dense_stats.cupti_version != 28 || dense_stats.records_written == 0 ||
         dense_stats.bytes_written <= 8 * 1024 * 1024 ||

@@ -551,3 +551,33 @@ usług. Test pełnego dispatchera najpierw odtworzył dokładną odmowę (RED),
 następnie sprawdził utrwalenie group-volume-v1 i start obu usług (GREEN).
 Ten sam test zachowuje wariant legacy i odrzuca brakujący/nieznany pin grupy;
 16 testów pending-resume przeszło. Nie jest to jeszcze dowód startu runtime.
+
+## Zegar natywny zweryfikowany; stary właściciel blokuje admission
+
+Resume `82568ed9e17d4d9bba1769583bd558ca` zbudował pakiet ze źródeł
+`af5b58a325fe5511cf07470bf87a931cca5ce3fc` i trzech zmienionych plików zegara.
+Snapshot: `9654c9a5992f5949b1041b79915447c75f318c67c257d31b86df9eff682268b7`.
+Biblioteka FEM: `27e289b4a19b0cb9d5b172cbff4877cc368b472cbbb568a6c6743af98fd6173e`.
+Build zakończył się kodem0 w 467,941 s. Native contract
+`6464969b3c7d4ffc81e5c214b83671d0` przeszedł: compile1,706322 s, test2,382864 s.
+Gęsty capture ma 112513 rekordów, zero strat i błędów. Niezależne granice
+CLOCK_MONOTONIC_RAW oraz wszystkie rekordy czasowe mieszczą się w oknie.
+Pliki dowodowe i SHA zapisano na WSL w
+`sp4-diagnostics/cupti-monotonic-native-6464969b3c7d4ffc81e5c214b83671d0`.
+
+Admission runtime odmówił po buildzie: `native service target/build mismatch;
+attach refused`. OWNER nadal opisuje dawny Ready z commita646/snapshotfc4,
+a nowa inkarnacja kontenera nie posiada jego procesu. Istniejący zarządzany
+`stop-bootstrap-volume` zakończył się sukcesem jako
+`2d620c62dcac467aa638d63400133604`: zatrzymał wyłącznie diagnostyczny backend,
+zachowując OWNER, sesje, lease i frontend. Nowy process receipt ma
+`shutdown_unknown`, SHA `1cf43a6e2ccdc40e75b2b6825c7f7f9dd7e6b9a0b041d5b9460aa8460a0e5cbe`.
+
+Przegląd wykazał brak kontynuacji pomiędzy tym stopem a container recovery:
+stop celowo nie zapisuje niepotwierdzonego `service_owner`, natomiast recovery
+wymaga go w bieżącym process receipt. Nie wolno go dopisywać ani usuwać OWNER.
+Następny etap: jawny dowód wiążący istniejący stop-bootstrap, diagnostyczny
+fence, oryginalne bajty OWNER/LAUNCH/config/process i zatrzymany frontend;
+zachować natywny format V5 oraz pełne piny terminal/held/history. Samo
+odzyskanie kontrolera nie kwalifikuje symulacji. SP4 on/off z poprawionym
+zegarem, przyspieszenie i pełne porównanie fizyki pozostają NOT VERIFIED.
