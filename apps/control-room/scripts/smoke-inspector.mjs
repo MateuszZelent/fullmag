@@ -5034,6 +5034,17 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
+    if (path === "/v2/sessions/current/simulation/stages/results") {
+      return fulfillJson(route, {
+        revision: "study-results:" + fixture.revision,
+        project_id: "inspector-routing-smoke",
+        scene_revision: fixture.revision,
+        authored_input_sha256: null,
+        authored_stage_ids: [],
+        results: [],
+        next_cursor: null,
+      });
+    }
     if (path === "/v2/sessions/current/simulation/stages/execution") {
       const modal = fixture.analysisProduct === "modal_eigen";
       const stageId = modal ? "eigen-dispersion" : "frequency-response";

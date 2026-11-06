@@ -1085,7 +1085,7 @@ mod tests {
             let authored = AuthoredStudy::from_scene(&scene).unwrap();
             let mut remaining = MAX_AUTHORED_COMPARISON_BYTES;
             let accepted = authored.accepted_authoring(&store, &intent, &spec, &mut remaining);
-            assert_eq!(authored.relation(stage, &accepted), expected);
+            assert_eq!(authored.relation(stage, &accepted, None), expected);
         }
 
         let authored = AuthoredStudy::from_scene(&pipeline_scene(2e-12, 0.01, true)).unwrap();

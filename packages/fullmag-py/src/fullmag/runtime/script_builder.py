@@ -4424,7 +4424,7 @@ def _render_region_owned_authoring(
                 f"assignment_id={_py_repr(assignment.assignment_id)}",
             ]
             if assignment.region_id is not None:
-                region_ref = region_vars.get(assignment.region_id)
+                region_ref = region_vars.get((magnet.object_id or magnet.name, assignment.region_id))
                 if region_ref is not None:
                     kwargs.append(f"region={region_ref}")
                 else:
@@ -4534,6 +4534,7 @@ def _render_region_owned_authoring_from_override(
         g = _normalize_mapping(geo_obj)
         magnet_name = str(g.get("name", ""))
         magnet_var = magnet_vars.get(magnet_name, "body")
+        object_id = str(g.get("object_id") or g.get("id") or magnet_name)
         raw_assignments = g.get("material_parameter_fields")
         assignments = raw_assignments if isinstance(raw_assignments, list) else []
         for raw_assignment in assignments:
@@ -4546,7 +4547,7 @@ def _render_region_owned_authoring_from_override(
             ]
             region_id = assignment.get("region_id")
             if isinstance(region_id, str) and region_id:
-                region_ref = region_vars.get(region_id)
+                region_ref = region_vars.get((object_id, region_id))
                 if region_ref is not None:
                     kwargs.append(f"region={region_ref}")
                 else:
@@ -4717,7 +4718,7 @@ def _render_couplings(
     problem: Problem,
     magnet_vars: dict[str, str],
     *,
-    region_vars: dict[str, str] | None = None,
+    region_vars: Mapping[tuple[str, str], str] | None = None,
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
@@ -4732,6 +4733,15 @@ def _render_couplings(
         coupling_payloads = [coupling.to_ir() for coupling in problem.couplings]
     if not coupling_payloads:
         return []
+    geometries = overrides.get("geometries")
+    if isinstance(geometries, list):
+        object_ids = {}
+        for geometry in geometries:
+            payload = _normalize_mapping(geometry)
+            name = str(payload.get("name", ""))
+            object_ids[name] = str(payload.get("object_id") or payload.get("id") or name)
+    else:
+        object_ids = {magnet.name: magnet.object_id or magnet.name for magnet in problem.magnets}
     root = "study.couplings" if surface == "study" else "fm.couplings.registry()"
     lines = ["# Couplings"]
     if surface != "study":
@@ -4741,11 +4751,13 @@ def _render_couplings(
         source_expr = _render_coupling_endpoint_expr(
             coupling.get("source"),
             magnet_vars,
+            object_ids=object_ids,
             region_vars=region_vars,
         )
         target_expr = _render_coupling_endpoint_expr(
             coupling.get("target"),
             magnet_vars,
+            object_ids=object_ids,
             region_vars=region_vars,
         )
         params = _normalize_mapping(coupling.get("parameters"))
@@ -4800,7 +4812,8 @@ def _render_coupling_endpoint_expr(
     endpoint: object,
     magnet_vars: dict[str, str],
     *,
-    region_vars: dict[str, str] | None = None,
+    object_ids: Mapping[str, str],
+    region_vars: Mapping[tuple[str, str], str] | None = None,
 ) -> str:
     payload = endpoint.to_ir() if hasattr(endpoint, "to_ir") else endpoint
     if not isinstance(payload, dict):
@@ -4817,7 +4830,8 @@ def _render_coupling_endpoint_expr(
         return f"fm.couplings.surface({_py_repr(object_name)}, {_py_repr(selector)})"
     if kind == "region":
         region_id = str(payload.get("region_id"))
-        region_expr = (region_vars or {}).get(region_id)
+        object_id = object_ids.get(object_name, object_name)
+        region_expr = (region_vars or {}).get((object_id, region_id))
         if region_expr is not None:
             return region_expr
         return f"fm.couplings.region({_py_repr(object_name)}, {_py_repr(region_id)})"
