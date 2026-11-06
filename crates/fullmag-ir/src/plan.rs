@@ -1069,7 +1069,10 @@ impl FdmPlanIR {
             Some("spin_torque")
         } else if has_dmi && variable_exchange {
             Some("dmi_variable_exchange")
-        } else if self.rotated_interfacial_dmi.is_some() && variable_ms {
+        } else if self.rotated_interfacial_dmi.is_some()
+            && variable_ms
+            && self.precision != ExecutionPrecision::Double
+        {
             Some("rotated_dmi_variable_ms")
         } else {
             None
@@ -2849,6 +2852,9 @@ mod tests {
 
         let mut plan = cellwise_ms();
         plan.rotated_interfacial_dmi = Some(1e-3);
+        plan.precision = ExecutionPrecision::Double;
+        assert_eq!(plan.cuda_heterogeneous_material_error(), None);
+        plan.precision = ExecutionPrecision::Single;
         assert!(owner(&plan).starts_with("fdm_cuda_heterogeneous_material_unsupported:rotated_dmi_variable_ms"));
 
         let mut plan = FdmPlanIR::default();

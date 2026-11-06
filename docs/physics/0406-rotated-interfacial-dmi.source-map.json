@@ -32,6 +32,7 @@
     }
   ],
   "sources": [
+    {"id": "cuda-local-ms-rotated-dmi", "path": "backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu", "symbol": "rotated_interfacial_dmi_field_kernel", "responsibility": "Use the same local saturation magnetization denominator for native field readback as the fused CUDA solver."},
     {
       "id": "python-term",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",

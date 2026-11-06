@@ -4867,6 +4867,39 @@ mod tests {
     }
 
     #[test]
+    fn cuda_fp64_rotated_dmi_uses_local_ms_without_changing_energy() {
+        if !is_cuda_available() {
+            eprintln!("skipping rotated DMI cellwise Ms parity: CUDA unavailable");
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.rotated_interfacial_dmi = Some(0.004);
+        let cells = plan.initial_magnetization.len();
+        let scalar_ms = plan.material.saturation_magnetisation;
+        let mut uniform = NativeFdmBackend::create(&plan).expect("scalar Ms rDMI plan");
+        uniform.refresh_observables().expect("refresh scalar Ms fields");
+        let scalar_field = uniform.copy_h_rotated_dmi(cells).expect("scalar Ms rDMI field");
+        let scalar_energy = uniform.snapshot_step_stats(plan.grid.cells)
+            .expect("scalar Ms energy").e_rotated_dmi;
+        assert!(scalar_field.iter().flatten().any(|h| h.abs() > 1.0));
+
+        let ms: Vec<_> = (0..cells).map(|i| scalar_ms * (1.0 + i as f64 / 8.0)).collect();
+        let expected: Vec<_> = scalar_field.iter().zip(&ms)
+            .map(|(field, local_ms)| field.map(|value| value * scalar_ms / local_ms))
+            .collect();
+        plan.material.ms_field = Some(ms);
+        let mut heterogeneous = NativeFdmBackend::create(&plan).expect("cellwise Ms rDMI plan");
+        heterogeneous.refresh_observables().expect("refresh cellwise Ms fields");
+        let actual = heterogeneous.copy_h_rotated_dmi(cells).expect("cellwise Ms rDMI field");
+        let energy = heterogeneous.snapshot_step_stats(plan.grid.cells)
+            .expect("cellwise Ms energy").e_rotated_dmi;
+
+        assert_vector_field_close("cellwise Ms H_rDMI", &actual, &expected, 1e-12, 1e-7);
+        assert_scalar_close("fixed-state rDMI energy", energy, scalar_energy, 1e-12, 1e-28);
+    }
+
+    #[test]
     fn native_fdm_cuda_preserves_complete_adaptive_policy_before_ffi() {
         let adaptive = fullmag_ir::AdaptiveTimeStepIR {
             tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
