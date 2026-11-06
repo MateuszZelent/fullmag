@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use crate::error::ApiError;
 use crate::live_authored_initial_state::describe_initial_state_frame;
 use crate::schemas::authoring::PreparedInitialStateResource;
-use crate::schemas::commands::{RuntimeAuthoredInitialStateSource, RuntimeInitialStateRequest};
+use crate::schemas::commands::RuntimeAuthoredInitialStateSource;
+use crate::study_execution_contract::matches_prepared_request;
 use crate::schemas::common::AcceptedObservationFrameRef;
 use crate::shared_json::SharedJson;
 use crate::types::SessionStateResponse;
@@ -72,27 +73,6 @@ pub(crate) fn describe_prepared_initial_state(
     describe_initial_state_frame(frame, bundle)
 }
 
-pub(crate) fn prepared_request(
-    request: Option<&RuntimeInitialStateRequest>,
-) -> Option<&RuntimeAuthoredInitialStateSource> {
-    match request {
-        Some(RuntimeInitialStateRequest::AuthoredInitialState {
-            source: source @ RuntimeAuthoredInitialStateSource::Prepared { .. },
-        }) => Some(source),
-        _ => None,
-    }
-}
-
-pub(super) fn matches_request(
-    identity: &PreparedInitialStateResource,
-    request: &RuntimeAuthoredInitialStateSource,
-) -> bool {
-    matches!(request, RuntimeAuthoredInitialStateSource::Prepared {
-        scene_revision, initial_state_revision, publication_id,
-    } if *scene_revision == identity.scene_revision
-        && *initial_state_revision == identity.initial_state_revision
-        && publication_id == &identity.publication_id)
-}
 
 impl PreparedStateCapture {
     pub(crate) fn capture(
@@ -102,7 +82,7 @@ impl PreparedStateCapture {
         let (frame, bundle, field) =
             qualified(snapshot).ok_or_else(prepared_initial_state_unavailable)?;
         let identity = describe_initial_state_frame(frame, bundle)
-            .filter(|identity| matches_request(identity, request))
+            .filter(|identity| matches_prepared_request(identity, request))
             .ok_or_else(prepared_initial_state_unavailable)?;
         let metadata = snapshot
             .metadata
@@ -133,7 +113,7 @@ impl PreparedStateCapture {
         entry: &fullmag_plan::StudyProblemCatalogEntry,
         request: &RuntimeAuthoredInitialStateSource,
     ) -> Result<PreparedStateArtifact, ApiError> {
-        if !matches_request(&self.identity, request) {
+        if !matches_prepared_request(&self.identity, request) {
             return Err(prepared_initial_state_unavailable());
         }
         let plan = self

@@ -6,41 +6,7 @@ use crate::schemas::diagnostics::SolverProfileCommandConfig;
 use crate::schemas::relaxation::RelaxationAlgorithm;
 use crate::types::MeshCommandTarget;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RuntimeInitialStateRequest {
-    DefaultForTarget,
-    AuthoredInitialState {
-        source: RuntimeAuthoredInitialStateSource,
-    },
-    StageResult {
-        run_id: String,
-        step_id: String,
-        case_id: String,
-        artifact_id: String,
-        content_sha256: String,
-        #[serde(default)]
-        allow_stale_model: bool,
-    },
-    LatestCompatibleState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RuntimeAuthoredInitialStateSource {
-    Study {
-        scene_revision: u64,
-    },
-    Stage {
-        stage_id: String,
-        scene_revision: u64,
-    },
-    Prepared {
-        scene_revision: u64,
-        initial_state_revision: u64,
-        publication_id: String,
-    },
-}
+pub use crate::study_execution_contract::{RuntimeAuthoredInitialStateSource, RuntimeInitialStateRequest};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct RuntimeCommandIntent {

@@ -1,12 +1,8 @@
 //! Immutable live initial-state provenance shared by acceptance and dispatch.
 
 use fullmag_authoring::{StudyInputSource, StudyPlan, StudyStep};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{
-    is_physical_stage, is_state_input, state_input, unresolved, validate_live_initial_state_request,
-};
 use crate::error::ApiError;
 use crate::live_accepted_continuation::InitialStateDecision;
 use crate::schemas::authoring::PreparedInitialStateResource;
@@ -15,42 +11,10 @@ use crate::schemas::stage_results::{
     StudyResultInitialState, StudyResultInitialStateSource, StudyResultInputSelection,
     StudyResultResetScope,
 };
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum ResolvedInitialState {
-    Authored {
-        reference: String,
-        reason: String,
-    },
-    Artifact {
-        run_id: String,
-        step_id: String,
-        case_id: String,
-        artifact_id: String,
-        content_sha256: String,
-    },
-    Prepared {
-        publication: PreparedInitialStateResource,
-        artifact_id: String,
-        content_sha256: String,
-    },
-    Study {
-        initial_step_id: Option<String>,
-        authored_reference: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "schema_version", deny_unknown_fields)]
-enum AcceptedInitialStateBinding {
-    #[serde(rename = "fullmag.live-initial-state-binding.v1")]
-    V1 {
-        requested: Option<RuntimeInitialStateRequest>,
-        resolved: ResolvedInitialState,
-        overlay: Option<fullmag_authoring::StudyInitialStateOverlay>,
-    },
-}
+use crate::study_execution_contract::{
+    is_physical_stage, matches_prepared_request, prepared_request, state_input, study_initial_state,
+    unresolved, AcceptedInitialStateBinding, ResolvedInitialState,
+};
 
 fn encode_binding(binding: AcceptedInitialStateBinding) -> Result<Value, ApiError> {
     serde_json::to_value(binding)
@@ -96,31 +60,6 @@ pub(crate) fn selected_initial_state_binding(
     })
 }
 
-fn study_initial_state(study: &StudyPlan) -> Result<ResolvedInitialState, ApiError> {
-    let mut initial_step_id = None;
-    let mut authored_reference = None;
-    if let Some(step) = study.steps.iter().find(|step| is_physical_stage(step)) {
-        initial_step_id = Some(step.step_id.clone());
-        if let Some(port) = state_input(step)? {
-            let StudyInputSource::AuthoredInitialState { reference } = &port.source else {
-                return Err(unresolved(
-                    "the full Study has no authored initial state at its first physical step",
-                ));
-            };
-            authored_reference = Some(reference.clone());
-        }
-        if step.initial_state_overlay.is_some() {
-            return Err(unresolved(
-                "the first physical Study step cannot start from a scoped overlay",
-            ));
-        }
-    }
-    Ok(ResolvedInitialState::Study {
-        initial_step_id,
-        authored_reference,
-    })
-}
-
 pub(crate) fn study_initial_state_binding(
     study: &StudyPlan,
     requested: &RuntimeInitialStateRequest,
@@ -145,227 +84,6 @@ pub(crate) fn study_initial_state_binding(
         resolved,
         overlay: None,
     })
-}
-
-pub(crate) fn validate_worker_initial_state_binding(
-    specification: &fullmag_application::RunSpecification,
-    study: &StudyPlan,
-    step: &fullmag_runtime_control::AcceptedWorkerStep,
-) -> anyhow::Result<()> {
-    use anyhow::{ensure, Context as _};
-    let Some(live) = specification.parameters.get("live_workspace") else {
-        return Ok(());
-    };
-    let requested: Option<RuntimeInitialStateRequest> = live
-        .pointer("/command/initial_state")
-        .map(|request| serde_json::from_value(request.clone()))
-        .transpose()
-        .context("decode live command initial state request")?;
-    let Some(binding) = live.get("initial_state_source") else {
-        ensure!(
-            requested.is_none(),
-            "explicit initial state request has no accepted binding"
-        );
-        return Ok(());
-    };
-    if binding.get("schema_version").is_none() {
-        ensure!(
-            requested.is_none(),
-            "explicit initial state request cannot use legacy provenance"
-        );
-        // Previously accepted immutable RunSpecs carried only a descriptive record.
-        ensure!(
-            matches!(
-                binding.get("kind").and_then(Value::as_str),
-                Some("continuation" | "authored")
-            ),
-            "unrecognized legacy initial state provenance"
-        );
-        return Ok(());
-    }
-    let AcceptedInitialStateBinding::V1 {
-        requested: bound_request,
-        resolved,
-        overlay,
-    } = serde_json::from_value(binding.clone()).context("decode accepted initial state binding")?;
-    ensure!(
-        requested == bound_request,
-        "accepted initial state differs from the live command request"
-    );
-    if let Some(request) = requested.as_ref() {
-        let revision = live
-            .get("scene_revision")
-            .and_then(Value::as_u64)
-            .context("explicit initial state has no accepted scene revision")?;
-        validate_live_initial_state_request(
-            Some(request),
-            revision,
-            matches!(&resolved, ResolvedInitialState::Study { .. }),
-        )
-        .map_err(|error| anyhow::anyhow!(error.message))?;
-    }
-    match &resolved {
-        ResolvedInitialState::Study { .. } => {
-            ensure!(
-                live.get("step_id").is_none_or(Value::is_null),
-                "whole Study initial state binds a selected stage"
-            );
-            ensure!(
-                overlay.is_none(),
-                "whole Study initial state cannot carry a stage overlay"
-            );
-            let expected =
-                study_initial_state(study).map_err(|error| anyhow::anyhow!(error.message))?;
-            ensure!(
-                expected == resolved,
-                "whole Study initial state differs from the accepted plan"
-            );
-            return Ok(());
-        }
-        ResolvedInitialState::Authored { .. }
-        | ResolvedInitialState::Artifact { .. }
-        | ResolvedInitialState::Prepared { .. } => {
-            ensure!(
-                live.get("step_id").and_then(Value::as_str) == Some(step.step_id.as_str()),
-                "accepted initial state belongs to a different selected stage"
-            );
-            ensure!(
-                overlay == step.initial_state_overlay,
-                "accepted initial state overlay differs from the accepted stage"
-            );
-        }
-    }
-    if let Some(RuntimeInitialStateRequest::AuthoredInitialState {
-        source: RuntimeAuthoredInitialStateSource::Stage { stage_id, .. },
-    }) = requested.as_ref()
-    {
-        ensure!(
-            stage_id == &step.step_id,
-            "authored initial state refers to another stage"
-        );
-    }
-    let mut ports = step.study_inputs.iter().filter(|port| is_state_input(port));
-    let port = ports
-        .next()
-        .context("accepted selected stage has no initial state port")?;
-    ensure!(
-        port.required && ports.next().is_none(),
-        "accepted selected stage has an ambiguous initial state port"
-    );
-    let input = step.resolved_input.inputs.get(&port.port_id);
-    match (resolved, &port.source) {
-        (
-            ResolvedInitialState::Authored { reference, .. },
-            StudyInputSource::AuthoredInitialState {
-                reference: expected,
-            },
-        ) => {
-            ensure!(
-                &reference == expected && input.is_none() && overlay.is_none(),
-                "accepted authored initial state differs from the worker input"
-            );
-            ensure!(
-                super::prepared_request(requested.as_ref()).is_none(),
-                "requested prepared magnetization was replaced by authored initial state"
-            );
-            ensure!(
-                !matches!(
-                    requested,
-                    Some(
-                        RuntimeInitialStateRequest::StageResult { .. }
-                            | RuntimeInitialStateRequest::LatestCompatibleState
-                    )
-                ),
-                "requested final state was replaced by authored initial state"
-            );
-        }
-        (
-            ResolvedInitialState::Prepared {
-                publication,
-                artifact_id,
-                content_sha256,
-            },
-            StudyInputSource::PinnedArtifact {
-                artifact_id: expected_id,
-                content_sha256: expected_digest,
-            },
-        ) => {
-            let artifact = input
-                .and_then(|input| input.study_artifact.as_ref())
-                .context("prepared initial state has no typed CAS binding")?;
-            ensure!(
-                overlay.is_none()
-                    && super::prepared_request(requested.as_ref()).is_some_and(|request| {
-                        super::prepared::matches_request(&publication, request)
-                    })
-                    && &artifact_id == expected_id
-                    && &content_sha256 == expected_digest
-                    && artifact.artifact_id == artifact_id
-                    && artifact.object_ref == content_sha256
-                    && specification
-                        .immutable_assets
-                        .iter()
-                        .any(|asset| asset.asset_id == artifact_id
-                            && asset.content_sha256 == content_sha256),
-                "accepted prepared magnetization differs from the worker artifact"
-            );
-        }
-        (
-            ResolvedInitialState::Artifact {
-                run_id,
-                step_id,
-                case_id,
-                artifact_id,
-                content_sha256,
-            },
-            StudyInputSource::PinnedArtifact {
-                artifact_id: expected_id,
-                content_sha256: expected_digest,
-            },
-        ) => {
-            let input = input.context("pinned initial state has no worker artifact")?;
-            let artifact = input
-                .study_artifact
-                .as_ref()
-                .context("pinned initial state has no typed CAS binding")?;
-            ensure!(
-                &artifact_id == expected_id
-                    && &content_sha256 == expected_digest
-                    && artifact.artifact_id == artifact_id
-                    && artifact.object_ref == content_sha256,
-                "accepted final state differs from the worker artifact"
-            );
-            match requested {
-                Some(RuntimeInitialStateRequest::StageResult {
-                    run_id: requested_run,
-                    step_id: requested_step,
-                    case_id: requested_case,
-                    artifact_id: requested_artifact,
-                    content_sha256: requested_digest,
-                    ..
-                }) => {
-                    ensure!(
-                        run_id == requested_run
-                            && step_id == requested_step
-                            && case_id == requested_case
-                            && artifact_id == requested_artifact
-                            && content_sha256 == requested_digest,
-                        "accepted final state identity differs from the exact result request"
-                    );
-                }
-                Some(RuntimeInitialStateRequest::AuthoredInitialState { source }) => {
-                    ensure!(
-                        matches!(source, RuntimeAuthoredInitialStateSource::Stage { .. })
-                            && overlay.is_some(),
-                        "authored initial state requires an authored port or a scoped overlay"
-                    );
-                }
-                _ => {}
-            }
-        }
-        _ => anyhow::bail!("accepted initial state source differs from the worker port"),
-    }
-    Ok(())
 }
 
 /// Describe the input of the successful attempt from its immutable plan and
@@ -572,8 +290,8 @@ fn describe_pinned_result_state(
         } if artifact_id == expected_artifact
             && content_sha256 == expected_digest
             && overlay.is_none()
-            && super::prepared_request(requested.as_ref())
-                .is_some_and(|request| super::prepared::matches_request(&publication, request))
+            && prepared_request(requested.as_ref())
+                .is_some_and(|request| matches_prepared_request(&publication, request))
             && specification.immutable_assets.iter().any(|asset| {
                 asset.asset_id == artifact_id && asset.content_sha256 == content_sha256
             }) =>

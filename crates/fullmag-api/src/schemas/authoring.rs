@@ -1845,16 +1845,7 @@ pub struct MagnetizationApplyRequest {
     pub scopes: Vec<MagnetizationApplyScope>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PreparedInitialStateResource {
-    pub scene_revision: u64,
-    pub initial_state_revision: u64,
-    pub publication_id: String,
-    pub observation_frame_id: String,
-    pub domain_generation_id: String,
-    pub values_sha256: String,
-}
+pub use crate::study_execution_contract::PreparedInitialStateResource;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

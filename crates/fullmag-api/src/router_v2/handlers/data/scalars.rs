@@ -355,7 +355,7 @@ fn historical_series_unavailable() -> ApiError {
 /// checks and share the same exact output binding and archived data reader.
 pub(crate) fn read_bound_historical_scalars(
     store: &fullmag_session::SessionStore,
-    binding: crate::live_accepted_continuation::ExactStepFinalStateBinding,
+    binding: crate::study_execution_contract::ExactStepFinalStateBinding,
     start: Option<u64>,
     limit: Option<u64>,
     columns: Option<&str>,

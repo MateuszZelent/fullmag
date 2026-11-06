@@ -13,48 +13,27 @@ use crate::error::ApiError;
 use crate::live_accepted_continuation::{self, ContinuationSource, InitialStateDecision};
 use crate::live_execution_binding::current_study_history;
 use crate::schemas::commands::{RuntimeAuthoredInitialStateSource, RuntimeInitialStateRequest};
+use crate::study_execution_contract::{is_physical_stage, is_state_input, state_input, unresolved};
 use crate::types::CurrentLiveRequestContext;
+
+pub(crate) use crate::study_execution_contract::{prepared_request, validate_live_initial_state_request};
 
 mod binding;
 mod prepared;
 
 pub(crate) use prepared::{
-    describe_prepared_initial_state, prepared_request, PreparedStateArtifact, PreparedStateCapture,
+    describe_prepared_initial_state, PreparedStateArtifact, PreparedStateCapture,
 };
 
 pub(crate) use binding::{
     describe_result_initial_state, selected_initial_state_binding, study_initial_state_binding,
-    validate_worker_initial_state_binding,
 };
-
-fn unresolved(message: impl Into<String>) -> ApiError {
-    ApiError::unprocessable_with_code("stage_state_source_unresolved", message)
-}
 
 fn prepared_initial_state_unavailable() -> ApiError {
     ApiError::unprocessable_with_code(
         "initial_state_prepared_publication_unavailable",
         "the requested prepared initial-state publication is unavailable",
     )
-}
-
-fn is_state_input(input: &StudyInputPort) -> bool {
-    matches!(
-        input.data_kind,
-        StudyPortDataKind::State | StudyPortDataKind::InitialState
-    )
-}
-
-fn state_input(step: &StudyStep) -> Result<Option<&StudyInputPort>, ApiError> {
-    let mut inputs = step.inputs.iter().filter(|input| is_state_input(input));
-    let input = inputs.next();
-    if inputs.next().is_some() {
-        return Err(unresolved(format!(
-            "stage '{}' has multiple magnetization inputs",
-            step.step_id
-        )));
-    }
-    Ok(input)
 }
 
 fn catalog_entry<'a>(
@@ -161,52 +140,6 @@ pub(crate) fn resolve_selected_live_initial_state(
     }
 }
 
-pub(crate) fn validate_live_initial_state_request(
-    request: Option<&RuntimeInitialStateRequest>,
-    scene_revision: u64,
-    whole_study: bool,
-) -> Result<(), ApiError> {
-    use RuntimeAuthoredInitialStateSource::{Prepared, Stage, Study};
-    use RuntimeInitialStateRequest::{AuthoredInitialState, DefaultForTarget};
-
-    match request {
-        None | Some(DefaultForTarget) => Ok(()),
-        Some(AuthoredInitialState { source }) => {
-            let revision = match source {
-                Study { scene_revision }
-                | Stage { scene_revision, .. }
-                | Prepared { scene_revision, .. } => *scene_revision,
-            };
-            if revision != scene_revision {
-                return Err(ApiError::conflict_with_code(
-                    "initial_state_scene_revision_mismatch",
-                    "the authored initial state refers to a different scene revision",
-                ));
-            }
-            match source {
-                Study { .. } => Ok(()),
-                Prepared { .. } if whole_study => Err(unresolved(
-                    "the full Study requires its own authored initial state",
-                )),
-                Prepared { publication_id, .. }
-                    if publication_id.trim().is_empty() || publication_id.len() > 256 =>
-                {
-                    Err(ApiError::bad_request("prepared initial state requires a valid publication ID"))
-                }
-                Prepared { .. } => Ok(()),
-                Stage { .. } if whole_study => Err(unresolved(
-                    "the full Study requires its own authored initial state",
-                )),
-                Stage { .. } => Ok(()),
-            }
-        }
-        Some(_) if whole_study => Err(unresolved(
-            "the full Study starts from its authored initial state",
-        )),
-        Some(_) => Ok(()),
-    }
-}
-
 pub(crate) fn resolve_requested_live_initial_state(
     store: &SessionStore,
     context: &CurrentLiveRequestContext,
@@ -310,17 +243,6 @@ pub(crate) fn resolve_requested_live_initial_state(
             Ok(InitialStateDecision::Continuation(source))
         }
     }
-}
-
-fn is_physical_stage(step: &StudyStep) -> bool {
-    use fullmag_authoring::{StudyPrimitiveStageKind, StudyStepKind};
-    step.enabled
-        && matches!(
-            &step.kind,
-            StudyStepKind::Primitive {
-                stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax,
-            }
-        )
 }
 
 fn bind_study_texture_to_selected_stage(

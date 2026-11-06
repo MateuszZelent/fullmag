@@ -14,16 +14,9 @@ pub struct ScalarObservationSource {
     pub scalar_revision: u64,
 }
 
-/// Run, authored execution step, case and worker attempt of one scalar series.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct ScalarSeriesIdentity {
-    pub run_id: String,
-    pub task_id: String,
-    pub step_id: String,
-    pub case_id: String,
-    pub attempt_id: String,
-    pub ownership_epoch: u64,
-}
+pub use crate::study_execution_contract::{
+    HistoricalScalarCoverage, HistoricalScalarWindow, ScalarSeriesIdentity,
+};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ScalarWindow {
@@ -40,25 +33,4 @@ pub struct ScalarWindow {
     /// Present only when the window contains exactly the current accepted row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_observation: Option<ScalarObservationSource>,
-}
-
-/// Archived physical samples read from one claim-qualified artifact.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct HistoricalScalarWindow {
-    pub series: ScalarSeriesIdentity,
-    pub artifact_id: String,
-    pub content_sha256: String,
-    pub coverage: HistoricalScalarCoverage,
-    pub total_rows: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_start: Option<u64>,
-    pub columns: Vec<String>,
-    pub rows: Vec<Vec<f64>>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum HistoricalScalarCoverage {
-    SolverSeries,
-    TerminalSample,
 }

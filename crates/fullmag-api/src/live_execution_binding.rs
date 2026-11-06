@@ -1,6 +1,7 @@
 //! Compatibility between an authored document and immutable accepted input.
 
 use crate::error::ApiError;
+use crate::study_execution_contract::{parse_study_history_parent, StudyHistoryParent};
 use crate::types::{AppState, CurrentLiveRequestContext, SessionStateResponse};
 use fullmag_application::RunSpecification;
 use fullmag_authoring::{
@@ -8,38 +9,10 @@ use fullmag_authoring::{
     SCENE_EXECUTION_INPUT_SCHEMA,
 };
 use fullmag_session::{FmsRunIntent, SessionStore};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 const MAX_STUDY_HISTORY_PROJECTS: usize = 64;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "schema_version", deny_unknown_fields)]
-pub(crate) enum StudyHistoryParent {
-    #[serde(rename = "fullmag.live-study-history-parent.v1")]
-    V1 {
-        run_id: String,
-        specification_sha256: String,
-    },
-}
-
-pub(crate) fn parse_study_history_parent(value: &Value) -> anyhow::Result<StudyHistoryParent> {
-    let link: StudyHistoryParent = serde_json::from_value(value.clone())?;
-    let StudyHistoryParent::V1 {
-        run_id,
-        specification_sha256,
-    } = &link;
-    fullmag_session::repository_path::validate_store_id(run_id)?;
-    anyhow::ensure!(
-        specification_sha256.len() == 64
-            && specification_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-        "invalid Study history parent specification digest"
-    );
-    Ok(link)
-}
 
 pub(crate) fn verified_history_run_spec(
     intent: &FmsRunIntent,

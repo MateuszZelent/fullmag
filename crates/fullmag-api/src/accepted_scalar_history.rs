@@ -11,9 +11,9 @@ use std::path::Path;
 
 use super::WorkerExecutionReceiptIdentity;
 use super::{read_attempt_receipt, retry_store_writer_busy, write_immutable_attempt_receipt};
-use crate::live_accepted_continuation::{ExactStepFinalStateBinding, FINAL_STATE_PORT};
-use crate::schemas::scalars::{
-    HistoricalScalarCoverage, HistoricalScalarWindow, ScalarSeriesIdentity,
+use crate::study_execution_contract::{
+    ExactStepFinalStateBinding, HistoricalScalarCoverage, HistoricalScalarWindow,
+    ScalarSeriesIdentity, FINAL_STATE_PORT,
 };
 
 const RECEIPT_FILE: &str = "scalar_history_receipt.v1.json";

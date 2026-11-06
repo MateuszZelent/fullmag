@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::DecodedStudyArtifact;
 use fullmag_authoring::{
-    StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
+    StudyAcceptancePolicy, StudyOutputPort, StudyPortDataKind,
 };
 use fullmag_ir::ExecutionPlanIR;
 use fullmag_runner::{
@@ -619,7 +619,7 @@ fn validate_accepted_worker_parameters(
             bail!("accepted worker has no binding for live_workspace field `{key}`");
         }
         if let Some(value) = live_workspace.get("study_history_parent") {
-            crate::live_execution_binding::parse_study_history_parent(value)?;
+            crate::study_execution_contract::parse_study_history_parent(value)?;
         }
         if let Some(value) = live_workspace.get("request_receipt") {
             let receipt: fullmag_session::LiveComputeRequestReceipt = serde_json::from_value(value.clone())
@@ -2665,7 +2665,7 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
-    crate::live_stage_initial_state::validate_worker_initial_state_binding(
+    crate::study_execution_contract::validate_worker_initial_state_binding(
         specification,
         &accepted.study,
         accepted_step,

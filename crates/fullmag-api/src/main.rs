@@ -47,6 +47,7 @@ mod accepted_observation_spool;
 mod live_field_demand;
 mod accepted_field_binary;
 mod accepted_project_storage;
+mod study_execution_contract;
 mod analysis;
 mod artifacts;
 mod assets;

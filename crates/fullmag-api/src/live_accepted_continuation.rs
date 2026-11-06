@@ -17,7 +17,8 @@ use fullmag_session::{FmsArtifactStatus, FmsRunCatalog, FmsTaskCatalogEntry, Fms
 use serde_json::Value;
 
 /// Output port carrying the final state of a live command (FEM requires this id).
-pub(crate) const FINAL_STATE_PORT: &str = "final_state";
+use crate::study_execution_contract::ExactStepFinalStateBinding;
+pub(crate) use crate::study_execution_contract::FINAL_STATE_PORT;
 /// Input port pinning the previous command's final state.
 pub(crate) const INITIAL_STATE_PORT: &str = "initial_state";
 const OUTPUT_CASE_ID: &str = "default";
@@ -235,14 +236,6 @@ fn load_final_state(
         layout: state.layout,
         values: state.values,
     }))
-}
-
-pub(crate) struct ExactStepFinalStateBinding {
-    pub identity: crate::schemas::scalars::ScalarSeriesIdentity,
-    pub artifact_catalog: fullmag_session::FmsArtifactCatalog,
-    pub task: FmsTaskCatalogEntry,
-    pub accepted_state_ref: Option<fullmag_quantities::AcceptedStateRef>,
-    pub output: fullmag_session::FmsStudyOutputManifestEntry,
 }
 
 pub(crate) struct PublishedFinalState {

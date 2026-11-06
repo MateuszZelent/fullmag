@@ -265,7 +265,7 @@ pub(crate) fn prepare_and_publish(
     let study_step = accepted.study.steps.iter().find(|candidate| candidate.step_id == step.step_id)
         .context("materialization study step missing")?;
     let mut states = execution.outputs.iter().filter(|output| {
-        (source.is_some() || output.port_id == crate::live_accepted_continuation::FINAL_STATE_PORT)
+        (source.is_some() || output.port_id == crate::study_execution_contract::FINAL_STATE_PORT)
             && study_step.outputs.iter().any(|port| port.port_id == output.port_id
                 && port.data_kind == fullmag_authoring::StudyPortDataKind::State)
     });
@@ -330,7 +330,7 @@ pub(crate) fn prepare_and_publish(
     } else { 0 };
     let quantity_budget = budget.saturating_sub(terminal_stats_bytes).saturating_sub(completion_bytes);
     let layout_bytes = if is_live_study
-        && output.port_id == crate::live_accepted_continuation::FINAL_STATE_PORT
+        && output.port_id == crate::study_execution_contract::FINAL_STATE_PORT
     {
         publish_terminal_layout(store, step, &state, &state_object_ref, quantity_budget)?
     } else {
