@@ -2911,7 +2911,6 @@ class StudyStageRerunContractTests(unittest.TestCase):
             "command_revision": 0,
         }
         if mode == "stage-b":
-            precondition["stage_execution_revision"] = 27
             command = {
                 "kind": "relax",
                 "target": {"kind": "stage_id", "stage_id": "relax-b"},
@@ -3110,6 +3109,10 @@ class StudyStageRerunContractTests(unittest.TestCase):
                 ("changed old history", lambda item: item["after"]["preserved_prior_result_identities"][0].update(
                     artifact_sha256="f" * 64)),
                 ("incomplete terminal", lambda item: item["after"].update(run_status="running")),
+                ("unexpected stage-control precondition", lambda item: (
+                    item["before"]["precondition"].update(stage_execution_revision=27),
+                    item["command_receipt"]["payload"]["precondition"].update(stage_execution_revision=27),
+                )),
                 ("native claim", lambda item: item.update(native_execution_proven=True)),
                 ("field claim", lambda item: item.update(field_data_proven=True)),
                 ("result shape", lambda item: item["after"]["result_identities"].pop()),
@@ -3373,7 +3376,17 @@ const session = {name:'P22 three Relax stages', session_id:'s', session_epoch:'s
 const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
 const precondition = {scene_revision:31, mesh_revision:18, domain_generation_id:'fdm-domain-8',
   current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:0,
-  stage_execution_revision:27};
+  region_topology_revision:3, region_membership_revision:4,
+  region_coefficients_revision:5, region_initial_state_revision:6};
+const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,
+  domain_generation_id:'fdm-domain-8',region_topology_revision:3,region_membership_revision:4,
+  region_coefficients_revision:5,region_initial_state_revision:6}};
+assert.deepEqual(runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
+  {runtime_state:'awaiting_command'},{commands:[]}),precondition);
+assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'foreign'},
+  {runtime_state:'awaiting_command'},{commands:[]}));
+assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
+  {runtime_state:'paused'},{commands:[]}));
 const request = {method:'POST', path:'/v2/sessions/current/simulation/commands', scope,
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};
@@ -3384,6 +3397,7 @@ assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, commandC
 assert.equal(runner.studyStageRerunRequestAllowed({...request, scope:'session=other'}, context), false);
 assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, target:{kind:'stage_id',stage_id:'relax-a'}}}, context), false);
 assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, precondition:{...precondition, mesh_revision:17}}}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, precondition:{...precondition, stage_execution_revision:27}}}, context), false);
 """
         result = subprocess.run(
             [node, "--input-type=module", "-e", javascript, source],

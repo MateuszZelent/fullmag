@@ -350,7 +350,7 @@ function currentProfile(status, currentRun, currentSession, expectedSources) {
   };
 }
 
-function commandPrecondition(status, currentRun, execution, solverStatus, commands, mode) {
+export function studyStageComputePrecondition(status, currentRun, solverStatus, commands) {
   const resources = status?.resources;
   assert(plainRecord(resources), "The P22 status omitted current resource revisions");
   const precondition = {};
@@ -371,11 +371,6 @@ function commandPrecondition(status, currentRun, execution, solverStatus, comman
   assert(solverStatus?.runtime_state === "awaiting_command",
     "Solver status is not awaiting a command before submission");
   precondition.runtime_state = solverStatus.runtime_state;
-  if (mode === "stage-b") {
-    assert(Number.isSafeInteger(execution?.revision) && execution.revision >= 0,
-      "Stage B precondition omitted the execution revision");
-    precondition.stage_execution_revision = execution.revision;
-  }
   assert(Array.isArray(commands?.commands), "Command queue resource is malformed");
   precondition.command_revision = commands.commands.length;
   return precondition;
@@ -590,7 +585,7 @@ export async function runStudyStageRerun() {
     const expectedResultIds = expectedStageIds;
     assert.deepEqual(results.map((result) => result.authored_stage_id), expectedResultIds,
       "P22 baseline durable results differ from the current stage view");
-    const precondition = commandPrecondition(statusAfter, currentRun, execution, solverStatus, commands, mode);
+    const precondition = studyStageComputePrecondition(statusAfter, currentRun, solverStatus, commands);
     const fence = await apiGet(statusPath, observedSession, false);
     readCounts.status++;
     assertSameSession(observedSession, readSessionIdentity(fence));

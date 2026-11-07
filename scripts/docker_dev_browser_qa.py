@@ -2987,11 +2987,8 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
                 "region_coefficients_revision", "region_initial_state_revision",
             ))):
         raise BuildControlError("Study stage rerun unknown outcome omitted its exact command precondition")
-    if expected_mode == "stage-b":
-        if type(precondition.get("stage_execution_revision")) is not int or precondition["stage_execution_revision"] < 0:
-            raise BuildControlError("Unknown Stage B command omitted the stage-execution revision")
-    elif "stage_execution_revision" in precondition:
-        raise BuildControlError("Unknown whole-Study command has a stage-only revision")
+    if "stage_execution_revision" in precondition:
+        raise BuildControlError("Unknown Study compute command includes a stage-control revision")
     before_results = before.get("result_identities")
     if not isinstance(before_results, list) or len(before_results) != len(expected_before):
         raise BuildControlError("Study stage rerun unknown outcome omitted its old result identities")
@@ -3289,11 +3286,8 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     )
     if any(type(precondition.get(key)) is not int or precondition[key] < 0 for key in region_revision_keys):
         raise BuildControlError("Study stage rerun omitted one of the current region revision preconditions")
-    if expected_mode == "stage-b":
-        if type(precondition.get("stage_execution_revision")) is not int or precondition["stage_execution_revision"] < 0:
-            raise BuildControlError("Stage B command omitted its exact stage-execution revision")
-    elif "stage_execution_revision" in precondition:
-        raise BuildControlError("Whole-Study command included a stage-only execution precondition")
+    if "stage_execution_revision" in precondition:
+        raise BuildControlError("Study compute command includes a stage-control revision")
 
     receipt = payload.get("command_receipt")
     command = receipt.get("payload") if isinstance(receipt, Mapping) else None
