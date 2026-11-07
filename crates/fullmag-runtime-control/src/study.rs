@@ -2705,6 +2705,16 @@ fn bind_step_output_manifests(
                     input.port_id
                 )
             })?;
+        if resolved
+            .study_artifact
+            .as_ref()
+            .is_some_and(|supplied| supplied != &study_artifact)
+        {
+            bail!(
+                "resolved StepOutput `{}` typed artifact differs from its validated manifest binding",
+                input.port_id
+            );
+        }
         resolved.study_artifact = Some(study_artifact);
     }
     Ok(())
@@ -2809,10 +2819,16 @@ fn resolve_step_output_inputs(
         let from_catalog = ResolvedInput {
             source: artifact.artifact_id.clone(),
             content_sha256: artifact.content_sha256.clone(),
-            study_artifact: None,
+            // Admission replay may already carry typed metadata. Keep it for
+            // canonical manifest/CAS validation below; do not trust or drop it.
+            study_artifact: supplied_inputs
+                .get(&port.port_id)
+                .and_then(|supplied| supplied.study_artifact.clone()),
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            if supplied.source != from_catalog.source
+                || supplied.content_sha256 != from_catalog.content_sha256
+            {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
