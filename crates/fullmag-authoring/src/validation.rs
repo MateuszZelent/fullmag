@@ -336,6 +336,13 @@ fn validate_scene_document_with_mode(
         }
     }
 
+    if let Some(source) = scene.study.shared_domain_mesh_source.as_ref() {
+        if matches!(source, crate::ScriptBuilderSharedDomainMeshSource::Explicit { .. })
+            && scene.study.requested_backend == "fdm" {
+            return Err(SceneDocumentValidationError::new("explicit shared domain source requires FEM"));
+        }
+        crate::validate_shared_domain_mesh_source(source, &scene.objects)?;
+    }
     let mut geometry_keys = std::collections::BTreeSet::new();
     for object in &scene.objects {
         let key = object.geometry.geometry_name.clone().unwrap_or_else(|| {

@@ -54,6 +54,7 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        shared_domain_mesh_source: None,
         interactive_session_requested: None,
         wait_for_solve: None,
         execution_profile: None,
@@ -18006,17 +18007,20 @@ async fn scene_execution_intent_null_merge_patch_removes_keys_before_deserializa
     }));
     scene.study.interactive_session_requested = Some(false);
     scene.study.wait_for_solve = Some(true);
+    scene.study.shared_domain_mesh_source = Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated);
     state.current_live_state.write().await.as_mut().unwrap().scene_document = Some(scene);
     let app = build_v2_router().with_state(state.clone());
     let response = app.clone().oneshot(Request::builder().method("PATCH")
         .uri("/v2/sessions/current/model/scene").header("content-type", "application/json")
         .body(Body::from(serde_json::json!({"merge_patch": {"study": {
             "interactive_session_requested": null, "wait_for_solve": null,
+            "shared_domain_mesh_source": null,
         }}}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let resource = body_json(response).await;
     assert!(resource["study"].get("interactive_session_requested").is_none());
     assert!(resource["study"].get("wait_for_solve").is_none());
+    assert!(resource["study"].get("shared_domain_mesh_source").is_none());
     assert_eq!(resource["study"]["stages"][0]["interactive_session_requested"], true);
     assert_eq!(resource["study"]["stages"][0]["wait_for_solve"], false);
     let response = app.oneshot(Request::builder().method("GET")
@@ -18026,6 +18030,7 @@ async fn scene_execution_intent_null_merge_patch_removes_keys_before_deserializa
     let committed = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
     assert_eq!(committed.study.interactive_session_requested, None);
     assert_eq!(committed.study.wait_for_solve, None);
+    assert_eq!(committed.study.shared_domain_mesh_source, None);
 }
 
 #[tokio::test]

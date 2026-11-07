@@ -2847,6 +2847,9 @@ class Problem:
         for label in labels.values():
             require_non_empty(label, "auxiliary_geometry_names.label")
         object.__setattr__(self, "auxiliary_geometry_names", labels)
+        self._validate_explicit_domain_marker_intent()
+        from fullmag.runtime.domain_mesh_source import accept_domain_mesh_source
+        accept_domain_mesh_source(self)
         field_only = isinstance(self.study, FieldOnly)
         if not self.magnets and not (field_only or isinstance(self.study, AntennaFieldSolve)):
             raise ValueError("Problem requires at least one magnet")
@@ -3117,6 +3120,21 @@ class Problem:
         self._validate_geometry_consistency()
         self._validate_region_consistency()
 
+    def _validate_explicit_domain_marker_intent(self) -> None:
+        workflow = self.runtime_metadata.get("mesh_workflow")
+        if not isinstance(workflow, dict) or not workflow.get("domain_mesh_source"):
+            return
+        markers = workflow.get("domain_region_markers")
+        if not isinstance(markers, list):
+            raise ValueError("explicit domain mesh requires a domain_region_markers list")
+        if not markers:
+            if (not isinstance(self.study, (FieldOnly, AntennaFieldSolve)) or self.magnets or self.energy
+                    or self.field_drives or self.solved_antenna_drives or self.spin_torque is not None
+                    or self.spin_torques or self.spin_transports or self.magnetization_constraints):
+                raise ValueError("empty domain region maps are only valid for nonmagnetic FieldOnly/AntennaFieldSolve observation")
+            if workflow.get("domain_object_region_markers"):
+                raise ValueError("an all-air observation domain cannot contain object-region markers")
+
     def to_ir(
         self,
         *,
@@ -3133,6 +3151,9 @@ class Problem:
           _copy_cached_geometry_assets: bool = True,
           _accepted_preparation: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        self._validate_explicit_domain_marker_intent()
+        from fullmag.runtime.domain_mesh_source import accept_domain_mesh_source
+        accept_domain_mesh_source(self)
         runtime = self.runtime.resolved(
             backend=requested_backend,
             mode=execution_mode,

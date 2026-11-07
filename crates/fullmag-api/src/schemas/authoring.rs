@@ -2192,6 +2192,7 @@ mod execution_intent_tests {
             "study": {
                 "interactive_session_requested": false,
                 "wait_for_solve": true,
+                "shared_domain_mesh_source": {"kind": "generated"},
                 "stages": [{"kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9,
                             "interactive_session_requested": true, "wait_for_solve": false}],
                 "study_pipeline": {"nodes": [{"node_kind": "group", "id": "group", "label": "Group",
@@ -2210,6 +2211,7 @@ mod execution_intent_tests {
         assert_eq!(decoded.study, resource.study);
         assert_eq!(wire["study"]["interactive_session_requested"], false);
         assert_eq!(wire["study"]["wait_for_solve"], true);
+        assert_eq!(wire["study"]["shared_domain_mesh_source"], serde_json::json!({"kind": "generated"}));
         assert_eq!(wire["study"]["stages"][0]["interactive_session_requested"], true);
         assert_eq!(wire["study"]["stages"][0]["wait_for_solve"], false);
     }

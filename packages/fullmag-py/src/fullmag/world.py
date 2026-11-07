@@ -2578,6 +2578,7 @@ class _WorldState:
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
     _domain_region_markers: list[dict[str, object]] | None = None
+    _domain_marker_owners: list[dict[str, object]] | None = None
     _domain_object_region_markers: list[dict[str, object]] | None = None
     _frozen_magnetic_submesh_source: dict[str, object] | None = None
     _extra_runtime_metadata: dict[str, object] = field(default_factory=dict)
@@ -3946,6 +3947,7 @@ def _normalize_domain_region_marker_table(
     region_markers: Any,
     *,
     label: str,
+    allow_empty: bool = False,
 ) -> list[dict[str, object]]:
     if isinstance(region_markers, dict):
         items = region_markers.items()
@@ -3988,7 +3990,7 @@ def _normalize_domain_region_marker_table(
         seen_geometry_names.add(geometry_name)
         seen_markers.add(marker)
         normalized.append({"geometry_name": geometry_name, "marker": marker})
-    if not normalized:
+    if not normalized and not allow_empty:
         raise ValueError(f"{label} must not be empty")
     return normalized
 
@@ -6571,11 +6573,13 @@ class StudyBuilder:
         *,
         region_markers: Any,
         object_region_markers: Any | None = None,
+        marker_owners: Any | None = None,
     ) -> "StudyBuilder":
         domain_mesh(
             source,
             region_markers=region_markers,
             object_region_markers=object_region_markers,
+            marker_owners=marker_owners,
         )
         return self
 
@@ -7673,6 +7677,7 @@ def domain_mesh(
     *,
     region_markers: Any,
     object_region_markers: Any | None = None,
+    marker_owners: Any | None = None,
 ) -> None:
     """Attach an explicit shared-domain FEM mesh asset.
 
@@ -7692,7 +7697,10 @@ def domain_mesh(
     """
     rendered_source = _canonical_mesh_source_path(source, label="domain_mesh")
     _state._domain_mesh_source = rendered_source
-    _state._domain_region_markers = _normalize_domain_region_markers(region_markers)
+    # Physical eligibility is checked on the complete Problem, after all
+    # objects/stages are declared. A pure observation mesh has no magnetic map.
+    _state._domain_region_markers = _normalize_domain_region_marker_table(
+        region_markers, label="region_markers", allow_empty=True)
     normalized_object_region_markers = (
         _normalize_domain_region_marker_table(
             object_region_markers,
@@ -7713,6 +7721,16 @@ def domain_mesh(
                     f"object_region_markers marker {marker} duplicates a region_markers marker"
                 )
     _state._domain_object_region_markers = normalized_object_region_markers
+    _state._domain_marker_owners = None
+    if marker_owners is not None:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        declaration = {
+            "kind": "explicit", "source": rendered_source,
+            "region_markers": _state._domain_region_markers, "marker_owners": marker_owners,
+        }
+        if normalized_object_region_markers is not None:
+            declaration["object_region_markers"] = normalized_object_region_markers
+        _state._domain_marker_owners = normalize_shared_domain_mesh_source(declaration)["marker_owners"]
 
 
 def frozen_magnetic_submesh(
@@ -8494,6 +8512,8 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        if _state._domain_marker_owners is not None:
+            mesh_workflow["domain_marker_owners"] = copy.deepcopy(_state._domain_marker_owners)
         reference = _state._extra_runtime_metadata.get("fem_domain_mesh")
         if (
             isinstance(reference, Mapping)
@@ -8591,6 +8611,7 @@ def _bind_mesh_artifact(
     _state._active_mesh_artifact = artifact
     _state._domain_mesh_source = str(source_path)
     _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
+    _state._domain_marker_owners = None
     _state._domain_object_region_markers = [
         dict(entry) for entry in artifact.object_region_markers
     ]
@@ -8622,6 +8643,7 @@ def _clear_bound_mesh_artifact() -> None:
     _state._active_mesh_artifact = None
     _state._domain_mesh_source = None
     _state._domain_region_markers = None
+    _state._domain_marker_owners = None
     _state._domain_object_region_markers = None
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
     _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
@@ -8948,7 +8970,7 @@ def geometry_object(
         raise TypeError("geometry_object() requires a geometry with a geometry_name")
     _require_unique_geometry_key(geometry_name)
     resolved_id = (
-        require_non_empty(object_id, "object_id") if object_id is not None else geometry_name
+        require_non_empty(object_id, "object_id") if object_id is not None else require_non_empty(name, "name")
     )
     if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
         resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
@@ -10092,7 +10114,7 @@ def _build_problem(
             table_autosave=s._table_autosave,
         )
 
-    return Problem(
+    problem = Problem(
         name=s._name,
         magnets=magnets,
         energy=energy,
@@ -10123,6 +10145,10 @@ def _build_problem(
         pbc=s._pbc,
         parameters=s._parameters if s._parameters.names else None,
     )
+    workflow = problem.runtime_metadata.get("mesh_workflow", {})
+    if s._domain_mesh_source is not None and s._domain_marker_owners is None:
+        s._domain_marker_owners = copy.deepcopy(workflow.get("domain_marker_owners"))
+    return problem
 
 
 def _uniform_material_dmi_coefficient(

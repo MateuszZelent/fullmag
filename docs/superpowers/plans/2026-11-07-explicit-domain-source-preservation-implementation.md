@@ -6,7 +6,7 @@
 **Architecture:** Zachować już istniejące rozdzielenie object_id, nazwy prezentacyjnej i klucza geometrii w V03. Dodać typowaną deklarację źródła do wspólnego authoringu oraz eksportowalną asercję właścicieli, która wyłącznie sprawdza istniejące przypisanie i nigdy go nie zmienia. Nie dodawać wykonywalnego marker_bindings ani nie przełączać writera IR.
 **Tech Stack:** Python DSL i unittest, Rust serde/fullmag-authoring, istniejące API v2, obecny workflow bootstrap.
 **Spec:** [Projekt źródła domeny i diagnoza](2026-11-07-explicit-domain-mesh-roundtrip-proposal.md), [mesh roundtrip](../../specs/mesh-roundtrip-semantics-v1.md), [ADR0024](../../adr/0024-compositional-physics-object-model.md), [ADR0027](../../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md), [zatwierdzony projekt domen](../../../.superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md).
-**Status:** PRZEJRZANY; OCZEKUJE DECYZJI UŻYTKOWNIKA. Nowe parametry i pola poniżej są proponowane, nie wdrożone. Naprawione wcześniej object_id i lookup właściciela podregionu są osobnymi warunkami koniecznymi. Ten etap nie kończy E0–E12, wspólnej siatki antena/LLG ani reprodukcji publikacji.
+**Status:** ZATWIERDZONY 07.11.2026; W REALIZACJI. T1 zapisany w 1c83cf566933a2a5ce49e42a9bc785ebc47dd22f; T2 ma interpretowane regresje, CI i odbiór T3 pozostają otwarte. Naprawione wcześniej object_id i lookup właściciela podregionu są osobnymi warunkami koniecznymi. Ten etap nie kończy E0–E12, wspólnej siatki antena/LLG ani reprodukcji publikacji.
 
 ## Global Constraints
 

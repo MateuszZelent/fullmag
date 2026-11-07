@@ -1935,6 +1935,11 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     document["study"].update(execution_intent)
     if rotated_dmi_object_ids is not None:
         document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
+    if "shared_domain_mesh_source" in builder:
+        from fullmag.runtime.domain_mesh_source import validate_scene_domain_marker_owners
+        document["study"]["shared_domain_mesh_source"] = validate_scene_domain_marker_owners(
+            builder["shared_domain_mesh_source"], document["objects"]
+        )
     if builder.get("fem_domain_mesh") is not None:
         fem_domain_mesh = validate_fem_domain_mesh_reference(
             builder["fem_domain_mesh"], context="builder.fem_domain_mesh"
@@ -2305,6 +2310,12 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "excitation_analysis": excitation_analysis,
     }
     builder.update(execution_intent)
+    if "shared_domain_mesh_source" in study:
+        from fullmag.runtime.domain_mesh_source import validate_scene_domain_marker_owners
+        source = validate_scene_domain_marker_owners(study["shared_domain_mesh_source"], scene.get("objects") or [])
+        if source["kind"] == "explicit" and builder.get("requested_backend", builder.get("backend")) == "fdm":
+            raise ValueError("shared_domain_mesh_source requires FEM")
+        builder["shared_domain_mesh_source"] = source
     fem_domain_mesh = study.get("fem_domain_mesh")
     if fem_domain_mesh is not None:
         builder["fem_domain_mesh"] = validate_fem_domain_mesh_reference(
@@ -2672,6 +2683,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    if "shared_domain_mesh_source" in builder:
+        overrides["shared_domain_mesh_source"] = copy.deepcopy(builder["shared_domain_mesh_source"])
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")

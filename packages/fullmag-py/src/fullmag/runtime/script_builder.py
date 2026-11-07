@@ -415,6 +415,10 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    from fullmag.runtime.domain_mesh_source import source_from_problem
+    shared_source = source_from_problem(base_problem)
+    if shared_source is not None:
+        draft["shared_domain_mesh_source"] = shared_source
     fem_domain_mesh = _export_fem_domain_mesh_reference(
         base_problem,
         source_root=source_root,
@@ -1206,6 +1210,16 @@ def _render_scene_document_bootstrap(
         lines.append(_render_fem_demag_solver_call(demag_policy, surface="study"))
     lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
+    if "shared_domain_mesh_source" in builder:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        source = normalize_shared_domain_mesh_source(builder["shared_domain_mesh_source"])
+        if source["kind"] == "explicit":
+            config = {"domain_mesh_source": source["source"], "domain_region_markers": source["region_markers"],
+                      "domain_marker_owners": source["marker_owners"]}
+            if "object_region_markers" in source:
+                config["domain_object_region_markers"] = source["object_region_markers"]
+            lines.append(_render_domain_mesh_call("study", config, source_root=Path.cwd()))
+
 
     solver = builder.get("solver")
     if isinstance(solver, Mapping):
@@ -1343,6 +1357,11 @@ def _render_scene_document_bootstrap(
                 lines.append(
                     f"{handle}.mesh(cell_size={_python_literal(tuple(raw_grid['cell']))})"
                 )
+
+    region_lines, _ = _render_region_owned_authoring_from_override(
+        list(objects), magnet_vars=snapshot_handles, source_root=Path.cwd()
+    )
+    lines.extend(region_lines)
 
     # Non-magnetic objects remain valid for explicit field-only stages.
     # Run/Relax validation continues to require magnetic objects on import.
@@ -7643,6 +7662,21 @@ def _study_global_mesh_config(problem: Problem, overrides: dict[str, object]) ->
                 continue
             config[key] = value
 
+    if mesh_workflow.get("domain_marker_owners") is not None:
+        config["domain_marker_owners"] = copy.deepcopy(mesh_workflow["domain_marker_owners"])
+    if "shared_domain_mesh_source" in overrides:
+        from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
+        source = normalize_shared_domain_mesh_source(overrides["shared_domain_mesh_source"])
+        for key in ("domain_mesh_source", "domain_region_markers", "domain_object_region_markers", "domain_marker_owners"):
+            config.pop(key, None)
+        config["domain_mesh_mode"] = source["kind"]
+        if source["kind"] == "explicit":
+            config["build_target"] = "domain"
+            config["domain_mesh_source"] = source["source"]
+            config["domain_region_markers"] = source["region_markers"]
+            config["domain_marker_owners"] = source["marker_owners"]
+            if "object_region_markers" in source:
+                config["domain_object_region_markers"] = source["object_region_markers"]
     return config
 
 
@@ -7917,7 +7951,7 @@ def _render_domain_mesh_call(
     if not isinstance(source_value, str) or not source_value.strip():
         return None
     raw_markers = mesh_config.get("domain_region_markers")
-    if not isinstance(raw_markers, list) or not raw_markers:
+    if not isinstance(raw_markers, list):
         return None
     rendered_markers = {}
     for raw_entry in raw_markers:
@@ -7929,11 +7963,11 @@ def _render_domain_mesh_call(
         if not isinstance(marker, (int, float)):
             continue
         rendered_markers[geometry_name] = int(marker)
-    if not rendered_markers:
+    if raw_markers and not rendered_markers:
         return None
     kwargs = [
         f"source={_py_repr(_relativize_path(source_value, source_root))}",
-        f"region_markers={_py_literal(rendered_markers)}",
+        f"region_markers={_py_literal(rendered_markers if raw_markers else [])}",
     ]
     raw_object_region_markers = mesh_config.get("domain_object_region_markers")
     if isinstance(raw_object_region_markers, list) and raw_object_region_markers:
@@ -7951,6 +7985,17 @@ def _render_domain_mesh_call(
             kwargs.append(
                 f"object_region_markers={_py_literal(rendered_object_region_markers)}"
             )
+    if "domain_marker_owners" in mesh_config:
+        owners = []
+        for owner in mesh_config["domain_marker_owners"]:
+            target = owner["target"]
+            target_args = f"object_id={_py_repr(target['object_id'])}"
+            if "region_id" in target:
+                target_args += f", region_id={_py_repr(target['region_id'])}"
+            fields = ", ".join(f"{_py_repr(key)}: {_py_literal(owner[key])}"
+                               for key in ("table", "geometry_name", "marker"))
+            owners.append("{" + fields + f", 'target': fm.RegionRef({target_args})" + "}")
+        kwargs.append("marker_owners=[" + ", ".join(owners) + "]")
     return f"{_surface_call(surface, 'domain_mesh')}({', '.join(kwargs)})"
 
 

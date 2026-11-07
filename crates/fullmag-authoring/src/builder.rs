@@ -885,6 +885,9 @@ where
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderState {
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::domain_mesh_source::deserialize_present_source")]
+    pub shared_domain_mesh_source: Option<crate::ScriptBuilderSharedDomainMeshSource>,
     pub revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_execution_bool")]
     pub interactive_session_requested: Option<bool>,

@@ -1,0 +1,2050 @@
+{
+  "schema_version": "domain_marker_owner_cases.v1",
+  "cases": [
+    {
+      "id": "explicit",
+      "valid": true,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "renamed_display",
+      "valid": true,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Renamed display",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "missing_owner",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "replacement",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "region_alias_drift",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Renamed core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "missing_coverage",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "duplicate_owner",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          },
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unknown_source_field",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ],
+        "unexpected": 1
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unknown_marker_field",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "unexpected": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unknown_target_field",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film",
+              "unexpected": 1
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "root_region_target",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "null_subregion_target",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": null
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "null_object_region_table",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": null,
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wrong_expected_owner",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "other"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "marker_bool",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": true
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "marker_float",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1.0
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "marker_zero",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 0
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "marker_negative",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": -1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "marker_overflow",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 4294967296
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "source_nul",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "bad\u0000mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "source_whitespace",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": " mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cross_table_collision",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 1
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "disabled_region",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": false,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "alias_vs_new_exact_id",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "Core",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "Core",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            },
+            {
+              "region_id": "Core",
+              "owner_object": "immutable-film",
+              "name": "Other",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exact_id_survives_alias_rename",
+      "valid": true,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "core-id",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "core-id",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Renamed",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "disabled_id_blocks_active_alias",
+      "valid": false,
+      "source": {
+        "kind": "explicit",
+        "source": "retained.fullmag-mesh",
+        "region_markers": [
+          {
+            "geometry_name": "film_geom",
+            "marker": 1
+          }
+        ],
+        "object_region_markers": [
+          {
+            "geometry_name": "core-id",
+            "marker": 2
+          }
+        ],
+        "marker_owners": [
+          {
+            "table": "region_markers",
+            "geometry_name": "film_geom",
+            "marker": 1,
+            "target": {
+              "object_id": "immutable-film"
+            }
+          },
+          {
+            "table": "object_region_markers",
+            "geometry_name": "core-id",
+            "marker": 2,
+            "target": {
+              "object_id": "immutable-film",
+              "region_id": "core-id"
+            }
+          }
+        ]
+      },
+      "objects": [
+        {
+          "id": "immutable-film",
+          "name": "Film",
+          "role": "magnet",
+          "geometry": {
+            "geometry_kind": "Box",
+            "geometry_name": "film_geom",
+            "geometry_params": {
+              "size": [
+                1,
+                1,
+                1
+              ]
+            }
+          },
+          "material_ref": "material",
+          "regions": [
+            {
+              "region_id": "core-id",
+              "owner_object": "immutable-film",
+              "name": "Core",
+              "enabled": false,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            },
+            {
+              "region_id": "other-id",
+              "owner_object": "immutable-film",
+              "name": "core-id",
+              "enabled": true,
+              "shape": {
+                "kind": "box",
+                "size": [
+                  0.2,
+                  0.2,
+                  0.2
+                ],
+                "center": [
+                  0,
+                  0,
+                  0
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "generated",
+      "valid": true,
+      "source": {
+        "kind": "generated"
+      },
+      "objects": []
+    },
+    {
+      "id": "generated_with_source",
+      "valid": false,
+      "source": {
+        "kind": "generated",
+        "source": "bad"
+      },
+      "objects": []
+    },
+    {
+      "id": "null",
+      "valid": false,
+      "source": null,
+      "objects": []
+    },
+    {
+      "id": "all_air",
+      "valid": true,
+      "source": {
+        "kind": "explicit",
+        "source": "air.fullmag-mesh",
+        "region_markers": [],
+        "marker_owners": []
+      },
+      "objects": []
+    }
+  ]
+}

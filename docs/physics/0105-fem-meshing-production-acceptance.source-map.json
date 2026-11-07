@@ -902,6 +902,25 @@
       "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
       "symbol": "_export_geometry_descriptor",
       "responsibility": "Pełne nazwy i zagnieżdżone drzewa Translate/CSG w eksporcie."
+    },
+    {
+      "id": "domain-source-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-domain-source-authoring-assertion",
+      "responsibility": "Zatwierdzony kontrakt źródła i statycznych ownerów bez nowej semantyki wykonywalnego IR.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "domain-source-normalization",
+      "path": "packages/fullmag-py/src/fullmag/runtime/domain_mesh_source.py",
+      "symbol": "normalize_shared_domain_mesh_source",
+      "responsibility": "Ścisła normalizacja źródła, map i pełnego pokrycia ownerów."
+    },
+    {
+      "id": "domain-owner-assertion",
+      "path": "packages/fullmag-py/src/fullmag/runtime/domain_mesh_source.py",
+      "symbol": "validate_domain_marker_owners",
+      "responsibility": "Odmowa przy nieaktualnym lub brakującym właścicielu; brak remapowania."
     }
   ],
   "public_api": {
@@ -935,6 +954,26 @@
         "meaning": "wybór istniejącej recipe magnetycznego lub pomocniczego obiektu bez aktywacji fizyki",
         "backend_support": "shared authoring FEM/FDM CPU/GPU; existing mesh gates remain",
         "problem_ir": "runtime_metadata.mesh_workflow.per_geometry[] keyed by actual geometry name"
+      },
+      {
+        "python": "world.geometry.geometry_name",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Niepusty klucz bez otaczających spacji i kolizji globalnych; legacy default przy braku.",
+        "meaning": "Klucz zasobu niezależny od etykiety i object_id.",
+        "backend_support": "FDM CPU/GPU i FEM CPU/GPU: wspólny authoring, bez nowej kwalifikacji solverów.",
+        "problem_ir": "geometry.entries[].name; geometry_id"
+      },
+      {
+        "python": "world.domain_mesh.marker_owners",
+        "type": "list[dict] | None",
+        "default": "None (initial legacy capture)",
+        "si_unit": "1",
+        "validation": "Pełne pokrycie obu tabel i statyczne RegionRef; exact ID przed aliasem; odmowa zmiany ownera.",
+        "meaning": "Asercja bieżącego modelu, bez historii IR v0.3 i bez remapowania.",
+        "backend_support": "FEM CPU/GPU: wspólny authoring; FDM CPU/GPU: odmowa jawnego FEM domain.",
+        "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only)"
       }
     ]
   }

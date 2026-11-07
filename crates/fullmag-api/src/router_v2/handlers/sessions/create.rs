@@ -153,6 +153,7 @@ pub(crate) fn create_empty_scene_document(
         solved_antenna_drives: Vec::new(),
         antenna_spectrum_requests: Vec::new(),
         study: SceneStudyState {
+            shared_domain_mesh_source: None,
             requested_backend: request.backend.clone(),
             requested_device: request.device.clone(),
             requested_precision: request.precision.clone(),

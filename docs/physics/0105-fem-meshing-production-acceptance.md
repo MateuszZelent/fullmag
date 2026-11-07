@@ -1106,7 +1106,7 @@ nazwy dzieci i kolejność transformacji; nazwa obiektu nie zastępuje nazw dzie
 
 | Parametr | Typ / default | Jednostka SI | Walidacja / znaczenie | Python → IR |
 |---|---|---|---|---|
-| geometry_name | str lub None, None | $1$ | Jawny niepusty klucz bez otaczających spacji, unikalny globalnie; brak zachowuje legacy name_geom dla magnetyka, name dla auxiliary | world.geometry/geometry_object/antenna_object i StudyBuilder.conductor → geometry.entries[].name oraz geometry_id |
+| world.geometry.geometry_name | str lub None, None | $1$ | Jawny niepusty klucz bez otaczających spacji, unikalny globalnie; brak zachowuje legacy name_geom dla magnetyka, name dla auxiliary | world.geometry/geometry_object/antenna_object i StudyBuilder.conductor → geometry.entries[].name; geometry_id |
 | auxiliary_geometry_names | mapa str→str, pusta | $1$ | Etykiety istniejących auxiliary keys; nie aktywują fizyki | Problem → physics_objects[].name i physics_graph.objects[].name |
 | geometry_params.name | str, rzeczywista nazwa kształtu | $1$ | Zachowana na każdym poziomie istniejących konstruktorów, niezależnie od etykiety ownera | builder/scena → geometry.entries[] i zagnieżdżone deskryptory |
 
@@ -1128,3 +1128,52 @@ _export_geometry_descriptor i _render_geometry_expr_from_override; runtime/
 scene_document.py::build_scene_document_from_builder oraz
 build_builder_from_scene_document. Odbiór: test_geometry_asset_identity.py;
 adaptery Rust i ciągły odbiór Python–Rust–Python wymagają CI.
+
+(fem-domain-source-authoring-assertion)=
+## Jawne źródło domeny i asercja właścicieli
+
+shared_domain_mesh_source zachowuje istniejące źródło FEM w builderze i scenie.
+Jest deklaracją authoringu, bez nowego równania lub wykonywalnego bindingu
+w ProblemIR 0.3.0. Nie potwierdza historii, której nie zawiera stare wejście.
+
+| Parametr | Typ / default | SI | Walidacja / znaczenie | Docelowa reprezentacja |
+|---|---|---|---|---|
+| shared_domain_mesh_source | optional generated/explicit, brak legacy | $1$ | generated bez dalszych pól; explicit wymaga source, region_markers i marker_owners; nieznane pola/null odmawiają | ScriptBuilderState i SceneStudyState |
+| source | str, wymagany explicit | $1$ | niepusty, bez NUL; istniejący resolver bez nowego grantu | mesh_workflow.domain_mesh_source |
+| region_markers | lista geometry_name/marker, wymagana | $1$ | unikalne klucze i dodatnie u32; [] tylko dotychczasowy niemagnetyczny all-air | domain_region_markers |
+| object_region_markers | optional lista, brak | $1$ | te same reguły, markery rozłączne z root table | domain_object_region_markers |
+| world.domain_mesh.marker_owners | list[dict] lub None, None (initial legacy capture) | $1$ | dokładnie jeden rekord na każdy wpis; root RegionRef z object_id, subregion z object_id i region_id | problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only) |
+| table | region_markers/object_region_markers | $1$ | literalna tabela źródłowa, bez remapowania | deklaracja i asercja |
+| target | istniejący fm.RegionRef | $1$ | exact immutable ID, bez fallbacku do nazwy nowego ownera | statyczny rekord w Pythonie |
+
+Pierwsze przyjęcie kompletnego starego modelu przechwytuje bieżących ownerów.
+Następne odświeżenia i rename sprawdzają zapisane oczekiwania. Exact region_id
+ma pierwszeństwo przed aliasem, również jeśli region jest wyłączony. Brak,
+niejednoznaczność lub zmiana ownera daje odmowę przed materializacją, także
+przy include_geometry_assets=False. To nie jest ochrona dowolnej edycji
+wykonywalnego IR ani dowód historii obiektu o ponownie użytym jawnym ID.
+
+Brak deklaracji pozostawia legacy source w eksporcie script-backed. Generated
+jawnie usuwa wybór domenowego źródła/map/asercji, bez zmiany recept Universe,
+native fem_domain_mesh, wyników i cache. Merge Patch null usuwa deklarację;
+nie oznacza resetu generated. Pole wchodzi do istniejącego fingerprint.
+
+FDM CPU/GPU odmawiają jawnej domeny FEM. FEM CPU/GPU mają wspólny kontrakt
+authoringu, bez deklaracji kwalifikacji solvera. Zachowany loader nadal
+sprawdza plik, hash, mapy i certyfikaty; błąd nie uruchamia zastępczego meshingu.
+Native fem_domain_mesh nadal oznacza study.mesh.load, osobny kontrakt.
+
+Source index: runtime/domain_mesh_source.py::normalize_shared_domain_mesh_source,
+capture_domain_marker_owners, validate_domain_marker_owners,
+accept_domain_mesh_source; world.py::domain_mesh; model/problem.py::Problem;
+runtime/scene_document.py::build_builder_from_scene_document oraz
+runtime/script_builder.py::_render_domain_mesh_call. Kontrole: test_explicit_domain_roundtrip.py,
+wspólny fixture Python/Rust i CI; rzeczywisty Solve i zmiana pakietu pozostają
+poza zatwierdzonym odbiorem tego etapu.
+
+### Pełna tabela publicznych parametrów zachowania źródła
+
+| Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | Python → IR |
+|---|---|---|---|---|---|---|---|
+| world.geometry.geometry_name | str \| None | None | $1$ | Niepusty klucz bez otaczających spacji i kolizji globalnych; legacy default przy braku. | Klucz zasobu niezależny od etykiety i object_id. | FDM CPU/GPU i FEM CPU/GPU: wspólny authoring, bez nowej kwalifikacji solverów. | geometry.entries[].name; geometry_id |
+| world.domain_mesh.marker_owners | list[dict] \| None | None (initial legacy capture) | $1$ | Pełne pokrycie obu tabel i statyczne RegionRef; exact ID przed aliasem; odmowa zmiany ownera. | Asercja bieżącego modelu, bez historii IR v0.3 i bez remapowania. | FEM CPU/GPU: wspólny authoring; FDM CPU/GPU: odmowa jawnego FEM domain. | problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only) |

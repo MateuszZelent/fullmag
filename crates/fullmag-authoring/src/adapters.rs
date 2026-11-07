@@ -90,6 +90,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         solved_antenna_drives: builder.solved_antenna_drives.clone(),
         antenna_spectrum_requests: builder.antenna_spectrum_requests.clone(),
         study: SceneStudyState {
+            shared_domain_mesh_source: builder.shared_domain_mesh_source.clone(),
             interactive_session_requested: builder.interactive_session_requested,
             wait_for_solve: builder.wait_for_solve,
             backend: builder.backend.clone(),
@@ -248,6 +249,7 @@ pub fn scene_document_to_script_builder(
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
 
     Ok(ScriptBuilderState {
+        shared_domain_mesh_source: normalized_scene.study.shared_domain_mesh_source.clone(),
         interactive_session_requested: normalized_scene.study.interactive_session_requested,
         wait_for_solve: normalized_scene.study.wait_for_solve,
         revision: scene.revision,
@@ -809,6 +811,10 @@ pub fn scene_document_to_script_builder_overrides(
     if !builder.execution_layers.is_empty() {
         overrides["execution_layers"] = serde_json::to_value(&builder.execution_layers)
             .expect("execution layers are serializable");
+    }
+    if let Some(source) = scene.study.shared_domain_mesh_source.as_ref() {
+        overrides["shared_domain_mesh_source"] = serde_json::to_value(source)
+            .expect("shared domain source is serializable");
     }
     Ok(overrides)
 }
@@ -2719,6 +2725,7 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            shared_domain_mesh_source: None,
             interactive_session_requested: None,
             wait_for_solve: None,
             revision: 7,
@@ -5333,6 +5340,42 @@ mod tests {
         let scene = scene_document_from_script_builder(&builder);
         let restored = scene_document_to_script_builder(&scene).unwrap();
         assert_eq!(restored.geometries[0].geometry_params, params);
+    }
+
+    #[test]
+    fn shared_domain_source_survives_both_adapters_and_overrides() {
+        let mut builder = sample_builder();
+        builder.requested_backend = Some("fem".to_string());
+        builder.shared_domain_mesh_source = Some(serde_json::from_value(serde_json::json!({
+            "kind": "explicit", "source": "retained.fullmag-mesh",
+            "region_markers": [{"geometry_name": "flower_geom", "marker": 1}],
+            "marker_owners": [{"table": "region_markers", "geometry_name": "flower_geom",
+                              "marker": 1, "target": {"object_id": "flower"}}]
+        })).unwrap());
+        let scene = scene_document_from_script_builder(&builder);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.shared_domain_mesh_source, builder.shared_domain_mesh_source);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["shared_domain_mesh_source"],
+                   serde_json::to_value(&builder.shared_domain_mesh_source).unwrap());
+    }
+
+    #[test]
+    fn shared_domain_source_missing_generated_and_null_are_distinct() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert!(overrides.get("shared_domain_mesh_source").is_none());
+        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated);
+        let value = serde_json::to_value(&scene).unwrap();
+        let restored: SceneDocument = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored.study.shared_domain_mesh_source, scene.study.shared_domain_mesh_source);
+        let mut absent = value.clone();
+        absent["study"].as_object_mut().unwrap().remove("shared_domain_mesh_source");
+        let restored: SceneDocument = serde_json::from_value(absent).unwrap();
+        assert!(restored.study.shared_domain_mesh_source.is_none());
+        let mut null = value;
+        null["study"]["shared_domain_mesh_source"] = Value::Null;
+        assert!(serde_json::from_value::<SceneDocument>(null).is_err());
     }
 
 }

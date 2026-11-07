@@ -2210,6 +2210,7 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            shared_domain_mesh_source: None,
             interactive_session_requested: None,
             wait_for_solve: None,
             revision: 3,

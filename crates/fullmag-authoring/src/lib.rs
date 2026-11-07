@@ -4,6 +4,7 @@ mod adapters;
 mod authoring_model;
 mod builder;
 mod execution_input;
+mod domain_mesh_source;
 mod geometry;
 mod geometry_features;
 mod material_requirements;
@@ -29,6 +30,7 @@ pub use authoring_model::{
     PHYSICS_CONFIGURATION_SCHEMA_VERSION,
 };
 pub use builder::*;
+pub use domain_mesh_source::{ScriptBuilderSharedDomainMeshSource, ScriptBuilderDomainMarkerOwner, ScriptBuilderDomainMarkerTable, validate_shared_domain_mesh_source};
 pub use execution_input::{
     scene_execution_input_identity, scene_execution_input_view, SceneExecutionInputIdentity,
     SCENE_EXECUTION_INPUT_SCHEMA,

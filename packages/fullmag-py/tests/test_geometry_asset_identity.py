@@ -57,6 +57,13 @@ study.stages.add_run(until=1e-12)
         aux = fm.geometry_object(fm.Box(1e-8, 1e-8, 5e-9), name="wire")
         self.assertEqual(aux.geometry_name, "wire")
 
+    def test_explicit_auxiliary_key_does_not_change_implicit_object_id(self):
+        study = fm.study("implicit-identity")
+        study.engine("fem")
+        study.objects.mesh.defaults(maximum_element_size=5e-9)
+        study.conductor(fm.Box(10e-9, 10e-9, 5e-9), name="Display", geometry_name="stable-key")
+        self.assertEqual(world._build_problem().auxiliary_geometry_object_ids, {"stable-key": "Display"})
+
     def test_auxiliary_label_is_separate_in_both_physics_producers(self):
         study = fm.study("auxiliary-label")
         study.engine("fem")

@@ -531,6 +531,9 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
     let object = payload
         .as_object_mut()
         .expect("discretization payload is a JSON object");
+    if let Some(source) = scene.study.shared_domain_mesh_source.as_ref() {
+        object.insert("shared_domain_mesh_source".to_string(), json!(source));
+    }
     if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
         object.insert("fem_domain_mesh".to_string(), json!(reference));
     }
@@ -626,5 +629,24 @@ mod rotated_dmi_scope_tests {
         let scoped = energy_terms(&scene).into_iter().find(|t| t["kind"] == "rotated_interfacial_dmi").unwrap();
         assert_eq!(scoped["object_ids"], json!(["film"]));
         assert_eq!(scoped["value"], 0.0);
+    }
+}
+
+
+#[cfg(test)]
+mod shared_domain_source_tests {
+    use super::*;
+
+    #[test]
+    fn shared_domain_source_enters_discretization_fingerprint_without_changing_absence() {
+        let mut scene = crate::scene_document_from_script_builder(&crate::ScriptBuilderState::default());
+        let legacy = discretization_payload(&scene);
+        assert!(legacy.get("shared_domain_mesh_source").is_none());
+        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated);
+        let reset = discretization_payload(&scene);
+        assert_eq!(reset["shared_domain_mesh_source"], json!({"kind": "generated"}));
+        assert_ne!(legacy, reset);
+        scene.study.shared_domain_mesh_source = None;
+        assert_eq!(discretization_payload(&scene), legacy);
     }
 }
