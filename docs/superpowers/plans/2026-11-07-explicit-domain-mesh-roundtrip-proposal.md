@@ -305,3 +305,55 @@ Pusta mapa GSG nie zastępuje tych przypadków.
 
 Status pozostaje WYMAGA UZUPEŁNIENIA PROJEKTU. Ten przegląd nie zmienia
 kontraktu, polityki, runtime ani stanu wyników; nie uruchamia nowych obliczeń.
+
+
+## Naprawa istniejącego lookup właściciela podregionu — 07.11.2026
+
+Śledzenie granicy ujawniło niezależny błąd w
+packages/fullmag-py/src/fullmag/model/problem.py::Problem.to_ir.
+owner_geometry_names używało magnet.name, podczas gdy ObjectRegion.owner_object
+zawiera jawne object_id. Dla track / immutable-track do materializatora
+dochodził pusty owner_geometry_name. Gdy drugi magnetyk miał nazwę
+immutable-track i inne ID, podregion był kierowany do geometrii tego drugiego
+obiektu. Nie jest to nowe znaczenie IR, lecz błędny lookup już istniejącego ID.
+
+Naprawa używa dokładnego object_id i dawnego name tylko wtedy, gdy ID jest None.
+Nie przepisuje map źródła ani ID podregionu. Testy w
+packages/fullmag-py/tests/test_object_region_owner_identity.py przez publiczny
+authoring i Problem.to_ir przechwytują rzeczywiste argumenty istniejącego
+materializatora. Obejmuje to jawne ID, legacy brak ID, rename i kolizję
+z nazwą prezentacyjną drugiego magnetyka.
+
+RED: 4 testy, 3 właściwe porażki i 1 PASS legacy; bez błędów setupu.
+GREEN: 4 nowe i 4 istniejące regresje, 8/8 PASS. Materializator zastąpiono
+capture wyłącznie w teście; subprocess.Popen jest blokowany w nowych
+regresjach. To dowód poprawnego handoff authoringu, nie nowego meshowania,
+wyniku pola lub zakwalifikowania wspólnego rdzenia antena/LLG.
+Receipty red.json i green.json zachowano w prywatnym wolumenie grupy pod
+verification/object-region-owner-identity-20261107/.
+Bootstrap rust-contracts dostał wykonanie nowego pliku obok dotychczasowych
+regresji roundtripu; wynik CI zostanie zapisany po rzeczywistym zakończeniu.
+
+## Granica warunkowego wariantu V03 po przeglądzie
+
+Niezależny przegląd dopuścił zachowanie geometry_name w V03 oraz eksportowalną
+asercję authoringu, o ile nie obiecujemy nowej ochrony każdego wejścia IR.
+Kandydat marker_owners musi identyfikować tabelę, literalny klucz, marker
+i oczekiwany RegionRef, mieć pełne pokrycie bez duplikatów oraz przechowywać
+raz przyjęte trwałe ID. Refresh/rename nie mogą wyliczać oczekiwanego właściciela
+ponownie. Sprawdzenie po zebraniu modelu musi poprzedzać każdą materializację,
+także to_ir(include_geometry_assets=False), i odpowiadać dokładnie regule
+ID przed aliasem, również dla wyłączonego ID.
+
+Nie wolno przedstawiać tego jako trwałej historii ownera w samym V03 IR.
+Identyczny zaakceptowany IR zachowuje bieżący graph i mapy, ale dowolnie
+zmodyfikowany IR nie zawiera wcześniejszego oczekiwanego targetu.
+Ochrona obejmująca takie ponowne authorowanie IR wymaga osobnego typowanego
+kontraktu i atomowej granicy V04. Obowiązkowa bramka ukryta wyłącznie
+w runtime_metadata byłaby błędnym obejściem.
+
+Dla auxiliary oddzielenie etykiety od geometry key musi objąć również
+world.py::geometry_object, model/problem.py::Problem.to_ir i
+model/physics_scope.py::build_physics_graph. Samo nowe pole sceny
+nie wystarczy. Ten wariant jest nadal rozpoznaniem granicy, nie wdrożeniem
+nowego source declaration lub zatwierdzonym wspólnym modelem domen.

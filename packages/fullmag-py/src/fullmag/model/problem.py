@@ -3256,7 +3256,9 @@ class Problem:
                 for magnet in self.magnets
             }
             owner_geometry_names = {
-                magnet.name: magnet.geometry.geometry_name for magnet in self.magnets
+                (magnet.name if magnet.object_id is None else magnet.object_id):
+                magnet.geometry.geometry_name
+                for magnet in self.magnets
             }
             object_region_mesh_specs = []
             for region in object_regions:
