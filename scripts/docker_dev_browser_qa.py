@@ -3423,6 +3423,23 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("field_data_proven") is not False):
         raise BuildControlError("Study stage rerun claims unsupported execution or field evidence")
 
+    reload = payload.get("reload_proof")
+    canvas = reload.get("canvas") if isinstance(reload, Mapping) else None
+    if (not isinstance(reload, Mapping) or reload.get("status") != 200
+            or reload.get("path") != "/workspace" or reload.get("run_id") != new_run
+            or type(reload.get("command_count")) is not int or reload["command_count"] != 1
+            or type(reload.get("command_attempt_count")) is not int or reload["command_attempt_count"] != 1
+            or reload.get("stable_projection") is not True or reload.get("history_identity_preserved") is not True
+            or not isinstance(canvas, Mapping) or canvas.get("visible") is not True
+            or canvas.get("context_type") not in ("WebGLRenderingContext", "WebGL2RenderingContext")
+            or canvas.get("context_lost") is not False
+            or any(type(canvas.get(key)) is not int or not 0 < canvas[key] <= 16384
+                   for key in ("drawing_buffer_width", "drawing_buffer_height"))
+            or canvas.get("quantity_id") != "m" or canvas.get("label_visible") is not True
+            or canvas.get("field_state") != "data-ready"
+            or type(canvas.get("fdm_model_count")) is not int or canvas["fdm_model_count"] != 8):
+        raise BuildControlError("Study stage rerun omitted its same-run reload, history or WebGL proof")
+
     read_counts = payload.get("read_counts")
     required_counts = {"status": 2, "current_session": 2, "scene": 2, "commands": 1, "current_run": 2,
                        "stage_execution": 2, "solver_status": 2, "stage_results": 3, "command_details": 0}

@@ -481,7 +481,6 @@ function stableProjection(snapshot) {
       authored_stage_ids: snapshot.sceneStageIds,
       stage_statuses: snapshot.execution.stage_statuses,
       completed_stage_indexes: snapshot.execution.completed_stage_indexes,
-      stage_statuses: snapshot.execution.stage_statuses,
     },
     scene_revision: snapshot.scene.revision,
     scene_stage_ids: snapshot.sceneStageIds,
@@ -525,6 +524,7 @@ export async function runStudyStageRerun() {
   let before = null;
   let beforeSnapshot = null;
   let after = null;
+  let reloadProof = null;
   let commandCount = 0;
   let commandAttemptCount = 0;
   let clientAckCount = 0;
@@ -964,6 +964,61 @@ export async function runStudyStageRerun() {
       "New P22 run results contain a stage outside the selected mode");
     after = summary(afterSnapshot);
     after.preserved_prior_result_identities = afterOldResults;
+    phase = "reload-observation";
+    const reloadResponse = await page.reload({
+      waitUntil: "domcontentloaded", timeout: Math.min(60_000, timerBudget()),
+    });
+    assert.equal(reloadResponse?.status(), 200, "P22 reload did not return HTTP 200");
+    assert.equal(new URL(page.url()).pathname, "/workspace", "P22 reload changed the workspace route");
+    const home = page.locator('.fm-home-overlay[data-state="home-overlay"]');
+    if (await home.isVisible().catch(() => false)) {
+      await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
+      await home.waitFor({ state: "hidden", timeout: Math.min(15_000, timerBudget()) });
+    }
+    await page.waitForFunction(() => {
+      const viewport = document.querySelector(".fm-viewport-3d");
+      const canvas = viewport?.querySelector("canvas");
+      const label = viewport?.querySelector('[data-quantity-id="m"][data-field-state="data-ready"]');
+      const rect = canvas?.getBoundingClientRect();
+      const labelRect = label?.getBoundingClientRect();
+      return canvas && rect?.width > 0 && rect?.height > 0
+        && labelRect?.width > 0 && labelRect?.height > 0;
+    }, null, { timeout: Math.min(30_000, timerBudget()) });
+    const canvas = await page.locator(".fm-viewport-3d").evaluate((viewport) => {
+      const element = viewport.querySelector("canvas");
+      const rect = element.getBoundingClientRect();
+      const gl = element.getContext("webgl2") ?? element.getContext("webgl");
+      const label = viewport.querySelector('[data-quantity-id="m"]');
+      const labelRect = label?.getBoundingClientRect();
+      const style = label ? getComputedStyle(label) : null;
+      return {
+        visible: rect.width > 0 && rect.height > 0,
+        context_type: gl?.constructor.name ?? null,
+        context_lost: gl?.isContextLost() ?? true,
+        drawing_buffer_width: gl?.drawingBufferWidth ?? 0,
+        drawing_buffer_height: gl?.drawingBufferHeight ?? 0,
+        quantity_id: label?.getAttribute("data-quantity-id") ?? null,
+        label_visible: Boolean(labelRect?.width > 0 && labelRect?.height > 0
+          && style?.display !== "none" && style?.visibility !== "hidden" && Number(style?.opacity) > 0),
+        field_state: label?.getAttribute("data-field-state") ?? null,
+        fdm_model_count: Number(viewport.getAttribute("data-fdm-model-count")),
+      };
+    });
+    assert(canvas.visible && !canvas.context_lost
+      && ["WebGLRenderingContext", "WebGL2RenderingContext"].includes(canvas.context_type)
+      && canvas.drawing_buffer_width > 0 && canvas.drawing_buffer_height > 0,
+      "P22 reload lost the visible WebGL drawing buffer");
+    assert.equal(canvas.fdm_model_count, afterSnapshot.profile.domain_cell_count);
+    const reloaded = await readSnapshot(session, { requireIdle: true, expectedStageIds: expectedAfterIds });
+    assert.deepEqual(stableProjection(reloaded), stableProjection(afterSnapshot),
+      "P22 reload changed the current run, scene, stage execution or result identities");
+    const reloadedHistory = await readResults(before.run_id, session, studyStageExpectedStageIds(mode, "before"));
+    assert.deepEqual(reloadedHistory, afterOldResults, "P22 reload changed prior immutable result identities");
+    assert.equal(commandCount, 1, "P22 reload dispatched a second command");
+    assert.equal(commandAttemptCount, 1, "P22 reload attempted a second command");
+    reloadProof = { status: 200, path: "/workspace", run_id: reloaded.currentRun.run_id,
+      command_count: commandCount, command_attempt_count: commandAttemptCount,
+      stable_projection: true, history_identity_preserved: true, canvas };
     publicTerminalProven = true;
     outcome = "terminal-confirmed";
   } catch (error) {
@@ -1002,6 +1057,7 @@ export async function runStudyStageRerun() {
       camera_patch_receipts: cameraPatchReceipts,
       ui_command_proven: uiCommandProven,
       after,
+      reload_proof: reloadProof,
       history_identity_preserved: historyIdentityPreserved,
       public_terminal_proven: publicTerminalProven,
       native_execution_proven: false,
