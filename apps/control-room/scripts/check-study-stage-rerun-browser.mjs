@@ -10,7 +10,6 @@ import { startBrowserQaLoopbackProxy } from "./lib/browser-qa-loopback-proxy.mjs
 const schema = "fullmag.docker-dev-study-stage-rerun-result.v1";
 const scenario = "study-stage-rerun";
 const sessionName = "P22 three Relax stages";
-const fixturePath = "examples/interactive_study/fdm_cpu_three_relax_continue.py";
 const fixtureRuntimePath = "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py";
 const stageIds = ["relax-a", "relax-b", "relax-c"];
 const statusPath = "/v2/sessions/current/status";
