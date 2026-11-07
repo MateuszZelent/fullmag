@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0913-fem-gpu-amg-coarse-residency.md",
-    "reviewed_revision": "3246b40c54389b98b9cd9e3ee73f6c5e83466ab7"
+    "reviewed_revision": "70d35b84dae4e840e8cc881c35ef45014c604284"
   },
   "backend_matrix": [
     {
@@ -257,6 +257,54 @@
       "responsibility": "Test GPU:263 węzły, kolejność, dokładne wartości, audit, odmowy i teardown.",
       "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/tests/demag_poisson_contract.cpp#L4467"
+    },
+    {
+      "id": "capture-local-field-cache",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "NativeFemCaptureFieldCache",
+      "responsibility": "Reuse H_ex and H_ext vectors inside one source-provider batch only; all other fields bypass these cache slots.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284; does not establish runtime speedup.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2107"
+    },
+    {
+      "id": "capture-local-field-batch",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "copy_live_preview_fields_for_capture",
+      "responsibility": "Own one cache for an ordered synchronous capture batch; cache lifetime ends when the method returns.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L5974"
+    },
+    {
+      "id": "capture-energy-reuse",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "copy_energy_density_values_from_source",
+      "responsibility": "Consume the shared field provider while preserving the existing term loop, prefactors, mask-aware accumulation, and DG0 projection branch.",
+      "evidence_status": "Committed source behavior and nodal/DG0 regression at 70d35b84dae4e840e8cc881c35ef45014c604284.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2262"
+    },
+    {
+      "id": "capture-owner-order-publication",
+      "path": "crates/fullmag-runner/src/fem/relax/preview.rs",
+      "symbol": "capture_native_fem_observables",
+      "responsibility": "Select demanded quantities and clock/map, prepare and validate the ordered batch, then publish the complete capture to StepUpdate.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284; provider errors return before capture publication.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/fem/relax/preview.rs#L1771"
+    },
+    {
+      "id": "capture-cache-value-regression",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "batch_matches_individual_nodal_and_dg0_outputs_and_reads_exchange_external_once",
+      "responsibility": "Bitwise compare direct H_ex/H_ext and energy outputs for nodal and DG0 paths; assert one H_ex/H_ext provider read per batch.",
+      "evidence_status": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284; not a runtime or performance qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2696"
+    },
+    {
+      "id": "capture-cache-lifetime-error-regression",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "each_capture_re_reads_at_the_same_step_and_provider_failure_aborts_the_batch",
+      "responsibility": "Assert the next capture re-reads changed source values at the same step and that a provider error aborts the batch.",
+      "evidence_status": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284; not a runtime or performance qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2759"
     }
   ],
   "public_api": {
@@ -331,6 +379,9 @@
     "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580",
     "packed_field_download": "GPU contract passed; 50fs OFF/ON and coarse18-OFF field/table parity exact; 318→252 cudaMemcpy2D,22pack kernels, identical D2H bytes; one sample per variant/mode, repeated speedup not qualified",
     "packed_evidence_sha256": "a6f7b5c5700b97e88b64d4d8c47dd3329c3468530c3194d92b58f70eaa79e166",
-    "residual_norm_limit": "Historical transport-experiment CG uses the preconditioned norm and conditional GPU true-residual check. Subsequent every-solve Euclidean certification passed native RED/GREEN and seven-step 50 fs OFF full-Zarr parity; see 0532. Full 1 ns SP4 and corrected-source CUPTI remain unqualified."
+    "residual_norm_limit": "Historical transport-experiment CG uses the preconditioned norm and conditional GPU true-residual check. Subsequent every-solve Euclidean certification passed native RED/GREEN and seven-step50fs full-Zarr OFF/ON with the capture cache. Corrected-source CUPTI515377 clock/loss gates passed; full1ns SP4 and CUDA719 root cause remain unqualified.",
+    "capture_local_field_reuse": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284 covers bitwise nodal/DG0 equivalence, one H_ex/H_ext read per batch, same-step re-read, and provider failure. A managed full-Zarr OFF/ON pair preserved both frames, all four fields, 15 table columns, terminal m/torque and the full schedule. The trace comparison observed 346 to 262 D2H events in the 209192 B bin and cudaMemcpy2D 252 to 168; the 8 B bin increased by 90 events (+720 B). The earlier packed ON revision lacked the independent residual fix, so aggregate byte deltas are not attributed solely to this cache. No time or speedup claim is qualified.",
+    "capture_local_evidence_sha256": "6bc8299e6adb1ea569193385010ad61c60232b1d83b4b4fac0d369a838ec508b",
+    "capture_local_timing_limit": "N=1 OFF: field_copy0.441745444->0.268411438s, reported_solver4.211157581->4.379183733s. Timers have different scopes and must not be summed. Repeated attributable total speedup is not qualified."
   }
 }
