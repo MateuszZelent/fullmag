@@ -93,6 +93,30 @@ Literalne0,25T i30GHz/T dają nadal f0=7,5GHz, zgodnie z istniejącym wzorcem i 
 
 Źródła obrazów: APS92aeb043aa5329cd73fc77fecc6eb110af760fe8b86a0f9b072cca2c83a7bf27; arXivdc7a08ec34e42eeefc854437b64d9a3c071a2d59c68d3a012a23d470011329ba. Dokładne ścieżki, wymiary, kolumny i przeliczenie zapisano w figure3-marker-raster-check.json. [Wersja wydawnicza](https://journals.aps.org/prresearch/abstract/10.1103/PhysRevResearch.2.043203).
 
+## 5. Przekrój zbieżności na trzech zachowanych siatkach
+
+Nowy odczytowy audyt obejmuje wszystkie komórki wcześniejszych globalnych siatek 100/75/50 nm, a nie tylko najnowszą lokalną siatkę 50/bulk75 nm. Przed wykonaniem zapisano sześć rozłącznych pasów odległości centroidu Tet od tych samych ośmiu pionowych krawędzi: 0–25, 25–50, 50–100, 100–200, 200–400 i powyżej 400 nm. To przypisanie całych komórek według środka, nie dokładne całkowanie po przyciętym obszarze.
+
+Ponownie sprawdzono SHA czterech payloadów każdego źródła: cells, conductivity, stable_vertex_ids, v_raw; ich descriptor pochodzi z wcześniej zweryfikowanego publicznego odczytu. Każda komórka należy dokładnie do jednego pasa; suma licznika i mianownika estymatora zgadza się z zachowaną analizą całego źródła względnie poniżej 1e-100. Użyto bez zmian scripts/antenna_gsg_current_correction.py::partitioned_weighted_rt0_h1_correction, Decimal120.
+
+| Siatka nominalna | Tet4 | Globalne η | Udział energii korekty do 50 nm | Do 200 nm | Powyżej 400 nm |
+|---|---:|---:|---:|---:|---:|
+| 100 nm | 14 299 | 0,04909710 | 56,1829% | 98,0098% | 0,2303% |
+| 75 nm | 25 516 | 0,03828854 | 65,8466% | 98,2219% | 0,1399% |
+| 50 nm | 72 911 | 0,03496045 | 64,9954% | 98,3628% | 0,1167% |
+
+Przejście 75→50 nm zwiększa licznik korekty w pasie 0–25 nm o 14,8768%; po normalizacji kwadratem rzeczywistego prądu wzrost wynosi 14,8478%. Lokalne η tego pasa zmienia się z 0,481587 do 0,491022. W pasie powyżej 400 nm licznik po tej samej normalizacji maleje do 0,694948 poprzedniej wartości; jego udział w całym liczniku jest mały. W innych pasach zmiany nie są jednolite: stosunek licznika po normalizacji wynosi 0,692803 dla 25–50 nm i 0,917145 dla 50–100 nm.
+
+Wynik wspiera lokalizację problemu aproksymacji przy narożach. Nie dowodzi zbieżności do rozwiązania ciągłego, ścisłego błędu H ani zgodności z publikacją. Zmienna liczba komórek i centroidowe granice pasów ograniczają interpretację lokalnych ilorazów; nie ustanowiono nowego progu zaliczenia. Dotychczasowe kryterium globalnej kontrakcji nadal nie jest spełnione. Propozycja nowego meshowania naroży pozostaje niewykonana.
+
+Dowody w control volume: verification/gsg-corner-convergence-localization-20261107/. Czas 83,673 s, szczyt RSS 148 612 KiB, limit przestrzeni adresowej 2 GiB, bez nowego meshowania i Solve.
+
+| Artefakt | SHA256 |
+|---|---|
+| analyze.py | 3fea4d896533ce1e84cfef1bb01ccc1a62b19803c79fe0e265aad7b47b0cac4e |
+| prospective-analysis.json | 62d565d2675dfae725c1f15077d4d18046bbbc5f475c143f66edab55f2a4ff88 |
+| result.json | 07dae7747d11f878203733c418b5ba01efda0e00d97cd18fdee5b2e0338286d4 |
+
 ## Mapa kodu i granice wykonania
 
 | Źródło + symbol | Odpowiedzialność / dowód |
