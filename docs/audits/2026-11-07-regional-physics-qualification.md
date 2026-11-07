@@ -174,3 +174,33 @@ Home round-trip, widoczny WebGL2 canvas 617×495, drawing buffer 617×495,
 context_lost=false przed/po, brak błędów strony i konsoli. Renderer przeglądarki
 korzysta z SwiftShader; to dowód lifecycle canvasu, nie sprzętowego renderingu
 RTX ani materializacji wszystkich pól. Nie powtarzano Solve w QA.
+
+
+## Rozszerzony natywny FDM CUDA: wariacja, energia i lokalna alpha
+
+Harness `scripts/benchmarks/fdm_regions_interaction_abi_checks.py` wykonano
+w tej samej grupie, biblioteka FDM SHA-256
+`6ef5859d1b732eb1477b5eed5b6c7b677bcb9939457a65b16cf5323ab617d72c`.
+Dwie komórki mają Ms 400/800 kA/m, alpha 0,1/0,4 przy odmiennych wartościach
+scalar fallback. Przypadki zmieniają także lokalne Ku1/Ku2, Kc1/Kc2/Kc3 i A.
+
+| Kontrola | Zakres | Wynik i zadana tolerancja |
+|---|---|---|
+| Pochodna energii na sferze jednostkowej | Zeeman, uniaxial, cubic, MEL, exchange uniform/local A, iDMI+exchange, bulk-DMI+exchange; fp64/fp32 | 16 PASS; max 9,55e-11 / 2,59e-5 przy limitach 1e-7 / 3e-3; epsilon 1e-5 / 1e-3 |
+| Niezależne różnice energii z wielomianów not fizycznych | Zeeman, uniaxial, cubic, MEL; fp64/fp32 | 8 PASS; max 1,96e-16 / 1,14e-8 przy limitach 1e-12 / 1e-6 |
+| LLG w stałym polu +z, m(0)=+x, lokalna alpha | Heun, RK4, RK23, DP45, ABM3; fp64/fp32; 100 kroków po 1e-14 s | 10 PASS; max błąd składowej 7,21e-13 / 2,43e-8 przy limitach 5e-8 / 1e-5 |
+| Raw demag bez widm Newella | fp64/fp32 | 2 oczekiwane odmowy; **fizyka demagu NOT VERIFIED w tym harnessie** |
+
+Lokalne A wymaga rzeczywistego ABI v2 FACES; starsze wejście z a_field
+prawidłowo odmówiło. Połączenie ma niezależnie obliczoną harmoniczną średnią A.
+Osi długości 1/2 użyto ze swobodnymi brzegami, bez PBC. Test nie kwalifikuje
+planera, wszystkich DMI/geometrii, adaptacji ani długiego horyzontu fp32.
+Błąd harnessu podczas rozbudowy nadpisywał zmienną tolerancji gradientu
+ostrzejszą tolerancją energii; rozdzielono nazwy bez zmiany kryteriów odbioru.
+
+Pięć unit checks wyroczni i pomiaru: PASS; wykrywają podmianę lokalnego Ms,
+czynnik 2, NaN oraz nieinformatywny zerowy gradient i sprawdzają invariants LLG.
+Surowy raport SHA-256
+`ffb9614bc8c3d23115895abbf583d1c7613b9cc13c7fafc536eacfae9fc125cf`
+zachowano w parze `fdm_regions_interaction_abi_checks.py/.zarr` na WSL,
+wraz z wejściami, kodem, nagłówkiem i hashem biblioteki przed/po.
