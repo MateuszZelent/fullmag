@@ -115,11 +115,12 @@ Wynik ostatniego V/J/H pozostaje zachowany jako Succeeded.
 - `git apply --check` względem bieżącego worktree: PASS; patch niewdrożony.
 - Niezależny przegląd współrzędnych, pełnego delta IR, pinów, składania
   minimum i ograniczeń proxy: bez wykrytej zmiany fizyki.
-- **Pełny round-trip IR: FAILED.** Kanoniczny eksporter dodaje
-  `wait_for_solve=True` w obu przypadkach: starym 50 nm i kandydacie.
-  Definicje siatki są identyczne po eksporcie. Nie usunięto różnicy z testu,
-  nie zmieniono tolerancji i nie nazwano wszystkich bramek zaliczonymi.
-  Jedna próba przygotowania użyje oryginalnego kandydata, nie eksportu.
+- **Python→Python: PASS po naprawie flag**, zgodnie z zachowanym późniejszym
+  audytem opisanym w uzupełnieniu. Wcześniejszy FAILED wynikał z dopisywania
+  wait_for_solve=True; historyczne dowody odmowy pozostają zachowane.
+  Definicje siatki i progi nie zostały zmienione w celu zaliczenia testu.
+  Roundtrip przez SceneDocument nadal nie przechodzi. Ewentualna zatwierdzona
+  próba przygotowania użyje oryginalnego kandydata, nie eksportu UI.
 
 Pierwsze odczyty kontrolne ujawniły niewłaściwe użycie `Problem.to_ir`
 z domyślną materializacją. Guard zablokował `gmsh.model.mesh.generate`
@@ -136,3 +137,20 @@ Istotne pliki: `ir-delta.json`, `profile-and-cost-audit.json`,
 
 Ta decyzja dotyczy wyłącznie wyżej przypiętego przygotowania i pomiaru.
 Nie kwalifikuje anteny do konsumenta LLG ani nie dowodzi zgodności z publikacją.
+
+
+## Uzupełnienie po zatwierdzonej naprawie flag wykonania
+
+Powyższy FAILED opisuje historyczny eksporter. Późniejszy zachowany audyt
+verification/antenna-authoring-roundtrip-20261107/real-gsg-inputs-v1/result.json
+(SHA256 e0f7f428cc7f24119f608224b0e234f98f9a66074da871128d8f468e57dc8163)
+potwierdził dla obu przypiętych skryptów:
+Python→Python bez różnic pełnego IR, identyczny mesh_workflow i flagi etapów.
+Guardy potwierdziły zero Popen i zero gmsh.generate. Nie powtarzano tego audytu.
+
+Python→Scene→Python nadal traci jawną domenę i mapę region_markers.
+[Osobny audyt](2026-11-07-gsg-scene-domain-mesh-audit.md) oraz
+[projekt naprawy](2026-11-07-explicit-domain-mesh-roundtrip-proposal.md)
+opisują granicę i brak gotowości ogólnego kontraktu. Poprawka flag/ID nie
+stanowi naprawy wyboru domeny. Zgoda na corner25 i wykonanie prepare/Solve
+nadal nie nastąpiły; ten wpis nie aktywuje profilu ani nie kwalifikuje źródła.

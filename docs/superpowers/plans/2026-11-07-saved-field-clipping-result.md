@@ -166,8 +166,9 @@ job inspector-actions-browser-smoke (128434317280) SUCCESS.
 Receipt nowego fixture: state=passed, exit_code=0,
 source_changed_during_run=false; browser report passed=true, errors=[].
 Dotychczasowy inspector-actions również przeszedł dla tego samego HEAD.
-Pozostałe joby całego workflow były jeszcze aktywne przy zapisie tego odbioru;
-nie należy utożsamiać sukcesu jednego joba z końcowym sukcesem workflow.
+Końcowy odczyt Actions potwierdził completed/success całego workflow,
+w tym control-room-contracts i browser-fixture-smoke. Dowód obejmuje testowany
+HEAD; późniejszy commit 25c34a587c05a1695825e5ab1fae09cad6921a02 zmienił tylko raport.
 
 Sprawdzono screenshot ACK: fokus pozostaje na suwaku, Section position=0,
 wspólna sekcja w rzeczywistym ScrollArea zachowuje układ. Test mierzy także
