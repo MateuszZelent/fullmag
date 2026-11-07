@@ -98,9 +98,10 @@ Starszy ręczny check-saved-field-presentation.mjs zatrzymuje się przed panelem
 nie znajduje dawnego inspectSelected w przebudowanym Results Browser.
 Nie użyto go jako dowodu poprawki ani nie zmieniano przy okazji jego przepływu.
 
-Brakuje pełnej automatycznej regresji pending/ACK, root DOM, scroll/focus,
-bounded requests i przełączenia sesji/wyniku. Nie zakwalifikowano osobno wszystkich
-wariantów wireframe/wektorów. Kontrola powierzchni nie zamyka E7/E12.
+Automatyczna regresja panelu pending/ACK, root DOM, scroll/focus i bounded
+requests została uzupełniona poniżej. Nadal brakuje automatycznej kontroli
+przełączenia sesji/wyniku oraz wszystkich wariantów renderowania rzeczywistych
+wireframe/wektorów. Kontrola powierzchni nie zamyka E7/E12.
 Historyczny Failed i representation not verified pozostają jawne.
 Nie jest to dowód zgodności Fig. 3 ani kwalifikacji źródła do LLG.
 
@@ -159,5 +160,51 @@ zachowując dotychczasowe testy Object/Airbox bez zmian.
 Przed uruchomieniem browser CI: focused ESLint PASS, TypeScript PASS i 3/3 testów
 panelu PASS w istniejącym frontendzie grupy. Receipty: frontend
 verification/saved-field-clipping-20261107/stability/.
-Wynik przeglądarkowy pozostaje oczekujący; sam przygotowany test nie jest dowodem.
+[CI 42382972877](https://github.com/MateuszZelent/fullmag/actions/runs/42382972877),
+HEAD 3b29f1cbdb59ae04f4e3e27bbba3aaff2b1be900:
+job inspector-actions-browser-smoke (128434317280) SUCCESS.
+Receipt nowego fixture: state=passed, exit_code=0,
+source_changed_during_run=false; browser report passed=true, errors=[].
+Dotychczasowy inspector-actions również przeszedł dla tego samego HEAD.
+Pozostałe joby całego workflow były jeszcze aktywne przy zapisie tego odbioru;
+nie należy utożsamiać sukcesu jednego joba z końcowym sukcesem workflow.
+
+Sprawdzono screenshot ACK: fokus pozostaje na suwaku, Section position=0,
+wspólna sekcja w rzeczywistym ScrollArea zachowuje układ. Test mierzy także
+opacity przodków kontrolek, ponieważ opacity rodzica nie zmienia odczytu
+getComputedStyle(...).opacity samego dziecka. Tę lukę wskazał niezależny review
+i poprawiono ją przed uruchomieniem CI.
+
+Archiwum artefaktu GitHub 13577954689: 831159 B, 24 wpisy,
+SHA256 9e2a663d6e6aa5c7a6c8c250aca46d64a71d60e2b56239bda238ee295713e1d1.
+Frontend stability/ci-42382972877-inspector.zip zawiera receipty, logi i PNG
+saved-section-pending.png / saved-section-ack.png.
+Log joba: 55291 B, SHA256
+efb700b9f52932964aef011b92a06cf9c5d61e305ea8543f89f7ee2775dcaf5a.
+
+Logowanie gh w Windows odmówiło dispatch (401). Odczyt auth w WSL potwierdził
+istniejące poprawne konto i uprawnienia workflow; CI uruchomiono z WSL, bez
+przekazywania lub zapisywania tokenu. Nie wymagało ponownego logowania użytkownika.
+
 Bez nowego Solve, native buildu, restartu lub zwalniania rezerwacji.
+
+
+## Rzeczywiste H275 — wektory i wireframe
+
+Na tym samym zachowanym wyniku wyłączono powierzchnię oraz geometrię źródła:
+
+- wektory: Y50 i flip pokazały przeciwne połowy domeny;
+- wireframe przy wyłączonych wektorach: Y50 i flip pokazały przeciwne połowy siatki;
+- końcowo przywrócono Surface/Vectors/Legend/Source geometry on, Wireframe off,
+  Arrow length=1, Section off/Z50/flipped=false.
+
+Wektory przy domyślnej długości są zbyt małe w widoku całej wydłużonej domeny.
+Dla obserwacji clippingu ustawiono tymczasowo długość 5, a następnie przywrócono 1.
+To potwierdza działanie przycięcia, ale nie kwalifikuje domyślnej czytelności
+trajektorii pola ani gęstości próbkowania. Potrzebny jest osobny odbiór prezentacji
+wydłużonego nośnika; nie należy zastępować go twierdzeniem o pełnym E7.
+
+Render details po przywróceniu: context active, drawing buffer 944×587 px,
+Rendered frames 0 in 2.00 s. Legenda nadal 0.02073–25.4 A/m.
+Obserwacje i screenshoty CUA były widoczne w rozmowie, bez zapisu lokalnego PNG.
+Nie wykonano nowego Solve ani zmiany danych naukowych.
