@@ -2847,5 +2847,582 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         self.assertIn("test_docker_dev_browser_qa", (ROOT / "scripts/docker_volume_checks.py").read_text(encoding="utf-8"))
 
 
+class StudyStageRerunContractTests(unittest.TestCase):
+    SOURCE_KEYS = (
+        "runner", "loopback_proxy", "fixture", "scene_adapter", "tree_view", "study_nodes",
+        "stage_builder", "command_adapter", "command_contributions", "study_compute_input",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qa = _load_qa_module()
+
+    @staticmethod
+    def sources(qa):
+        return qa._study_stage_rerun_source_sha256(ROOT)
+
+    @staticmethod
+    def result_identity(run_id, stage_id, index):
+        return {
+            "project_id": "project-p22",
+            "study_id": "study-p22",
+            "source": {
+                "run_id": run_id,
+                "task_id": f"task-{index}",
+                "step_id": stage_id,
+                "case_id": f"case-{index}",
+                "attempt_id": f"attempt-{index}",
+                "ownership_epoch": index,
+            },
+            "authored_stage_id": stage_id,
+            "artifact_id": f"artifact-{run_id}-{stage_id}",
+            "artifact_sha256": f"{index:064x}",
+            "codec_id": "fullmag.scalar-series.v1",
+            "codec_version": "1",
+            "accepted_at": "2026-11-07T10:00:00Z",
+        }
+
+    def result_fixture(self, mode, sources):
+        qa = self.qa
+        session = {
+            "name": "P22 three Relax stages",
+            "session_id": "session-p22",
+            "session_epoch": "session-p22@1",
+            "request_scope_epoch": "api:p22:1",
+        }
+        previous_run = "run-before"
+        new_run = "run-after"
+        before_ids = ["relax-a", "relax-b", "relax-c"] if mode == "stage-b" else ["relax-b"]
+        after_ids = ["relax-b"] if mode == "stage-b" else ["relax-a", "relax-b", "relax-c"]
+        before_results = [self.result_identity(previous_run, stage_id, index + 1)
+                          for index, stage_id in enumerate(before_ids)]
+        new_results = [self.result_identity(new_run, stage_id, index + 4)
+                       for index, stage_id in enumerate(after_ids)]
+        precondition = {
+            "scene_revision": 31,
+            "mesh_revision": 18,
+            "domain_generation_id": "fdm-domain-8",
+            "region_topology_revision": 3,
+            "region_membership_revision": 4,
+            "region_coefficients_revision": 5,
+            "region_initial_state_revision": 6,
+            "current_run": {"kind": "run", "run_id": previous_run},
+            "runtime_state": "awaiting_command",
+            "command_revision": 0,
+        }
+        if mode == "stage-b":
+            precondition["stage_execution_revision"] = 27
+            command = {
+                "kind": "relax",
+                "target": {"kind": "stage_id", "stage_id": "relax-b"},
+                "initial_state": {"kind": "default_for_target"},
+                "precondition": deepcopy(precondition),
+                "client_intent_id": "study:relax:p22-stage-b",
+                "reason": "user_requested",
+                "requested_at_unix_ms": 1_799_000_000_000,
+            }
+        else:
+            command = {
+                "kind": "solve",
+                "target": {"kind": "study"},
+                "precondition": deepcopy(precondition),
+                "client_intent_id": "study:solve:p22-study",
+                "reason": "user_requested",
+                "requested_at_unix_ms": 1_799_000_000_000,
+            }
+        scope = "session=session-p22&epoch=session-p22%401&request_scope_epoch=api%3Ap22%3A1"
+        execution_binding = {"requested_target": command["target"], "run_id": new_run}
+        if mode == "stage-b":
+            execution_binding["step_id"] = "relax-b"
+        return {
+            "schema": qa.STUDY_STAGE_RERUN_RESULT_SCHEMA,
+            "scenario": "study-stage-rerun",
+            "state": "passed",
+            "mode": mode,
+            "failure": None,
+            "public_url": "http://127.0.0.1:3242",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources,
+            "source_sha256_after": sources,
+            "session_before": session,
+            "session_after": dict(session),
+            "before": {
+                "run_id": previous_run,
+                "run_status": "completed",
+                "solver_state": "awaiting_command",
+                "execution_state": "completed",
+                "stage_ids": before_ids,
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm", "domain_cell_count": 8,
+                            "domain_generation_id": "fdm-domain-8",
+                            "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                            "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                            "script_sha256": sources["fixture"]},
+                "result_identities": before_results,
+                "precondition": precondition,
+            },
+            "command_receipt": {
+                "method": "POST",
+                "path": "/v2/sessions/current/simulation/commands",
+                "status": 202,
+                "scope_header": scope,
+                "payload": command,
+                "execution_binding": execution_binding,
+            },
+            "command_count": 1,
+            "command_attempt_count": 1,
+            "ui_command_proven": True,
+            "after": {
+                "run_id": new_run,
+                "run_status": "completed",
+                "solver_state": "awaiting_command",
+                "execution_state": "completed",
+                "stage_ids": after_ids,
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm", "domain_cell_count": 8,
+                            "domain_generation_id": "fdm-domain-8",
+                            "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                            "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                            "script_sha256": sources["fixture"]},
+                "result_identities": new_results,
+                "preserved_prior_result_identities": deepcopy(before_results),
+            },
+            "history_identity_preserved": True,
+            "public_terminal_proven": True,
+            "native_execution_proven": False,
+            "field_data_proven": False,
+            "outcome": "terminal-confirmed",
+            "read_counts": {
+                "status": 2,
+                "current_session": 2,
+                "scene": 2,
+                "commands": 2,
+                "current_run": 2,
+                "stage_execution": 2,
+                "solver_status": 2,
+                "stage_results": 3,
+                "command_details": 0,
+            },
+            "request_counts": {
+                "GET /v2/sessions/current/status": 2,
+                "GET /v2/sessions/current": 2,
+                "GET /v2/sessions/current/model/scene": 2,
+                "GET /v2/sessions/current/simulation/commands": 2,
+                "GET /v2/sessions/current/simulation/runs/current": 2,
+                "GET /v2/sessions/current/simulation/stages/execution": 2,
+                "GET /v2/sessions/current/simulation/solver/status": 2,
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={previous_run}&limit=100": 2,
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100": 1,
+                "POST /v2/sessions/current/simulation/commands": 1,
+            },
+            "total_requests": 18,
+            "request_limit": 512,
+            "request_path_limit": 128,
+            "per_path_read_limit": 128,
+            "violations": [],
+            "errors": [],
+            "proxy_failures": [],
+        }
+
+    def test_managed_compose_pins_one_fixed_stage_or_study_runner(self):
+        qa = self.qa
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        sources = self.sources(qa)
+        for mode in ("stage-b", "study"):
+            document = qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun=mode, study_stage_rerun_source_sha256=sources,
+            )
+            service = document["services"]["browser-qa"]
+            self.assertEqual(service["command"], [
+                "node", "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                mode,
+            ])
+            self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "study-stage-rerun")
+            self.assertEqual(service["environment"]["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE"], mode)
+            self.assertEqual(json.loads(service["environment"]["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256"]), sources)
+            self.assertTrue(service["read_only"])
+            self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+            mounts = {mount["target"]: mount for mount in service["volumes"]}
+            self.assertEqual(set(mounts), {
+                "/state/development",
+                "/state/development/workspace/apps/control-room/scripts",
+                qa.STUDY_STAGE_RERUN_SRC_TARGET,
+                qa.STUDY_STAGE_RERUN_FIXTURE_TARGET,
+            })
+            self.assertEqual(mounts[qa.STUDY_STAGE_RERUN_SRC_TARGET]["source"], str(ROOT / "apps/control-room/src"))
+            self.assertEqual(mounts[qa.STUDY_STAGE_RERUN_FIXTURE_TARGET]["source"],
+                             str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]))
+            self.assertNotIn("ports", service)
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun="compute-anything", study_stage_rerun_source_sha256=sources,
+            )
+        for options in (
+            {"canvas_only": False},
+            {"prepare_viewport_fixture": True},
+            {"airbox_inspector": True},
+            {"inspector_ack": True},
+            {"saved_playback_item_id": "4", "source_script_sha256": "b" * 64},
+            {"expect_run_performance": True},
+        ):
+            with self.subTest(options=options), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                    study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources, **options,
+                )
+
+    def test_result_validator_requires_exact_target_terminal_scope_and_old_history(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        for mode in ("stage-b", "study"):
+            payload = self.result_fixture(mode, sources)
+            parsed = qa._parse_study_stage_rerun_result(
+                json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+            )
+            self.assertEqual(parsed, payload)
+            bad_cases = (
+                ("mode", lambda item: item.update(mode="study" if mode == "stage-b" else "stage-b")),
+                ("source drift", lambda item: item.update(source_sha256_after={**sources, "runner": "b" * 64})),
+                ("duplicate command", lambda item: item.update(command_count=2)),
+                ("duplicate command attempt", lambda item: item.update(command_attempt_count=2)),
+                ("background command", lambda item: item.update(ui_command_proven=False)),
+                ("wrong target", lambda item: item["command_receipt"]["payload"]["target"].update(
+                    stage_id="relax-a" if mode == "stage-b" else "relax-b")),
+                ("foreign run binding", lambda item: item["command_receipt"]["execution_binding"].update(
+                    run_id="foreign-run")),
+                ("wrong step binding", lambda item: item["command_receipt"]["execution_binding"].update(
+                    step_id="relax-a" if mode == "stage-b" else "relax-b")),
+                ("edited requested scene", lambda item: item["before"]["scene_profile"].update(
+                    requested_device="cuda")),
+                ("wrong scope", lambda item: item["command_receipt"].update(scope_header="session=foreign")),
+                ("stale precondition", lambda item: item["command_receipt"]["payload"]["precondition"].update(mesh_revision=17)),
+                ("changed old history", lambda item: item["after"]["preserved_prior_result_identities"][0].update(
+                    artifact_sha256="f" * 64)),
+                ("incomplete terminal", lambda item: item["after"].update(run_status="running")),
+                ("native claim", lambda item: item.update(native_execution_proven=True)),
+                ("field claim", lambda item: item.update(field_data_proven=True)),
+                ("result shape", lambda item: item["after"]["result_identities"].pop()),
+            )
+            for name, mutate in bad_cases:
+                with self.subTest(mode=mode, reason=name):
+                    invalid = deepcopy(payload)
+                    mutate(invalid)
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            json.dumps(invalid).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+                        )
+
+    def test_post_dispatch_unknown_is_retained_without_claiming_terminal_or_history(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        payload = self.result_fixture("stage-b", sources)
+        payload.update(
+            state="outcome-unknown",
+            failure="The command response timed out after dispatch",
+            outcome="unknown",
+            after=None,
+            history_identity_preserved=None,
+            public_terminal_proven=False,
+        )
+        payload["command_receipt"]["status"] = 503
+        payload["command_receipt"].pop("execution_binding")
+        for key in ("status", "current_session", "scene", "commands", "current_run", "stage_execution", "solver_status"):
+            payload["read_counts"][key] = 3
+        payload["request_counts"] = {
+            "GET /v2/sessions/current/status": 3,
+            "GET /v2/sessions/current": 3,
+            "GET /v2/sessions/current/model/scene": 3,
+            "GET /v2/sessions/current/simulation/commands": 3,
+            "GET /v2/sessions/current/simulation/runs/current": 3,
+            "GET /v2/sessions/current/simulation/stages/execution": 3,
+            "GET /v2/sessions/current/simulation/solver/status": 3,
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-before&limit=100": 3,
+            "POST /v2/sessions/current/simulation/commands": 1,
+        }
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        self.assertEqual(
+            qa._parse_study_stage_rerun_result(
+                json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b",
+            ),
+            payload,
+        )
+        for name, mutate in (
+            ("fabricated after state", lambda value: value.update(after={})),
+            ("claimed public terminal", lambda value: value.update(public_terminal_proven=True)),
+            ("claimed history preservation", lambda value: value.update(history_identity_preserved=True)),
+            ("missing UI proof", lambda value: value.update(ui_command_proven=False)),
+            ("duplicate POST", lambda value: value["request_counts"].update(
+                {"POST /v2/sessions/current/simulation/commands": 2})),
+            ("foreign target binding", lambda value: value["command_receipt"].update(execution_binding={
+                "requested_target": {"kind": "stage_id", "stage_id": "relax-a"},
+                "run_id": "possible-run", "step_id": "relax-b",
+            })),
+        ):
+            with self.subTest(rejected=name):
+                invalid = deepcopy(payload)
+                mutate(invalid)
+                invalid["total_requests"] = sum(invalid["request_counts"].values())
+                with self.assertRaises(qa.BuildControlError):
+                    qa._parse_study_stage_rerun_result(
+                        json.dumps(invalid).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b",
+                    )
+
+    def test_parse_error_is_unknown_unless_complete_pinned_output_proves_no_dispatch(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        result = {
+            "schema": qa.STUDY_STAGE_RERUN_RESULT_SCHEMA,
+            "scenario": "study-stage-rerun",
+            "mode": "stage-b",
+            "state": "failed",
+            "outcome": "not-dispatched",
+            "failure": "Preflight stopped before opening the command menu",
+            "public_url": "http://127.0.0.1:3242",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources,
+            "source_sha256_after": sources,
+            "session_before": None,
+            "session_after": None,
+            "before": None,
+            "command_receipt": None,
+            "command_count": 0,
+            "command_attempt_count": 0,
+            "client_ack_count": 0,
+            "ui_command_proven": False,
+            "after": None,
+            "history_identity_preserved": None,
+            "public_terminal_proven": False,
+            "native_execution_proven": False,
+            "field_data_proven": False,
+            "read_counts": {
+                "status": 0, "current_session": 0, "scene": 0, "commands": 0, "current_run": 0,
+                "stage_execution": 0, "solver_status": 0, "stage_results": 0, "command_details": 0,
+            },
+            "request_counts": {},
+            "total_requests": 0,
+            "request_limit": 512,
+            "request_path_limit": 128,
+            "per_path_read_limit": 128,
+            "violations": [],
+            "errors": [],
+            "proxy_failures": [],
+        }
+        encoded = (json.dumps(result) + "\n").encode()
+        self.assertTrue(qa._study_stage_no_dispatch_proven(encoded, sources, "stage-b"))
+        for name, raw in (
+            ("missing output", b""),
+            ("truncated JSON", encoded[:len(encoded) // 2]),
+            ("malformed JSON", b"{not-json}\n"),
+            ("oversized output", b" " * (qa.MAX_RESULT_BYTES + 1)),
+        ):
+            with self.subTest(incomplete=name):
+                self.assertFalse(qa._study_stage_no_dispatch_proven(raw, sources, "stage-b"))
+        for name, mutate in (
+            ("source drift", lambda value: value.update(source_sha256_after={**sources, "runner": "b" * 64})),
+            ("wrong mode", lambda value: value.update(mode="study")),
+            ("command count", lambda value: value.update(command_count=1)),
+            ("UI dispatch marker", lambda value: value.update(ui_command_proven=True)),
+            ("command receipt", lambda value: value.update(command_receipt={"method": "POST"})),
+            ("forwarded command inventory", lambda value: value.update(request_counts={
+                "POST /v2/sessions/current/simulation/commands": 1,
+            }, total_requests=1)),
+        ):
+            with self.subTest(rejected=name):
+                invalid = deepcopy(result)
+                mutate(invalid)
+                self.assertFalse(
+                    qa._study_stage_no_dispatch_proven(
+                        (json.dumps(invalid) + "\n").encode(), sources, "stage-b",
+                    )
+                )
+
+    def test_new_mode_helper_inspect_refuses_command_or_pin_substitution(self):
+        qa = self.qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree", "source_root": str(ROOT)}
+        sources = self.sources(qa)
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+            study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources,
+        )
+        service = document["services"]["browser-qa"]
+        helper = {
+            "Image": "sha256:" + "c" * 64,
+            "Config": {
+                "User": "65532:65532", "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {**qa.source_labels(identity), "com.docker.compose.project": identity["project_name"],
+                           "com.docker.compose.service": "browser-qa"},
+            },
+            "HostConfig": {"GroupAdd": qa._script_bind_groups(ROOT), "ReadonlyRootfs": True,
+                           "NetworkMode": identity["network_name"], "PortBindings": None,
+                           "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                           "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+                           "Mounts": [
+                               {"Type": "volume", "Source": "fullmag-frontend-state", "Target": "/state/development",
+                                "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                                "Target": "/state/development/workspace/apps/control-room/scripts", "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / "apps/control-room/src"),
+                                "Target": qa.STUDY_STAGE_RERUN_SRC_TARGET, "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                                "Target": qa.STUDY_STAGE_RERUN_FIXTURE_TARGET, "ReadOnly": True},
+                           ]},
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": "fullmag-frontend-state", "Destination": "/state/development", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/src"),
+                 "Destination": qa.STUDY_STAGE_RERUN_SRC_TARGET, "RW": False},
+                {"Type": "bind", "Source": str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                 "Destination": qa.STUDY_STAGE_RERUN_FIXTURE_TARGET, "RW": False},
+            ],
+        }
+        control = SimpleNamespace(project=identity["project_name"])
+        qa._validate_browser_helper(
+            helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+            study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources,
+        )
+        for changed in ("command", "source-pin", "missing-src", "foreign-fixture", "writable-src", "unrequested"):
+            altered = deepcopy(helper)
+            if changed == "command":
+                altered["Config"]["Cmd"][-1] = "study"
+            if changed == "source-pin":
+                altered["Config"]["Env"].append("CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256={}")
+            if changed == "missing-src":
+                altered["HostConfig"]["Mounts"].pop(2)
+                altered["Mounts"].pop(2)
+            if changed == "foreign-fixture":
+                altered["HostConfig"]["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+                altered["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+            if changed == "writable-src":
+                altered["HostConfig"]["Mounts"][2]["ReadOnly"] = False
+                altered["Mounts"][2]["RW"] = True
+            with self.subTest(changed=changed), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    altered, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                    study_stage_rerun="stage-b" if changed != "unrequested" else None,
+                    study_stage_rerun_source_sha256=sources if changed != "unrequested" else None,
+                )
+
+    def test_javascript_guard_allows_only_one_scoped_exact_command(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for the study-stage-rerun pure guard contract")
+        source = (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri()
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+assert.deepEqual(runner.studyStageCommandForMode('stage-b'), {
+  kind: 'relax', target: {kind:'stage_id', stage_id:'relax-b'},
+  initial_state: {kind:'default_for_target'},
+});
+assert.deepEqual(runner.studyStageCommandForMode('study'), {
+  kind: 'solve', target: {kind:'study'},
+});
+assert.throws(() => runner.studyStageCommandForMode('script'));
+assert.deepEqual(runner.studyStageExpectedStageIds('stage-b', 'before'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('stage-b', 'after'), ['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('study', 'before'), ['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('study', 'after'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageCommandResponseOutcome(202, {accepted:true,command_id:'cmd-1'}),
+  {outcome:'accepted',command_id:'cmd-1'});
+assert.deepEqual(runner.studyStageCommandResponseOutcome(503, {accepted:true,command_id:'cmd-1'}),
+  {outcome:'unknown',command_id:null});
+assert.deepEqual(runner.studyStageCommandResponseOutcome(202, {accepted:true}),
+  {outcome:'unknown',command_id:null});
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'stage_id',stage_id:'relax-b'},
+  run_id:'new',step_id:'relax-b'}, 'stage-b', 'new'), true);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'stage_id',stage_id:'relax-b'},
+  run_id:'foreign',step_id:'relax-b'}, 'stage-b', 'new'), false);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new'}, 'study', 'new'), true);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new',step_id:'relax-b'},
+  'study', 'new'), false);
+const node = (id, label, algorithm, maxSteps, first=false) => ({
+  enabled:true,id,label,node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+  payload:{...(first ? {adaptive_timestep:null,demag_interval_s:'',fixed_timestep:'1e-13',integrator:'rk23',
+    max_relaxation_time_s:''} : {}),energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',
+    max_steps:maxSteps,relax_algorithm:algorithm,stage_id:id,torque_tolerance:'0.0001',until_seconds:''}
+});
+const makeScene = () => ({study:{requested_backend:'fdm',requested_device:'cpu',requested_precision:'double',
+  study_pipeline:{version:'study_pipeline.v1',nodes:[node('relax-a','Relax 1','llg_overdamped','10',true),
+    node('relax-b','Relax 2','projected_gradient_bb','1'),node('relax-c','Relax 3','nonlinear_cg','1')]}}});
+assert.equal(runner.validateStudyStageScene(makeScene()).stages.length, 3);
+const editedSteps = makeScene(); editedSteps.study.study_pipeline.nodes[1].payload.max_steps = '1000000000000';
+assert.throws(() => runner.validateStudyStageScene(editedSteps));
+const editedDevice = makeScene(); editedDevice.study.requested_device = 'cuda';
+assert.throws(() => runner.validateStudyStageScene(editedDevice));
+const extraNode = makeScene(); extraNode.study.study_pipeline.nodes.push(node('relax-d','Relax 4','nonlinear_cg','1'));
+assert.throws(() => runner.validateStudyStageScene(extraNode));
+const session = {name:'P22 three Relax stages', session_id:'s', session_epoch:'s@1', request_scope_epoch:'api:1'};
+const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
+const precondition = {scene_revision:31, mesh_revision:18, domain_generation_id:'fdm-domain-8',
+  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:0,
+  stage_execution_revision:27};
+const request = {method:'POST', path:'/v2/sessions/current/simulation/commands', scope,
+  body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
+    reason:'user_requested', requested_at_unix_ms:1000}};
+const context = {mode:'stage-b', session, expectedPrecondition:precondition, commandCount:0, phase:'ui-submit'};
+assert.equal(runner.studyStageRerunRequestAllowed(request, context), true);
+assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, phase:'preflight'}), false);
+assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, commandCount:1}), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, scope:'session=other'}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, target:{kind:'stage_id',stage_id:'relax-a'}}}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, precondition:{...precondition, mesh_revision:17}}}, context), false);
+"""
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_just_dispatches_an_enum_and_quotes_source_without_executing_it(self):
+        just = shutil.which("just")
+        if just is None:
+            self.skipTest("just is required for fixed managed dispatch coverage")
+        source = "/tmp/p22 source;$(touch /tmp/should-not-run)"
+        justfile = str(ROOT / "justfile")
+        result = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "stage-b"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = result.stdout + result.stderr
+        self.assertIn("--study-stage-rerun stage-b", rendered)
+        self.assertIn("p22 source;$(touch /tmp/should-not-run)", rendered)
+        self.assertFalse(Path("/tmp/should-not-run").exists())
+
+        omitted = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", ""],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(omitted.returncode, 0, omitted.stderr)
+        self.assertNotIn("--study-stage-rerun", omitted.stdout + omitted.stderr)
+
+        malformed = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "arbitrary"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(malformed.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
