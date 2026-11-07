@@ -6,7 +6,9 @@
 **Architecture:** Naprawiamy istniejących właścicieli authoringu, bez nowych pól fizycznych ProblemIR i bez drugiego runtime. Dwa opcjonalne pola na poziomie study przechodzą przez typy Rust/Python; migawki etapów używają istniejących map extra/payload. Renderer odtwarza ustawienia przed każdym etapem i końcowy stan workspace po deklaracjach.
 **Tech Stack:** Python DSL/unittest, Rust serde i istniejący kompilator pipeline, API v2 oraz obecne testy Vitest.
 **Spec:** [Raport reprodukcji](2026-11-07-antenna-capture-intent-regression-audit.md) oraz [kontrakty aplikacji](../../../.agents/instructions/contracts.md), sekcje 4, 10 i 13.
-**Status:** DO PRZEGLĄDU. Nie jest autoryzacją implementacji ani operacji runtime. Baza: 4f2d82887d028040b3f5493e2eef83dc95d33f81.
+**Status:** ZATWIERDZONY 07.11.2026; implementacja źródłowa i lekki odbiór wykonane. Testy Rust/API oraz CI42365723712 przeszły; odbiór managed pozostaje niewykonany. Bez zgody na nowy Solve, restart lub zwolnienie rezerwacji. [Raport wykonania](2026-11-07-execution-intent-roundtrip-result.md).
+
+Zatwierdzona wersja planu jest zachowana w commicie e5c94c31a5899b5b8a16e32869012470429de0e2, SHA256 b79c14a7a520cdeca04fcb2ce64c7a22930b19393c148959f198ae914d193b9f. Poniższa lista zawiera również wymagane, jeszcze niewykonane bramki.
 
 ## Global Constraints
 
@@ -15,7 +17,7 @@
 - Nie zmieniać wyboru bramek CLI: wait czytany z pierwszego etapu, keep-alive z ostatniego; headless oraz jawne flagi launchera zachowują dotychczasowe pierwszeństwo.
 - Zachować domyślne pomijanie wait=False w _build_problem i priorytet _extra_runtime_metadata. Nie dodawać stanu explicitness.
 - Nie dodawać endpointu, drugiego klienta API, kontrolek Inspectora ani szerszego typowania całej mapy SceneResource.study.
-- Wszystkie buildy wyłącznie we właściwej grupie Docker i przez istniejące recepty. Lokalnie nie kompilować testów jednostkowych Rust; wymagane CI jest dozwolone, ale logowanie GH pozostaje nieodnowione.
+- Wszystkie buildy wyłącznie we właściwej grupie Docker i przez istniejące recepty. Lokalnie nie kompilować testów jednostkowych Rust; wymagane CI jest dozwolone, logowanie GH odnowiono; CI poprzedniej bazy nie kwalifikuje nowego kodu.
 - Ten plan nie obejmuje nowego Solve, prepare-only corner25, restartu na ślepo ani zwolnienia quarantine. Decyzja corner25 pozostaje osobna.
 - Dokumentacja po polsku; kod i komentarze po angielsku. Dokument opisuje kontrakt authoringu, nie nową fizykę. Stosować scientific-documentation-contract dla dokumentacji Python/IR/runtime i jawnie oznaczyć brakujące dowody.
 
@@ -125,11 +127,11 @@ Nazwy poniżej są nowymi testami do dodania; nie są deklaracją istniejących 
 - Dodać w builder.rs prywatny dla crate helper deserialize_present_execution_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>, gdzie D: serde::Deserializer<'de>; obecny klucz wymaga bool. SceneStudyState używa tego samego helpera przez crate::builder. Atrybut serde(default) obsługuje wyłącznie brak.
 - Oba adaptery zachowują Some(false), Some(true), None i stage.extra. Walidatory etapów odrzucają obecny nieboolean obu kluczy niezależnie od require_solve_refs.
 
-- [ ] Napisać regresje serde/adapterów dla kartezjańskiego zestawu {brak, False, True} obu flag oraz odrzuceń null/"false"/0/[]/{}.
-- [ ] Dodać regresje starych dokumentów, flat stage.extra, primitive w grupie oraz disabled primitive z niepoprawnym typem (walidacja nadal odmawia; wykonanie disabled niczego nie zmienia).
+- [x] Napisać regresje serde/adapterów dla kartezjańskiego zestawu {brak, False, True} obu flag oraz odrzuceń null/"false"/0/[]/{}.
+- [x] Dodać regresje starych dokumentów, flat stage.extra, primitive w grupie oraz disabled primitive z niepoprawnym typem (walidacja nadal odmawia; wykonanie disabled niczego nie zmienia).
 - [ ] Potwierdzić RED przez dozwolone CI; jeżeli GH nadal niedostępny, zachować testy jako NOT VERIFIED zamiast lokalnie kompilować testy Rust.
-- [ ] Wdrożyć pola, ścisły deserializer, adaptery i walidację. Nie zmieniać API mapy study ani pól fizycznych IR.
-- [ ] Uzupełnić specyfikację: pełna tabela parametrów, Python→IR/runtime, backend-neutralność, źródła symboli, zgodność, checklist i niewykonane bramki.
+- [x] Wdrożyć pola, ścisły deserializer, adaptery i walidację. Nie zmieniać API mapy study ani pól fizycznych IR.
+- [x] Uzupełnić specyfikację: pełna tabela parametrów, Python→IR/runtime, backend-neutralność, źródła symboli, zgodność, checklist i niewykonane bramki.
 - [ ] Zweryfikować testami kontraktu i późniejszym managed buildem; przed commitem przejrzeć pełne inicjalizatory i osobno indeks. Tylko razem z częścią Python w Task 2 publikować nowy dokument z kluczami.
 
 ## Task 2: Pełny roundtrip i shared pipeline, bez zmiany bramek CLI
@@ -142,24 +144,24 @@ Nazwy poniżej są nowymi testami do dodania; nie są deklaracją istniejących 
 - _render_stages zachowuje istniejącą sygnaturę; odtwarza flagi przed KAŻDYM etapem, także action z continue. render_loaded_problem_as_script przywraca finalny workspace po inventory/pipeline declarations.
 - materialize_pipeline_primitive zachowuje sygnaturę. Najpierw sprawdza wszystkie obecne flagi; parserom rodzaju przekazuje payload pomniejszony wyłącznie o te dwa poprawne klucze. Stosuje flagi przed klonowaniem IR przez per-kind materializer. Brak klucza nie resetuje stanu.
 
-- [ ] Przenieść nowe testy z dowodów prywatnego wolumenu do powtarzalnego testu repo; używać execution_context, lightweight_assets i blokad Popen/gmsh.generate. Dodać wieloetapowe przypadki ze śladu public-config-stage-trace-v2.
-- [ ] Dodać testy stanu workspace innego niż pierwszy/ostatni etap; porównać publiczny run-config przed i po eksporcie, skuteczne flagi każdego etapu i wejścia obu bramek CLI.
-- [ ] Dodać testy raw metadata dla thin i pełnego export-run-config: typy i priorytet pozostają; walidacja typowanej sceny odmawia zamiast zmieniać wartość. Eksport payloadu w otwartej mapie nie może pośrednio zmienić lub normalizować surowego IR.
-- [ ] Dodać live capture/default/False/True oraz zachowanie run flags przez _trim_pipeline_run_payloads; wyeksportowany antenna primitive także zachowuje flagi.
-- [ ] Dodać testy shared compiler: run/antenna/action bez solvera, nested group, disabled node, missing key inheritance oraz invalid type/unknown kind/unknown payload key.
-- [ ] Odtworzyć RED. Użyć istniejącego unittest w backendzie grupy: PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src, FULLMAG_TEST_TEMP_ROOT w prywatnym control volume; python3 -B -m unittest discover -s /opt/fullmag/source/packages/fullmag-py/tests -p test_execution_intent_roundtrip.py. Nie uruchamiać hostowego buildu.
-- [ ] Wdrożyć cały tor Python i Rust z tabeli. Usunąć forcing także w live capture; nie używać hostowego trybu live jako deklaracji skryptu.
-- [ ] Dopiero z pełnym per-stage rendering usunąć interactive/wait z _stage_signature. Regresja rzeczywistej zmiany Ms/geometrii nadal musi odmawiać.
-- [ ] W shared materializer nie dodawać pełnego klonu ciężkiego ProblemIR tylko do dwóch flag. Przed zmianą zachować poprzednie wartości/nieobecność zmienianych kluczy, po Err je przywrócić; walidować oba typy przed pierwszym zapisem. Zachować dotychczasowe odmowy pozostałych parserów.
-- [ ] Uruchomić nowe i właściwe istniejące lekkie testy; Rust tests wyłącznie dozwolonym CI. Sprawdzić lint/parser i diff. Commitować spójny fragment z Task 1, jeżeli oddzielne commity nie przechodzą wszystkich granic zgodności.
+- [x] Przenieść nowe testy z dowodów prywatnego wolumenu do powtarzalnego testu repo; używać execution_context, lightweight_assets i blokad Popen/gmsh.generate. Dodać wieloetapowe przypadki ze śladu public-config-stage-trace-v2.
+- [x] Dodać testy stanu workspace innego niż pierwszy/ostatni etap; porównać publiczny run-config przed i po eksporcie, skuteczne flagi każdego etapu i wejścia obu bramek CLI.
+- [x] Dodać testy raw metadata dla thin i pełnego export-run-config: typy i priorytet pozostają; walidacja typowanej sceny odmawia zamiast zmieniać wartość. Eksport payloadu w otwartej mapie nie może pośrednio zmienić lub normalizować surowego IR.
+- [x] Dodać live capture/default/False/True oraz zachowanie run flags przez _trim_pipeline_run_payloads; wyeksportowany antenna primitive także zachowuje flagi.
+- [x] Dodać testy shared compiler: run/antenna/action bez solvera, nested group, disabled node, missing key inheritance oraz invalid type/unknown kind/unknown payload key.
+- [x] Odtworzyć RED. Użyć istniejącego unittest w backendzie grupy: PYTHONPATH=/opt/fullmag/source/packages/fullmag-py/src, FULLMAG_TEST_TEMP_ROOT w prywatnym control volume; python3 -B -m unittest discover -s /opt/fullmag/source/packages/fullmag-py/tests -p test_execution_intent_roundtrip.py. Nie uruchamiać hostowego buildu.
+- [x] Wdrożyć cały tor Python i Rust z tabeli. Usunąć forcing także w live capture; nie używać hostowego trybu live jako deklaracji skryptu.
+- [x] Dopiero z pełnym per-stage rendering usunąć interactive/wait z _stage_signature. Regresja rzeczywistej zmiany Ms/geometrii nadal musi odmawiać.
+- [x] W shared materializer nie dodawać pełnego klonu ciężkiego ProblemIR tylko do dwóch flag. Przed zmianą zachować poprzednie wartości/nieobecność zmienianych kluczy, po Err je przywrócić; walidować oba typy przed pierwszym zapisem. Zachować dotychczasowe odmowy pozostałych parserów.
+- [x] Uruchomić nowe i właściwe istniejące lekkie testy; Rust tests wyłącznie dozwolonym CI. Sprawdzić lint/parser i diff. Commitować spójny fragment z Task 1, jeżeli oddzielne commity nie przechodzą wszystkich granic zgodności.
 
 ## Task 3: Odbiór publicznego przepływu i integracja
 
 **Files:** istniejące testy SceneResource w schemas/authoring.rs i router_v2/tests.rs; apps/control-room/src/kernel/resources/geometryLifecycleResources.test.ts oraz właściwe istniejące testy modeli study; dokumenty dowodów.
 **Interfaces:** istniejący SceneResource.study jako mapa, obecne merge_patch i eksport projektu; bez nowych zasobów API.
 
-- [ ] Dodać API regression: scene → GET/projection → niezwiązany merge-patch → persistence → canonical export zachowuje obie flagi oraz stage extras. False musi przetrwać; null usuwa klucz zgodnie z istniejącym merge-patch.
-- [ ] Dodać frontend regression zachowania pełnej sceny i kształtu niezwiązanych study patches; nie dodawać kontrolek ani bezpośrednich fetch.
+- [x] Dodać API regression: scene → GET/projection → niezwiązany merge-patch → persistence → canonical export zachowuje obie flagi oraz stage extras. False musi przetrwać; null usuwa klucz zgodnie z istniejącym merge-patch.
+- [x] Dodać frontend regression zachowania pełnej sceny i kształtu niezwiązanych study patches; nie dodawać kontrolek ani bezpośrednich fetch.
 - [ ] Sprawdzić aktualny justfile i tożsamość grupy. Udokumentowana recepta odbioru to just docker-dev "/home/kking/git/fullmag/worktrees/antenna-transport-e2e-20261011" 3203, z zachowaniem bieżącego projektu oraz właściwych receiptów. Nie wykonać jej przed gotowym, przejrzanym kodem i zgodnym admission.
 - [ ] Ponowić odczyt drain/rezerwacji. W czasie przygotowania planu rezerwacja solvera pozostaje quarantined: 3 CPU, 5637144576 B RAM. Ten plan nie upoważnia do jej zwolnienia, zmiany markerów ani obejścia bramki; odmowa oznacza jawne NOT VERIFIED dla managed odbioru.
 - [ ] Po zgodnym managed buildzie wykonać kontrolę prawdziwego UI: otwarcie/eksport/ponowny import testowej sceny, bez Compute/Solve i bez modyfikacji projektu użytkownika. Potwierdzić flagi przez publiczne API i eksport, a nie tylko wygląd panelu.
@@ -183,4 +185,19 @@ Nowy schemat etapów jest zbędny: istniejące extra i primitive.payload są zac
 SceneResource.study już przenosi additional_properties; nie jest potrzebna regeneracja szerszego schematu.
 Auto-wait nie może nadpisywać jawnego False. Nie zmieniamy fizyki ani wyboru pierwszego/ostatniego etapu w CLI.
 Niezależny przegląd wykazał niejednoznaczność surowego eksportu; poprawiono ją powyżej przez oddzielny copy_execution_intent. Przejrzano pokrycie specyfikacji, kroki, sygnatury, pięć Review Focus i proporcję zakresu. Nowe ślady i przegląd są dowodem przyczyn, nie dowodem wdrożenia.
-Implementacja, CI, managed build i odbiór browser nadal niewykonane.
+Implementacja i lekkie testy są wykonane; CI42365723712 nowego kodu zakończyło się sukcesem. Managed build i odbiór browser spójnego pakietu nadal niewykonane. Szczegóły w raporcie wykonania.
+
+## Checkpoint 07.11.2026 — CI i rzeczywiste wejścia GSG
+
+- Kod naprawy i fixture’ów: 5b19f00e4bf8dcc88ef8789d7c251c8e5ad5bb21,
+  dec3ab642e6abe3a85459690fd908e10920858eb, 7f798b881d43dbdad1cf98ca62b40f37e3280795.
+- [CI42365723712](https://github.com/MateuszZelent/fullmag/actions/runs/42365723712):
+  oba wybrane joby rust-contracts i inspector-actions-browser-smoke zakończone success.
+  Joby pominięte przez profil rust nie są dowodem pozostałych lane.
+- Python→Python dla zachowanych rzeczywistych skryptów GSG 50 nm i projektu corner25:
+  pełne IR zgodne z dotychczasową tolerancją liczb 5e-12; definicja meshu identyczna.
+  Flagi zachowane również przez scenę.
+- Odrębny błąd: typowana scena nie przechowuje jawnej referencji domain_mesh i markerów.
+  Nie utożsamiamy go z naprawionymi flagami. Raport: 2026-11-07-gsg-scene-domain-mesh-audit.md.
+- Nie wykonano meshowania, Submit/Solve, restartu lub zwolnienia quarantine.
+  Corner25 pozostaje nieaktywowanym projektem.

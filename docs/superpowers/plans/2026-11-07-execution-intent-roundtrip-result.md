@@ -20,7 +20,7 @@ Fizyczny guard nadal odrzuca rzeczywistą zmianę Ms między etapami. Zachowano 
 
 ## Dowody
 
-CI bieżącego commita: [run 42365723712](https://github.com/MateuszZelent/fullmag/actions/runs/42365723712), head 7f798b881d43dbdad1cf98ca62b40f37e3280795, contract_scope=rust — krok „Run execution-intent roundtrip contracts” PASS; browser inspector-actions PASS; szerszy job Rust nadal w toku. Poniższy zestaw 203 testów Python dotyczy pełnych dirty źródeł i nie zastępuje odbioru selektywnego commita.
+CI bieżącego commita: [run 42365723712](https://github.com/MateuszZelent/fullmag/actions/runs/42365723712), head 7f798b881d43dbdad1cf98ca62b40f37e3280795, contract_scope=rust — workflow zakończony SUCCESS: rust-contracts i inspector-actions-browser-smoke PASS. Poniższy zestaw 203 testów Python dotyczy pełnych dirty źródeł i nie zastępuje odbioru selektywnego commita.
 
 W poprzednim CI [42364949531](https://github.com/MateuszZelent/fullmag/actions/runs/42364949531), head dec3ab642e6abe3a85459690fd908e10920858eb, przeszło 75 testów Python (11+5+59), cztery nowe testy authoring oraz trzy testy application. API skompilowało się, lecz pierwszy test API odmówił deserializacji niekompletnego fixture’a: brak wymaganego entrypoint_kind. Poprawka 7f798b881… uzupełnia trzy fixture’y API, nie zmienia produkcyjnej deserializacji. Test browser inspector-actions przeszedł w obu poprzednich CI. Pierwszy run 42364164605 ujawnił analogiczny brak w dwóch fixture’ach authoring i niekanoniczny zapis liczby w trzecim; commit dec3ab642… naprawił te dane.
 
@@ -34,7 +34,7 @@ Rozważone warianty: uzupełnienie jawnego pola w fixture’ach, tworzenie ich p
 | Frontend resource regression | 33/33 PASS | w tym 4 nowe kombinacje bool; poprawna ścieżka istniejąca już wcześniej |
 | ESLint pliku frontend | PASS | bez kontroli nowego backendu w UI |
 | Parser Rust | 8/8 PASS | rustfmt --emit stdout, diagnostyka składni; nie kompilacja |
-| Regresje Rust serde/compiler/API | 7 nowych testów authoring/application PASS w CI dec3ab642…; API skompilowane | poprawka 7f798b881…: cały krok kontraktu z testami API PASS; szerszy CI w toku |
+| Regresje Rust serde/compiler/API | 7 nowych testów authoring/application PASS w CI dec3ab642…; API skompilowane | poprawka 7f798b881…: cały krok kontraktu z testami API PASS; szerszy job rust-contracts również PASS |
 | Walidator dokumentu i source-map | PASS | kontrola struktury i symboli |
 | Testy kontraktu dokumentacji | 41/41 PASS | nie kwalifikacja fizyki |
 | Przykład dokumentacji i publiczny export-run-config | PASS | lightweight assets, bez solvera |
@@ -53,7 +53,7 @@ Dowody w prywatnym control volume grupy3203:
 
 ## Niewykonane bramki i ryzyka
 
-1. Zakończenie szerszego CI42365723712 dla dokładnego commita 7f798b881d43dbdad1cf98ca62b40f37e3280795. Krok nowego kontraktu wykonania i browser PASS; to nie oznacza jeszcze sukcesu całego workflow. Lokalny zakaz kompilacji testów jest zachowany. CI42360365698 dla wcześniejszego commita zakończyło się jednym błędem testu stale authorization; nie jest dowodem dla nowych źródeł.
+1. CI42365723712 dla dokładnego commita 7f798b881d43dbdad1cf98ca62b40f37e3280795 zakończyło się sukcesem. Pominięte joby innych profili nie są przez to zakwalifikowane. Lokalny zakaz kompilacji testów jest zachowany. CI42360365698 dla wcześniejszego commita zakończyło się jednym błędem testu stale authorization; nie jest dowodem dla nowych źródeł.
 2. Managed build spójnego pakietu oraz publiczny roundtrip API/UI. Wcześniejszy runtime odrzuci nową scenę z dodatkowymi polami. Rollback wymaga zachowanej wersji sceny sprzed tych pól.
 3. Pełny test FEM scratch z rzeczywistym meshem i browser odbiór nowego pakietu. Nie wyłączono guardów tylko po to, aby uzyskać zielony wynik.
 4. Reprodukcja wyników publikacji i kwalifikacja GSG pozostają odrębnymi, nieukończonymi zadaniami. Ta zmiana nie poprawia ani nie kwalifikuje numerycznych V/J/H.
@@ -94,3 +94,17 @@ Poniższe SHA dotyczą stanu pełnego worktree podczas lekkiego odbioru, nie sel
 | docs/specs/execution-intent-roundtrip.source-map.json | dd0c3fd8b017f6693e4bf8700b750a95e805616d2fa6309df72409147c9b6f17 |
 
 Standardowe wydzielenie commita korzysta z [udokumentowanego alternatywnego indeksu Git](https://git-scm.com/docs/git). Przecięcie20ścieżekz63chronionymi było puste; po commicie odświeżono tylko te20wpisów przez git restore --staged, bez zmiany plików roboczych.
+
+## Kontrola na wejściach GSG
+
+Po naprawie sprawdzono zachowane skrypty gsg_junction_prepare_50nm.py oraz
+nieaktywowany gsg_junction_prepare_corner25nm.py. Python→canonical Python
+zachowuje całe IR, siatkę oraz skuteczne flagi każdego etapu i workspace.
+Przez typowaną scenę flagi także przechodzą poprawnie, lecz scena gubi referencję
+jawnego domain_mesh. To odrębna, wcześniej istniejąca luka kontraktu meshu,
+nie zaliczona do naprawionej kontroli wykonania. Odbiór pełnego przepływu E12
+pozostaje nieukończony. Szczegóły: 2026-11-07-gsg-scene-domain-mesh-audit.md.
+
+Pełny log udanego CI (45 987 946 B) jest zachowany wyłącznie w prywatnym
+control volume: verification/antenna-authoring-roundtrip-20261107/isolated-commit-ci-v2/ci-42365723712-full.log,
+SHA256 5734748c930679615de6fdafb06fd5e8f72c900ac41249265f29243e34de59fe.
