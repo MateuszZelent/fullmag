@@ -17683,7 +17683,7 @@ study.run(1e-12)
     assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
     assert!(rewritten.contains("region_id=\"body:ui-core\""));
     assert!(rewritten.contains(
-        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000, unit=\"A/m\"), priority=5"
+        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000.0, unit=\"A/m\"), priority=5"
     ));
     assert!(rewritten.contains(
         "body.set_material_field(\"alpha\", fm.fields.constant(0.05, unit=\"dimensionless\"), assignment_id=\"field:ui-core-alpha\", region=body_ui_core_region"
