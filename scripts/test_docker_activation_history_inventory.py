@@ -120,6 +120,19 @@ class HistoryInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(HistoryError, "workspace-retirement"):
             control_references(self.root, TOKEN)
 
+    def test_recovery_and_startup_stop_roots_keep_reference_pins(self):
+        self.terminal(TOKEN, RUN)
+        for name in ("container-recovery-preparation", "runtime-services", "stop-bootstrap",
+                     "stop-bootstrap-frontend", "startup-recovery-stop", "startup-recovery-stop-preview"):
+            with self.subTest(root=name):
+                relative = name + "/pin.json"
+                path = self.put(relative, {"attempt": TOKEN})
+                proof = control_references(self.root, "0" * 32)
+                self.assertIn(TOKEN, proof["protected"])
+                self.assertIn(relative, proof["pins"])
+                path.unlink()
+                path.parent.rmdir()
+
     def test_new_consumer_root_symlinks_and_invalid_json_refuse(self):
         path = self.put("new-consumer/pin.json", {"attempt": TOKEN})
         with self.assertRaisesRegex(HistoryError, "Unclassified"):
