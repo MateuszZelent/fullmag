@@ -99,10 +99,15 @@ pub async fn create(
 fn validated_execution(
     request: &CreateSessionRequest,
 ) -> Result<SessionExecutionResource, ApiError> {
-    let supported_backend = matches!(request.backend.as_str(), "fdm" | "fem");
-    if !supported_backend || request.device != "cpu" || request.precision != "double" {
+    if fullmag_runner::scratch_authoring_capabilities(
+        &request.backend,
+        &request.device,
+        &request.precision,
+    )
+    .is_none()
+    {
         return Err(ApiError::bad_request(
-            "supported scratch execution is exactly fdm|fem with cpu device and double precision",
+            "supported scratch execution is fdm|fem cpu double or fdm gpu single|double",
         ));
     }
     Ok(SessionExecutionResource {
@@ -233,7 +238,11 @@ fn scratch_snapshot(
         solver_profile: None,
         fem_mesh: None,
     });
-    snapshot.capabilities = fullmag_runner::scratch_authoring_capabilities(&execution.backend);
+    snapshot.capabilities = fullmag_runner::scratch_authoring_capabilities(
+        &execution.backend,
+        &execution.device,
+        &execution.precision,
+    );
     snapshot.metadata = Some(json!({
         "requested_execution": execution,
         "effective_execution": execution,
