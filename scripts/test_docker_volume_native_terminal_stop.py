@@ -26,7 +26,7 @@ def snapshot():
         "session": {"session_id": "session-test", "session_epoch": "session-test@123", "request_scope_epoch": API + ":4"},
         "resources": {"scene_revision": 7, "stages_revision": 6}, "solver": {"state": "running"}, "run": {"run_id": RUN}},
         "run": {"run_id": RUN, "session_id": "session-test", "status": "running", "started_at": "123"},
-        "scene": {"scene_revision": 7, "objects": []},
+        "scene": {"revision": 7, "objects": []},
         "queue": {"schema_version": "compute_queue.v1", "items": [], "next_cursor": None},
         "commands": {"revision": 0, "commands": [], **{key + "_count": 0 for key in (
             "pending", "accepted", "dispatched", "running", "completed", "rejected", "failed")}},
@@ -73,7 +73,7 @@ class Contracts(unittest.TestCase):
             lambda x: x["status"]["session"].update(session_epoch="foreign@123"),
             lambda x: x["status"]["session"].update(request_scope_epoch=API + ":5junk"),
             lambda x: x["run"].update(session_id="other"),
-            lambda x: x["scene"].update(scene_revision=8),
+            lambda x: x["scene"].update(revision=8),
             lambda x: x["runtime"].update(state="failed"),
             lambda x: x["run"].update(status="completed"),
             lambda x: x["health"].update(active_session=False)]
@@ -83,6 +83,23 @@ class Contracts(unittest.TestCase):
                 mutate(value)
                 with self.assertRaises(BuildControlError):
                     subject.snapshot_binding(value)
+
+    def test_scene_requires_canonical_revision_and_only_consistent_typed_alias(self):
+        subject.snapshot_binding(self.snapshot)
+        matching_alias = copy.deepcopy(self.snapshot)
+        matching_alias["scene"]["scene_revision"] = 7
+        subject.snapshot_binding(matching_alias)
+        invalid_scenes = ({"scene_revision": 7}, {}, {"revision": True}, {"revision": False},
+                          {"revision": -1}, {"revision": "7"},
+                          {"revision": 7, "scene_revision": 8},
+                          {"revision": 7, "scene_revision": True},
+                          {"revision": 7, "scene_revision": "7"},
+                          {"revision": 7, "scene_revision": None})
+        for scene in invalid_scenes:
+            value = copy.deepcopy(self.snapshot)
+            value["scene"] = scene
+            with self.subTest(scene=scene), self.assertRaises(BuildControlError):
+                subject.snapshot_binding(value)
 
     def test_queue_and_active_commands_refused(self):
         for mutate in [lambda x: x["queue"].update(next_cursor="next"),

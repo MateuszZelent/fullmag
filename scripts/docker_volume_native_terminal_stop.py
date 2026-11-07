@@ -100,7 +100,12 @@ def snapshot_binding(snapshot):
             and status.get("solver", {}).get("state") == "running", "public run is not stale Running")
     require(isinstance(resources, dict) and type(resources.get("scene_revision")) is int
             and resources["scene_revision"] >= 0, "scene resource identity is missing")
-    require(scene.get("scene_revision") == resources["scene_revision"], "scene revision differs")
+    revision = scene.get("revision")
+    require(type(revision) is int and revision >= 0 and revision == resources["scene_revision"],
+            "canonical scene revision differs")
+    if "scene_revision" in scene:
+        require(type(scene["scene_revision"]) is int and scene["scene_revision"] == revision,
+                "optional scene revision alias differs")
     epoch = session.get("session_epoch")
     started = run.get("started_at")
     require(isinstance(started, str) and started.isdigit() and int(started) > 0
