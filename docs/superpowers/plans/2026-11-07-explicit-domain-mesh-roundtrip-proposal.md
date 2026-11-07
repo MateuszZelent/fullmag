@@ -1,6 +1,9 @@
 # Jawna domena GSG w scenie UI — projekt naprawy roundtripu
 
-Status: WYMAGA UZUPEŁNIENIA PROJEKTU po niezależnym przeglądzie; nie jest gotowy do zatwierdzenia ani implementacji nowego kontraktu.
+Status: audyt i historia projektu ogólnego; nowy wykonywalny binding IR pozostaje nierozstrzygnięty.
+Bieżący [przejrzany plan zachowania istniejącej domeny V03](2026-11-07-explicit-domain-source-preservation-implementation.md)
+rozstrzyga authoring i jawnie ograniczoną asercję, bez nowego bindingu solvera;
+oczekuje osobnej decyzji przed wdrożeniem nowych pól.
 Baza kodu: f6d176fb4ed53912f00c32373639d2cd2a0a79f9, z zachowaniem wcześniejszego WIP.
 Cel pełnego zadania nadal obejmuje E0–E12 i reprodukcję publikacji. Ten etap
 naprawia utratę wejścia meshu i nie zastępuje kwalifikacji fizyki lub odbioru UI.
