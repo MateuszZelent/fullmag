@@ -17946,7 +17946,7 @@ async fn scene_execution_intent_survives_unrelated_patch_and_export() {
         state_mut.current_workspace_root = script_dir.clone();
     }
     let mut scene = sample_scene_document_with_stage(serde_json::json!({
-        "kind": "run", "until_seconds": 1e-9,
+        "kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9,
         "interactive_session_requested": true, "wait_for_solve": false,
     }));
     scene.study.interactive_session_requested = Some(false);
@@ -17998,7 +17998,7 @@ async fn scene_execution_intent_survives_unrelated_patch_and_export() {
 async fn scene_execution_intent_null_merge_patch_removes_keys_before_deserialization() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document_with_stage(serde_json::json!({
-        "kind": "run", "until_seconds": 1e-9,
+        "kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9,
         "interactive_session_requested": true, "wait_for_solve": false,
     }));
     scene.study.interactive_session_requested = Some(false);

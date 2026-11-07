@@ -2192,7 +2192,7 @@ mod execution_intent_tests {
             "study": {
                 "interactive_session_requested": false,
                 "wait_for_solve": true,
-                "stages": [{"kind": "run", "until_seconds": 1e-9,
+                "stages": [{"kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9,
                             "interactive_session_requested": true, "wait_for_solve": false}],
                 "study_pipeline": {"nodes": [{"node_kind": "group", "id": "group", "label": "Group",
                     "enabled": false, "children": [{"node_kind": "primitive", "id": "run", "label": "Run",
