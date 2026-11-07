@@ -7698,15 +7698,14 @@ def domain_mesh(
         array; Fullmag does not synthesize conformal region markers from shapes.
     """
     rendered_source = _canonical_mesh_source_path(source, label="domain_mesh")
-    _state._domain_mesh_source = rendered_source
     # Physical eligibility is checked on the complete Problem, after all
     # objects/stages are declared. A pure observation mesh has no magnetic map.
-    _state._domain_region_markers = _normalize_domain_region_marker_table(
+    normalized_region_markers = _normalize_domain_region_marker_table(
         region_markers, label="region_markers", allow_empty=True)
     normalized_object_region_markers = (
         _normalize_domain_region_marker_table(
             object_region_markers,
-            label="object_region_markers",
+            label="object_region_markers", allow_empty=True,
         )
         if object_region_markers is not None
         else None
@@ -7714,7 +7713,7 @@ def domain_mesh(
     if normalized_object_region_markers:
         region_marker_ids = {
             int(entry["marker"])
-            for entry in _state._domain_region_markers
+            for entry in normalized_region_markers
         }
         for entry in normalized_object_region_markers:
             marker = int(entry["marker"])
@@ -7722,17 +7721,22 @@ def domain_mesh(
                 raise ValueError(
                     f"object_region_markers marker {marker} duplicates a region_markers marker"
                 )
-    _state._domain_object_region_markers = normalized_object_region_markers
-    _state._domain_marker_owners = None
+    normalized_marker_owners = None
     if marker_owners is not None:
         from fullmag.runtime.domain_mesh_source import normalize_shared_domain_mesh_source
         declaration = {
             "kind": "explicit", "source": rendered_source,
-            "region_markers": _state._domain_region_markers, "marker_owners": marker_owners,
+            "region_markers": normalized_region_markers, "marker_owners": marker_owners,
         }
         if normalized_object_region_markers is not None:
             declaration["object_region_markers"] = normalized_object_region_markers
-        _state._domain_marker_owners = normalize_shared_domain_mesh_source(declaration)["marker_owners"]
+        normalized_marker_owners = normalize_shared_domain_mesh_source(declaration)["marker_owners"]
+
+
+    _state._domain_mesh_source = rendered_source
+    _state._domain_region_markers = normalized_region_markers
+    _state._domain_object_region_markers = normalized_object_region_markers
+    _state._domain_marker_owners = normalized_marker_owners
 
 
 def frozen_magnetic_submesh(

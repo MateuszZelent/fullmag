@@ -751,6 +751,15 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
     signal_part_id: str
     left_ground_part_id: str
     right_ground_part_id: str
+    closed_loop: bool
+    inlet_connection_length_m: float | None
+    inlet_crossbar_length_m: float | None
+    inlet_connection_part_id: str | None
+    inlet_connection_conductivity_s_per_m: float | None
+    outlet_connection_length_m: float | None
+    outlet_crossbar_length_m: float | None
+    outlet_connection_part_id: str | None
+    outlet_connection_conductivity_s_per_m: float | None
 
     def __init__(
         self,
@@ -767,6 +776,15 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
         length: float | None = None,
         thickness: float | None = None,
         conductivity: float | None = None,
+        closed_loop: bool = False,
+        inlet_connection_length_m: float | None = None,
+        inlet_crossbar_length_m: float | None = None,
+        inlet_connection_part_id: str | None = None,
+        inlet_connection_conductivity_s_per_m: float | None = None,
+        outlet_connection_length_m: float | None = None,
+        outlet_crossbar_length_m: float | None = None,
+        outlet_connection_part_id: str | None = None,
+        outlet_connection_conductivity_s_per_m: float | None = None,
     ) -> None:
         resolved_length = _antenna_alias(length_m, length, "length_m")
         resolved_thickness = _antenna_alias(thickness_m, thickness, "thickness_m")
@@ -792,6 +810,34 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
         object.__setattr__(self, "signal_part_id", normalized_ids[0])
         object.__setattr__(self, "left_ground_part_id", normalized_ids[1])
         object.__setattr__(self, "right_ground_part_id", normalized_ids[2])
+        if not isinstance(closed_loop, bool):
+            raise TypeError("closed_loop must be bool")
+        loop_values = {
+            "inlet_connection_length_m": inlet_connection_length_m,
+            "inlet_crossbar_length_m": inlet_crossbar_length_m,
+            "inlet_connection_part_id": inlet_connection_part_id,
+            "inlet_connection_conductivity_s_per_m": inlet_connection_conductivity_s_per_m,
+            "outlet_connection_length_m": outlet_connection_length_m,
+            "outlet_crossbar_length_m": outlet_crossbar_length_m,
+            "outlet_connection_part_id": outlet_connection_part_id,
+            "outlet_connection_conductivity_s_per_m": outlet_connection_conductivity_s_per_m,
+        }
+        if not closed_loop and any(value is not None for value in loop_values.values()):
+            raise ValueError("connection parameters require closed_loop=True")
+        object.__setattr__(self, "closed_loop", closed_loop)
+        for field, value in loop_values.items():
+            if closed_loop:
+                if value is None:
+                    raise ValueError(f"closed_loop requires explicit {field}")
+                value = (require_non_empty(value, field) if field.endswith("part_id")
+                         else _antenna_positive(value, field))
+            object.__setattr__(self, field, value)
+        if closed_loop:
+            if len(set((*normalized_ids, self.inlet_connection_part_id, self.outlet_connection_part_id))) != 5:
+                raise ValueError("closed_loop part IDs must be distinct")
+            for side in ("inlet", "outlet"):
+                if getattr(self, f"{side}_crossbar_length_m") >= getattr(self, f"{side}_connection_length_m"):
+                    raise ValueError(f"{side} crossbar must leave a positive-length feed neck")
 
     @property
     def geometry_name(self) -> str:
@@ -844,10 +890,62 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
             })
         return tuple(sections)
 
+    def connection_solids(self) -> dict[str, tuple[dict[str, object], ...]]:
+        """Three necks and one crossbar per connection, in world coordinates."""
+        if not self.closed_loop:
+            return {}
+        result = {}
+        for side, station in (("inlet", self.stations[0]), ("outlet", self.stations[-1])):
+            length = getattr(self, f"{side}_connection_length_m")
+            bar = getattr(self, f"{side}_crossbar_length_m")
+            if side == "inlet":
+                neck_interval, bar_interval = (-length + bar, 0.0), (-length, -length + bar)
+            else:
+                neck_interval = (self.length_m, self.length_m + length - bar)
+                bar_interval = (self.length_m + length - bar, self.length_m + length)
+            left = -(station.signal_width_m / 2 + station.left_gap_m + station.left_ground_width_m / 2)
+            right = station.signal_width_m / 2 + station.right_gap_m + station.right_ground_width_m / 2
+            vmin, vmax = left - station.left_ground_width_m / 2, right + station.right_ground_width_m / 2
+            specs = (
+                (neck_interval, 0.0, station.signal_width_m),
+                (neck_interval, left, station.left_ground_width_m),
+                (neck_interval, right, station.right_ground_width_m),
+                (bar_interval, (vmin + vmax) / 2, vmax - vmin),
+            )
+            part = getattr(self, f"{side}_connection_part_id")
+            result[part] = tuple(
+                {key: {"u_m": u, "vertices": vertices, "conductors": {part: vertices}}
+                 for key, u in zip(("from", "to"), interval)
+                 for vertices in (_section_vertices(self.transform, u, center, width, 0.0, self.thickness_m),)}
+                for interval, center, width in specs
+            )
+        return result
+
+    def solid_segments(self) -> tuple[dict[str, object], ...]:
+        return _AntennaLayoutGeometry.solid_segments(self) + tuple(
+            solid for solids in self.connection_solids().values() for solid in solids)
+
+    def world_bounds(self) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        vertices = [v for section in self._sections() for v in section["vertices"]]
+        vertices.extend(v for solids in self.connection_solids().values() for solid in solids
+                        for section in solid.values() for v in section["vertices"])
+        return (tuple(min(v[i] for v in vertices) for i in range(3)),
+                tuple(max(v[i] for v in vertices) for i in range(3)))
+
     def to_ir(self) -> dict[str, object]:
         return {
             "name": self.name,
             "kind": "cpw",
+            **({"loop": {"enabled": True,
+                "inlet_connection_length_m": self.inlet_connection_length_m,
+                "inlet_crossbar_length_m": self.inlet_crossbar_length_m,
+                "inlet_connection_part_id": self.inlet_connection_part_id,
+                "inlet_connection_conductivity_s_per_m": self.inlet_connection_conductivity_s_per_m,
+                "outlet_connection_length_m": self.outlet_connection_length_m,
+                "outlet_crossbar_length_m": self.outlet_crossbar_length_m,
+                "outlet_connection_part_id": self.outlet_connection_part_id,
+                "outlet_connection_conductivity_s_per_m": self.outlet_connection_conductivity_s_per_m,
+            }} if self.closed_loop else {}),
             "length_m": self.length_m,
             "thickness_m": self.thickness_m,
             "conductivity_s_per_m": self.conductivity_s_per_m,
@@ -868,6 +966,9 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
     def from_ir(cls, value: Mapping[str, object]) -> "CPWAntennaLayout":
         if value.get("kind") != "cpw":
             raise ValueError("CPW layout kind is required")
+        loop = value.get("loop", {})
+        if not isinstance(loop, Mapping) or set(loop) - {'outlet_connection_length_m', 'inlet_crossbar_length_m', 'outlet_connection_conductivity_s_per_m', 'inlet_connection_conductivity_s_per_m', 'inlet_connection_length_m', 'inlet_connection_part_id', 'enabled', 'outlet_crossbar_length_m', 'outlet_connection_part_id'}:
+            raise ValueError("CPW loop contains unsupported authored fields")
         stations = tuple(CPWWidthStation(**station) for station in value["stations"])
         signal_id, left_id, right_id = _antenna_conductor_ids(
             value.get("conductors", ()), ("signal", "ground_left", "ground_right"),
@@ -882,6 +983,15 @@ class CPWAntennaLayout(_AntennaLayoutGeometry):
             signal_part_id=signal_id,
             left_ground_part_id=left_id,
             right_ground_part_id=right_id,
+            closed_loop=loop.get("enabled", False),
+            inlet_connection_length_m=loop.get("inlet_connection_length_m"),
+            inlet_crossbar_length_m=loop.get("inlet_crossbar_length_m"),
+            inlet_connection_part_id=loop.get("inlet_connection_part_id"),
+            inlet_connection_conductivity_s_per_m=loop.get("inlet_connection_conductivity_s_per_m"),
+            outlet_connection_length_m=loop.get("outlet_connection_length_m"),
+            outlet_crossbar_length_m=loop.get("outlet_crossbar_length_m"),
+            outlet_connection_part_id=loop.get("outlet_connection_part_id"),
+            outlet_connection_conductivity_s_per_m=loop.get("outlet_connection_conductivity_s_per_m"),
         )
 
 

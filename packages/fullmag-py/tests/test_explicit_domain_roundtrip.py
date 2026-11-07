@@ -166,6 +166,36 @@ study.stages.add_run(until=2e-12)
                     with self.assertRaises(ValueError):
                         validate_scene_domain_marker_owners(case["source"], case["objects"])
 
+    def test_rejected_domain_mesh_preserves_previous_source_and_frozen_owners(self):
+        exec(SOURCE, {})
+        before = copy.deepcopy(world._build_problem().runtime_metadata["mesh_workflow"])
+        for kwargs in (
+            {"region_markers": {"film_geom": 9}, "object_region_markers": {"Core": 9}},
+            {"region_markers": {"film_geom": 9}, "marker_owners": []},
+            {"region_markers": {"film_geom": 9}, "object_region_markers": [],
+             "marker_owners": [{"table": "region_markers", "geometry_name": "film_geom",
+                                "marker": True, "target": fm.RegionRef("immutable-film")}]},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ValueError):
+                    fm.domain_mesh("rejected.fullmag-mesh", **kwargs)
+                after = world._build_problem().runtime_metadata["mesh_workflow"]
+                self.assertEqual(after, before)
+
+    def test_scene_roundtrip_preserves_absent_and_empty_object_marker_table(self):
+        loaded = self.load()
+        for explicit_empty in (False, True):
+            with self.subTest(explicit_empty=explicit_empty):
+                scene = build_scene_document_from_builder(export_builder_draft(loaded))
+                declaration = scene["study"]["shared_domain_mesh_source"]
+                declaration.pop("object_region_markers")
+                declaration["marker_owners"] = declaration["marker_owners"][:1]
+                if explicit_empty:
+                    declaration["object_region_markers"] = []
+                after = self.load(render_scene_document_as_script(scene), "empty-map.py")
+                restored = build_scene_document_from_builder(export_builder_draft(after))
+                self.assertEqual(restored["study"]["shared_domain_mesh_source"], declaration)
+
     def test_source_declaration_does_not_grant_fdm_execution(self):
         scene = build_scene_document_from_builder(export_builder_draft(self.load()))
         scene["study"]["requested_backend"] = "fdm"

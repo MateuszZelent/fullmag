@@ -1211,3 +1211,66 @@ Reset wariantu przez JSON Merge Patch zachowuje zwykłą semantykę scalania:
 oprócz kind=generated należy usunąć nullami pola wcześniejszego explicit.
 Samo usunięcie całej shared_domain_mesh_source przez null oznacza legacy
 brak nadpisania i nie jest resetem generated.
+
+(fem-gsg-source-roundtrip-dependency)=
+### Zależność odbioru zamrożonych wejść GSG od publicznego authoringu
+
+Ciągły test źródeł 50 nm i corner25 wymaga istniejącego w worktree konstruktora
+zamkniętego CPW. Do dostarczanego zakresu należy jego deklaracja Python,
+serializacja geometrii i eksport, bez nowego meshingu lub solvera. Jest to
+pełny skończony obwód 3D przyjęty wcześniej dla GSG. Połączenia składają się
+z trzech szyjek i poprzeczki na każdym końcu; ich zasięg wchodzi do bounds.
+Trzy nominalne gałęzie i terminale pozostają trzema gałęziami; połączenia
+nie stają się nowymi zewnętrznymi elektrodami.
+
+| Python | Typ | Default | SI | Walidacja | Znaczenie | Backend | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| CPWAntennaLayout.closed_loop | bool | False | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.enabled |
+| CPWAntennaLayout.inlet_connection_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_length_m |
+| CPWAntennaLayout.outlet_connection_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_length_m |
+| CPWAntennaLayout.inlet_crossbar_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_crossbar_length_m |
+| CPWAntennaLayout.outlet_crossbar_length_m | float \| None | None | m | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_crossbar_length_m |
+| CPWAntennaLayout.inlet_connection_part_id | str \| None | None | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_part_id |
+| CPWAntennaLayout.outlet_connection_part_id | str \| None | None | 1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_part_id |
+| CPWAntennaLayout.inlet_connection_conductivity_s_per_m | float \| None | None | S m^-1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.inlet_connection_conductivity_s_per_m |
+| CPWAntennaLayout.outlet_connection_conductivity_s_per_m | float \| None | None | S m^-1 | Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection. | Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty. | FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera. | geometry.entries[].loop.outlet_connection_conductivity_s_per_m |
+
+Metry i przewodność w siemensach na metr są wielkościami SI; ID i boolean
+są bezwymiarowe. Konstruktor odmawia niepełnego opisu. Parametry nominalnego
+CPW i transformacja zachowują kontrakt. Istniejący StructuredCurrentClosure
+v2 przyjmuje dokładnie jeden przekrój w układzie obiektu: oś x dla GSG lub
+dotychczasową oś z. Pozostałe osie i układ world nadal odmawiają. Test źródła
+zachowuje przekrój i skok potencjału; nie wyznacza nowego prądu.
+
+**Interpretacja backendów.** FEM CPU: authoring zamkniętego źródła 3D;
+dyskretyzacja przewodnika i transport nie są wykonywane. FEM GPU: brak nowej
+realizacji lub kwalifikacji. FDM CPU i FDM GPU: przenoszenie deklaracji nie
+przyznaje możliwości rozwiązania FEM transportu. Równania LLG, transportu
+i pola, tolerancje i budżety pozostają bez zmian.
+
+**API, IR i runtime.** Python przechowuje parametry loop w istniejącym geometry
+IR i odtwarza je literalnie. Nie ma nowej wersji ProblemIR, endpointu, etapu,
+capability lub aktywacji fizyki z nazwy. Bounds i segmenty bryły zawierają
+połączenia, więc ich utrata w eksporcie jest błędem. Starszy Python bez tych
+keywordów odmawia; test wymaga spójnego pakietu źródeł. Nie migrujemy sesji,
+wyników lub provenance i nie podmieniamy działającego runtime.
+
+**Źródła i walidacja.** packages/fullmag-py/src/fullmag/model/geometry.py +
+CPWAntennaLayout jest jedynym konstruktorem; jego connection_solids opisuje
+bryły połączeń. packages/fullmag-py/src/fullmag/model/current_transport.py +
+StructuredCurrentClosure waliduje przekrój. Eksport:
+packages/fullmag-py/src/fullmag/runtime/script_builder.py +
+_render_antenna_layout_expr. Regresje konstrukcji, bounds i odmów:
+packages/fullmag-py/tests/test_cpw_closed_loop_layout.py +
+ClosedGsgLayoutTests. Ciągły test pełnego IR:
+crates/fullmag-authoring/tests/explicit_domain_python_roundtrip.rs +
+pinned_gsg_sources_preserve_full_ir_through_real_rust_adapters.
+Nominalne GSG odnosi się do Sushruth i in. (2020),
+[doi:10.1103/PhysRevResearch.2.043203](https://doi.org/10.1103/PhysRevResearch.2.043203);
+nieopublikowane połączenia są jawnym założeniem modelu, nie danymi pracy.
+
+**Kompletność i odroczenia.** Opis zawiera dziewięć pól, jednostki, odmowy,
+mapowanie Python–IR, cztery interpretacje backendów i źródła kodu.
+Testy source-only nie kwalifikują siatki, solvera, błędu H, wzbudzenia spinowego
+lub zgodności z publikacją. Native build, UI E2E i zbieżność fizyczna pozostają
+osobnymi, niewykonanymi tu bramkami.

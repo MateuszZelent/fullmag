@@ -2244,8 +2244,8 @@ mod tests {
                 ..fullmag_authoring::ScriptBuilderSolverState::default()
             },
             mesh: fullmag_authoring::ScriptBuilderMeshState {
-                algorithm_2d: 6,
-                algorithm_3d: 1,
+                algorithm_2d: Some(6),
+                algorithm_3d: Some(1),
                 size_mode: Some("predefined".to_string()),
                 hmax: String::new(),
                 hmin: String::new(),
@@ -2266,8 +2266,8 @@ mod tests {
                 smoothing_steps: 1,
                 optimize: String::new(),
                 optimize_iterations: 1,
-                compute_quality: false,
-                per_element_quality: false,
+                compute_quality: Some(false),
+                per_element_quality: Some(false),
                 interface_hmax: None,
                 interface_thickness: None,
                 transition_distance: None,

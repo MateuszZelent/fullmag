@@ -7970,7 +7970,7 @@ def _render_domain_mesh_call(
         f"region_markers={_py_literal(rendered_markers if raw_markers else [])}",
     ]
     raw_object_region_markers = mesh_config.get("domain_object_region_markers")
-    if isinstance(raw_object_region_markers, list) and raw_object_region_markers:
+    if isinstance(raw_object_region_markers, list):
         rendered_object_region_markers = {}
         for raw_entry in raw_object_region_markers:
             entry = _normalize_mapping(raw_entry)
@@ -7981,9 +7981,9 @@ def _render_domain_mesh_call(
             if not isinstance(marker, (int, float)):
                 continue
             rendered_object_region_markers[geometry_name] = int(marker)
-        if rendered_object_region_markers:
+        if rendered_object_region_markers or not raw_object_region_markers:
             kwargs.append(
-                f"object_region_markers={_py_literal(rendered_object_region_markers)}"
+                f"object_region_markers={_py_literal(rendered_object_region_markers if raw_object_region_markers else [])}"
             )
     if "domain_marker_owners" in mesh_config:
         owners = []
@@ -9874,13 +9874,13 @@ def _render_antenna_layout_expr(
         for entry in params.get("conductors", [])
         if isinstance(entry, Mapping)
     }
+    loop = params.get("loop")
+    if isinstance(loop, Mapping) and loop.get("enabled") is True:
+        kwargs.append("closed_loop=True")
+        for key, value in loop.items():
+            if key != "enabled":
+                kwargs.append(f"{key}={_py_repr(value)}")
     if constructor == "fm.MicrostripAntennaLayout":
-        loop = params.get("loop")
-        if isinstance(loop, Mapping) and loop.get("enabled") is True:
-            kwargs.append("closed_loop=True")
-            for key, value in loop.items():
-                if key != "enabled":
-                    kwargs.append(f"{key}={_py_repr(value)}")
         kwargs.extend([
             f"return_width_m={number('return_width_m', 'return_width')}",
             f"return_offset_m={number('return_offset_m', 'return_gap_m')}",
@@ -10026,7 +10026,7 @@ def _render_geometry_expr_from_override(
         )
         expr = f"fm.{kind}({left_expr}, {right_expr}, name={_py_repr(name)})"
     else:
-        expr = f"fm.Box(1e-9, 1e-9, 1e-9, name={_py_repr(name)})"
+        raise ValueError(f"unsupported geometry kind {kind!r}")
 
     translation = params.get("translation")
     if not isinstance(translation, list):

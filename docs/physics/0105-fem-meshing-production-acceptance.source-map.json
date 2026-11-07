@@ -940,6 +940,31 @@
       "path": "crates/fullmag-authoring/src/builder.rs",
       "symbol": "ScriptBuilderMeshState",
       "responsibility": "Typowany authoring zachowuje None i jawne wartości, odrzuca present null."
+    },
+    {
+      "id": "gsg-source-authoring-dependency",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class CPWAntennaLayout",
+      "responsibility": "Deklaracja zamkniętego GSG wymagana przez przypięte źródła; bez nowego Solve."
+    },
+    {
+      "id": "gsg-source-cut-authoring",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class StructuredCurrentClosure",
+      "responsibility": "Dokładnie jeden object-frame x lub z cut, bez zmiany solvera."
+    },
+    {
+      "id": "gsg-source-roundtrip-geometry",
+      "path": "packages/fullmag-py/tests/test_cpw_closed_loop_layout.py",
+      "symbol": "class ClosedGsgLayoutTests",
+      "responsibility": "Regresje parametrów, bounds i eksportu zamkniętego GSG."
+    },
+    {
+      "id": "gsg-source-roundtrip-dependency-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-gsg-source-roundtrip-dependency",
+      "responsibility": "Zakres zależności authoringu i ograniczenia dowodu.",
+      "evidence_status": "planned_contract"
     }
   ],
   "public_api": {
@@ -993,6 +1018,96 @@
         "meaning": "Asercja bieżącego modelu, bez historii IR v0.3 i bez remapowania.",
         "backend_support": "FEM CPU/GPU: wspólny authoring; FDM CPU/GPU: odmowa jawnego FEM domain.",
         "problem_ir": "problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only)"
+      },
+      {
+        "python": "CPWAntennaLayout.closed_loop",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "1",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.enabled"
+      },
+      {
+        "python": "CPWAntennaLayout.inlet_connection_length_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.inlet_connection_length_m"
+      },
+      {
+        "python": "CPWAntennaLayout.outlet_connection_length_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.outlet_connection_length_m"
+      },
+      {
+        "python": "CPWAntennaLayout.inlet_crossbar_length_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.inlet_crossbar_length_m"
+      },
+      {
+        "python": "CPWAntennaLayout.outlet_crossbar_length_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.outlet_crossbar_length_m"
+      },
+      {
+        "python": "CPWAntennaLayout.inlet_connection_part_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.inlet_connection_part_id"
+      },
+      {
+        "python": "CPWAntennaLayout.outlet_connection_part_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.outlet_connection_part_id"
+      },
+      {
+        "python": "CPWAntennaLayout.inlet_connection_conductivity_s_per_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "S m^-1",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.inlet_connection_conductivity_s_per_m"
+      },
+      {
+        "python": "CPWAntennaLayout.outlet_connection_conductivity_s_per_m",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "S m^-1",
+        "validation": "Jawne wymagane przy closed_loop=True; dodatnie długości i przewodności, rozłączne ID; crossbar krótszy niż connection.",
+        "meaning": "Parametr skończonej geometrii połączeń GSG; szczegóły w tabeli noty.",
+        "backend_support": "FEM CPU authoring only; FEM GPU i FDM CPU/GPU bez nowej kwalifikacji solvera.",
+        "problem_ir": "geometry.entries[].loop.outlet_connection_conductivity_s_per_m"
       }
     ]
   }

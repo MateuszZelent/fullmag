@@ -94,6 +94,29 @@ study.stages.add_run(until=1e-12)
                                                            source_root=Path(".")), {"fm": fm})
         self.assertEqual(restored.to_ir(), shape.to_ir())
 
+    def test_unknown_geometry_is_rejected_in_canonical_and_override_export(self):
+        from fullmag.runtime.script_builder import _render_geometry_expr
+
+        class CustomGeometry:
+            @property
+            def geometry_name(self):
+                return "custom-shape"
+
+        unknown = CustomGeometry()
+        for shape in (
+            unknown,
+            fm.Translate(unknown, (1, 2, 3), name="translated"),
+            fm.Difference(fm.Box(3, 3, 3, name="box"), unknown, name="difference"),
+            fm.Union(unknown, fm.Box(3, 3, 3, name="box"), name="union"),
+        ):
+            with self.subTest(shape=type(shape).__name__):
+                with self.assertRaisesRegex(ValueError, "unsupported geometry"):
+                    _render_geometry_expr(shape, magnet_name="label", source_root=Path("."))
+                kind, params = _export_geometry_kind_params(shape)
+                with self.assertRaisesRegex(ValueError, "unsupported geometry"):
+                    _render_geometry_expr_from_override(kind, params, name="label",
+                                                        source_root=Path("."))
+
     def test_global_geometry_key_collisions_are_rejected(self):
         for pair in (("magnet", "magnet"), ("aux", "aux"), ("magnet", "aux")):
             with self.subTest(pair=pair):

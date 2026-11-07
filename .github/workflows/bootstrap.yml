@@ -121,6 +121,7 @@ jobs:
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_object_region_owner_identity.py
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_geometry_asset_identity.py
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_explicit_domain_roundtrip.py
+          python -B -m unittest discover -s packages/fullmag-py/tests -p test_cpw_closed_loop_layout.py
           cargo test --locked -p fullmag-authoring --lib execution_intent_
           cargo test --locked -p fullmag-authoring --lib magnetic_object_id_
           cargo test --locked -p fullmag-authoring --lib geometry_asset_identity_

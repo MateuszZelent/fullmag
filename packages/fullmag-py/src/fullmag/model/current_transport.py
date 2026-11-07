@@ -210,8 +210,8 @@ class StructuredCurrentClosure:
                 "source_cuts must contain at least one StructuredCurrentSourceCut"
             )
         if schema_version == "structured_current_closure.v2":
-            if len(cuts) != 1 or cuts[0].plane.coordinate_frame != "object" or cuts[0].plane.axis != "z":
-                raise ValueError("structured closure v2 requires exactly one object-frame z cut")
+            if len(cuts) != 1 or cuts[0].plane.coordinate_frame != "object" or cuts[0].plane.axis not in {"x", "z"}:
+                raise ValueError("structured closure v2 requires exactly one object-frame x or z cut")
         elif any(cut.plane.coordinate_frame != "world" for cut in cuts):
             raise ValueError("structured closure v1 requires world-frame planes")
         for field_name, values in (
