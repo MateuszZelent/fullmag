@@ -1203,6 +1203,13 @@ markery, projection/conformal mode oraz capability result. Validation errors
 blokują niepoprawne zakresy i `Ms<=0`; unsupported combinations blokują planner.
 Nie wolno porzucać regionu lub coupling po cichu.
 
+Eksport Python i SceneDocument zachowuje także `shape.center` dla box/sphere,
+`shape.center` i `shape.axis` dla cylinder oraz pełne wyrażenie CSG. Zastąpienie
+CSG pudełkiem lub wyzerowanie przesunięcia zmienia wsparcie parametrów, a więc
+problem fizyczny. Nieznany typ kształtu musi zostać odrzucony. Regresje obu
+ścieżek eksportu porównują kanoniczny shape IR, a publiczny przypadek dwóch
+połówek z Ms 400/800 kA/m sprawdza niezależnie moment globalny `mx=-1/3`.
+
 (material-regions-implementation-mapping)=
 ### 4.7 Implementation mapping
 

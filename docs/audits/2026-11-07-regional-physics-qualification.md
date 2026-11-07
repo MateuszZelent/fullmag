@@ -6,7 +6,7 @@ Poniższe wyniki nie oznaczają ukończenia całej macierzy oddziaływań.
 
 ## Środowisko i recovery
 
-Źródła aplikacji: czysty commit `af6a066127b62be148020f92694989c91a7bd490`,
+Pierwsze pomiary: czysty commit `af6a066127b62be148020f92694989c91a7bd490`,
 baza `master` po PR #408: `08820339454b6e31856dd0a9b858f3220978e9b1`.
 Snapshot: `7455d442fe0413b8991495d916fe098478976422635ea3c78d0dd3d9c73ef63e`.
 Grupa: `fullmag-worktree-fullmag-eacd36ead0850e14`, frontend na porcie 3345.
@@ -124,3 +124,53 @@ Ponowny managed stop-only zakończył się sukcesem:
 Run pozostają do potwierdzenia. Pierwszy CI portu wskazał brak pomocniczego
 parsera `payload_string_value`; zależność uzupełniono z tego samego źródła P22
 wraz z regresją nieprawidłowego typu integratora.
+
+
+## Kontynuacja w grupie WSL: publiczny CPU, geometria i tabele
+
+Przebudowa/resume `a78de313e98a4b34af8b8ab71a12f2f2` zakończyła się sukcesem
+na commicie `689816fd2bd4350944eb163b5f98a7f03e9f141a`, ze snapshotem
+`45413df7a5a18badd41c3f21622fd1ee90dec26e4a751693af5ee5dcdcd772de`
+(dirty: własne skrypty i wyniki kwalifikacji). Kontrakty bootstrap CI tego
+commita przeszły, w tym Rust, Python, generated API i Control Room.
+
+Próba CPU `regional-mean-cpu-20261107-02` została przyjęta, ale zakończyła się
+`Permission denied` przy przygotowaniu output storage, **bez uruchomienia
+solvera**. `total_steps=1` w tym widoku oznaczało zadanie, nie krok solvera.
+Backend UID 65532 ma dodatkową grupę 1000 i zapis do `/state`; nasz nowy katalog
+kwalifikacji miał jednak 0755. Wyłącznie ten katalog otrzymał zapis grupowy
+(0775). Nie zmieniano praw całego `examples`, checkoutu ani storage.
+
+Próba 03 wykonała dwa kroki, bez jawnego zapisu tabeli. Próba 04 została
+poprawnie odrzucona za krokową cadence tabeli w physical-time Run. Próba 05
+nie wystartowała: retirement nie umiał wyeksportować przechwyconego
+`sampling.table_autosave`. Naprawiono odbiornik eksportu i odtwarzanie tabel
+każdego Run. Review wykrył także dziedziczenie poprzedniej tabeli przy
+missing/null oraz tolerowanie stringowego `every_steps`; obie uwagi mają
+regresje i poprawki. Publiczne `study.tableautosave(enabled=False)` oraz
+`fm.tableautosave(enabled=False)` wyłączają tabelę bez dodatkowego authored
+stage. IR i OpenAPI zachowują dotychczasowy kontrakt.
+
+Próba 06 wykonała solver, ale niezależna kontrola wykazała **mx=0 zamiast −1/3**.
+Przyczyną była utrata przesunięcia regionu Box w SceneDocument → Python,
+nie redukcja momentu. Dodatkowa regresja wykazała ten sam problem dla sfery
+oraz utratę osi cylindra. Eksport zachowuje teraz center/axis, pełne CSG
+oraz odmawia nieznanego typu zamiast podstawiać mały Box. Wykonywalne regresje
+przeszły RED → GREEN. Pełny moduł round-trip: **64/64 PASS** w backendzie.
+Dodatkowa próba pytest nie wykonała testów: obraz nie zawiera modułu pytest;
+nie instalowano zależności na hoście.
+
+Publiczna próba 07, aktywacja `9f4fce71118c40fe92ba5e9174024358`, run
+`run-live-1e56b97d62bff28ba6a3d53d419735f5abc9145a1baa225f58cd5835b9b72683`,
+zakończyła się na CPU/double po 2 krokach do 2e-14 s. Tabela w krokach 0/1/2
+zawiera mx = −0,3333333333333333 przy Ms 400/800 kA/m; tolerancja 1e-12.
+Surowe dane RED (06) i GREEN (07), pola Ms, stany, tabelę, mesh provenance,
+skrypt i hashe zachowano w `fdm_moment_weighted_mean_cpu.zarr/qualification_evidence`
+obok skryptu na WSL. Biblioteki aplikacji pochodzą z powyższego pakietu;
+Python renderer korzystał z live bind źródeł opisanych tą poprawką.
+
+Browser QA `8d9e3d994aa6417ca976d23d3ab087c2`: **PASS** dla istniejącej sesji,
+Home round-trip, widoczny WebGL2 canvas 617×495, drawing buffer 617×495,
+context_lost=false przed/po, brak błędów strony i konsoli. Renderer przeglądarki
+korzysta z SwiftShader; to dowód lifecycle canvasu, nie sprzętowego renderingu
+RTX ani materializacji wszystkich pól. Nie powtarzano Solve w QA.

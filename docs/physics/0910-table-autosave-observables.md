@@ -225,6 +225,15 @@ only `every_steps`. The default column set is:
 step, t, mx, my, mz, e_total, max_torque
 ```
 
+`study.tableautosave(enabled=False)` (or `fm.tableautosave(enabled=False)`)
+clears the persistent table for subsequent declarations without inserting an
+authored stage. Disabling cannot be combined with a cadence, quantities or a
+custom table ID. Canonical SceneDocument export preserves each Run's table
+cadence, columns, expressions and ID, including a missing/null table after an
+enabled one. This changes neither field output nor the numerical trajectory.
+The IR and OpenAPI representations remain unchanged: no table is represented
+by the absence of `sampling.table_autosave`.
+
 Persistent `study.stages.tableautosave(...)` actions remain readable for
 compatibility. New relaxation scripts attach accepted-step sampling directly
 to the owning relaxation stage so the cadence cannot leak into later stages.

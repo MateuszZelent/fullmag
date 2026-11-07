@@ -79,6 +79,18 @@
   },
   "sources": [
     {
+      "id": "table-flat-disable",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "def tableautosave",
+      "responsibility": "Configure or explicitly clear the table for subsequent declarations without adding an authored stage."
+    },
+    {
+      "id": "run-table-canonical-capture",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_scene_sampling_outputs",
+      "responsibility": "Preserve captured Run table cadence, columns, expressions and ID, including missing/null table state."
+    },
+    {
       "id": "table-api",
       "path": "packages/fullmag-py/src/fullmag/model/study.py",
       "symbol": "class TableAutosave",
@@ -177,6 +189,16 @@
     }
   ],
   "tests": [
+    {
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_captured_run_tables_roundtrip_with_cadence_expressions_and_ids",
+      "scope": "Per-Run table capture and strict malformed payload refusal."
+    },
+    {
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_run_table_can_be_cleared_without_an_extra_authored_stage",
+      "scope": "Missing/null table after an enabled Run without inherited sampling or additional stages."
+    },
     {
       "path": "packages/fullmag-py/tests/test_table_autosave.py",
       "symbol": "test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir",
