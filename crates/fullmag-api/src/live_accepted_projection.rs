@@ -23,21 +23,26 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_DEFERRAL_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Diagnostics only: observe the original future without cancelling or replaying it.
-pub(crate) async fn observe_projection_phase<T>(
+/// Box before constructing the returned future: an async function argument would
+/// retain the entire operation inline, even before its first poll. Nested large
+/// projection futures must not inflate the Tokio task's stack footprint.
+pub(crate) fn observe_projection_phase<T>(
     phase: &'static str,
     operation: impl std::future::Future<Output = T>,
-) -> T {
-    let elapsed = ProjectionPhaseTimer::new(phase);
-    tokio::pin!(operation);
-    let result = tokio::select! {
-        result = &mut operation => result,
-        _ = tokio::time::sleep(Duration::from_secs(1)) => {
-            tracing::warn!(phase, "accepted projection phase still pending after one second");
-            operation.await
-        }
-    };
-    drop(elapsed);
-    result
+) -> impl std::future::Future<Output = T> {
+    let mut operation = Box::pin(operation);
+    async move {
+        let elapsed = ProjectionPhaseTimer::new(phase);
+        let result = tokio::select! {
+            result = &mut operation => result,
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                tracing::warn!(phase, "accepted projection phase still pending after one second");
+                operation.await
+            }
+        };
+        drop(elapsed);
+        result
+    }
 }
 
 pub(crate) struct ProjectionPhaseTimer {
@@ -3762,6 +3767,47 @@ fn unix_time_millis_now() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observer_future_keeps_large_operation_on_heap_before_first_poll() {
+        let payload = [std::hint::black_box(0x5a_u8); 64 * 1024];
+        let operation = async move {
+            std::future::pending::<()>().await;
+            std::hint::black_box(payload);
+        };
+        let operation_bytes = std::mem::size_of_val(&operation);
+        assert!(operation_bytes >= 64 * 1024, "fixture lost its suspended payload: {operation_bytes}");
+        let observed = observe_projection_phase("large_future_size_test", operation);
+        let observer_bytes = std::mem::size_of_val(&observed);
+        assert!(observer_bytes <= 1024,
+            "observer embeds the operation before first poll: operation={operation_bytes}, observer={observer_bytes}");
+    }
+
+    #[test]
+    fn idle_projection_polls_on_two_mebibyte_tokio_worker_stack() {
+        // Explicitly retain the production-sized stack even if the test runner
+        // sets RUST_MIN_STACK. No environment or storage admission is changed.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(2 * 1024 * 1024)
+            .enable_all()
+            .build()
+            .unwrap();
+        let state = crate::router_v2::tests::test_app_state();
+        runtime.block_on(async move {
+            tokio::spawn(async move {
+                let mut cursor = None;
+                let mut study_cache = None;
+                let mut published_demand = None;
+                observe_projection_phase("idle_stack_test", poll_once(
+                    &state, &mut cursor, &mut study_cache, &mut published_demand,
+                )).await.unwrap();
+                assert!(cursor.is_none());
+                assert!(study_cache.is_none());
+                assert!(published_demand.is_none());
+            }).await.unwrap();
+        });
+    }
 
     fn task(lifecycle: fullmag_session::FmsTaskLifecycle) -> fullmag_session::FmsTaskCatalogEntry {
         fullmag_session::FmsTaskCatalogEntry {
