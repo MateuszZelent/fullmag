@@ -121,3 +121,18 @@ kwalifikowane sprzątanie. Nie wykonano prune, kasowania cache ani wolumenów.
 
 Obliczenie J/H na corner25, nowa eta, zbieżność względem publikacji oraz LLG
 pozostają niewykonane. Nie należy oznaczać E0–E12 jako ukończonego.
+
+
+## Uzupełnienie po analizie wdrożonego nadzorcy
+
+Dalszy przegląd ujawnił istniejącą ścieżkę, której powyższy audyt terminalnych
+profili recovery nie obejmował. Opublikowany fullmag-api-accepted-supervisor
+może rozliczyć autentyczny exit receipt lokalnie, przed spawn; działający
+host-aware scheduler osobno zwalnia host po weryfikacji Released local.
+Nie trzeba na tej podstawie rozszerzać Unknown/Failed o Ready lub Drained.
+
+[Konkretny przegląd, piny i zakres do zatwierdzenia](2026-11-07-succeeded-supervisor-reconciliation-proposal.md)
+opisuje tę możliwość na podstawie źródeł faktycznie użytych do zbudowania
+opublikowanego binarium. To zmienia następny krok: zamiast projektować nowe
+przejście właściciela, można zweryfikować istniejącego nadzorcę. Nie został
+jeszcze wywołany; rezerwacja i działające usługi pozostają zachowane.
