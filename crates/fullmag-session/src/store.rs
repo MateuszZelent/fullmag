@@ -1066,7 +1066,10 @@ impl SessionStore {
             &relative,
             crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
         )
-        .with_context(|| format!("reading run intent {relative}"))?;
+        .map_err(|error| {
+            let message = format!("reading run intent {relative}: {error}");
+            error.context(message)
+        })?;
         let intent: FmsRunIntent = serde_json::from_slice(&data)?;
         intent.validate()?;
         if intent.run_id != run_id {
