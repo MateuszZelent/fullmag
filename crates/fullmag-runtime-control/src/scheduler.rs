@@ -1602,6 +1602,17 @@ mod accepted_start_tests {
         StudyProblemCatalog,
         fullmag_plan::StudyExecutionPlan,
     ) {
+        study_and_catalog_with_authored_state(with_step_output_chain, false)
+    }
+
+    fn study_and_catalog_with_authored_state(
+        with_step_output_chain: bool,
+        authored_state: bool,
+    ) -> (
+        StudyPlan,
+        StudyProblemCatalog,
+        fullmag_plan::StudyExecutionPlan,
+    ) {
         let step_ids = if with_step_output_chain {
             vec!["step:a", "step:b", "step:c"]
         } else {
@@ -1690,6 +1701,17 @@ mod accepted_start_tests {
             .problem_meta
             .runtime_metadata
             .insert("runtime_selection".into(), json!({"device": "cpu", "precision": "double"}));
+        if authored_state {
+            let step_id = &study.steps[0].step_id;
+            let reference = fullmag_plan::authored_initial_state_reference(step_id, &problem)
+                .expect("authored state reference is derived from the accepted ProblemIR");
+            study.steps[0].inputs.push(StudyInputPort {
+                port_id: "initial_state".into(),
+                data_kind: StudyPortDataKind::State,
+                required: true,
+                source: StudyInputSource::AuthoredInitialState { reference },
+            });
+        }
         let catalog = StudyProblemCatalog::from_entries(
             &study,
             study
@@ -1713,18 +1735,68 @@ mod accepted_start_tests {
     }
 
     fn fixture_with_steps(prepared: bool, with_step_output_chain: bool) -> Fixture {
+        fixture_with_authored_state(prepared, with_step_output_chain, false, None)
+    }
+
+    fn authored_state_fixture() -> Fixture {
+        fixture_with_authored_state(true, false, true, None)
+    }
+
+    fn invalid_authored_state_fixture(reference_kind: &str) -> Fixture {
+        fixture_with_authored_state(false, false, true, Some(reference_kind))
+    }
+
+    fn fixture_with_authored_state(
+        prepared: bool,
+        with_step_output_chain: bool,
+        authored_state: bool,
+        reference_override: Option<&str>,
+    ) -> Fixture {
         let directory = tempfile::tempdir().unwrap();
         let store = SessionStore::open(directory.path().join("store")).unwrap();
         let run_id = RunId::parse("run-manual-scheduler").unwrap();
         let project_id = ProjectId::parse("project-manual-scheduler").unwrap();
-        let (study, catalog, lowered) = study_and_catalog(with_step_output_chain);
+        let (mut study, catalog, lowered) =
+            study_and_catalog_with_authored_state(with_step_output_chain, authored_state);
+        if let Some(reference_override) = reference_override {
+            let entry = catalog
+                .entries()
+                .iter()
+                .find(|entry| entry.step_id() == study.steps[0].step_id)
+                .expect("fixture catalog contains the first step");
+            let port = study.steps[0]
+                .inputs
+                .iter_mut()
+                .find(|port| port.port_id == "initial_state")
+                .expect("fixture has an authored initial-state port");
+            let fullmag_authoring::StudyInputSource::AuthoredInitialState { reference } =
+                &mut port.source
+            else {
+                unreachable!("authored fixture has a typed authored source");
+            };
+            *reference = match reference_override {
+                "malformed" => "authored-initial-state:v1:bad".into(),
+                "foreign" => fullmag_plan::authored_initial_state_reference(
+                    "step:foreign",
+                    entry.problem(),
+                )
+                .expect("foreign reference is well-formed but belongs to another step"),
+                "missing" => String::new(),
+                unknown => panic!("unknown authored-reference fixture `{unknown}`"),
+            };
+        }
         let definition_bytes = b"accepted-definition".to_vec();
         let definition_sha256 = fullmag_session::hex_sha256(&definition_bytes);
         let study_bytes = study.canonical_json_bytes().unwrap();
         let study_sha256 = fullmag_session::hex_sha256(&study_bytes);
-        let catalog_bytes = fullmag_session::canonical_json_bytes(
-            &serde_json::to_value(&catalog).unwrap(),
-        );
+        let mut catalog_value = serde_json::to_value(&catalog).unwrap();
+        if reference_override.is_some() {
+            // Keep the catalog bound to these exact (invalid) study bytes so
+            // load_accepted_study_snapshot reaches the production authored
+            // reference validator instead of stopping at the outer digest.
+            catalog_value["study_plan_sha256"] = json!(study.canonical_sha256().unwrap());
+        }
+        let catalog_bytes = fullmag_session::canonical_json_bytes(&catalog_value);
         let catalog_sha256 = fullmag_session::hex_sha256(&catalog_bytes);
         let mut specification = RunSpecification::new(
             ProjectSnapshot {
@@ -2121,6 +2193,143 @@ mod accepted_start_tests {
             if stage != "step:c" {
                 finish_scheduled_step(&fixture, &accepted, &scheduled, &output_bytes);
             }
+        }
+    }
+
+    #[test]
+    fn required_authored_initial_state_reaches_prepare_without_a_cas_input() {
+        let fixture = authored_state_fixture();
+        fixture
+            .store
+            .release_accepted_run_start(
+                fixture.run_id.as_str(),
+                &fixture.specification_sha256,
+                "compute-release",
+            )
+            .unwrap();
+
+        let accepted = crate::load_accepted_study_snapshot(
+            &fixture.store,
+            &fixture.run_id,
+            &fixture.project_id,
+        )
+        .unwrap();
+        let step = accepted
+            .study
+            .steps
+            .iter()
+            .find(|step| step.step_id == "step:run")
+            .unwrap();
+        let [port] = step.inputs.as_slice() else {
+            panic!("the physical step must carry exactly one authored state port");
+        };
+        let StudyInputSource::AuthoredInitialState { reference } = &port.source else {
+            panic!("the required initial state must remain typed as authored");
+        };
+        assert!(port.required);
+        assert_eq!(port.data_kind, StudyPortDataKind::State);
+        assert_eq!(
+            reference,
+            &fullmag_plan::authored_initial_state_reference(
+                &step.step_id,
+                accepted.catalog.entries()[0].problem(),
+            )
+            .unwrap(),
+            "the authored reference must pin the accepted ProblemIR"
+        );
+        assert!(fixture
+            .store
+            .read_artifact_catalog(fixture.run_id.as_str())
+            .unwrap()
+            .is_none(), "authored input must not require a CAS artifact catalog");
+
+        let scheduled = super::schedule_next_ready_accepted_task(
+            &fixture.store,
+            &fixture.run_id,
+            offer(),
+        )
+        .unwrap()
+        .expect("a qualified authored input is scheduler-resolvable");
+        assert_eq!(scheduled.step_id, "step:run");
+        assert_eq!(
+            scheduled.admission,
+            fullmag_session::TaskAdmissionCommitDisposition::Admitted
+        );
+        let fullmag_application::WorkerCommand::Prepare { resolved_input } =
+            &scheduled.prepare.command
+        else {
+            panic!("the admitted authored-input task must publish Prepare");
+        };
+        assert!(
+            !resolved_input.inputs.contains_key("initial_state"),
+            "the immutable authored ProblemIR supplies this input; it is not a resolved CAS binding"
+        );
+        let task_id = fullmag_session::task_id_for_study_step(
+            fixture.run_id.as_str(),
+            "step:run",
+        )
+        .unwrap();
+        assert!(fixture
+            .store
+            .read_task_admission(
+                fixture.run_id.as_str(),
+                &task_id,
+                scheduled.claim.attempt_id.as_str(),
+            )
+            .unwrap()
+            .is_some(), "Prepare follows a durable task admission");
+    }
+
+    #[test]
+    fn malformed_foreign_or_missing_authored_reference_fails_before_claim_or_admission() {
+        for reference_kind in ["malformed", "foreign", "missing"] {
+            let fixture = invalid_authored_state_fixture(reference_kind);
+            fixture
+                .store
+                .release_accepted_run_start(
+                    fixture.run_id.as_str(),
+                    &fixture.specification_sha256,
+                    "compute-release",
+                )
+                .unwrap();
+            let before = fixture
+                .store
+                .read_run_catalog(fixture.run_id.as_str())
+                .unwrap()
+                .unwrap();
+            let admission_calls = std::cell::Cell::new(0);
+            let error = super::schedule_next_ready_accepted_task_with_admission(
+                &fixture.store,
+                &fixture.run_id,
+                offer(),
+                |_| Ok(true),
+                |_task, _claim, _inputs, _preparation, _accepted| {
+                    admission_calls.set(admission_calls.get() + 1);
+                    Ok(None)
+                },
+            )
+            .expect_err("invalid authored provenance must fail before task start");
+            assert_eq!(admission_calls.get(), 0, "invalid provenance cannot reach admission");
+            assert!(
+                error.to_string().contains("authored initial state"),
+                "{reference_kind} must fail the existing authored-reference validator: {error:#}"
+            );
+            let after = fixture
+                .store
+                .read_run_catalog(fixture.run_id.as_str())
+                .unwrap()
+                .unwrap();
+            assert_eq!(after, before, "invalid provenance cannot queue or claim a task");
+            let task_id = fullmag_session::task_id_for_study_step(
+                fixture.run_id.as_str(),
+                "step:run",
+            )
+            .unwrap();
+            assert!(fixture
+                .store
+                .read_active_resource_lease_for_task(fixture.run_id.as_str(), &task_id)
+                .unwrap()
+                .is_none());
         }
     }
 

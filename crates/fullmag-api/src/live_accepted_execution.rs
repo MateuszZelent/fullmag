@@ -3110,6 +3110,182 @@ mod tests {
         })).unwrap()
     }
 
+    fn selected_b_scene_plan() -> (
+        fullmag_authoring::SceneDocument,
+        fullmag_authoring::StudyPlan,
+        fullmag_plan::StudyProblemCatalog,
+        fullmag_ir::ProblemIR,
+    ) {
+        use fullmag_authoring::{
+            StudyExecutionProfileReference, StudyModelReference, StudyPlanMigrationDefaults,
+            StudySolverConfigReference,
+        };
+
+        let mut scene = ui_source_scene();
+        scene.study.study_pipeline = Some(serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v2",
+            "nodes": [
+                {"node_kind": "primitive", "id": "step:a", "label": "A",
+                    "source": "ui_authored", "stage_kind": "run"},
+                {"node_kind": "primitive", "id": "step:b", "label": "B",
+                    "source": "ui_authored", "stage_kind": "run"},
+                {"node_kind": "primitive", "id": "step:c", "label": "C",
+                    "source": "ui_authored", "stage_kind": "run"}
+            ]
+        })).unwrap());
+
+        let profile = fullmag_application::legacy_live_execution_profile();
+        let defaults = StudyPlanMigrationDefaults {
+            model: StudyModelReference { model_id: "model:p10".into(), version: "1".into() },
+            solver_config: StudySolverConfigReference {
+                preset_id: "solver:p10".into(), version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:p10".into(), version: "1".into(),
+            },
+            execution_profile: StudyExecutionProfileReference {
+                profile_id: profile.profile_id, version: profile.version,
+            },
+        };
+        let mut study = fullmag_authoring::scene_document_to_study_plan(
+            &scene, "study:p10-selected-b", scene.revision, &defaults,
+        ).unwrap();
+        crate::script::select_scene_pipeline_tasks(&mut study);
+
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({"device": "cpu", "precision": "double"}),
+        );
+        let inputs = study.steps.iter().filter(|step| step.enabled).map(|step| {
+            fullmag_application::StudyStepExecutionInput {
+                step_id: step.step_id.clone(),
+                problem: problem.clone(),
+                layers: Vec::new(),
+            }
+        }).collect::<Vec<_>>();
+        fullmag_application::bind_scene_study_physical_state_flow(
+            &mut study, scene.study.study_pipeline.as_ref(), &inputs,
+        ).unwrap();
+        let entries = study.steps.iter().filter(|step| step.enabled).map(|step| {
+            fullmag_plan::StudyProblemCatalogEntry::from_step(step, problem.clone())
+        }).collect();
+        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, entries).unwrap();
+        (scene, study, catalog, problem)
+    }
+
+    #[test]
+    fn selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b() {
+        use fullmag_authoring::StudyInputSource;
+        use super::{select_live_step, RuntimeCommandTarget};
+
+        let (_scene, mut study, catalog, problem) = selected_b_scene_plan();
+        let target = RuntimeCommandTarget::StageId { stage_id: "step:b".into() };
+        let selected = select_live_step(&study, "run", Some(&target)).unwrap();
+        assert_eq!(study.steps[selected].step_id, "step:b");
+        assert!(matches!(
+            &study.steps[1].inputs[0].source,
+            StudyInputSource::StepOutput { step_id, port, .. }
+                if step_id == "step:a" && port == "final_state"
+        ));
+        assert!(matches!(
+            &study.steps[2].inputs[0].source,
+            StudyInputSource::StepOutput { step_id, port, .. }
+                if step_id == "step:b" && port == "final_state"
+        ));
+
+        let a_plan = fullmag_plan::plan(catalog.entries().iter()
+            .find(|entry| entry.step_id() == "step:a").unwrap().problem()).unwrap();
+        let b_plan = fullmag_plan::plan(catalog.entries().iter()
+            .find(|entry| entry.step_id() == "step:b").unwrap().problem()).unwrap();
+        let source_layout = fullmag_runner::study_magnetization_layout_for_plan(&a_plan).unwrap();
+        let values = match &a_plan.backend_plan {
+            fullmag_ir::BackendPlanIR::Fdm(fdm) => vec![[0.6, 0.8, 0.0]; fdm.initial_magnetization.len()],
+            _ => panic!("the selected B fixture must use the FDM lane"),
+        };
+        assert!(!values.is_empty());
+        fullmag_runner::materialize_study_magnetization_input(
+            &b_plan, &source_layout, &values,
+        ).expect("the qualified A layout and samples are compatible with B");
+        let decision = crate::live_accepted_continuation::InitialStateDecision::Continuation(
+            crate::live_accepted_continuation::ContinuationSource {
+                run_id: "run:qualified-a".into(),
+                step_id: "step:a".into(),
+                case_id: "default".into(),
+                artifact_id: "artifact:qualified-a-final-state".into(),
+                content_sha256: "a".repeat(64),
+                layout: source_layout,
+                values,
+            },
+        );
+
+        crate::live_stage_initial_state::restrict_live_study_to_selected_step(
+            &mut study, selected, &problem, &decision,
+        ).expect("rebind B to A's qualified result before validating the isolated graph");
+        assert!(!study.steps[0].enabled, "A is retained as definition, not scheduled");
+        assert!(study.steps[1].enabled);
+        assert!(!study.steps[2].enabled, "C is not scheduled by the selected-B request");
+        assert!(study.steps[1].completion_dependencies.is_empty());
+        assert!(matches!(
+            &study.steps[1].inputs[0].source,
+            StudyInputSource::PinnedArtifact { artifact_id, content_sha256 }
+                if artifact_id == "artifact:qualified-a-final-state"
+                    && content_sha256 == &"a".repeat(64)
+        ));
+
+        let lowered = fullmag_plan::lower_study_plan(
+            &study, |_| Ok::<_, String>(problem.clone()),
+        ).expect("the rebound selected plan must pass the normal compiler");
+        assert_eq!(
+            lowered.steps.iter().filter(|step| step.enabled)
+                .map(|step| step.step_id.as_str()).collect::<Vec<_>>(),
+            vec!["step:b"],
+        );
+    }
+
+    #[test]
+    fn selected_b_rejects_unqualified_disabled_and_cyclic_predecessors() {
+        use fullmag_authoring::StudyInputSource;
+        use super::{select_live_step, RuntimeCommandTarget};
+
+        let (scene, study, catalog, _) = selected_b_scene_plan();
+        let selected = select_live_step(
+            &study,
+            "run",
+            Some(&RuntimeCommandTarget::StageId { stage_id: "step:b".into() }),
+        ).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path()).unwrap();
+        let context = crate::types::CurrentLiveRequestContext {
+            session_id: "session:p10".into(),
+            run_id: None,
+            session_epoch: 1,
+            request_scope_epoch: "api:p10".into(),
+        };
+
+        let error = crate::live_stage_initial_state::resolve_selected_live_initial_state(
+            &store, &context, &scene, &study, catalog.entries(), selected, true, None,
+        ).unwrap_err();
+        assert!(error.message.contains("unavailable current predecessor"), "{error}");
+
+        let mut disabled = study.clone();
+        disabled.steps[0].enabled = false;
+        let error = crate::live_stage_initial_state::resolve_selected_live_initial_state(
+            &store, &context, &scene, &disabled, catalog.entries(), selected, true, None,
+        ).unwrap_err();
+        assert!(error.message.contains("required predecessor 'step:a' is unavailable"), "{error}");
+
+        let mut cyclic = study;
+        cyclic.steps[1].inputs[0].source = StudyInputSource::StepOutput {
+            step_id: "step:c".into(), port: "final_state".into(), case_id: "default".into(),
+        };
+        let error = crate::live_stage_initial_state::resolve_selected_live_initial_state(
+            &store, &context, &scene, &cyclic, catalog.entries(), selected, true, None,
+        ).unwrap_err();
+        assert!(error.message.contains("unsupported predecessor state chain"), "{error}");
+    }
+
     #[test]
     fn legacy_preparation_capture_preserves_cpu_threads_through_python_and_binding() {
         let root = crate::script::repo_root();

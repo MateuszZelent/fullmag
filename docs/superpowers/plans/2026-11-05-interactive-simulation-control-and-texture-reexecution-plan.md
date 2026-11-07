@@ -774,3 +774,14 @@ Dowody testowe użyte w tabeli:
 3. Odbiór bazowy: S29 A→B→C wraz z publicznym terminalnym lifecycle; następnie rzeczywisty PPM B i Compute Study. Każda komenda ma osobną nową tożsamość; nie ponawiać nieznanego wyniku.
 4. Edycja materiału → Stage A; FDM cell 8→16 → całe Study; reset globalny i regionalny; trwała historia, eksport/import i reload. Rozszerzyć istniejący harness o te profile, bez tworzenia duplikatu istniejącego edytora FDM.
 5. Pozostałe scenariusze S01–S46 i deklarowane realizacje FEM/FDM CPU/GPU/multilayer, potem wymagane CI/review/PR → master → kwalifikowane zakończenie worktree. Samo rozliczenie i samo uruchomienie Dockera nie kończy P22.
+
+
+### Dalszy odbiór po rozliczeniu — 2026-11-07
+
+Recovery próby sieci 84bd676a618e41748c9b261fb6f95d95 zakończyło się failed-confirmed z zachowaniem poprzednich wskaźników i wszystkich 20 kontrolowanych plików S29e. Nowy managed start 8e53ef90a12745f19779a45ae0106392 zakończył się sukcesem. Działa czysty pakiet e4c5319987e9b1f3e335e5069ba12f559f8c0662 (snapshot 086878b5b37bd72674908acb41ff1a07ab4082e9a56959f08542f24a7e06b516); API oraz native runtime przeszły niezależne kontrole gotowości.
+
+Nowy S29f (run-live-ece6933373c9d98b18a2649aa1157abe7a241d69b737ad971ede8b946db9b4d1) wykonał trzy etapy Succeeded. Niezależny odczyt manifestów, aktualnych prób workerów i próbek CAS potwierdził A→B→C. Publiczne API pokazało Completed, trzy etapy completed oraz awaiting_command. To ograniczony dowód FDM CPU na ośmiu komórkach, nie dowód zbieżności ani innych realizacji.
+
+Dodano cztery dedykowane regresje P10/P11: `selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b`, `selected_b_rejects_unqualified_disabled_and_cyclic_predecessors`, `required_authored_initial_state_reaches_prepare_without_a_cas_input`, `malformed_foreign_or_missing_authored_reference_fails_before_claim_or_admission`. Dwie pierwsze obejmują selektor, wiązanie i kompilację grafu; dodatnia fixture źródła A sprawdza zgodność layoutu/próbek, lecz sama nie ładuje jego proweniencji z CAS. Dwie kolejne używają rzeczywistego trwałego store i schedulera queue/admission/Prepare. Testy znalazły się w istniejących filtrach CI live_accepted_execution::tests i scheduler::accepted_start_tests. Parser Rust obu plików i diff check przeszły; wykonanie nowych testów w CI oraz rzeczywisty B-only pozostają otwarte.
+
+Rzeczywisty harness PPM najpierw zatrzymał nieaktualny dispatcher just przed przeglądarką (naprawiony z testem RED/GREEN). Następny preflight przekroczył limit podczas zimnego ładowania frontendu, również przed uruchomieniem przeglądarki i przed komendą. Receipt błędu potwierdzono; ponowiony odczyt dokładnego URL zwrócił 200 i poprawny redirect do /workspace. Żadnego z tych dwóch zdarzeń nie zaliczono jako testu PPM. Kod produktu pozostał bez zmian względem działającego e4c; późniejsze zmiany dotyczą wrappera QA, testów i dokumentacji.
