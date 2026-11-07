@@ -2860,9 +2860,9 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
                  static_cast<unsigned long long>(control_bytes),
                  static_cast<unsigned long long>(control_fences));
     // Aggregate counters include the explicitly classified scalar readbacks.
-    // Each of the two solves can read at most the RHS and residual norms.
-    check(control_fences <= 4u && control_bytes == control_fences * sizeof(double),
-          "mixed-P1 GPU validation may read only one scalar per required norm");
+    // Both solves must independently certify the RHS and residual norms.
+    check(control_fences == 4u && control_bytes == 4u * sizeof(double),
+          "mixed-P1 GPU validation must certify both solves using scalar-only readbacks");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
               after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&
               after.hot_loop_host_sync_count - before.hot_loop_host_sync_count == control_fences &&
@@ -3000,6 +3000,64 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         check(HYPRE_ClearError(HYPRE_ERROR_ARG) == 0 &&
                   HYPRE_GetError() == before_argument_error,
               "test must clear only its injected argument error");
+
+        // A real successful PCG solve must still be independently certified.
+        // Corrupt only its owned potential vector after the final use of this solve;
+        // the HYPRE success bit remains the result of the solve above.
+        auto *validation_workspace = fullmag::fem::workspace_ptr(ctx);
+        check(validation_workspace != nullptr && validation_workspace->solver != nullptr &&
+                  validation_workspace->x_par != nullptr && validation_workspace->b_par != nullptr &&
+                  validation_workspace->stream_interop.ready &&
+                  validation_workspace->stream_interop.hypre_stream != nullptr,
+              "independent residual regression requires the initialized mixed-P1 Hypre workspace");
+        int successful_iterations = 0;
+        double solver_reported_residual = 0.0;
+        bool solver_reported_converged = false;
+        fullmag::fem::read_demag_poisson_hypre_solver_stats(
+            ctx, *validation_workspace, successful_iterations,
+            solver_reported_residual, solver_reported_converged);
+        const double rhs_norm_before_corruption = validation_workspace->b_par->Norml2();
+        const double potential_norm_before_corruption = validation_workspace->x_par->Norml2();
+        check(solver_reported_converged && successful_iterations > 0 &&
+                  std::isfinite(solver_reported_residual) && solver_reported_residual >= 0.0,
+              "independent residual regression must start from an actual successful GPU CG solve");
+        check(std::isfinite(rhs_norm_before_corruption) && rhs_norm_before_corruption > 0.0 &&
+                  std::isfinite(potential_norm_before_corruption) &&
+                  potential_norm_before_corruption > 0.0,
+              "independent residual regression requires a nonzero RHS and solved potential");
+
+        const auto validation_stream = validation_workspace->stream_interop.hypre_stream;
+        const int validation_rows = validation_workspace->x_par->Size();
+        check(validation_rows > 0 &&
+                  ctx.gpu_state.device.demag_poisson.poisson_solution != nullptr,
+              "independent residual regression requires the owned device potential storage");
+        check(cudaMemsetAsync(
+                  ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
+                  static_cast<size_t>(validation_rows) * sizeof(double),
+                  validation_stream) == cudaSuccess,
+              "independent residual regression corrupts only the test-owned potential on the Hypre stream");
+        validation_workspace->x_par->HypreWrite();
+        check(cudaStreamSynchronize(validation_stream) == cudaSuccess,
+              "independent residual regression orders the test-only potential corruption");
+
+        int corrupted_iterations = 0;
+        double independently_checked_residual = 0.0;
+        error.clear();
+        const bool corrupted_candidate_accepted =
+            fullmag::fem::validate_demag_poisson_hypre_device_solve(
+                ctx, *validation_workspace, corrupted_iterations,
+                independently_checked_residual, error);
+        check(!corrupted_candidate_accepted &&
+                  corrupted_iterations == successful_iterations &&
+                  std::isfinite(independently_checked_residual) &&
+                  independently_checked_residual > ctx.demag.solver.relative_tolerance &&
+                  error.find("solver_reported_converged=true") != std::string::npos &&
+                  error.find("residual_independently_certified=true") != std::string::npos &&
+                  error.find("relative_tolerance=") != std::string::npos,
+              "independent Euclidean residual must reject a corrupted potential despite stale solver success");
+        std::printf(
+            "gpu_independent_residual_corruption_rejected rows=%d residual=%.17g\n",
+            validation_rows, independently_checked_residual);
     }
     fullmag::fem::gpu_demag_poisson_destroy(ctx);
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);

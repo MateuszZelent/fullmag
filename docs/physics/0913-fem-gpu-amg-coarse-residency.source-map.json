@@ -222,8 +222,8 @@
       "id": "residual",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "validate_demag_poisson_hypre_device_solve",
-      "responsibility": "Warunkowo liczy normę Ax-b i RHS; przy sukcesie CG może używać raportowanej normy preconditionowanej.",
-      "evidence_status": "source-audited: independent Euclidean GPU certification remains open; stored-output parity does not close this gate",
+      "responsibility": "Historyczny kod użyty w eksperymentach transportu liczył normę Ax-b i RHS warunkowo; późniejszą certyfikację każdego solve opisuje nota 0532.",
+      "evidence_status": "Historical source mapping for retained transport results; subsequent native RED/GREEN and 50 fs OFF residual-certificate evidence is scoped in 0532.",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452"
     },
     {
@@ -331,6 +331,6 @@
     "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580",
     "packed_field_download": "GPU contract passed; 50fs OFF/ON and coarse18-OFF field/table parity exact; 318→252 cudaMemcpy2D,22pack kernels, identical D2H bytes; one sample per variant/mode, repeated speedup not qualified",
     "packed_evidence_sha256": "a6f7b5c5700b97e88b64d4d8c47dd3329c3468530c3194d92b58f70eaa79e166",
-    "residual_norm_limit": "Pinned CG uses preconditioned norm. CPU true-residual check is independent; current GPU check is conditional. SP4atol=None; transport experiment does not close Euclidean certification gap."
+    "residual_norm_limit": "Historical transport-experiment CG uses the preconditioned norm and conditional GPU true-residual check. Subsequent every-solve Euclidean certification passed native RED/GREEN and seven-step 50 fs OFF full-Zarr parity; see 0532. Full 1 ns SP4 and corrected-source CUPTI remain unqualified."
   }
 }

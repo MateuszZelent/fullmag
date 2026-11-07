@@ -461,7 +461,9 @@ bool validate_demag_poisson_hypre_device_solve(
     read_demag_poisson_hypre_solver_stats(
         ctx, workspace, iterations, residual, solver_reported_converged);
 
-    constexpr bool force_independent_validation = false;
+    // HYPRE CG can report a preconditioned residual. Certify the actual
+    // candidate independently, including solver-reported successes.
+    constexpr bool force_independent_validation = true;
     const auto validation_needs = resolve_hypre_residual_validation_needs(
         solver_reported_converged,
         ctx.demag.solver.has_absolute_tolerance != 0,

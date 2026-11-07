@@ -89,11 +89,11 @@ independent acceptance threshold. The pinned MFEM `HyprePCG` defaults do not
 enable HYPRE's `two_norm` option, so its internal CG criterion uses a
 preconditioned norm. Its absolute threshold is not generally the Euclidean
 threshold in this table. GMRES uses the Euclidean residual norm. Native CPU
-Poisson independently checks `||Ax-b||2`; the current GPU implementation does
-so conditionally, when the solver does not report convergence. A successful
-GPU CG report alone is therefore not an independent Euclidean certificate.
-The 50 fs SP4 transport experiments use `atol=None` and leave this algorithmic
-criterion unchanged. See the current implementation boundary in section 5.1.
+Poisson independently checks `||Ax-b||2`. The corrected device-HYPRE GPU
+path also computes that certificate after every solve, including a reported
+CG success. A successful CG report alone is not an independent Euclidean
+certificate. The historical 50 fs SP4 transport experiments use `atol=None`
+and predate this correction; see the qualification boundary in section 5.1.
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -387,23 +387,46 @@ solver kind, iteration count, residual, relative/absolute tolerance, and
 maximum iterations. Last-attempt iteration/residual telemetry remains
 available for diagnosis, but the failed field is never current solver state.
 
-#### Current GPU boundary and planned independent check
+#### Independent GPU residual check and qualification boundary
 
 At source revision `53a5d5171e06db3c4950511d4523f872f58317f1`, a reported
 GPU CG success can skip the independent residual calculation. With a positive
 `atol`, that path multiplies the reported relative residual by `||b||2`;
-for preconditioned CG this is not generally `||Ax-b||2`. This is an open
-validation gap, not evidence that the retained SP4 fields are wrong.
+for preconditioned CG this is not generally `||Ax-b||2`. This historical
+validation gap does not by itself establish an error in the retained SP4 fields.
 
-The next correction must compute `||Ax-b||2` and `||b||2` on the GPU after
-every device-HYPRE Poisson solve, before publishing its candidate field,
-irrespective of HYPRE's success report. It must keep authored tolerances,
-the iteration cap, the internal CG norm choice, and the existing shared
-acceptance rule. Only scalar norms may return to the host; full vectors stay
-on the device for this check. Its native regression must start with a real
-successful GPU CG solve, corrupt only the test-owned potential, and require
-the production validator to reject that potential despite the stale success
-report. This correction and its RED/GREEN runtime proof remain pending.
+The corrected path computes `||Ax-b||2` and `||b||2` on the GPU after every
+device-HYPRE Poisson solve, before publishing its candidate field, irrespective
+of HYPRE's success report. It preserves authored tolerances, the iteration cap,
+the internal CG norm choice, and the existing shared acceptance rule. Only two
+scalar norms return to the host; full vectors stay on the device for this check.
+
+The native regression starts with a real successful GPU CG solve, zeros only
+the test-owned potential after its final use, and requires the production
+validator to reject that potential despite the stale success report. Managed
+RED compiled successfully and failed at that assertion on the old path. Managed
+GREEN passed `fem-demag-poisson`, emitted
+`gpu_independent_residual_corruption_rejected rows=8 residual=1`, and retained
+the packed-field GPU runtime check. The mixed-P1 audit requires exactly four
+scalar readbacks (32 bytes) across two solves and excludes full-vector hot-loop
+transfers.
+
+This native proof is scoped to source snapshot
+`53ca91e871dea24376153412b2dbe7c8b7e70647e20cc71db5887893c45cc8ea`,
+FEM library `62a74c4969ac6d6e0971e9d4eacd3c4c7ab4e146e8c48aaa2d5cedb1e5778f59`,
+and contract attempt `0b53c886a43f4bd5a60b925fdcee754f` (compile/test exit 0).
+The subsequent strict-GPU SP4 OFF probe completed seven accepted steps to
+50 fs with full Zarr. All 15 table columns and both frames of all four fields
+were bitwise equal to the earlier packed-field OFF result; accepted time,
+time step, and iteration counts were unchanged. Independently certified
+relative residuals were between `2.16e-13` and `2.86e-13`, within the authored
+`1e-12` bound. Run `run-live-05242fe02997994db4f8b2ba8b37b716d1ae553a4f475a238a3fd63bc6993923`
+is pinned by report SHA-256
+`1824aec5a08a0aa5cf05a22608c45fd532ee9f4b385d844cbade2c897ccb8ebf`.
+Its single OFF solver timing was 4.211 s versus the earlier 3.836 s; neither
+this difference nor a total speedup is qualified by repeated timing. Full
+1 ns SP4, MuMax3 GPU parity, and a corrected-source CUPTI ON/OFF pair remain
+separate qualification gates.
 
 (validation)=
 ## 6. Validation strategy
@@ -445,8 +468,10 @@ report. This correction and its RED/GREEN runtime proof remain pending.
 (limitations)=
 ## 8. Known limits and deferred work
 
-- The GPU independent Euclidean residual gap described in section 5.1 remains
-  open; stored field/energy/torque parity does not close that gate.
+- Independent GPU certification passed the native RED/GREEN contract in
+  section 5.1 and its seven-step full-Zarr probe. Full 1 ns SP4 qualification
+  with that correction remains pending;
+  historical stored field/energy/torque parity does not qualify the new path.
 - Live mid-run thread-pool retuning is still unsupported.
 - Native FEM currently reports OpenMP thread resolution through runtime/log
   diagnostics and FFI step stats; richer direct UI telemetry can replace
@@ -947,7 +972,7 @@ managed-runtime qualification.
 | General strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb` | Checks the omitted-policy non-PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/native_fem.rs#L8641) |
 | PGBB strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb` | Checks the omitted-policy PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/native_fem.rs#L8654) |
 | CPU Poisson solver | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Configures Hypre solver/preconditioner and validates the attempted solve. | FEM CPU | Source-visible; this page does not claim a fresh CPU runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L211) |
-| GPU Poisson residual validation | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Validates device solve convergence, residual, and tolerance evidence. | FEM GPU | Source-visible; narrow type-18 runtime evidence is documented separately in note 0913. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452) |
+| GPU Poisson residual validation | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Independently certifies Euclidean RHS and residual norms after every device-HYPRE solve. | FEM GPU | Native RED/GREEN and seven-step full-Zarr OFF parity passed; see section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452) |
 | Potential RHS | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | Assembles the magnetization source for the finite-element Poisson equation. | FEM CPU; shared equation contract | Source-visible; see `fem_demag_poisson_contract`. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L359) |
 | Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Recovers `H_demag` from the potential gradient. | FEM CPU; shared equation contract | Source-visible; manufactured-potential check is described in `docs/physics/fem_demag_poisson.md`. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L709) |
 | Native FEM host threads | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | Resolves and applies the native OpenMP team at run start. | FEM CPU; GPU host initialization | `cpu_threads_contract` source contract; no device-residency claim. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/runtime/cpu_threads.cpp#L137) |
@@ -957,5 +982,5 @@ managed-runtime qualification.
 | Policy script export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_fem_demag_solver_policy` | Exports the authored policy for script round-trip. | FEM authoring round-trip | Source-visible; export/re-import does not execute a solver. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/runtime/script_builder.py#L3869) |
 | Policy acceptance regression | `packages/fullmag-py/tests/test_standard_problem_4_fem.py` | `test_sp4_requests_qualified_demag_linear_solver_policy` | Checks the SP4 policy request in the authored script. | FEM API | Existing repository test; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/tests/test_standard_problem_4_fem.py#L10) |
 | Native CPU thread contract | `backends/fem/tests/cpu_threads_contract.cpp` | `main` | Exercises native thread resolution and setup behavior. | FEM CPU | Existing source contract; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/cpu_threads_contract.cpp#L315) |
-| Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing source contract; the planned corrupted-potential GPU regression is not yet executed. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
-| Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing source contract; the planned corrupted-potential GPU regression is not yet executed. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/demag_poisson_contract.cpp#L151) |
+| Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
+| Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/demag_poisson_contract.cpp#L151) |

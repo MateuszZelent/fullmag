@@ -14,7 +14,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "narrow runtime diagnostic only; full SP4 remains unqualified",
-      "scope": "The 50 fs coarse-relaxation type 18 result is linked from note 0913 and is not generalized to CPU or whole-SP4 qualification."
+      "scope": "Device-HYPRE independent residual native RED/GREEN and seven-step 50 fs full-Zarr parity passed; full 1 ns SP4 and repeated speedup remain unqualified."
     },
     {
       "solver": "FDM",
@@ -209,7 +209,7 @@
       "id": "gpu-poisson-validation",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "validate_demag_poisson_hypre_device_solve",
-      "responsibility": "Validates device solver convergence and residual/tolerance evidence."
+      "responsibility": "Independently certifies the GPU candidate using Euclidean RHS and residual norms before shared validation, including reported HYPRE success."
     },
     {
       "id": "poisson-rhs",
@@ -368,7 +368,7 @@
   ],
   "validation": {
     "object_example": "Policy.to_ir checked without Solve.",
-    "gpu_residual_norm": "Current CG uses preconditioned norm; independent Euclidean GPU check is conditional. Planned every-solve certificate and corrupted-potential RED/GREEN remain pending.",
+    "gpu_residual_norm": "Managed native corrupted-potential RED/GREEN passed, followed by a seven-step 50 fs full-Zarr OFF parity check with independent relative residuals 2.16e-13..2.86e-13 <= 1e-12. Full 1 ns SP4 and corrected-source CUPTI remain unqualified.",
     "unchanged_tolerances": "SP4 uses rtol1e-12,atolNone,max500; the transport probe did not change these.",
     "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed."
   }
