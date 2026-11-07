@@ -3501,6 +3501,16 @@ const request = {method:'POST', path:'/v2/sessions/current/simulation/commands',
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};
 const context = {mode:'stage-b', session, expectedPrecondition:precondition, commandCount:0, phase:'ui-submit'};
+const activeStatus = {session,lifecycle:{connectivity:'connected',session_resource:'active',commandability:'allowed'}};
+assert.deepEqual(runner.readStudyStageSessionIdentity(activeStatus), session);
+const runningStatus = {...activeStatus,lifecycle:{...activeStatus.lifecycle,commandability:'forbidden'}};
+assert.throws(() => runner.readStudyStageSessionIdentity(runningStatus));
+assert.deepEqual(runner.readStudyStageSessionIdentity(runningStatus,{requireCommandable:false}), session);
+for (const invalid of [
+  {...runningStatus,lifecycle:{...runningStatus.lifecycle,connectivity:'disconnected'}},
+  {...runningStatus,lifecycle:{...runningStatus.lifecycle,session_resource:'inactive'}},
+  {...runningStatus,session:{...session,request_scope_epoch:''}},
+]) assert.throws(() => runner.readStudyStageSessionIdentity(invalid,{requireCommandable:false}));
 const cameraRequest = {method:'PATCH',path:'/v2/sessions/current/visualization/state',scope,
   body:{camera:{fov_degrees:45,orthographic_scale:null,position:[1,2,3],projection:'perspective',
     target:[0,0,0],up:[0,1,0]}}};

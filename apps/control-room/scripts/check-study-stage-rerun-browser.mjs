@@ -242,7 +242,7 @@ async function sourceHashes() {
   return Object.fromEntries(entries);
 }
 
-function readSessionIdentity(status) {
+export function readStudyStageSessionIdentity(status, { requireCommandable = true } = {}) {
   const session = status?.session;
   assert(plainRecord(session) && session.name === sessionName, "The current session is not the task-owned P22 fixture");
   for (const key of identityKeys) {
@@ -251,7 +251,8 @@ function readSessionIdentity(status) {
   }
   assert(status.lifecycle?.connectivity === "connected"
     && status.lifecycle?.session_resource === "active"
-    && status.lifecycle?.commandability === "allowed", "The P22 session is not commandable");
+    && (!requireCommandable || status.lifecycle?.commandability === "allowed"),
+    "The P22 session is disconnected, inactive or not commandable");
   return Object.fromEntries([...identityKeys, "name"].map((key) => [key, session[key]]));
 }
 
@@ -579,7 +580,7 @@ export async function runStudyStageRerun() {
   } = {}) {
     const status = await apiGet(statusPath, expectedSession, false);
     readCounts.status++;
-    const observedSession = readSessionIdentity(status);
+    const observedSession = readStudyStageSessionIdentity(status);
     if (expectedSession) assertSameSession(expectedSession, observedSession);
     else session = observedSession;
     if (requireIdle) {
@@ -599,7 +600,7 @@ export async function runStudyStageRerun() {
     readCounts.solver_status++;
     const statusAfter = await apiGet(statusPath, observedSession, false);
     readCounts.status++;
-    const sessionAfter = readSessionIdentity(statusAfter);
+    const sessionAfter = readStudyStageSessionIdentity(statusAfter);
     assertSameSession(observedSession, sessionAfter);
     for (const key of [...regionRevisionKeys, "scene_revision", "mesh_revision", "domain_generation_id",
       "commands_revision", "stages_revision"]) {
@@ -633,7 +634,7 @@ export async function runStudyStageRerun() {
     const precondition = studyStageComputePrecondition(statusAfter, currentRun, solverStatus, commands);
     const fence = await apiGet(statusPath, observedSession, false);
     readCounts.status++;
-    assertSameSession(observedSession, readSessionIdentity(fence));
+    assertSameSession(observedSession, readStudyStageSessionIdentity(fence));
     for (const key of [...regionRevisionKeys, "scene_revision", "mesh_revision", "domain_generation_id",
       "commands_revision", "stages_revision"]) {
       assert.equal(fence.resources?.[key], statusAfter.resources?.[key], "P22 revision fence changed after reads");
@@ -691,7 +692,7 @@ export async function runStudyStageRerun() {
   async function readAfterCommand(expectedSession) {
     const status = await apiGet(statusPath, expectedSession, false);
     readCounts.status++;
-    assertSameSession(expectedSession, readSessionIdentity(status));
+    assertSameSession(expectedSession, readStudyStageSessionIdentity(status, { requireCommandable: false }));
     const currentRun = await apiGet(currentRunPath, expectedSession);
     readCounts.current_run++;
     const execution = await apiGet(executionPath, expectedSession);
