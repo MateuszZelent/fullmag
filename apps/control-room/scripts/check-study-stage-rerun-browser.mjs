@@ -793,12 +793,14 @@ export async function runStudyStageRerun() {
 
     let action;
     if (mode === "stage-b") {
-      for (const parentId of ["model:study", "model:study:stages"]) {
+      const expandParent = async (parentId) => {
         const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
         await parent.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
         await parent.focus();
         if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
-      }
+      };
+      await expandParent("model:study");
+      await expandParent("model:study:stages");
       const selectedStage = beforeClick.execution.stages.find((stage) => stage?.stage_id === "relax-b");
       assert(selectedStage, "The fresh completed stage execution omitted the exact Stage B target");
       const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:'
