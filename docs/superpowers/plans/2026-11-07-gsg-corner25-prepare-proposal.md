@@ -154,3 +154,30 @@ Python→Scene→Python nadal traci jawną domenę i mapę region_markers.
 opisują granicę i brak gotowości ogólnego kontraktu. Poprawka flag/ID nie
 stanowi naprawy wyboru domeny. Zgoda na corner25 i wykonanie prepare/Solve
 nadal nie nastąpiły; ten wpis nie aktywuje profilu ani nie kwalifikuje źródła.
+
+
+## Aktualizacja gotowości po zakończeniu naprawy eksportu — 07.11.2026
+
+Wpisy powyżej opisujące utratę domeny przez SceneDocument są historyczne.
+[Raport zakończonej naprawy](2026-11-07-explicit-domain-roundtrip-result.md)
+potwierdza pełny roundtrip obu przypiętych wejść, również corner25, przez
+rzeczywiste adaptery Rust i Python. Końcowy
+[CI 42402270407](https://github.com/MateuszZelent/fullmag/actions/runs/42402270407)
+dla kodu d8d35943caca6d894562077828ea077555bdbf21 zakończył się success.
+Guardy potwierdziły zero tworzenia siatek i zero zgłoszeń Solve.
+Ta kontrola authoringu nie kwalifikuje wyniku fizycznego.
+
+Odczytowy docker_gsg_reference.qualified_backend przeszedł dla istniejącej
+pary usług 3203: development attempt 894d4efb43eb483eb6179d8d49fd449e,
+config SHA256 1c0a74f52438f272836dd5c248dd06559cf19774c2c92b8394efd23a4ec10bd4,
+backend 05de79a8e6d4f33d1c7b8b201c69cc9813fa3beec0ccbe9d99013941de301ced.
+Potwierdził bieżącą inkarnację, zdrowie usług, powiązany pakiet i manifest
+archiwum. Nie wykonano control.prepare, operacji przygotowania ani restartu.
+Nowe poprawki Rust authoringu nadal nie są wdrożone w tym starszym pakiecie.
+
+Osobna ścieżka prepare-only nie wymaga zwalniania zawieszonej rezerwacji
+obliczeniowej. Nie jest to zgoda na Solve ani dowód, że kolejny Solve zostanie
+przyjęty. Kontroler ponownie sprawdzi tę samą grupę przed przyjęciem operacji.
+Ponowny odczyt kandydata, patcha i walidacji potwierdził niezmienione SHA256
+z tabeli. Patch pozostaje niewdrożony, corner25 nie wykonano; wymagana jest
+decyzja o tej jednej próbie. Dotychczasowe limity i fizyka pozostają bez zmian.
