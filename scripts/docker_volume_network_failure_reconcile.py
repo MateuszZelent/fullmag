@@ -511,6 +511,77 @@ def _failure_result(original_raw: bytes, proof_raw: bytes, observation: dict[str
     return canonical(result) + b"\n"
 
 
+def _publication_paths(attempt: str, recovery_id: str | None = None) -> dict[str, str]:
+    require(isinstance(attempt, str) and TOKEN.fullmatch(attempt) is not None,
+            "Invalid publication attempt")
+    root = "development/attempts/" + attempt + "/reconciliation"
+    if recovery_id is not None:
+        require(isinstance(recovery_id, str) and TOKEN.fullmatch(recovery_id) is not None,
+                "Recovery identity must be a complete lowercase token")
+        root += "/recoveries/" + recovery_id
+    return {"proof": root + "/network-failure-proof.json",
+            "result": root + "/result.json", "prepared": root + "/prepared.json"}
+
+
+
+def _load_prepared_recovery(control, args, original_raw) -> dict[str, object] | None:
+    previous_sha = getattr(args, "resume_prepared_sha256", None)
+    recovery_id = getattr(args, "recovery_id", None)
+    if previous_sha is None and recovery_id is None:
+        return None
+    _require_sha(previous_sha, "resume-prepared-sha256")
+    require(recovery_id is not None, "Prepared recovery requires an explicit recovery-id")
+    new_paths = _publication_paths(args.attempt, recovery_id)
+    root = "development/attempts/" + args.attempt
+    for relative in (root + "/network-failure-reconcile.lock", root + "/terminal.json",
+                     "development/current.json", "development/verified.json", *new_paths.values()):
+        require(read_raw(control, relative, optional=True) is None,
+                "Prepared recovery has a partial publication or occupied generation")
+    require(digest(original_raw) == args.receipt_sha256
+            and read_raw(control, root + "/unknown-receipt.json") == original_raw,
+            "Prepared recovery lost its exact original receipt archive")
+    old_paths = _publication_paths(args.attempt)
+    raw = {key: read_raw(control, path) for key, path in old_paths.items()}
+    require(all(isinstance(value, bytes) for value in raw.values()),
+            "Prepared recovery is incomplete")
+    require(digest(raw["prepared"]) == previous_sha, "Prepared recovery digest changed")
+    prepared = _json(raw["prepared"], "Previous preparation")
+    require(prepared == {"schema": SCHEMA, "attempt": args.attempt,
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "proof_sha256": digest(raw["proof"]), "result_sha256": digest(raw["result"])},
+            "Previous preparation does not bind its complete proof and result")
+    proof = _json(raw["proof"], "Previous proof")
+    original = _json(original_raw, "Original development receipt")
+    require(all(proof.get(key) == value for key, value in {
+            "schema": SCHEMA, "state": "failed-confirmed", "attempt": args.attempt,
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "engine_id": args.engine_id, "compose_project": control.project,
+            "original_error_sha256": digest(str(original["error"]).encode("utf-8")),
+            "admission_scope": "initial-failure-only-group-local"}.items()),
+            "Previous proof belongs to another attempt, engine or group")
+    require(isinstance(proof.get("helper_id"), str) and SHA.fullmatch(proof["helper_id"]) is not None
+            and isinstance(proof.get("helper_fingerprint"), str)
+            and SHA.fullmatch(proof["helper_fingerprint"]) is not None,
+            "Previous proof does not pin its original helper")
+    result = _json(raw["result"], "Previous result")
+    reconciliation = result.get("reconciliation")
+    require(isinstance(reconciliation, dict), "Previous result has no reconciliation")
+    observation_sha = _require_sha(reconciliation.get("observation_sha256"), "previous observation digest")
+    expected = deepcopy(original)
+    expected.update(state="failed-confirmed", finished_at=result.get("finished_at"),
+        reconciliation={"schema": SCHEMA, "state": "failed-confirmed",
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "proof_sha256": digest(raw["proof"]), "observation_sha256": observation_sha,
+            "resource_policy": "retained"}, build_data_qualification="NOT VERIFIED")
+    require(result == expected and type(result.get("finished_at")) in (int, float)
+            and 0 < result["finished_at"] < float("inf"),
+            "Previous result changed original evidence or its failure-only semantics")
+    return {"prepared_sha256": previous_sha, "recovery_id": recovery_id,
+            "helper_id": proof["helper_id"], "helper_fingerprint": proof["helper_fingerprint"],
+            "previous_files": {old_paths[key]: digest(value) for key, value in raw.items()}}
+
+
+
 def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
     return b"" if documents is None else b"".join(
         base64.b64encode(payload) + b"\n" for payload in documents.values()
@@ -520,7 +591,8 @@ def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
 def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_sha: str,
                 proof_sha: str, result_sha: str, prepared_sha: str, *,
                 recover_absent_helper: bool = False, operation_lock_identity: str | None = None,
-                prepared_documents: dict[str, bytes] | None = None) -> str:
+                prepared_documents: dict[str, bytes] | None = None,
+                recovery: dict[str, object] | None = None) -> str:
     root = control.path("development/attempts/" + attempt)
     current = control.path("development/current.json")
     verified = control.path("development/verified.json")
@@ -528,14 +600,14 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
     terminal = root + "/terminal.json"
     archive = root + "/unknown-receipt.json"
     compose = root + "/compose.json"
-    proof = root + "/reconciliation/network-failure-proof.json"
-    result = root + "/reconciliation/result.json"
-    prepared = root + "/reconciliation/prepared.json"
+    paths = _publication_paths(attempt, recovery["recovery_id"] if recovery else None)
+    proof, result, prepared = (control.path(paths[key]) for key in ("proof", "result", "prepared"))
+    previous_files = recovery["previous_files"] if recovery else {}
     lock = root + "/network-failure-reconcile.lock"
     active = control.path("active")
     operation_lock = control.path("operation.lock")
     inputs = (active, operation_lock, receipt, compose,
-              archive, proof, result, prepared)
+              archive, proof, result, prepared, *(control.path(path) for path in previous_files))
     parents = set("/".join(path.split("/")[:-1]) for path in (*inputs, current, verified, terminal, lock))
     parent_checks = " ".join(
         f"test ! -L '{parent}'; test -d '{parent}'; "
@@ -582,9 +654,21 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
             f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
             f"rm -- '{active}'; sync '{control.path('active').rsplit('/', 1)[0]}'"
         )
+    previous_checks = " ".join(
+        f"test ! -L '{control.path(path)}'; test -f '{control.path(path)}'; "
+        f"test $(stat -c %h '{control.path(path)}') = 1; "
+        f"test \"$(sha256sum '{control.path(path)}' | cut -d' ' -f1)\" = '{value}';"
+        for path, value in previous_files.items())
+    if recovery:
+        previous_checks += (
+            f"test ! -L '{archive}'; test -f '{archive}'; test $(stat -c %h '{archive}') = 1; "
+            f"test \"$(sha256sum '{archive}' | cut -d' ' -f1)\" = '{original_sha}'; "
+        )
     preparation = ""
     if prepared_documents is not None:
-        expected = {archive: original_sha, proof: proof_sha, result: result_sha, prepared: prepared_sha}
+        expected = {proof: proof_sha, result: result_sha, prepared: prepared_sha}
+        if not recovery:
+            expected = {archive: original_sha, **expected}
         require(set(prepared_documents) == set(expected)
                 and all(digest(prepared_documents[path]) == sha for path, sha in expected.items()),
                 "Prepared failure documents differ from their exact pins")
@@ -594,13 +678,13 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
             f"test ! -L '{root}'; test -d '{root}'; test \"$(readlink -f '{root}')\" = '{root}'; "
             + " ".join(f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
                        for path in (active, receipt, compose)) + " "
-            + owner_check
+            + owner_check + previous_checks + " "
             + f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
             + f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
             + " ".join(f"test ! -L '{path}'; test ! -e '{path}';"
                        for path in (*expected, current, verified, terminal, lock)) + " "
         )
-        reconciliation = root + "/reconciliation"
+        reconciliation = prepared.rsplit("/", 1)[0]
         preparation += (
             f"test ! -L '{lock}'; test ! -e '{lock}'; set -C; exec 7>'{lock}'; set +C; flock -n 7; "
             f"test ! -L '{reconciliation}'; "
@@ -622,7 +706,7 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
     )
     script = (
         "umask 027; " + admission + preparation + parent_checks + " " + input_checks + " "
-        + transaction_lock +
+        + transaction_lock + previous_checks + " " +
 
         f"test \"$(cat '{active}')\" = '{attempt}'; "
         f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
@@ -678,9 +762,23 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     selected, identity, control = _identity_and_control(args.source_root)
     require(identity["source_root"] == str(selected), "Selected checkout identity is not canonical")
 
-    first = _observe(control, identity, args)
+    require(not (getattr(args, "recover_absent_helper", False)
+                 and (getattr(args, "resume_prepared_sha256", None) is not None
+                      or getattr(args, "recovery_id", None) is not None)),
+            "Prepared recovery cannot replace an absent original owner")
+    recovery = None
+    observation_options = {}
+    if getattr(args, "resume_prepared_sha256", None) is not None or getattr(args, "recovery_id", None) is not None:
+        original_raw = read_raw(control, "development/attempts/" + args.attempt + "/receipt.json")
+        recovery = _load_prepared_recovery(control, args, original_raw)
+        observation_options = {"allowed_archive": original_raw}
+    first = _observe(control, identity, args, **observation_options)
+    if recovery:
+        require(first["helper_id"] == recovery["helper_id"]
+                and first["helper_fingerprint"] == recovery["helper_fingerprint"],
+                "Prepared recovery no longer belongs to the original helper")
     time.sleep(0.5)
-    second = _observe(control, identity, args)
+    second = _observe(control, identity, args, **observation_options)
     require(canonical(second) == canonical(first),
             "Full Docker/control observation changed during the stability window")
     root = "development/attempts/" + args.attempt
@@ -689,9 +787,13 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     original = _json(original_raw, "Original development receipt")
     proof_raw = _proof_bytes(second, original)
     result_raw = _failure_result(original_raw, proof_raw, second)
-    proof_relative = root + "/reconciliation/network-failure-proof.json"
-    result_relative = root + "/reconciliation/result.json"
-    prepared_relative = root + "/reconciliation/prepared.json"
+    if recovery:
+        result = _json(result_raw, "Fresh recovery result")
+        result["reconciliation"].update(recovery_id=recovery["recovery_id"],
+            previous_prepared_sha256=recovery["prepared_sha256"])
+        result_raw = canonical(result) + b"\n"
+    paths = _publication_paths(args.attempt, recovery["recovery_id"] if recovery else None)
+    proof_relative, result_relative, prepared_relative = (paths[key] for key in ("proof", "result", "prepared"))
     prepared_raw = canonical({
         "schema": SCHEMA,
         "attempt": args.attempt,
@@ -718,19 +820,21 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
 
     # All paths must be pristine before the first write. Any partial transaction
     # is intentionally non-replayable and requires operator inspection.
-    for relative in (root + "/unknown-receipt.json", proof_relative, result_relative,
+    archive_paths = () if recovery else (root + "/unknown-receipt.json",)
+    for relative in (*archive_paths, proof_relative, result_relative,
                      prepared_relative, root + "/network-failure-reconcile.lock",
                      "development/current.json", "development/verified.json", root + "/terminal.json"):
         require(read_raw(control, relative, optional=True) is None,
                 "An earlier or partial failure reconciliation publication exists")
     absent_helper = bool(getattr(args, "recover_absent_helper", False))
-    prepared_documents = {control.path(relative): payload for relative, payload in (
-        (root + "/unknown-receipt.json", original_raw),
-        (proof_relative, proof_raw), (result_relative, result_raw), (prepared_relative, prepared_raw),
-    )}
+    publication_documents = [(proof_relative, proof_raw), (result_relative, result_raw),
+                             (prepared_relative, prepared_raw)]
+    if not recovery:
+        publication_documents.insert(0, (root + "/unknown-receipt.json", original_raw))
+    prepared_documents = {control.path(relative): payload for relative, payload in publication_documents}
 
     # Re-observe the exact group resources before the single journal/publication transaction.
-    final_observation = _observe(control, identity, args, allowed_archive=None)
+    final_observation = _observe(control, identity, args, allowed_archive=original_raw if recovery else None)
     require(canonical(final_observation) == canonical(second),
             "Resources or ownership changed immediately before failure publication")
     committed = bounded_capture(control.helper_args(_cas_script(
@@ -739,6 +843,7 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         recover_absent_helper=absent_helper,
         operation_lock_identity=second.get("operation_lock_identity"),
         prepared_documents=prepared_documents,
+        **({"recovery": recovery} if recovery else {}),
     )), data=_prepared_input(prepared_documents), timeout=90)
     require(committed.returncode == 0,
             "Failure publication outcome is unknown; preserve exact attempt and inspect its receipts")
@@ -771,6 +876,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--engine-id", required=True)
     parser.add_argument("--recover-absent-helper", action="store_true",
                         help="explicitly recover an absent original helper under the existing operation lock")
+    parser.add_argument("--resume-prepared-sha256")
+    parser.add_argument("--recovery-id")
     parser.add_argument("--apply", action="store_true", help="publish failure-only terminal after full re-observation")
     args = parser.parse_args(argv)
     try:
