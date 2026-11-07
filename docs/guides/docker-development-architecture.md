@@ -862,6 +862,8 @@ bezpośrednich bindów, bez fizycznej analizy cudzych checkoutów Windows/WSL.
 do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
 CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
 SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Dawne równoległe obserwacje fizycznych cudzych checkoutów nie są częścią
+tego kontraktu group-local; nie są wymagane do tej failure-only publikacji.
 Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
 historycznego proof jako świeżego dowodu. Wariant nie łączy się z
 `--recover-absent-helper`: przygotowana generacja nadal wymaga oryginalnego
