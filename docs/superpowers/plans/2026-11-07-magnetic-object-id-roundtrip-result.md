@@ -120,8 +120,13 @@ verification/magnetic-object-id-roundtrip-20261107/approved-execution/.
 | scene-analysis-lowering.log (zachowany błąd fixture) | 988e1134e8ec2a4e9c88195c788d35be127faaf0bc690c3ad294ee1ce81332bd |
 
 Dodatkowy manifest wykonania przypina commity, CI, pięć plików oraz stan indeksu.
-Kopie drobnych metadanych i ledger etapów są w .superpowers/sdd/
-2026-11-07-magnetic-object-id-roundtrip-implementation/ na ext4 WSL.
+Podczas wykonania użyto prywatnego workspace na ext4 WSL. Jego ledger,
+metadane CI i indeksy selektywnych commitów zarchiwizowano w tym samym
+control volume jako completed-execution-metadata.tar.gz (20 zweryfikowanych
+plików, 2 276 905 B), SHA256
+a884167c2a74e3f10b0ff40163ebd3500db2ea286b782337f71b4f05a5b3d983.
+Obok są verified-ci.json oraz execution-progress-final.md; archiwum
+jest dowodem technicznym, nie kontenerem wyników naukowych.
 
 ## Osobny odczyt rzeczywistego UI
 
