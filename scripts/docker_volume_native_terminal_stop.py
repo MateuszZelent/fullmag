@@ -56,6 +56,8 @@ def sha(raw):
 def validate_options(args, *, recreate_services, restart_idle_service, stop_after_drain,
                      resume_recreation_id=None, refresh_frontend_service=False, retire_only=False):
     capture = getattr(args, "capture_native_terminal", False)
+    quiesce = getattr(args, "quiesce_api", False)
+    require(type(quiesce) is bool and (not quiesce or capture), "--quiesce-api requires explicit native capture")
     stop, digest_pin = (getattr(args, key, None) for key in (
         "native_terminal_stop", "native_terminal_stop_sha256"))
     require(type(capture) is bool, "capture flag must be boolean")
@@ -266,6 +268,12 @@ def capture(backend_id, store_root):
 
 def validate_drain(captured, process):
     ready, terminal = process.get("service_owner", {}), process.get("terminal_service_owner", {})
+    if "api_quiescence" in captured:
+        validate_quiescence(captured)
+        proof = captured["api_quiescence"]
+        require(process.get("api_pid") == proof["api_pin"]["pid"]
+                and process.get("error") == QUIESCE_CAUSE and process.get("api_diagnostic_only") is False,
+                "drain lost the exact API quiescence cause")
     require(process.get("schema") == "fullmag.docker-process-tree.v1" and process.get("state") == "drained"
             and process.get("accepted_store") == "/state/runs/docker-all/session-store"
             and type(process.get("api_exit_code")) is int and process["api_exit_code"] == -15,
@@ -319,6 +327,25 @@ def validate_fresh(control, *, stop_attempt, stop_sha256, source_root, attempt, 
             and drain.get("backend_container_id") == terminal.get("backend_container")
             and drain.get("process_receipt_sha256") == sha(canonical(process) + b"\n")
             and decode(read(PROCESS_PATH)) == process, "current drained process receipt differs")
+    quiesced = terminal.get("inputs", {}).get("quiesce_api", False)
+    require(type(quiesced) is bool and quiesced == ("api_quiescence" in captured),
+            "stop mode and API quiescence proof differ")
+    intent = None
+    if quiesced:
+        validate_quiescence(captured)
+        intent_raw = read(root + "api-quiescence-intent.json")
+        intent = decode(intent_raw)
+        require(sha(intent_raw) == captured["api_quiescence"]["intent_sha256"]
+                == terminal.get("api_quiescence_intent_sha256")
+                and intent.get("schema") == QUIESCE_INTENT_SCHEMA,
+                "API quiescence intent CAS differs")
+        prepared = intent.get("prepared", {})
+        require(prepared.get("preflight") == captured["preflight"]
+                and prepared.get("run_binding") == captured["run_binding"]
+                and prepared.get("native_config_sha256") == captured["native_config_sha256"]
+                and prepared.get("api_pin") == captured["api_quiescence"]["api_pin"]
+                and canonical(owner_identity(prepared.get("ready_owner", {}))) == canonical(captured["ready_owner"]),
+                "API quiescence intent authority differs")
     stopped_raw = read(root + "idle-stop-containers.json")
     stopped = decode(stopped_raw)
     require(sha(stopped_raw) == terminal.get("idle_stop_containers_sha256")
@@ -332,5 +359,220 @@ def validate_fresh(control, *, stop_attempt, stop_sha256, source_root, attempt, 
                 and old.get("State", {}).get("StartedAt") == now.get("State", {}).get("StartedAt")
                 and old.get("State", {}).get("Running") is False and now.get("State", {}).get("Running") is False,
                 "service incarnation changed after stop")
+    if intent is not None:
+        require(set(intent.get("services", {})) == set(stopped), "quiescence service set differs")
+        for name, observed in stopped.items():
+            before = intent["services"][name]
+            require(all(before.get(key) == observed.get(key) for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                    and before.get("State", {}).get("StartedAt") == observed.get("State", {}).get("StartedAt")
+                    and before.get("State", {}).get("Running") is (name == "backend"),
+                    "quiescence intent service incarnation differs")
+        require(stopped["backend"].get("State", {}).get("ExitCode") == 1
+                and stopped["backend"].get("State", {}).get("OOMKilled") is False,
+                "quiesced backend exit differs from the retained API cause")
     return {"schema": "fullmag.native-terminal-stop-fresh-state.v1", "stop_attempt": stop_attempt,
             "stop_sha256": stop_sha256, "capture_sha256": sha(captured_raw)}
+
+QUIESCE_SCHEMA = "fullmag.native-terminal-api-quiescence.v1"
+QUIESCE_INTENT_SCHEMA = "fullmag.native-terminal-api-quiescence-intent.v1"
+QUIESCE_CAUSE = "Fullmag API exited unexpectedly (-15)"
+API_BINARY = "/opt/fullmag/package/bin/fullmag-api"
+
+# Reuse only fixed trusted transport definitions, never any run-owned code.
+_QUIESCE_PREFIX = PROBE.split("before=snapshot()", 1)[0]
+_QUIESCE_COMMON = r'''
+import os,pathlib,signal,socket,time
+API_BINARY="/opt/fullmag/package/bin/fullmag-api"
+CAUSE="Fullmag API exited unexpectedly (-15)"
+def canon(value):
+ return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+def process_record():
+ raw=service._bounded_regular(service.process_receipt_path(paths),"API quiescence process receipt",MAX)
+ return raw,json.loads(raw,object_pairs_hook=unique)
+def proc_pin(pid):
+ if type(pid) is not int or pid<=1: raise RuntimeError("invalid API PID")
+ root=pathlib.Path("/proc")/str(pid)
+ text=(root/"stat").read_text()
+ fields=text[text.rfind(")")+2:].split()
+ with (root/"cmdline").open("rb") as source: argv=source.read(4097)
+ if len(argv)>4096 or argv!=API_BINARY.encode()+b"\0": raise RuntimeError("API argv differs")
+ exe=os.readlink(root/"exe")
+ if exe!=str(pathlib.Path(API_BINARY).resolve(strict=True)): raise RuntimeError("API executable differs")
+ return {"pid":pid,"start_token":fields[19],"ppid":int(fields[1]),"argv":[API_BINARY],"exe":exe}
+def run_pins_for(run):
+ if not isinstance(run,str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}",run) is None:
+  raise RuntimeError("invalid accepted run identity")
+ return {name:hashlib.sha256(service._bounded_regular(paths.store/"runs"/run/name,"API quiescence accepted record",MAX)).hexdigest()
+  for name in ("run_intent.json","run_catalog.json","start_release.json")}
+def api_binding(value):
+ status=value["status"]; session=status["session"]; resources=status["resources"]
+ return {"schema":"fullmag.native-terminal-stop-preflight.v1","api_instance_id":value["api_instance_id"],
+  "session_id":session["session_id"],"session_epoch":session["session_epoch"],
+  "request_scope_epoch":session["request_scope_epoch"],"run_id":value["run"]["run_id"],
+  "public_run":value["run"],"resources":resources,"scene_sha256":hashlib.sha256(canon(value["scene"])).hexdigest(),
+  "scene_revision":resources["scene_revision"],"queue":value["queue"],"commands":value["commands"],
+  "runtime":value["runtime"],"health":{"status":value["health"]["status"],"active_session":value["health"]["active_session"]}}
+'''
+QUIESCE_PREPARE = _QUIESCE_PREFIX + _QUIESCE_COMMON + r'''
+before=snapshot()
+owner=service._service_status(paths)
+service._validate_terminal_owner(owner,state="ready",name="API quiescence Ready owner")
+config=config_digest()
+process_raw,process=process_record()
+if process.get("schema")!="fullmag.docker-process-tree.v1" or process.get("state")!="ready":
+ raise RuntimeError("API process receipt is not Ready")
+if service._owner_fingerprint(process.get("service_owner",{}))!=service._owner_fingerprint(owner):
+ raise RuntimeError("API process owner differs")
+api=proc_pin(process.get("api_pid"))
+pins=run_pins_for(before["run"]["run_id"])
+after=snapshot()
+if config!=config_digest() or process_raw!=process_record()[0] or proc_pin(api["pid"])!=api:
+ raise RuntimeError("API quiescence preparation changed")
+print(json.dumps({"before":before,"after":after,"ready_owner":owner,"native_config_sha256":config,
+ "process_sha256":hashlib.sha256(process_raw).hexdigest(),"api_pin":api,"run_pins":pins},sort_keys=True))
+'''
+QUIESCE_CAPTURE = _QUIESCE_PREFIX + _QUIESCE_COMMON + r'''
+raw=sys.stdin.buffer.read(MAX+1)
+if len(raw)>MAX: raise RuntimeError("API quiescence intent exceeds bound")
+request=json.loads(raw,object_pairs_hook=unique)
+intent=request["intent"]
+if hashlib.sha256(canon(intent)+b"\n").hexdigest()!=request["intent_sha256"]:
+ raise RuntimeError("API quiescence intent digest differs")
+if intent.get("schema")!="fullmag.native-terminal-api-quiescence-intent.v1":
+ raise RuntimeError("API quiescence intent schema differs")
+prepared=intent["prepared"]
+preflight=prepared["preflight"]; api=prepared["api_pin"]; run=preflight["run_id"]
+fd=os.pidfd_open(api["pid"])
+try:
+ # Revalidate the pinned live API and native owner before the one signal.
+ if proc_pin(api["pid"])!=api: raise RuntimeError("API incarnation changed before quiescence")
+ for _ in range(2):
+  current=snapshot()
+  if (api_binding(current)!=preflight or current["status"]["solver"]["state"]!="running"
+      or current["status"].get("run",{}).get("run_id")!=run):
+   raise RuntimeError("API/session/scene/resources changed before quiescence")
+ owner=service._service_status(paths)
+ service._validate_terminal_owner(owner,state="ready",name="API quiescence Ready owner")
+ if service._owner_fingerprint(owner)!=service._owner_fingerprint(prepared["ready_owner"]):
+  raise RuntimeError("Native owner changed before API quiescence")
+ if (config_digest()!=prepared["native_config_sha256"] or run_pins_for(run)!=prepared["run_pins"]
+     or hashlib.sha256(process_record()[0]).hexdigest()!=prepared["process_sha256"]
+     or proc_pin(api["pid"])!=api):
+  raise RuntimeError("Pinned authority changed before API quiescence")
+ signal.pidfd_send_signal(fd,signal.SIGTERM,None,0)
+finally: os.close(fd)
+# No process, owner, worker or scheduler is signalled after this point.
+deadline=time.monotonic()+15
+while True:
+ gone=not (pathlib.Path("/proc")/str(api["pid"])).exists()
+ try:
+  with socket.create_connection(("127.0.0.1",8081),timeout=.2): closed=False
+ except ConnectionRefusedError: closed=True
+ if gone and closed: break
+ if time.monotonic()>=deadline: raise RuntimeError("API closure is unconfirmed; backend retained")
+ time.sleep(.05)
+while True:
+ retained_raw,retained=process_record()
+ if retained.get("state")=="failed_outcome_retained":
+  if (retained.get("api_pid")!=api["pid"] or retained.get("api_exit_code")!=-15
+      or retained.get("api_diagnostic_only") is not False or retained.get("error")!=CAUSE
+      or service._owner_fingerprint(retained.get("service_owner",{}))!=service._owner_fingerprint(owner)):
+   raise RuntimeError("API quiescence cause differs; backend retained")
+  break
+ if time.monotonic()>=deadline: raise RuntimeError("API quiescence retention unconfirmed; backend retained")
+ time.sleep(.05)
+if config_digest()!=prepared["native_config_sha256"] or run_pins_for(run)!=prepared["run_pins"]:
+ raise RuntimeError("Native pins changed after API closure; backend retained")
+evidence=service._run_cli(paths,["runtime","service-inspect-terminal-run","--config",str(paths.config),
+ "--config-sha256",prepared["native_config_sha256"],"--run-id",run],timeout=30)
+fresh_owner=service._service_status(paths)
+service._validate_terminal_owner(fresh_owner,state="ready",name="API quiescence retained owner")
+if (service._owner_fingerprint(owner)!=service._owner_fingerprint(fresh_owner)
+    or config_digest()!=prepared["native_config_sha256"] or run_pins_for(run)!=prepared["run_pins"]
+    or retained_raw!=process_record()[0]):
+ raise RuntimeError("Native inspection pins changed after API closure; backend retained")
+print(json.dumps({"evidence":evidence,"run_pins":prepared["run_pins"],"retained_process":retained,
+ "retained_process_sha256":hashlib.sha256(retained_raw).hexdigest(),"api_closed":True},sort_keys=True))
+'''
+
+
+def _record_pins(binding):
+    return {"run_intent.json": binding["intent_sha256"], "run_catalog.json": binding["catalog_sha256"],
+            "start_release.json": binding["start_release_sha256"]}
+
+
+def prepare_api_quiescence(backend_id, store_root):
+    """Read-only admission to closing one exact API, not native terminal authority."""
+    from docker_build_control import docker_capture
+    from docker_volume_terminal_observation import _store_reader
+    result = docker_capture("exec", backend_id, "python3", "-I", "-B", "-c", QUIESCE_PREPARE, timeout=180)
+    require(len(result.stdout) <= 2 * MAX_BYTES, "quiescence preparation exceeds bound")
+    observed = decode(result.stdout)
+    preflight = snapshot_binding(observed.get("before"))
+    require(preflight == snapshot_binding(observed.get("after")), "API changed during quiescence preparation")
+    binding = run_binding(_store_reader(store_root), preflight)
+    require(observed.get("run_pins") == _record_pins(binding), "accepted records changed before quiescence intent")
+    owner = observed.get("ready_owner", {})
+    require(owner.get("state") == "ready", "quiescence owner is not Ready")
+    owner_identity(owner)
+    api = observed.get("api_pin", {})
+    require(type(api.get("pid")) is int and api["pid"] > 1 and isinstance(api.get("start_token"), str)
+            and api["start_token"].isdigit() and type(api.get("ppid")) is int and api["ppid"] > 0
+            and api.get("argv") == [API_BINARY] and api.get("exe") == API_BINARY, "API process pin differs")
+    return {"preflight": preflight, "run_binding": binding, "run_pins": _record_pins(binding),
+            "ready_owner": owner, "api_pin": api, "process_sha256": digest(observed.get("process_sha256")),
+            "native_config_sha256": digest(observed.get("native_config_sha256"))}
+
+
+def quiesce_api_and_capture(backend_id, store_root, intent):
+    """One pidfd signal after durable intent; failures never respawn the API."""
+    from docker_build_control import docker_capture
+    from docker_volume_terminal_observation import _store_reader
+    intent_sha = sha(canonical(intent) + b"\n")
+    request = canonical({"intent": intent, "intent_sha256": intent_sha})
+    result = docker_capture("exec", "-i", backend_id, "python3", "-I", "-B", "-c", QUIESCE_CAPTURE,
+                            data=request, timeout=210)
+    require(len(result.stdout) <= MAX_BYTES, "quiesced capture exceeds bound")
+    observed = decode(result.stdout)
+    prepared = intent["prepared"]
+    require(run_binding(_store_reader(store_root), prepared["preflight"]) == prepared["run_binding"]
+            and observed.get("run_pins") == prepared["run_pins"], "accepted records changed after API quiescence")
+    evidence = observed.get("evidence", {})
+    terminal_sha = digest(evidence.get("terminal_evidence_sha256"))
+    require(evidence == {"schema_version": "runtime_service_terminal_run_evidence.v1",
+        "run_id": prepared["preflight"]["run_id"], "terminal_evidence_sha256": terminal_sha,
+        "mutations_applied": False, "solve_replayed": False}
+        and evidence["mutations_applied"] is False and evidence["solve_replayed"] is False,
+        "quiesced native inspection identity or mutation flags differ")
+    captured = {"schema": SCHEMA, "preflight": prepared["preflight"], "run_binding": prepared["run_binding"],
+        "native_config_sha256": prepared["native_config_sha256"], "terminal_evidence_sha256": terminal_sha,
+        "ready_owner": owner_identity(prepared["ready_owner"]), "api_quiescence": {
+            "schema": QUIESCE_SCHEMA, "intent_sha256": intent_sha, "api_pin": prepared["api_pin"],
+            "api_closed": observed.get("api_closed"), "signal": "SIGTERM",
+            "retained_process": observed.get("retained_process"),
+            "retained_process_sha256": observed.get("retained_process_sha256")}}
+    validate_quiescence(captured)
+    return captured
+
+
+def validate_quiescence(captured):
+    proof = captured.get("api_quiescence", {})
+    process = proof.get("retained_process", {})
+    require(proof.get("schema") == QUIESCE_SCHEMA and proof.get("api_closed") is True
+            and proof.get("signal") == "SIGTERM", "explicit API closure is unconfirmed")
+    digest(proof.get("intent_sha256"))
+    api = proof.get("api_pin", {})
+    require(type(api.get("pid")) is int and api["pid"] > 1 and api.get("argv") == [API_BINARY]
+            and api.get("exe") == API_BINARY and isinstance(api.get("start_token"), str)
+            and api["start_token"].isdigit(), "closed API incarnation differs")
+    # runtime_service._atomic_json uses ensure_ascii=True and compact JSON+LF.
+    process_raw = (json.dumps(process, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    require(sha(process_raw) == proof.get("retained_process_sha256")
+            and process.get("schema") == "fullmag.docker-process-tree.v1"
+            and process.get("state") == "failed_outcome_retained" and process.get("error") == QUIESCE_CAUSE
+            and process.get("api_pid") == api["pid"] and type(process.get("api_exit_code")) is int
+            and process["api_exit_code"] == -15 and process.get("api_diagnostic_only") is False
+            and process.get("accepted_store") == "/state/runs/docker-all/session-store"
+            and process.get("service_owner", {}).get("state") == "ready"
+            and canonical(owner_identity(process["service_owner"])) == canonical(captured.get("ready_owner")),
+            "API quiescence retained cause or owner differs")

@@ -185,14 +185,24 @@ class Contracts(unittest.TestCase):
         self.assertIn("service-inspect-terminal-run", subject.PROBE)
         self.assertNotIn("service-recover", subject.PROBE)
 
-    def _idle_capture(self, *, failure=None, drain_failure=False):
+    def _idle_capture(self, *, failure=None, drain_failure=False, quiesce=False, incarnation_change=False):
         from contextlib import ExitStack
         import test_docker_volume_idle_stop as existing
         import docker_volume_dev as dev
         fixture = existing.IdleStopFixture()
         fixture.args.capture_native_terminal = True
+        fixture.args.quiesce_api = quiesce
         fixture.args.config_sha256 = subject.sha(dev.canonical(fixture.document))
-        drain = (raw(self.process), self.process)
+        process = copy.deepcopy(self.process)
+        if quiesce:
+            process.update(api_pid=22, error=subject.QUIESCE_CAUSE, api_diagnostic_only=False)
+            stopped_backend = fixture.stopped_backend
+            def stopped():
+                result = stopped_backend()
+                result["State"]["ExitCode"] = 1
+                return result
+            fixture.stopped_backend = stopped
+        drain = (raw(process), process)
         patches = existing.DockerVolumeIdleStopTests()._patches(fixture, drain)
         base_text, base_capture = fixture.text, fixture.capture
         def text(*args, **kwargs):
@@ -218,9 +228,36 @@ class Contracts(unittest.TestCase):
             stack.enter_context(mock.patch.object(dev, "docker_text", side_effect=text))
             stack.enter_context(mock.patch.object(dev, "docker_capture", side_effect=docker_capture))
             stack.enter_context(mock.patch.object(subject, "capture", side_effect=capture))
+            if quiesce:
+                prepared = {"preflight": self.preflight, "run_binding": self.binding,
+                            "ready_owner": OWNER, "api_pin": self.api_pin(),
+                            "native_config_sha256": self.capture["native_config_sha256"]}
+                def close_and_capture(backend, store, intent):
+                    self.assertTrue(fixture.control.write_bytes.called)
+                    intent_path, intent_raw = fixture.control.write_bytes.call_args.args
+                    self.assertTrue(intent_path.endswith("/api-quiescence-intent.json"))
+                    self.assertEqual(json.loads(intent_raw), json.loads(raw(intent)))
+                    fixture.events.append(("pidfd-close-api", None))
+                    if failure:
+                        raise failure
+                    value = self.quiesced_capture()
+                    value["api_quiescence"]["intent_sha256"] = subject.sha(intent_raw)
+                    return value
+                def prepare(*args):
+                    if incarnation_change:
+                        original_actual = fixture.actual
+                        def changed(service):
+                            result = original_actual(service)
+                            if service == "backend":
+                                result["State"]["StartedAt"] = "new-backend-incarnation"
+                            return result
+                        fixture.actual = changed
+                    return prepared
+                stack.enter_context(mock.patch.object(subject, "prepare_api_quiescence", side_effect=prepare))
+                stack.enter_context(mock.patch.object(subject, "quiesce_api_and_capture", side_effect=close_and_capture))
             if drain_failure:
                 stack.enter_context(mock.patch.object(subject, "validate_drain", side_effect=BuildControlError("drain failed")))
-            if failure or drain_failure:
+            if failure or drain_failure or incarnation_change:
                 with self.assertRaises(BuildControlError):
                     dev.stop_idle(fixture.args)
             else:
@@ -245,6 +282,91 @@ class Contracts(unittest.TestCase):
         fixture = self._idle_capture(drain_failure=True)
         receipt = next(event[1] for event in fixture.events if event[0] == "exit")
         self.assertIsNot(receipt.get("idle_backend_stopped"), True)
+
+    @staticmethod
+    def api_pin():
+        return {"pid": 22, "ppid": 11, "start_token": "4240740", "argv": [subject.API_BINARY], "exe": subject.API_BINARY}
+
+    def quiesced_capture(self):
+        captured = copy.deepcopy(self.capture)
+        process = copy.deepcopy(self.process)
+        process.pop("terminal_service_owner")
+        process.update(state="failed_outcome_retained", api_pid=22,
+                       error=subject.QUIESCE_CAUSE, api_diagnostic_only=False)
+        captured["api_quiescence"] = {"schema": subject.QUIESCE_SCHEMA, "intent_sha256": "1" * 64,
+            "api_pin": self.api_pin(), "api_closed": True, "signal": "SIGTERM", "retained_process": process,
+            "retained_process_sha256": subject.sha(raw(process))}
+        return captured
+
+    def test_quiesce_requires_explicit_capture_stop_only(self):
+        for args in (types.SimpleNamespace(quiesce_api=True),
+                     types.SimpleNamespace(quiesce_api=True, capture_native_terminal=True)):
+            with self.assertRaises(BuildControlError):
+                subject.validate_options(args, recreate_services=False, restart_idle_service=True, stop_after_drain=False)
+        with self.assertRaises(BuildControlError):
+            subject.validate_options(types.SimpleNamespace(quiesce_api=True), recreate_services=False,
+                                     restart_idle_service=True, stop_after_drain=True)
+        self.assertEqual(subject.validate_options(types.SimpleNamespace(quiesce_api=True, capture_native_terminal=True),
+                         recreate_services=False, restart_idle_service=True, stop_after_drain=True), (True, None))
+
+    def test_quiescence_transport_is_fixed_one_pidfd_signal_no_fallback(self):
+        import ast
+        ast.parse(subject.QUIESCE_PREPARE)
+        ast.parse(subject.QUIESCE_CAPTURE)
+        self.assertEqual(subject.QUIESCE_CAPTURE.count("signal.pidfd_send_signal("), 1)
+        for forbidden in ("os.kill(", "SIGKILL", "SIGCONT", "service-recover", "service-drain"):
+            self.assertNotIn(forbidden, subject.QUIESCE_CAPTURE)
+        self.assertIn("service-inspect-terminal-run", subject.QUIESCE_CAPTURE)
+        self.assertLess(subject.QUIESCE_CAPTURE.index("API/session/scene/resources changed"),
+                        subject.QUIESCE_CAPTURE.index("signal.pidfd_send_signal("))
+
+    def test_quiescence_requires_exact_retained_cause_and_native_owner(self):
+        captured = self.quiesced_capture()
+        subject.validate_quiescence(captured)
+        for mutate in (lambda x: x["api_quiescence"].update(api_closed=False),
+                       lambda x: x["api_quiescence"].update(signal="SIGKILL"),
+                       lambda x: x["api_quiescence"]["retained_process"].update(error="other failure"),
+                       lambda x: x["api_quiescence"]["retained_process"].update(api_exit_code=0),
+                       lambda x: x["api_quiescence"]["retained_process"].update(api_diagnostic_only=True),
+                       lambda x: x["api_quiescence"]["retained_process"]["service_owner"].update(state="failed")):
+            value = copy.deepcopy(captured)
+            mutate(value)
+            # Rehash altered records to test semantic checks, not merely digest refusal.
+            proof = value["api_quiescence"]
+            proof["retained_process_sha256"] = subject.sha(raw(proof["retained_process"]))
+            with self.assertRaises(BuildControlError):
+                subject.validate_quiescence(value)
+
+    def test_quiesced_managed_stop_requires_drain_and_backend_exit_one(self):
+        fixture = self._idle_capture(quiesce=True)
+        self.assertTrue(fixture.backend_stopped)
+        self.assertTrue(any(event[0] == "pidfd-close-api" for event in fixture.events))
+        self.assertFalse(any(event[0] == "restore-frontend" for event in fixture.events))
+        receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+        self.assertTrue(fixture.control.operation.call_args.args[1]["quiesce_api"])
+        self.assertEqual(receipt["state"], "succeeded")
+        self.assertTrue(receipt["backend_stop_issued"])
+
+    def test_restart_during_prepare_refuses_before_intent_and_signal(self):
+        fixture = self._idle_capture(quiesce=True, incarnation_change=True)
+        self.assertFalse(fixture.backend_stopped)
+        self.assertFalse(any(event[0] == "pidfd-close-api" for event in fixture.events))
+        self.assertTrue(any(event[0] == "restore-frontend" for event in fixture.events))
+        self.assertFalse(any(call.args[0].endswith("/api-quiescence-intent.json")
+                             for call in fixture.control.write_bytes.call_args_list))
+        receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+        self.assertNotIn("api_quiescence_intent_sha256", receipt)
+
+    def test_post_quiescence_busy_or_transport_failure_retains_unknown_without_rollback(self):
+        for cause in ("native descriptor busy", "observation timeout after signal"):
+            fixture = self._idle_capture(quiesce=True, failure=BuildControlError(cause))
+            self.assertFalse(fixture.backend_stopped)
+            self.assertFalse(any(event[0] == "restore-frontend" for event in fixture.events))
+            receipt = next(event[1] for event in fixture.events if event[0] == "exit")
+            self.assertEqual(receipt["api_quiescence_outcome"], "outcome-unknown-retained")
+            self.assertFalse(receipt["backend_stop_issued"])
+            self.assertFalse(receipt["api_respawned"])
+            self.assertEqual(sum(event[0] == "pidfd-close-api" for event in fixture.events), 1)
 
     def test_inspect_failure_does_not_create_capture(self):
         with mock.patch("docker_build_control.docker_capture", side_effect=BuildControlError("native descriptor busy")):
@@ -287,6 +409,41 @@ class Contracts(unittest.TestCase):
                 with self.assertRaises(BuildControlError):
                     subject.validate_fresh(control, **bad)
             kwargs["actual"]["backend"]["State"]["StartedAt"] = "restarted"
+            with self.assertRaises(BuildControlError):
+                subject.validate_fresh(control, **kwargs)
+
+    def test_quiesced_fresh_requires_exact_intent_cas_and_failure_cause(self):
+        controls, kwargs, control = self.fresh_fixture()
+        root = "iteration/attempts/" + kwargs["stop_attempt"] + "/"
+        captured = self.quiesced_capture()
+        before = copy.deepcopy(kwargs["actual"])
+        before["backend"]["State"]["Running"] = True
+        intent = {"schema": subject.QUIESCE_INTENT_SCHEMA, "services": before, "prepared": {
+            "preflight": captured["preflight"], "run_binding": captured["run_binding"], "ready_owner": OWNER,
+            "api_pin": captured["api_quiescence"]["api_pin"], "native_config_sha256": captured["native_config_sha256"]}}
+        intent_raw = raw(intent)
+        captured["api_quiescence"]["intent_sha256"] = subject.sha(intent_raw)
+        controls[root + "api-quiescence-intent.json"] = intent_raw
+        controls[root + "native-terminal-stop.json"] = raw(captured)
+        process = copy.deepcopy(self.process)
+        process.update(api_pid=22, error=subject.QUIESCE_CAUSE, api_diagnostic_only=False)
+        controls[subject.PROCESS_PATH] = raw(process)
+        controls[root + "backend-drain.json"] = raw({"schema": "fullmag.docker-idle-restart-drain.v1",
+            "backend_container_id": kwargs["actual"]["backend"]["Id"], "process_receipt": process,
+            "process_receipt_sha256": subject.sha(raw(process))})
+        kwargs["actual"]["backend"]["State"].update(ExitCode=1, OOMKilled=False)
+        controls[root + "idle-stop-containers.json"] = raw(kwargs["actual"])
+        terminal = json.loads(controls[root + "terminal.json"])
+        terminal["inputs"]["quiesce_api"] = True
+        terminal["api_quiescence_intent_sha256"] = subject.sha(intent_raw)
+        terminal["native_terminal_capture_sha256"] = subject.sha(raw(captured))
+        terminal["idle_stop_containers_sha256"] = subject.sha(controls[root + "idle-stop-containers.json"])
+        controls[root + "terminal.json"] = controls[root + "receipt.json"] = raw(terminal)
+        kwargs["stop_sha256"] = subject.sha(raw(terminal))
+        with mock.patch("docker_volume_accepted_reattach._control_bytes", side_effect=lambda _, path, **kw: controls[path]), \
+             mock.patch("docker_volume_terminal_observation._store_reader", return_value=self.read_store):
+            subject.validate_fresh(control, **kwargs)
+            controls[root + "api-quiescence-intent.json"] += b" "
             with self.assertRaises(BuildControlError):
                 subject.validate_fresh(control, **kwargs)
 

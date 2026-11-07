@@ -7687,6 +7687,7 @@ def _retained_operation(
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
+    quiesce_api = getattr(args, "quiesce_api", False)
     from docker_volume_native_terminal_stop import validate_options as native_terminal_options
     capture_native, native_terminal_pin = native_terminal_options(
         args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
@@ -7949,6 +7950,7 @@ def _retained_operation(
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
                                             **({"capture_native_terminal": True} if capture_native else {}),
+                                            **({"quiesce_api": True} if quiesce_api else {}),
                                             **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
@@ -7959,6 +7961,8 @@ def _retained_operation(
             if actual["frontend"]["State"].get("Running"):
                 docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
             operation["daemon_pending"] = False
+            api_quiescence_started = False
+            native_terminal_capture = None
             try:
                 fresh = {service: json.loads(docker_text("inspect", identifier))[0]
                          for service, identifier in ids.items()}
@@ -8057,7 +8061,34 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     store_root = storage.validate_path(
                         state / "runs" / "docker-all" / "session-store", state, "native terminal accepted store",
                     )
-                    native_terminal_capture = capture_native_terminal(ids["backend"], store_root)
+                    if quiesce_api:
+                        from docker_volume_native_terminal_stop import (
+                            QUIESCE_INTENT_SCHEMA, prepare_api_quiescence, quiesce_api_and_capture,
+                        )
+                        prepared = prepare_api_quiescence(ids["backend"], store_root)
+                        quiescence_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                               for service, identifier in ids.items()}
+                        for service, observed in quiescence_services.items():
+                            before = fresh[service]
+                            if (any(observed.get(key) != before.get(key)
+                                    for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                    or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                    or observed.get("State", {}).get("Running") is not (service == "backend")):
+                                raise BuildControlError("API quiescence service incarnation changed before intent")
+                        _assert_private_restart_network(quiescence_services, ids, control.project)
+                        intent = {"schema": QUIESCE_INTENT_SCHEMA, "prepared": prepared, "services": quiescence_services}
+                        intent_raw = canonical(intent) + b"\n"
+                        control.write_bytes(operation["root"] + "/api-quiescence-intent.json", intent_raw)
+                        operation["receipt"]["api_quiescence_intent_sha256"] = hashlib.sha256(intent_raw).hexdigest()
+                        # A failed/unknown call can have closed the API. Never roll it back or signal again.
+                        api_quiescence_started = True
+                        operation["daemon_pending"] = True
+                        operation["receipt"]["api_quiescence_outcome"] = "intent-published-outcome-unknown"
+                        native_terminal_capture = quiesce_api_and_capture(ids["backend"], store_root, intent)
+                        operation["daemon_pending"] = False
+                        operation["receipt"]["api_quiescence_outcome"] = "api-closed-native-terminal-confirmed"
+                    else:
+                        native_terminal_capture = capture_native_terminal(ids["backend"], store_root)
                     captured_services = {service: json.loads(docker_text("inspect", identifier))[0]
                                          for service, identifier in ids.items()}
                     for service, observed in captured_services.items():
@@ -8083,6 +8114,16 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     _saved_authoring_read_archive(saved_authoring, state)
                     control.write(operation["root"] + "/saved-authoring-final-preflight.json", authoring_probe)
             except Exception as error:
+                if api_quiescence_started:
+                    operation["daemon_pending"] = True
+                    operation["receipt"].update(
+                        api_quiescence_outcome=("api-closed-retained" if native_terminal_capture else "outcome-unknown-retained"),
+                        frontend_restore="retained-stopped", api_respawned=False, backend_stop_issued=False,
+                    )
+                    raise BuildControlError(
+                        "API quiescence failed after durable intent; backend/native owner retained, "
+                        "API closed or outcome unknown, frontend retained stopped; no signal replay or API respawn: " + str(error)
+                    ) from error
                 _idle_preflight_failed(
                     error, saved_authoring, operation, ids["frontend"],
                     restore_frontend=actual["frontend"]["State"].get("Running") is True,
@@ -8093,6 +8134,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             operation["receipt"].update(state="restarting-idle-backend", state_root=str(state),
                 backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
             operation["daemon_pending"] = True
+            if quiesce_api:
+                operation["receipt"]["backend_stop_issued"] = True
             docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
             stopped = json.loads(docker_text("inspect", ids["backend"]))[0]
             if (stopped.get("Id") != actual["backend"].get("Id")
@@ -8100,7 +8143,7 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     != actual["backend"].get("State", {}).get("StartedAt")
                     or stopped["State"].get("Running") is not False
                     or stopped["State"].get("OOMKilled") is not False
-                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal else 0)):
+                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal or quiesce_api else 0)):
                 raise BuildControlError("Backend termination is not confirmed graceful; restart withheld")
             from docker_volume_stop_unadmitted import _read_terminal_process_receipt
             drained_raw, drained = _read_terminal_process_receipt(stopped, control)

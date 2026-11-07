@@ -2656,6 +2656,8 @@ def _parser() -> argparse.ArgumentParser:
         "--capture-terminal-observation", action="store_true",
         help="capture native evidence for a completed or failed run during a managed stop-only drain",
     )
+    idle_restart.add_argument("--quiesce-api", action="store_true",
+                              help="with native capture stop-only: close only the exact pinned API before native inspection")
     idle_restart.add_argument("--capture-native-terminal", action="store_true",
                               help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
     idle_restart.add_argument(
