@@ -155,7 +155,7 @@ adapters.rs::builder_geometry_name_for_object emituje bieżące object.name
 z fallbackiem do ID. Nowe powiązanie sceny oparte wyłącznie na geometry_name
 mogłoby po rename wskazywać stary obiekt albo nowy obiekt o dawnej nazwie.
 
-Jednocześnie model/problem.py::_materialize_geometry_assets porównuje
+Jednocześnie model/problem.py::build_geometry_assets_for_request porównuje
 artifact.region_markers i artifact.object_region_markers dosłownie z mapami
 zadanymi w domain_mesh. Nie wystarczy zastąpić nazwy przez bieżącą etykietę:
 niezmieniony plik może nadal zawierać stary klucz. Nie wolno omijać tej
@@ -185,7 +185,7 @@ projektu i nie zaliczamy go do zatwierdzonej naprawy flag wykonania.
 ## Ustalenia po dalszej analizie — bez wdrożenia
 
 Właściciel podregionu jest już znany: SceneObjectRegion.owner_object oraz
-region_id. asset_pipeline.py zapisuje region_id do geometry_name mapy
+region_id. asset_pipeline.py::_realize_fem_domain_mesh_asset_from_components_impl zapisuje region_id do geometry_name mapy
 object_region_markers. Nazwa prezentacyjna regionu nie jest tym kluczem.
 Syntetyczna kontrola rzeczywistego loadera jest opisana w audycie.
 
@@ -213,5 +213,95 @@ na 0.3.1 ani 0.4 w ramach naprawy flag lub ID.
 
 Niezależny warunek konieczny, możliwy do naprawienia bez nowego IR:
 [przeniesienie już istniejącego object_id magnetyka przez Rust](2026-11-07-magnetic-object-id-roundtrip-implementation.md).
-Ten patch jest przygotowany osobno i nie stanowi obejścia nierozstrzygniętej
-granicy mapowania domeny. Cel pełnego roundtripu i reprodukcji pozostaje otwarty.
+Ten patch został wdrożony i zweryfikowany osobno: [wynik siedmiu regresji i CI](2026-11-07-magnetic-object-id-roundtrip-result.md). Nie stanowi obejścia
+nierozstrzygniętej granicy mapowania domeny. Cel pełnego roundtripu i reprodukcji
+pozostaje otwarty.
+
+
+## Rozstrzygnięcie zakresu tożsamości — 07.11.2026
+
+Odczyt i niezależny przegląd na HEAD
+8ecf00436cef40f1a4b32e331bfbf362c37c01fd rozdzieliły dwie naprawy.
+Zachowanie już istniejącego klucza geometrii nie jest samo w sobie nową
+semantyką IR. V03 rozdziela geometry.entries[].name, regions[].geometry
+i magnets[].name/object_id. Dlatego nie uzasadniamy migracji całego IR
+wyłącznie utratą klucza podczas eksportu. Ewentualne nowe marker_bindings
+pozostają osobnym, wersjonowanym rozszerzeniem, a nie ustalonym warunkiem
+każdego bezstratnego roundtripu.
+
+### Potwierdzona przyczyna w publicznym Pythonie
+
+W istniejącym backendzie wykonano izolowany proces Python z importem źródeł
+z /opt/fullmag/source/packages/fullmag-py/src i blokadą subprocess.Popen.
+Dla Box o nazwie persisted_geom oraz object_id=immutable-sample:
+
+| Nazwa obiektu | Klucz przekazanego kształtu | Klucz zwrócony przez MagnetHandle._resolved_geometry |
+|---|---|---|
+| sample | persisted_geom | sample_geom |
+| renamed sample | persisted_geom | renamed sample_geom |
+
+Dla geometry_object(type=conductor, object_id=immutable-conductor) ten sam
+test zwrócił odpowiednio sample i renamed sample zamiast persisted_conductor.
+Proces zakończył się kodem 0, lista wywołań subprocess była pusta.
+Nie wywoływano to_ir, materializacji, Gmsh ani Solve. To dowód zachowania
+konstruktorów, nie kompletny test roundtripu lub wykonania solvera.
+
+Właściciele przyczyny:
+
+- packages/fullmag-py/src/fullmag/world.py::MagnetHandle._resolved_geometry
+  nadpisuje shape.name przez nazwę magnetyka z sufiksem _geom;
+- packages/fullmag-py/src/fullmag/world.py::geometry_object nadpisuje
+  shape.name nazwą prezentacyjną obiektu;
+- packages/fullmag-py/src/fullmag/runtime/script_builder.py::_export_geometry_entry
+  zachowuje nazwę magnetyka, lecz nie odrębny klucz jego geometrii;
+- crates/fullmag-authoring/src/adapters.rs::builder_geometry_name_for_object
+  wybiera nazwę prezentacyjną;
+- crates/fullmag-plan/src/mesh.rs::shared_domain_region_entries_for_problem
+  już rozwiązuje klucz geometrii przez region do magnetyka.
+
+Hash world.py podczas kontroli:
+b8634f79e4edfb723a2582bba5a6446dc009be723fc8dfb126f4817f909cab3f.
+Hash mesh.rs:
+e0c88d8f33bc0038506f19a6aca74cd7fd860effb052edd4cebab8fe4d3f9bb7.
+To przypięcie do odczytanego dirty worktree; sam HEAD nie opisuje jego WIP.
+
+### Legacy alias nie jest trwałym region_id
+
+Kontrprzykład z odczytu kodu, nie wynik wykonanego meshowania: mapa artefaktu
+ma geometry_name=core, marker=2; region ma region_id=r-1,
+owner_object=immutable-A, name=core. Funkcja
+crates/fullmag-plan/src/mesh.rs::resolve_object_region_marker dopuszcza
+jednoznaczny alias nazwy, gdy nie ma pasującego region_id. Po zmianie nazwy
+r-1 na renamed core alias przestaje działać; po dodaniu r-2 o nazwie core
+może wskazać nowy region. Zachowanie klucza głównej geometrii tego nie naprawia.
+Mapy zapisane przez packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py::_realize_fem_domain_mesh_asset_from_components_impl
+używają region_id i nie mają tej konkretnej zależności od nazwy.
+
+Nie zmieniać map artefaktu, build_report ani receipt podczas rename:
+model/problem.py::build_geometry_assets_for_request wymaga ich literalnej zgodności.
+
+### Następny projekt — granice, które musi domknąć
+
+Najmniejszy kandydat zachowuje źródło, obie mapy i istniejące klucze geometrii
+w Pythonie, builderze i scenie, bez zmiany writera V03. Dla kanonicznych
+region_id ma zachować rename przy stałej tożsamości; legacy alias, którego
+właściciel się zmienia lub przestaje być jednoznaczny, ma powodować jawną
+odmowę zamiast automatycznego przepięcia. To ograniczenie trzeba pokazać
+użytkownikowi, nie nazywać pełną obsługą dowolnych legacy map.
+
+Przed planem implementacyjnym pozostaje wskazać dokładny, wspólny nośnik
+przypięcia właściciela oraz jego eksport do Python. Guard istniejący tylko
+w SceneDocument jest niewystarczający: po eksporcie nie wolno utracić dowodu,
+że usunięty obiekt i nowy obiekt pod dawną nazwą mają różne object_id.
+Nowe ukryte znaczenie tylko w scenie naruszałoby jeden kontrakt modelu.
+Jeżeli rozwiązanie wymaga nowej semantyki IR, obowiązuje atomowa granica
+V04 z ADR0024 i ADR0027; nie dodawać ignorowanego pola do V03.
+
+Kryteria regresji: nieedytowane wejście GSG, odrębny geometry key i nazwa,
+rename przy stałym object_id, usunięcie i odtworzenie pod dawną nazwą,
+kanoniczny region_id, alias legacy po rename oraz po kolizji z nowym ID,
+niezmienione bajty źródła i pełny Python → scena → Python → IR.
+Pusta mapa GSG nie zastępuje tych przypadków.
+
+Status pozostaje WYMAGA UZUPEŁNIENIA PROJEKTU. Ten przegląd nie zmienia
+kontraktu, polityki, runtime ani stanu wyników; nie uruchamia nowych obliczeń.
