@@ -132,6 +132,62 @@ class RequestedSubnetTests(unittest.TestCase):
         with self.assertRaises(BuildControlError):
             module.validate_retained_subnet(document, "10.20.0.0/24")
 
+    def test_retained_subnet_is_derived_without_mutating_document(self):
+        document = compose_document()
+        document["networks"]["fullmag"]["ipam"]["config"] = [
+            {"subnet": "172.16.2.0/24", "gateway": "172.16.2.1"}
+        ]
+        before = deepcopy(document)
+
+        self.assertEqual(module.retained_requested_subnet(document), "172.16.2.0/24")
+        self.assertEqual(module.retained_requested_subnet(document, "172.16.2.0/24"), "172.16.2.0/24")
+        self.assertEqual(document, before)
+
+    def test_retained_subnet_preserves_legacy_absence_and_rejects_bad_pins(self):
+        no_ipam = compose_document()
+        del no_ipam["networks"]["fullmag"]["ipam"]
+        empty = compose_document()
+        legacy = compose_document()
+        del legacy["networks"]
+        self.assertIsNone(module.retained_requested_subnet(no_ipam))
+        self.assertIsNone(module.retained_requested_subnet(empty))
+        self.assertIsNone(module.retained_requested_subnet(legacy))
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(no_ipam, "172.16.2.0/24")
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(empty, "172.16.2.0/24")
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(legacy, "172.16.2.0/24")
+
+        multiple = compose_document()
+        multiple["networks"]["fullmag"]["ipam"]["config"] = [
+            {"subnet": "172.16.2.0/24"}, {"subnet": "172.17.2.0/24"}
+        ]
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(multiple)
+
+        malformed = compose_document()
+        malformed["networks"]["fullmag"]["ipam"]["config"] = [{"subnet": "172.16.2.1/24"}]
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(malformed)
+
+        for subnet_record in ({"subnet": ""}, {"subnet": "   "}, {}):
+            with self.subTest(subnet_record=subnet_record):
+                malformed = compose_document()
+                malformed["networks"]["fullmag"]["ipam"]["config"] = [subnet_record]
+                with self.assertRaises(BuildControlError):
+                    module.retained_requested_subnet(malformed)
+        blank = compose_document()
+        blank["networks"]["fullmag"]["ipam"]["config"] = [{"subnet": ""}]
+        with patch.object(module, "parse_requested_subnet", return_value=None):
+            with self.assertRaisesRegex(BuildControlError, "subnet is missing"):
+                module.retained_requested_subnet(blank)
+
+        retained = compose_document()
+        retained["networks"]["fullmag"]["ipam"]["config"] = [{"subnet": "172.16.2.0/24"}]
+        with self.assertRaises(BuildControlError):
+            module.retained_requested_subnet(retained, "172.16.3.0/24")
+
 
 class RequestedSubnetAvailabilityTests(unittest.TestCase):
     def capture_for(self, documents, *, listed_ids=None, inspect_override=None, list_result=None):

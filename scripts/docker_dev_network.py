@@ -90,6 +90,41 @@ def validate_retained_subnet(document, value):
     return None
 
 
+def retained_requested_subnet(document, requested_value=None):
+    """Resolve a retained Compose subnet without inventing one for legacy documents."""
+    requested = parse_requested_subnet(requested_value)
+    if not isinstance(document, Mapping):
+        raise BuildControlError("Compose document must be an object for Docker network subnet handling")
+    if "networks" not in document:
+        if requested is not None:
+            validate_retained_subnet(document, requested)
+        return None
+    networks = document.get("networks")
+    if not isinstance(networks, Mapping) or set(networks) != {"fullmag"}:
+        raise BuildControlError("Compose document must define exactly the project-scoped fullmag network")
+    network = networks.get("fullmag")
+    if not isinstance(network, Mapping):
+        raise BuildControlError("Compose fullmag network definition is incomplete")
+    if "ipam" not in network:
+        if requested is not None:
+            validate_retained_subnet(document, requested)
+        return None
+    _, ipam = _project_network(document)
+    config = ipam.get("config", [])
+    if not config:
+        if requested is not None:
+            validate_retained_subnet(document, requested)
+        return None
+    if len(config) != 1 or not isinstance(config[0], Mapping):
+        raise BuildControlError("Retained Compose fullmag network must contain exactly one subnet")
+    raw = config[0].get("subnet")
+    retained = parse_requested_subnet(raw)
+    if retained is None:
+        raise BuildControlError("Retained Compose fullmag network subnet is missing")
+    validate_retained_subnet(document, requested or retained)
+    return retained
+
+
 def _json_no_duplicates(pairs):
     result = {}
     for key, value in pairs:

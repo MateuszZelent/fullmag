@@ -7848,6 +7848,10 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    from docker_dev_network import retained_requested_subnet
+    retained_subnet = retained_requested_subnet(document, getattr(args, "network_subnet", None))
+    if retained_subnet is not None:
+        args.network_subnet = retained_subnet
     from docker_volume_cancelled_activation_guard import require_fresh_recreation
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
