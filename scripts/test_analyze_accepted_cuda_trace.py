@@ -62,11 +62,11 @@ class AcceptedCudaTraceTests(unittest.TestCase):
     def read(self, **overrides):
         return analyze(self.root, **({"run_id": "run-1", "attempt_id": "attempt-1", "worker_pid": 42, "gpu_uuid": "GPU-test"} | overrides))
 
-    def use_monotonic_raw_clock(self):
+    def use_attested_clock(self, clock_source="clock_monotonic"):
         self.receipt["native"]["stats"]["cupti_version"] = 28
         self.header["cupti_api_version"] = 28
         self.header["activity_kinds"].append("cuda_event_metadata")
-        self.header["clock_source"] = "clock_monotonic_raw"
+        self.header["clock_source"] = clock_source
         self.header["timestamp_callback_registered"] = True
 
     def set_capture_window(self, start, end, total_wall_seconds):
@@ -89,21 +89,45 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.assertEqual(api28["timing_qualification"]["status"], "not_verified")
         self.assertIsNone(api28["timing_qualification"]["clock_source"])
 
-    def test_monotonic_raw_clock_with_complete_in_bounds_capture_passes(self):
-        self.use_monotonic_raw_clock()
+    def test_monotonic_clock_with_complete_in_bounds_capture_passes(self):
+        self.use_attested_clock()
         self.set_capture_window(1_000_000_000, 2_000_000_000, 1.2)
         self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
 
         result = self.read()
         qualification = result["timing_qualification"]
         self.assertEqual(qualification["status"], "passed")
-        self.assertEqual(qualification["clock_source"], "clock_monotonic_raw")
+        self.assertEqual(qualification["clock_source"], "clock_monotonic")
         self.assertEqual(qualification["reasons"], [])
         self.assertEqual(qualification["evidence"]["capture_duration_ns"], 1_000_000_000)
         self.assertEqual(qualification["evidence"]["total_wall_seconds"], 1.2)
 
+    def test_historical_monotonic_raw_header_is_readable_but_not_timing_qualified(self):
+        self.use_attested_clock("clock_monotonic_raw")
+        self.set_capture_window(1_000_000_000, 26_071_720_495, 23.388822552)
+        self.publish([self.event("kernel", 2_000_000_000, 2_100_000_000)])
+
+        result = self.read()
+        qualification = result["timing_qualification"]
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["solver_outcome"], "completed")
+        self.assertEqual(qualification["clock_source"], "clock_monotonic_raw")
+        self.assertEqual(qualification["status"], "not_verified")
+        self.assertIn("clock_domain_differs_from_host", qualification["reasons"])
+        self.assertIn("capture_duration_exceeds_host_window", qualification["reasons"])
+        self.assertEqual(qualification["evidence"]["out_of_bounds_timed_records"], 0)
+
+    def test_historical_monotonic_raw_clock_is_never_passed(self):
+        self.use_attested_clock("clock_monotonic_raw")
+        self.set_capture_window(1_000_000_000, 2_000_000_000, 1.2)
+        self.publish([self.event("kernel", 1_100_000_000, 1_800_000_000)])
+
+        qualification = self.read()["timing_qualification"]
+        self.assertEqual(qualification["status"], "not_verified")
+        self.assertIn("clock_domain_differs_from_host", qualification["reasons"])
+
     def test_out_of_bounds_records_are_unverified_even_without_native_drops(self):
-        self.use_monotonic_raw_clock()
+        self.use_attested_clock()
         self.publish([self.event("kernel", 50, 120), self.event("kernel", 280, 350)])
 
         result = self.read()
@@ -118,7 +142,7 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.assertEqual(result["kinds"]["kernel"]["summed_duration_ns"], 40)
 
     def test_capture_duration_must_fit_host_window_with_one_millisecond_tolerance(self):
-        self.use_monotonic_raw_clock()
+        self.use_attested_clock()
         self.set_capture_window(1, 10_000_001, 0.001)
         self.publish([self.event("kernel", 100, 200)])
 
@@ -128,7 +152,7 @@ class AcceptedCudaTraceTests(unittest.TestCase):
         self.assertEqual(qualification["evidence"]["duration_tolerance_ns"], 1_000_000)
 
     def test_invalid_timed_records_and_incomplete_capture_are_unverified(self):
-        self.use_monotonic_raw_clock()
+        self.use_attested_clock()
         self.receipt.update(status="partial", solver_outcome="cancelled")
         self.receipt["native"]["stats"]["incomplete_records"] = 1
         self.publish([self.event("kernel", 0, 0, timestamps_valid=False, timestamp_status="incomplete")])
@@ -144,7 +168,10 @@ class AcceptedCudaTraceTests(unittest.TestCase):
     def test_unknown_false_incomplete_and_extra_clock_header_fields_refuse(self):
         base = dict(self.header)
         cases = [
-            (28, {"clock_source": "clock_monotonic"}, "unknown clock"),
+            (28, {"clock_source": "clock_monotonic", "timestamp_callback_registered": False}, "false callback"),
+            (28, {"clock_source": "clock_monotonic", "timestamp_callback_registered": 1}, "numeric callback"),
+            (28, {"clock_source": "clock_monotonic"}, "incomplete pair"),
+            (28, {"clock_source": "unknown_clock", "timestamp_callback_registered": True}, "unknown clock"),
             (28, {"clock_source": "clock_monotonic_raw", "timestamp_callback_registered": False}, "false callback"),
             (28, {"clock_source": "clock_monotonic_raw", "timestamp_callback_registered": 1}, "numeric callback"),
             (28, {"clock_source": "clock_monotonic_raw"}, "incomplete pair"),

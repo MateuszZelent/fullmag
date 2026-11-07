@@ -113,13 +113,13 @@ std::mutex g_api_mutex;
 std::once_flag g_callback_registration_once;
 CUptiResult g_callback_registration = CUPTI_ERROR_NOT_INITIALIZED;
 
-// CUPTI 12.9 defaults to CLOCK_REALTIME on Linux. WSL clock corrections can
-// jump backwards and corrupt the GPU-to-CPU interpolation. Register this
-// process-lifetime callback before enabling any activity, and use exactly the
-// same clock for the capture boundaries. No allocation or collector lock here.
-uint64_t CUPTIAPI monotonic_raw_timestamp() {
+// Use the host's Rust Instant-compatible monotonic clock domain for GPU-to-CPU
+// interpolation and capture bounds. Register this process-lifetime callback
+// before enabling any activity, and use exactly the same clock for the capture
+// boundaries. No allocation or collector lock here.
+uint64_t CUPTIAPI monotonic_timestamp() {
     timespec now{};
-    if (clock_gettime(CLOCK_MONOTONIC_RAW, &now) != 0 || now.tv_sec < 0) {
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0 || now.tv_sec < 0) {
         g_trace.counts.api_errors.fetch_add(1, std::memory_order_relaxed);
         g_trace.collector_poisoned.store(true, std::memory_order_release);
         g_trace.stop_requested.store(true, std::memory_order_release);
@@ -760,7 +760,7 @@ void disable_and_flush(ActivityTrace &trace) {
             trace.collector_poisoned.store(true, std::memory_order_release);
         }
     }
-    trace.end_timestamp_ns.store(monotonic_raw_timestamp());
+    trace.end_timestamp_ns.store(monotonic_timestamp());
     trace.flush_complete.store(true, std::memory_order_release);
     trace.active.store(false, std::memory_order_release);
     trace.changed.notify_all();
@@ -855,7 +855,7 @@ bool append_header(ActivityTrace &trace, uint64_t max_bytes, uint32_t duration_m
         header, sizeof(header),
         "{\"type\":\"header\",\"schema\":\"worker_cuda_trace.v1\","
         "\"timestamp_domain\":\"cupti_activity_ns\",\"cupti_api_version\":%u,"
-        "\"clock_source\":\"clock_monotonic_raw\",\"timestamp_callback_registered\":true,"
+        "\"clock_source\":\"clock_monotonic\",\"timestamp_callback_registered\":true,"
         "\"max_bytes\":%llu,\"max_duration_ms\":%u,"
         "\"activity_kinds\":[\"driver_api\",\"runtime_api\",\"kernel\",\"memcpy\","
         "\"memset\",\"synchronization\",\"memory\",\"cuda_event_metadata\"]}\n",
@@ -897,7 +897,7 @@ bool validate_output_fd(int fd) {
 
 void register_callbacks_once() {
     std::call_once(g_callback_registration_once, [] {
-        g_callback_registration = g_cupti.cuptiActivityRegisterTimestampCallback(monotonic_raw_timestamp);
+        g_callback_registration = g_cupti.cuptiActivityRegisterTimestampCallback(monotonic_timestamp);
         if (g_callback_registration == CUPTI_SUCCESS) {
             g_callback_registration = g_cupti.cuptiActivityRegisterCallbacks(buffer_requested, buffer_completed);
         }
@@ -1008,7 +1008,7 @@ extern "C" int fullmag_fem_cuda_trace_start_v1(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
 
-    const uint64_t timestamp = monotonic_raw_timestamp();
+    const uint64_t timestamp = monotonic_timestamp();
     if (timestamp == 0) {
         ::close(duplicate);
         g_trace.output_fd.store(-1);

@@ -157,7 +157,9 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     expected_header = {"type": "header", "schema": "worker_cuda_trace.v1", "timestamp_domain": "cupti_activity_ns",
         "cupti_api_version": api_version, "max_bytes": config["max_bytes"], "max_duration_ms": config["max_duration_ms"],
         "activity_kinds": list(KINDS)}
-    monotonic_header = expected_header | {"clock_source": "clock_monotonic_raw",
+    monotonic_header = expected_header | {"clock_source": "clock_monotonic",
+        "timestamp_callback_registered": True}
+    historical_raw_header = expected_header | {"clock_source": "clock_monotonic_raw",
         "timestamp_callback_registered": True}
     with regular(root / receipt["trace_file"], config["max_bytes"]) as (stream, actual_size):
         require(actual_size == size, "trace size mismatch")
@@ -173,9 +175,14 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
                 legacy_api24_header = expected_header | {"activity_kinds": list(LEGACY_KINDS)}
                 require(event == expected_header or (api_version == 24 and event == legacy_api24_header)
                     or (api_version == 28 and event == monotonic_header
+                        and event.get("timestamp_callback_registered") is True)
+                    or (api_version == 28 and event == historical_raw_header
                         and event.get("timestamp_callback_registered") is True),
                     "trace header differs from admitted capture")
                 if event == monotonic_header:
+                    clock_source = event["clock_source"]
+                    timestamp_callback_registered = event["timestamp_callback_registered"]
+                elif event == historical_raw_header:
                     clock_source = event["clock_source"]
                     timestamp_callback_registered = event["timestamp_callback_registered"]
                 declared_kinds = tuple(event["activity_kinds"])
@@ -252,7 +259,9 @@ def analyze(root: Path, *, run_id: str, attempt_id: str, worker_pid: int, gpu_uu
     capture_duration_ns = end - start
     duration_tolerance_ns = 1_000_000
     timing_reasons = []
-    if clock_source != "clock_monotonic_raw" or timestamp_callback_registered is not True:
+    if clock_source == "clock_monotonic_raw" and timestamp_callback_registered is True:
+        timing_reasons.append("clock_domain_differs_from_host")
+    elif clock_source != "clock_monotonic" or timestamp_callback_registered is not True:
         timing_reasons.append("clock_source_not_attested")
     if receipt["status"] != "complete":
         timing_reasons.append("capture_not_complete")
