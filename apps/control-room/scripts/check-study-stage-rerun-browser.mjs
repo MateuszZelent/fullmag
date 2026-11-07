@@ -831,6 +831,7 @@ export async function runStudyStageRerun() {
       action = page.getByRole("menuitem", { name: "Run This Stage", exact: true });
     } else {
       const row = page.locator('[role="treeitem"][data-node-id="model:study"]');
+      await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
       assert.equal(await row.count(), 1, "The Study Explorer row is absent or duplicated");
       await row.click({ button: "right" });
       action = page.getByRole("menuitem", { name: "Compute Study", exact: true });
