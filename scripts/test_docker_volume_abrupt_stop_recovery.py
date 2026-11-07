@@ -622,7 +622,8 @@ class AbruptStopTests(unittest.TestCase):
             with self.assertRaisesRegex(BuildControlError, 'absent, original stopped pair'):
                 reference.revalidate()
 
-    def test_removed_worktree_retry_refreshes_both_foreign_proofs_and_checks_new_consumer(self):
+    def test_removed_worktree_retry_refreshes_both_proofs_and_requalifies_changed_consumers(self):
+        from docker_build_control import BuildControlError
         from docker_prepared_backend_reference import PreparedBackendReference
 
         proof, auth, compose, control, transition = self.prepared_reference_fixture()
@@ -658,13 +659,33 @@ class AbruptStopTests(unittest.TestCase):
             self.assertEqual(load.call_count, 2)
             snapshot.assert_called_once()
             snapshot.reset_mock()
-            read.side_effect = [inventory, [*inventory, {'Id': 'f'*64, 'Mounts': []}]]
-            with self.assertRaisesRegex(r.ContainerRecoveryError, 'new Docker consumer'):
-                r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            prove_win.reset_mock()
+            prove_wsl.reset_mock()
+            new = consumer('f'*64, r'E:\foreign\new')
             restarted = copy.deepcopy(windows)
             restarted['State'].update(Status='running', Running=True, Pid=123)
-            read.side_effect = [inventory, [restarted, wsl]]
-            with self.assertRaisesRegex(r.ContainerRecoveryError, 'consumer identity or lifecycle changed'):
+            changed = [restarted, wsl, new]
+            read.side_effect = [inventory, changed, changed]
+            r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            self.assertEqual([c.args[2] for c in prove_win.call_args_list], [windows, restarted, new])
+            prove_wsl.assert_called_once()
+            snapshot.assert_called_once()
+
+            snapshot.reset_mock()
+            read.side_effect = [inventory, changed]
+            def deny_restarted(*args, **kwargs):
+                if args[2]['State']['Running']:
+                    raise BuildControlError('foreign stopped-absence proof no longer applies')
+                self.assertIsNot(args[2], new)
+            prove_win.side_effect = deny_restarted
+            with self.assertRaisesRegex(BuildControlError, 'stopped-absence proof no longer applies'):
+                r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            snapshot.assert_not_called()
+
+            prove_win.side_effect = None
+            read.side_effect = [inventory, *[[{**windows, 'RestartCount': count}, wsl]
+                                             for count in range(1, 5)]]
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'inventory did not stabilize'):
                 r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
             snapshot.assert_not_called()
 

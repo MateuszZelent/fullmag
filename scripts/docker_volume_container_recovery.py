@@ -2108,7 +2108,8 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
         helper_id = authenticate(operation)
         own.add(_require_container(helper_id, "authenticated operation helper ID"))
     records = _read_foreign_docker_consumers(own)
-    for item in records:
+
+    def qualify(item):
         alias_mapping = None
         alias_mapping_decided = False
         mounts = item.get("Mounts")
@@ -2211,16 +2212,29 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
                     for kind, path in protected)
             if overlap:
                 _fail("a foreign Docker container references the recovery store/control/ledger")
+
+    for item in records:
+        qualify(item)
     if prepared_reference is not None:
-        prepared_reference.revalidate()
         from docker_windows_bind_isolation import _container_pin as consumer_pin
 
+        # A scan may take minutes when Windows hosts many junctions. Reprove
+        # only consumers whose full critical pin changed. Each round still
+        # checks a complete inventory and the authenticated removed pair.
         observed = {item["Id"]: (consumer_pin(item), item.get("RestartCount")) for item in records}
-        for current in _read_foreign_docker_consumers(own):
-            if current["Id"] not in observed:
-                _fail("prepared recovery found a new Docker consumer after physical isolation")
-            if (consumer_pin(current), current.get("RestartCount")) != observed[current["Id"]]:
-                _fail("prepared recovery Docker consumer identity or lifecycle changed after physical isolation")
+        for round_index in range(4):
+            prepared_reference.revalidate()
+            current = _read_foreign_docker_consumers(own)
+            pins = {item["Id"]: (consumer_pin(item), item.get("RestartCount")) for item in current}
+            changed = [item for item in current if pins[item["Id"]] != observed.get(item["Id"])]
+            if not changed:
+                return
+            if round_index == 3:
+                _fail("prepared recovery Docker consumer inventory did not stabilize after fresh proofs: "
+                      + ", ".join(item["Id"] for item in changed[:8]))
+            for item in changed:
+                qualify(item)
+            observed = pins
 
 
 def prepare_abrupt_stop_proof(

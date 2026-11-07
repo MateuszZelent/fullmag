@@ -129,9 +129,11 @@ Przed całym skanem i po nim kontroler ponawia odczyt łańcucha rekordów,
 Compose, silnika i sieci. Każda sonda sprawdza absencję obu dokładnych ID
 przez `inspect` i `ps -a`. Obce montowania nadal przechodzą świeże sondy
 fizyczne WSL albo native Windows/DrvFs. Referencja wymaga nadal rozwiązywalnych
-przypiętych aliasów starego backendu i zgodnego kanonicznego magazynu. Nowy
-konsument lub zmiana jego tożsamości, montowań, sieci albo stanu procesu po
-skanie powoduje odmowę startu.
+przypiętych aliasów starego backendu i zgodnego kanonicznego magazynu. Po
+skanie nowy konsument oraz każda zmiana jego tożsamości, montowań, sieci
+lub stanu procesu wymaga świeżego dowodu. Kontroler powtarza pełny odczyt
+inwentarza po każdej z maksymalnie trzech rund nowych sond. Odmawia startu,
+jeśli któraś sonda odmówi albo inwentarz się nie ustabilizuje.
 
 Archiwum sondy po usunięciu wiąże jej wynik z digestami manifestu, requestu,
 `prepared` i `absence`. Stare obserwacje kontenerów pozostają historyczne.
