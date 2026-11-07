@@ -123,3 +123,7 @@ Wszystko w prywatnym control volume obecnej grupy3203.
 - scripts/docker_dev_submit_accepted.py:
   _validated_request, submit_once — piny i trwały jednorazowy fence.
 - /opt/fullmag/entrypoint.py::read_operator_capability — istniejący mechanizm obrazu.
+
+## Realizacja — 7.11.2026
+
+Zakres wykonano: profil HTTP201, jeden Submit, jedna materializacja tego samego przyjętego runu, Succeeded i publiczny odczyt V/J/H. η=0,03464604656814306, bez kwalifikacji bazy lub reprodukcji publikacji. Pozostało domknięcie rezerwacji quarantined po writer busy; bez recovery lub dalszego Solve. Raport: docs/superpowers/plans/2026-11-07-gsg-profile-publication-and-resubmission-result.md.
