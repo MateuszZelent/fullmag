@@ -5614,32 +5614,56 @@ mod tests {
     }
 
     #[test]
-    fn materialize_script_stages_rejects_hidden_configuration_inside_plain_run() {
-        let config = ScriptExecutionConfig {
+    fn materialize_script_stages_applies_run_integrator_and_rejects_relax_controls() {
+        let run_config = |payload: serde_json::Value| ScriptExecutionConfig {
             antenna_inventory: Default::default(),
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
             default_until_seconds: Some(2e-9),
             study_pipeline: Some(StudyPipelineDocument {
                 version: "study_pipeline.v1".to_string(),
-                nodes: vec![primitive_node(
-                    "run",
-                    "run",
-                    json!({
-                        "entrypoint_kind": "flat_run",
-                        "until_seconds": 2e-9,
-                        "fixed_timestep": 1e-13
-                    }),
-                )],
+                nodes: vec![primitive_node("run", "run", payload)],
             }),
             stages: vec![],
         };
 
-        let error = materialize_script_stages(config)
-            .expect_err("plain Run must reject hidden solver/output configuration");
+        // Same shape as a Run draft exported by fullmag.runtime.script_builder.
+        let stages = materialize_script_stages(run_config(json!({
+            "kind": "run",
+            "entrypoint_kind": "flat_run",
+            "integrator": "heun",
+            "fixed_timestep": "2e-13",
+            "demag_interval_s": "",
+            "until_seconds": "2e-9",
+            "relax_algorithm": "",
+            "torque_tolerance": "",
+            "energy_tolerance": "",
+            "max_steps": "",
+            "sampling": {"outputs": []},
+            "spin_wave_response": null
+        })))
+        .expect("script-exported Run draft must materialize");
+        match stages[0].ir.study.optional_dynamics() {
+            Some(fullmag_ir::DynamicsIR::Llg {
+                integrator,
+                fixed_timestep,
+                ..
+            }) => {
+                assert_eq!(integrator.as_str(), "heun");
+                assert_eq!(*fixed_timestep, Some(2e-13));
+            }
+            other => panic!("Run stage must keep LLG dynamics: {other:?}"),
+        }
+
+        let error = materialize_script_stages(run_config(json!({
+            "entrypoint_kind": "flat_run",
+            "until_seconds": 2e-9,
+            "torque_tolerance": "1e-4"
+        })))
+        .expect_err("plain Run must reject relaxation controls");
         let error = format!("{error:#}");
-        assert!(error.contains("run pipeline stage accepts only until_seconds"));
-        assert!(error.contains("fixed_timestep"));
+        assert!(error.contains("run pipeline stage accepts until_seconds"));
+        assert!(error.contains("torque_tolerance"));
     }
 
     #[test]

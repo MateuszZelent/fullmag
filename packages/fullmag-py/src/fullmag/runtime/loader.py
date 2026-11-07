@@ -69,7 +69,9 @@ class LoadedStage:
             runtime_metadata["output_storage_source_dir"] = str(Path(source_root).resolve())
             if source_stem:
                 runtime_metadata["output_storage_source_stem"] = source_stem
-        if isinstance(runtime_metadata, dict):
+        # Action stages (add_field_drive, save_state, ...) solve nothing, so they get no
+        # autosave policy; a solver stage before or after them owns the outputs.
+        if isinstance(runtime_metadata, dict) and self.action is None:
             configure_problem_ir_autosave(
                 ir,
                 runtime_metadata.get("output_storage"),
