@@ -2182,6 +2182,9 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
     malformed = payload.clone();
     malformed.insert("unknown_solver_control".into(), Value::Bool(true));
     assert!(materialize("script_imported", &malformed).is_err());
+    malformed = payload.clone();
+    malformed.insert("integrator".into(), serde_json::json!({"bad": "rk4"}));
+    assert!(materialize("script_imported", &malformed).is_err());
     let mut unsupported = payload;
     unsupported.insert(
         "relax_algorithm".into(),
@@ -3293,6 +3296,23 @@ fn apply_dynamics_overrides(
         }
     }
     Ok(())
+}
+
+fn payload_string_value(value: Option<&Value>, key: &str) -> Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        Some(Value::Bool(value)) => Ok(Some(value.to_string())),
+        Some(_) => bail!("payload field '{key}' must be a string, number, boolean, or null"),
+    }
 }
 
 fn payload_string(payload: &BTreeMap<String, Value>, key: &str) -> Option<String> {
