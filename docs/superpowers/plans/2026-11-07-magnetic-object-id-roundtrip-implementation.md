@@ -6,7 +6,7 @@
 **Architecture:** Naprawiamy utratę już istniejącego pola publicznego Python/Scene, bez nowego modelu fizyki, ProblemIR lub endpointu. Rust odczytuje opcjonalny klucz object_id, przekazuje ID sceny w obie strony. Istniejący końcowy rewrite override już zachowuje ID i pozostaje bez zmiany. Brak/null w starym builderze zachowuje fallback do name.
 **Tech Stack:** Rust serde, fullmag-authoring, istniejące testy API i workflow bootstrap.
 **Spec:** [ADR 0024](../../adr/0024-compositional-physics-object-model.md), rozdział Implementation obligations oraz Migration and rollback; istniejący Python runtime/scene_document.py i model/structure.py::Ferromagnet.
-**Status:** DO ZATWIERDZENIA; patch wyłącznie przygotowany, nie zastosowany.
+**Status:** Zatwierdzono i zastosowano dokładny patch. RED potwierdzony; siedem nowych testów i pełna suita authoringu przeszły. Końcowy bootstrap i pełny workflow authoringu zakończyły się sukcesem; szczegóły i granice w [raporcie wykonania](2026-11-07-magnetic-object-id-roundtrip-result.md).
 
 ## Global Constraints
 
@@ -54,7 +54,7 @@ kwalifikują żadnego solvera. Nie ma nowych parametrów SI lub równań.
 Patch kandydacki: [dokładny diff](2026-11-07-magnetic-object-id-roundtrip.patch).
 SHA256: 9cc76ed39ca056413a467eb680bc974cb35a7ba591ea9bcbf68a53d2e64fcef2.
 Baza: 4de2e92954ea105f05b55cf2d897ff09d01d234f wraz z niezmienionym WIP.
-git apply --check przeszedł. Testów nie skompilowano i patcha nie zastosowano.
+Stan przed zgodą użytkownika: git apply --check przeszedł; testów jeszcze nie skompilowano, a patch nie był zastosowany. Aktualny stan wykonania jest w raporcie, nie w poniższym historycznym przeglądzie kandydata.
 Manifest przypina hashe przed/po dla pięciu plików; przed zastosowaniem
 trzeba ponownie sprawdzić te hashe. Nie ma zgody na dopasowanie zmienionej bazy
 przez automatyczne rozszerzanie zakresu.
@@ -75,18 +75,18 @@ przez automatyczne rozszerzanie zakresu.
 **Interfaces:** brak zmiany sygnatur adapterów. Nowe pole Rust odzwierciedla
 istniejący klucz Python; JSON overrides nadal pochodzi od jednego właściciela.
 
-- [ ] Odtworzyć RED przez CI dla testów z kandydata bez poprawki produkcyjnej; pierwszy test musi wskazać utratę immutable-A na rzecz flower, a nie awarię setupu.
-- [ ] Zastosować przypięty patch po ponownym check/hash, zachowując istniejący WIP.
-- [ ] Test magnetic_object_id_survives_builder_json_and_both_adapters: JSON object_id=immutable-A, name=flower; ID we wszystkich trzech przejściach identyczne.
-- [ ] Test magnetic_object_id_survives_scene_rename: nazwa Renamed sample zmieniona, ID immutable-A stałe także w overrides.
-- [ ] Test magnetic_object_id_legacy_absence_and_null_keep_name_fallback: oba wejścia dają dawne ID flower i poprawną scenę.
-- [ ] Test magnetic_object_id_does_not_fallback_for_explicit_empty_id: komunikat zawiera scene object ids must not be empty.
-- [ ] Test magnetic_object_id_duplicate_is_rejected_despite_different_names: komunikat zawiera duplicate scene object id.
-- [ ] Test magnetic_object_id_preserves_existing_owned_region_identity: owner_object i region_id przechodzą bez zmiany.
-- [ ] Test magnetic_object_id_preserves_fdm_grid_through_rename: istniejąca mapa per_magnet po name przechodzi na per_object_grid po immutable ID i wraca pod zmienioną nazwą z tym samym cell, bez starego klucza.
-- [ ] Uruchomić istniejące CI rust-contracts, w tym nowy prefiks, testy API i regresje execution_intent. Przeczytać cały istotny błąd; nie osłabiać asercji dla zielonego wyniku.
-- [ ] Review zakresu i kompatybilności; selektywny commit/push na branch zadania po sprawdzeniu indeksu w osobnym poleceniu. Zachować dokładne 63 wcześniejsze wpisy.
-- [ ] Raport: pełne SHA kodu/CI, RED→GREEN, ograniczenia i niewykonany odbiór managed.
+- [x] Odtworzyć RED przez CI dla testów z kandydata bez poprawki produkcyjnej; pierwszy test musi wskazać utratę immutable-A na rzecz flower, a nie awarię setupu.
+- [x] Zastosować przypięty patch po ponownym check/hash, zachowując istniejący WIP.
+- [x] Test magnetic_object_id_survives_builder_json_and_both_adapters: JSON object_id=immutable-A, name=flower; ID we wszystkich trzech przejściach identyczne.
+- [x] Test magnetic_object_id_survives_scene_rename: nazwa Renamed sample zmieniona, ID immutable-A stałe także w overrides.
+- [x] Test magnetic_object_id_legacy_absence_and_null_keep_name_fallback: oba wejścia dają dawne ID flower i poprawną scenę.
+- [x] Test magnetic_object_id_does_not_fallback_for_explicit_empty_id: komunikat zawiera scene object ids must not be empty.
+- [x] Test magnetic_object_id_duplicate_is_rejected_despite_different_names: komunikat zawiera duplicate scene object id.
+- [x] Test magnetic_object_id_preserves_existing_owned_region_identity: owner_object i region_id przechodzą bez zmiany.
+- [x] Test magnetic_object_id_preserves_fdm_grid_through_rename: istniejąca mapa per_magnet po name przechodzi na per_object_grid po immutable ID i wraca pod zmienioną nazwą z tym samym cell, bez starego klucza.
+- [x] Uruchomić istniejące CI rust-contracts, w tym nowy prefiks, testy API i regresje execution_intent. Przeczytać cały istotny błąd; nie osłabiać asercji dla zielonego wyniku.
+- [x] Review zakresu i kompatybilności; selektywny commit/push na branch zadania po sprawdzeniu indeksu w osobnym poleceniu. Zachować dokładne 63 wcześniejsze wpisy.
+- [x] Raport: pełne SHA kodu/CI, RED→GREEN, ograniczenia i niewykonany odbiór managed.
 
 Ta naprawa usuwa jeden warunek konieczny dla trwałych powiązań siatki.
 Nie dowodzi zachowania domeny GSG przez scenę ani rename-safe interpretacji
@@ -97,7 +97,7 @@ Pierwszy review usunął zbędny hunk geometry_override_value: jego publiczny ca
 Review v2 wykrył błąd składania pliku patcha (fragmenty kolejnych plików w hunku adapters.rs). V2 nie został zastosowany. V3 usuwa te linie i dodaje konkretne asercje błędów oraz regresję mapowania FDM. Kontrola składni i końcowy review przeszły; CI pozostaje niewykonane.
 
 
-## Weryfikacja kandydata v3 — bez zastosowania
+## Historyczna weryfikacja kandydata v3 — przed zatwierdzeniem
 
 - git apply --check: PASS na aktualnych źródłach.
 - Dokładnie cztery zmienione pliki Rust przeszły parser rustfmt, bez
@@ -118,3 +118,12 @@ Review v2 wykrył błąd składania pliku patcha (fragmenty kolejnych plików w 
 Plan prosi o decyzję wyłącznie o tej poprawce oraz lekkich testach i CI.
 Nie obejmuje nowej interpretacji markerów, migracji V04, zarządzanego
 buildu/restartu, recovery, zwolnienia rezerwacji lub nowego Solve.
+
+## Checkpoint wdrożenia 07.11.2026
+
+- Zgoda użytkownika: „Zatwierdzam poprawkę i testy CI”.
+- RED: b7901293e831f9a834463beea7808f6714a23a1f, CI42373884418 — właściwa utrata ID, 6 fail / 1 pass.
+- Patch: 9fa93114476cebfa5f1fa9a4a97686dd8dfadfdf; pięć końcowych hashów zgodnych z zatwierdzonym kandydatem.
+- Wykryty stary fixture poprawiono w 6a85162cd73a2256f3c882e64f5a8a26ceec8846, bez zmiany produkcyjnej semantyki flag.
+- Pełne CI42375241700: success, 198/198 authoring, 65/65 scena Python, 10/10 materializacja aplikacji.
+- Bootstrap42374520930: success, rust-contracts i inspector-actions-browser-smoke. Odbiór nowego managed pakietu nadal NOT VERIFIED; bez Solve, restartu i zwalniania rezerwacji.
