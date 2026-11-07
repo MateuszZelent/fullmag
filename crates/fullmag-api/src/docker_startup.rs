@@ -60,6 +60,13 @@ pub(crate) struct DockerStartupRequest {
     pub execution: DockerStartupExecution,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solver_profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cuda_trace")]
+    pub cuda_trace: Option<Value>,
+}
+
+fn deserialize_cuda_trace<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    // A supplied null is an invalid request, not the absence of profiling.
+    Value::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -90,6 +97,8 @@ pub(crate) struct DockerStartupResponse {
     pub source_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solver_profile_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_trace_sha256: Option<String>,
     pub status: &'static str,
     pub execution: DockerStartupExecution,
     pub session_id: String,
@@ -212,6 +221,7 @@ pub(crate) async fn activate_current_live_startup(
             Some(loaded.source.path.clone()),
             progress_sender,
             request.solver_profile.clone(),
+            request.cuda_trace.clone(),
         );
         tokio::pin!(preparation);
         let mut progress_receiver_open = true;
@@ -592,6 +602,10 @@ fn validate_request(request: &DockerStartupRequest) -> Result<(), ApiError> {
     if let Some(value) = &request.solver_profile {
         crate::accepted_solver_profile::request_digest(value)
             .map_err(|error| ApiError::unprocessable_with_code("invalid_solver_profile", error.to_string()))?;
+    }
+    if let Some(value) = &request.cuda_trace {
+        crate::accepted_solver_profile::cuda_trace::request_digest(value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_cuda_trace", error.to_string()))?;
     }
     validate_source_identity(&request.source)?;
     if request.execution.mode != "canonical_live_v2"
@@ -1706,6 +1720,10 @@ fn startup_session_id(request: &DockerStartupRequest, source: &CapturedSource) -
         identity.push('\0');
         identity.push_str(&fullmag_session::canonical_json_sha256(value));
     }
+    if let Some(value) = &request.cuda_trace {
+        identity.push_str("\0cuda_trace\0");
+        identity.push_str(&fullmag_session::canonical_json_sha256(value));
+    }
     format!(
         "docker-startup-{}",
         fullmag_session::hex_sha256(identity.as_bytes())
@@ -1843,6 +1861,7 @@ fn replay_or_reject(
         request_id: request.request_id.clone(),
         source_sha256: source.sha256.clone(),
         solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
+        cuda_trace_sha256: request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256),
         status,
         execution: request.execution.clone(),
         session_id: existing.session.session_id.clone(),
@@ -1972,6 +1991,7 @@ async fn publish_startup_result(
         request_id: request.request_id.clone(),
         source_sha256: loaded.source.sha256.clone(),
         solver_profile_sha256: request.solver_profile.as_ref().map(fullmag_session::canonical_json_sha256),
+        cuda_trace_sha256: request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256),
         status: if status == "waiting_for_solve" {
             "waiting_for_solve"
         } else {
@@ -2768,6 +2788,7 @@ mod tests {
             authorization: AUTHORIZATION_KIND.to_string(),
             request_id: "startup-test-1".to_string(),
             solver_profile: None,
+            cuda_trace: None,
             source: DockerStartupSource {
                 path: "/opt/fullmag/source/examples/scene.py".to_string(),
                 root: CONTAINER_SOURCE_ROOT.to_string(),
@@ -3461,6 +3482,54 @@ mod tests {
         json!({"schema_version": "accepted_solver_profile.v1", "config": {
             "enabled": true, "sample_every": 1, "sample_interval_wall_ms": 0,
             "max_samples": 128, "emit_engine_log": false, "persist_artifact": true}})
+    }
+
+    fn trace_parameter() -> Value {
+        json!({"schema_version": "accepted_cuda_trace.v1", "max_bytes": 67108864,
+            "max_duration_ms": 60000})
+    }
+
+    #[test]
+    fn startup_cuda_trace_is_separate_optional_and_strict() {
+        let absent = request();
+        assert!(serde_json::to_value(&absent).unwrap().get("cuda_trace").is_none());
+        let mut raw = serde_json::to_value(&absent).unwrap();
+        assert!(serde_json::from_value::<DockerStartupRequest>(raw.clone()).unwrap().cuda_trace.is_none());
+        raw["cuda_trace"] = Value::Null;
+        let supplied_null: DockerStartupRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(supplied_null.cuda_trace, Some(Value::Null));
+        assert_eq!(validate_request(&supplied_null).unwrap_err().code.as_deref(), Some("invalid_cuda_trace"));
+        let source = CapturedSource { path: PathBuf::from(&absent.source.path),
+            sha256: absent.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let mut traced = absent.clone(); traced.cuda_trace = Some(trace_parameter());
+        validate_request(&traced).unwrap();
+        assert_ne!(startup_session_id(&absent, &source), startup_session_id(&traced, &source));
+        assert!(traced.solver_profile.is_none());
+        let mut both = traced.clone(); both.solver_profile = Some(profile_parameter());
+        validate_request(&both).unwrap();
+        assert_ne!(startup_session_id(&traced, &source), startup_session_id(&both, &source));
+        traced.cuda_trace.as_mut().unwrap()["max_bytes"] = json!(true);
+        assert_eq!(validate_request(&traced).unwrap_err().code.as_deref(), Some("invalid_cuda_trace"));
+    }
+
+    #[test]
+    fn startup_cuda_trace_replay_confirms_exact_digest_and_rejects_changed_limits() {
+        let mut request = request(); request.cuda_trace = Some(trace_parameter());
+        let source = CapturedSource { path: PathBuf::from(&request.source.path),
+            sha256: request.source.sha256.clone(), size_bytes: 1, bytes: Vec::new() };
+        let snapshot_request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({"session_id": "trace-replay"})).unwrap();
+        let mut snapshot = default_current_live_state(&snapshot_request);
+        snapshot.metadata = Some(json!({STARTUP_METADATA_KEY: {
+            "request": request, "source_sha256": source.sha256, "source_size_bytes": 1,
+            "status": "waiting_for_compute", "run_id": "run-trace", "step_ids": ["step:run"],
+            "scene_revision": 1, "runtime_metadata": {"interactive": true, "wait_for_solve": true}
+        }}).into());
+        let Json(response) = replay_or_reject(&request, &source, &snapshot).unwrap();
+        assert_eq!(response.cuda_trace_sha256, request.cuda_trace.as_ref().map(fullmag_session::canonical_json_sha256));
+        assert!(response.solver_profile_sha256.is_none());
+        request.cuda_trace.as_mut().unwrap()["max_duration_ms"] = json!(30000);
+        assert_eq!(replay_or_reject(&request, &source, &snapshot).unwrap_err().code.as_deref(),
+            Some("docker_startup_request_conflict"));
     }
 
     #[test]

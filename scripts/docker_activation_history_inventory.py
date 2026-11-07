@@ -1,11 +1,13 @@
 """Read-only inventories used by the managed activation history transaction."""
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from pathlib import Path
 import re
 import stat
 import subprocess
+import uuid
 
 from docker_activation_history_policy import (
     HistoryError, canonical, digest, document, referenced_attempts,
@@ -23,12 +25,69 @@ KNOWN_ROOTS = frozenset({
     "activation", "iteration", "backend", "frontend", "cancelled-activation-recovery",
     "cold-stored-budget-stop-preview", "cold-stored-budget-stop", "recreate-services",
     "offline-reconciliation", "pre-admission-output-reconciliation", "namespaces",
+    "host-device-reattest", "container-recovery-preparation", "runtime-services",
+    "stop-bootstrap", "stop-bootstrap-frontend",
+    "startup-recovery-stop", "startup-recovery-stop-preview",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
+HOST_LEDGER_ROOT_WRITER_OWNER = "runtime-control/host-ledger-roots/WRITER.owner.json"
+WRITER_TIMESTAMP = re.compile(
+    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})\Z"
+)
+
+
+def _writer_uuid(value, label):
+    if not isinstance(value, str):
+        raise HistoryError("Host ledger writer " + label + " is malformed")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise HistoryError("Host ledger writer " + label + " is malformed") from error
+    if str(parsed) != value or parsed.version != 4 or parsed.variant != uuid.RFC_4122:
+        raise HistoryError("Host ledger writer " + label + " is malformed")
+
+
+def _writer_timestamp(value, label):
+    match = WRITER_TIMESTAMP.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise HistoryError("Host ledger writer " + label + " timestamp is malformed")
+    try:
+        datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S")
+    except ValueError as error:
+        raise HistoryError("Host ledger writer " + label + " timestamp is malformed") from error
+    zone = match.group(3)
+    if zone != "Z":
+        hours, minutes = map(int, zone[1:].split(":"))
+        if hours > 23 or minutes > 59:
+            raise HistoryError("Host ledger writer " + label + " timestamp is malformed")
+
+
+def _host_ledger_writer_digest(raw):
+    value = document(raw, "host ledger roots writer owner")
+    if value.get("schema") != "fullmag.writer.v1" or value.get("released") is not True:
+        raise HistoryError("Host ledger roots writer owner is not a released fullmag.writer.v1 record")
+    _writer_uuid(value.get("token"), "token")
+    _writer_uuid(value.get("process_start_token"), "process_start_token")
+    if not isinstance(value.get("host"), str) or not value["host"]:
+        raise HistoryError("Host ledger writer host identity is malformed")
+    if type(value.get("pid")) is not int or not 0 < value["pid"] <= 0xFFFFFFFF:
+        raise HistoryError("Host ledger writer pid is malformed")
+    _writer_timestamp(value.get("acquired_at"), "acquired_at")
+    _writer_timestamp(value.get("heartbeat_at"), "heartbeat_at")
+
+    # Rust rewrites these three values for every write transaction. Keep every
+    # stable and future field in the digest so identity changes remain pinned.
+    stable = dict(value)
+    for key in ("token", "acquired_at", "heartbeat_at"):
+        del stable[key]
+    return digest(canonical(stable))
 
 
 def _reference_digest(root, relative, raw):
+    if relative == HOST_LEDGER_ROOT_WRITER_OWNER:
+        return _host_ledger_writer_digest(raw)
     if relative != "runtime-control/runtime-services/OWNER.json":
         return digest(raw)
     value = document(raw, "runtime owner")

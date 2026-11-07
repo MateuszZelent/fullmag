@@ -106,6 +106,62 @@ Kwalifikacja operacyjna pozostaje `NOT VERIFIED` do czasu rzeczywistej próby.
 Wycofanie nie usuwa archiwów ani wyników i nie przywraca starych bajtów, jeśli
 istnieją aktywni konsumenci lub zdążyło nastąpić kolejne admission.
 
+### Sonda obcych aliasów dla istniejącego backendu worktree
+
+Pierwsza próba abrupt recovery w zarejestrowanym worktree może kwalifikować
+nieznany alias WSL niezależną sondą fizyczną. Jawne wejście
+`prove_worktree_foreign_alias_disjoint` wiąże tożsamość Git/BuildControl,
+utrwalony Compose, obraz i mounty, certyfikat Linux oraz surowy marker ownera.
+Kontrola control volume i namespace uwzględnia deklarację backendu oraz
+rzeczywisty `HostConfig` z subpath; ledger zachowuje reguły ADR0076.
+
+Sonda używa istniejącego nieuprzywilejowanego helpera z mountami tylko do
+odczytu. Nazwa aliasu ani różne urządzenia nie dowodzą rozłączności. Własne
+kontenery odrzuca według obu etykiet projektu. Stary backend musi nadal istnieć
+i być zatrzymany; jego pełna stabilna obserwacja oraz inkarnacja obcego
+konsumenta są sprawdzane przed pomiarem i po nim. Archiwalny dowód jest
+materiałem audytowym: walidator metadanych nie zastępuje nowej sondy fizycznej
+przy granicy mutacji. Ścieżka master zachowuje swój dotychczasowy schemat.
+
+Kontynuacja abrupt recovery worktree po pełnym usunięciu pary używa
+historycznego manifestu dopiero po uwierzytelnieniu zgodnego `absence.json`.
+Przed całym skanem i po nim kontroler ponawia odczyt łańcucha rekordów,
+Compose, silnika i sieci. Każda sonda sprawdza absencję obu dokładnych ID
+przez `inspect` i `ps -a`. Obce montowania nadal przechodzą świeże sondy
+fizyczne WSL albo native Windows/DrvFs. Referencja wymaga nadal rozwiązywalnych
+przypiętych aliasów starego backendu i zgodnego kanonicznego magazynu. Po
+skanie nowy konsument oraz każda zmiana jego tożsamości, montowań, sieci
+lub stanu procesu wymaga świeżego dowodu. Kontroler powtarza pełny odczyt
+inwentarza po każdej z maksymalnie trzech rund nowych sond. Odmawia startu,
+jeśli któraś sonda odmówi albo inwentarz się nie ustabilizuje.
+
+Archiwum sondy po usunięciu wiąże jej wynik z digestami manifestu, requestu,
+`prepared` i `absence`. Stare obserwacje kontenerów pozostają historyczne.
+Ponowienie używa istniejących rekordów i pomija ponowne usuwanie pary.
+Po ponownym sprawdzeniu bajtów terminala start dziedziczy przypięty prywatny
+układ wolumenu. Kontrakt natywny i dokładna lista plików spoza indeksu
+pochodzą z zachowanego Compose.
+Kwalifikacja tej kontynuacji wymaga rzeczywistego przebiegu na danym hoście.
+
+### Zewnętrzne junctiony w obcym bindzie Windows
+
+Ścisły dowód Windows v2 nadal wymaga zawarcia celów linków w źródle bindu.
+Osobny wariant dla junctionów może kwalifikować najwyżej osiem zewnętrznych
+celów. Nie ma listy zaufanych ścieżek: każdy cel musi mieć pełny dowód
+tożsamości native Windows i mapowania DrvFs oraz rozłączności od wszystkich
+trzech chronionych backingów WSL/Docker. Cel musi być zwykłym katalogiem
+na NTFS/ReFS; kolejne zewnętrzne junctiony, nieznane linki i niepełna
+inwentaryzacja powodują odmowę. Błędów ani braku celu nie uznaje się za dowód.
+
+Nowy schemat wiąże dokładny zbiór junctionów z inwentaryzacją rootu,
+surowym celem DrvFs i identyfikatorami linków. Wszystkie pozostałe linki
+podlegają dotychczasowej kwalifikacji. Pełne obserwacje przed i po muszą
+być równe, łącznie z inkarnacjami kontenerów i chronionymi backingami.
+Walidacja zapisanego dowodu nie zastępuje świeżej obserwacji przed mutacją.
+Obsługa jest wyłącznie odczytowa i nie zmienia obcych worktree, dowiązań
+ani kontenerów. Kwalifikacja runtime wymaga rzeczywistego przejścia całej
+kontroli konsumentów; testy syntetyczne tego nie dowodzą.
+
 ## Domknięcie refreshu po udanym odtworzeniu frontendu
 
 Docker Desktop może przedstawiać ten sam bind WSL innym zapisem niż host.
@@ -132,6 +188,27 @@ backend source snapshot nadal jest obowiązkowe. Odmowa dowolnego pinu
 zachowuje zasoby. Niepełna publikacja zachowuje journal i blokadę zamiast
 umożliwiać nową konkurencyjną operację. Regresje interpretowane nie zastępują
 kwalifikacji rzeczywistego prepare/apply ani symulacji.
+
+## Zatrzymanie API po nieudanym początkowym recovery
+
+`stop-diagnostic-volume --startup-recovery --preview` kwalifikuje dokładną
+nieudaną próbę DEVELOPMENT, zachowaną autoryzację recovery, historyczne
+OWNER i process-tree oraz bieżące API z blokadą wykonywania. Ścieżka obejmuje
+błąd walidacji ostatniego heartbeat terminalnego runa przed przejęciem
+właściciela. Podgląd wiąże działającą parę usług, cgroup, instancję API,
+oryginalne rekordy i pełny snapshot store oraz ledgeru. Sprawdza też
+konsumentów projektu, prywatnego wolumenu i sieci tej grupy.
+
+Zastosowanie wymaga SHA planu podglądu. Kontroler ponawia obserwację pod
+blokadą operacji i zapisuje intent przed łagodnym zatrzymaniem dokładnego
+backendu. Receipt zachowuje `execution_state=unknown`, oryginalne OWNER,
+process-tree, ledger, dane użytkownika oraz autoryzację. Dalszy start tej
+samej instancji odbywa się przez `resume-volume --restart-backend` i jego
+bramki admission. Dla zachowanego wyniku nieznanego po potwierdzonym stopie
+`--reconcile-startup-stop-attempt` ponawia wyłącznie obserwację. Wiąże
+oryginalny helper, intent i snapshot oraz publikuje terminal przez CAS
+w pierwotnym helperze. Testy źródłowe i kwalifikacja konkretnego stopu mają
+oddzielne dowody.
 
 ## Obowiązki i weryfikacja
 

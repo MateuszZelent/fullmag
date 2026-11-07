@@ -1166,3 +1166,49 @@ katalogu artefaktów, zgodne z terminalnym task/attempt/epoch/resource i release
 lease. Nie zbiera dowolnych referencji z payloadów workerów. Izolowany helper
 pozostaje ograniczony do 64 MiB pamięci: CAS czyta i hashuje strumieniowo,
 z kontrolą limitów, liczby bajtów i niezmienności tożsamości pliku przed/po.
+
+### Odzyskanie po diagnostycznym stopie przed potwierdzeniem ownera
+
+Po odmowie `native service target/build mismatch; attach refused` nowy backend
+może uruchomić wyłącznie diagnostyczne API. Zarządzany `stop-bootstrap-volume`
+zatrzymuje ten backend, zachowując historyczny `OWNER=ready` oraz receipt
+`shutdown_unknown` bez `service_owner`. Brak tego pola nie oznacza drain ani
+uprawnienia do usunięcia właściciela. Nie wolno go dopisywać w celu spełnienia
+starszego warunku recovery.
+
+Hostowy proof `fullmag.docker-abrupt-stop-proof.v4` dopuszcza ten konkretny
+stan wyłącznie z jawnym `bootstrap_stop`. Dowód wiąże wybrany attempt i surowy
+SHA terminala stopu, zakończoną operację kontrolera, preflight nieobecności
+procesów historycznego ownera, oryginalny failed-resume process i fence oraz
+development/Compose. Cztery dokumenty native (process, OWNER, LAUNCH, config)
+pozostają niezmienione i przypięte surowymi hashami. Kanoniczny hash terminala
+w receipcie operacji jest innym hashem niż SHA pliku sidecar z końcowym LF.
+Inkarnacje backendu i frontendu muszą odpowiadać nieudanemu resume.
+
+Ten wariant obsługuje wyłącznie niepustą listę terminalnych runów i istniejący
+request native V3. Nie pozwala pomijać held, historii retry, aktywnych lease
+ani nieznanych danych. Pełne kontrole store/CAS, ledgera, urządzeń, obcych
+konsumentów i zatrzymanej pary usług pozostają obowiązkowe. Wyjątek od
+`process.service_owner` wybiera wyłącznie schemat uwierzytelnionego proof;
+ten sam walidator działa przy przygotowaniu, odczycie i granicy mutacji.
+Starsze warianty zachowują dotychczasowe wymagania.
+
+Właścicielem tej kontynuacji jest launcher Docker DEV; native recovery nadal
+odpowiada za zmianę stanu historycznego właściciela pod własnymi blokadami.
+Rollback do starszego launchera odmawia nowego proof, zachowując dane.
+Regresje wymagają odrzucenia zmienionych hashy, ownera, fence, inkarnacji,
+źródła/grupy, nieukończonego stopu i niepasującego requestu native.
+Implementacja walidatora i testy źródłowe nie stanowią dowodu odzyskania
+instancji ani wykonania symulacji. Managed recovery i następujące po nim
+profilowanie wymagają osobnych pokwitowań.
+
+`stop-bootstrap-frontend-volume` przygotowuje zatrzymaną parę po takim stopie.
+Preview sprawdza wyłącznie istniejący wolumen i dowody. Jawne apply wymaga
+SHA planu, kwalifikuje go przed `prepare`, a następnie pod blokadą grupy zapisuje
+niezmienny intent i ponownie odczytuje komplet dowodów przed SIGTERM do dokładnego
+ID frontendu. Nie wymusza zakończenia procesu. Po sygnale kontroluje tę samą
+inkarnację, zatrzymany backend oraz niezmienione dokumenty native. Już zatrzymanej
+inkarnacji nie sygnalizuje ponownie. Stop nie jest drain ani zgodą na teardown:
+obowiązują późniejsze pełne bramki recovery. Timeout zachowuje unknown i helper
+operacji; zwykłe ponowienie apply nie rozlicza takiej blokady. Wymaga ona osobnej
+kwalifikowanej finalizacji, bez ponownego wysyłania niepewnego sygnału.

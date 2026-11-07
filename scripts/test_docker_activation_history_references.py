@@ -1,4 +1,5 @@
 """Regression tests for live references beside historical backend markers."""
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -6,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from docker_activation_history_inventory import control_references
-from docker_activation_history_policy import HistoryError
+from docker_activation_history_policy import HistoryError, digest
 
 
 def make_root(path):
@@ -106,6 +107,88 @@ class HistoricalMarkerReferenceTests(unittest.TestCase):
         owner["heartbeat_at"] = "not-a-timestamp"
         put(self.root, path, owner)
         with self.assertRaisesRegex(HistoryError, "heartbeat"):
+            control_references(self.root, "f" * 32)
+
+    def test_released_host_ledger_writer_normalizes_only_transaction_identity_and_times(self):
+        owner_relative = "runtime-control/host-ledger-roots/WRITER.owner.json"
+        registry_relative = "runtime-control/host-ledger-roots/HOST_LEDGER_ROOTS.json"
+        owner = {
+            "schema": "fullmag.writer.v1",
+            "token": "11111111-1111-4111-8111-111111111111",
+            "process_start_token": "22222222-2222-4222-8222-222222222222",
+            "host": "host-a",
+            "pid": 2345,
+            "acquired_at": "2026-11-05T21:12:37.731114153Z",
+            "heartbeat_at": "2026-11-05T21:12:42.731114153Z",
+            "released": True,
+        }
+        registry = {
+            "schema_version": "host_ledger_root_registry.v1",
+            "roots_by_host_id": {"host-a": "/state/ledger-a"},
+        }
+        put(self.root, owner_relative, owner)
+        registry_path = put(self.root, registry_relative, registry)
+        first = control_references(self.root, "f" * 32)
+        self.assertEqual(first["pins"][registry_relative], digest(registry_path.read_bytes()))
+
+        next_transaction = {
+            **owner,
+            "token": "33333333-3333-4333-8333-333333333333",
+            "acquired_at": "2026-11-05T21:13:37.731114153Z",
+            "heartbeat_at": "2026-11-05T21:13:42.731114153Z",
+        }
+        put(self.root, owner_relative, next_transaction)
+        second = control_references(self.root, "f" * 32)
+        self.assertEqual(first["pins"][owner_relative], second["pins"][owner_relative])
+        self.assertEqual(first["sha256"], second["sha256"])
+        self.assertEqual(first["pins"][registry_relative], second["pins"][registry_relative])
+
+        identity_changes = (
+            ("pid", 2346),
+            ("host", "host-b"),
+            ("process_start_token", "44444444-4444-4444-8444-444444444444"),
+            ("future_identity", {"revision": 2}),
+        )
+        for key, value in identity_changes:
+            changed = copy.deepcopy(owner)
+            changed[key] = value
+            put(self.root, owner_relative, changed)
+            with self.subTest(field=key):
+                proof = control_references(self.root, "f" * 32)
+                self.assertNotEqual(first["pins"][owner_relative], proof["pins"][owner_relative])
+        for key, value in (
+            ("schema", "fullmag.writer.v2"),
+            ("released", False),
+            ("token", "not-a-uuid"),
+            ("process_start_token", "not-a-uuid"),
+            ("host", ""),
+            ("pid", True),
+            ("acquired_at", "not-a-timestamp"),
+            ("heartbeat_at", "2026-02-30T21:12:42Z"),
+        ):
+            changed = copy.deepcopy(owner)
+            changed[key] = value
+            put(self.root, owner_relative, changed)
+            with self.subTest(invalid_field=key), self.assertRaises(HistoryError):
+                control_references(self.root, "f" * 32)
+
+        put(self.root, owner_relative, owner)
+        registry["roots_by_host_id"]["host-a"] = "/state/ledger-b"
+        put(self.root, registry_relative, registry)
+        registry_changed = control_references(self.root, "f" * 32)
+        self.assertNotEqual(first["pins"][registry_relative], registry_changed["pins"][registry_relative])
+        self.assertNotEqual(first["sha256"], registry_changed["sha256"])
+
+    def test_linked_host_ledger_writer_owner_is_refused(self):
+        owner = self.root / "runtime-control/host-ledger-roots/WRITER.owner.json"
+        owner.parent.mkdir(parents=True)
+        target = put(self.root, "outside-writer-owner.json", {"schema": "fullmag.writer.v1"})
+        owner.symlink_to(target)
+        put(self.root, "runtime-control/host-ledger-roots/HOST_LEDGER_ROOTS.json", {
+            "schema_version": "host_ledger_root_registry.v1", "roots_by_host_id": {},
+        })
+
+        with self.assertRaisesRegex(HistoryError, "Linked or special control reference entry"):
             control_references(self.root, "f" * 32)
 
     def assert_marker_only_is_excluded(self, marker_relative, closed_attempt, sibling_relative,

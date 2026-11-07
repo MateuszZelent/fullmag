@@ -105,6 +105,14 @@ class NativeContractIntegrationTests(unittest.TestCase):
             serve.assert_not_called()
 
     def test_native_contract_success_reaches_publication_with_valid_report(self):
+        self._assert_native_contract_publication("fem-demag-poisson")
+
+    def test_cuda_activity_contract_reaches_publication_with_its_exact_target(self):
+        self._assert_native_contract_publication("fem-cuda-activity-trace")
+
+    def _assert_native_contract_publication(self, gate):
+        gates = (gate,)
+        binary_path = Path("backends/fem") / native_contracts.CONTRACT_TARGETS[gate]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             package = root / "package"
@@ -148,7 +156,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 make_environments.append(dict(make_environment))
                 self.assertEqual(
                     make_environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"],
-                    "fem-demag-poisson",
+                    gate,
                 )
                 self.assertEqual(
                     Path(make_environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"]),
@@ -179,7 +187,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 return 0
 
             def fake_run_contracts(**kwargs):
-                self.assertEqual(kwargs["requested"], GATES)
+                self.assertEqual(kwargs["requested"], gates)
                 self.assertEqual(kwargs["package_root"], candidate)
                 self.assertEqual(
                     kwargs["preparation_root"],
@@ -193,7 +201,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                     "contract_revision": native_contracts.CONTRACT_REVISION,
                     "state": "succeeded",
                     "source_snapshot_sha256": source_snapshot,
-                    "requested": list(GATES),
+                    "requested": list(gates),
                     "attempt_id": attempt_id,
                     "evidence": {
                         "log_sha256": "f" * 64,
@@ -202,7 +210,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                         "report_path": f"attempt-{attempt_id}/report.json",
                     },
                     "contracts": {
-                        GATES[0]: {
+                        gates[0]: {
                             "contract_revision": native_contracts.CONTRACT_REVISION,
                             "state": "passed",
                             "compile": {
@@ -210,7 +218,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                                 "exit_code": 0,
                                 "argv": [
                                     "cmake", "--build", str(native_root), "--target",
-                                    native_contracts.TEST_BINARY_RELATIVE_PATH.name,
+                                    binary_path.name,
                                     "--parallel", "2",
                                 ],
                                 "duration_seconds": 0.001,
@@ -218,11 +226,11 @@ class NativeContractIntegrationTests(unittest.TestCase):
                             "test": {
                                 "state": "succeeded",
                                 "exit_code": 0,
-                                "argv": [str(native_root / native_contracts.TEST_BINARY_RELATIVE_PATH)],
+                                "argv": [str(native_root / binary_path)],
                                 "duration_seconds": 0.001,
                             },
                             "test_binary": {
-                                "path": native_contracts.TEST_BINARY_RELATIVE_PATH.as_posix(),
+                                "path": binary_path.as_posix(),
                                 "sha256_before": test_binary_sha256,
                                 "sha256_after": test_binary_sha256,
                             },
@@ -247,7 +255,7 @@ class NativeContractIntegrationTests(unittest.TestCase):
                 manifest=manifest,
                 source_root=root / "source",
                 git_common_root=root / "git-common",
-                native_contract=list(GATES),
+                native_contract=list(gates),
             )
             errors = io.StringIO()
             publish_completed_build = backend._publish_completed_build
@@ -295,12 +303,12 @@ class NativeContractIntegrationTests(unittest.TestCase):
             self.assertEqual(len(reports), 1)
             self.assertEqual(
                 make_environments[0]["FULLMAG_INTERNAL_NATIVE_CONTRACTS"],
-                "fem-demag-poisson",
+                gate,
             )
             self.assertTrue(
                 native_contracts.receipt_satisfies(
                     reports[0],
-                    requested=GATES,
+                    requested=gates,
                     source_snapshot_sha256=source_snapshot,
                     package_root=candidate,
                 )

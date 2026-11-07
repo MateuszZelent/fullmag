@@ -18,6 +18,7 @@ FAILED_BUILD_SCHEMA = "fullmag.docker-iteration-failed-build-reconciliation.v1"
 PRESTART_SCHEMA = "fullmag.docker-iteration-prestart-reconciliation.v1"
 TERMINAL_PRESTART_SCHEMA = "fullmag.docker-terminal-prestart-reconciliation.v1"
 FRONTEND_FROZEN_SCHEMA = "fullmag.docker-resume-frontend-frozen-reconciliation.v1"
+LAYOUT_REFUSAL_SCHEMA = "fullmag.docker-resume-layout-refusal.v1"
 ACTIVATION_PREFLIGHT_SCHEMA = "fullmag.docker-activation-preflight-reconciliation.v1"
 TOOLCHAIN_CANCELED_SCHEMA = "fullmag.docker-toolchain-canceled-reconciliation.v1"
 SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -64,6 +65,9 @@ def fingerprint(actual):
 
 
 def validate_request(request):
+    if isinstance(request, dict) and request.get("schema") == LAYOUT_REFUSAL_SCHEMA:
+        from docker_volume_resume_layout_refusal import validate_shape
+        return validate_shape(request)
     if isinstance(request, dict) and request.get("schema") == FRONTEND_FROZEN_SCHEMA:
         from docker_volume_frontend_frozen_recovery import validate_shape
         return validate_shape(request)
@@ -145,7 +149,7 @@ def inspect_pins(request, *, frontend_running=True):
     for name, pin in request["containers"].items():
         records = json.loads(docker_capture("inspect", pin["id"]).stdout)
         require(len(records) == 1, "Ambiguous container inspection")
-        validate_incarnation(records[0], pin, request["compose_project"], running=(False if name != "lease" and request["schema"] in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA) else
+        validate_incarnation(records[0], pin, request["compose_project"], running=(False if name != "lease" and request["schema"] in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, LAYOUT_REFUSAL_SCHEMA) else
                 False if name == "frontend" and request["schema"] == FRONTEND_FROZEN_SCHEMA else
                 frontend_running if name == "frontend" else not (name == "backend" and request["schema"] == FAILED_BUILD_SCHEMA)))
         result[name] = records[0]
@@ -218,6 +222,9 @@ def validate_failed_build_state(actual, failure, log):
 def validate_failed_build(control, root, request, original, actual, state):
     import docker_volume_dev as dev
     from docker_volume_stop_unadmitted import _read_terminal_process_receipt
+    if request["schema"] == LAYOUT_REFUSAL_SCHEMA:
+        from docker_volume_resume_layout_refusal import validate_failure
+        return validate_failure(control, root, request, original, actual, state)
     if request["schema"] == FRONTEND_FROZEN_SCHEMA:
         from docker_volume_frontend_frozen_recovery import validate_failure
         return validate_failure(control, root, request, original, actual, state)
@@ -296,15 +303,18 @@ def commit_script(control, root, request, journal_relative, result_sha, current_
                   and request.get("schema") == ACTIVATION_PREFLIGHT_SCHEMA)
     toolchain = (phase == "toolchain" and publish_verified is False
                  and request.get("schema") == TOOLCHAIN_CANCELED_SCHEMA)
-    frozen = phase == "resume" and not publish_verified and request.get("schema") == FRONTEND_FROZEN_SCHEMA
+    frozen = phase == "resume" and not publish_verified and request.get("schema") in (FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA)
     require(activation or toolchain or frozen or (phase, publish_verified) in (("iteration", True), ("iteration", False), ("boris-reference", False)), "Closed reconciliation phase required")
     require(phase != "iteration" or publish_verified
             or request.get("schema") in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA), "Failure-only publication requires its explicit schema")
-    require(not publish_verified or request.get("schema") not in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FRONTEND_FROZEN_SCHEMA),
+    require(not publish_verified or request.get("schema") not in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA, FRONTEND_FROZEN_SCHEMA, LAYOUT_REFUSAL_SCHEMA),
             "A failed iteration cannot publish a verified success")
     phase = control.path(phase)
     targets = f"'{path}/receipt.json' '{phase}/current.json' " + (f"'{phase}/verified.json' " if publish_verified else "") + f"'{path}/terminal.json'"
     marker_commit = ""
+    if request.get("schema") == LAYOUT_REFUSAL_SCHEMA:
+        from docker_volume_resume_layout_refusal import pointer_cas_script
+        marker_commit = pointer_cas_script(control, request, result_sha)
     if activation:
         require(SHA.fullmatch(request.get("started_marker_sha256", "")) is not None,
                 "Exact started marker digest required")
@@ -386,10 +396,11 @@ def reconcile(args):
         from docker_activation_preflight_runtime import reconcile_preflight
         return reconcile_preflight(args, control, selected, request, request_raw)
     frontend_frozen = isinstance(request, dict) and request.get("schema") == FRONTEND_FROZEN_SCHEMA
+    layout_refusal = isinstance(request, dict) and request.get("schema") == LAYOUT_REFUSAL_SCHEMA
     terminal_prestart = isinstance(request, dict) and request.get("schema") == TERMINAL_PRESTART_SCHEMA
     prestart = isinstance(request, dict) and request.get("schema") in (PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA)
     cgroup = isinstance(request, dict) and request.get("schema") == CGROUP_FAILURE_SCHEMA
-    typed_failure = frontend_frozen or prestart or cgroup or (isinstance(request, dict) and request.get("schema") == FAILED_BUILD_SCHEMA)
+    typed_failure = layout_refusal or frontend_frozen or prestart or cgroup or (isinstance(request, dict) and request.get("schema") == FAILED_BUILD_SCHEMA)
     require(typed_failure or not getattr(args, "preview", False), "Preview is scoped to a typed failure reconciliation")
     if not typed_failure:
         _require_native_windows()
@@ -397,12 +408,17 @@ def reconcile(args):
         from docker_boris_volume import reconcile_preproducer
         return reconcile_preproducer(args, control, selected, request, request_raw)
     validate_request(request)
-    failed_build = frontend_frozen or request["schema"] in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA)
+    failed_build = layout_refusal or frontend_frozen or request["schema"] in (FAILED_BUILD_SCHEMA, PRESTART_SCHEMA, TERMINAL_PRESTART_SCHEMA, CGROUP_FAILURE_SCHEMA)
     require(request["source_root"] == str(selected) and request["compose_project"] == control.project
             and request["port"] == args.port, "Selected checkout/group/port differs")
     require(digest(Path(__file__).read_bytes()) == request["controller_sha256"], "Controller code differs from reviewed request")
-    phase = "resume" if frontend_frozen else "iteration"
+    phase = "resume" if frontend_frozen or layout_refusal else "iteration"
     root = phase + "/attempts/" + request["attempt"]
+    if layout_refusal:
+        from docker_volume_resume_layout_refusal import completed
+        if completed(control, root, request, args.request_sha256):
+            print(json.dumps({"state": "failed-confirmed", "attempt": request["attempt"], "already_completed": True}))
+            return
     journal_root = root + "/reconciliation"
     current_raw = read_raw(control, root + "/receipt.json")
     saved = read_raw(control, root + "/unknown-receipt.json", optional=True)
@@ -419,7 +435,7 @@ def reconcile(args):
     require(original.get("helper_container") == "fullmag-control-" + request["attempt"], "Recorded lease owner differs")
     base_attempt = original.get("inputs", {}).get("attempt")
     require(isinstance(base_attempt, str) and TOKEN.fullmatch(base_attempt), "Missing original development attempt")
-    document = control.read(("development/attempts/" + base_attempt if frontend_frozen else root) + "/compose.json")
+    document = control.read(("development/attempts/" + base_attempt if frontend_frozen or layout_refusal else root) + "/compose.json")
     require(digest(canonical(document)) == request["config_sha256"] and document.get("name") == control.project
             and original.get("inputs", {}).get("config_sha256") == request["config_sha256"], "Compose CAS differs")
     require(frontend_frozen or (original["inputs"].get("image_id") == request["containers"]["backend"]["image"]
@@ -486,13 +502,21 @@ def reconcile(args):
         dev._validate_retained_service(document, actual[name], name, image_config,
                                       expected_started_at=request["containers"][name]["started_at"])
     cache_adapter.validate_container(actual["backend"], cache)
-    dev._assert_private_restart_network(actual, ids, control.project)
+    if layout_refusal:
+        from docker_stopped_network import observe_stopped_bridge
+        observe_stopped_bridge(actual["backend"], actual["frontend"], control.project)
+    else:
+        dev._assert_private_restart_network(actual, ids, control.project)
     if failed_build:
         validate_failed_build(control, root, request, original, actual, state)
     else:
         validate_package(request)
     validate_partial_journal(control, journal_root, current_raw,
                              request["unknown_receipt_sha256"], args.request_sha256)
+    retained_result_raw = None
+    if layout_refusal and digest(current_raw) != request["unknown_receipt_sha256"]:
+        retained_result_raw = read_raw(control, journal_root + "/" + digest(current_raw) + "/result.json")
+        require(retained_result_raw == current_raw, "Partial refusal result bytes differ from prepared journal")
     observer_script = claim_script(control, root, request, digest(current_raw), phase=phase, publish_verified=not failed_build)
     if typed_failure and getattr(args, "preview", False):
         print(json.dumps({"state": "validated-only", "attempt": request["attempt"], "schema": request["schema"]}))
@@ -535,13 +559,16 @@ def reconcile(args):
                                if m["target"] == "/opt/fullmag/source-git"))
         # Persist the exact observer incarnation before a daemon-side _finish operation can outlive this client.
         control.write(journal_root + "/observers/" + observer_record["container_id"] + ".json", observer_record)
-        begin_requested = True
-        claim.stdin.write(b"BEGIN\n")
-        claim.stdin.flush()
-        require(control._line(claim) == "OBSERVING", "Observer BEGIN outcome unknown; resources retained")
+        if not layout_refusal:
+            begin_requested = True
+            claim.stdin.write(b"BEGIN\n")
+            claim.stdin.flush()
+            require(control._line(claim) == "OBSERVING", "Observer BEGIN outcome unknown; resources retained")
         if failed_build:
             actual = inspect_pins(request)
-            result["frontend_frozen_failure_proof" if frontend_frozen else "cgroup_failure_proof" if cgroup else "terminal_prestart_failure_proof" if terminal_prestart
+            if layout_refusal:
+                observe_stopped_bridge(actual["backend"], actual["frontend"], control.project)
+            result["layout_refusal_proof" if layout_refusal else "frontend_frozen_failure_proof" if frontend_frozen else "cgroup_failure_proof" if cgroup else "terminal_prestart_failure_proof" if terminal_prestart
                    else "prestart_failure_proof" if prestart else "failed_build_proof"] = validate_failed_build(control, root, request, original, actual, state)
             if frontend_frozen:
                 proof = result["frontend_frozen_failure_proof"]
@@ -560,6 +587,11 @@ def reconcile(args):
         result["finished_at"] = time.time()
         result["filesystem_after"] = control.space()
         result_raw = canonical(result) + b"\n"
+        if retained_result_raw is not None:
+            # Resume the already authenticated terminal-last publication with
+            # exactly its prepared bytes, not a new observer/time identity.
+            result_raw = retained_result_raw
+            result = json.loads(result_raw)
         transaction_root = journal_root + "/" + digest(result_raw)
         write_immutable(control, transaction_root + "/result.json", result_raw)
         write_immutable(control, transaction_root + "/prepared.json", canonical({"schema": SCHEMA,
@@ -567,11 +599,22 @@ def reconcile(args):
             "result_sha256": digest(result_raw)}) + b"\n")
         # Commit is performed by the SAME daemon helper that owns the observer lock.
         # Sending a complete line hands off execution, never ownership of that lock.
+        if layout_refusal:
+            # This path has performed only reads and immutable journal writes.
+            # Evidence refusal before BEGIN releases the observer on EOF.
+            begin_requested = True
+            claim.stdin.write(b"BEGIN\n")
+            claim.stdin.flush()
+            require(control._line(claim) == "OBSERVING", "Observer BEGIN outcome unknown; resources retained")
         claim.stdin.write(("COMMIT " + digest(result_raw) + "\n").encode("ascii"))
         claim.stdin.flush()
         claim.stdin.close()
         require(control._line(claim) == "COMMITTED", "Finalization outcome unknown; original owner/journal retained")
         require(read_raw(control, root + "/terminal.json") == result_raw, "Terminal publication differs")
+        if layout_refusal:
+            from docker_volume_resume_layout_refusal import verify_finalization, wait_release
+            verify_finalization(control, root, request, result_raw)
+            wait_release(control, request)
         if cgroup:
             require(digest(read_raw(control, "iteration/verified.json")) == request["failure"]["verified_sha256"],
                     "Failure-only publication changed the last verified iteration")

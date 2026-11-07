@@ -360,6 +360,7 @@ pub(crate) async fn submit_live_command_with_transition(
             },
             None,
             solver_profile,
+            None,
         )
     })
     .await
@@ -943,6 +944,7 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
         None,
         None,
         None,
+        None,
     )
     .await?;
     // The existing command path already owns the transition fence. The
@@ -980,6 +982,7 @@ pub(crate) async fn prepare_live_study_with_asset_root(
         source_script_path,
         None,
         None,
+        None,
     )
     .await
 }
@@ -995,6 +998,7 @@ pub(crate) async fn prepare_live_study_with_asset_root_and_progress(
     source_script_path: Option<PathBuf>,
     progress_sender: tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>,
     solver_profile: Option<serde_json::Value>,
+    cuda_trace: Option<serde_json::Value>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     prepare_live_study_with_source_paths(
         state,
@@ -1008,6 +1012,7 @@ pub(crate) async fn prepare_live_study_with_asset_root_and_progress(
         source_script_path,
         Some(progress_sender),
         Some(solver_profile),
+        cuda_trace,
     )
     .await
 }
@@ -1024,6 +1029,7 @@ async fn prepare_live_study_with_source_paths(
     source_path: Option<PathBuf>,
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
     explicit_profile: Option<Option<serde_json::Value>>,
+    cuda_trace: Option<serde_json::Value>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     validate_live_scene_for_context(state, context, &scene).await?;
     let Some(store_root) = state.submit_store_root.clone() else {
@@ -1061,6 +1067,7 @@ async fn prepare_live_study_with_source_paths(
             },
             progress_sender,
             solver_profile,
+            cuda_trace,
         )
     })
     .await
@@ -1719,6 +1726,7 @@ fn materialize_live_accepted(
         submission,
         None,
         None,
+        None,
     )?;
     commit_prepared_live_accepted(&prepared)
 }
@@ -1849,6 +1857,7 @@ fn prepare_live_accepted(
     submission: LiveAcceptedSubmission,
     progress_sender: Option<tokio::sync::mpsc::Sender<crate::script::PythonHelperProgress>>,
     solver_profile: Option<serde_json::Value>,
+    cuda_trace: Option<serde_json::Value>,
 ) -> Result<PreparedLiveAcceptedStudy, ApiError> {
     // Script-backed scenes retain relative native mesh references after the
     // startup request. Resolve them with the same original asset parent.
@@ -2491,6 +2500,12 @@ fn prepare_live_accepted(
         parameters.as_object_mut().expect("RunSpec parameters object")
             .insert(crate::accepted_solver_profile::PARAMETER.into(), value);
     }
+    if let Some(value) = cuda_trace {
+        crate::accepted_solver_profile::cuda_trace::request_digest(&value)
+            .map_err(|error| ApiError::unprocessable_with_code("invalid_cuda_trace", error.to_string()))?;
+        parameters.as_object_mut().expect("RunSpec parameters object")
+            .insert(crate::accepted_solver_profile::cuda_trace::PARAMETER.into(), value);
+    }
     if let Some(initial_state) = initial_state {
         parameters["live_workspace"]
             .as_object_mut()
@@ -2510,7 +2525,10 @@ fn prepare_live_accepted(
             );
     }
     crate::accepted_solver_profile::validate_study_profile(&parameters, &study, &catalog)
-        .map_err(|error| ApiError::unprocessable_with_code("accepted_solver_profile_unsupported", error.to_string()))?;
+        .map_err(|error| ApiError::unprocessable_with_code(
+            if parameters.get(crate::accepted_solver_profile::cuda_trace::PARAMETER).is_some() {
+                "accepted_cuda_trace_unsupported"
+            } else { "accepted_solver_profile_unsupported" }, error.to_string()))?;
     let intent_id = if let Some(receipt) = request_receipt {
         format!("live-http-v2-{}", receipt.key_sha256)
     } else {

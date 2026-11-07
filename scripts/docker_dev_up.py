@@ -1117,15 +1117,21 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
     if script is None:
         return None
     import fullmag_storage as storage
-    from docker_startup_script import prepare
+    from docker_startup_script import cuda_trace_sha256, prepare
+
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DockerDevUpError("Script activation cuda trace opt-in must be a boolean")
 
     try:
         source_commit = storage.git(group.source_root, "rev-parse", "HEAD")
+        prepare_options = {"cuda_trace": True} if cuda_trace else {}
         authorization = prepare(
             group.source_root,
             script,
             request_id="fullmag-activation-probe",
             source_commit=source_commit,
+            **prepare_options,
         )
     except (OSError, TypeError, ValueError, storage.StorageError) as error:
         raise DockerDevUpError(
@@ -1141,6 +1147,9 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
             authorization.source_commit or "",
         )
     )
+    if cuda_trace:
+        trace_sha256 = cuda_trace_sha256(authorization.cuda_trace)
+        material += b"\0cuda_trace\0" + trace_sha256.encode("ascii")
     return "docker-volume-up-" + hashlib.sha256(material).hexdigest()
 
 

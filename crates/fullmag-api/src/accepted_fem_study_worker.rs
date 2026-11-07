@@ -62,6 +62,8 @@ pub(crate) struct AcceptedFemPreparedExecution {
     pub(crate) plan_digest: String,
     pub(crate) resolved_device: String,
     pub(crate) gpu_uuid: Option<String>,
+    pub(crate) cuda_trace: Option<crate::accepted_solver_profile::cuda_trace::Config>,
+    pub(crate) output_storage_budget: u64,
 }
 
 /// Resolve and validate every deterministic accepted FEM admission input
@@ -101,6 +103,19 @@ pub(crate) fn prepare_accepted_fem_execution(
         crate::accepted_solver_profile::validate_fem_profile_plan(&accepted_step.problem, &execution_plan)
             .context("validate the actual preparation-resolved profiling plan before native dispatch")?;
     }
+    let cuda_trace = crate::accepted_solver_profile::cuda_trace::config(&accepted.run.specification.parameters)?;
+    let output_storage_budget = crate::accepted_solver_profile::cuda_trace::output_storage_budget(
+        cuda_trace.as_ref(), accepted_step.claim.lease.budget.storage_bytes)?;
+    if cuda_trace.is_some() {
+        crate::accepted_solver_profile::cuda_trace::validate_plan(&accepted_step.problem, &execution_plan)?;
+        if accepted_step.resolved_input.requested_execution.device != "gpu"
+            || runtime.resolved_device != "gpu" || runtime.gpu_uuid.as_deref().is_none_or(str::is_empty) {
+            bail!("CUDA trace requires the exact accepted GPU allocation without fallback");
+        }
+        if !fullmag_runner::fem_cuda_trace_available() {
+            bail!("requested CUDA trace is unavailable in the compiled native runtime");
+        }
+    }
     let mut problem = accepted_step.problem.clone();
     problem.problem_meta.runtime_metadata.insert("performance_execution_identity".into(),
         serde_json::json!({
@@ -134,6 +149,8 @@ pub(crate) fn prepare_accepted_fem_execution(
         plan_digest: accepted_plan_digest(accepted_step),
         resolved_device: runtime.resolved_device.clone(),
         gpu_uuid: runtime.gpu_uuid.clone(),
+        cuda_trace,
+        output_storage_budget,
     })
 }
 
@@ -151,6 +168,7 @@ pub(crate) fn execute_accepted_fem_attempt(
     autosave_root: &Path,
     interrupt_requested: Option<&AtomicBool>,
     profile: &mut crate::accepted_solver_profile::step_profile::Capture,
+    start_cuda_trace: impl FnOnce() -> Result<Option<crate::accepted_solver_profile::cuda_capture::Capture>>,
 ) -> Result<AcceptedFemExecutionOutcome> {
     let display_selection = fullmag_runner::DisplaySelectionState::default;
     let mut live_observation = crate::accepted_study_worker::AcceptedLiveObservationWriter::new(
@@ -160,6 +178,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         format!("fem_{}", prepared.resolved_device),
     );
     let field_sampling_interval = live_observation.field_sampling_interval();
+    let mut cuda_trace = start_cuda_trace()?;
     let runner_result = fullmag_runner::run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
         &prepared.problem,
         &prepared.execution_plan,
@@ -177,6 +196,16 @@ pub(crate) fn execute_accepted_fem_attempt(
             StepAction::Continue
         },
     );
+    if let Some(capture) = &mut cuda_trace {
+        let outcome = match &runner_result {
+            Ok(result) if result.status == RunStatus::Completed => "completed",
+            Ok(result) if result.status == RunStatus::Cancelled => "cancelled",
+            _ => "failed",
+        };
+        if let Err(error) = capture.finish(outcome) {
+            eprintln!("accepted FEM CUDA trace persistence failed: {error:#}");
+        }
+    }
     // Scalar and mapped live fields share the bounded sidecar; final state is
     // still committed only through the durable output path.
     live_observation.finish();
@@ -203,7 +232,7 @@ pub(crate) fn execute_accepted_fem_attempt(
         &prepared.case_id,
         &result,
         &attempt_output_dir,
-        accepted_step.claim.lease.budget.storage_bytes,
+        prepared.output_storage_budget,
     )
     .context("collect bounded typed outputs from accepted FEM attempt")?;
     let state_output = outputs

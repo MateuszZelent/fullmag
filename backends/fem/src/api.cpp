@@ -40,6 +40,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -6554,6 +6555,34 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
+) {
+    if (out_relax_type == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null out_relax_type");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::int32_t relax_type = -1;
+    std::string error;
+    if (!fullmag::fem::read_device_demag_amg_coarse_relax_type(
+            handle->context, relax_type, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    *out_relax_type = relax_type;
     return FULLMAG_FEM_OK;
 }
 

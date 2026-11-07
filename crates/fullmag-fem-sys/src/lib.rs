@@ -6,6 +6,7 @@
 #![allow(non_camel_case_types)]
 
 pub mod node_map;
+pub mod cuda_trace;
 
 use std::ffi::c_void;
 use std::os::raw::c_char;
@@ -3738,6 +3739,11 @@ extern "C" {
     pub fn fullmag_fem_backend_get_transfer_audit(
         handle: *mut fullmag_fem_backend,
         out_audit: *mut fullmag_fem_transfer_audit,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+        handle: *mut fullmag_fem_backend,
+        out_relax_type: *mut i32,
     ) -> i32;
 
     pub fn fullmag_fem_backend_get_gpu_state_info(

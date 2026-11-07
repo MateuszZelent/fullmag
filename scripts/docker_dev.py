@@ -2588,6 +2588,10 @@ def _parser() -> argparse.ArgumentParser:
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this activation",
     )
+    activate_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this activation",
+    )
     script_parser = subparsers.add_parser(
         "script",
         help=(
@@ -2627,6 +2631,10 @@ def _parser() -> argparse.ArgumentParser:
     run_script_parser.add_argument(
         "--solver-profile", action="store_true",
         help="enable the bounded accepted FEM solver profile for this run",
+    )
+    run_script_parser.add_argument(
+        "--cuda-trace", action="store_true",
+        help="enable the bounded accepted FEM CUDA activity trace for this run",
     )
     run_script_parser.add_argument("--attempt")
     run_script_parser.add_argument("--config-sha256")
@@ -2729,6 +2737,12 @@ def _parser() -> argparse.ArgumentParser:
     stop_diagnostic.add_argument("--source-root", type=Path, required=True)
     stop_diagnostic.add_argument("--port", type=int, required=True)
     stop_diagnostic.add_argument("--preview", action="store_true")
+    stop_diagnostic.add_argument("--reconcile-startup-stop-attempt",
+                                 help="observe and complete one retained startup-recovery stop without sending a signal")
+    stop_diagnostic.add_argument("--startup-recovery", action="store_true",
+                                 help="stop only the fenced API of an initial failed container-recovery startup")
+    stop_diagnostic.add_argument("--expected-plan-sha256",
+                                 help="apply the exact successful --startup-recovery --preview plan")
     stop_diagnostic.add_argument(
         "--resume-attempt",
         help="exact successful retained resume attempt that pins the current backend start time",
@@ -2818,6 +2832,18 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap.add_argument("--stop-frontend", action="store_true")
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend = subparsers.add_parser(
+        "stop-bootstrap-frontend-volume",
+        help="Qualify and stop the exact frontend after a preserved diagnostic bootstrap stop",
+    )
+    stop_bootstrap_frontend.add_argument("--attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--config-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--source-root", type=Path, required=True)
+    stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
+    stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--apply", action="store_true")
+    stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
     recreate_volume.add_argument("--retire-only", action="store_true", help="archive an exact stopped and genuinely drained group without starting replacements")
     recreate_volume.add_argument("--attempt", required=True)
@@ -2827,7 +2853,7 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument('--prepared-quarantine-sha256',
                                  help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
-                                 choices=("fem-demag-poisson",),
+                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -2991,7 +3017,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
         command.add_argument("--native-contract", action="append", default=None,
-                             choices=("fem-demag-poisson",),
+                             choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),
@@ -3026,6 +3052,10 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--headless", action="store_true",
                 help="start the backend without starting the retained frontend service",
+            )
+            command.add_argument(
+                "--cuda-trace", action="store_true",
+                help="enable the bounded accepted FEM CUDA activity trace for the startup script",
             )
         command.add_argument(
             "--migrate-host-capacity", action="store_true",
@@ -3204,6 +3234,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from docker_volume_stop_bootstrap import stop_bootstrap
             result = stop_bootstrap(args)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        elif args.action == "stop-bootstrap-frontend-volume":
+            from docker_volume_bootstrap_frontend_stop import run as stop_bootstrap_frontend
+            result = stop_bootstrap_frontend(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "recreate-volume":
             if args.lost_state_stop and (not args.fresh_state or any((
                     args.retire_only, args.resume_recreation, args.recovery_authorization,
@@ -3277,6 +3311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_sha256=getattr(args, "config_sha256", None),
                 headless=bool(getattr(args, "headless", False)),
                 solver_profile=getattr(args, "solver_profile", False),
+                cuda_trace=getattr(args, "cuda_trace", False),
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
             return int(result["exit_code"])

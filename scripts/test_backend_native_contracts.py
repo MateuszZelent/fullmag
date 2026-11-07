@@ -79,9 +79,9 @@ class BackendNativeContractsTests(unittest.TestCase):
 
         return patch.object(native_contracts.subprocess, "Popen", side_effect=start), calls
 
-    def _run(self):
+    def _run(self, requested=None):
         return run_contracts(
-            requested=[FEM_DEMAG_POISSON],
+            requested=requested or [FEM_DEMAG_POISSON],
             native_build_root=self.native_root,
             package_root=self.package_root,
             evidence_root=self.evidence_root,
@@ -90,20 +90,61 @@ class BackendNativeContractsTests(unittest.TestCase):
             jobs=3,
         )
 
-    def _prepare(self):
+    def _prepare(self, requested=None):
         return native_contracts.prepare_contracts(
-            requested=[FEM_DEMAG_POISSON], native_build_root=self.native_root,
+            requested=requested or [FEM_DEMAG_POISSON], native_build_root=self.native_root,
             evidence_root=self.root / "preparation", source_snapshot_sha256=SNAPSHOT,
             environment=self.environment, jobs=3,
         )
 
-    def _run_prepared(self):
+    def _run_prepared(self, requested=None):
         return run_contracts(
-            requested=[FEM_DEMAG_POISSON], native_build_root=self.native_root,
+            requested=requested or [FEM_DEMAG_POISSON], native_build_root=self.native_root,
             package_root=self.package_root, evidence_root=self.evidence_root,
             source_snapshot_sha256=SNAPSHOT, environment=self.environment, jobs=3,
             preparation_root=self.root / "preparation",
         )
+
+    def test_cuda_activity_contract_binds_its_own_target_and_preparation(self):
+        name = "fem-cuda-activity-trace"
+        binary = self.build_fem / "fem_cuda_activity_trace_contract"
+        binary.write_bytes(b"CUDA trace executable")
+        runner, calls = self._runner(outcomes=[0, 0])
+        with runner:
+            prepared = self._prepare([name])
+            report = self._run_prepared([name])
+        self.assertEqual(calls[0][0][4], binary.name)
+        self.assertEqual(calls[1][0], [str(binary)])
+        self.assertEqual(report["contracts"][name]["compile"], prepared["contracts"][name]["compile"])
+        self.assertTrue(receipt_satisfies(report, requested=[name], source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+        self.assertFalse(receipt_satisfies(report, requested=[FEM_DEMAG_POISSON], source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+        for field in ("compile", "test", "test_binary", "preparation"):
+            altered = json.loads(json.dumps(report))
+            if field == "compile": altered["contracts"][name]["compile"]["argv"][4] = "fem_demag_poisson_contract"
+            elif field == "test": altered["contracts"][name]["test"]["argv"][0] = str(self.build_fem / "fem_demag_poisson_contract")
+            elif field == "test_binary": altered["contracts"][name]["test_binary"]["path"] = "backends/fem/fem_demag_poisson_contract"
+            else: altered["preparation"]["requested"] = [FEM_DEMAG_POISSON]
+            self.assertFalse(receipt_satisfies(altered, requested=[name], source_snapshot_sha256=SNAPSHOT, package_root=self.package_root), field)
+
+    def test_cuda_activity_test_failure_is_preserved_and_cannot_qualify_package(self):
+        name = "fem-cuda-activity-trace"
+        (self.build_fem / "fem_cuda_activity_trace_contract").write_bytes(b"CUDA trace executable")
+        # A CTest skip is not a successful managed GPU qualification.
+        for code in (9, 77):
+            runner, calls = self._runner(outcomes=[0, code])
+            with runner, self.assertRaises(NativeContractError) as failed:
+                self._run([name])
+            self.assertEqual(len(calls), 2)
+            report = failed.exception.report
+            self.assertTrue(failed.exception.receipt_path.is_file())
+            self.assertEqual(report["contracts"][name]["test"]["exit_code"], code)
+            self.assertFalse(receipt_satisfies(report, requested=[name], source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
+
+    def test_combined_contract_request_is_refused_before_any_command(self):
+        runner, calls = self._runner()
+        with runner, self.assertRaises(ValueError):
+            normalize_contracts([FEM_DEMAG_POISSON, "fem-cuda-activity-trace"])
+        self.assertEqual(calls, [])
 
     def test_preparation_rebuild_precedes_copy_and_test_does_not_recompile(self) -> None:
         def rebuild_library():

@@ -20,6 +20,7 @@ from docker_build_control import BuildControlError, bounded_capture, canonical, 
 from docker_compose_identity import compose_project_identity, validate_source_labels
 
 SCHEMA = "fullmag.foreign-windows-bind-disjoint-proof.v2"
+JUNCTION_SCHEMA = "fullmag.foreign-windows-junction-bind-disjoint-proof.v1"
 NATIVE_SCHEMA = "fullmag.windows-bind-native-identity.v1"
 MAX_BYTES = 1024 * 1024
 MAX_DESCENDANT_ENTRIES = 100000
@@ -34,6 +35,9 @@ BACKINGS = {"wsl-current", "wsl-docker-desktop", "docker-desktop-data"}
 PROOF_FIELDS = {"schema", "decision", "container_id", "source_sha256",
                 "context", "before", "after", "provider_sha256"}
 OBSERVATION_FIELDS = {"engine", "backend", "foreign", "linux", "mapping", "native", "contained_links"}
+JUNCTION_OBSERVATION_FIELDS = OBSERVATION_FIELDS | {"external_junctions"}
+MAX_EXTERNAL_JUNCTIONS = 8
+JUNCTION_OBSERVATION_SECONDS = 120
 
 
 class WindowsBindObservationDrift(BuildControlError):
@@ -49,6 +53,10 @@ class WindowsBindObservationDrift(BuildControlError):
         }
         self.ordinary_inventory_only = bool(self.differences) and set(self.differences) <= ordinary_inventory
         super().__init__("Windows isolation identities drifted: " + ", ".join(self.differences))
+
+
+class WindowsExternalJunctionDetected(BuildControlError):
+    """The legacy native provider found a junction outside its candidate root."""
 
 # No Add-Type, compilation, temporary files or candidate contents are used.
 # Microsoft: hard links cannot refer to files on different volumes.
@@ -419,6 +427,17 @@ $backings['docker-desktop-data']=Identity (Join-Path $disk 'docker_data.vhdx') (
 """
 
 
+_EXTERNAL_JUNCTION_REFUSAL = "throw 'junction target escapes candidate root'"
+_EXTERNAL_JUNCTION_REFUSAL_MESSAGE = "junction target escapes candidate root"
+_provider_refusal_count = WINDOWS_PROVIDER.count(_EXTERNAL_JUNCTION_REFUSAL)
+if _provider_refusal_count != 1:
+    raise RuntimeError("Windows native provider junction refusal template changed")
+WINDOWS_JUNCTION_PROVIDER = WINDOWS_PROVIDER.replace(
+    _EXTERNAL_JUNCTION_REFUSAL,
+    "# External junction target is independently qualified by the caller.",
+)
+
+
 def require(condition, message):
     if not condition:
         raise BuildControlError(message)
@@ -426,6 +445,9 @@ def require(condition, message):
 
 def _sha(value):
     return hashlib.sha256(value).hexdigest()
+
+
+WINDOWS_JUNCTION_PROVIDER_SHA256 = _sha(WINDOWS_JUNCTION_PROVIDER.encode("utf-8"))
 
 
 def _json(raw):
@@ -635,8 +657,16 @@ def _validate_native(value, source, distro):
     return value
 
 
-def _capture(command, data=None):
-    result = bounded_capture(command, data=data, timeout=40, maximum=MAX_BYTES)
+def _remaining_timeout(deadline):
+    if deadline is None:
+        return 40
+    remaining = int(deadline - time.monotonic())
+    require(remaining > 0, "Windows junction observation exceeded its 120-second bound")
+    return min(40, remaining)
+
+
+def _capture(command, data=None, *, deadline=None):
+    result = bounded_capture(command, data=data, timeout=_remaining_timeout(deadline), maximum=MAX_BYTES)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", "replace")[-1024:].strip()
         raise BuildControlError("Read-only Windows bind identity command failed: exit_code="
@@ -646,15 +676,24 @@ def _capture(command, data=None):
     return result.stdout
 
 
-def _native(source, distro, *, allow_external_junctions=False):
+def _native(source, distro, *, allow_external_junctions=False, deadline=None):
     powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-    provider = WINDOWS_PROVIDER
-    if allow_external_junctions:
-        refusal = "throw 'junction target escapes candidate root'"
-        require(provider.count(refusal) == 1, "Initial recovery junction policy template changed")
-        provider = provider.replace(refusal, "# Initial recovery independently qualifies this target.")
-    raw = _capture([powershell, "-NoProfile", "-NonInteractive", "-Command", provider],
-                   canonical({"path": _windows_source_path(source), "distro": distro}))
+    provider = WINDOWS_JUNCTION_PROVIDER if allow_external_junctions else WINDOWS_PROVIDER
+    command = [powershell, "-NoProfile", "-NonInteractive", "-Command", provider]
+    request = canonical({"path": _windows_source_path(source), "distro": distro})
+    try:
+        raw = (_capture(command, request) if deadline is None
+               else _capture(command, request, deadline=deadline))
+    except BuildControlError as error:
+        exact_refusal = re.match(
+            r"^Read-only Windows bind identity command failed: exit_code=1; "
+            + re.escape(_EXTERNAL_JUNCTION_REFUSAL_MESSAGE) + r"(?:\r?\n|$)",
+            str(error),
+        )
+        if not allow_external_junctions and exact_refusal:
+            raise WindowsExternalJunctionDetected(
+                "Windows bind contains a junction outside its candidate root") from error
+        raise
     return _validate_native(_json(raw), source, distro)
 
 
@@ -668,11 +707,12 @@ def _canonical_linux(value):
     return path
 
 
-def _findmnt(path, recursive=False):
+def _findmnt(path, recursive=False, *, deadline=None):
     args = ["findmnt", "--json", "--target", str(path), "--output", "TARGET,SOURCE,FSTYPE,FSROOT,OPTIONS"]
     if recursive:
         args.append("--submounts")
-    value = _json(_capture(args))
+    raw = _capture(args) if deadline is None else _capture(args, deadline=deadline)
+    value = _json(raw)
     rows = value.get("filesystems") if isinstance(value, dict) else None
     require(isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], dict),
             "Kernel mount identity is absent or ambiguous")
@@ -697,13 +737,14 @@ def _reject_submounts(mount, path):
         pending.extend(descendants)
 
 
-def _linux_identity(source_root, reference_root):
+def _linux_identity(source_root, reference_root, *, deadline=None):
     source, reference = _canonical_linux(source_root), _canonical_linux(reference_root)
-    root_mount = _findmnt("/")
+    root_mount = _findmnt("/") if deadline is None else _findmnt("/", deadline=deadline)
     require(root_mount.get("target") == "/" and root_mount.get("fstype") == "ext4"
             and root_mount.get("fsroot") == "/", "Reference requires this WSL distro root ext4")
     for path in (source, reference):
-        mount = _findmnt(path, recursive=True)
+        mount = (_findmnt(path, recursive=True) if deadline is None
+                 else _findmnt(path, recursive=True, deadline=deadline))
         _reject_submounts(mount, path)
         require({key: value for key, value in mount.items() if key != "children"} == root_mount
                 and path.stat().st_dev == Path("/").stat().st_dev,
@@ -723,19 +764,24 @@ def _linux_identity(source_root, reference_root):
             "marker_sha256": _sha(raw), "engine_id": marker["engine_id"]}
 
 
-def _mapping(source):
+def _mapping(source, *, deadline=None):
     source = _windows_source_path(source)
-    translated = _capture(["wslpath", "-u", source]).decode("utf-8", "strict").strip()
+    translated_raw = (_capture(["wslpath", "-u", source]) if deadline is None
+                      else _capture(["wslpath", "-u", source], deadline=deadline))
+    translated = translated_raw.decode("utf-8", "strict").strip()
     path = Path(translated)
     require(path.is_absolute() and str(path) == os.path.normpath(str(path))
             and ".." not in path.parts, "wslpath returned an unsafe path")
     for part in (path, *path.parents):
         require(not stat.S_ISLNK(part.lstat().st_mode), "Translated Windows path traverses a symlink")
     require(path.resolve(strict=True) == path, "Translated Windows path is not canonical")
-    back = _capture(["wslpath", "-w", translated]).decode("utf-8", "strict").strip()
+    back_raw = (_capture(["wslpath", "-w", translated]) if deadline is None
+                else _capture(["wslpath", "-w", translated], deadline=deadline))
+    back = back_raw.decode("utf-8", "strict").strip()
     require(ntpath.normcase(_windows_path(back)) == ntpath.normcase(_windows_path(source)),
             "Official WSL path roundtrip differs")
-    mount = _findmnt(path, recursive=True)
+    mount = (_findmnt(path, recursive=True) if deadline is None
+             else _findmnt(path, recursive=True, deadline=deadline))
     require(mount.get("fstype") in {"9p", "drvfs"} and mount.get("fsroot") == "/"
             and ntpath.normcase(str(mount.get("source"))) == ntpath.normcase(source[:2] + "\\"),
             "Translated source is not the exact native Windows drive mapping")
@@ -763,8 +809,8 @@ def _validate_engine(value):
     return value
 
 
-def _engine():
-    value = _json(docker_capture("info", "--format", "{{json .}}", timeout=40).stdout)
+def _engine(*, deadline=None):
+    value = _json(docker_capture("info", "--format", "{{json .}}", timeout=_remaining_timeout(deadline)).stdout)
     keys = ("ID", "Name", "OperatingSystem", "OSType", "KernelVersion")
     return _validate_engine({key: value.get(key) for key in keys})
 
@@ -963,11 +1009,13 @@ def _validate_link_evidence(value, mapping, native, *, external_junctions=()):
     return value
 
 
-def _qualify_links(mapping, native, *, external_junctions=()):
+def _qualify_links(mapping, native, *, external_junctions=(), deadline=None):
     expected = [row for row in _link_paths(native) if row[1] not in external_junctions]
     allowed = {relative: record for _, relative, record in expected}
     root = Path(mapping["path"])
-    deadline = time.monotonic() + DESCENDANT_BUDGET_MS / 1000
+    link_deadline = time.monotonic() + DESCENDANT_BUDGET_MS / 1000
+    if deadline is not None:
+        link_deadline = min(link_deadline, deadline)
     result = []
     for windows_path, initial_relative, record in expected:
         kind = record["kind"]
@@ -975,7 +1023,7 @@ def _qualify_links(mapping, native, *, external_junctions=()):
         hops = []
         seen = set()
         for _ in range(MAX_RELATIVE_LINK_HOPS + 1):
-            require(time.monotonic() < deadline, "Relative file-link qualification exceeded its time bound")
+            require(time.monotonic() < link_deadline, "Relative file-link qualification exceeded its time bound")
             require(relative not in seen, "Relative file-link chain contains a cycle")
             seen.add(relative)
             current = root.joinpath(*PurePosixPath(relative).parts)
@@ -1003,7 +1051,7 @@ def _qualify_links(mapping, native, *, external_junctions=()):
             relative = _resolve_qualified_link(relative, target, record, mapping, native)
         else:
             raise BuildControlError("Relative file-link chain exceeds its fixed hop bound")
-    require(not expected or time.monotonic() < deadline,
+    require(not expected or time.monotonic() < link_deadline,
             "Relative file-link qualification exceeded its time bound")
     return _validate_link_evidence(result, mapping, native, external_junctions=external_junctions)
 
@@ -1062,7 +1110,7 @@ def validate_windows_bind_disjoint_proof(proof, *, source, container_id):
     return proof
 
 
-def _validate_windows_bind_observation(observed, context, *, source, container_id):
+def _validate_windows_bind_observation(observed, context, *, source, container_id, external_junctions=()):
     require(isinstance(observed, dict) and set(observed) == OBSERVATION_FIELDS,
             "Windows isolation observation is incomplete")
     _validate_engine(observed["engine"])
@@ -1107,23 +1155,27 @@ def _validate_windows_bind_observation(observed, context, *, source, container_i
             and ".." not in target.parts and ".." not in path.parts
             and (path == target or target in path.parents),
             "Windows proof mount does not contain its translated candidate")
-    _validate_link_evidence(observed["contained_links"], mapping, observed["native"])
+    _validate_link_evidence(observed["contained_links"], mapping, observed["native"],
+                            external_junctions=external_junctions)
 
 
-def prove_windows_bind_disjoint(control, backend, container, source, reference_root):
+def prove_windows_bind_disjoint(control, backend, container, source, reference_root, *, prepared_reference=None):
     """Prove and archive one exact literal Windows bind, without entering a container."""
+    from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+
     _windows_source_path(source)
-    first_backend, first_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    inspect_backend = _recovery_backend_inspector(control, _inspect, prepared_reference)
+    first_backend, first_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(first_backend) == _container_pin(backend)
             and _container_pin(first_foreign) == _container_pin(container),
             "Consumer changed before Windows isolation proof")
     context = _context(control, first_backend, first_foreign, source, reference_root)
     before = _observation(context, first_backend, first_foreign, source)
-    after_backend, after_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    after_backend, after_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_context(control, after_backend, after_foreign, source, reference_root) == context,
             "Registered proof context changed")
     after = _observation(context, after_backend, after_foreign, source)
-    final_backend, final_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    final_backend, final_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(final_backend) == after["backend"]
             and _container_pin(final_foreign) == after["foreign"] and _engine() == after["engine"],
             "Consumer or engine changed after native Windows identity observation")
@@ -1131,8 +1183,224 @@ def prove_windows_bind_disjoint(control, backend, container, source, reference_r
              "source_sha256": _sha(source.encode("utf-8")), "context": context,
              "provider_sha256": _sha(WINDOWS_PROVIDER.encode("utf-8")), "before": before, "after": after}
     validate_windows_bind_disjoint_proof(proof, source=source, container_id=container["Id"])
-    from docker_bind_overlap_probe import _archive_foreign_proof
     # Read-only preflight has no lease. The repeated destructive-boundary
     # observation is archived by the existing active-operation publisher.
-    _archive_foreign_proof(control, proof)
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
+    return proof
+
+
+def _external_junction_inventory(native):
+    root = PureWindowsPath(_windows_path(native["candidate"]["path"]))
+    external = {}
+    for windows_path, relative, record in _link_paths(native):
+        if record["tag"] != "0xa0000003":
+            continue
+        target = PureWindowsPath(_windows_path(record["target"]))
+        if target != root and root not in target.parents:
+            external[relative] = (windows_path, record)
+    return external
+
+
+def _validate_shared_protected_snapshot(root_native, target_native):
+    fields = ("registry", "desktop_disk_origin", "desktop_disk_root", "desktop_disk_junction",
+              "settings_sha256", "settings_keys")
+    require(all(root_native[field] == target_native[field] for field in fields)
+            and set(root_native["backings"]) == set(target_native["backings"]),
+            "External target Desktop/settings/backing snapshot differs from the bind root")
+    for role in BACKINGS:
+        root_backing, target_backing = root_native["backings"][role], target_native["backings"][role]
+        require(set(root_backing) == set(target_backing)
+                and all(root_backing[key] == target_backing[key]
+                        for key in set(root_backing) - {"hardlinks"})
+                and (root_backing["hardlinks"] is None or target_backing["hardlinks"] is None
+                     or root_backing["hardlinks"] == target_backing["hardlinks"]),
+                "External target protected backing identity differs from the bind root")
+
+
+def _validate_junction_mapping(mapping, windows_target, *, root_device):
+    require(isinstance(mapping, dict) and set(mapping) == {
+        "path", "roundtrip", "mount", "device", "inode", "mode", "nlink"},
+        "External junction DrvFs mapping fields differ")
+    target = _windows_path(windows_target)
+    mount = mapping["mount"]
+    require(isinstance(mapping["path"], str) and isinstance(mount, dict)
+            and isinstance(mount.get("target"), str),
+            "External junction DrvFs mapping path or mount is malformed")
+    path = Path(mapping["path"])
+    require(path.is_absolute()
+            and ".." not in path.parts and str(path) == os.path.normpath(mapping["path"])
+            and ntpath.normcase(_windows_path(mapping["roundtrip"])) == ntpath.normcase(target)
+            and mount.get("fstype") in {"9p", "drvfs"}
+            and mount.get("fsroot") == "/"
+            and ntpath.normcase(str(mount.get("source"))) == ntpath.normcase(target[:2] + "\\")
+            and type(mapping["device"]) is int and mapping["device"] > 0
+            and mapping["device"] != root_device
+            and type(mapping["inode"]) is int and mapping["inode"] > 0
+            and type(mapping["mode"]) is int and stat.S_ISDIR(mapping["mode"])
+            and type(mapping["nlink"]) is int and mapping["nlink"] > 0,
+            "External junction target is not its exact separate ordinary DrvFs directory")
+    mount_target = Path(mount.get("target", ""))
+    require(mount_target.is_absolute() and ".." not in mount_target.parts
+            and (path == mount_target or mount_target in path.parents),
+            "External junction DrvFs mount does not contain its exact target")
+    _reject_submounts(mount, path)
+    return mapping
+
+
+def _junction_observation(context, backend, foreign, source):
+    deadline = time.monotonic() + JUNCTION_OBSERVATION_SECONDS
+    linux = _linux_identity(context["source_root"], context["reference_root"], deadline=deadline)
+    engine = _engine(deadline=deadline)
+    require(engine["ID"] == linux["engine_id"], "Docker engine differs from the reference admission")
+    mapping = _mapping(source, deadline=deadline)
+    native = _native(source, context["distro"], allow_external_junctions=True, deadline=deadline)
+    kind = native["candidate"]["kind"]
+    require(kind == "directory" and stat.S_ISDIR(mapping["mode"]),
+            "External junction proof requires an ordinary directory bind")
+    require(mapping["device"] != linux["root_device"],
+            "Foreign Windows bind aliases the protected ext4 filesystem")
+    external = _external_junction_inventory(native)
+    require(1 <= len(external) <= MAX_EXTERNAL_JUNCTIONS,
+            "External junction inventory is empty or exceeds its fixed bound")
+
+    root = Path(mapping["path"])
+    external_evidence = {}
+    for relative, (windows_path, record) in external.items():
+        require(time.monotonic() < deadline,
+                "Windows junction observation exceeded its 120-second bound")
+        target = record["target"]
+        link_path = root.joinpath(*PurePosixPath(relative).parts)
+        _link_parent_directories(root, link_path, mapping["device"])
+        link_identity = _file_identity(link_path)
+        require(stat.S_ISLNK(link_identity["mode"])
+                and link_identity["device"] == mapping["device"],
+                "External Windows junction is not the exact DrvFs link")
+        target_mapping = _mapping(target, deadline=deadline)
+        require(stat.S_ISDIR(target_mapping["mode"])
+                and target_mapping["device"] != linux["root_device"],
+                "External Windows junction target aliases the protected ext4 filesystem")
+        raw_target = os.readlink(link_path)
+        require(raw_target == target_mapping["path"],
+                "External Windows junction raw DrvFs target differs from its exact mapping")
+        try:
+            target_native = _native(target, context["distro"], deadline=deadline)
+        except WindowsExternalJunctionDetected as error:
+            raise BuildControlError("nested external junctions are not supported") from error
+        require(target_native["candidate"]["kind"] == "directory"
+                and not _external_junction_inventory(target_native),
+                "nested external junction target is not supported")
+        _validate_shared_protected_snapshot(native, target_native)
+        target_links = _qualify_links(target_mapping, target_native, deadline=deadline)
+        _link_parent_directories(root, link_path, mapping["device"])
+        require(_file_identity(link_path) == link_identity
+                and os.readlink(link_path) == raw_target
+                and raw_target == target_mapping["path"],
+                "External Windows junction identity or raw target changed during observation")
+        external_evidence[relative] = {
+            "link": {**link_identity, "raw_target": raw_target},
+            "mapping": target_mapping,
+            "native": target_native,
+            "contained_links": target_links,
+        }
+
+    contained = _qualify_links(mapping, native, external_junctions=external, deadline=deadline)
+    require(time.monotonic() < deadline,
+            "Windows junction observation exceeded its 120-second bound")
+    return {"engine": engine, "backend": _container_pin(backend), "foreign": _container_pin(foreign),
+            "linux": linux, "mapping": mapping, "native": native, "contained_links": contained,
+            "external_junctions": external_evidence}
+
+
+def validate_windows_junction_bind_disjoint_proof(proof, *, source, container_id):
+    require(isinstance(proof, dict) and set(proof) == PROOF_FIELDS
+            and proof["schema"] == JUNCTION_SCHEMA and proof["decision"] == "disjoint"
+            and proof["container_id"] == container_id and CID.fullmatch(str(container_id))
+            and proof["source_sha256"] == _sha(source.encode("utf-8"))
+            and proof["provider_sha256"] == WINDOWS_JUNCTION_PROVIDER_SHA256,
+            "Windows junction proof schema/source/consumer/provider differs")
+    context = proof["context"]
+    require(isinstance(context, dict) and set(context) == {
+        "identity", "project", "control_volume", "control_namespace", "ledger_volume", "distro",
+        "source_root", "reference_root"} and isinstance(context.get("distro"), str),
+        "Windows junction proof context is absent")
+    identity = context["identity"]
+    require(isinstance(identity, dict) and identity.get("project_name") == context["project"]
+            and identity.get("source_root") == context["source_root"]
+            and identity.get("checkout_kind") in {"main-checkout", "worktree"}
+            and all(isinstance(context.get(key), str) and context[key]
+                    for key in ("project", "control_volume", "ledger_volume", "source_root", "reference_root"))
+            and isinstance(context["control_namespace"], str),
+            "Windows junction registered group binding is incomplete")
+    for observed in (proof["before"], proof["after"]):
+        _validate_windows_junction_observation(observed, context, source=source, container_id=container_id)
+    if proof["before"] != proof["after"]:
+        raise WindowsBindObservationDrift(_observation_differences(proof["before"], proof["after"]))
+    return proof
+
+
+def _validate_windows_junction_observation(observed, context, *, source, container_id):
+    require(isinstance(observed, dict) and set(observed) == JUNCTION_OBSERVATION_FIELDS,
+            "Windows junction observation is incomplete")
+    _validate_native(observed.get("native"), source, context["distro"])
+    external = observed["external_junctions"]
+    expected = _external_junction_inventory(observed["native"])
+    require(1 <= len(expected) <= MAX_EXTERNAL_JUNCTIONS,
+            "External junction inventory is empty or exceeds its fixed bound")
+    require(isinstance(external, dict) and set(external) == set(expected),
+            "External junction evidence does not cover the exact native inventory")
+    root = {key: observed[key] for key in OBSERVATION_FIELDS}
+    _validate_windows_bind_observation(root, context, source=source, container_id=container_id,
+                                       external_junctions=expected)
+    root_native, root_mapping = observed["native"], observed["mapping"]
+    root_device = observed["linux"]["root_device"]
+    for relative, (windows_path, record) in expected.items():
+        entry = external[relative]
+        require(isinstance(entry, dict) and set(entry) == {"link", "mapping", "native", "contained_links"},
+                "External junction evidence fields differ")
+        link = entry["link"]
+        target = record["target"]
+        target_mapping, target_native = entry["mapping"], entry["native"]
+        require(isinstance(link, dict) and set(link) == {"device", "inode", "mode", "raw_target"}
+                and type(link["device"]) is int and link["device"] == root_mapping["device"]
+                and type(link["inode"]) is int and link["inode"] > 0
+                and type(link["mode"]) is int and stat.S_ISLNK(link["mode"])
+                and isinstance(link["raw_target"], str),
+                "External junction live link identity is malformed")
+        _validate_junction_mapping(target_mapping, target, root_device=root_device)
+        require(link["raw_target"] == target_mapping["path"],
+                "External junction raw DrvFs target differs from its exact mapping")
+        _validate_native(target_native, target, context["distro"])
+        require(target_native["candidate"]["kind"] == "directory"
+                and not _external_junction_inventory(target_native),
+                "nested external junction target is not supported")
+        _validate_shared_protected_snapshot(root_native, target_native)
+        _validate_link_evidence(entry["contained_links"], target_mapping, target_native)
+    return observed
+
+
+def prove_windows_junction_bind_disjoint(control, backend, container, source, reference_root, *, prepared_reference=None):
+    """Prove one registered Windows bind with separately qualified external directory junctions."""
+    from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+
+    _windows_source_path(source)
+    inspect_backend = _recovery_backend_inspector(control, _inspect, prepared_reference)
+    first_backend, first_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
+    require(_container_pin(first_backend) == _container_pin(backend)
+            and _container_pin(first_foreign) == _container_pin(container),
+            "Consumer changed before Windows junction isolation proof")
+    context = _context(control, first_backend, first_foreign, source, reference_root)
+    before = _junction_observation(context, first_backend, first_foreign, source)
+    after_backend, after_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
+    require(_context(control, after_backend, after_foreign, source, reference_root) == context,
+            "Registered junction proof context changed")
+    after = _junction_observation(context, after_backend, after_foreign, source)
+    final_backend, final_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
+    require(_container_pin(final_backend) == after["backend"]
+            and _container_pin(final_foreign) == after["foreign"] and _engine() == after["engine"],
+            "Consumer or engine changed after native Windows junction observation")
+    proof = {"schema": JUNCTION_SCHEMA, "decision": "disjoint", "container_id": container["Id"],
+             "source_sha256": _sha(source.encode("utf-8")), "context": context,
+             "provider_sha256": WINDOWS_JUNCTION_PROVIDER_SHA256, "before": before, "after": after}
+    validate_windows_junction_bind_disjoint_proof(proof, source=source, container_id=container["Id"])
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
     return proof
