@@ -7694,6 +7694,12 @@ def _retained_operation(
         stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
         refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
     )
+    from docker_volume_empty_api_abort import fresh_pin as empty_api_abort_fresh_pin
+    empty_api_abort_pin = empty_api_abort_fresh_pin(
+        args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
     if capture_terminal and (not restart_idle_service or not stop_after_drain
             or getattr(args, "saved_authoring_checkpoint", None)
             or getattr(args, "saved_authoring_checkpoint_sha256", None)):
@@ -8199,6 +8205,12 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        empty_api_abort_archive = None
+        if empty_api_abort_pin is not None:
+            from docker_volume_empty_api_abort import validate_fresh as validate_empty_api_abort_fresh
+            empty_api_abort_archive = validate_empty_api_abort_fresh(
+                control, args, selected, actual, empty_api_abort_pin,
+            )
         native_terminal_archive = None
         if native_terminal_pin is not None:
             from docker_volume_native_terminal_stop import validate_fresh as validate_native_terminal_fresh
@@ -8621,6 +8633,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     if service == "backend" and observed.get("State", {}).get("Running"):
                         raise BuildControlError("Fresh session requires the backend stopped")
                     actual[service] = observed
+            if empty_api_abort_pin is not None:
+                leased_empty_api_abort = validate_empty_api_abort_fresh(control, args, selected, actual, empty_api_abort_pin)
+                if leased_empty_api_abort != empty_api_abort_archive:
+                    raise BuildControlError("Empty API-abort fresh-state proof changed under recreation lease")
+                operation["receipt"]["empty_api_abort_fresh_archive"] = leased_empty_api_abort
             if native_terminal_pin is not None:
                 leased_native_terminal = validate_native_terminal_fresh(
                     control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],

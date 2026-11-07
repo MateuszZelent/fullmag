@@ -869,3 +869,27 @@ historycznego proof jako świeżego dowodu. Wariant nie łączy się z
 transakcji, z ponownym sprawdzeniem hashy starej generacji przed zapisem.
 Testy źródłowe nie zastępują
 potwierdzenia konkretnej operacji na silniku Docker.
+
+### Pusty bootstrap po SIGABRT API, bez native ownera
+
+`stop-empty-api-abort-volume` obsługuje jawnie wybraną próbę development, która
+zbudowała i opublikowała pakiet, ale API zakończyło start przez SIGABRT (-6)
+przed powstaniem ownera i jakiegokolwiek runu. Wymaga `--attempt`,
+`--config-sha256`, `--source-root` i `--port`; `--preview` zapisuje plan bez
+zatrzymania, a `--apply --expected-plan-sha256 <sha256>` ponownie sprawdza
+ten sam plan pod blokadą operacji i zatrzymuje dokładnie przypiętą parę.
+
+Dowód obejmuje oba puste namespace runtime-services, pusty runs, brak API PID
+i otwartego portu, wyłącznie init i supervisor w backendzie, brak aktywacji,
+zwolnione rezerwacje i lease, zgodność publication/config oraz pełne tożsamości
+i czasy startu usług. Obecność dodatkowego konsumenta projektu lub control
+volume blokuje operację. Odczyty nie analizują fizycznie cudzych checkoutów.
+
+Po stopie backend ma exit 1, frontend exit 0, a process-tree zachowuje
+`shutdown_unknown`, przyczynę API -6 i brak ownera. Receipt potwierdza ten
+rzeczywisty stan; nie deklaruje drain. Oddzielna para
+`recreate-volume --fresh-state --empty-api-abort-stop <stop-attempt>
+--empty-api-abort-stop-sha256 <raw-terminal-sha256>` dopuszcza wyłącznie
+archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
+blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
+namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.

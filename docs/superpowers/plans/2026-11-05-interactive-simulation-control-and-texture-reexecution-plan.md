@@ -658,4 +658,11 @@ Kolejna próba wykonała quiescence API, natywną kontrolę terminalności i aut
 
 Nowy observer diagnostyczny był `async fn`, więc jego future przechowywał dużą operację inline przed pierwszym poll; `tokio::pin!` nie przenosił jej na stertę. Zmieniono go na zwykłą funkcję wykonującą `Box::pin` przed utworzeniem zwracanego async future. Dodano regresję rozmiaru dla zawieszonej operacji 64 KiB i test pustej projekcji na workerze Tokio z jawnym stosem 2 MiB. Nie zwiększono stosu procesu. Parser i review przeszły; wykonanie nowych testów Rust w CI oraz potwierdzenie startu poprawionego API pozostają wymagane.
 
+Scalenie z aktualnym masterem zachowuje zatwierdzony zakres group-local recovery
+oraz obie ścieżki: osieroconego helpera i wznowienia przygotowanej generacji
+dowodu. Pusty bootstrap po SIGABRT API otrzymał oddzielny preview/apply stop
+i fresh-only receipt. Potwierdza brak native ownera, bez udawania drain;
+archiwizacja wymaga ponownej walidacji tego samego pustego stanu. Testy źródłowe
+nie potwierdzają jeszcze rzeczywistego zatrzymania ani poprawionego startu API.
+
 T8 pozostaje otwarte. Macierz S01–S46 wymaga dowodów wykonania dla poszczególnych scenariuszy, w tym WebGL, trwałych artefaktów i osobnej kwalifikacji FDM/FEM CPU/GPU oraz multilayer.

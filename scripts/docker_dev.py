@@ -2709,6 +2709,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_unadmitted.add_argument("--source-sha256", required=True)
     stop_unadmitted.add_argument("--request-id", required=True)
     stop_unadmitted.add_argument("--session-id", required=True)
+    empty_abort = subparsers.add_parser(
+        "stop-empty-api-abort-volume", help="preview or stop one empty ownerless API abort; never claim a native drain",
+    )
+    empty_abort.add_argument("--attempt", required=True)
+    empty_abort.add_argument("--config-sha256", required=True)
+    empty_abort.add_argument("--source-root", type=Path, required=True)
+    empty_abort.add_argument("--port", type=int, required=True)
+    empty_abort_mode = empty_abort.add_mutually_exclusive_group(required=True)
+    empty_abort_mode.add_argument("--preview", action="store_true")
+    empty_abort_mode.add_argument("--apply", action="store_true")
+    empty_abort.add_argument("--expected-plan-sha256")
     stop_diagnostic = subparsers.add_parser(
         "stop-diagnostic-volume",
         help="stop one pinned backend that retains only its failed-owner diagnostic API",
@@ -2857,6 +2868,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--empty-api-abort-stop", help="Fresh-state only: exact successful ownerless API-abort stop attempt")
+    recreate_volume.add_argument("--empty-api-abort-stop-sha256", help="SHA-256 of that exact raw stop terminal receipt")
     recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
     recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
     recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
@@ -3128,6 +3141,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "stop-empty-api-abort-volume":
+            from docker_volume_empty_api_abort import stop
+            result = stop(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
