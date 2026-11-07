@@ -204,7 +204,10 @@ blokadą operacji i zapisuje intent przed łagodnym zatrzymaniem dokładnego
 backendu. Receipt zachowuje `execution_state=unknown`, oryginalne OWNER,
 process-tree, ledger, dane użytkownika oraz autoryzację. Dalszy start tej
 samej instancji odbywa się przez `resume-volume --restart-backend` i jego
-bramki admission. Testy źródłowe i kwalifikacja konkretnego stopu mają
+bramki admission. Dla zachowanego wyniku nieznanego po potwierdzonym stopie
+`--reconcile-startup-stop-attempt` ponawia wyłącznie obserwację. Wiąże
+oryginalny helper, intent i snapshot oraz publikuje terminal przez CAS
+w pierwotnym helperze. Testy źródłowe i kwalifikacja konkretnego stopu mają
 oddzielne dowody.
 
 ## Obowiązki i weryfikacja

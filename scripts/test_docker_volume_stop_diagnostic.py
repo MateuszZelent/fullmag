@@ -364,6 +364,7 @@ class StartupRecoveryDiagnosticStopTests(unittest.TestCase):
         for row in value["actual"].values():
             row["Mounts"] = []
             row["State"]["Health"] = {"Log": ["first observation"]}
+            row["ExecIDs"] = ["transient-healthcheck"]
         authority = {"authorization": value["auth"], "request": value["request"],
                      "operator_authorization": {"process_receipt_sha256": hashlib.sha256(value["process_raw"]).hexdigest()},
                      "storage_proof": value["storage_proof"], "released_snapshot": value["released"],
@@ -385,6 +386,7 @@ class StartupRecoveryDiagnosticStopTests(unittest.TestCase):
             value["probe"]["process_ids"] = [1, 7, 41, 100]
             for row in value["actual"].values():
                 row["State"]["Health"] = {"Log": ["second observation"]}
+                row["ExecIDs"] = None
             second = stop._capture_startup_recovery_plan(args, value["selected"], {}, control,
                 value["previous"], "development/attempts/" + value["attempt"], {}, {})[0]
         self.assertEqual(first, second)
@@ -407,6 +409,141 @@ class StartupRecoveryDiagnosticStopTests(unittest.TestCase):
         self.assertIn("runtime_startup", source)
         self.assertIn("shutdown_unknown", source)
         self.assertIn("x-fullmag-api-instance", source)
+
+
+class StartupStopReconciliationTests(unittest.TestCase):
+    def run_reconciliation(self, drift=None):
+        from types import SimpleNamespace
+
+        value = StartupRecoveryDiagnosticStopTests().fixture()
+        control = value["control"]
+        attempt = "9" * 32
+        root = "startup-recovery-stop/attempts/" + attempt
+        previous_root = "development/attempts/" + value["attempt"]
+        image = value["previous"]["inputs"]["image_id"]
+        actual = copy.deepcopy(value["actual"])
+        for row in actual.values():
+            row["Mounts"] = []
+        actual["backend"]["State"].update(Running=False, Pid=0, ExitCode=0, OOMKilled=False, FinishedAt="finished")
+        ids = {role: row["Id"] for role, row in actual.items()}
+        terminal_raw, compose_raw = stop.canonical(value["previous"]), b"{}"
+        inputs = {"attempt": value["attempt"], "config_sha256": value["config_sha256"],
+                  "source_root": str(value["selected"]), "startup_recovery": True, "preview_only": False,
+                  "backend_container_id": ids["backend"], "frontend_container_id": ids["frontend"],
+                  "backend_started_at": actual["backend"]["State"]["StartedAt"], "image_id": image,
+                  "terminal_sha256": stop._sha256(terminal_raw), "compose_sha256": stop._sha256(compose_raw)}
+        receipt = {"state": "outcome-unknown-resources-retained", "phase": "startup-recovery-stop",
+                   "attempt": attempt, "compose_project": control.project, "control_volume": control.volume,
+                   "error": "Frontend incarnation changed while stopping only the backend", "inputs": inputs,
+                   "helper_container_id": "1" * 64}
+        authority = {"storage_proof": value["storage_proof"], "released_snapshot": value["released"],
+                     "raw": {key: key.encode() for key in ("runtime_authorization", "operator_authorization",
+                         "abrupt_proof", "native_request", "attestation", "manifest")}}
+        authority["raw"]["prepared_receipt"] = None
+        files = {previous_root + "/terminal.json": terminal_raw, previous_root + "/compose.json": compose_raw}
+        guest = {}
+        for relative, key in {
+            "runtime-control/runtime-services/OWNER.json": "owner_sha256",
+            "runtime-control/runtime-services/LAUNCH.json": "launch_sha256",
+            "runtime-control/runtime-service/docker-all.json": "runtime_config_sha256",
+            "runtime-control/runtime-service/process-tree.json": "historical_process_receipt_sha256",
+            "runtime-control/runtime-service/api-failure-" + "8" * 32 + ".json": "startup_failure_fence_sha256",
+            "runtime-control/worker-cgroup/ready.json": "worker_cgroup_ready_sha256",
+            "runtime-control/worker-cgroup/request.json": "worker_cgroup_request_sha256",
+            "backend/runtime-provenance.json": "provenance_sha256",
+        }.items():
+            files[relative] = relative.encode()
+            guest[key] = stop._sha256(files[relative])
+        guest["api_failure_fence"] = "/opt/fullmag/runtime-control/runtime-service/api-failure-" + "8" * 32 + ".json"
+        plan = {"frontend": actual["frontend"], "storage_proof": value["storage_proof"],
+                "released_snapshot": value["released"], "guest_observation": guest, "prepared_receipt_sha256": None}
+        for name, field in (("runtime_authorization", "recovery_authorization_sha256"),
+                            ("operator_authorization", "operator_authorization_sha256"),
+                            ("abrupt_proof", "abrupt_proof_sha256"), ("native_request", "native_request_sha256"),
+                            ("attestation", "attestation_sha256"), ("manifest", "manifest_sha256")):
+            plan[field] = stop._sha256(authority["raw"][name])
+        plan_sha = stop._sha256(stop.canonical(plan))
+        intent = {"schema": "fullmag.docker-startup-recovery-stop-intent.v1", "state": "stop-planned",
+                  "plan_sha256": plan_sha, "backend_image_id": image,
+                  **{key: inputs[key] for key in ("backend_container_id", "backend_started_at",
+                     "frontend_container_id", "terminal_sha256", "compose_sha256")}}
+        if drift == "intent":
+            intent["backend_container_id"] = "0" * 64
+        if drift == "source":
+            files[previous_root + "/terminal.json"] += b" "
+        if drift == "receipt":
+            authority["raw"]["prepared_receipt"] = b"new prepared receipt"
+        intent_path = "verification/startup-recovery-stop-intent-" + ids["backend"] + ".json"
+        files[intent_path] = stop.canonical(intent)
+        helper_files = {"active": (attempt + "\n").encode(), root + "/receipt.json": stop.canonical(receipt),
+                        root + "/terminal.json": None, root + "/preflight.json": stop.canonical(plan)}
+        args = SimpleNamespace(reconcile_startup_stop_attempt=attempt, attempt=value["attempt"],
+                               expected_plan_sha256=plan_sha, config_sha256=value["config_sha256"])
+        with patch("docker_volume_activation_reconcile._validate_helper", return_value=({}, "1" * 64)), \
+             patch("docker_volume_activation_reconcile._validate_helper_logged"), \
+             patch("docker_volume_activation_reconcile._wait_for_helper_exit"), \
+             patch.object(stop, "_read_from_original_helper", side_effect=lambda ctl, helper, path, **kwargs: helper_files[path]), \
+             patch.object(stop, "_read_raw", side_effect=lambda ctl, path: files[path]), \
+             patch.object(stop, "_container_snapshot", return_value=(image, ids, actual)), \
+             patch.object(stop, "_assert_startup_recovery_consumers"), \
+             patch.object(stop, "_startup_recovery_authority", return_value=authority), \
+             patch.object(stop, "docker_capture", side_effect=AssertionError("Reconciliation must never signal Docker")), \
+             patch.object(stop, "_publish_helper_reconciliation") as publish:
+            if drift is not None:
+                with self.assertRaises(BuildControlError):
+                    stop._reconcile_startup_stop(args, control, value["selected"], {})
+                publish.assert_not_called()
+                return
+            result = stop._reconcile_startup_stop(args, control, value["selected"], {})
+            self.assertEqual(result, {"state": "stopped-confirmed", "signals_sent": 0})
+            publish.assert_called_once()
+            proof = json.loads(publish.call_args.kwargs["proof_raw"])
+            self.assertEqual(proof["signals_sent"], 0)
+            self.assertEqual(receipt["state"], "outcome-unknown-resources-retained")
+
+    def test_reconciliation_observes_without_another_signal(self):
+        self.run_reconciliation()
+
+    def test_reconciliation_refuses_source_intent_and_optional_receipt_drift(self):
+        for drift in ("source", "intent", "receipt"):
+            with self.subTest(drift=drift):
+                self.run_reconciliation(drift)
+
+    @unittest.skipUnless(Path("/bin/bash").is_file(), "requires the managed helper shell")
+    def test_publisher_resumes_exact_proof_and_refuses_different_proof(self):
+        import tempfile
+        from types import SimpleNamespace
+
+        for matching in (True, False):
+            with self.subTest(matching=matching), tempfile.TemporaryDirectory() as directory:
+                folder = Path(directory)
+                root = "startup-recovery-stop/attempts/" + "9" * 32
+                operation = folder / root
+                operation.mkdir(parents=True)
+                (folder / "active").write_bytes(b"active\n")
+                (operation / "receipt.json").write_bytes(b"original receipt")
+                proof = b'{"signals_sent":0}\n'
+                (operation / "startup-stop-reconciliation-proof.json").write_bytes(proof if matching else b"different")
+                control = SimpleNamespace(path=lambda relative: str(folder / relative),
+                    _namespace_guard=lambda script: script.replace("sync /control;", "sync '" + directory + "';"))
+                def shell(*argv, **kwargs):
+                    self.assertEqual(argv[0], "exec")
+                    return subprocess.run(["/bin/bash", "-euo", "pipefail", "-c", argv[-1]],
+                                          capture_output=True, timeout=15)
+                with patch.object(stop, "docker_capture", side_effect=shell):
+                    kwargs = dict(root=root, active_sha256=stop._sha256(b"active\n"),
+                                  receipt_sha256=stop._sha256(b"original receipt"), proof_raw=proof,
+                                  terminal_raw=b'{"state":"succeeded"}\n',
+                                  proof_name="startup-stop-reconciliation-proof.json")
+                    if matching:
+                        stop._publish_helper_reconciliation(control, "1" * 64, **kwargs)
+                        self.assertEqual((operation / "terminal.json").read_bytes(), kwargs["terminal_raw"])
+                    else:
+                        with self.assertRaises(BuildControlError):
+                            stop._publish_helper_reconciliation(control, "1" * 64, **kwargs)
+                        self.assertFalse((operation / "terminal.json").exists())
+                self.assertEqual((operation / "receipt.json").read_bytes(), b"original receipt")
+                self.assertEqual((folder / "active").read_bytes(), b"active\n")
 
 
 class DiagnosticStopShellTests(unittest.TestCase):

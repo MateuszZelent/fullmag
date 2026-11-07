@@ -981,6 +981,7 @@ def _startup_recovery_container_pin(actual):
     from docker_volume_container_recovery import _stable_container_observation
 
     pinned = _stable_container_observation(actual)
+    pinned.pop("ExecIDs", None)
     pinned["State"] = {key: value for key, value in actual.get("State", {}).items() if key != "Health"}
     return pinned
 
@@ -1063,6 +1064,132 @@ def _load_startup_recovery_preview(control, inputs, expected_plan_sha256):
     return dict(plan), dict(preview)
 
 
+def _reconcile_startup_stop(args, control, selected, identity):
+    """Observe one already stopped backend under its original retained lease."""
+    from docker_volume_activation_reconcile import (
+        _validate_helper, _validate_helper_logged, _wait_for_helper_exit,
+    )
+
+    attempt = args.reconcile_startup_stop_attempt
+    if not isinstance(attempt, str) or ATTEMPT_RE.fullmatch(attempt) is None:
+        _fail("Reconciliation requires the complete original stop attempt")
+    phase = "startup-recovery-stop"
+    root = phase + "/attempts/" + attempt
+    _, helper_id = _validate_helper(control, "fullmag-control-" + attempt, attempt, phase=phase)
+    _validate_helper_logged(helper_id)
+    active_raw = _read_from_original_helper(control, helper_id, "active", maximum=128)
+    receipt_raw = _read_from_original_helper(control, helper_id, root + "/receipt.json")
+    receipt = _json(receipt_raw, "retained unknown startup stop")
+    inputs = receipt.get("inputs", {})
+    if (active_raw != (attempt + "\n").encode()
+            or receipt.get("state") != "outcome-unknown-resources-retained"
+            or receipt.get("phase") != phase or receipt.get("attempt") != attempt
+            or receipt.get("compose_project") != control.project
+            or receipt.get("control_volume") != control.volume
+            or receipt.get("helper_container_id") != helper_id
+            or receipt.get("error") != "Frontend incarnation changed while stopping only the backend"
+            or inputs.get("startup_recovery") is not True or inputs.get("preview_only") is not False
+            or inputs.get("attempt") != args.attempt or inputs.get("config_sha256") != args.config_sha256
+            or inputs.get("source_root") != str(selected)):
+        _fail("Retained startup stop identity or supported observation failure differs")
+    if _read_from_original_helper(control, helper_id, root + "/terminal.json", optional=True) is not None:
+        _fail("Original startup stop is already terminal")
+    plan_raw = _read_from_original_helper(control, helper_id, root + "/preflight.json", maximum=8 * 1024 * 1024)
+    plan = _json(plan_raw, "original startup stop plan")
+    plan_sha = _sha256(canonical(plan))
+    if plan_sha != args.expected_plan_sha256:
+        _fail("Original stop plan differs from the supplied preview digest")
+    intent_relative = "verification/startup-recovery-stop-intent-" + inputs["backend_container_id"] + ".json"
+    intent_raw = _read_raw(control, intent_relative)
+    intent = _json(intent_raw, "original stop intent")
+    if (intent.get("schema") != "fullmag.docker-startup-recovery-stop-intent.v1"
+            or intent.get("state") != "stop-planned" or intent.get("plan_sha256") != plan_sha
+            or any(intent.get(key) != inputs.get(key) for key in (
+                "backend_container_id", "backend_started_at", "frontend_container_id",
+                "terminal_sha256", "compose_sha256"))
+            or intent.get("backend_image_id") != inputs.get("image_id")):
+        _fail("Original stop intent differs from its retained operation and plan")
+    previous_root = "development/attempts/" + args.attempt
+    terminal_raw = _read_raw(control, previous_root + "/terminal.json")
+    compose_raw = _read_raw(control, previous_root + "/compose.json")
+    if (_sha256(terminal_raw) != inputs["terminal_sha256"]
+            or _sha256(compose_raw) != inputs["compose_sha256"]):
+        _fail("Original development or Compose bytes changed")
+    previous, document = _json(terminal_raw, "development"), _json(compose_raw, "Compose")
+
+    def observe():
+        image, ids, actual = _container_snapshot(
+            args, selected, identity, control, previous, document, allow_stopped_backend=True,
+        )
+        state = actual["backend"]["State"]
+        if (image != inputs["image_id"] or ids.get("backend") != inputs["backend_container_id"]
+                or ids.get("frontend") != inputs["frontend_container_id"]
+                or state.get("StartedAt") != inputs["backend_started_at"]
+                or state.get("Running") is not False or state.get("Pid") != 0
+                or state.get("ExitCode") != 0 or state.get("OOMKilled") is not False
+                or not state.get("FinishedAt")
+                or _startup_recovery_container_pin(actual["frontend"])
+                    != _startup_recovery_container_pin(plan["frontend"])):
+            _fail("Exact graceful backend stop and preserved frontend are not confirmed")
+        operation = {"receipt": receipt, "helper_container_id": helper_id}
+        _assert_startup_recovery_consumers(control, operation, ids, actual, document)
+        authority = _startup_recovery_authority(control, previous, document, actual["backend"], selected)
+        if (authority["storage_proof"] != plan["storage_proof"]
+                or authority["released_snapshot"] != plan["released_snapshot"]):
+            _fail("Original store, ledger, or released leases changed after stop")
+        for name, field in (("runtime_authorization", "recovery_authorization_sha256"),
+                            ("operator_authorization", "operator_authorization_sha256"),
+                            ("abrupt_proof", "abrupt_proof_sha256"), ("native_request", "native_request_sha256"),
+                            ("attestation", "attestation_sha256"), ("manifest", "manifest_sha256")):
+            if _sha256(authority["raw"][name]) != plan[field]:
+                _fail("Preserved recovery authority changed: " + name)
+        prepared = authority["raw"]["prepared_receipt"]
+        prepared_sha = _sha256(prepared) if prepared is not None else None
+        if prepared_sha != plan.get("prepared_receipt_sha256"):
+            _fail("Pending native recovery receipt changed after the original stop plan")
+        guest = plan["guest_observation"]
+        pins = {
+            "runtime-control/runtime-services/OWNER.json": "owner_sha256",
+            "runtime-control/runtime-services/LAUNCH.json": "launch_sha256",
+            "runtime-control/runtime-service/docker-all.json": "runtime_config_sha256",
+            "runtime-control/runtime-service/process-tree.json": "historical_process_receipt_sha256",
+            _runtime_relative(guest["api_failure_fence"]): "startup_failure_fence_sha256",
+            "runtime-control/worker-cgroup/ready.json": "worker_cgroup_ready_sha256",
+            "runtime-control/worker-cgroup/request.json": "worker_cgroup_request_sha256",
+            "backend/runtime-provenance.json": "provenance_sha256",
+        }
+        for relative, key in pins.items():
+            if _sha256(_read_raw(control, relative)) != guest[key]:
+                _fail("Preserved startup evidence changed: " + relative)
+        return {"backend": _startup_recovery_container_pin(actual["backend"]),
+                "frontend": _startup_recovery_container_pin(actual["frontend"]),
+                "storage_proof": authority["storage_proof"], "released_snapshot": authority["released_snapshot"]}
+
+    first = observe()
+    if observe() != first or _read_raw(control, intent_relative) != intent_raw:
+        _fail("Post-stop observation changed before reconciliation")
+    proof = {"schema": "fullmag.startup-stop-reconciliation.v1", "state": "stopped-confirmed",
+             "original_receipt_sha256": _sha256(receipt_raw), "original_plan_sha256": plan_sha,
+             "intent_sha256": _sha256(intent_raw), "helper_id": helper_id, "signals_sent": 0,
+             "controller_sha256": _sha256(Path(__file__).read_bytes()),
+             "observation": {"backend_state": first["backend"]["State"],
+                 "backend_pin_sha256": _sha256(canonical(first["backend"])),
+                 "frontend_pin_sha256": _sha256(canonical(first["frontend"])),
+                 "storage_proof_sha256": _sha256(canonical(first["storage_proof"])),
+                 "released_snapshot_sha256": _sha256(canonical(first["released_snapshot"]))}}
+    proof_name = "startup-stop-reconciliation-proof.json"
+    terminal = {**receipt, "state": "succeeded", "original_error": receipt["error"],
+                "error": None, "stopped_backend": True, "execution_state": "unknown",
+                "reconciled_without_signal": True, "finished_at": time.time(),
+                "reconciliation_proof": root + "/" + proof_name,
+                "result": {"state": "stopped-confirmed", "signals_sent": 0}}
+    _publish_helper_reconciliation(control, helper_id, root=root,
+        active_sha256=_sha256(active_raw), receipt_sha256=_sha256(receipt_raw),
+        proof_raw=canonical(proof) + b"\n", terminal_raw=canonical(terminal) + b"\n", proof_name=proof_name)
+    _wait_for_helper_exit(helper_id)
+    return terminal["result"]
+
+
 def _stop_startup_recovery_diagnostic(args):
     from docker_dev import _compose_identity, _select_source
     from docker_volume_unclaimed_cancellation import _control_raw
@@ -1076,6 +1203,9 @@ def _stop_startup_recovery_diagnostic(args):
             _fail(label + " is not a complete lowercase identity")
     preview_only = bool(getattr(args, "preview", False))
     expected_plan_sha256 = getattr(args, "expected_plan_sha256", None)
+    if getattr(args, "reconcile_startup_stop_attempt", None) is not None:
+        if preview_only:
+            _fail("Stop reconciliation cannot combine with preview")
     if preview_only:
         if expected_plan_sha256 is not None:
             _fail("Preview does not accept an apply plan digest")
@@ -1094,6 +1224,8 @@ def _stop_startup_recovery_diagnostic(args):
     helper_image = configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"]
     control = BuildControl(identity, helper_image)
     control.prepare()
+    if getattr(args, "reconcile_startup_stop_attempt", None) is not None:
+        return _reconcile_startup_stop(args, control, selected, identity)
 
     previous_root = "development/attempts/" + args.attempt
     terminal_raw = _read_raw(control, previous_root + "/terminal.json")
@@ -1696,7 +1828,7 @@ def _service_incarnation(actual: Mapping[str, object], service: str) -> dict[str
     }
 
 
-def _publish_read_timeout_reconciliation(
+def _publish_helper_reconciliation(
     control: BuildControl,
     helper_id: str,
     *,
@@ -1705,10 +1837,13 @@ def _publish_read_timeout_reconciliation(
     receipt_sha256: str,
     proof_raw: bytes,
     terminal_raw: bytes,
+    proof_name: str = "read-timeout-reconciliation-proof.json",
 ) -> None:
+    if proof_name not in {"read-timeout-reconciliation-proof.json", "startup-stop-reconciliation-proof.json"}:
+        _fail("Unsupported reconciliation proof name")
     active_path = shlex.quote(control.path("active"))
     receipt_path = shlex.quote(control.path(root + "/receipt.json"))
-    proof_path = shlex.quote(control.path(root + "/read-timeout-reconciliation-proof.json"))
+    proof_path = shlex.quote(control.path(root + "/" + proof_name))
     preflight_path = shlex.quote(control.path(root + "/diagnostic-stop-preflight.json"))
     diagnostic_terminal_path = shlex.quote(control.path(root + "/diagnostic-stop-terminal.json"))
     terminal_path = shlex.quote(control.path(root + "/terminal.json"))
@@ -1725,20 +1860,21 @@ def _publish_read_timeout_reconciliation(
     def publish(target: str, payload: bytes) -> str:
         encoded = shlex.quote(base64.b64encode(payload).decode("ascii"))
         return (
-            f"test ! -e {target}; test ! -L {target}; "
-            f"tmp=$(mktemp {directory}/.read-timeout-reconcile.XXXXXXXX); "
+            f"if test -e {target}; then test ! -L {target}; test -f {target}; "
+            f"test $(stat -c %h {target}) = 1; "
+            f"test \"$(sha256sum {target} | cut -d' ' -f1)\" = {shlex.quote(_sha256(payload))}; else "
+            f"test ! -L {target}; tmp=$(mktemp {directory}/.operation-reconcile.XXXXXXXX); "
             f"trap 'rm -f -- \"$tmp\"' EXIT; "
             f"printf %s {encoded} | base64 -d > \"$tmp\"; chmod 0440 \"$tmp\"; "
             # Link publication is atomic and refuses an existing target even
             # if two reconciliations passed the preceding absence check.
-            f"sync \"$tmp\"; ln -T -- \"$tmp\" {target}; rm -f -- \"$tmp\"; sync {directory}; "
+            f"sync \"$tmp\"; ln -T -- \"$tmp\" {target}; rm -f -- \"$tmp\"; sync {directory}; fi; "
         )
 
     script = (
         "set -euo pipefail; umask 027; "
         f"test ! -L {directory}; test -d {directory}; test \"$(readlink -f {directory})\" = {directory}; "
         + assert_original_pins()
-        + f"test ! -e {proof_path}; test ! -L {proof_path}; "
         + f"test ! -e {terminal_path}; test ! -L {terminal_path}; "
         + publish(proof_path, proof_raw)
         + assert_original_pins()
@@ -1865,7 +2001,7 @@ def _reconcile_read_timeout_attempt(
         "finished_at": time.time(),
     }
     terminal_raw = canonical(terminal) + b"\n"
-    _publish_read_timeout_reconciliation(
+    _publish_helper_reconciliation(
         control, helper_id,
         root=root,
         active_sha256=_sha256(active_raw or b""),
@@ -1888,6 +2024,8 @@ def _reconcile_read_timeout_attempt(
 def stop_diagnostic(args: argparse.Namespace) -> dict[str, object]:
     if getattr(args, "startup_recovery", False):
         return _stop_startup_recovery_diagnostic(args)
+    if getattr(args, "reconcile_startup_stop_attempt", None) is not None:
+        _fail("Startup stop reconciliation requires --startup-recovery")
     if getattr(args, "expected_plan_sha256", None) is not None:
         _fail("A preview plan digest requires --startup-recovery")
     from docker_dev import _compose_identity, _select_source

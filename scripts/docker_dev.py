@@ -2718,6 +2718,8 @@ def _parser() -> argparse.ArgumentParser:
     stop_diagnostic.add_argument("--source-root", type=Path, required=True)
     stop_diagnostic.add_argument("--port", type=int, required=True)
     stop_diagnostic.add_argument("--preview", action="store_true")
+    stop_diagnostic.add_argument("--reconcile-startup-stop-attempt",
+                                 help="observe and complete one retained startup-recovery stop without sending a signal")
     stop_diagnostic.add_argument("--startup-recovery", action="store_true",
                                  help="stop only the fenced API of an initial failed container-recovery startup")
     stop_diagnostic.add_argument("--expected-plan-sha256",
