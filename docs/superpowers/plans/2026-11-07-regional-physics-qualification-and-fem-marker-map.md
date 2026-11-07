@@ -30,8 +30,8 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
   Terminal oraz zwolnienie blokady muszą być rzeczywiście potwierdzone.
 - [x] Uaktualnić źródła zadania do aktualnego `origin/master` bez naruszania
   obcej pracy; zapisać pełny SHA i status wejścia.
-- [ ] Potwierdzić source/common Git/storage na WSL, port i budżet miejsca.
-- [ ] Wykonać `just docker-dev-toolchain`, a następnie
+- [x] Potwierdzić source/common Git/storage na WSL, port i budżet miejsca.
+- [x] Wykonać `just docker-dev-toolchain`, a następnie
   `just docker-dev <worktree> 3345 '' required fem-demag-poisson`.
 - [ ] Zweryfikować receipt, dokładne obrazy i kontenery, mounty RO/RW,
   prywatny volume i ledger grupy, API, native contract oraz browser QA.
@@ -40,7 +40,7 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
 
 - [ ] Zestawić istniejące dowody z bieżącymi źródłami; nie powtarzać wyników,
   których wejścia i warunki nadal mają zastosowanie. Zapisać pozostałe luki.
-- [ ] Wykonać analityczne sprawdzenie redukcji FEM DG0 na dokładnym zbiorze
+- [x] Wykonać analityczne sprawdzenie redukcji FEM DG0 na dokładnym zbiorze
   elementów w zarządzanym runtime; odróżnić je od ABI bez MFEM.
 - [ ] Wykonać brakujące przypadki FDM CPU/CUDA fp64 i fp32: lokalne Ms/A/alpha,
   wymiana i jej energia, demag, Zeeman, anizotropia, MEL, legalne DMI,

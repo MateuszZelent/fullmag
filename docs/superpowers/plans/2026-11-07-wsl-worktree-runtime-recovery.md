@@ -83,7 +83,7 @@ Potwierdzono `terminal.error == readiness.error` oraz dokładną kopertę `Runti
 - [x] Przeprowadzić niezależne review, zapisać spójny commit i wypchnąć branch/PR do `master`; zachować wymagane kontrole.
 - [x] Użyć nowej recepty z `--stop-frontend` do kontrolowanego zatrzymania obu usług diagnostycznego `fullmag-master`, potwierdzając zachowanie ownera, sesji, lease i namespace. Zachować istniejące dane main oraz jego pakiet/rollback; w rejestrze pozostawić native execution Unknown i warunek ponownej kontroli przed przyszłym recovery main. Nie uruchamiać main ponownie i nie zgłaszać jego archiwizacji ani genuine drain.
 - [x] Zamknąć starą nieudaną próbę worktree rozszerzonym reconcilerem z jawnymi pinami przygotowania i nowej generacji dowodów z zadania 2, po pełnej kwalifikacji. Nie ponawiać pierwotnego `--apply` nad istniejącym przygotowaniem ani nie uruchamiać nowej próby nad aktywną blokadą.
-- [ ] Uruchomić `just docker-dev-toolchain` i `just docker-dev` z katalogu worktree, z jawnym worktree/source, osobnym wolnym portem, wymaganym GPU i kontraktem `fem-demag-poisson`.
+- [x] Uruchomić `just docker-dev-toolchain` i `just docker-dev` z katalogu worktree, z jawnym worktree/source, osobnym wolnym portem, wymaganym GPU i kontraktem `fem-demag-poisson`.
 - [ ] Sprawdzić receipt, rzeczywiste mounty/etykiety obu usług, API, natywny kontrakt i zarządzany browser QA `--canvas-only`. Dopiero te wyniki kwalifikują docelową grupę worktree.
 - [ ] Potwierdzić integrację kodu na `master`, wykonać adekwatną retencję i zapisać faktyczny stan oraz ewentualne aktywne zasoby w rejestrze.
 
