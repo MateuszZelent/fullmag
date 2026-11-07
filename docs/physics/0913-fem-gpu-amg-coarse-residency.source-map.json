@@ -1,0 +1,290 @@
+{
+  "document": {
+    "path": "docs/physics/0913-fem-gpu-amg-coarse-residency.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unchanged / not-qualified-by-this-experiment"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "runtime-diagnostic-only / full-SP4-unqualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM nie używa tej realizacji Poissona HYPRE."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM nie używa tej realizacji Poissona HYPRE."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-gpu-amg-coarse-system",
+      "symbols": [
+        "K",
+        "phi",
+        "b",
+        "r",
+        "B",
+        "z"
+      ],
+      "sources": [
+        "assembly",
+        "residual",
+        "gpu-amg"
+      ]
+    },
+    {
+      "id": "eq-gpu-amg-coarse-relaxation",
+      "symbols": [
+        "K",
+        "phi",
+        "b",
+        "D",
+        "omega",
+        "j",
+        "c"
+      ],
+      "sources": [
+        "gpu-amg"
+      ],
+      "upstream_source": {
+        "url": "https://github.com/hypre-space/hypre/blob/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/parcsr_ls/par_relax.c",
+        "symbol": "hypre_BoomerAMGRelax",
+        "role": "Pinned type18 GPU L1-Jacobi dispatch; configure_demag_amg selects this implementation."
+      }
+    }
+  ],
+  "symbols": [
+    {
+      "id": "K",
+      "latex": "K, K_c",
+      "meaning": "Macierz sztywności Poissona oraz jej najgrubszy poziom",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi, \\phi_c",
+      "meaning": "Wektory współczynników potencjału skalarnego",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "b",
+      "latex": "b, b_c",
+      "meaning": "Wektor prawej strony i jego ograniczenie do najgrubszego poziomu",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "Residual układu Poissona",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "B",
+      "latex": "B",
+      "meaning": "Operator preconditionera",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "z",
+      "latex": "z",
+      "meaning": "Preconditionowany residual",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "D",
+      "latex": "D_c",
+      "meaning": "Diagonalne skalowanie relaksacji HYPRE",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "omega",
+      "latex": "\\omega_c",
+      "meaning": "Waga relaksacji",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "Indeks relaksacji coarse cycle",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "Indeks najgrubszego poziomu AMG",
+      "si_unit": "1"
+    },
+    {
+      "id": "m",
+      "latex": "m",
+      "meaning": "Jednostkowa magnetyzacja nodalna",
+      "si_unit": "1"
+    },
+    {
+      "id": "E",
+      "latex": "E_1, E_2",
+      "meaning": "Porównywane wartości tego samego składnika energii",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "Stała przenikalności próżni użyta we wspólnej konwersji torque",
+      "si_unit": "\\mathrm{H/m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "gpu-amg",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "configure_demag_amg",
+      "responsibility": "Ustawienie i kontrola coarse cycle18 wyłącznie w GPU AMG.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "gpu-getter",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "read_device_demag_amg_coarse_relax_type",
+      "responsibility": "Odczyt skutecznej polityki z kontrolą lifecycle i flag HYPRE.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "native-api",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1",
+      "responsibility": "Addytywny getter C ABI bez zmiany rozmiaru istniejących struktur.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "policy",
+      "path": "backends/fem/core/demag_solver_policy.cpp",
+      "symbol": "resolve_demag_amg_policy_from_environment",
+      "responsibility": "Dotychczasowe parametry profilu AMG.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "artifact",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "demag_amg_profile_metadata",
+      "responsibility": "Publikacja zaobserwowanego coarse type albo null dla braku obserwacji.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "python",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Publiczne domyślne wartości, walidacja i serializacja polityki.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "hints",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "Opcjonalna polityka FEM w kanonicznym ProblemIR.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Rozwiązana polityka przekazana do wykonania FEM.",
+      "evidence_status": "source-visible; new managed native build and runtime pending"
+    },
+    {
+      "id": "assembly",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "build_p1_demag_operators",
+      "responsibility": "Tworzy dyskretny operator i sprzężenia Poissona.",
+      "evidence_status": "source-visible; candidate runtime pending"
+    },
+    {
+      "id": "residual",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "validate_demag_poisson_hypre_device_solve",
+      "responsibility": "Liczy normę Ax-b, normę RHS i względny residual; waliduje tolerancje.",
+      "evidence_status": "source-visible; candidate runtime pending"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "str",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "CG lub GMRES",
+        "meaning": "Wybór zewnętrznej metody liniowej",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "str",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "AMG, JACOBI lub NONE",
+        "meaning": "Wybór preconditionera",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "dodatnia skończona wartość",
+        "meaning": "Względna tolerancja residualu; próba używa 1e-12",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m}",
+        "validation": "None lub dodatnia skończona wartość",
+        "meaning": "Opcjonalna tolerancja bezwzględnego residualu algebraicznego",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "wartość co najmniej 1",
+        "meaning": "Limit iteracji zewnętrznego solvera",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "wartość nieujemna",
+        "meaning": "Poziom diagnostyki liniowej",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.print_level"
+      }
+    ]
+  },
+  "validation": {
+    "baseline": "50fs / seven accepted steps / full Zarr preserved; recovery receipt d6fe4d9e7c67487b",
+    "candidate_native_runtime": "Managed CUDA build and CUPTI contract passed; actual getter18 in two completed50fs runs; native Poisson regression pending",
+    "candidate_physics_and_speedup": "Terminal energies/m/torque pass; old/new adaptive schedule equality failed; no attributable speedup",
+    "instrumentation_pair": "Full Zarr15columns/fourfields/twoframes and native finalm/torque/schedules exact equal ON/OFF; timingpassed514161records",
+    "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580"
+  }
+}

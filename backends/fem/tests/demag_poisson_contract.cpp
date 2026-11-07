@@ -19,6 +19,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
@@ -33,6 +34,7 @@
 #endif
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 #include <HYPRE_utilities.h>
+#include <_hypre_utilities.h>
 #endif
 
 #include <cmath>
@@ -2719,6 +2721,18 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         double energy = 0.0;
     };
     std::array<CpuOracle, realizations.size()> cpu_oracles;
+    {
+        fullmag::fem::Context uninitialized_context;
+        uninitialized_context.poisson_demag.gpu_demag_mode =
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        std::int32_t coarse_relax_type = 0;
+        std::string error;
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         uninitialized_context, coarse_relax_type, error),
+                     error, "uninitialized GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == -1,
+              "uninitialized/non-GPU demag AMG coarse-cycle query must return -1");
+    }
     // Finish and destroy every CPU workspace before configuring MFEM's
     // process-wide CUDA backend, as the production MFEM entry point does.
     for (size_t index = 0; index < realizations.size(); ++index) {
@@ -2914,6 +2928,75 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               gpu_workspace->fresh_zero_guess_count == 1u &&
               gpu_workspace->warm_start_count == 1u,
           "mixed-P1 GPU Poisson build/upload/setup/fresh/warm counters must each be one");
+    if (index == 0u) {
+        fullmag::fem::gpu_demag_poisson_destroy(ctx);
+        ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+        error.clear();
+        check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx, error), error,
+                     "mixed CUDA/Hypre AMG Poisson workspace initialization");
+        std::int32_t coarse_relax_type = -1;
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "initialized GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == 18,
+              "initialized GPU Poisson AMG must report coarse-cycle relax type 18");
+        error.clear();
+        check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
+                         ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+                     error, "mixed CUDA/Hypre AMG Poisson device step");
+        check(cudaDeviceSynchronize() == cudaSuccess,
+              "mixed-P1 AMG device Hypre step must synchronize for test readback");
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "post-solve GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == 18,
+              "post-solve GPU Poisson AMG must report coarse-cycle relax type 18");
+        const HYPRE_Int prior_status = HYPRE_GetError();
+        check((prior_status & ~HYPRE_ERROR_CONV) == 0,
+              "AMG getter sticky-status test must start without non-convergence errors");
+        const bool inject_convergence =
+            (prior_status & HYPRE_ERROR_CONV) == 0;
+        if (inject_convergence) {
+            hypre_error(HYPRE_ERROR_CONV);
+        }
+        const HYPRE_Int convergence_status = HYPRE_GetError();
+        check((convergence_status & HYPRE_ERROR_CONV) != 0,
+              "AMG getter sticky-status test must have HYPRE_ERROR_CONV set");
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "GPU demag AMG query with sticky convergence status");
+        check(coarse_relax_type == 18,
+              "GPU demag AMG query must succeed with only a prior convergence bit");
+        check(HYPRE_GetError() == convergence_status,
+              "GPU demag AMG query must preserve the prior convergence bit");
+        if (inject_convergence) {
+            check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0 &&
+                      HYPRE_GetError() == prior_status,
+                  "test must clear only its injected convergence bit");
+        }
+
+        const HYPRE_Int before_argument_error = HYPRE_GetError();
+        check((before_argument_error & ~HYPRE_ERROR_CONV) == 0,
+              "AMG getter error-bit test must start without other HYPRE errors");
+        hypre_error(HYPRE_ERROR_ARG);
+        const HYPRE_Int argument_error_status = HYPRE_GetError();
+        check((argument_error_status & HYPRE_ERROR_ARG) != 0,
+              "AMG getter error-bit test must set HYPRE_ERROR_ARG");
+        error.clear();
+        check(!fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                  ctx, coarse_relax_type, error),
+              "GPU demag AMG query must reject a pre-existing non-convergence error");
+        check(error.find("pre-existing HYPRE status") != std::string::npos,
+              "GPU demag AMG query must report the pre-existing HYPRE error");
+        check(HYPRE_GetError() == argument_error_status,
+              "GPU demag AMG query must preserve a pre-existing argument error");
+        check(HYPRE_ClearError(HYPRE_ERROR_ARG) == 0 &&
+                  HYPRE_GetError() == before_argument_error,
+              "test must clear only its injected argument error");
+    }
     fullmag::fem::gpu_demag_poisson_destroy(ctx);
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
     fullmag::fem::context_destroy_poisson(ctx);

@@ -3917,6 +3917,26 @@ impl NativeFemBackend {
         Ok(audit)
     }
 
+    fn gpu_demag_amg_coarse_relax_type(&self) -> Result<Option<i32>, RunError> {
+        let mut coarse_relax_type = -1;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+                self.handle,
+                &mut coarse_relax_type,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU AMG coarse-cycle policy query failed"));
+        }
+        match coarse_relax_type {
+            -1 => Ok(None),
+            value if value >= 0 => Ok(Some(value)),
+            value => Err(RunError {
+                message: format!("FEM GPU AMG coarse-cycle policy returned invalid type {value}"),
+            }),
+        }
+    }
+
     pub(crate) fn gpu_state_info(&self) -> Result<NativeFemGpuStateInfo, RunError> {
         let mut info = ffi::fullmag_fem_gpu_state_info {
             allocated: 0,
@@ -4402,6 +4422,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
@@ -4867,6 +4888,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,
@@ -5236,6 +5258,7 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
             demag_amg_aggressive_coarsening: stats.demag_amg_aggressive_coarsening,

@@ -28,6 +28,7 @@
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 #include <HYPRE_utilities.h>
+#include <HYPRE_parcsr_ls.h>
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <HYPRE_parcsr_mv.h>
 #endif
@@ -44,16 +45,78 @@ namespace fullmag::fem {
 namespace {
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
+bool read_hypre_demag_amg_coarse_relax_type(
+    HYPRE_Solver amgraw,
+    HYPRE_Int &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+    const HYPRE_Int prior_status = HYPRE_GetError();
+    if ((prior_status & ~HYPRE_ERROR_CONV) != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType found pre-existing HYPRE status " +
+            std::to_string(static_cast<int>(prior_status));
+        return false;
+    }
+    HYPRE_Int observed_relax_type = -1;
+    const HYPRE_Int status =
+        HYPRE_BoomerAMGGetCycleRelaxType(amgraw, &observed_relax_type, 3);
+    const HYPRE_Int current_status = HYPRE_GetError();
+    const HYPRE_Int new_status = current_status & ~prior_status;
+    const HYPRE_Int unexpected_status = status & ~(prior_status & HYPRE_ERROR_CONV);
+    if (unexpected_status != 0 || new_status != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType failed for GPU Poisson demag coarse cycle: status=" +
+            std::to_string(static_cast<int>(status)) +
+            " current=" + std::to_string(static_cast<int>(current_status)) +
+            " new=" + std::to_string(static_cast<int>(new_status));
+        return false;
+    }
+    relax_type = observed_relax_type;
+    return true;
+}
+
+bool validate_demag_amg_coarse_relax_type(HYPRE_Solver amgraw, std::string &error)
+{
+    HYPRE_Int relax_type = -1;
+    if (!read_hypre_demag_amg_coarse_relax_type(amgraw, relax_type, error)) {
+        return false;
+    }
+    if (relax_type != 18) {
+        error =
+            "GPU Poisson demag AMG coarse cycle must use relax type 18; "
+            "HYPRE reports " +
+            std::to_string(static_cast<int>(relax_type));
+        return false;
+    }
+    return true;
+}
+
+bool configure_demag_amg(
+    mfem::HypreBoomerAMG &amg,
+    const Context &ctx,
+    std::string &error)
 {
     const auto &policy = ctx.demag.amg_policy;
     amg.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
     amg.SetRelaxType(policy.relax_type);
+    const HYPRE_Solver amgraw = amg;
+    const HYPRE_Int cycle_relax_status =
+        HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3);
+    if (cycle_relax_status != 0) {
+        error =
+            "HYPRE_BoomerAMGSetCycleRelaxType failed for GPU Poisson demag "
+            "coarse cycle with status " +
+            std::to_string(static_cast<int>(cycle_relax_status));
+        return false;
+    }
+    if (!validate_demag_amg_coarse_relax_type(amgraw, error)) {
+        return false;
+    }
     amg.SetCoarsening(policy.coarsening);
     amg.SetInterpolation(policy.interpolation);
     amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
     if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
+    return true;
 }
 
 bool configure_demag_poisson_hypre_preconditioner(
@@ -68,7 +131,9 @@ bool configure_demag_poisson_hypre_preconditioner(
     switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG: {
         auto amg = std::make_unique<mfem::HypreBoomerAMG>(*workspace.A_par);
-        configure_demag_amg(*amg, ctx);
+        if (!configure_demag_amg(*amg, ctx, error)) {
+            return false;
+        }
         workspace.preconditioner = std::move(amg);
         return true;
     }
@@ -143,6 +208,45 @@ bool configure_demag_poisson_hypre_solver(
 
 } // namespace
 
+bool read_device_demag_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG ||
+        !ctx.poisson_demag.gpu_workspace_ready) {
+        return true;
+    }
+    const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace == nullptr || !workspace->ready || workspace->preconditioner == nullptr) {
+        error = "GPU Poisson demag AMG context is marked initialized but has no "
+            "ready Hypre preconditioner";
+        return false;
+    }
+    const auto *amg = dynamic_cast<const mfem::HypreBoomerAMG *>(
+        workspace->preconditioner.get());
+    if (amg == nullptr) {
+        error = "GPU Poisson demag AMG context is marked ready with a non-AMG "
+            "Hypre preconditioner";
+        return false;
+    }
+    HYPRE_Int observed_relax_type = -1;
+    if (!read_hypre_demag_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*amg), observed_relax_type, error)) {
+        return false;
+    }
+    relax_type = static_cast<std::int32_t>(observed_relax_type);
+#else
+    (void)ctx;
+    (void)error;
+#endif
+    return true;
+}
+
 bool initialize_demag_poisson_hypre_device_solver(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
@@ -206,6 +310,11 @@ bool initialize_demag_poisson_hypre_device_solver(
     }
     const auto setup_start = FemSteadyClock::now();
     workspace.solver->Setup(*workspace.b_par, *workspace.x_par);
+    if (ctx.demag.solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG &&
+        !validate_demag_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*workspace.preconditioner), error)) {
+        return false;
+    }
     ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_start);
     workspace.solver_setup_count += 1;
     ctx.poisson_demag.setup_count = workspace.solver_setup_count;

@@ -3741,6 +3741,11 @@ extern "C" {
         out_audit: *mut fullmag_fem_transfer_audit,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+        handle: *mut fullmag_fem_backend,
+        out_relax_type: *mut i32,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_get_gpu_state_info(
         handle: *mut fullmag_fem_backend,
         out_info: *mut fullmag_fem_gpu_state_info,

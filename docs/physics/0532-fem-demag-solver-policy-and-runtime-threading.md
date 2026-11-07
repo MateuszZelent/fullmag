@@ -34,7 +34,10 @@ not the governing micromagnetic equations.
 - `H_demag` demagnetizing field `[A/m]`
 - `u` scalar potential `[A]`
 - `rtol` relative linear-solver tolerance `[dimensionless]`
-- `atol` absolute linear-solver tolerance `[dimensionless]`
+- `atol` absolute algebraic residual tolerance `[A m]` for the unscaled
+  Poisson stiffness system `K u = b`, where `K` has units `[m]` and `u` has
+  units `[A]`. Unlike `rtol`, this threshold depends on the algebraic basis
+  and any system scaling; it is not a relative, dimensionless norm.
 - `N_iter` linear-solver iteration cap `[dimensionless count]`
 
 All user-visible physical quantities remain SI-clean.

@@ -4257,6 +4257,15 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_gpu_state_info *out_info
 );
 
+/*
+ * Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
+ * when not applicable.
+ */
+FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
+);
+
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_rk_plan_info(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_rk_plan_info *out_info
