@@ -189,6 +189,24 @@ zachowuje zasoby. Niepełna publikacja zachowuje journal i blokadę zamiast
 umożliwiać nową konkurencyjną operację. Regresje interpretowane nie zastępują
 kwalifikacji rzeczywistego prepare/apply ani symulacji.
 
+## Zatrzymanie API po nieudanym początkowym recovery
+
+`stop-diagnostic-volume --startup-recovery --preview` kwalifikuje dokładną
+nieudaną próbę DEVELOPMENT, zachowaną autoryzację recovery, historyczne
+OWNER i process-tree oraz bieżące API z blokadą wykonywania. Ścieżka obejmuje
+błąd walidacji ostatniego heartbeat terminalnego runa przed przejęciem
+właściciela. Podgląd wiąże działającą parę usług, cgroup, instancję API,
+oryginalne rekordy i pełny snapshot store oraz ledgeru. Sprawdza też
+konsumentów projektu, prywatnego wolumenu i sieci tej grupy.
+
+Zastosowanie wymaga SHA planu podglądu. Kontroler ponawia obserwację pod
+blokadą operacji i zapisuje intent przed łagodnym zatrzymaniem dokładnego
+backendu. Receipt zachowuje `execution_state=unknown`, oryginalne OWNER,
+process-tree, ledger, dane użytkownika oraz autoryzację. Dalszy start tej
+samej instancji odbywa się przez `resume-volume --restart-backend` i jego
+bramki admission. Testy źródłowe i kwalifikacja konkretnego stopu mają
+oddzielne dowody.
+
 ## Obowiązki i weryfikacja
 
 Adapter klienta i host paths: `docker_dev_host.py`; build kontrolny:
