@@ -860,6 +860,13 @@ dotychczasową kwalifikację obcych mountów Windows/WSL. Świeże dowody trafia
 do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
 CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
 SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Odczyty pełnych dowodów niezależnych źródeł Windows wykonuje najwyżej czterech
+obserwatorów równocześnie, z osobną kopią ustalonego kontekstu. Współdzielenie
+pomiaru tego samego tekstowego źródła nie współdzieli autoryzacji konsumenta:
+każdy kontener nadal przechodzi kontrole, także dla `absent-stopped`.
+Koordynator zbiera całą partię i ponownie sprawdza kontenery oraz kontekst.
+Równoległość skraca okno obserwacji; pełna równość dowodów, wszystkie trzy
+obserwacje i warunki CAS pozostają obowiązkowe. Ciągły churn nadal powoduje odmowę.
 Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
 historycznego proof jako świeżego dowodu. Testy źródłowe nie zastępują
 potwierdzenia konkretnej operacji na silniku Docker.

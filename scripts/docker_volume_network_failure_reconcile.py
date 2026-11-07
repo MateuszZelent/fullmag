@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -42,6 +43,7 @@ TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONTAINERS = 4096
 MAX_INSPECT_BATCH = 64
+MAX_WINDOWS_OBSERVERS = 4
 WINDOWS_BIND = re.compile(r"^(?:[A-Za-z]:|/(?:run/desktop/mnt/host|host_mnt|mnt/host)/[A-Za-z](?:/|$))")
 POOL_ERROR = "all predefined address pools have been fully subnetted"
 
@@ -355,25 +357,42 @@ def _observe_windows_source(source, native_source, context, pin):
     return _observe_present_windows_bind(source, context["distro"], context["linux"]["root_device"])
 
 
-def _initial_desktop_qualifier(identity, compose, engine_id):
+def _windows_source_batch(sources, context):
+    """Read complete independent proofs; no worker mutates coordinator state."""
+    if not sources:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(MAX_WINDOWS_OBSERVERS, len(sources))) as executor:
+        futures = {}
+        try:
+            for source, pin in sources.items():
+                futures[source] = executor.submit(_observe_windows_source, source,
+                    windows._windows_source_path(source), deepcopy(context), deepcopy(pin))
+            results = {}
+            # Preserve input order regardless of worker completion order.
+            for source, future in futures.items():
+                evidence = future.result()
+                require(isinstance(evidence, dict)
+                        and {"native", "mapping", "kind"} <= evidence.keys()
+                        and evidence["kind"] in {"present", "absent-stopped"},
+                        "Windows source observer returned incomplete evidence")
+                results[source] = evidence
+            return results
+        except BaseException:
+            for future in futures.values():
+                future.cancel()
+            # Executor exit joins running bounded read-only probes as well.
+            raise
+
+
+def _initial_desktop_qualifier(identity, compose, engine_id, *, candidates=None):
     """Collect read-only evidence for the authenticated pre-backend attempt."""
     context = None
     by_source = {}
     pins = {}
     wsl_sources = {}
 
-    def observe(container, source):
+    def initialize_context():
         nonlocal context
-        pin = windows._container_pin(container)
-        pins[pin["id"]] = pin
-        if source.startswith(WSL_ALIAS):
-            evidence = _wsl_kernel_bind_identity(source)
-            wsl_sources[source] = evidence
-            return evidence["canonical_source"], {
-                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
-                "mapping": evidence, "kind": "wsl-kernel",
-            }
-        native_source = windows._windows_source_path(source)
         if context is None:
             mounts = compose["services"]["backend"].get("volumes")
             require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
@@ -390,6 +409,19 @@ def _initial_desktop_qualifier(identity, compose, engine_id):
             require(engine["ID"] == linux["engine_id"] == engine_id,
                     "Initial native admission does not match the pinned Docker engine")
             context = {"linux": linux, "engine": engine, "distro": distro}
+
+    def observe(container, source):
+        pin = windows._container_pin(container)
+        pins[pin["id"]] = pin
+        if source.startswith(WSL_ALIAS):
+            evidence = _wsl_kernel_bind_identity(source)
+            wsl_sources[source] = evidence
+            return evidence["canonical_source"], {
+                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
+                "mapping": evidence, "kind": "wsl-kernel",
+            }
+        native_source = windows._windows_source_path(source)
+        initialize_context()
         if source not in by_source:
             by_source[source] = (_observe_windows_source(source, native_source, context, pin), pin)
         evidence, _ = by_source[source]
@@ -402,10 +434,12 @@ def _initial_desktop_qualifier(identity, compose, engine_id):
 
     def verify(*, refresh_windows=False):
         if refresh_windows:
-            # Recheck early sources last so the oldest Windows evidence is
-            # refreshed closest to the failure publication boundary.
+            # Queue early sources last, bounding the full refresh window while
+            # retaining every field of the original equality check.
+            refreshed_sources = _windows_source_batch(
+                {source: pin for source, (_, pin) in reversed(by_source.items())}, context)
             for source, (evidence, pin) in reversed(by_source.items()):
-                refreshed = _observe_windows_source(source, windows._windows_source_path(source), context, pin)
+                refreshed = refreshed_sources[source]
                 require(refreshed == evidence,
                         "Foreign Windows bind changed before failure publication: " + source
                         + "; changed fields: " + ", ".join(windows._observation_differences(evidence, refreshed)))
@@ -421,6 +455,21 @@ def _initial_desktop_qualifier(identity, compose, engine_id):
                 and windows._linux_identity(linux["source_root"], linux["reference_root"]) == linux,
                 "Initial Windows isolation context changed")
 
+    if candidates is not None:
+        sources = {}
+        for container in candidates:
+            mounts = container.get("Mounts")
+            require(isinstance(mounts, list) and all(isinstance(mount, dict) for mount in mounts),
+                    "Foreign container mount inventory is incomplete")
+            for mount in mounts:
+                source = mount.get("Source")
+                if (mount.get("Type") == "bind" and isinstance(source, str)
+                        and WINDOWS_BIND.match(source) and source not in sources):
+                    sources[source] = windows._container_pin(container)
+        if sources:
+            initialize_context()
+            measured = _windows_source_batch(sources, context)
+            by_source.update({source: (measured[source], pin) for source, pin in sources.items()})
     return observe, verify
 
 
@@ -499,7 +548,8 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
     network_error = validate_network_absence(
         network_result.returncode, network_result.stdout, network_result.stderr, network_name)
     containers = _container_inventory()
-    qualify_desktop_bind, verify_desktop_binds = _initial_desktop_qualifier(identity, compose, args.engine_id)
+    qualify_desktop_bind, verify_desktop_binds = _initial_desktop_qualifier(
+        identity, compose, args.engine_id, candidates=containers)
     inventory = validate_container_inventory(
         containers, helper_id=helper_id, helper_name=helper_name, project=control.project,
         network_name=network_name, identity=identity, control_volume=control.volume,
