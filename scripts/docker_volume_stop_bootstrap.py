@@ -182,6 +182,92 @@ def _validate_resume(
     }
 
 
+def _validate_failure_origin(args) -> str:
+    resume = getattr(args, "resume_attempt", None)
+    terminal = getattr(args, "development_terminal_sha256", None)
+    process = getattr(args, "process_receipt_sha256", None)
+    if resume is not None:
+        if (not isinstance(resume, str) or ATTEMPT_RE.fullmatch(resume) is None
+                or terminal is not None or process is not None
+                or getattr(args, "stop_frontend", False)):
+            _fail("Resume requires its exact attempt and cannot mix direct-development options")
+        return "resume"
+    if (not isinstance(terminal, str) or SHA256_RE.fullmatch(terminal) is None
+            or not isinstance(process, str) or SHA256_RE.fullmatch(process) is None):
+        _fail("Direct development recovery requires terminal and process SHA-256 pins")
+    return "development"
+
+
+def _validate_development_failure(args, control, selected, previous, inputs,
+                                  terminal_raw, process_raw) -> dict[str, object]:
+    root = "development/attempts/" + args.attempt
+    process_relative = root + "/process-failure.json"
+    readiness_relative = root + "/readiness-failure.json"
+    sidecar_raw = _read_raw(control, process_relative)
+    readiness_raw = _read_raw(control, readiness_relative)
+    readiness = _json(readiness_raw, "development readiness failure")
+    process = _json(process_raw, "live diagnostic process receipt")
+    cgroup = previous.get("worker_cgroup")
+    backend = previous.get("backend_container")
+    frontend = previous.get("frontend_container")
+    image = inputs.get("image_id")
+    started = previous.get("backend_started_at")
+    error = process.get("error")
+    if (
+        _sha256(terminal_raw) != args.development_terminal_sha256
+        or _sha256(process_raw) != args.process_receipt_sha256
+        or sidecar_raw != process_raw
+        or previous.get("schema") != "fullmag.docker-build-operation.v1"
+        or previous.get("phase") != "development"
+        or previous.get("state") != "failed-confirmed"
+        or previous.get("attempt") != args.attempt
+        or previous.get("compose_project") != control.project
+        or previous.get("control_volume") != control.volume
+        or previous.get("config_sha256") != args.config_sha256
+        or inputs.get("source_root") != str(selected)
+        or previous.get("control_namespace", "") != control.namespace
+        or not isinstance(backend, str) or CONTAINER_RE.fullmatch(backend) is None
+        or not isinstance(frontend, str) or CONTAINER_RE.fullmatch(frontend) is None
+        or backend == frontend
+        or not isinstance(image, str) or IMAGE_RE.fullmatch(image) is None
+        or not isinstance(started, str) or not started
+        or not isinstance(cgroup, Mapping)
+        or cgroup.get("schema") != "fullmag.worker-cgroup-ready.v1"
+        or cgroup.get("state") != "ready"
+        or cgroup.get("compose_project") != control.project
+        or cgroup.get("container_id") != backend
+        or cgroup.get("image_id") != image
+        or not _matches_target_build_failure(error)
+        or readiness.get("backend_container_id") != backend
+        or readiness.get("backend_started_at") != started
+        or readiness.get("error") != previous.get("error")
+        or readiness.get("error") != "Runtime admission failed; services retained: " + str(error)[:4096]
+    ):
+        _fail("Development failure is not bound to its exact producer evidence and backend")
+    return {
+        "phase": "development", "attempt": args.attempt,
+        "relative": root + "/terminal.json", "sha256": _sha256(terminal_raw),
+        "process_relative": process_relative, "process_sha256": _sha256(process_raw),
+        "readiness_relative": readiness_relative, "readiness_sha256": _sha256(readiness_raw),
+        "backend_container": backend, "frontend_container": frontend,
+        "image_id": image, "backend_started_at": started,
+        "pin_sources": {
+            "backend_container": ["development terminal", "development worker_cgroup", "readiness failure", "Docker inspect"],
+            "frontend_container": ["development terminal", "Docker inspect"],
+            "image_id": ["development inputs", "development worker_cgroup", "Docker inspect"],
+            "backend_started_at": ["development terminal", "readiness failure", "Docker inspect"],
+        },
+    }
+
+
+def _origin_fields(pins) -> dict[str, object]:
+    origin = pins["failure_origin"]
+    if origin["phase"] == "resume":
+        return {"resume_attempt": origin["attempt"], "resume_terminal_sha256": origin["sha256"],
+                "resume_process_failure_sha256": pins["failure_process_sha256"]}
+    return {"failure_origin": origin, "process_failure_sha256": pins["failure_process_sha256"]}
+
+
 def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]:
     from docker_volume_stop_diagnostic import _port_matches
     from docker_volume_unclaimed_cancellation import _control_raw
@@ -189,8 +275,7 @@ def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]
 
     if not isinstance(args.attempt, str) or ATTEMPT_RE.fullmatch(args.attempt) is None:
         _fail("Development attempt is not a complete lowercase identity")
-    if not isinstance(args.resume_attempt, str) or ATTEMPT_RE.fullmatch(args.resume_attempt) is None:
-        _fail("Resume attempt is not a complete lowercase identity")
+    origin_kind = _validate_failure_origin(args)
     if not isinstance(args.config_sha256, str) or SHA256_RE.fullmatch(args.config_sha256) is None:
         _fail("Compose config SHA-256 is not a complete lowercase digest")
     if type(args.port) is not int or not 1 <= args.port <= 65535:
@@ -228,33 +313,34 @@ def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]
     _operator_probe_record_from_retained(previous, document)
     _port_matches(document, args.port)
 
-    resume = _validate_resume(
-        control,
-        attempt=args.attempt,
-        resume_attempt=args.resume_attempt,
-        config_sha256=args.config_sha256,
-        selected=selected,
-        previous=previous,
-        previous_inputs=inputs,
-    )
-    resume_sidecar_relative = "resume/attempts/" + args.resume_attempt + "/process-failure.json"
-    sidecar_raw = _control_raw(
-        control, resume_sidecar_relative, optional=True, maximum=MAX_EVIDENCE_BYTES
-    )
-    if sidecar_raw is None:
-        _fail("Failed-confirmed resume terminal has no process-failure sidecar")
-    sidecar = _json(sidecar_raw, "failed resume process-failure sidecar")
     process_raw = _read_raw(control, "runtime-control/runtime-service/process-tree.json")
-    process = _json(process_raw, "live diagnostic process receipt")
-    if sidecar_raw != process_raw or sidecar != process:
-        _fail("Resume process-failure sidecar is not byte-identical to the live process receipt")
+    if origin_kind == "resume":
+        origin = _validate_resume(
+            control,
+            attempt=args.attempt,
+            resume_attempt=args.resume_attempt,
+            config_sha256=args.config_sha256,
+            selected=selected,
+            previous=previous,
+            previous_inputs=inputs,
+        )
+        origin["phase"] = "resume"
+        sidecar_relative = "resume/attempts/" + args.resume_attempt + "/process-failure.json"
+    else:
+        origin = _validate_development_failure(args, control, selected, previous, inputs,
+                                               terminal_raw, process_raw)
+        sidecar_relative = origin["process_relative"]
+    sidecar_raw = _read_raw(control, sidecar_relative)
+    _json(sidecar_raw, "producer process-failure sidecar")
+    if sidecar_raw != process_raw:
+        _fail("Producer process-failure sidecar is not byte-identical to the live process receipt")
 
     effective_previous = dict(previous)
-    effective_previous["backend_started_at"] = resume["backend_started_at"]
-    effective_previous["backend_container"] = resume["backend_container"]
-    effective_previous["frontend_container"] = resume["frontend_container"]
+    effective_previous["backend_started_at"] = origin["backend_started_at"]
+    effective_previous["backend_container"] = origin["backend_container"]
+    effective_previous["frontend_container"] = origin["frontend_container"]
     effective_inputs = dict(inputs)
-    effective_inputs["image_id"] = resume["image_id"]
+    effective_inputs["image_id"] = origin["image_id"]
     effective_previous["inputs"] = effective_inputs
     return {
         "previous_root": previous_root,
@@ -266,17 +352,17 @@ def _load_pins(args, control: BuildControl, selected: Path) -> dict[str, object]
         "compose_raw": compose_raw,
         "compose": document,
         "compose_sha256": _sha256(compose_raw),
-        "image_id": resume["image_id"],
-        "backend_container": resume["backend_container"],
-        "frontend_container": resume["frontend_container"],
-        "backend_started_at": resume["backend_started_at"],
-        "resume": resume,
-        "resume_sidecar_relative": resume_sidecar_relative,
-        "resume_sidecar_raw": sidecar_raw,
-        "resume_sidecar_sha256": _sha256(sidecar_raw),
+        "image_id": origin["image_id"],
+        "backend_container": origin["backend_container"],
+        "frontend_container": origin["frontend_container"],
+        "backend_started_at": origin["backend_started_at"],
+        "failure_origin": origin,
+        "failure_process_relative": sidecar_relative,
+        "failure_process_raw": sidecar_raw,
+        "failure_process_sha256": _sha256(sidecar_raw),
         "process_raw": process_raw,
         "effective_previous": effective_previous,
-        "pin_sources": resume["pin_sources"],
+        "pin_sources": origin["pin_sources"],
     }
 
 
@@ -514,9 +600,9 @@ def _probe_evidence(
     owner = _json(owner_raw, "historical Ready runtime owner")
     process = _json(process_raw, "diagnostic process receipt")
     fence = _json(fence_raw, "startup failure fence")
-    sidecar_raw = pins["resume_sidecar_raw"]
+    sidecar_raw = pins["failure_process_raw"]
     if not isinstance(sidecar_raw, bytes):
-        _fail("Resume process-failure sidecar pin is invalid")
+        _fail("Producer process-failure sidecar pin is invalid")
     if (
         _decode_probe(probe, "runtime_config", maximum=256 * 1024) != config_raw
         or _decode_probe(probe, "owner", maximum=256 * 1024) != owner_raw
@@ -525,7 +611,7 @@ def _probe_evidence(
     ):
         _fail("In-container bootstrap evidence differs from canonical control-volume bytes")
     if process_raw != sidecar_raw:
-        _fail("Current process receipt no longer matches the exact failed-resume sidecar")
+        _fail("Current process receipt no longer matches the exact producer sidecar")
     if (config.get("schema_version") != "runtime_service_config.v2"
             or config.get("target_id") != "docker-all"
             or config.get("store_root") != "/state/runs/docker-all/session-store"):
@@ -587,7 +673,7 @@ def _probe_evidence(
         "owner_sha256": _sha256(owner_raw),
         "process_receipt_sha256": _sha256(process_raw),
         "failure_fence_sha256": _sha256(fence_raw),
-        "resume_sidecar_sha256": _sha256(sidecar_raw),
+        "failure_process_sha256": _sha256(sidecar_raw),
         "provenance_sha256": _sha256(provenance_raw),
         "runtime_config_raw": config_raw,
         "owner_raw": owner_raw,
@@ -652,12 +738,12 @@ def _assert_group_consumers(control: BuildControl, operation, ids: Mapping[str, 
 
 def _fingerprint(pins: Mapping[str, object], evidence: Mapping[str, object], image: str, ids: Mapping[str, str], actual) -> tuple[object, ...]:
     return (
-        pins["terminal_sha256"], pins["compose_sha256"], pins["resume"]["sha256"],
-        pins["resume_sidecar_sha256"], pins["backend_started_at"], pins["image_id"],
+        pins["terminal_sha256"], pins["compose_sha256"], canonical(pins["failure_origin"]),
+        pins["failure_process_sha256"], pins["backend_started_at"], pins["image_id"],
         pins["backend_container"], pins["frontend_container"],
         evidence["runtime_config_sha256"], evidence["owner_sha256"],
         evidence["process_receipt_sha256"], evidence["failure_fence_sha256"],
-        evidence["resume_sidecar_sha256"], evidence["provenance_sha256"],
+        evidence["failure_process_sha256"], evidence["provenance_sha256"],
         evidence["api_instance_id"], evidence["api_pid"], evidence["current_build_commit"],
         evidence["current_build_snapshot"], image, ids["backend"], ids["frontend"],
         actual["backend"].get("State", {}).get("StartedAt"),
@@ -674,10 +760,31 @@ def _observe(args, control, selected, identity, pins):
     if (image != pins["image_id"]
             or ids["backend"] != pins["backend_container"]
             or ids["frontend"] != pins["frontend_container"]):
-        _fail("Compose service IDs/image differ from the exact linked development and resume pins")
+        _fail("Compose service IDs/image differ from the exact failure-origin pins")
     probe = _probe_backend(ids["backend"])
     evidence = _probe_evidence(control, pins, probe)
     return image, ids, actual, evidence
+
+
+def _stop_pinned_frontend(control, operation, pins, ids, actual, helper_id) -> None:
+    """Stop only the already observed frontend; ambiguity retains the lease."""
+    if _assert_group_consumers(control, operation, ids) != helper_id:
+        _fail("Consumers changed before frontend stop")
+    started = actual["frontend"].get("State", {}).get("StartedAt")
+
+    def check(running):
+        rows = json.loads(docker_capture("inspect", ids["frontend"]).stdout)
+        if (len(rows) != 1 or rows[0].get("Id") != ids["frontend"]
+                or rows[0].get("Image") != pins["image_id"]
+                or rows[0].get("State", {}).get("StartedAt") != started
+                or rows[0].get("State", {}).get("Running") is not running
+                or (not running and rows[0].get("State", {}).get("Status") != "exited")):
+            _fail("Exact frontend incarnation/state was not confirmed")
+    check(True)
+    compose_capture(pins["compose"], "stop", "--timeout", "60", "frontend", timeout=90)
+    check(False)
+    if _assert_group_consumers(control, operation, ids) != helper_id:
+        _fail("Consumers changed during frontend stop")
 
 
 def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
@@ -685,8 +792,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
 
     if not isinstance(args.attempt, str) or ATTEMPT_RE.fullmatch(args.attempt) is None:
         _fail("Development attempt is not a complete lowercase identity")
-    if not isinstance(args.resume_attempt, str) or ATTEMPT_RE.fullmatch(args.resume_attempt) is None:
-        _fail("Resume attempt is not a complete lowercase identity")
+    _validate_failure_origin(args)
     if not isinstance(args.config_sha256, str) or SHA256_RE.fullmatch(args.config_sha256) is None:
         _fail("Compose config SHA-256 is not a complete lowercase digest")
     if type(args.port) is not int or not 1 <= args.port <= 65535:
@@ -713,7 +819,6 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
     )
     operation_inputs = {
         "attempt": args.attempt,
-        "resume_attempt": args.resume_attempt,
         "config_sha256": args.config_sha256,
         "source_root": str(selected),
         "port": args.port,
@@ -722,9 +827,9 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         "frontend_container_id": initial_ids["frontend"],
         "backend_started_at": initial_pins["backend_started_at"],
         "development_terminal_sha256": initial_pins["terminal_sha256"],
-        "resume_terminal_sha256": initial_pins["resume"]["sha256"],
         "compose_sha256": initial_pins["compose_sha256"],
-        "resume_process_failure_sha256": initial_pins["resume_sidecar_sha256"],
+        **_origin_fields(initial_pins),
+        "stop_frontend": bool(getattr(args, "stop_frontend", False)),
         "process_receipt_sha256": initial_evidence["process_receipt_sha256"],
         "owner_sha256": initial_evidence["owner_sha256"],
         "failure_fence_sha256": initial_evidence["failure_fence_sha256"],
@@ -748,14 +853,12 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         control._assert_live_operation_helper(operation)
 
         preflight = {
-            "schema": "fullmag.docker-bootstrap-api-stop-preflight.v1",
+            "schema": "fullmag.docker-bootstrap-api-stop-preflight." + ("v1" if pins["failure_origin"]["phase"] == "resume" else "v2"),
             "state": "preflight-confirmed",
             "execution_state": "unknown",
             "attempt": args.attempt,
-            "resume_attempt": args.resume_attempt,
             "config_sha256": args.config_sha256,
             "development_terminal_sha256": pins["terminal_sha256"],
-            "resume_terminal_sha256": pins["resume"]["sha256"],
             "compose_sha256": pins["compose_sha256"],
             "image_id": image,
             "backend_container_id": ids["backend"],
@@ -766,7 +869,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             "owner_sha256": evidence["owner_sha256"],
             "owner_pids_absent": evidence["owner_pids_absent"],
             "process_receipt_sha256": evidence["process_receipt_sha256"],
-            "resume_process_failure_sha256": pins["resume_sidecar_sha256"],
+            **_origin_fields(pins),
             "failure_fence_sha256": evidence["failure_fence_sha256"],
             "api_pid": evidence["api_pid"],
             "api_instance_id": evidence["api_instance_id"],
@@ -819,7 +922,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         owner_after = _read_raw(control, "runtime-control/runtime-services/OWNER.json", maximum=256 * 1024)
         config_after = _read_raw(control, "runtime-control/runtime-service/docker-all.json", maximum=256 * 1024)
         fence_after = _read_raw(control, evidence["fence_relative"], maximum=256 * 1024)
-        sidecar_after = _read_raw(control, pins["resume_sidecar_relative"])
+        sidecar_after = _read_raw(control, pins["failure_process_relative"])
         process_after_raw = _read_raw(control, "runtime-control/runtime-service/process-tree.json")
         process_after = _json(process_after_raw, "post-stop process receipt")
         process_before = evidence["process"]
@@ -830,7 +933,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             or _sha256(config_after) != evidence["runtime_config_sha256"]
             or fence_after != evidence["fence_raw"]
             or _sha256(fence_after) != evidence["failure_fence_sha256"]
-            or sidecar_after != pins["resume_sidecar_raw"]
+            or sidecar_after != pins["failure_process_raw"]
             or process_after.get("state") != "shutdown_unknown"
             or process_after.get("api_diagnostic_only") is not True
             or process_after.get("api_pid") != evidence["api_pid"]
@@ -849,11 +952,16 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
         if before_comparable != after_comparable:
             _fail("Supervisor changed process evidence beyond the expected unknown API shutdown")
 
+        origin = pins["failure_origin"]
+        if origin["phase"] == "development":
+            readiness_after = _read_raw(control, origin["readiness_relative"])
+            if _sha256(readiness_after) != origin["readiness_sha256"]:
+                _fail("Producer readiness sidecar changed during stop")
         terminal_raw = _read_raw(control, pins["terminal_relative"])
-        resume_raw = _read_raw(control, pins["resume"]["relative"])
+        resume_raw = _read_raw(control, pins["failure_origin"]["relative"])
         compose_raw = _read_raw(control, pins["compose_relative"])
         if (_sha256(terminal_raw) != pins["terminal_sha256"]
-                or _sha256(resume_raw) != pins["resume"]["sha256"]
+                or _sha256(resume_raw) != pins["failure_origin"]["sha256"]
                 or _sha256(compose_raw) != pins["compose_sha256"]):
             _fail("Original development/resume/Compose receipts changed during the stop")
         if _assert_group_consumers(control, operation, ids) != helper_id:
@@ -866,13 +974,17 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
                 or stopped_again[0].get("State", {}).get("Running") is not False):
             _fail("Exact backend stopped state changed during post-stop evidence capture")
 
+        frontend_running = True
+        if getattr(args, "stop_frontend", False):
+            _stop_pinned_frontend(control, operation, pins, ids, final_actual, helper_id)
+            frontend_running = False
+
         terminal = {
-            "schema": "fullmag.docker-bootstrap-api-stop.v1",
+            "schema": "fullmag.docker-bootstrap-api-stop." + ("v1" if pins["failure_origin"]["phase"] == "resume" else "v2"),
             "state": "stopped-confirmed",
             "execution_state": "unknown",
             "created_at": time.time(),
             "attempt": args.attempt,
-            "resume_attempt": args.resume_attempt,
             "config_sha256": args.config_sha256,
             "source_root": str(selected),
             "port": args.port,
@@ -883,9 +995,8 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             "frontend_container_id": ids["frontend"],
             "pin_sources": pins["pin_sources"],
             "development_terminal_sha256": pins["terminal_sha256"],
-            "resume_terminal_sha256": pins["resume"]["sha256"],
             "compose_sha256": pins["compose_sha256"],
-            "resume_process_failure_sha256": pins["resume_sidecar_sha256"],
+            **_origin_fields(pins),
             "runtime_owner_state": "ready-history-preserved",
             "owner_sha256_before": evidence["owner_sha256"],
             "owner_sha256_after": _sha256(owner_after),
@@ -900,7 +1011,7 @@ def stop_bootstrap(args: argparse.Namespace) -> dict[str, object]:
             "current_build_commit": evidence["current_build_commit"],
             "current_build_snapshot": evidence["current_build_snapshot"],
             "backend_running": False,
-            "frontend_running": True,
+            "frontend_running": frontend_running,
             "resource_leases": "untouched",
             "session_store": "untouched",
         }

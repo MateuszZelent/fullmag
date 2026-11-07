@@ -2807,7 +2807,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     stop_bootstrap.add_argument("--attempt", required=True)
     stop_bootstrap.add_argument("--config-sha256", required=True)
-    stop_bootstrap.add_argument("--resume-attempt", required=True)
+    stop_bootstrap.add_argument("--resume-attempt")
+    stop_bootstrap.add_argument("--development-terminal-sha256")
+    stop_bootstrap.add_argument("--process-receipt-sha256")
+    stop_bootstrap.add_argument("--stop-frontend", action="store_true")
     stop_bootstrap.add_argument("--source-root", type=Path, required=True)
     stop_bootstrap.add_argument("--port", type=int, required=True)
     stop_bootstrap_frontend = subparsers.add_parser(

@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 import subprocess
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -56,6 +57,90 @@ def helper_doc():
         "NetworkSettings": {"Networks": {}},
             "Mounts": [],
     }
+
+
+class WindowsBatchTests(unittest.TestCase):
+    def test_full_sources_run_in_bounded_parallel_and_preserve_deterministic_results(self):
+        sources={f'C:\\foreign\\{i}':{'id':str(i)} for i in range(8)}
+        lock=threading.Lock()
+        barrier=threading.Barrier(4,timeout=10)
+        active=maximum=0
+        seen=[]
+        context={'linux':{'root_device':1},'distro':'Ubuntu'}
+        def observe(source,native,ctx,pin):
+            nonlocal active,maximum
+            with lock:
+                active+=1
+                maximum=max(maximum,active)
+                seen.append(source)
+            try:
+                barrier.wait()
+                ctx['linux']['root_device']=2
+                return {'kind':'present','native':{'source':source},'mapping':{'path':native}}
+            finally:
+                with lock: active-=1
+        with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
+            results=reconcile._windows_source_batch(sources,context)
+        self.assertEqual(maximum,4)
+        self.assertEqual(active,0)
+        self.assertCountEqual(seen,sources)
+        self.assertEqual(list(results),list(sources))
+        self.assertEqual(context['linux']['root_device'],1)
+        self.assertEqual(set(results),set(sources))
+        for source,evidence in results.items(): self.assertEqual(evidence['native']['source'],source)
+
+    def test_failure_or_incomplete_result_discards_whole_batch_and_joins_workers(self):
+        for result in (BuildControlError('native qualification refused'),TimeoutError('timeout'),None,{}):
+            with self.subTest(result=result):
+                def observe(*args):
+                    if isinstance(result,Exception): raise result
+                    return result
+                with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
+                    with self.assertRaises((BuildControlError,TimeoutError)):
+                        reconcile._windows_source_batch({'C:\\foreign':{'id':'b'}},{})
+
+    def test_prewarm_deduplicates_source_but_never_consumer_authorization(self):
+        source=r'C:\git\foreign'
+        stopped={'id':'b'*64,'running':False}
+        running={'id':'c'*64,'running':True}
+        docs=[{**stopped,'Mounts':[{'Type':'bind','Source':source}]},
+              {**running,'Mounts':[{'Type':'bind','Source':source}]}]
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        evidence={'kind':'absent-stopped','native':{},'mapping':{}}
+        def must_stay_stopped(pin):
+            if pin['running']: raise BuildControlError('running consumer')
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
+             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id'],'running':d['running']}), \
+             patch.object(reconcile,'_observe_windows_source',return_value=evidence) as measure, \
+             patch.object(reconcile.absent_windows,'_stopped',side_effect=must_stay_stopped):
+            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=docs)
+            self.assertEqual(measure.call_count,1)
+            qualify(stopped,source)
+            with self.assertRaisesRegex(BuildControlError,'running consumer'): qualify(running,source)
+
+    def test_prewarm_matches_lazy_proof_and_rechecks_context_after_full_refresh(self):
+        source=r'C:\git\foreign'
+        doc={'id':'b'*64,'Mounts':[{'Type':'bind','Source':source}]}
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        linux={'root_device':1,'engine_id':'engine','source_root':'/source','reference_root':'/reference'}
+        proof={'kind':'present','native':{'identity':'full'},'mapping':{'path':'/mapped'}}
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value=linux), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}) as engine, \
+             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id']}), \
+             patch.object(reconcile.windows,'_inspect',return_value=doc), \
+             patch.object(reconcile,'_observe_windows_source',return_value=proof):
+            lazy,verify_lazy=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
+            expected=lazy(doc,source)
+            verify_lazy(refresh_windows=True)
+            parallel,verify_parallel=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=[doc])
+            self.assertEqual(parallel(doc,source),expected)
+            verify_parallel(refresh_windows=True)
+            engine.return_value={'ID':'changed'}
+            with self.assertRaisesRegex(BuildControlError,'context changed'):
+                verify_parallel(refresh_windows=True)
 
 
 class NetworkFailureValidatorsTests(unittest.TestCase):
@@ -186,11 +271,28 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
             patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
             patch.object(reconcile.windows, "_container_pin", return_value=pin),
             patch.object(reconcile, "_observe_windows_source",
-                         side_effect=[{"kind": "present", "inode": 12}, {"kind": "present", "inode": 13}]),
+                         side_effect=[{"kind": "present", "inode": 12, "native": {}, "mapping": {}}, {"kind": "present", "inode": 13, "native": {}, "mapping": {}}]),
         ):
             qualify, verify = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
             qualify({}, source)
-            with self.assertRaisesRegex(BuildControlError, "changed before failure publication"):
+            with self.assertRaisesRegex(BuildControlError, "changed before failure publication") as refused:
+                verify(refresh_windows=True)
+            self.assertIn(source, str(refused.exception))
+            self.assertIn('observation.inode', str(refused.exception))
+
+    def test_parallel_refresh_still_rejects_ordinary_inventory_drift(self):
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        source=r'C:\git\foreign'
+        before={'kind':'present','native':{'candidate':{'descendants':{'entries':1}}},'mapping':{}}
+        after={'kind':'present','native':{'candidate':{'descendants':{'entries':2}}},'mapping':{}}
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
+             patch.object(reconcile.windows,'_container_pin',return_value={'id':'b'*64}), \
+             patch.object(reconcile,'_observe_windows_source',side_effect=[before,after]):
+            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
+            qualify({},source)
+            with self.assertRaisesRegex(BuildControlError,'observation.native.candidate.descendants.entries'):
                 verify(refresh_windows=True)
 
     def test_vanishing_container_retries_full_inventory(self):
@@ -399,11 +501,83 @@ class ReconcileTransactionTests(unittest.TestCase):
                 reconcile.reconcile(self.args)
         write.assert_not_called()
 
+    def prepared_fixture(self):
+        proof = reconcile._proof_bytes(self.observation, json.loads(self.original_raw))
+        result = reconcile._failure_result(self.original_raw, proof, self.observation)
+        prepared = reconcile.canonical({
+            'schema':reconcile.SCHEMA, 'attempt':ATTEMPT,
+            'original_receipt_sha256':self.args.receipt_sha256,
+            'compose_sha256':self.args.compose_sha256,
+            'proof_sha256':reconcile.digest(proof), 'result_sha256':reconcile.digest(result)})+b'\n'
+        root=f'development/attempts/{ATTEMPT}'
+        files={root+'/unknown-receipt.json':self.original_raw,
+               root+'/reconciliation/prepared.json':prepared,
+               root+'/reconciliation/network-failure-proof.json':proof,
+               root+'/reconciliation/result.json':result}
+        self.args.resume_prepared_sha256=reconcile.digest(prepared)
+        self.args.recovery_id='e'*32
+        return files
+
+    def test_prepared_recovery_validates_old_generation_without_mutating_it(self):
+        files=self.prepared_fixture()
+        with patch.object(reconcile,'read_raw', side_effect=lambda c,p,**kw: files.get(p)):
+            recovery=reconcile._load_prepared_recovery(self.control,self.args,self.original_raw)
+        self.assertEqual(recovery['prepared_sha256'], self.args.resume_prepared_sha256)
+        for relative in list(files):
+            changed={**files,relative:b'changed'}
+            with self.subTest(path=relative), \
+                 patch.object(reconcile,'read_raw', side_effect=lambda c,p,**kw: changed.get(p)), \
+                 self.assertRaises(BuildControlError):
+                reconcile._load_prepared_recovery(self.control,self.args,self.original_raw)
+        for suffix in ('network-failure-reconcile.lock','terminal.json'):
+            changed={**files,f'development/attempts/{ATTEMPT}/'+suffix:b'partial'}
+            with self.subTest(partial=suffix), \
+                 patch.object(reconcile,'read_raw',side_effect=lambda c,p,**kw: changed.get(p)), \
+                 self.assertRaises(BuildControlError):
+                reconcile._load_prepared_recovery(self.control,self.args,self.original_raw)
+
+    def test_prepared_recovery_reobserves_three_times_and_preserves_original_files(self):
+        files=self.prepared_fixture()
+        root=f'development/attempts/{ATTEMPT}'
+        files[root+'/receipt.json']=self.original_raw
+        originals=dict(files)
+        def read(c,p,**kw): return files.get(p)
+        def write(c,p,raw):
+            self.assertNotIn(p,files)
+            files[p]=raw
+        def publish(*a,**kw):
+            result=files[root+'/reconciliation/recoveries/'+self.args.recovery_id+'/result.json']
+            for p in (root+'/receipt.json',root+'/terminal.json','development/current.json'): files[p]=result
+            return subprocess.CompletedProcess([],0,b'',b'')
+        with patch.object(reconcile,'_identity_and_control',return_value=(Path(IDENTITY['source_root']),IDENTITY,self.control)), \
+             patch.object(reconcile,'read_raw',side_effect=read), \
+             patch.object(reconcile,'write_immutable',side_effect=write), \
+             patch.object(reconcile,'_observe',return_value=self.observation) as observe, \
+             patch.object(reconcile,'_cas_script',return_value='cas'), \
+             patch.object(reconcile,'bounded_capture',side_effect=publish), \
+             patch.object(reconcile,'_probe_helper_absence',return_value='f'*64), \
+             patch.object(reconcile.time,'sleep'):
+            result=reconcile.reconcile(self.args)
+        self.assertEqual(result['state'],'failed-confirmed')
+        self.assertEqual(observe.call_count,3)
+        self.assertTrue(all(call.kwargs=={'allowed_archive':self.original_raw} for call in observe.call_args_list))
+        for p,raw in originals.items():
+            if p!=root+'/receipt.json': self.assertEqual(files[p],raw)
+        published=json.loads(files[root+'/terminal.json'])
+        self.assertEqual(published['reconciliation']['previous_prepared_sha256'],self.args.resume_prepared_sha256)
+
+    def test_prepared_recovery_requires_safe_nonce_and_complete_pair(self):
+        self.args.resume_prepared_sha256='a'*64
+        for nonce in (None,'../escape','A'*32):
+            self.args.recovery_id=nonce
+            with self.subTest(nonce=nonce), self.assertRaises(BuildControlError):
+                reconcile._load_prepared_recovery(self.control,self.args,self.original_raw)
+
 
 
 
 class FailurePublicationShellTests(unittest.TestCase):
-    def run_publication(self, *, corrupt=False, symlink=False):
+    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
             control = SimpleNamespace(path=lambda relative: str(base / relative))
@@ -418,6 +592,21 @@ class FailurePublicationShellTests(unittest.TestCase):
             }
             for name, value in values.items():
                 (root / name).write_bytes(value)
+            recovery_args = {}
+            if recovery:
+                generation = root / 'reconciliation/recoveries' / ('e'*32)
+                generation.mkdir(parents=True)
+                for name, raw in (('network-failure-proof.json', b'proof'),
+                                  ('result.json', b'result'), ('prepared.json', b'prepared')):
+                    (generation/name).write_bytes(raw)
+                recovery_args['recovery'] = {
+                    'recovery_id':'e'*32,
+                    'previous_files':{
+                        f'development/attempts/{ATTEMPT}/reconciliation/prepared.json':reconcile.digest(b'prepared'),
+                        f'development/attempts/{ATTEMPT}/reconciliation/network-failure-proof.json':reconcile.digest(b'proof'),
+                        f'development/attempts/{ATTEMPT}/reconciliation/result.json':reconcile.digest(b'result')}}
+                if corrupt_previous:
+                    (root/'reconciliation/prepared.json').write_bytes(b'changed')
             (base / "active").write_text(ATTEMPT + "\n")
             if corrupt:
                 (root / "compose.json").write_bytes(b"changed")
@@ -429,11 +618,11 @@ class FailurePublicationShellTests(unittest.TestCase):
                 script = reconcile._cas_script(control, ATTEMPT, *[
                     reconcile.digest(value) for value in
                     (b"original", b"compose", b"proof", b"result", b"prepared")
-                ])
+                ], **recovery_args)
                 completed = subprocess.run(["bash", "-euc", script], capture_output=True)
             self.assertEqual((base / "active").read_text(), ATTEMPT + "\n")
             self.assertFalse((base / "development/verified.json").exists())
-            if corrupt or symlink:
+            if corrupt or symlink or corrupt_previous:
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertEqual((root / "receipt.json").read_bytes(), b"original")
                 self.assertFalse((root / "terminal.json").exists())
@@ -452,6 +641,12 @@ class FailurePublicationShellTests(unittest.TestCase):
 
     def test_symlink_input_refuses_publication(self):
         self.run_publication(symlink=True)
+
+    def test_prepared_generation_cas_preserves_old_files(self):
+        self.run_publication(recovery=True)
+
+    def test_prepared_generation_cas_rejects_old_preparation_changed_after_observation(self):
+        self.run_publication(recovery=True, corrupt_previous=True)
 
 
 if __name__ == "__main__":

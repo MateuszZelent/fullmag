@@ -816,3 +816,57 @@ cyklu start/restart, zanim wcześniejsze dowody zostaną do niego przypisane.
 ### Wznowienie samego frontendu po udanym starcie
 
 `just docker-dev-resume <start-attempt> <config-sha256> <source-root> <port>` może wznowić zatrzymany frontend także wtedy, gdy historyczny start zakończył się `succeeded`. Launcher sprawdza dokładne incarnation ID, project, image, source i mounty obu usług oraz wymaga działającego backendu i zatrzymanego frontendu. Startuje wyłącznie frontend; nie zmienia historycznego receipt, nie restartuje backendu i nie powtarza aktywacji ani Solve. Ścieżkę odtworzono po błędzie V8 heap frontendu; wynik zapisywany jest jako nowa operacja `resume`.
+
+### Zatrzymanie diagnostyki po bezpośredniej awarii bootstrapu
+
+`scripts/docker_dev.py stop-bootstrap-volume` obsługuje dwa rozłączne źródła
+dowodów: istniejący `--resume-attempt` albo parę
+`--development-terminal-sha256` i `--process-receipt-sha256` dla bezpośredniego
+startu `development`. Pozostałe wymagane argumenty to `--repo-root`, `--source-root`,
+`--attempt`, `--config-sha256` i `--port`. `--repo-root` jest argumentem globalnym,
+umieszczanym przed nazwą polecenia. Parametry muszą pochodzić z konkretnej
+zachowanej próby, nie z bieżących ustawień innej grupy.
+
+Bezpośredni wariant wymaga stanu `failed-confirmed`, oryginalnych plików
+`process-failure.json` i `readiness-failure.json`, zgodności pierwszego z żywym
+receiptem procesu oraz koperty błędu rzeczywistego producenta. Zachowuje pełne
+kontrole startup fence, PID, cgroup, image, source, inkarnacji API, braku sesji
+i procesów historycznego ownera oraz konsumentów grupy/wolumenu pod blokadą.
+Opcjonalne `--stop-frontend` jest dostępne tylko dla tego wariantu i po
+potwierdzonym stopie backendu zatrzymuje dokładnie przypięty frontend tej grupy.
+Nie usuwa kontenerów ani danych. Brak potwierdzenia zatrzymania pozostawia
+wynik nieznany; operator nie powinien ponawiać sygnału na podstawie timeoutu.
+
+Wariant bezpośredni zapisuje receipt `fullmag.docker-bootstrap-api-stop.v2`
+z jawnym `failure_origin`; wariant resume zachowuje v1. Historyczny owner Ready,
+sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
+Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
+do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
+
+### Przygotowana, nieopublikowana awaria tworzenia sieci
+
+`scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
+zestaw `reconciliation/{prepared,result,network-failure-proof}.json`, jeśli
+poprzednia próba zatrzymała się przed CAS. Wymaga pary
+`--resume-prepared-sha256 <sha256>` i `--recovery-id <32 lowercase hex>` obok
+dotychczasowych pinów `--source-root`, `--attempt`, `--receipt-sha256`,
+`--compose-sha256` oraz `--engine-id`. Bez `--apply` wykonuje tylko kwalifikację.
+
+Oryginalny receipt i jego archiwum muszą pozostać identyczne. Obecność blokady
+CAS, terminalu lub wskaźników current/verified powoduje odmowę. Nowa operacja
+sprawdza pełne powiązanie wcześniejszego przygotowania, proof, result i helpera,
+a następnie wykonuje dwie obserwacje i trzecią bezpośrednio przed CAS, zachowując
+dotychczasową kwalifikację obcych mountów Windows/WSL. Świeże dowody trafiają
+do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
+CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
+SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Odczyty pełnych dowodów niezależnych źródeł Windows wykonuje najwyżej czterech
+obserwatorów równocześnie, z osobną kopią ustalonego kontekstu. Współdzielenie
+pomiaru tego samego tekstowego źródła nie współdzieli autoryzacji konsumenta:
+każdy kontener nadal przechodzi kontrole, także dla `absent-stopped`.
+Koordynator zbiera całą partię i ponownie sprawdza kontenery oraz kontekst.
+Równoległość skraca okno obserwacji; pełna równość dowodów, wszystkie trzy
+obserwacje i warunki CAS pozostają obowiązkowe. Ciągły churn nadal powoduje odmowę.
+Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
+historycznego proof jako świeżego dowodu. Testy źródłowe nie zastępują
+potwierdzenia konkretnej operacji na silniku Docker.
