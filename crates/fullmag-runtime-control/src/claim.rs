@@ -780,6 +780,16 @@ pub fn load_current_task_claim(
     run_id: &RunId,
     task_id: &str,
 ) -> Result<TaskClaim> {
+    store.retry_windows_folder_observation("load current task claim", || {
+        load_current_task_claim_once(store, run_id, task_id)
+    })
+}
+
+fn load_current_task_claim_once(
+    store: &SessionStore,
+    run_id: &RunId,
+    task_id: &str,
+) -> Result<TaskClaim> {
     let catalog = store
         .read_run_catalog(run_id.as_str())?
         .context("task claim recovery requires a durable run catalog")?;
@@ -855,4 +865,13 @@ pub fn load_current_task_claim(
         claim.lease.heartbeat_sequence,
     )?;
     Ok(claim)
+}
+
+#[cfg(test)]
+mod scoped_store_io_classification_tests {
+    #[test]
+    fn raw_enodata_is_not_a_global_transient_store_error() {
+        let error: anyhow::Error = std::io::Error::from_raw_os_error(61).into();
+        assert!(!crate::is_transient_store_io(&error));
+    }
 }

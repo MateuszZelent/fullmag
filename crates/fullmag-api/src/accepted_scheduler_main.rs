@@ -1113,6 +1113,17 @@ fn build_run_queue_snapshot(
     next_run_id: Option<&RunId>,
     max_queued_runs: usize,
 ) -> Result<RunQueueSnapshot> {
+    store.retry_windows_folder_observation("build accepted scheduler run queue snapshot", || {
+        build_run_queue_snapshot_once(store, run_ids, next_run_id, max_queued_runs)
+    })
+}
+
+fn build_run_queue_snapshot_once(
+    store: &SessionStore,
+    run_ids: &[RunId],
+    next_run_id: Option<&RunId>,
+    max_queued_runs: usize,
+) -> Result<RunQueueSnapshot> {
     let mut queued = Vec::new();
     for run_id in run_ids {
         let Some(catalog) = store.read_run_catalog(run_id.as_str())? else {

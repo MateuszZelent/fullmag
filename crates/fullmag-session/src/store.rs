@@ -21,6 +21,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -40,6 +41,111 @@ mod claimed_worker_interruption;
 
 const MAX_TASK_ADMISSION_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_JOB_SUBMISSION_BYTES: usize = 64 * 1024;
+const WINDOWS_FOLDER_OBSERVATION_RETRY_WINDOW: Duration = Duration::from_secs(2);
+const WINDOWS_FOLDER_OBSERVATION_RETRY_INTERVAL: Duration = Duration::from_millis(20);
+
+fn has_raw_os_error(error: &anyhow::Error, code: i32) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.raw_os_error() == Some(code))
+    })
+}
+
+fn retry_windows_folder_observation_with<T>(
+    operation: &str,
+    mut is_attested_windows_folder: impl FnMut() -> Result<bool>,
+    mut observe: impl FnMut() -> Result<T>,
+    retry_window: Duration,
+    retry_interval: Duration,
+) -> Result<T> {
+    let first_error = match observe() {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if !has_raw_os_error(&first_error, 61) {
+        return Err(first_error).with_context(|| format!("observing {operation}"));
+    }
+
+    let initial_error_context = format!("{first_error:#}");
+    let deadline = Instant::now() + retry_window;
+    let mut last_error = first_error;
+    match is_attested_windows_folder() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} failed with raw errno 61; scoped retry requires an admitted Docker Desktop Windows folder; initial error: {initial_error_context}"
+                )
+            });
+        }
+        Err(validation_error) => {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} failed with raw errno 61; scoped retry filesystem admission failed: {validation_error:#}; initial error: {initial_error_context}"
+                )
+            });
+        }
+    }
+
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+        std::thread::sleep(retry_interval.min(deadline.duration_since(now)));
+        if Instant::now() >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+
+        // Revalidate the actual mount and its admission before every whole
+        // observation retry; the folder may have been remounted meanwhile.
+        match is_attested_windows_folder() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(last_error).with_context(|| {
+                    format!(
+                        "{operation} retry stopped because the current filesystem is not an admitted Docker Desktop Windows folder; initial error: {initial_error_context}"
+                    )
+                });
+            }
+            Err(validation_error) => {
+                return Err(last_error).with_context(|| {
+                    format!(
+                        "{operation} retry stopped because filesystem admission failed: {validation_error:#}; initial error: {initial_error_context}"
+                    )
+                });
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(last_error).with_context(|| {
+                format!(
+                    "{operation} remained at raw errno 61 through the bounded Windows folder observation retry window; initial error: {initial_error_context}"
+                )
+            });
+        }
+
+        match observe() {
+            Ok(value) => return Ok(value),
+            Err(error) if has_raw_os_error(&error, 61) => last_error = error,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "{operation} retry returned a different error after initial raw errno 61: {initial_error_context}"
+                    )
+                });
+            }
+        }
+    }
+}
 
 fn read_present_directory(root: &Path, relative: &str, label: &str) -> Result<Option<PathBuf>> {
     let path = checked_path(root, relative)?;
@@ -177,6 +283,27 @@ fn register_solution_object(
 }
 
 impl SessionStore {
+    /// Retry one complete read-only observation after raw errno 61 only when
+    /// the current store root is an admitted Docker Desktop Windows folder.
+    pub fn retry_windows_folder_observation<T>(
+        &self,
+        operation: &str,
+        observe: impl FnMut() -> Result<T>,
+    ) -> Result<T> {
+        retry_windows_folder_observation_with(
+            operation,
+            || {
+                Ok(matches!(
+                    crate::writer::classify_local_filesystem(&self.root)?,
+                    crate::writer::LocalFilesystemKind::DockerDesktopWindowsFolder
+                ))
+            },
+            observe,
+            WINDOWS_FOLDER_OBSERVATION_RETRY_WINDOW,
+            WINDOWS_FOLDER_OBSERVATION_RETRY_INTERVAL,
+        )
+    }
+
     /// Open or initialize a `SessionStore` at the given root directory.
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
@@ -938,7 +1065,8 @@ impl SessionStore {
             &self.root,
             &relative,
             crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
-        )?;
+        )
+        .with_context(|| format!("reading run intent {relative}"))?;
         let intent: FmsRunIntent = serde_json::from_slice(&data)?;
         intent.validate()?;
         if intent.run_id != run_id {
@@ -1478,7 +1606,8 @@ impl SessionStore {
 
     fn read_run_catalog_once(&self, run_id: &str) -> Result<Option<FmsRunCatalog>> {
         let relative = format!("runs/{run_id}/run_catalog.json");
-        let path = checked_path(&self.root, &relative)?;
+        let path = checked_path(&self.root, &relative)
+            .with_context(|| format!("resolving run catalog {relative}"))?;
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => {}
             Ok(_) => anyhow::bail!("run catalog path is not a file"),
@@ -1489,9 +1618,13 @@ impl SessionStore {
             &self.root,
             &relative,
             crate::archive_document::MAX_CONTROL_DOCUMENT_BYTES as usize,
-        )?;
-        let catalog: FmsRunCatalog = serde_json::from_slice(&data)?;
-        catalog.validate()?;
+        )
+        .with_context(|| format!("reading run catalog {relative}"))?;
+        let catalog: FmsRunCatalog = serde_json::from_slice(&data)
+            .with_context(|| format!("decoding run catalog {relative}"))?;
+        catalog
+            .validate()
+            .with_context(|| format!("validating run catalog {relative}"))?;
         if catalog.run_id != run_id {
             anyhow::bail!("run catalog identity does not match its path");
         }
@@ -6505,7 +6638,13 @@ impl SessionStore {
             if !resource_dir.is_dir() {
                 anyhow::bail!("resource lease identity path is not a directory");
             }
-            for lease_entry in fs::read_dir(&resource_dir)? {
+            let lease_entries = fs::read_dir(&resource_dir).with_context(|| {
+                format!(
+                    "listing resource lease directory {}",
+                    resource_dir.display()
+                )
+            })?;
+            for lease_entry in lease_entries {
                 let lease_entry = lease_entry?;
                 if is_atomic_write_staging_filename(&lease_entry.file_name()) {
                     continue;
@@ -6514,7 +6653,9 @@ impl SessionStore {
                 if !lease_entry.file_type()?.is_file() {
                     anyhow::bail!("resource lease entry is not a file");
                 }
-                let data = fs::read(lease_entry.path())?;
+                let lease_path = lease_entry.path();
+                let data = fs::read(&lease_path)
+                    .with_context(|| format!("reading resource lease {}", lease_path.display()))?;
                 let lease: FmsResourceLease = serde_json::from_slice(&data)?;
                 lease.validate()?;
                 if lease.run_id != run_id || lease.resource_id != resource_id {
@@ -11874,5 +12015,253 @@ mod read_transaction_tests {
         let transaction = first.read_transaction().unwrap();
         let error = second.read_coordinator_journal_readonly("run-read", &transaction).unwrap_err();
         assert!(error.to_string().contains("another store"));
+    }
+}
+
+#[cfg(test)]
+mod windows_folder_observation_retry_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    fn raw_error(code: i32) -> anyhow::Error {
+        std::io::Error::from_raw_os_error(code).into()
+    }
+
+    #[test]
+    fn scoped_retry_revalidates_before_each_whole_observation_attempt() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let events = RefCell::new(Vec::new());
+        let result = retry_windows_folder_observation_with(
+            "test observation",
+            || {
+                validations.set(validations.get() + 1);
+                events.borrow_mut().push("validate");
+                Ok(true)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                events.borrow_mut().push("observe");
+                if observations.get() < 3 {
+                    Err(raw_error(61))
+                } else {
+                    Ok("fresh observation")
+                }
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap();
+
+        assert_eq!(result, "fresh observation");
+        assert_eq!(observations.get(), 3);
+        assert_eq!(validations.get(), 3);
+        assert_eq!(
+            events.into_inner(),
+            ["observe", "validate", "validate", "observe", "validate", "observe"]
+        );
+    }
+
+    #[test]
+    fn scoped_retry_does_not_replay_non_enodata_errors() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "non-ENODATA observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(true)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(13))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 0);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(13))
+        }));
+        assert!(format!("{error:#}").contains("non-ENODATA observation"));
+    }
+
+    #[test]
+    fn scoped_retry_stops_at_deadline_and_preserves_raw_enodata_cause() {
+        let observations = Cell::new(0usize);
+        let started = Instant::now();
+        let error = retry_windows_folder_observation_with(
+            "permanent ENODATA observation",
+            || Ok(true),
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(3),
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+
+        assert!(observations.get() >= 1);
+        assert!(
+            observations.get() <= 50,
+            "unexpected retries: {}",
+            observations.get()
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "retry exceeded its test deadline: {elapsed:?}"
+        );
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+        assert!(format!("{error:#}").contains("permanent ENODATA observation"));
+    }
+
+    #[test]
+    fn unattested_filesystem_does_not_retry_raw_enodata() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "unattested observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(false)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 1);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_stops_if_filesystem_revalidation_changes_to_unattested() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "mount changed observation",
+            || {
+                validations.set(validations.get() + 1);
+                Ok(validations.get() == 1)
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 2);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_stops_if_filesystem_revalidation_errors() {
+        let validations = Cell::new(0usize);
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "admission changed observation",
+            || {
+                validations.set(validations.get() + 1);
+                if validations.get() == 1 {
+                    Ok(true)
+                } else {
+                    Err(anyhow::anyhow!("Windows folder grant is no longer valid"))
+                }
+            },
+            || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert_eq!(validations.get(), 2);
+        assert!(format!("{error:#}").contains("Windows folder grant is no longer valid"));
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
+    }
+
+    #[test]
+    fn retry_preserves_a_newer_nonretryable_observation_error() {
+        let observations = Cell::new(0usize);
+        let error = retry_windows_folder_observation_with(
+            "lease observation",
+            || Ok(true),
+            || {
+                observations.set(observations.get() + 1);
+                if observations.get() == 1 {
+                    Err::<(), _>(raw_error(61))
+                } else {
+                    Err::<(), _>(anyhow::anyhow!("active resource lease is corrupt"))
+                }
+            },
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+
+        assert_eq!(observations.get(), 2);
+        assert!(format!("{error:#}").contains("active resource lease is corrupt"));
+        assert!(format!("{error:#}").contains("initial raw errno 61"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_windows_folder_store_root_does_not_retry_raw_enodata() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("session-store")).unwrap();
+        assert_ne!(
+            crate::writer::classify_local_filesystem(store.root()).unwrap(),
+            crate::writer::LocalFilesystemKind::DockerDesktopWindowsFolder
+        );
+
+        let observations = Cell::new(0usize);
+        let error = store
+            .retry_windows_folder_observation("non-Windows-folder observation", || {
+                observations.set(observations.get() + 1);
+                Err::<(), _>(raw_error(61))
+            })
+            .unwrap_err();
+
+        assert_eq!(observations.get(), 1);
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.raw_os_error() == Some(61))
+        }));
     }
 }
