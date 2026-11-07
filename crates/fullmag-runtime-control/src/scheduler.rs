@@ -2310,9 +2310,14 @@ mod accepted_start_tests {
             )
             .expect_err("invalid authored provenance must fail before task start");
             assert_eq!(admission_calls.get(), 0, "invalid provenance cannot reach admission");
+            let expected_error = if reference_kind == "missing" {
+                "input.source.reference must be a non-empty portable identifier"
+            } else {
+                "authored initial state differs from its accepted ProblemIR reference"
+            };
             assert!(
-                error.chain().any(|cause| cause.to_string().contains("authored initial state")),
-                "{reference_kind} must fail the existing authored-reference validator: {error:#}"
+                error.chain().any(|cause| cause.to_string().contains(expected_error)),
+                "{reference_kind} must fail its canonical input validator before admission: {error:#}"
             );
             let after = fixture
                 .store
