@@ -1,6 +1,6 @@
 # GSG: lokalne 25 nm przy narożach — propozycja jednej próby przygotowania
 
-Status: **profil wdrożony; zatwierdzona próba zakończyła się odmową bramki just przed kontrolerem; siatki nie wygenerowano. Brakująca integracja poprawiona i przetestowana; nowa próba oczekuje na decyzję**.
+Status: **siatka corner25 wygenerowana i zachowana w WSL; publiczny eksport przygotowania odrzucony przez starszy CLI. Brak gotowego requestu i nowego V/J/H**.
 Baza: `5c57d680b379b53b4f29c614f091ab92864352e2`.
 Celem jest rzeczywiste zagęszczenie źródła 3D w miejscach dominujących w
 błędzie prądu, przed dalszą kwalifikacją pola i odpowiedzi LLG.
@@ -244,3 +244,81 @@ podnoszenia limitów lub zmiany rezerwacji. Obecne wyniki pozostają.
 Zastosowane zmiany kodu nadal są w roboczym drzewie z wcześniejszymi
 niezacommitowanymi zależnościami kontrolera; sam commit dokumentu nie
 stanowi opublikowania samodzielnego pakietu tych źródeł.
+
+
+## Odbiór jednej zatwierdzonej kontynuacji — 07.11.2026
+
+Zgoda na nowe wywołanie wpłynęła. Wykonano dokładnie jedną receptę
+docker-dev-gsg-mesh-prepare z corner25 i niezmienionymi pinami grupy 3203.
+Próba 8b99f132491b4c0f9e6305186a252b87 ma failed-confirmed; recepta exit 2,
+czas 186,566 s. To stan całej próby, mimo udanego wykonania Gmsh.
+
+Trzy fazy inventory-before, mesh-producer i inventory-after zakończyły się
+exit 0. Cache producenta:
+1673b40a6b14d4732336229340b5d063e2252f2652a27cdcc5d3e8d8a8e05f7a.npz,
+1 863 470 B, SHA256 69c7e3322e25fcf309c8eab7698e5b724f4aad6fe51e0c67a82f7704622b06c3.
+Kontrola po zakończeniu ponownie potwierdziła identyczny SHA256.
+
+| Obserwacja | Local50 | Corner25 |
+|---|---:|---:|
+| Surowe węzły Gmsh przed cięciem | 12 573 | 14 193 |
+| Tet4 | 34 243 | 40 783 |
+| Pola rozmiaru ze statusem applied | 2 | 10 |
+| Objętość przewodnika [m³] | 1,314e-18 | 1,314e-18 |
+| Dodatnie objętości Tet4 | 34 243/34 243 | 40 783/40 783 |
+| Medianowa najdłuższa krawędź przy narożach [nm] | 68,74–76,79 | 39,60–40,90 |
+
+Ostatni wiersz obejmuje osiem osobnych otoczeń: centroidy do 100 nm od
+zadanych pionowych odcinków naroży, z rozłącznym przypisaniem do najbliższego
+odcinka. Dla każdego Tet4 obliczono długości sześciu krawędzi, potem medianę
+najdłuższej. Ilorazy median corner25/local50 wynoszą 0,523–0,581.
+To opis zrealizowanej geometrii, nie estymator błędu J/H i nie kwalifikacja.
+W raporcie producenta po cięciu źródła jest 14 209 węzłów i 18 par.
+Wszystkie pięć części istnieje. Nośnik H pozostaje niezmieniony; znaczniki
+przekroczenia 72 911 komórek i 4 mln par są false. Nie uprawnia to do Solve.
+
+### Ujawniona niezgodność spójnego pakietu
+
+Publiczny CLI zakończył się exit 1, stdout 0 B, stderr 410 B:
+antenna_field_solve odrzuca interactive_session_requested oraz wait_for_solve.
+Działający pakiet ma wersję 0.1.0-dev.20261105.g006e8f024f89.dirty.s42d570eca01a+9805.
+Jego binaria nie zawierają późniejszej, już przetestowanej poprawki flag.
+Nie usunięto flag z wejścia ani nie podmieniono ich wartości dla starszego
+czytnika. Gotowy request nie powstał. Nie uruchomiono kolejnego prepare,
+transportu, H-only, LLG, buildu lub restartu. Dzieci zostały zebrane;
+terminalny receipt nie oznacza zgody na automatyczne ponowienie.
+
+Dalszy krok wymaga wdrożenia spójnego nowszego pakietu przez managed build,
+a dopiero potem osobno uzgodnionego odbioru przygotowania. Ostatnia zgoda
+jawnie wykluczała build; niniejszy raport go nie uruchamia ani nie rozszerza
+istniejącego recovery. Rezerwacja starego solvera pozostaje osobnym warunkiem
+kontrolowanego okna. Nie deklarujemy gotowości do następnego Solve.
+
+### Trwałe dane i dowody
+
+Dowody techniczne w control volume:
+verification/gsg-corner-refinement-20261107/approved-continuation-v2/
+(managed-recipe-result.json, managed-recipe.log,
+realized-corner-mesh-comparison.json). Raport porównania ma SHA256
+43728368759ab7f878343eb8193b09f4afe105eb0808e6bd67707e4324741192.
+Oryginalny receipt i pełny stderr:
+verification/gsg-junction-preparation-20261106/attempts/8b99f132491b4c0f9e6305186a252b87/.
+
+Unikalną siatkę i wejścia zachowano również na ext4 hosta WSL w
+examples/sushruth_2020_closed_gsg/corner25_preparation_20261107_8b99f132
+obecnego worktree. Katalog zawiera 9 plików z kontrolowanym SHA256,
+README i manifest-integrity.json. Manifest ma SHA256
+f7d52aeb046dd00bbb3628a391dcf0b56eb25ce4a47319bc285e0ad0f62564c9.
+Osobny odczyt z WSL potwierdził wszystkie kopie. To archiwum przygotowania
+z oryginalnym .npz; nie nazywamy go wynikiem Zarr ani gotowym requestem.
+
+Niezależnie od tej próby odczytano z hosta WSL wszystkie 1 958 unikalnych
+obiektów CAS wskazanych przez ostatni run V/J/H 40c6990b…, jego 1 980
+referencji assetów, definicję, study, katalog i dwa opublikowane artefakty.
+Łącznie 222 741 485 B; każdy SHA256 zgodny, run intent i artifact catalog
+nie zmieniły się podczas odczytu. Sam pakiet V/J/H ma 124 406 331 B.
+Dowód host-cas-persistence-20261107-v1.json jest w poprzednim katalogu
+approved-execution-v1 i ma SHA256
+58f2b7f52af0201c094cdc9a724d90399d337ac7a4de1151bcde506bd2fcf453.
+To dowód trwałości bajtów w WSL, nie nowy cold-load runtime, przenośny
+sąsiedni Zarr lub potwierdzenie nauki. Nie kopiowano całego magazynu CAS.
