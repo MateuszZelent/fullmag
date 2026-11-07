@@ -154,3 +154,14 @@ Ostatnia zgoda dopuszczała wyłącznie jedną próbę prepare-only i jawnie
 wykluczała build/restart/zmianę rezerwacji. Nie interpretujemy jej jako zgody
 na ten nowy zakres. Nie jest potrzebna zmiana wersjonowanego kontraktu,
 nowy format recovery, usuwanie danych lub nowa geometria fizyczna.
+
+## Odbiór zatwierdzonego wykonania — 07.11.2026
+
+Użytkownik zatwierdził rozliczenie i zarządzaną aktualizację. Operacja została
+wykonana przez istniejącego nadzorcę, bez nowego Solve. Obie rezerwacje są
+Released, a aktualizacja 8857232e70bc47aca8dea77ad9da0f86 ma status succeeded.
+Scena została odtworzona przez publiczne API; zachowane tensory są zgodne
+bajt w bajt. Odbiór wizualny po restarcie nadal oczekuje świeżej karty.
+Szczegółowy [raport wykonania](2026-11-07-succeeded-supervisor-reconciliation-execution.md)
+zawiera właściwą receptę saved-authoring, receipty, ograniczenia i dowody.
+Powyższy opis propozycji zachowuje historyczny stan sprzed wykonania.
