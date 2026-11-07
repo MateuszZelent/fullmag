@@ -6,6 +6,31 @@ import unittest
 
 
 class DevelopmentRecoveryShellTests(unittest.TestCase):
+    def test_prelaunch_actual_recipes_dispatch_exact_flags_and_reject_extra_commands(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        base = ['a' * 32, 'b' * 64, source]
+        recipes = [('docker-dev-stop-prelaunch-failure', base + ['3242'],
+                    [b'--stop-only', b'--quiesce-api', b'--capture-prelaunch-failure']),
+                   ('docker-dev-recreate-prelaunch-failure', base + ['c' * 32, 'd' * 64, '3242'],
+                    [b'--fresh-state', b'--prelaunch-failure-stop', b'c' * 32,
+                     b'--prelaunch-failure-stop-sha256', b'd' * 64])]
+        for name, args, suffix in recipes:
+            with self.subTest(recipe=name):
+                dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run', name, *args],
+                                     capture_output=True, text=True, timeout=15)
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                recipe = dry.stderr.strip()
+                result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                argv = result.stdout.split(b'\0')[:-1]
+                self.assertEqual(argv[-len(suffix):], suffix)
+                self.assertEqual(argv[argv.index(b'--source-root') + 1], source.encode())
+                for tail in ('; printf injected', ' --force'):
+                    refused = self.dispatch(recipe + tail, marker='  *"scripts/docker_dev.py"*)\n')
+                    self.assertEqual(refused.returncode, 2)
+                    self.assertNotIn(b'injected', refused.stdout)
+
     def test_prepared_completed_archive_actual_recipe_dispatches_only_both_pins(self):
         repo = Path(__file__).resolve().parents[1]
         base = ['a' * 32, 'b' * 64, '/selected/checkout', 'c' * 32, 'd' * 64, 'e' * 64,
