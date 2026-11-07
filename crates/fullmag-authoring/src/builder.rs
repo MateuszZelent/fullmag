@@ -746,6 +746,8 @@ pub struct ScriptBuilderMeshInterfaceState {
 pub struct ScriptBuilderGeometryEntry {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_name: Option<String>,
     pub geometry_kind: String,
     #[serde(default)]

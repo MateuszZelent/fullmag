@@ -220,6 +220,7 @@ pub fn scene_document_to_script_builder(
 
             Ok(ScriptBuilderGeometryEntry {
                 name: builder_geometry_name_for_object(object),
+                object_id: Some(object.id.clone()),
                 region_name: object.region_name.clone(),
                 geometry_kind: object.geometry.geometry_kind.clone(),
                 geometry_params,
@@ -1383,7 +1384,7 @@ fn geometry_mesh_override_value(mesh: &ScriptBuilderPerGeometryMeshState) -> Val
 fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObject {
     let (geometry_params, translation) = split_top_level_translation(&geometry.geometry_params);
     SceneObject {
-        id: geometry.name.clone(),
+        id: geometry.object_id.clone().unwrap_or_else(|| geometry.name.clone()),
         name: geometry.name.clone(),
         role: "magnet".to_string(),
         geometry: SceneGeometry {
@@ -2861,6 +2862,7 @@ mod tests {
             }),
             geometries: vec![ScriptBuilderGeometryEntry {
                 name: "flower".to_string(),
+                object_id: Some("flower".to_string()),
                 region_name: Some("core".to_string()),
                 geometry_kind: "ImportedGeometry".to_string(),
                 geometry_params: serde_json::json!({

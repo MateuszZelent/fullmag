@@ -2292,6 +2292,7 @@ mod tests {
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
                 name: "body".to_string(),
+                object_id: None,
                 region_name: None,
                 geometry_kind: "Box".to_string(),
                 geometry_params: serde_json::json!({ "size": [1.0, 1.0, 1.0] }),
