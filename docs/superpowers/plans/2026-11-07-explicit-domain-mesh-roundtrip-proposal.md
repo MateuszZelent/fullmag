@@ -360,3 +360,28 @@ world.py::geometry_object, model/problem.py::Problem.to_ir i
 model/physics_scope.py::build_physics_graph. Samo nowe pole sceny
 nie wystarczy. Ten wariant jest nadal rozpoznaniem granicy, nie wdrożeniem
 nowego source declaration lub zatwierdzonym wspólnym modelem domen.
+
+
+### Końcowy odbiór poprawki lookup — CI42388131944
+
+Kod: 4a553095ee4df07e369319e722e15bf5d70be468.
+[Bootstrap42388131944](https://github.com/MateuszZelent/fullmag/actions/runs/42388131944)
+zakończył się completed/success na tym commicie. Oba uruchomione joby:
+rust-contracts 128449793402 oraz inspector-actions-browser-smoke
+128449793652 mają success; pozostałe joby były pominięte zgodnie ze scope rust.
+Log potwierdził wykonanie test_object_region_owner_identity.py:
+4 testy, 0.012 s, OK. Osiem testów lokalnych obejmowało dodatkowo cztery
+istniejące regresje; nie przypisujemy tej liczby samemu nowemu plikowi CI.
+
+Pełne logi, odpowiedzi job API oraz nowy append-only receipt
+ci-final-42388131944.json są w prywatnym wolumenie pod
+verification/object-region-owner-identity-20261107/.
+SHA256 logu rust-contracts:
+bee6f1a068940a157e6e10e6c1b94c772dabb4243d3b0d77f303ddb362211a3d.
+SHA256 logu browser:
+ec7888aea70c8aff884414533b84185622557997d1be30e508c99217214c1ac2.
+
+Wynik kwalifikuje tę poprawkę źródeł i objęte testy przeglądarkowe.
+Nie oznacza nowego meshowania, Solve, rebuild/restartu API, zwolnienia
+rezerwacji, wdrożenia planowanego source declaration ani zgodności
+numerycznej z publikacją. Nowy przejrzany plan ma osobną decyzję wykonawczą.
