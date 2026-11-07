@@ -2911,6 +2911,43 @@ def _parse_inspector_ack_result(output, public_url, browser_url, expected_source
     return dict(payload)
 
 
+STUDY_CAMERA_PATCH_KEY = "PATCH /v2/sessions/current/visualization/state"
+
+
+def _validate_study_camera_patches(payload, session):
+    receipts = payload.get("camera_patch_receipts", [])
+    counts = payload.get("request_counts")
+    if (not isinstance(receipts, list) or len(receipts) > 4
+            or not isinstance(counts, Mapping) or counts.get(STUDY_CAMERA_PATCH_KEY, 0) != len(receipts)):
+        raise BuildControlError("Study camera autosave inventory differs from its bounded receipts")
+    if not receipts:
+        return
+    if not isinstance(session, Mapping):
+        raise BuildControlError("Study camera autosave omitted its session")
+    scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+        session["session_epoch"], safe="") + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    fields = {"fov_degrees", "orthographic_scale", "position", "projection", "target", "up"}
+    def finite(value):
+        return type(value) in (float, int) and math.isfinite(value)
+    for receipt in receipts:
+        body = receipt.get("payload") if isinstance(receipt, Mapping) else None
+        camera = body.get("camera") if isinstance(body, Mapping) else None
+        if (not isinstance(receipt, Mapping)
+                or set(receipt) != {"method", "path", "scope_header", "payload"}
+                or receipt.get("method") != "PATCH"
+                or receipt.get("path") != "/v2/sessions/current/visualization/state"
+                or receipt.get("scope_header") != scope
+                or not isinstance(body, Mapping) or set(body) != {"camera"}
+                or not isinstance(camera, Mapping) or set(camera) != fields
+                or camera.get("projection") not in ("orthographic", "perspective")
+                or not finite(camera.get("fov_degrees")) or not 0 < camera["fov_degrees"] < 180
+                or not (camera.get("orthographic_scale") is None
+                        or finite(camera["orthographic_scale"]) and camera["orthographic_scale"] > 0)
+                or any(not isinstance(camera[key], list) or len(camera[key]) != 3
+                       or not all(finite(value) for value in camera[key]) for key in ("position", "target", "up"))):
+            raise BuildControlError("Study camera autosave changed its scope or camera-only payload")
+
+
 def _study_stage_expected_ids(mode: str, phase: str) -> list[str]:
     if mode not in {"stage-b", "study"} or phase not in {"before", "after"}:
         raise BuildControlError("Study stage rerun mode/phase is invalid")
@@ -3058,6 +3095,7 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
             or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
                    or read_counts[key] > 512 for key, minimum in required_counts.items())):
         raise BuildControlError("Study stage rerun unknown outcome omitted bounded public reads")
+    _validate_study_camera_patches(payload, session)
     request_counts = payload.get("request_counts")
     command_key = "POST /v2/sessions/current/simulation/commands"
     ack_key = "POST /v2/sessions/current/visualization/client-acks"
@@ -3070,6 +3108,8 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
             raise BuildControlError("Study stage rerun unknown outcome request inventory is malformed")
         method, path = key.split(" ", 1)
         if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == STUDY_CAMERA_PATCH_KEY and count <= 4:
             continue
         if key == ack_key and count <= 16:
             continue
@@ -3142,6 +3182,10 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
             or candidate.get("command_receipt", object()) is not None
             or candidate.get("ui_command_proven") is not False):
         return False
+    try:
+        _validate_study_camera_patches(candidate, candidate.get("session_before"))
+    except (BuildControlError, KeyError, TypeError, ValueError):
+        return False
     request_counts = candidate.get("request_counts")
     total_requests = candidate.get("total_requests")
     if not isinstance(request_counts, Mapping) or len(request_counts) > 128:
@@ -3155,6 +3199,8 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
     for key, count in request_counts.items():
         method, path = key.split(" ", 1)
         if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == STUDY_CAMERA_PATCH_KEY and count <= 4:
             continue
         if key == ack_key and count <= 16:
             continue
@@ -3384,6 +3430,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
                    or read_counts[key] > 512 for key, minimum in required_counts.items())):
         raise BuildControlError("Study stage rerun omitted bounded before/after public resource reads")
+    _validate_study_camera_patches(payload, session)
     request_counts = payload.get("request_counts")
     if not isinstance(request_counts, Mapping) or not 1 <= len(request_counts) <= 128:
         raise BuildControlError("Study stage rerun omitted its measured API request inventory")
@@ -3397,6 +3444,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         if method == "GET":
             if not path.startswith("/v2/"):
                 raise BuildControlError("Study stage rerun read escaped the public v2 API")
+        elif key == STUDY_CAMERA_PATCH_KEY:
+            if count > 4:
+                raise BuildControlError("Study camera autosave exceeded its bound")
         elif key == ack_key:
             if count > 16:
                 raise BuildControlError("Study stage rerun visualization acknowledgements exceeded their bound")

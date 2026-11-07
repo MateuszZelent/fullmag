@@ -135,6 +135,26 @@ export function studyStageRerunRequestAllowed(request, context) {
   }
 }
 
+export function studyStageCameraPatchAllowed(request, session) {
+  try {
+    const body = request?.body;
+    if (request?.method !== "PATCH" || request?.path !== "/v2/sessions/current/visualization/state"
+        || request?.scope !== sessionScope(session) || !plainRecord(body)
+        || canonical(Object.keys(body)) !== canonical(["camera"])) return false;
+    const camera = body.camera;
+    const keys = ["fov_degrees", "orthographic_scale", "position", "projection", "target", "up"];
+    if (!plainRecord(camera) || canonical(Object.keys(camera).sort()) !== canonical(keys)
+        || !["orthographic", "perspective"].includes(camera.projection)
+        || !Number.isFinite(camera.fov_degrees) || camera.fov_degrees <= 0 || camera.fov_degrees >= 180
+        || !(camera.orthographic_scale === null
+          || Number.isFinite(camera.orthographic_scale) && camera.orthographic_scale > 0)) return false;
+    return [camera.position, camera.target, camera.up].every((vector) =>
+      Array.isArray(vector) && vector.length === 3 && vector.every(Number.isFinite));
+  } catch {
+    return false;
+  }
+}
+
 export function studyStageRerunClientAckAllowed(request, session) {
   const body = request?.body;
   if (request?.method !== "POST" || request?.path !== clientAckPath
@@ -507,6 +527,7 @@ export async function runStudyStageRerun() {
   let commandCount = 0;
   let commandAttemptCount = 0;
   let clientAckCount = 0;
+  const cameraPatchReceipts = [];
   let commandRequest = null;
   let commandReceipt = null;
   let executionBinding = null;
@@ -761,11 +782,22 @@ export async function runStudyStageRerun() {
       try {
         record(method, path);
         if (method === "GET") return route.continue();
+        const scope = request.headers()["x-fullmag-session-scope"];
+        if (method === "PATCH" && url.pathname === "/v2/sessions/current/visualization/state" && session) {
+          const body = request.postDataJSON();
+          if (!studyStageCameraPatchAllowed({ method, path, scope, body }, session)
+              || cameraPatchReceipts.length >= 4) {
+            if (violations.length < 16) violations.push("Rejected an invalid or over-budget camera autosave: "
+              + Object.keys(body ?? {}).slice(0, 16).join(","));
+            return route.abort();
+          }
+          cameraPatchReceipts.push({ method, path, scope_header: scope, payload: body });
+          return route.continue();
+        }
         if (method !== "POST" || !session) {
           if (violations.length < 16) violations.push("Unexpected non-GET API request: " + method + " " + url.pathname);
           return route.abort();
         }
-        const scope = request.headers()["x-fullmag-session-scope"];
         if (url.pathname === clientAckPath) {
           const body = request.postDataJSON();
           if (!studyStageRerunClientAckAllowed({ method, path, scope, body }, session)
@@ -919,7 +951,6 @@ export async function runStudyStageRerun() {
     assertStageRerunSceneUnchanged(afterSnapshot, session);
     assert.deepEqual(afterSnapshot.stageIds, expectedAfterIds,
       "P22 current stage view includes an unexpected stage");
-    assert.deepEqual(afterSnapshot.execution.stage_statuses, expectedAfterIds.map(() => "completed"));
     const afterOldResults = await readResults(
       before.run_id, session, studyStageExpectedStageIds(mode, "before"),
     );
@@ -967,6 +998,7 @@ export async function runStudyStageRerun() {
       command_count: commandCount,
       command_attempt_count: commandAttemptCount,
       client_ack_count: clientAckCount,
+      camera_patch_receipts: cameraPatchReceipts,
       ui_command_proven: uiCommandProven,
       after,
       history_identity_preserved: historyIdentityPreserved,

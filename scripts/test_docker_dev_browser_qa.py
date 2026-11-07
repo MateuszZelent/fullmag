@@ -3403,6 +3403,36 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     study_stage_rerun_source_sha256=sources if changed != "unrequested" else None,
                 )
 
+    def test_camera_autosave_is_scoped_bounded_and_cannot_carry_model_edits(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        payload = self.result_fixture("stage-b", sources)
+        camera = {"fov_degrees": 45, "orthographic_scale": None, "position": [1, 2, 3],
+                  "projection": "perspective", "target": [0, 0, 0], "up": [0, 1, 0]}
+        receipt = {"method": "PATCH", "path": "/v2/sessions/current/visualization/state",
+                   "scope_header": payload["command_receipt"]["scope_header"], "payload": {"camera": camera}}
+        key = "PATCH /v2/sessions/current/visualization/state"
+        payload["camera_patch_receipts"] = [receipt]
+        payload["request_counts"][key] = 1
+        payload["total_requests"] += 1
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b"), payload)
+        for name, change in (
+            ("foreign scope", lambda x: x["camera_patch_receipts"][0].update(scope_header="foreign")),
+            ("material smuggled", lambda x: x["camera_patch_receipts"][0]["payload"].update(material={})),
+            ("unknown camera field", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(extra=1)),
+            ("nonfinite coordinate", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(up=[0,float("nan"),0])),
+            ("invalid projection", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(projection="invalid")),
+            ("unreported write", lambda x: x.update(camera_patch_receipts=[])),
+            ("over budget", lambda x: x.update(camera_patch_receipts=[receipt]*5,
+                request_counts={**x["request_counts"], key:5}, total_requests=x["total_requests"]+4)),
+        ):
+            value = deepcopy(payload)
+            change(value)
+            with self.subTest(name=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(json.dumps(value).encode(), value["public_url"],
+                    value["probe_url"], sources, "stage-b")
+
     def test_javascript_guard_allows_only_one_scoped_exact_command(self):
         node = shutil.which("node")
         if node is None:
@@ -3471,6 +3501,18 @@ const request = {method:'POST', path:'/v2/sessions/current/simulation/commands',
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};
 const context = {mode:'stage-b', session, expectedPrecondition:precondition, commandCount:0, phase:'ui-submit'};
+const cameraRequest = {method:'PATCH',path:'/v2/sessions/current/visualization/state',scope,
+  body:{camera:{fov_degrees:45,orthographic_scale:null,position:[1,2,3],projection:'perspective',
+    target:[0,0,0],up:[0,1,0]}}};
+assert.equal(runner.studyStageCameraPatchAllowed(cameraRequest, session), true);
+for (const invalid of [
+  {...cameraRequest, scope:'foreign'}, {...cameraRequest,method:'POST'},
+  {...cameraRequest,path:cameraRequest.path+'?extra=1'},
+  {...cameraRequest,body:{...cameraRequest.body,material:{}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,extra:1}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,position:[NaN,0,0]}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,projection:'invalid'}}},
+]) assert.equal(runner.studyStageCameraPatchAllowed(invalid, session), false);
 assert.equal(runner.studyStageRerunRequestAllowed(request, context), true);
 assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, phase:'preflight'}), false);
 assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, commandCount:1}), false);
