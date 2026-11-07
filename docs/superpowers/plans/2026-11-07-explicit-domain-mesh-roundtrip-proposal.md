@@ -180,3 +180,38 @@ nie zakwalifikuje kontraktu ogólnego.
 
 Nie wdrożono tego rozszerzenia. Nie prosimy o zatwierdzenie niepełnego
 projektu i nie zaliczamy go do zatwierdzonej naprawy flag wykonania.
+
+
+## Ustalenia po dalszej analizie — bez wdrożenia
+
+Właściciel podregionu jest już znany: SceneObjectRegion.owner_object oraz
+region_id. asset_pipeline.py zapisuje region_id do geometry_name mapy
+object_region_markers. Nazwa prezentacyjna regionu nie jest tym kluczem.
+Syntetyczna kontrola rzeczywistego loadera jest opisana w audycie.
+
+Rozważany poprawny owner dodatkowego powiązania to osobne marker_bindings
+przy FemDomainMeshAssetIR, z marker i istniejącym RegionRefIR jako target.
+Nie dodawać target do FemDomainRegionMarkerIR: tego samego typu używa
+build_report, a planner porównuje obie źródłowe mapy dosłownie.
+Source maps, receipt i semantic manifest pozostają niezmienione;
+binding musi mieć osobną tożsamość w przygotowaniu.
+
+To rozszerzenie dotyka także Pythonowego przygotowania magnetyzacji
+(model/problem.py), mesh.rs::shared_domain_region_entries_for_problem,
+mesh.rs::validate_domain_object_region_identity,
+fem.rs::build_conformal_region_element_fields oraz
+validate.rs::region_is_conformal. Sam nowy klucz sceny nie wystarcza.
+Nie wdrożono go i nie zadeklarowano go w obecnym publicznym IR.
+
+ADR0024, sekcja Migration and rollback, wymaga wspólnego cutoveru V04
+obiektów i polityk siatki. problem-ir-compatibility-v1 wymaga wersjonowania
+nowego znaczenia. Deserializator obecnego FemDomainMeshAssetIR ignoruje
+nieznane pola; nie wolno więc obiecać bezpiecznej odmowy starego runtime
+po dopisaniu samego marker_bindings. Wybór zgodnej granicy migracji musi
+poprzedzić implementację tego ogólnego kontraktu; nie zmieniamy writera
+na 0.3.1 ani 0.4 w ramach naprawy flag lub ID.
+
+Niezależny warunek konieczny, możliwy do naprawienia bez nowego IR:
+[przeniesienie już istniejącego object_id magnetyka przez Rust](2026-11-07-magnetic-object-id-roundtrip-implementation.md).
+Ten patch jest przygotowany osobno i nie stanowi obejścia nierozstrzygniętej
+granicy mapowania domeny. Cel pełnego roundtripu i reprodukcji pozostaje otwarty.

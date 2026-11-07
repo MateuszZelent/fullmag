@@ -94,3 +94,52 @@ Ponowne uruchomienie powinno użyć nowego katalogu dowodów; starych nie nadpis
 FDM CPU/GPU i FEM CPU/GPU nie były wykonywane. Sprawdzono wspólny tor
 authoringu na wejściu FEM CPU/double; nie jest to kwalifikacja solvera ani
 dowód odtworzenia publikacji.
+
+
+## Uzupełnienie: tożsamość źródła, podregiony i zgodność
+
+Kontrola loadera na zachowanym syntetycznym artefakcie dwóch Tet4 potwierdziła:
+obie oryginalne mapy są akceptowane, zmiana klucza głównego albo region_id
+powoduje właściwy ValueError o niezgodności z persisted artifact.
+Wszystkie pliki miały identyczne SHA przed i po odczycie; Popen=0 i
+gmsh.generate=0. To test samego loadera, nie pełnego Problem/Scene/runtime.
+
+W asset_pipeline.py::realize_shared_fem_domain_mesh mapa region_markers
+wiąże geometrię, lecz object_region_markers zapisuje istniejący region_id,
+nie etykietę podregionu. SceneObjectRegion ma już owner_object i region_id.
+Nie trzeba wynajdywać nowej tożsamości podregionu.
+
+persistence.py::_semantic_manifest_sha256 obejmuje nazwy i markery obu
+map. _validate_certification_receipt sprawdza ich zgodność z receipt v2.
+Przepisanie map po rename bez nowego kontraktu zrywa ten dowód.
+Odrębnym kandydatem są bindingi do istniejącego RegionRef/RegionRefIR,
+przy niezmienionych mapach źródła; nie zostały wdrożone.
+
+Dodatkowa luka jest wcześniejsza: ScriptBuilderGeometryEntry nie przenosi
+istniejącego object_id magnetyka. scene_object_from_geometry odtwarza ID z
+name. Publiczne rewrite overrides poprawnie dopisuje ID sceny mimo braku
+pola w typowanym builderze; ta ścieżka nie jest potwierdzonym błędem.
+Python dict builder i Scene to pole już mają. Osobny, niewdrożony patch i plan:
+[Zachowanie object_id](2026-11-07-magnetic-object-id-roundtrip-implementation.md).
+
+Obecny publiczny writer to IR 0.3.0. ADR0024 wymaga atomowego cutoveru
+obiektów i mesh policy na V04, a problem-ir-compatibility-v1 wymaga
+wersjonowania zmiany znaczenia. Nie dodajemy po cichu nowej semantyki
+bindingów do starego IR; jego deserializator ignoruje nieznane pola.
+Zachowanie istniejącego domain_mesh i dodanie nowej semantyki wiązania
+są odrębnymi wymaganiami, oba nadal otwarte.
+
+Przez GitHub API sprawdzono również master
+e8e0d35cb7da697207b490f9573cb2fb7f646e97, siedem commitów po lokalnie
+zintegrowanym eeb1e1fcf6070021ac902ee8ecb01268e2cea9b9. Publiczny writer
+i brak pola ID pozostają tam takie same. Był to odczyt przypiętych źródeł;
+nie jest dowodem fetch ani scalenia tego nowszego mastera z worktree.
+
+Dowody: verification/antenna-authoring-roundtrip-20261107/domain-marker-binding-audit-v2/
+w prywatnym control volume:
+- plan.json: a0034ff2ee809020cd3f22341efb7c3fff68dc31ad5044bc44dec2c1bbd007ea
+- audit.py: 7d4b9ac62a8e08a7abd71a6b3ec2fd19653e5bd22d23ef33947491726bf2baab
+- result.json: d4bd35ffb883a740f6c1f95818a28f8c117a60db0cde0e1bbf1b0c5929076de1
+- manifest.json przypina artefakty i rzeczywiste źródła.
+Wersja v1 przerwała się na błędzie cytowania skryptu przed importami;
+zachowano jej kod i failure.json. V2 naprawia wyłącznie ten błąd helpera.

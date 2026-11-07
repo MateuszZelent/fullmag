@@ -1,0 +1,193 @@
+--- a/crates/fullmag-authoring/src/builder.rs
++++ b/crates/fullmag-authoring/src/builder.rs
+@@ -746,6 +746,8 @@
+ pub struct ScriptBuilderGeometryEntry {
+     pub name: String,
+     #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub object_id: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
+     pub region_name: Option<String>,
+     pub geometry_kind: String,
+     #[serde(default)]
+--- a/crates/fullmag-authoring/src/adapters.rs
++++ b/crates/fullmag-authoring/src/adapters.rs
+@@ -220,6 +220,7 @@
+ 
+             Ok(ScriptBuilderGeometryEntry {
+                 name: builder_geometry_name_for_object(object),
++                object_id: Some(object.id.clone()),
+                 region_name: object.region_name.clone(),
+                 geometry_kind: object.geometry.geometry_kind.clone(),
+                 geometry_params,
+@@ -1383,7 +1384,7 @@
+ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObject {
+     let (geometry_params, translation) = split_top_level_translation(&geometry.geometry_params);
+     SceneObject {
+-        id: geometry.name.clone(),
++        id: geometry.object_id.clone().unwrap_or_else(|| geometry.name.clone()),
+         name: geometry.name.clone(),
+         role: "magnet".to_string(),
+         geometry: SceneGeometry {
+@@ -2861,6 +2862,7 @@
+             }),
+             geometries: vec![ScriptBuilderGeometryEntry {
+                 name: "flower".to_string(),
++                object_id: Some("flower".to_string()),
+                 region_name: Some("core".to_string()),
+                 geometry_kind: "ImportedGeometry".to_string(),
+                 geometry_params: serde_json::json!({
+@@ -5136,4 +5138,123 @@
+             "multilayer_convolution"
+         );
+     }
+-}
++
++    fn magnetic_identity_fixture() -> ScriptBuilderState {
++        let mut builder = sample_builder();
++        builder.fdm = None;
++        builder.initial_state = None;
++        builder.mesh_interfaces.clear();
++        builder.geometries[0].object_regions.clear();
++        builder.geometries[0].allocated_region_ids.clear();
++        builder.geometries[0].material_parameter_fields.clear();
++        builder
++    }
++
++    #[test]
++    fn magnetic_object_id_survives_builder_json_and_both_adapters() {
++        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
++        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
++        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++        let scene = scene_document_from_script_builder(&builder);
++        assert_eq!(scene.objects[0].id, "immutable-A");
++        assert_eq!(scene.objects[0].name, "flower");
++        let round_trip = scene_document_to_script_builder(&scene).unwrap();
++        assert_eq!(serde_json::to_value(&round_trip).unwrap()["geometries"][0]["object_id"], "immutable-A");
++        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
++        assert_eq!(overrides["geometries"][0]["object_id"], "immutable-A");
++    }
++
++    #[test]
++    fn magnetic_object_id_survives_scene_rename() {
++        let mut scene = scene_document_from_script_builder(&magnetic_identity_fixture());
++        scene.objects[0].id = "immutable-A".to_string();
++        scene.objects[0].name = "Renamed sample".to_string();
++        let builder = scene_document_to_script_builder(&scene).unwrap();
++        let round_trip = scene_document_from_script_builder(&builder);
++        assert_eq!(round_trip.objects[0].id, "immutable-A");
++        assert_eq!(round_trip.objects[0].name, "Renamed sample");
++        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
++        assert_eq!(overrides["geometries"][0]["object_id"], "immutable-A");
++        assert_eq!(overrides["geometries"][0]["name"], "Renamed sample");
++    }
++
++    #[test]
++    fn magnetic_object_id_legacy_absence_and_null_keep_name_fallback() {
++        for explicit_null in [false, true] {
++            let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
++            if explicit_null {
++                wire["geometries"][0]["object_id"] = Value::Null;
++            } else {
++                wire["geometries"][0].as_object_mut().unwrap().remove("object_id");
++            }
++            let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++            let scene = scene_document_from_script_builder(&builder);
++            assert_eq!(scene.objects[0].id, "flower");
++            assert!(scene_document_to_script_builder(&scene).is_ok());
++        }
++    }
++
++    #[test]
++    fn magnetic_object_id_does_not_fallback_for_explicit_empty_id() {
++        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
++        wire["geometries"][0]["object_id"] = serde_json::json!("");
++        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++        let scene = scene_document_from_script_builder(&builder);
++        let error = scene_document_to_script_builder(&scene).unwrap_err();
++        assert!(error.message.contains("scene object ids must not be empty"));
++    }
++
++    #[test]
++    fn magnetic_object_id_duplicate_is_rejected_despite_different_names() {
++        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
++        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
++        let mut second = wire["geometries"][0].clone();
++        second["name"] = serde_json::json!("second");
++        wire["geometries"].as_array_mut().unwrap().push(second);
++        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++        let scene = scene_document_from_script_builder(&builder);
++        let error = scene_document_to_script_builder(&scene).unwrap_err();
++        assert!(error.message.contains("duplicate scene object id"));
++    }
++
++    #[test]
++    fn magnetic_object_id_preserves_existing_owned_region_identity() {
++        let mut builder = sample_builder();
++        builder.fdm = None;
++        builder.initial_state = None;
++        builder.mesh_interfaces.clear();
++        builder.geometries[0].material_parameter_fields.clear();
++        let region = &mut builder.geometries[0].object_regions[0];
++        region.owner_object = "immutable-A".to_string();
++        region.region_id = "immutable-A:r1".to_string();
++        builder.geometries[0].allocated_region_ids = vec!["immutable-A:r1".to_string()];
++        let mut wire = serde_json::to_value(builder).unwrap();
++        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
++        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++        let scene = scene_document_from_script_builder(&builder);
++        let round_trip = scene_document_to_script_builder(&scene).unwrap();
++        assert_eq!(round_trip.geometries[0].object_regions, builder.geometries[0].object_regions);
++        assert_eq!(scene.objects[0].id, "immutable-A");
++        assert_eq!(scene.objects[0].regions[0].owner_object, "immutable-A");
++    }
++
++    #[test]
++    fn magnetic_object_id_preserves_fdm_grid_through_rename() {
++        let mut wire = serde_json::to_value(magnetic_identity_fixture()).unwrap();
++        wire["geometries"][0]["object_id"] = serde_json::json!("immutable-A");
++        wire["fdm"] = serde_json::json!({
++            "per_magnet": {"flower": {"cell": [1e-9, 2e-9, 3e-9]}}
++        });
++        let builder: ScriptBuilderState = serde_json::from_value(wire).unwrap();
++        let mut scene = scene_document_from_script_builder(&builder);
++        assert_eq!(scene.study.fdm.as_ref().unwrap().per_object_grid["immutable-A"].cell, [1e-9, 2e-9, 3e-9]);
++        assert!(!scene.study.fdm.as_ref().unwrap().per_object_grid.contains_key("flower"));
++        scene.objects[0].name = "Renamed sample".to_string();
++        let fdm = builder_fdm_from_scene(scene.study.fdm.as_ref(), &scene.objects).unwrap();
++        assert_eq!(fdm.per_magnet["Renamed sample"].cell, [1e-9, 2e-9, 3e-9]);
++        assert!(!fdm.per_magnet.contains_key("flower"));
++        assert!(!fdm.per_magnet.contains_key("immutable-A"));
++        let restored = scene_fdm_from_builder(Some(&fdm), &scene.objects).unwrap();
++        assert_eq!(restored.per_object_grid["immutable-A"].cell, [1e-9, 2e-9, 3e-9]);
++    }
++}
+--- a/crates/fullmag-api/src/types.rs
++++ b/crates/fullmag-api/src/types.rs
+@@ -2294,6 +2294,7 @@
+             initial_state: None,
+             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                 name: "body".to_string(),
++                object_id: None,
+                 region_name: None,
+                 geometry_kind: "Box".to_string(),
+                 geometry_params: serde_json::json!({ "size": [1.0, 1.0, 1.0] }),
+--- a/crates/fullmag-api/src/router_v2/tests.rs
++++ b/crates/fullmag-api/src/router_v2/tests.rs
+@@ -136,6 +136,7 @@
+         initial_state: None,
+         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+             name: "body".to_string(),
++            object_id: None,
+             region_name: None,
+             geometry_kind: "Box".to_string(),
+             geometry_params: serde_json::json!({ "size": [1.0, 1.0, 1.0] }),
+--- a/.github/workflows/bootstrap.yml
++++ b/.github/workflows/bootstrap.yml
+@@ -119,6 +119,7 @@
+           python -B -m unittest discover -s packages/fullmag-py/tests -p test_runtime_flags_export.py
+           python -B -m unittest discover -s packages/fullmag-py/tests -p test_script_builder_roundtrip.py
+           cargo test --locked -p fullmag-authoring --lib execution_intent_
++          cargo test --locked -p fullmag-authoring --lib magnetic_object_id_
+           cargo test --locked -p fullmag-application --lib primitive_execution_intent_
+           cargo test --locked -p fullmag-application --lib disabled_primitive_does_not_change_execution_intent
+           cargo test --locked -p fullmag-api --bin fullmag-api scene_resource_preserves_execution_intent_and_stage_extras
