@@ -80,9 +80,9 @@ Potwierdzono `terminal.error == readiness.error` oraz dokładną kopertę `Runti
 **Pliki:** `.github/workflows/bootstrap.yml`, `docs/guides/docker-development-architecture.md` oraz ten plan.
 
 - [x] Dodać testy do istniejącej bramki Python CI i opisać oba warianty recovery oraz obowiązkowe dowody.
-- [ ] Przeprowadzić niezależne review, zapisać spójny commit i wypchnąć branch/PR do `master`; zachować wymagane kontrole.
-- [ ] Użyć nowej recepty z `--stop-frontend` do kontrolowanego zatrzymania obu usług diagnostycznego `fullmag-master`, potwierdzając zachowanie ownera, sesji, lease i namespace. Zachować istniejące dane main oraz jego pakiet/rollback; w rejestrze pozostawić native execution Unknown i warunek ponownej kontroli przed przyszłym recovery main. Nie uruchamiać main ponownie i nie zgłaszać jego archiwizacji ani genuine drain.
-- [ ] Zamknąć starą nieudaną próbę worktree rozszerzonym reconcilerem z jawnymi pinami przygotowania i nowej generacji dowodów z zadania 2, po pełnej kwalifikacji. Nie ponawiać pierwotnego `--apply` nad istniejącym przygotowaniem ani nie uruchamiać nowej próby nad aktywną blokadą.
+- [x] Przeprowadzić niezależne review, zapisać spójny commit i wypchnąć branch/PR do `master`; zachować wymagane kontrole.
+- [x] Użyć nowej recepty z `--stop-frontend` do kontrolowanego zatrzymania obu usług diagnostycznego `fullmag-master`, potwierdzając zachowanie ownera, sesji, lease i namespace. Zachować istniejące dane main oraz jego pakiet/rollback; w rejestrze pozostawić native execution Unknown i warunek ponownej kontroli przed przyszłym recovery main. Nie uruchamiać main ponownie i nie zgłaszać jego archiwizacji ani genuine drain.
+- [x] Zamknąć starą nieudaną próbę worktree rozszerzonym reconcilerem z jawnymi pinami przygotowania i nowej generacji dowodów z zadania 2, po pełnej kwalifikacji. Nie ponawiać pierwotnego `--apply` nad istniejącym przygotowaniem ani nie uruchamiać nowej próby nad aktywną blokadą.
 - [ ] Uruchomić `just docker-dev-toolchain` i `just docker-dev` z katalogu worktree, z jawnym worktree/source, osobnym wolnym portem, wymaganym GPU i kontraktem `fem-demag-poisson`.
 - [ ] Sprawdzić receipt, rzeczywiste mounty/etykiety obu usług, API, natywny kontrakt i zarządzany browser QA `--canvas-only`. Dopiero te wyniki kwalifikują docelową grupę worktree.
 - [ ] Potwierdzić integrację kodu na `master`, wykonać adekwatną retencję i zapisać faktyczny stan oraz ewentualne aktywne zasoby w rejestrze.
@@ -99,4 +99,22 @@ wykonawcza skraca je bez zmiany rodziny dowodu i kryteriów akceptacji.
 - [x] Zbierać wyniki wyłącznie w koordynatorze, deterministycznie; przy błędzie odrzucać całą partię, anulować zadania oczekujące i odebrać działające odczyty.
 - [x] Dedup stosować wyłącznie do dokładnego tekstu źródła. Każdy kontener nadal podlega autoryzacji, szczególnie `absent-stopped`; prewarming nie zastępuje `validate_container_inventory`.
 - [x] Zachować pełne odświeżanie oraz końcowe kontrole engine/root i pinów kontenerów. Nie pomijać pól inwentarza i nie zmieniać równości wszystkich trzech obserwacji ani CAS.
-- [ ] Przeprowadzić niezależne review delty, CI/integrację i ponowić właściwą kwalifikację. Równoległość nie upoważnia do zaakceptowania ciągłego churnu.
+- [x] Przeprowadzić niezależne review delty, CI/integrację i ponowić właściwą kwalifikację. Równoległość nie upoważnia do zaakceptowania ciągłego churnu.
+
+## Aktualizacja wykonania — 7 listopada 2026
+
+PR #416 i #417 scalono po review i zielonych wymaganych kontrolach.
+Diagnostyczny main zatrzymano z zachowaniem ownera i native execution Unknown.
+Po zatrzymaniu grupy Windows P22 oryginalny rygorystyczny reconciler potwierdził
+awarię próby `21294d69464d4230a09574eb9ea79649` bez zmiany kryteriów izolacji.
+Zachowano stare przygotowanie. Świeży proof ma SHA-256
+`3edd36708c32f73d7d6a63011494b9e4bb9b5a5fc2b12120f5f76750305e89d6`,
+a wynik `eb50da2de997dcb2fa16241ca5ee089cb688c41bd4db744017fe6feb7f890ead`.
+Niezależny odczyt potwierdził terminal i current `failed-confirmed` oraz brak
+`active`. Nie wdrożono propozycji source-pairs v2 ani wariantu group-local z PR #411.
+
+Źródła zadania zaktualizowano fast-forward do
+`08820339454b6e31856dd0a9b858f3220978e9b1` (PR #408). Cudze zmiany głównego
+checkoutu pozostały identyczne bajtowo. Dalsze bramki opisuje
+[plan kwalifikacji i mapowania FEM](2026-11-07-regional-physics-qualification-and-fem-marker-map.md).
+Build aplikacji i runtime docelowej grupy pozostają do wykonania.
