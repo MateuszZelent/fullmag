@@ -51,6 +51,34 @@ study.stages.add_run(until=1e-12)
             self.assertEqual(after.problem.magnets[0].object_id, "immutable-film")
             self.assertEqual(after.problem.magnets[0].name, "Renamed film")
 
+    def test_scene_roundtrip_preserves_requested_backend_device_for_four_lanes(self):
+        for backend in ("fdm", "fem"):
+            for device in ("cpu", "gpu"):
+                with self.subTest(backend=backend, device=device), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    mesh = ("study.cell(5e-9, 5e-9, 5e-9)" if backend == "fdm" else
+                            "study.objects.mesh.defaults(maximum_element_size=5e-9)")
+                    source = f"""import fullmag as fm
+study = fm.study("four-lanes")
+study.engine("{backend}")
+study.device("{device}", precision="double")
+{mesh}
+film = study.geometry(fm.Box(10e-9, 10e-9, 5e-9), name="Film",
+                      object_id="immutable-film", geometry_name="persisted_geom")
+film.Ms = 800e3
+film.Aex = 13e-12
+"""
+                    before = self.load(source, root, "before.py")
+                    scene = build_scene_document_from_builder(export_builder_draft(before))
+                    after = self.load(render_scene_document_as_script(scene), root, "after.py")
+                    for loaded in (before, after):
+                        draft = export_builder_draft(loaded)
+                        self.assertEqual(draft["requested_backend"], backend)
+                        self.assertEqual(draft["requested_device"], device)
+                        self.assertEqual(draft["requested_precision"], "double")
+                    self.assertEqual(before.problem.to_ir(include_geometry_assets=False)["geometry"],
+                                     after.problem.to_ir(include_geometry_assets=False)["geometry"])
+
     def test_legacy_geometry_names_remain_unchanged(self):
         film = fm.geometry(fm.Box(1e-8, 1e-8, 5e-9), name="film")
         self.assertEqual(film._resolved_geometry().geometry_name, "film_geom")

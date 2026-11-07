@@ -126,6 +126,21 @@ impl MicrostripClosedLoopIR {
     }
 }
 
+/// Explicit finite end connections for the three coplanar conductors.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CpwClosedLoopIR {
+    pub enabled: bool,
+    pub inlet_connection_length_m: f64,
+    pub inlet_crossbar_length_m: f64,
+    pub inlet_connection_part_id: String,
+    pub inlet_connection_conductivity_s_per_m: f64,
+    pub outlet_connection_length_m: f64,
+    pub outlet_crossbar_length_m: f64,
+    pub outlet_connection_part_id: String,
+    pub outlet_connection_conductivity_s_per_m: f64,
+}
+
 /// Local inlet/outlet face selectors for one conductor body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

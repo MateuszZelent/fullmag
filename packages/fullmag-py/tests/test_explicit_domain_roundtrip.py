@@ -169,6 +169,9 @@ study.stages.add_run(until=2e-12)
     def test_rejected_domain_mesh_preserves_previous_source_and_frozen_owners(self):
         exec(SOURCE, {})
         before = copy.deepcopy(world._build_problem().runtime_metadata["mesh_workflow"])
+        state_fields = ("_domain_mesh_source", "_domain_region_markers",
+                        "_domain_object_region_markers", "_domain_marker_owners")
+        frozen = copy.deepcopy([getattr(world._state, field) for field in state_fields])
         for kwargs in (
             {"region_markers": {"film_geom": 9}, "object_region_markers": {"Core": 9}},
             {"region_markers": {"film_geom": 9}, "marker_owners": []},
@@ -179,6 +182,7 @@ study.stages.add_run(until=2e-12)
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):
                     fm.domain_mesh("rejected.fullmag-mesh", **kwargs)
+                self.assertEqual([getattr(world._state, field) for field in state_fields], frozen)
                 after = world._build_problem().runtime_metadata["mesh_workflow"]
                 self.assertEqual(after, before)
 

@@ -965,6 +965,24 @@
       "symbol": "DOC-ANCHOR:fem-gsg-source-roundtrip-dependency",
       "responsibility": "Zakres zależności authoringu i ograniczenia dowodu.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "gsg-source-owner-rust",
+      "path": "crates/fullmag-authoring/src/validation.rs",
+      "symbol": "validate_scene_closed_loop_owner",
+      "responsibility": "Dokładne cztery części mikrostripu albo pięć GSG, materiały i położenie cut."
+    },
+    {
+      "id": "gsg-source-declaration-rust",
+      "path": "crates/fullmag-ir/src/antenna.rs",
+      "symbol": "CpwClosedLoopIR",
+      "responsibility": "Typowane jawne parametry geometrii połączeń, bez nowego schematu lub solvera."
+    },
+    {
+      "id": "gsg-source-bounds-rust",
+      "path": "crates/fullmag-authoring/src/geometry.rs",
+      "symbol": "cpw_layout_bounds",
+      "responsibility": "Granice uwzględniające oba połączenia w authoringu."
     }
   ],
   "public_api": {

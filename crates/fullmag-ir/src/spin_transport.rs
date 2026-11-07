@@ -883,8 +883,8 @@ impl StructuredCurrentClosureIR {
             }
             let frame = cut.plane.coordinate_frame.as_deref().unwrap_or("world");
             if schema_version == "structured_current_closure.v2" {
-                if frame != "object" || cut.plane.axis != StructuredCutAxisIR::Z || cut.region.region_id.is_none() {
-                    errors.push(format!("{cut_path}.plane v2 requires object-frame Z and explicit inlet region"));
+                if frame != "object" || !matches!(cut.plane.axis, StructuredCutAxisIR::X | StructuredCutAxisIR::Z) || cut.region.region_id.is_none() {
+                    errors.push(format!("{cut_path}.plane v2 requires object-frame X or Z and explicit inlet region"));
                 }
             } else if frame != "world" {
                 errors.push(format!("{cut_path}.plane v1 requires world coordinate_frame"));

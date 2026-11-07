@@ -1274,3 +1274,15 @@ mapowanie Python–IR, cztery interpretacje backendów i źródła kodu.
 Testy source-only nie kwalifikują siatki, solvera, błędu H, wzbudzenia spinowego
 lub zgodności z publikacją. Native build, UI E2E i zbieżność fizyczna pozostają
 osobnymi, niewykonanymi tu bramkami.
+
+Warstwa Rust wymaga tej samej walidacji authoringu: cztery części mikrostripu
+albo pięć części GSG, z dokładną zgodnością nazw i przewodności z geometrią.
+Nie dopuszcza dowolnej liczby części. Źródło GSG leży wewnątrz centralnej
+szyjki wejściowej na osi x; dla mikrostripu pozostaje oś z i poprzedni zakres.
+Odmowy obejmują brak części, kolizję ID, zły materiał, oś i koniec szyjki.
+crates/fullmag-authoring/src/validation.rs + validate_scene_closed_loop_owner
+oraz crates/fullmag-ir/src/antenna.rs + CpwClosedLoopIR przechowują tę samą
+deklarację. crates/fullmag-ir/src/spin_transport.rs + StructuredCurrentClosureIR
+waliduje typowane X/Z; crates/fullmag-authoring/src/geometry.rs +
+cpw_layout_bounds uwzględnia połączenia w bounds. To zgodność czytnika
+authoringu z istniejącym Pythonem GSG, bez zmiany wykonawcy transportu.

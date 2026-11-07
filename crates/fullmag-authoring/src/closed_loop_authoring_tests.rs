@@ -1,5 +1,5 @@
 //! Regression inputs emitted by the actual MicrostripGeometryEditorModel transaction.
-//! These tests are intentionally not compiled during the source-contract work.
+//! Source-only contracts compiled by the authorized GitHub CI lane.
 use super::*;
 
 fn authored_scene() -> SceneDocument {
@@ -72,4 +72,84 @@ fn legacy_world_plane_remains_omitted_and_unknown_frame_is_rejected() {
     assert_eq!(decoded.coordinate_frame.unwrap_or_default(), crate::SceneStructuredCutCoordinateFrame::World);
     assert_eq!(serde_json::to_value(decoded).unwrap(), plane);
     assert!(serde_json::from_value::<crate::SceneStructuredCutPlane>(serde_json::json!({"axis":"z","offset_m":0.0,"normal":"positive_axis","coordinate_frame":"unknown"})).is_err());
+}
+
+fn authored_gsg_scene() -> SceneDocument {
+    let mut scene = authored_scene();
+    let geometry = &mut scene.objects[0].geometry;
+    geometry.geometry_kind = "CPWAntennaLayout".into();
+    geometry.geometry_params = serde_json::json!({
+        "length_m": 20e-6, "thickness_m": 90e-9, "conductivity_s_per_m": 58e6,
+        "stations": [0.0, 1.0].map(|s| serde_json::json!({
+            "s": s, "signal_width_m": 200e-9, "left_gap_m": 250e-9,
+            "right_gap_m": 250e-9, "left_ground_width_m": 200e-9,
+            "right_ground_width_m": 200e-9
+        })),
+        "conductors": [
+            {"id": "center", "kind": "signal"},
+            {"id": "left", "kind": "ground_left"},
+            {"id": "right", "kind": "ground_right"}
+        ],
+        "loop": {
+            "enabled": true,
+            "inlet_connection_length_m": 2e-6, "inlet_crossbar_length_m": 200e-9,
+            "inlet_connection_part_id": "feed", "inlet_connection_conductivity_s_per_m": 30e6,
+            "outlet_connection_length_m": 2e-6, "outlet_crossbar_length_m": 200e-9,
+            "outlet_connection_part_id": "end", "outlet_connection_conductivity_s_per_m": 30e6
+        }
+    });
+    mutate_current(&mut scene, |current| {
+        current["materials"] = serde_json::json!(["center", "left", "right", "feed", "end"].map(|id|
+            serde_json::json!({"region": {"object_id": "object", "region_id": id},
+                "material": {"sigma_Spm": if matches!(id, "feed" | "end") {30e6} else {58e6}}})));
+        let cut = &mut current["structured_current_closure"]["source_cuts"][0];
+        cut["region"]["region_id"] = serde_json::json!("feed");
+        cut["plane"]["axis"] = serde_json::json!("x");
+        cut["plane"]["offset_m"] = serde_json::json!(-1e-6);
+    });
+    scene
+}
+
+#[test]
+fn gsg_owner_accepts_five_authored_parts_and_central_inlet_source_cut() {
+    let scene = authored_gsg_scene();
+    check(&scene).unwrap();
+    let builder = crate::scene_document_to_script_builder(&scene).unwrap();
+    assert_eq!(crate::scene_document_from_script_builder(&builder).current_transports, scene.current_transports);
+}
+
+#[test]
+fn gsg_owner_rejects_wrong_cut_axis_region_and_neck_endpoints() {
+    for (path, value) in [
+        ("/structured_current_closure/source_cuts/0/plane/axis", serde_json::json!("z")),
+        ("/structured_current_closure/source_cuts/0/plane/axis", serde_json::json!("y")),
+        ("/structured_current_closure/source_cuts/0/region/region_id", serde_json::json!("left")),
+        ("/structured_current_closure/source_cuts/0/plane/offset_m", serde_json::json!(-2e-6 + 200e-9)),
+        ("/structured_current_closure/source_cuts/0/plane/offset_m", serde_json::json!(-1.9e-6)),
+        ("/structured_current_closure/source_cuts/0/plane/offset_m", serde_json::json!(0.0)),
+        ("/materials/1/material/sigma_Spm", serde_json::json!(1.0)),
+        ("/materials/1/region/region_id", serde_json::json!("unknown")),
+    ] {
+        let mut scene = authored_gsg_scene();
+        mutate_current(&mut scene, |current| *current.pointer_mut(path).unwrap() = value);
+        assert!(check(&scene).is_err(), "invalid GSG input accepted: {path}");
+    }
+    let mut scene = authored_gsg_scene();
+    mutate_current(&mut scene, |current| { current["materials"].as_array_mut().unwrap().pop(); });
+    assert!(check(&scene).is_err());
+}
+
+#[test]
+fn gsg_owner_rejects_disabled_degenerate_and_colliding_end_connections() {
+    for (key, value) in [
+        ("enabled", serde_json::json!(false)),
+        ("inlet_crossbar_length_m", serde_json::json!(2e-6)),
+        ("outlet_crossbar_length_m", serde_json::json!(0.0)),
+        ("inlet_connection_part_id", serde_json::json!("center")),
+        ("outlet_connection_conductivity_s_per_m", serde_json::json!(-1.0)),
+    ] {
+        let mut scene = authored_gsg_scene();
+        scene.objects[0].geometry.geometry_params["loop"][key] = value;
+        assert!(check(&scene).is_err(), "invalid GSG geometry accepted: {key}");
+    }
 }
