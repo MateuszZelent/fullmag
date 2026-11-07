@@ -399,18 +399,20 @@ function executionStageIds(execution, runId, session) {
 }
 
 export function studyStageTerminalScope(execution, authoredIds, expectedExecutedIds) {
+  const selected = new Set(expectedExecutedIds);
+  assert.equal(selected.size, expectedExecutedIds.length);
   assert.equal(execution.total_stages, authoredIds.length);
   assert.deepEqual(execution.stages.map((row) => row.stage_id), authoredIds,
     "P22 stage view must preserve the authored definitions");
-  const expectedStatuses = authoredIds.map((id) => expectedExecutedIds.includes(id) ? "completed" : "pending");
+  const expectedStatuses = authoredIds.map((id) => selected.has(id) ? "completed" : "pending");
   assert.deepEqual(execution.stage_statuses, expectedStatuses,
     "P22 current execution includes another or unfinished stage");
   assert.deepEqual(execution.completed_stage_indexes,
-    authoredIds.flatMap((id, index) => expectedExecutedIds.includes(id) ? [index] : []));
+    authoredIds.flatMap((id, index) => selected.has(id) ? [index] : []));
   for (const [index, row] of execution.stages.entries()) {
     assert.equal(row.index, index);
     assert.equal(row.status, expectedStatuses[index]);
-    if (!expectedExecutedIds.includes(row.stage_id)) {
+    if (!selected.has(row.stage_id)) {
       for (const key of ["started_at_unix_ms", "completed_at_unix_ms", "completed_step"]) {
         assert.equal(row[key], undefined, "An unselected stage has execution metadata");
       }
