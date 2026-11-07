@@ -622,7 +622,7 @@
     {
       "id": "regional-qualification-measurement-controls",
       "path": "scripts/benchmarks/test_fdm_regions_interaction_abi_checks.py",
-      "symbol": "GradientMeasurementTests",
+      "symbol": "class GradientMeasurementTests",
       "responsibility": "Reject global-Ms substitution, a wrong field factor, nonfinite and uninformative measurements."
     },
     {

@@ -33,7 +33,7 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
 - [x] Potwierdzić source/common Git/storage na WSL, port i budżet miejsca.
 - [x] Wykonać `just docker-dev-toolchain`, a następnie
   `just docker-dev <worktree> 3345 '' required fem-demag-poisson`.
-- [ ] Zweryfikować receipt, dokładne obrazy i kontenery, mounty RO/RW,
+- [x] Zweryfikować receipt, dokładne obrazy i kontenery, mounty RO/RW,
   prywatny volume i ledger grupy, API, native contract oraz browser QA.
 
 ## 2. Brakujące dowody fizyki i poprawki

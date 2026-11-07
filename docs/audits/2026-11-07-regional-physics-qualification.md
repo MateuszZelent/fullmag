@@ -204,3 +204,10 @@ Surowy raport SHA-256
 `ffb9614bc8c3d23115895abbf583d1c7613b9cc13c7fafc536eacfae9fc125cf`
 zachowano w parze `fdm_regions_interaction_abi_checks.py/.zarr` na WSL,
 wraz z wejściami, kodem, nagłówkiem i hashem biblioteki przed/po.
+
+
+CI dokumentacji dla `067fbd11c3c600e07d64500e1c1c74a907f24d56` wykryło
+niepoprawny zapis dwóch symboli w source-map i brak dwóch wierszy indeksu 0910.
+Poprawiono odwołania na jednoznaczne `class GradientMeasurementTests` i
+`class StudyBuilder` oraz uzupełniono indeks. Walidatory obu zmienionych
+manifestów źródłowych zakończyły się kodem 0. Nie zmieniano kryteriów naukowych.

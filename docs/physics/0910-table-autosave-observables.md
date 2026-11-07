@@ -451,6 +451,8 @@ completed samples and record an incomplete marker and stop reason.
 
 | Repository path | Symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Configure and explicitly clear the table for subsequent declarations without an authored stage. |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_scene_sampling_outputs` | Preserve per-Run table sampling and missing/null table state during canonical capture. |
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | Validate public cadence and lower it into table-autosave IR. |
 | `packages/fullmag-py/tests/test_table_autosave.py` | `test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir` | Verify physical-time table cadence lowers to `SamplingIR`. |
 | `packages/fullmag-py/tests/test_table_autosave.py` | `test_relaxation_table_autosave_lowers_accepted_step_cadence` | Verify accepted-step cadence lowers to `SamplingIR`. |

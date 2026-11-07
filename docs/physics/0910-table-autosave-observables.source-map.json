@@ -81,7 +81,7 @@
     {
       "id": "table-flat-disable",
       "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "def tableautosave",
+      "symbol": "class StudyBuilder",
       "responsibility": "Configure or explicitly clear the table for subsequent declarations without adding an authored stage."
     },
     {
