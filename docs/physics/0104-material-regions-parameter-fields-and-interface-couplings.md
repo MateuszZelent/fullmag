@@ -502,6 +502,23 @@ Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
 implemented path.
 
+#### CPU observation workspace lifetime
+
+Repeated accepted-state field capture must reuse an observation FFT workspace
+for the unchanged grid, cell dimensions and demagnetizing boundary policy.
+The observation workspace is separate from the integration workspace so its
+FFT counters do not become solver counters. Reuse concerns scratch buffers,
+FFT plans and Newell spectra; each capture still evaluates the current accepted
+magnetization and local $M_s$ at the accepted time. It must preserve the
+full-domain stray field in inactive cells and the solver's active-cell mask.
+The energy, exchange connection operator, LLG steps, output cadence, thermal
+counter and requested execution policy remain the same. Compare fresh/reused
+fields and densities for successive states, including heterogeneous $M_s$ and
+inactive cells; verify that one workspace lifecycle serves both captures.
+Runtime timing is a separate gate. A cancelled timing baseline is not a
+completed physics trajectory, and a development build is not a release
+throughput qualification.
+
 ### 3.2 FEM
 
 FEM realizes material fields as coefficients over elements, nodes, or
@@ -1433,3 +1450,7 @@ must include:
 | FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |
 | FEM shared-node regression fixture | `backends/fem/tests/element_dg0_workflow_contract.cpp` | `make_dg0_shared_node_plan` | Analytical ABI regression with unequal volumes: selected elements give 0.5; the induced node set gives 9/14. The initial-state average contract runs separately from MFEM dynamics in CI. |
 | FEM Ms regressions | `crates/fullmag-plan/src/tests.rs` | `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient` | Planner rejection table for transport with spatial `Ms`. |
+| CPU observation FFT | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `observable_demag_field_with_workspace` | Full-domain stray field with reusable observation scratch and spectra. |
+| CPU observation FFT | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `observable_effective_field_with_workspace` | Current accepted effective field without rebuilding observation FFT plans. |
+| CPU accepted capture | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `capture_full_active_cpu_fields` | Separate observation workspace lifetime and integrator telemetry. |
+| CPU observation regression | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `cpu_snapshot_reuses_observation_fft_workspace_across_states` | Fresh/reused field and density equality, current states, inactive cells and local Ms. |

@@ -291,9 +291,10 @@ również przeszło: max |dm| = 0, max względna różnica energii 1,0050e-14,
 a H_ex/H_eff w fp32 są identyczne. Tolerancje tego porównania zapisano
 w `uniform-invariance-plan.v1.json` przed wykonaniem przypadków uniform.
 
-Przypadek 1000 ziaren i osobny dowód Compute Fields z zaakceptowanego stanu
-fp32 są jeszcze **NOT VERIFIED**. Stan i surowe dowody
-są zachowywane w `regional_public_matrix_campaign_phase2.zarr` na ext4 WSL.
+Krótki przypadek 1000 ziaren CPU/double–CUDA/single również przeszedł;
+pełne długie porównanie ziaren i osobny dowód Compute Fields z zaakceptowanego
+stanu fp32 są jeszcze **NOT VERIFIED**. Stan i surowe dowody są zachowywane
+w Zarr kampanii phase2 oraz phase3 na ext4 WSL.
 
 ## Dodatkowa natywna kontrola PBC, singleton axes i u32
 
@@ -317,3 +318,51 @@ Ponowny niezależny review poprawek harnessu również nie uruchomił się z pow
 `builder error`; wynik testów jest odrębnym dowodem. Publiczna bramka
 GPU/fp32/PBC pozostaje bez zmian. To nie jest kwalifikacja całej macierzy,
 większych siatek okresowych ani zakończenie mapowania FEM.
+
+
+## Narzut obserwacji CPU ujawniony przez 1000 ziaren
+
+Kampania phase2 zachowała 16 ukończonych wykonań. Długi CPU/double dla ziaren,
+request `regional-matrix-a2-grains_cpu_double_long`, run
+`run-live-104b64b087045c7bb5e4bf8b662e2ad0277e0c66efb78723c588395ec5320123`,
+zatrzymano jedną oficjalną komendą Stop przypiętą do API/session/run.
+Obserwator potwierdził terminal `cancelled`; anulowania nie uznano za sukces
+fizyki. Zachowano częściowe M/H_ex/H_eff, energie i telemetrię 493 kroków
+(17 plików, 70 232 960 bajtów) w `performance_baseline_red` sąsiedniego Zarr.
+
+Mediany dodatnich kroków: callback 2,5830 s, raport solvera 0,1504 s,
+`field_copy_wall_time_ns` 2,3855 s. Ostatnia nazwa obejmuje materializację pól,
+nie tylko memcpy ani samą metrykę `preview_wall_time_ns`. Źródłowo dwa pola
+pełnego capture tworzyły nowy FftWorkspace z jądrami Newella przy każdym
+stanie. Poprawka utrzymuje osobny, dopasowany do geometrii workspace obserwacji
+przez bieg, bez zmiany integratora, lokalnego Ms ani kadencji wyjść.
+
+Nowa regresja porównuje świeże i ponownie użyte pola/gęstości dla dwóch stanów,
+lokalnego Ms i nieaktywnych komórek oraz sprawdza lifecycle i oddzielenie
+liczników solvera. Review źródeł bez konkretnych uwag. Kompilacja i runtime
+poprawki: **PASS**, resume `435c60d597bd4dc99c0915259e6f9815`,
+HEAD `bee88a7b6a88fffa39e627fb1789e17e830efe9e` i dirty snapshot SHA-256
+`afc3613400276fac1475b17099ed853290935856e765c11c25aa22d0e60e7d1c`.
+Kontrakt FEM Poisson przeszedł; testowana i opublikowana biblioteka mają
+identyczny SHA-256. Nowa regresja Rust wymaga jeszcze wykonania w CI.
+
+Przed nowym buildem przypięto limit mediany materializacji najwyżej połowy
+baseline. Dziesięć dodatnich zaakceptowanych kroków nowego problemu z tymi
+samymi wejściami dało **95,8049 ms**, stosunek **0,04017** do baseline,
+czyli około **24,9 razy krótszą** materializację. Gate: **PASS**.
+Jest to pomiar ścieżki obserwacji DEV, nie kwalifikacja przepustowości release
+ani czasu samych kerneli GPU. Wejścia, kadencja i tolerancje fizyczne pozostały
+te same. Nowy krótki CPU run:
+`run-live-991ea1adb0960e73fa664a3682d31a4ea2d1c6e58efa642fa8b2756dc91e271f`.
+
+Krótki CUDA/single dla 1000 ziaren również zakończył się **PASS**, run
+`run-live-fcabe337235f0e66732d28e63c97071a1105527899f492e961354acd5bb86e45`.
+Max |dm| = 2,0305e-7, max względna różnica energii = 7,2792e-8,
+H_ex/H_eff = 1,9927e-7 / 2,1468e-7, poniżej limitów 1e-5.
+Tym samym wszystkie pięć krótkich porównań fp32 przeszło; globalne maksima:
+|dm| 2,0305e-7, energia 1,9282e-7, pola 2,1468e-7.
+Phase3 zachowuje 16 wcześniejszych lane i dwa nowe krótkie lane ziaren.
+Długi CPU ma nowy request `regional-matrix-a3-grains_cpu_double_long`;
+anulowany request a2 nie jest odtwarzany. Długie porównanie ziaren nadal trwa,
+a osobna kontrola 1000 zwycięskich regionów i ich wartości materiałowych
+pozostaje wymaganą bramką po ukończeniu wszystkich czterech lane.

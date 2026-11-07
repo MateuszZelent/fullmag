@@ -614,6 +614,30 @@
   ],
   "sources": [
     {
+      "id": "cpu-observation-demag-workspace",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "observable_demag_field_with_workspace",
+      "responsibility": "Evaluate full-domain stray field for the current state with a retained, geometry-matched observation FFT workspace."
+    },
+    {
+      "id": "cpu-observation-effective-workspace",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "observable_effective_field_with_workspace",
+      "responsibility": "Reuse observation FFT plans and spectra while preserving accepted time and local material fields."
+    },
+    {
+      "id": "cpu-accepted-observation-workspace-lifetime",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "capture_full_active_cpu_fields",
+      "responsibility": "Capture accepted full fields with a private observation workspace, separate from integrator telemetry."
+    },
+    {
+      "id": "cpu-observation-workspace-reuse-regression",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "cpu_snapshot_reuses_observation_fft_workspace_across_states",
+      "responsibility": "Compare fresh/reused fields and densities across states, heterogeneous Ms and inactive cells; verify retained FFT lifecycle and isolated solver counters."
+    },
+    {
       "id": "accepted-fdm-precision-binding",
       "path": "crates/fullmag-api/src/accepted_study_worker.rs",
       "symbol": "accepted_fdm_execution_precision",

@@ -285,6 +285,7 @@ jobs:
       - name: Run FDM region exchange operator contracts
         run: |
           cargo test --locked -p fullmag-engine --lib fdm::shared::exchange_operator::tests
+          cargo test --locked -p fullmag-runner --lib cpu_snapshot_reuses_observation_fft_workspace_across_states
           cargo test --locked -p fullmag-engine --lib exchange_face_tests
           cargo test --locked -p fullmag-runner --lib fdm::cpu::reference::tests::dmi_decoupled_
           cargo test --locked -p fullmag-plan --lib fdm_region_
