@@ -1310,3 +1310,10 @@ jawne `--network-subnet`. Nie usuwaj cudzych sieci. Hash receiptu pakietu w
 pozostawionej proweniencji jest referencją; recovery sprawdza zgodność commit,
 snapshot i tożsamości native ze zarchiwizowanym drainem, a nie deklaruje
 ponownego odczytania usuniętego kontenera lub kwalifikacji jego binariów.
+
+
+### Zachowanie zakończonego natywnie Study przy zablokowanym Running w API
+
+Dla dokładnie przypiętej grupy `just docker-dev-stop-native-terminal <attempt> <config_sha256> <source_root> <port>` zapisuje publiczny stan, wiązanie zaakceptowanej komendy oraz niezmienne rekordy runu. Obsługuje zwolniony startup Study albo pojedynczy HTTP Compute nadal oznaczony jako Accepted, jeśli jego trwała recepta i bieżący dziennik wskazują ten sam run. Pozostała kolejka i aktywne komendy muszą być puste. Odczytowy preflight poprzedza zamknięcie dokładnego procesu API; właściwy natywny odczyt pod blokadą i potwierdzony drain pozostają obowiązkowe. Dla automatycznego HTTP Compute brak `start_release.json` jest przypiętą częścią dowodu. Probe korzysta z tej samej konfiguracji ABI CPU co entrypoint obrazu.
+
+Po sprawdzeniu terminalnego receiptu stopu i jego SHA `just docker-dev-recreate-native-terminal <attempt> <config_sha256> <source_root> <stop_attempt> <stop_sha256> <port>` archiwizuje całą poprzednią przestrzeń runtime i ledgeru przed utworzeniem świeżego środowiska. Dowód zachowania natywnego wyniku służy tej archiwizacji; odtworzenie aktywnego widoku wymaga własnego kontraktu. Przebudowa zachowuje jawny pojedynczy subnet z przypiętego Compose i ponownie sprawdza jego dostępność. Wszystkie kroki pozostają lokalne dla wybranej grupy WSL.

@@ -12,7 +12,8 @@ import re
 
 from docker_build_control import BuildControlError
 from docker_volume_terminal_observation import (canonical, decode as _decode, digest as _digest,
-                                                owner_identity as _owner_identity, portable as _portable)
+                                                _compute_proof_binding, owner_identity as _owner_identity,
+                                                portable as _portable)
 
 SCHEMA = "fullmag.native-terminal-stop-capture.v1"
 PREFLIGHT_SCHEMA = "fullmag.native-terminal-stop-preflight.v1"
@@ -124,18 +125,39 @@ def snapshot_binding(snapshot):
     counts = {name: commands.get(name + "_count") for name in (
         "pending", "accepted", "dispatched", "running", "completed", "rejected", "failed")}
     require(all(type(value) is int and value >= 0 for value in counts.values())
-            and all(counts[name] == 0 for name in ("pending", "accepted", "dispatched", "running")),
-            "active commands remain")
+            and all(counts[name] == 0 for name in ("pending", "dispatched", "running"))
+            and counts["accepted"] in (0, 1),
+            "more than one accepted command or another active command remains")
+    require(all(isinstance(item, dict) for item in entries), "command ledger entry is malformed")
+    command_ids = [item.get("command_id") for item in entries]
+    sequences = [item.get("seq") for item in entries]
+    require(all(isinstance(command_id, str) and command_id for command_id in command_ids)
+            and len(set(command_ids)) == len(entries)
+            and all(type(seq) is int and seq > 0 for seq in sequences)
+            and len(set(sequences)) == len(entries),
+            "command ledger identities or sequences differ")
+    accepted_entries = [item for item in entries if item.get("status") == "accepted"]
+    require(counts["accepted"] == len(accepted_entries), "accepted command counter differs from the ledger")
+    if accepted_entries:
+        entry = accepted_entries[0]
+        require(entry.get("kind") in {"solve", "run", "relax"},
+                "accepted command is outside the supported HTTP Compute scope")
+        require(type(entry.get("created_at_unix_ms")) is int and entry["created_at_unix_ms"] > 0
+                and entry.get("dispatched_at_unix_ms") is None
+                and entry.get("completed_at_unix_ms") is None
+                and entry.get("completion_status") is None and entry.get("error") is None,
+                "accepted command is not an undispatched live entry")
     for name in ("completed", "rejected", "failed"):
         require(counts[name] == sum(item.get("status") == name for item in entries if isinstance(item, dict)),
                 "command counters differ")
     require(sum(counts.values()) == len(entries) and all(
-        isinstance(item, dict) and item.get("status") in {"completed", "rejected", "failed"}
-        and type(item.get("completed_at_unix_ms")) is int and item["completed_at_unix_ms"] > 0
-        and item.get("completion_status") in {
-            "completed": {"succeeded", "completed", "cancelled"},
-            "rejected": {"rejected"}, "failed": {"failed"},
-        }[item["status"]] for item in entries),
+        isinstance(item, dict) and item.get("status") in {"accepted", "completed", "rejected", "failed"}
+        and (item.get("status") == "accepted" or (
+            type(item.get("completed_at_unix_ms")) is int and item["completed_at_unix_ms"] > 0
+            and item.get("completion_status") in {
+                "completed": {"succeeded", "completed", "cancelled"},
+                "rejected": {"rejected"}, "failed": {"failed"},
+            }[item["status"]])) for item in entries),
         "command completion evidence is incomplete")
     runtime = snapshot.get("runtime", {})
     require(runtime.get("schema_version") == "application_service_status.v1"
@@ -149,7 +171,49 @@ def snapshot_binding(snapshot):
             "runtime": runtime, "health": {"status": "ok", "active_session": True}}
 
 
-def run_binding(read_store, preflight):
+def _accepted_compute_ledger_binding(preflight, run_id, command, compute_binding, receipt):
+    ledger = preflight.get("commands", {})
+    entries = ledger.get("commands")
+    require(isinstance(entries, list), "current command ledger is unavailable")
+    accepted = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "accepted"]
+    require(len(accepted) == 1 and ledger.get("accepted_count") == 1,
+            "exactly one current accepted HTTP Compute command is required")
+    entry = accepted[0]
+    seq = entry.get("seq")
+    require(type(seq) is int and seq > 0,
+            "accepted command sequence is missing or invalid")
+    require(entry.get("command_id") == compute_binding.get("command_id")
+            and entry.get("kind") == command.get("kind")
+            and entry.get("client_intent_id") == command.get("client_intent_id")
+            and entry.get("request_id") == receipt.get("request_id"),
+            "current accepted command differs from its immutable Compute receipt")
+    requested_target = command.get("target")
+    bound_target = {"kind": "run", "run_id": run_id}
+    require(isinstance(requested_target, dict)
+            and requested_target.get("kind") in {"study", "run", "current_stage", "stage_index", "stage_id"}
+            and (requested_target.get("kind") != "run"
+                 or requested_target.get("run_id") in (None, run_id))
+            and entry.get("target") in (requested_target, bound_target),
+            "accepted command target differs from the requested scope or bound run")
+    require(type(entry.get("created_at_unix_ms")) is int and entry["created_at_unix_ms"] > 0
+            and entry.get("dispatched_at_unix_ms") is None
+            and entry.get("completed_at_unix_ms") is None
+            and entry.get("completion_status") is None and entry.get("error") is None,
+            "accepted command is not an undispatched live entry")
+    return {"command_id": entry["command_id"], "kind": entry["kind"], "seq": seq,
+            "client_intent_id": entry.get("client_intent_id"), "request_id": entry.get("request_id"),
+            "target": entry.get("target")}
+
+
+def optional_store_reader(store_root):
+    """Read one optional durable record using the accepted-store no-follow reader."""
+    from docker_volume_accepted_reattach import _read_store_regular
+    return lambda relative: _read_store_regular(
+        store_root, relative, "native terminal optional accepted record", maximum=MAX_BYTES, optional=True,
+    )
+
+
+def run_binding(read_store, preflight, read_optional_store=None):
     run = portable(preflight.get("run_id"))
     prefix = "runs/" + run + "/"
     intent_raw = read_store(prefix + "run_intent.json")
@@ -168,17 +232,39 @@ def run_binding(read_store, preflight):
             and live.get("scene_revision") == preflight.get("scene_revision")
             and snapshot.get("definition_revision") == preflight.get("scene_revision"),
             "accepted session or scene differs")
-    # This mode is deliberately limited to a released startup Study.
-    source_id = portable(live.get("request_idempotency_key"))
-    source_sha = digest(live.get("startup_source_sha256"))
-    require(live.get("command_id") == source_id and live.get("command") == {
-        "kind": "startup_script", "request_id": source_id, "source_sha256": source_sha},
-        "accepted startup binding differs")
-    release_raw = read_store(prefix + "start_release.json")
-    release = decode(release_raw)
-    require(release.get("schema_version") in {"accepted_run_start_release.v1", "accepted_run_start_release.v2"}
-            and release.get("run_id") == run and release.get("specification_sha256") == intent.get("payload_sha256"),
-            "native Start release differs")
+    command = live.get("command")
+    require(isinstance(command, dict), "accepted RunIntent command is missing")
+    accepted_count = preflight.get("commands", {}).get("accepted_count")
+    source_id = command.get("kind")
+    if source_id == "startup_script":
+        require(accepted_count == 0, "startup RunIntent cannot carry an accepted HTTP Compute command")
+        source_id = portable(live.get("request_idempotency_key"))
+        source_sha = digest(live.get("startup_source_sha256"))
+        require(live.get("command_id") == source_id and command == {
+            "kind": "startup_script", "request_id": source_id, "source_sha256": source_sha},
+            "accepted startup binding differs")
+        release_raw = read_store(prefix + "start_release.json")
+        release = decode(release_raw)
+        require(release.get("schema_version") in {"accepted_run_start_release.v1", "accepted_run_start_release.v2"}
+                and release.get("run_id") == run and release.get("specification_sha256") == intent.get("payload_sha256"),
+                "native Start release differs")
+        start_release_sha256 = sha(release_raw)
+        # Keep existing v1 startup captures usable after this extension.
+        source_binding = {"start_release_sha256": start_release_sha256}
+    else:
+        require(source_id in {"solve", "run", "relax"}, "RunIntent is not a supported HTTP Compute")
+        require(type(command.get("seq")) is int and command["seq"] == 0,
+                "direct Compute RunIntent sequence must remain unassigned before API publication")
+        require(callable(read_optional_store), "direct Compute requires the no-follow optional record reader")
+        release_raw = read_optional_store(prefix + "start_release.json")
+        require(release_raw is None, "direct HTTP Compute unexpectedly has a native Start release")
+        compute_binding = _checked(lambda _: _compute_proof_binding(intent, live, command), None)
+        receipt = live.get("request_receipt", {})
+        accepted_command = _accepted_compute_ledger_binding(
+            preflight, run, command, compute_binding, receipt,
+        )
+        source_binding = {"source_kind": "http_compute", "compute": compute_binding,
+                          "accepted_command": accepted_command, "start_release_sha256": None}
     tasks = catalog.get("tasks")
     require(catalog.get("schema_version") == "run_catalog.v1" and catalog.get("run_id") == run
             and type(catalog.get("revision")) is int and catalog["revision"] > 0
@@ -186,13 +272,16 @@ def run_binding(read_store, preflight):
                 isinstance(task, dict) and task.get("lifecycle") == "succeeded" for task in tasks),
             "native tasks are not all Succeeded")
     return {"run_id": run, "intent_sha256": sha(intent_raw), "catalog_sha256": sha(catalog_raw),
-            "start_release_sha256": sha(release_raw), "specification_sha256": digest(intent.get("payload_sha256"))}
+            **source_binding, "specification_sha256": digest(intent.get("payload_sha256"))}
 
 
 # Fixed read-only transport. No code is imported from the selected/foreign run.
-PROBE = r'''import hashlib,json,re,sys,urllib.request
+PROBE = r'''import hashlib,json,re,stat,sys,urllib.request
 sys.path.insert(0,"/opt/fullmag")
 import runtime_service as service
+import entrypoint
+# Reuse the fixed image-owned ABI configuration before invoking native CLI reads.
+entrypoint._configure_device_access()
 paths=service.canonical_paths()
 instance=None
 MAX=8*1024*1024
@@ -228,12 +317,21 @@ before=snapshot()
 owner=service._service_status(paths)
 service._validate_terminal_owner(owner,state="ready",name="native terminal stop owner")
 config=config_digest()
+def optional_record_pin(path):
+ service._assert_no_links(path.parent,"native terminal optional record parent")
+ try: metadata=path.lstat()
+ except FileNotFoundError: return None
+ if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+  raise RuntimeError("native terminal optional record is not a regular non-link file")
+ return hashlib.sha256(service._bounded_regular(path,"native terminal optional record",MAX)).hexdigest()
 def run_pins():
  run=before["run"]["run_id"]
  if not isinstance(run,str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}",run) is None:
   raise RuntimeError("invalid accepted run identity")
- return {name:hashlib.sha256(service._bounded_regular(paths.store/"runs"/run/name,"native terminal accepted record",MAX)).hexdigest()
-  for name in ("run_intent.json","run_catalog.json","start_release.json")}
+ root=paths.store/"runs"/run
+ return {"run_intent.json":hashlib.sha256(service._bounded_regular(root/"run_intent.json","native terminal accepted record",MAX)).hexdigest(),
+  "run_catalog.json":hashlib.sha256(service._bounded_regular(root/"run_catalog.json","native terminal accepted record",MAX)).hexdigest(),
+  "start_release.json":optional_record_pin(root/"start_release.json")}
 pins=run_pins()
 evidence=service._run_cli(paths,["runtime","service-inspect-terminal-run","--config",str(paths.config),
  "--config-sha256",config,"--run-id",before["run"]["run_id"]],timeout=30)
@@ -253,7 +351,7 @@ def capture(backend_id, store_root):
     before, after = snapshot_binding(observed.get("before")), snapshot_binding(observed.get("after"))
     require(before == after, "API/session/run/scene/resources changed during native inspection")
     read_store = _store_reader(store_root)
-    binding = run_binding(read_store, before)
+    binding = run_binding(read_store, before, optional_store_reader(store_root))
     require(observed.get("run_pins") == {"run_intent.json": binding["intent_sha256"],
             "run_catalog.json": binding["catalog_sha256"], "start_release.json": binding["start_release_sha256"]},
             "accepted records changed around native fenced inspection")
@@ -322,7 +420,8 @@ def validate_fresh(control, *, stop_attempt, stop_sha256, source_root, attempt, 
     require(captured.get("preflight", {}).get("schema") == PREFLIGHT_SCHEMA
             and captured["preflight"].get("public_run", {}).get("status") == "running",
             "literal public Running observation is missing")
-    require(run_binding(_store_reader(store_root), captured["preflight"]) == captured.get("run_binding"),
+    require(run_binding(_store_reader(store_root), captured["preflight"], optional_store_reader(store_root))
+            == captured.get("run_binding"),
             "stopped accepted run changed after native inspection")
     require(sha(read(CONFIG_PATH)) == captured.get("native_config_sha256"), "native config changed after stop")
     drain = decode(read(root + "backend-drain.json"))
@@ -386,7 +485,7 @@ API_BINARY = "/opt/fullmag/package/bin/fullmag-api"
 # Reuse only fixed trusted transport definitions, never any run-owned code.
 _QUIESCE_PREFIX = PROBE.split("before=snapshot()", 1)[0]
 _QUIESCE_COMMON = r'''
-import os,pathlib,signal,socket,time
+import os,pathlib,signal,socket,stat,time
 API_BINARY="/opt/fullmag/package/bin/fullmag-api"
 CAUSE="Fullmag API exited unexpectedly (-15)"
 def canon(value):
@@ -404,11 +503,20 @@ def proc_pin(pid):
  exe=os.readlink(root/"exe")
  if exe!=str(pathlib.Path(API_BINARY).resolve(strict=True)): raise RuntimeError("API executable differs")
  return {"pid":pid,"start_token":fields[19],"ppid":int(fields[1]),"argv":[API_BINARY],"exe":exe}
+def optional_record_pin(path):
+ service._assert_no_links(path.parent,"API quiescence optional record parent")
+ try: metadata=path.lstat()
+ except FileNotFoundError: return None
+ if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+  raise RuntimeError("API quiescence optional record is not a regular non-link file")
+ return hashlib.sha256(service._bounded_regular(path,"API quiescence optional record",MAX)).hexdigest()
 def run_pins_for(run):
  if not isinstance(run,str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}",run) is None:
   raise RuntimeError("invalid accepted run identity")
- return {name:hashlib.sha256(service._bounded_regular(paths.store/"runs"/run/name,"API quiescence accepted record",MAX)).hexdigest()
-  for name in ("run_intent.json","run_catalog.json","start_release.json")}
+ root=paths.store/"runs"/run
+ return {"run_intent.json":hashlib.sha256(service._bounded_regular(root/"run_intent.json","API quiescence accepted record",MAX)).hexdigest(),
+  "run_catalog.json":hashlib.sha256(service._bounded_regular(root/"run_catalog.json","API quiescence accepted record",MAX)).hexdigest(),
+  "start_release.json":optional_record_pin(root/"start_release.json")}
 def api_binding(value):
  status=value["status"]; session=status["session"]; resources=status["resources"]
  return {"schema":"fullmag.native-terminal-stop-preflight.v1","api_instance_id":value["api_instance_id"],
@@ -502,8 +610,12 @@ print(json.dumps({"evidence":evidence,"run_pins":prepared["run_pins"],"retained_
 
 
 def _record_pins(binding):
-    return {"run_intent.json": binding["intent_sha256"], "run_catalog.json": binding["catalog_sha256"],
-            "start_release.json": binding["start_release_sha256"]}
+    release_pin = binding.get("start_release_sha256")
+    if release_pin is not None:
+        digest(release_pin)
+    return {"run_intent.json": digest(binding.get("intent_sha256")),
+            "run_catalog.json": digest(binding.get("catalog_sha256")),
+            "start_release.json": release_pin}
 
 
 def prepare_api_quiescence(backend_id, store_root):
@@ -515,7 +627,7 @@ def prepare_api_quiescence(backend_id, store_root):
     observed = decode(result.stdout)
     preflight = snapshot_binding(observed.get("before"))
     require(preflight == snapshot_binding(observed.get("after")), "API changed during quiescence preparation")
-    binding = run_binding(_store_reader(store_root), preflight)
+    binding = run_binding(_store_reader(store_root), preflight, optional_store_reader(store_root))
     require(observed.get("run_pins") == _record_pins(binding), "accepted records changed before quiescence intent")
     owner = observed.get("ready_owner", {})
     require(owner.get("state") == "ready", "quiescence owner is not Ready")
@@ -540,7 +652,8 @@ def quiesce_api_and_capture(backend_id, store_root, intent):
     require(len(result.stdout) <= MAX_BYTES, "quiesced capture exceeds bound")
     observed = decode(result.stdout)
     prepared = intent["prepared"]
-    require(run_binding(_store_reader(store_root), prepared["preflight"]) == prepared["run_binding"]
+    require(run_binding(_store_reader(store_root), prepared["preflight"], optional_store_reader(store_root))
+            == prepared["run_binding"]
             and observed.get("run_pins") == prepared["run_pins"], "accepted records changed after API quiescence")
     evidence = observed.get("evidence", {})
     terminal_sha = digest(evidence.get("terminal_evidence_sha256"))

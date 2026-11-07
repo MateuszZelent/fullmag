@@ -1,6 +1,8 @@
 """Pure native-terminal stop contracts; no Docker, API, drain or solve calls."""
 import copy
 import json
+import pathlib
+import tempfile
 import types
 import unittest
 from unittest import mock
@@ -45,6 +47,37 @@ def records():
         "start_release.json": {"schema_version": "accepted_run_start_release.v1", "run_id": RUN, "specification_sha256": "b" * 64}}
 
 
+def http_compute_snapshot():
+    value = snapshot()
+    command_id = "fm-http-compute-1"
+    value["commands"].update(revision=4, accepted_count=1, commands=[{
+        "command_id": command_id, "seq": 3, "kind": "relax", "status": "accepted",
+        "client_intent_id": "study:relax:p22", "request_id": "request-http-p22",
+        "target": {"kind": "run", "run_id": RUN}, "created_at_unix_ms": 1234,
+        "dispatched_at_unix_ms": None, "completed_at_unix_ms": None,
+        "completion_status": None, "error": None,
+    }])
+    return value
+
+
+def http_compute_records():
+    value = records()
+    command_id = "fm-http-compute-1"
+    key_sha = "d" * 64
+    requested_target = {"kind": "run"}
+    command = {"seq": 0, "command_id": command_id, "kind": "relax",
+        "client_intent_id": "study:relax:p22", "target": requested_target}
+    receipt = {"key_sha256": key_sha, "request_sha256": "e" * 64,
+        "command_id": command_id, "request_id": "request-http-p22", "command_kind": "relax",
+        "client_intent_id": "study:relax:p22", "requested_target": requested_target}
+    live = value["run_intent.json"]["specification"]["parameters"]["live_workspace"]
+    live.update(request_idempotency_key=key_sha, command_id=command_id,
+        startup_source_sha256=None, command=command, request_receipt=receipt)
+    value["run_intent.json"]["idempotency_key"] = "live-http-v2-" + key_sha
+    value.pop("start_release.json")
+    return value
+
+
 class Contracts(unittest.TestCase):
     def setUp(self):
         self.snapshot = snapshot()
@@ -62,6 +95,15 @@ class Contracts(unittest.TestCase):
         self.process = {"schema": "fullmag.docker-process-tree.v1", "state": "drained", "api_exit_code": -15,
                         "accepted_store": "/state/runs/docker-all/session-store", "service_owner": OWNER,
                         "terminal_service_owner": terminal_owner}
+
+    def http_compute_fixture(self):
+        current = http_compute_snapshot()
+        source = http_compute_records()
+        preflight = subject.snapshot_binding(current)
+        read_store = lambda path: raw(source[path.rsplit("/", 1)[1]])
+        read_optional = lambda path: raw(source[path.rsplit("/", 1)[1]]) if path.rsplit("/", 1)[1] in source else None
+        binding = subject.run_binding(read_store, preflight, read_optional)
+        return current, source, preflight, read_store, read_optional, binding
 
     def test_literal_running_is_preserved_and_native_success_is_separate(self):
         self.assertEqual(self.preflight["public_run"]["status"], "running")
@@ -101,6 +143,11 @@ class Contracts(unittest.TestCase):
             with self.subTest(scene=scene), self.assertRaises(BuildControlError):
                 subject.snapshot_binding(value)
 
+    def test_startup_binding_keeps_the_original_v1_capture_shape(self):
+        self.assertEqual(set(self.binding), {
+            "run_id", "intent_sha256", "catalog_sha256", "start_release_sha256", "specification_sha256",
+        })
+
     def test_queue_and_active_commands_refused(self):
         for mutate in [lambda x: x["queue"].update(next_cursor="next"),
                        lambda x: x["queue"].update(items=[{"run_id": "foreign"}]),
@@ -113,7 +160,8 @@ class Contracts(unittest.TestCase):
 
     def test_terminal_command_entries_require_consistent_counts(self):
         value = self.snapshot["commands"]
-        value.update(completed_count=1, commands=[{"status": "completed", "completed_at_unix_ms": 12, "completion_status": "completed"}])
+        value.update(completed_count=1, commands=[{"command_id": "cmd-terminal-test", "seq": 1,
+            "status": "completed", "completed_at_unix_ms": 12, "completion_status": "completed"}])
         subject.snapshot_binding(self.snapshot)
         value["completed_count"] = 0
         with self.assertRaises(BuildControlError):
@@ -123,12 +171,14 @@ class Contracts(unittest.TestCase):
         for timestamp in (False, True, 0, -1, "12", None):
             value = snapshot()
             value["commands"].update(completed_count=1, commands=[{
+                "command_id": "cmd-terminal-test", "seq": 1,
                 "status": "completed", "completed_at_unix_ms": timestamp, "completion_status": "completed"}])
             with self.subTest(timestamp=timestamp), self.assertRaises(BuildControlError):
                 subject.snapshot_binding(value)
         for status, outcome in (("failed", "completed"), ("rejected", "failed"), ("completed", "unknown")):
             value = snapshot()
             value["commands"].update({status + "_count": 1, "commands": [{
+                "command_id": "cmd-terminal-test", "seq": 1,
                 "status": status, "completed_at_unix_ms": 12, "completion_status": outcome}]})
             with self.subTest(status=status), self.assertRaises(BuildControlError):
                 subject.snapshot_binding(value)
@@ -195,6 +245,240 @@ class Contracts(unittest.TestCase):
         value["evidence"]["solve_replayed"] = True
         with self.assertRaises(BuildControlError):
             capture(value)
+
+    def test_http_compute_capture_binds_one_current_accepted_command_and_absent_release(self):
+        current, source, preflight, read_store, read_optional, binding = self.http_compute_fixture()
+        self.assertEqual(binding["source_kind"], "http_compute")
+        self.assertEqual(binding["accepted_command"], {
+            "command_id": "fm-http-compute-1", "kind": "relax", "seq": 3,
+            "client_intent_id": "study:relax:p22", "request_id": "request-http-p22",
+            "target": {"kind": "run", "run_id": RUN},
+        })
+        self.assertIsNone(binding["start_release_sha256"])
+        self.assertIsNone(subject._record_pins(binding)["start_release.json"])
+        observed = {"before": current, "after": copy.deepcopy(current), "ready_owner": OWNER,
+            "native_config_sha256": "a" * 64, "evidence": {
+                "schema_version": "runtime_service_terminal_run_evidence.v1", "run_id": RUN,
+                "terminal_evidence_sha256": "c" * 64, "mutations_applied": False, "solve_replayed": False},
+            "run_pins": subject._record_pins(binding)}
+
+        def capture(value, store_reader=read_store, optional_reader=read_optional):
+            with mock.patch("docker_build_control.docker_capture",
+                            return_value=types.SimpleNamespace(stdout=raw(value))), \
+                 mock.patch("docker_volume_terminal_observation._store_reader", return_value=store_reader), \
+                 mock.patch.object(subject, "optional_store_reader", return_value=optional_reader):
+                return subject.capture("d" * 64, "/unused")
+
+        captured = capture(observed)
+        self.assertEqual(captured["run_binding"], binding)
+        self.assertEqual(captured["run_binding"]["accepted_command"]["seq"], 3)
+        requested_target_snapshot = copy.deepcopy(current)
+        requested_target_snapshot["commands"]["commands"][0]["target"] = {"kind": "run"}
+        requested_target_preflight = subject.snapshot_binding(requested_target_snapshot)
+        requested_target_binding = subject.run_binding(read_store, requested_target_preflight, read_optional)
+        self.assertEqual(requested_target_binding["accepted_command"]["target"], {"kind": "run"})
+        for key in observed["run_pins"]:
+            changed = copy.deepcopy(observed)
+            changed["run_pins"][key] = "9" * 64
+            with self.subTest(pin=key), self.assertRaises(BuildControlError):
+                capture(changed)
+
+        changed_source = copy.deepcopy(source)
+        changed_source["run_intent.json"]["specification"]["parameters"]["live_workspace"][
+            "request_receipt"]["request_sha256"] = "f" * 64
+        changed_reader = lambda path: raw(changed_source[path.rsplit("/", 1)[1]])
+        with self.assertRaises(BuildControlError):
+            capture(observed, store_reader=changed_reader)
+
+        changed_snapshot = copy.deepcopy(observed)
+        changed_snapshot["after"]["commands"]["commands"][0]["seq"] = 4
+        changed_snapshot["after"]["commands"]["revision"] = 5
+        with self.assertRaises(BuildControlError):
+            capture(changed_snapshot)
+
+    def test_http_compute_rejects_foreign_extra_wrong_scope_and_changed_source(self):
+        _, source, _, read_store, read_optional, _ = self.http_compute_fixture()
+        mutations = [
+            ("foreign command", lambda value: value["commands"]["commands"][0].update(command_id="fm-foreign")),
+            ("wrong kind", lambda value: value["commands"]["commands"][0].update(kind="solve")),
+            ("wrong client intent", lambda value: value["commands"]["commands"][0].update(client_intent_id="other-intent")),
+            ("wrong request id", lambda value: value["commands"]["commands"][0].update(request_id="other-request")),
+            ("foreign bound run", lambda value: value["commands"]["commands"][0].update(target={"kind": "run", "run_id": "run-foreign"})),
+            ("zero sequence", lambda value: value["commands"]["commands"][0].update(seq=0)),
+        ]
+        for label, mutate in mutations:
+            current = http_compute_snapshot()
+            mutate(current)
+            with self.subTest(case=label), self.assertRaises(BuildControlError):
+                preflight = subject.snapshot_binding(current)
+                subject.run_binding(read_store, preflight, read_optional)
+
+        extra = http_compute_snapshot()
+        extra["commands"]["commands"].append({
+            **copy.deepcopy(extra["commands"]["commands"][0]), "command_id": "fm-extra-accepted", "seq": 4,
+        })
+        extra["commands"].update(revision=5, accepted_count=2)
+        with self.assertRaises(BuildControlError):
+            subject.snapshot_binding(extra)
+
+        accepted_plus_running = http_compute_snapshot()
+        accepted_plus_running["commands"]["commands"].append({
+            "command_id": "fm-other-active", "seq": 4, "kind": "solve", "status": "running",
+            "created_at_unix_ms": 1235,
+        })
+        accepted_plus_running["commands"].update(revision=5, running_count=1)
+        with self.assertRaises(BuildControlError):
+            subject.snapshot_binding(accepted_plus_running)
+
+        unassigned_command_sequence = http_compute_records()
+        unassigned_command_sequence["run_intent.json"]["specification"]["parameters"]["live_workspace"][
+            "command"]["seq"] = 1
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(
+                lambda path: raw(unassigned_command_sequence[path.rsplit("/", 1)[1]]),
+                preflight, lambda path: None,
+            )
+
+        wrong_request_target = http_compute_records()
+        live = wrong_request_target["run_intent.json"]["specification"]["parameters"]["live_workspace"]
+        live["command"]["target"] = {"kind": "stage_id", "stage_id": "stage-foreign"}
+        preflight = subject.snapshot_binding(http_compute_snapshot())
+        reader = lambda path: raw(wrong_request_target[path.rsplit("/", 1)[1]])
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(reader, preflight, lambda path: None)
+
+        foreign_epoch = http_compute_records()
+        foreign_epoch["run_intent.json"]["specification"]["parameters"]["live_workspace"]["session_epoch"] = 5
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(lambda path: raw(foreign_epoch[path.rsplit("/", 1)[1]]), preflight, lambda path: None)
+        stale_epoch_snapshot = http_compute_snapshot()
+        stale_epoch_snapshot["status"]["session"]["request_scope_epoch"] = API + ":5"
+        stale_epoch_preflight = subject.snapshot_binding(stale_epoch_snapshot)
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(read_store, stale_epoch_preflight, read_optional)
+
+        foreign_scene = http_compute_records()
+        foreign_scene["run_intent.json"]["specification"]["parameters"]["live_workspace"]["scene_revision"] = 8
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(lambda path: raw(foreign_scene[path.rsplit("/", 1)[1]]), preflight, lambda path: None)
+
+        unexpected_release = http_compute_records()
+        unexpected_release["start_release.json"] = records()["start_release.json"]
+        with self.assertRaises(BuildControlError):
+            subject.run_binding(
+                lambda path: raw(unexpected_release[path.rsplit("/", 1)[1]]),
+                preflight,
+                lambda path: raw(unexpected_release["start_release.json"]),
+            )
+
+        tampered_source = copy.deepcopy(source)
+        tampered_source["run_intent.json"]["specification"]["parameters"]["live_workspace"][
+            "request_receipt"]["request_sha256"] = "f" * 64
+        observed = {"before": http_compute_snapshot(), "after": http_compute_snapshot(),
+            "ready_owner": OWNER, "native_config_sha256": "a" * 64, "evidence": {
+                "schema_version": "runtime_service_terminal_run_evidence.v1", "run_id": RUN,
+                "terminal_evidence_sha256": "c" * 64, "mutations_applied": False, "solve_replayed": False},
+            "run_pins": {"run_intent.json": "0" * 64, "run_catalog.json": "1" * 64,
+                         "start_release.json": None}}
+        with mock.patch("docker_build_control.docker_capture",
+                        return_value=types.SimpleNamespace(stdout=raw(observed))), \
+             mock.patch("docker_volume_terminal_observation._store_reader",
+                        return_value=lambda path: raw(tampered_source[path.rsplit("/", 1)[1]])), \
+             mock.patch.object(subject, "optional_store_reader", return_value=lambda path: None):
+            with self.assertRaises(BuildControlError):
+                subject.capture("d" * 64, "/unused")
+
+    def test_http_compute_record_pins_flow_through_quiescence_and_fresh(self):
+        current, _, preflight, read_store, read_optional, binding = self.http_compute_fixture()
+        pins = subject._record_pins(binding)
+        self.assertIsNone(pins["start_release.json"])
+        prepared_observation = {"before": current, "after": copy.deepcopy(current), "ready_owner": OWNER,
+            "native_config_sha256": "a" * 64, "process_sha256": "b" * 64,
+            "api_pin": self.api_pin(), "run_pins": pins}
+        with mock.patch("docker_build_control.docker_capture",
+                        return_value=types.SimpleNamespace(stdout=raw(prepared_observation))), \
+             mock.patch("docker_volume_terminal_observation._store_reader", return_value=read_store), \
+             mock.patch.object(subject, "optional_store_reader", return_value=read_optional):
+            prepared = subject.prepare_api_quiescence("d" * 64, "/unused")
+        self.assertIsNone(prepared["run_pins"]["start_release.json"])
+
+        retained = copy.deepcopy(self.process)
+        retained.pop("terminal_service_owner")
+        retained.update(state="failed_outcome_retained", api_pid=22, error=subject.QUIESCE_CAUSE,
+                        api_diagnostic_only=False)
+        observed = {"evidence": {"schema_version": "runtime_service_terminal_run_evidence.v1",
+                "run_id": RUN, "terminal_evidence_sha256": "c" * 64,
+                "mutations_applied": False, "solve_replayed": False},
+            "run_pins": pins, "retained_process": retained,
+            "retained_process_sha256": subject.sha(raw(retained)), "api_closed": True}
+        intent = {"schema": subject.QUIESCE_INTENT_SCHEMA, "prepared": prepared}
+        with mock.patch("docker_build_control.docker_capture",
+                        return_value=types.SimpleNamespace(stdout=raw(observed))), \
+             mock.patch("docker_volume_terminal_observation._store_reader", return_value=read_store), \
+             mock.patch.object(subject, "optional_store_reader", return_value=read_optional):
+            captured = subject.quiesce_api_and_capture("d" * 64, "/unused", intent)
+        self.assertIsNone(captured["run_binding"]["start_release_sha256"])
+        tampered_release_reader = lambda path: raw(records()["start_release.json"])
+        with mock.patch("docker_volume_terminal_observation._store_reader", return_value=read_store), \
+             mock.patch.object(subject, "optional_store_reader", return_value=tampered_release_reader):
+            with self.assertRaises(BuildControlError):
+                subject.quiesce_api_and_capture("d" * 64, "/unused", intent)
+
+        controls, kwargs, control = self.fresh_fixture()
+        root = "iteration/attempts/" + kwargs["stop_attempt"] + "/"
+        captured = {"schema": subject.SCHEMA, "preflight": preflight, "run_binding": binding,
+            "native_config_sha256": subject.sha(b"config"), "terminal_evidence_sha256": "c" * 64,
+            "ready_owner": subject.owner_identity(OWNER)}
+        controls[root + "native-terminal-stop.json"] = raw(captured)
+        terminal = json.loads(controls[root + "terminal.json"])
+        terminal["native_terminal_capture_sha256"] = subject.sha(controls[root + "native-terminal-stop.json"])
+        controls[root + "terminal.json"] = controls[root + "receipt.json"] = raw(terminal)
+        kwargs["stop_sha256"] = subject.sha(raw(terminal))
+        with mock.patch("docker_volume_accepted_reattach._control_bytes",
+                        side_effect=lambda _, path, **kw: controls[path]), \
+             mock.patch("docker_volume_terminal_observation._store_reader", return_value=read_store), \
+             mock.patch.object(subject, "optional_store_reader", return_value=read_optional):
+            subject.validate_fresh(control, **kwargs)
+        with mock.patch("docker_volume_accepted_reattach._control_bytes",
+                        side_effect=lambda _, path, **kw: controls[path]), \
+             mock.patch("docker_volume_terminal_observation._store_reader", return_value=read_store), \
+             mock.patch.object(subject, "optional_store_reader", return_value=tampered_release_reader):
+            with self.assertRaises(BuildControlError):
+                subject.validate_fresh(control, **kwargs)
+
+    def test_optional_release_pin_is_absence_or_safe_regular_file_never_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            run_dir = root / "runs" / RUN
+            run_dir.mkdir(parents=True)
+            relative = "runs/" + RUN + "/start_release.json"
+            read_optional = subject.optional_store_reader(root)
+            self.assertIsNone(read_optional(relative))
+            release = raw(records()["start_release.json"])
+            (run_dir / "start_release.json").write_bytes(release)
+            self.assertEqual(read_optional(relative), release)
+            (run_dir / "start_release.json").unlink()
+            target = root / "release-target.json"
+            target.write_bytes(release)
+            (run_dir / "start_release.json").symlink_to(target)
+            with self.assertRaises(BuildControlError):
+                read_optional(relative)
+
+    def test_probe_uses_the_same_image_owned_cpu_abi_setup_as_the_entrypoint(self):
+        import sys
+        calls = []
+        entrypoint = types.SimpleNamespace(_configure_device_access=lambda: calls.append("device-access"))
+        service = types.SimpleNamespace(canonical_paths=lambda: calls.append("paths"))
+        with mock.patch.dict(sys.modules, {"entrypoint": entrypoint, "runtime_service": service}), \
+             mock.patch.object(sys, "path", sys.path.copy()):
+            exec(subject._QUIESCE_PREFIX, {})
+        self.assertEqual(calls, ["device-access", "paths"])
+        calls.clear()
+        entrypoint._configure_device_access = mock.Mock(side_effect=RuntimeError("invalid device policy"))
+        with mock.patch.dict(sys.modules, {"entrypoint": entrypoint, "runtime_service": service}), \
+             mock.patch.object(sys, "path", sys.path.copy()), self.assertRaisesRegex(RuntimeError, "invalid device policy"):
+            exec(subject._QUIESCE_PREFIX, {})
+        self.assertEqual(calls, [])
 
     def test_probe_script_parses_and_keeps_native_fence_mandatory(self):
         import ast
@@ -334,6 +618,8 @@ class Contracts(unittest.TestCase):
         for forbidden in ("os.kill(", "SIGKILL", "SIGCONT", "service-recover", "service-drain"):
             self.assertNotIn(forbidden, subject.QUIESCE_CAPTURE)
         self.assertIn("service-inspect-terminal-run", subject.QUIESCE_CAPTURE)
+        self.assertIn('"start_release.json":optional_record_pin', subject.PROBE)
+        self.assertIn('"start_release.json":optional_record_pin', subject.QUIESCE_CAPTURE)
         self.assertLess(subject.QUIESCE_CAPTURE.index("API/session/scene/resources changed"),
                         subject.QUIESCE_CAPTURE.index("signal.pidfd_send_signal("))
 
