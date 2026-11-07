@@ -3662,7 +3662,7 @@ mod tests {
             for key in ["interactive_session_requested", "wait_for_solve"] {
                 for invalid in [Value::Null, serde_json::json!("false"), serde_json::json!(0),
                                 serde_json::json!([]), serde_json::json!({})] {
-                    let mut flat = serde_json::json!({"kind": "run", "until_seconds": 1e-9, "enabled": false});
+                    let mut flat = serde_json::json!({"kind": "run", "entrypoint_kind": "study", "until_seconds": 1e-9, "enabled": false});
                     flat[key] = invalid.clone();
                     let scene: SceneDocument = serde_json::from_value(serde_json::json!({
                         "version": "scene.v2", "study": {"stages": [flat]}
@@ -3698,6 +3698,7 @@ mod tests {
                        serde_json::json!({"interactive_session_requested": true, "wait_for_solve": false})] {
             let mut flat = values.clone();
             flat["kind"] = serde_json::json!("run");
+            flat["entrypoint_kind"] = serde_json::json!("study");
             flat["until_seconds"] = serde_json::json!(1e-9);
             let scene: SceneDocument = serde_json::from_value(serde_json::json!({
                 "version": "scene.v2", "study": {"stages": [flat], "study_pipeline": {"nodes": [{

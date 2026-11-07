@@ -2481,6 +2481,8 @@ mod tests {
                     }
                 }
                 let mut builder: ScriptBuilderState = serde_json::from_value(input).unwrap();
+                // Stage times normalize through numeric SceneStudyStageState.
+                builder.stages[0].until_seconds = "0.000000001".into();
                 builder.stages[0].extra.insert("interactive_session_requested".into(), Value::Bool(false));
                 builder.stages[0].extra.insert("wait_for_solve".into(), Value::Bool(true));
                 builder.stages[0].extra.insert("unrelated_stage_setting".into(), serde_json::json!({"kept": 7}));
