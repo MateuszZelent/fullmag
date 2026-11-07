@@ -2,10 +2,11 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-06-05
+- Last updated: 2026-11-07
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag needs two explicit contracts around native FEM Poisson demagnetization:
@@ -18,6 +19,7 @@ reproduce numerically relevant solver choices from Python or session metadata.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations
 
 The physical demagnetization model remains unchanged:
@@ -25,32 +27,89 @@ The physical demagnetization model remains unchanged:
 - `H_demag = -grad(u)`
 - `div(grad(u)) = div(M)` in the shared FEM domain
 
+With magnetization supported on the magnetic region and zero in the surrounding
+air part of the shared domain, the scalar-potential formulation is
+
+```{math}
+:label: eq-fem-demag-scalar-potential
+\mathbf{H}_{\mathrm{demag}}=-\nabla u,
+\qquad
+\nabla\cdot\nabla u=\nabla\cdot\mathbf{M}
+\quad\text{in }D.
+```
+
+This note concerns the linear solve used to realize this equation. The chosen
+finite computational domain and its Dirichlet, Robin, or periodic boundary
+realization remain owned by the corresponding FEM demag path.
+
 The added contract in this note changes only the numerical realization policy,
 not the governing micromagnetic equations.
 
+(symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
-- `M` magnetization `[A/m]`
-- `H_demag` demagnetizing field `[A/m]`
-- `u` scalar potential `[A]`
-- `rtol` relative linear-solver tolerance `[dimensionless]`
-- `atol` absolute algebraic residual tolerance `[A m]` for the unscaled
-  Poisson stiffness system `K u = b`, where `K` has units `[m]` and `u` has
-  units `[A]`. Unlike `rtol`, this threshold depends on the algebraic basis
-  and any system scaling; it is not a relative, dimensionless norm.
-- `N_iter` linear-solver iteration cap `[dimensionless count]`
+The nodal finite-element system for the unscaled Poisson operator and its
+residual are
+
+```{math}
+:label: eq-fem-demag-linear-system
+\mathbf{K}\mathbf{u}=\mathbf{b},
+\qquad
+\mathbf{r}=\mathbf{b}-\mathbf{K}\mathbf{u}.
+```
+
+For dimensionless nodal basis functions, the stiffness entries have units of
+metres, the potential coefficients have units of amperes, and the right-hand
+side and residual have units of ampere-metres. Thus `atol` is an absolute
+algebraic residual threshold in A·m for this unscaled system. If the assembled
+system or basis is rescaled, the numerical value of `atol` must be interpreted
+in that scaled system; `rtol` remains dimensionless. With `atol=None`, no
+absolute threshold is serialized or requested.
+
+| LaTeX token | Meaning | SI unit |
+|---|---|---|
+| `D` | Shared computational FEM domain (volume) | $\mathrm{m^3}$ |
+| `\mathbf{M}` | Magnetization field | `$\mathrm{A/m}$` |
+| `\mathbf{H}_{\mathrm{demag}}` | Demagnetizing field | `$\mathrm{A/m}$` |
+| `u` | Scalar magnetic potential and nodal coefficients | `$\mathrm{A}$` |
+| `\nabla` | Spatial gradient operator | `$\mathrm{m^{-1}}$` |
+| `\nabla\cdot` | Spatial divergence operator | `$\mathrm{m^{-1}}$` |
+| `\mathbf{K}` | Unscaled Poisson stiffness matrix | `$\mathrm{m}$` |
+| `\mathbf{u}` | Vector of scalar-potential coefficients | `$\mathrm{A}$` |
+| `\mathbf{b}` | Assembled Poisson right-hand side | `$\mathrm{A\,m}$` |
+| `\mathbf{r}` | Algebraic residual vector | `$\mathrm{A\,m}$` |
+| `\lVert\cdot\rVert_2` | Euclidean norm over algebraic coefficients | $\mathrm{A\,m}$; preserves its operand unit |
+| `\mathrm{rtol}` | Relative linear-solver tolerance | `$1$` |
+| `\mathrm{atol}` | Absolute residual tolerance for the unscaled system | `$\mathrm{A\,m}$` |
 
 All user-visible physical quantities remain SI-clean.
 
+The A·m unit describes the unscaled Euclidean residual and the intended
+independent acceptance threshold. The pinned MFEM `HyprePCG` defaults do not
+enable HYPRE's `two_norm` option, so its internal CG criterion uses a
+preconditioned norm. Its absolute threshold is not generally the Euclidean
+threshold in this table. GMRES uses the Euclidean residual norm. Native CPU
+Poisson independently checks `||Ax-b||2`; the current GPU implementation does
+so conditionally, when the solver does not report convergence. A successful
+GPU CG report alone is therefore not an independent Euclidean certificate.
+The 50 fs SP4 transport experiments use `atol=None` and leave this algorithmic
+criterion unchanged. See the current implementation boundary in section 5.1.
+
+(assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
 
 - The solver policy applies only to native FEM Poisson demag realizations.
 - It is a backend hint, not a new physical model term.
+- The solver policy is defined for the native FEM Poisson demag hint. It is not
+  a shared FDM/FEM physics parameter, and choosing it does not select a
+  boundary realization or guarantee that every solver/preconditioner tuple is
+  supported by every native lane.
 - CPU thread selection is resolved per run start and may differ between:
   - requested study/runtime threads,
   - resolved Rayon/control-plane threads,
   - effective native FEM OpenMP threads.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
@@ -91,8 +150,18 @@ to resolve the omitted policy to `CG/AMG`.
 No hybrid-specific semantics are introduced. Hybrid work must not reinterpret
 this as a common physics setting.
 
+### 3.4 Backend lane matrix
+
+| Solver family | Device | Contract in this note | Evidence boundary |
+|---|---|---|---|
+| FEM | CPU | Native FEM Poisson solver policy and CPU host-thread setup are source-visible. The public policy default is CG/AMG; an omitted policy resolves to that default on the CPU lane. | This page documents source contracts and tests; it does not claim a new CPU runtime qualification. |
+| FEM | GPU | The same explicit FEM policy is passed to native execution. If omitted, runtime resolution selects CG/JACOBI for the general strict GPU path and CG/AMG for `projected_gradient_bb`; explicit values are not rewritten. | [A separate 50 fs diagnostic observed coarse relaxation type 18 through the native getter](0913-fem-gpu-amg-coarse-residency.md). That narrow result does not qualify FEM CPU, all FEM GPU workloads, or full SP4. |
+| FDM | CPU | Not applicable: `FemLinearSolverPolicy` belongs to FEM discretization hints; FDM uses its own demag solver surfaces. | No cross-backend fallback is implied. |
+| FDM | GPU | Not applicable for the same reason; this policy does not configure FDM GPU demag. | No cross-backend fallback is implied. |
+
 ## 4. API, IR, and planner impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 This contract lives in explicit FEM backend hints, not in the common `Demag`
@@ -107,11 +176,40 @@ Canonical Python authoring surfaces:
   - `fm.fem_demag_solver(...)`
   - `study.fem_demag_solver(...)`
 
+The public dataclass defaults and validation come from
+`fullmag.model.discretization.FemLinearSolverPolicy`. Its six policy fields are
+the complete authored solver policy:
+
+| Python parameter | Type | Default | SI unit | Validation and rejection | Meaning | Backend support |
+|---|---|---|---|---|---|---|
+| `FemLinearSolverPolicy.solver` | `Literal["CG", "GMRES"]` | `"CG"` | `1` | Must be `CG` or `GMRES`; other values raise `ValueError`. | Outer Krylov solver. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
+| `FemLinearSolverPolicy.preconditioner` | `Literal["AMG", "JACOBI", "NONE"]` | `"AMG"` | `1` | Must be `AMG`, `JACOBI`, or `NONE`; other values raise `ValueError`. | Preconditioner for the Poisson solve. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
+| `FemLinearSolverPolicy.rtol` | `float` | `1e-8` | `1` | Converts with `float`; the converted value must be finite and greater than zero, otherwise `ValueError`. Conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original field value rather than coercing it. | Relative residual tolerance. | Native FEM CPU/GPU; `rtol` is dimensionless. |
+| `FemLinearSolverPolicy.atol` | `float or None` | `None` | $\mathrm{A\,m}$ | `None` or converts with `float` to a finite value greater than zero; nonfinite/nonpositive values raise `ValueError`, conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original value. | Optional absolute residual threshold for the unscaled Poisson system. | Native FEM CPU/GPU; backend applies it only when present and positive. |
+| `FemLinearSolverPolicy.max_iterations` | `int` | `500` | `1` | Only checks `< 1`; values below 1 raise `ValueError`, incomparable values raise `TypeError`. The annotation is not enforced; a non-int comparable value can pass and is serialized unchanged. The IR field is unsigned 32-bit. | Maximum outer solver iterations. | Native FEM CPU/GPU; IR representation uses an unsigned 32-bit field. |
+| `FemLinearSolverPolicy.print_level` | `int` | `0` | `1` | Only checks `< 0`; negative values raise `ValueError`, incomparable values raise `TypeError`. The annotation is not enforced; a non-int comparable value can pass and is serialized unchanged. The IR field is unsigned 32-bit. | Native linear-solver diagnostic verbosity. | Native FEM CPU/GPU; IR representation uses an unsigned 32-bit field. |
+
+The containing FEM hint is optional:
+
+| Python parameter | Type | Default | SI unit | Validation and rejection | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `FEM.demag_solver_policy` | `FemLinearSolverPolicy or None` | `None` | `1` | Type annotation is optional; constructor stores the value without an `isinstance` check, so a wrong non-None object raises `AttributeError` when `to_ir()` is called. | Explicit FEM Poisson solver request. | Native FEM CPU/GPU only; not an FDM setting. | `backend_policy.discretization_hints.fem.demag_solver_policy` |
+
+The flat and study calls use the same six keyword names, types, defaults, and
+validation as the dataclass. They construct the same policy and place it at the
+same FEM `ProblemIR` destination; they do not create a second policy schema.
+
+`fm.threads(cpu_threads)` and `study.threads(cpu_threads)` set a requested
+thread count for the next run. The argument is converted with `int()` and the
+result must be at least one. It is requested intent, not a promise that Rayon,
+native FEM OpenMP, and the device host runtime will all use that same count.
+
 CPU thread selection remains a runtime selection concern:
 
 - `fm.threads(...)`
 - `study.threads(...)`
 
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 - `FemHintsIR` carries optional `demag_solver_policy`
@@ -121,12 +219,114 @@ CPU thread selection remains a runtime selection concern:
   - resolved Rayon/control-plane threads
   - effective native FEM OpenMP threads when available
 
+The Python-to-IR boundary is:
+
+| Python surface | Canonical serialized value | ProblemIR / plan destination |
+|---|---|---|
+| `FemLinearSolverPolicy.to_ir()` | Mapping with `solver`, `preconditioner`, `rtol`, `max_iterations`, and `print_level`; includes `atol` only when non-`None`. | Policy fragment; not a complete `ProblemIR`. |
+| `FEM.demag_solver_policy` | The `to_ir()` mapping nested under the FEM hint. | `backend_policy.discretization_hints.fem.demag_solver_policy` → `FemHintsIR.demag_solver_policy` → `FemPlanIR.demag_solver_policy` |
+| `fm.fem_demag_solver(...)` / `study.fem_demag_solver(...)` | Same six fields and normalization as `FemLinearSolverPolicy`. | Same FEM hint path above. |
+| `fm.threads(cpu_threads)` / `study.threads(cpu_threads)` | Requested count in runtime selection metadata. | `problem_meta.runtime_metadata.runtime_selection.cpu_threads`; runner provenance separately reports resolved CPU and observed native FEM OpenMP counts when available. |
+
+Each policy field maps to the corresponding nested IR key:
+
+| Python parameter | ProblemIR field |
+|---|---|
+| `FemLinearSolverPolicy.solver` | `backend_policy.discretization_hints.fem.demag_solver_policy.solver` |
+| `FemLinearSolverPolicy.preconditioner` | `backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner` |
+| `FemLinearSolverPolicy.rtol` | `backend_policy.discretization_hints.fem.demag_solver_policy.rtol` |
+| `FemLinearSolverPolicy.atol` | `backend_policy.discretization_hints.fem.demag_solver_policy.atol` |
+| `FemLinearSolverPolicy.max_iterations` | `backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations` |
+| `FemLinearSolverPolicy.print_level` | `backend_policy.discretization_hints.fem.demag_solver_policy.print_level` |
+
 ### 4.3 Planner and capability-matrix impact
 
 - Planner propagates `FemHintsIR.demag_solver_policy` into executable FEM plans
 - Unsupported native FEM solver/preconditioner combinations remain explicit
   planning/runtime errors
 - Capability reporting remains public-executable for Poisson FEM demag
+
+(round-trip-and-failure-semantics)=
+### 4.4 Round-trip and failure semantics
+
+The following copyable fragment constructs only the public policy object and
+prints its canonical `to_ir()` value. It creates no problem, mesh, study, or
+solver execution:
+
+```python
+# %% Import the public API
+import fullmag as fm
+
+# %% Construct one FEM Poisson solver policy
+policy = fm.FemLinearSolverPolicy(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1e-8,
+    atol=None,
+    max_iterations=500,
+    print_level=0,
+)
+
+# %% Inspect this object's canonical IR fragment; no solver is run
+print(policy.to_ir())
+```
+
+The output is the actual policy fragment produced by the example above:
+
+```json
+{"solver": "CG", "preconditioner": "AMG", "rtol": 1e-08, "max_iterations": 500, "print_level": 0}
+```
+
+`atol=None` is omitted by `to_ir()`. A positive value is serialized under
+`atol`; its unit is the unscaled system's A·m residual unit described above.
+`FEM` nests the fragment under its FEM discretization hints. The Python
+script-export path reconstructs the same policy call and the normal Python
+validation runs again on reload.
+
+Requested intent consists of the authored backend/device/precision/mode and
+any explicitly authored policy fields. Resolved execution is selected later:
+an explicit policy is preserved, while an omitted policy starts from the
+public CG/AMG defaults and can resolve differently for strict FEM GPU. The
+current native resolver uses CG/JACOBI for the general GPU path and CG/AMG for
+`projected_gradient_bb`; this is runtime selection, not a change to Python
+defaults. Runtime telemetry must identify the solver, preconditioner, and
+observed solve state rather than inferring them from the request.
+
+Validation errors are raised when the policy fields fail their Python domain
+checks; typed planning or runtime errors reject unsupported combinations,
+failed native setup, or a solve that fails the convergence contract. Unsupported
+combinations do not fall back silently to FDM or another native FEM policy.
+The fail-closed publication rule in section 5.1 also applies: a candidate field
+is not current state until convergence and residual/iteration checks succeed.
+
+### 4.5 Runtime thread selection and provenance
+
+The requested study thread count is recorded separately from its resolved
+control-pool allocation. Native FEM configures its OpenMP team when the native
+context starts. Its requested and effective counts can differ from the runner's
+Rayon/control-pool count; for automatic selection, native FEM can apply
+mesh-aware CPU caps, while the GPU host runtime follows its own initialization
+path. Native FEM disables dynamic and nested OpenMP teams. Thread-pool changes
+made after a run starts do not retune that active run.
+
+Runtime metadata records requested/resolved CPU counts. Requested/effective
+native FEM OpenMP counts are filled from native step statistics when the lane
+reports them; a missing observation remains unavailable rather than being
+inferred from `fm.threads(...)`. The source-level CPU thread contract is tested
+independently from the narrow GPU coarse-relaxation diagnostic linked above.
+
+(implementation-mapping)=
+### 4.6 Implementation mapping
+
+The public class validates and serializes the policy. `FemHintsIR` carries the
+optional value from the canonical `ProblemIR`; `FemPlanIR` carries it to the
+runner. The native FEM policy resolver returns explicit values unchanged and
+chooses backend/algorithm-dependent defaults only when the hint is omitted.
+CPU and GPU Poisson implementations then configure their native solver and
+validate solve results in their own lane. CPU thread requests likewise travel
+through runtime selection, runner allocation/provenance, and native FEM OpenMP
+initialization; those values are reported as separate requested, resolved, and
+observed quantities.
 
 ## 5. Runtime/session/artifact/provenance impact
 
@@ -167,14 +367,19 @@ validated. A candidate scalar potential may be published, cached, lifted,
 recovered into `H_demag`, used in `H_eff`/energy, or exposed as an observable
 only when all of the following hold:
 
-- the concrete solver reports convergence rather than only termination,
+- convergence is established by a concrete solver report or by an independent
+  residual certificate; termination alone is insufficient,
 - the reported residual is finite and non-negative,
 - the reported residual satisfies the configured relative tolerance, or the
   solver explicitly reports convergence through the configured positive
   absolute tolerance,
 - the iteration count is non-negative and does not exceed `max_iterations`.
 
-Exhausting `max_iterations` without a solver convergence report is not
+An independent certificate must also satisfy the configured residual threshold
+and iteration cap. The shared validator explicitly permits such a certificate
+when HYPRE does not report convergence, including a valid zero-iteration
+solution; it does not accept a small unverified reported value by itself.
+Exhausting `max_iterations` without either convergence evidence is not
 convergence. On failure, the runtime must
 invalidate any warm-start/current marker for the attempted candidate and
 return a typed diagnostic containing the demag solver realization, linear
@@ -182,6 +387,25 @@ solver kind, iteration count, residual, relative/absolute tolerance, and
 maximum iterations. Last-attempt iteration/residual telemetry remains
 available for diagnosis, but the failed field is never current solver state.
 
+#### Current GPU boundary and planned independent check
+
+At source revision `53a5d5171e06db3c4950511d4523f872f58317f1`, a reported
+GPU CG success can skip the independent residual calculation. With a positive
+`atol`, that path multiplies the reported relative residual by `||b||2`;
+for preconditioned CG this is not generally `||Ax-b||2`. This is an open
+validation gap, not evidence that the retained SP4 fields are wrong.
+
+The next correction must compute `||Ax-b||2` and `||b||2` on the GPU after
+every device-HYPRE Poisson solve, before publishing its candidate field,
+irrespective of HYPRE's success report. It must keep authored tolerances,
+the iteration cap, the internal CG norm choice, and the existing shared
+acceptance rule. Only scalar norms may return to the host; full vectors stay
+on the device for this check. Its native regression must start with a real
+successful GPU CG solve, corrupt only the test-owned potential, and require
+the production validator to reject that potential despite the stale success
+report. This correction and its RED/GREEN runtime proof remain pending.
+
+(validation)=
 ## 6. Validation strategy
 
 ### 6.1 Analytical checks
@@ -218,8 +442,11 @@ available for diagnosis, but the failed field is never current solver state.
 - [x] Tests / benchmarks
 - [x] Documentation
 
+(limitations)=
 ## 8. Known limits and deferred work
 
+- The GPU independent Euclidean residual gap described in section 5.1 remains
+  open; stored field/energy/torque parity does not close that gate.
 - Live mid-run thread-pool retuning is still unsupported.
 - Native FEM currently reports OpenMP thread resolution through runtime/log
   diagnostics and FFI step stats; richer direct UI telemetry can replace
@@ -681,3 +908,54 @@ telemetry.
 
 - `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
 - `docs/physics/0520-fem-robin-airbox-demag-bootstrap-reference.md`
+
+(scientific-bibliography)=
+### Scientific bibliography
+
+- L. Exl and T. Schrefl, “Non-uniform FFT for the finite element computation
+  of the micromagnetic scalar potential,” *Journal of Computational Physics*,
+  270 (2014), 490–505. [doi:10.1016/j.jcp.2014.04.013](https://doi.org/10.1016/j.jcp.2014.04.013).
+  The paper states the scalar-potential stray-field equation and describes a
+  P1 finite-element realization; this page does not claim that its open-boundary
+  method is the boundary implementation used by every Fullmag lane.
+- V. E. Henson and U. M. Yang, “BoomerAMG: A Parallel Algebraic Multigrid
+  Solver and Preconditioner,” *Applied Numerical Mathematics*, 41(1) (2002),
+  155–177. [doi:10.1016/S0168-9274(01)00115-5](https://doi.org/10.1016/S0168-9274(01)00115-5).
+  This is background for the AMG option; it does not qualify a particular
+  Fullmag CPU or GPU runtime.
+
+- [Pinned MFEM HyprePCG default options](https://github.com/mfem/mfem/blob/d964264cdb9a13e94a201b6c236c7721e0c8765f/linalg/hypre.cpp#L3958) and [pinned HYPRE PCG stopping rule](https://github.com/hypre-space/hypre/blob/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/krylov/pcg.c#L390) support the distinction between internal and independently checked norms; [GMRES uses the Euclidean norm](https://github.com/hypre-space/hypre/blob/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/krylov/gmres.c#L469).
+
+(source-code-index)=
+## 10. Source-code index
+
+The links below are immutable links at the reviewed source revision
+`53a5d5171e06db3c4950511d4523f872f58317f1`. Runtime statements are bounded by
+the evidence column; source presence and tests do not replace scientific or
+managed-runtime qualification.
+
+| Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
+|---|---|---|---|---|---|---|
+| Public policy defaults, validation, and object IR | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FemLinearSolverPolicy` | Defines the six policy fields and omits `atol` when `None`. | FEM CPU/GPU API | Source and object lowering checked for this page. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/model/discretization.py#L160) |
+| Positive tolerance validation | `packages/fullmag-py/src/fullmag/_validation.py` | `require_positive` | Converts a numeric value and rejects nonfinite or nonpositive tolerances. | FEM CPU/GPU API | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/_validation.py#L261) |
+| FEM policy container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Places the optional policy in FEM discretization hints. | FEM CPU/GPU API | Source-visible; no runtime claim. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/model/discretization.py#L476) |
+| Study-level authoring | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Provides `study.threads(...)` and `study.fem_demag_solver(...)` wrappers. | FEM authoring/runtime intent | Source-visible; no run is constructed by the policy example. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/world.py#L5989) |
+| Runtime selection | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Carries optional `cpu_threads` into runtime metadata and validates positive counts. | CPU runtime selection | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/model/problem.py#L1884) |
+| Canonical FEM hints | `crates/fullmag-ir/src/mesh_hints.rs` | `FemHintsIR` | Carries optional `demag_solver_policy` in `ProblemIR`. | FEM CPU/GPU planning | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-ir/src/mesh_hints.rs#L1074) |
+| FEM execution plan | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | Carries the selected policy into the executable plan. | FEM CPU/GPU planning | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-ir/src/plan.rs#L1424) |
+| Omitted-policy resolution | `crates/fullmag-runner/src/native_fem/plan.rs` | `resolved_native_fem_demag_solver_policy` | Preserves explicit values; resolves omitted CPU/GPU values. | FEM CPU/GPU | Resolver tests cover CPU default, GPU non-PGBB/PGBB defaults, and explicit preservation. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/native_fem/plan.rs#L63) |
+| General strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb` | Checks the omitted-policy non-PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/native_fem.rs#L8641) |
+| PGBB strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb` | Checks the omitted-policy PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/native_fem.rs#L8654) |
+| CPU Poisson solver | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Configures Hypre solver/preconditioner and validates the attempted solve. | FEM CPU | Source-visible; this page does not claim a fresh CPU runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L211) |
+| GPU Poisson residual validation | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Validates device solve convergence, residual, and tolerance evidence. | FEM GPU | Source-visible; narrow type-18 runtime evidence is documented separately in note 0913. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452) |
+| Potential RHS | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | Assembles the magnetization source for the finite-element Poisson equation. | FEM CPU; shared equation contract | Source-visible; see `fem_demag_poisson_contract`. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L359) |
+| Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Recovers `H_demag` from the potential gradient. | FEM CPU; shared equation contract | Source-visible; manufactured-potential check is described in `docs/physics/fem_demag_poisson.md`. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L709) |
+| Native FEM host threads | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | Resolves and applies the native OpenMP team at run start. | FEM CPU; GPU host initialization | `cpu_threads_contract` source contract; no device-residency claim. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/cpu/mfem/runtime/cpu_threads.cpp#L137) |
+| Requested runner threads | `crates/fullmag-runner/src/lib.rs` | `requested_cpu_threads` | Reads the typed compute-resource request or legacy runtime metadata. | CPU runtime selection | Source-visible; runner thread tests cover precedence. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/lib.rs#L6716) |
+| Runtime thread summary | `crates/fullmag-runner/src/artifacts.rs` | `runtime_threading_summary` | Publishes requested/resolved counts and leaves native OpenMP fields unavailable until observed. | CPU runtime provenance | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/artifacts.rs#L472) |
+| Observed native thread provenance | `crates/fullmag-runner/src/artifacts.rs` | `provenance_with_runtime_threading` | Enriches provenance from native FEM step statistics when present. | FEM CPU/GPU runtime metadata | Source-visible; values remain unavailable if the native lane does not report them. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/crates/fullmag-runner/src/artifacts.rs#L1008) |
+| Policy script export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_fem_demag_solver_policy` | Exports the authored policy for script round-trip. | FEM authoring round-trip | Source-visible; export/re-import does not execute a solver. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/src/fullmag/runtime/script_builder.py#L3869) |
+| Policy acceptance regression | `packages/fullmag-py/tests/test_standard_problem_4_fem.py` | `test_sp4_requests_qualified_demag_linear_solver_policy` | Checks the SP4 policy request in the authored script. | FEM API | Existing repository test; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/packages/fullmag-py/tests/test_standard_problem_4_fem.py#L10) |
+| Native CPU thread contract | `backends/fem/tests/cpu_threads_contract.cpp` | `main` | Exercises native thread resolution and setup behavior. | FEM CPU | Existing source contract; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/cpu_threads_contract.cpp#L315) |
+| Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing source contract; the planned corrupted-potential GPU regression is not yet executed. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
+| Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing source contract; the planned corrupted-potential GPU regression is not yet executed. | [source](https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/demag_poisson_contract.cpp#L151) |

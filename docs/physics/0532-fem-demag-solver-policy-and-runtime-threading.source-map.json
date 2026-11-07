@@ -1,0 +1,375 @@
+{
+  "document": {
+    "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
+    "reviewed_revision": "53a5d5171e06db3c4950511d4523f872f58317f1"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented source contract; not runtime-qualified by this page",
+      "scope": "Native FEM Poisson policy and run-start CPU thread setup."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "narrow runtime diagnostic only; full SP4 remains unqualified",
+      "scope": "The 50 fs coarse-relaxation type 18 result is linked from note 0913 and is not generalized to CPU or whole-SP4 qualification."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FemLinearSolverPolicy is stored in FEM discretization hints; FDM uses separate demag policy surfaces."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FemLinearSolverPolicy does not configure FDM GPU demagnetization."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fem-demag-scalar-potential",
+      "symbols": [
+        "H_demag",
+        "grad",
+        "u",
+        "div",
+        "M"
+      ],
+      "sources": [
+        "poisson-rhs",
+        "poisson-field-recovery"
+      ]
+    },
+    {
+      "id": "eq-fem-demag-linear-system",
+      "symbols": [
+        "K",
+        "vecu",
+        "b",
+        "r"
+      ],
+      "sources": [
+        "cpu-poisson-solve",
+        "gpu-poisson-validation"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "D",
+      "latex": "D",
+      "meaning": "Shared computational FEM domain (volume)",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "M",
+      "latex": "\\mathbf{M}",
+      "meaning": "Magnetization field",
+      "si_unit": "\\mathrm{A/m}"
+    },
+    {
+      "id": "H_demag",
+      "latex": "\\mathbf{H}_{\\mathrm{demag}}",
+      "meaning": "Demagnetizing field",
+      "si_unit": "\\mathrm{A/m}"
+    },
+    {
+      "id": "u",
+      "latex": "u",
+      "meaning": "Scalar magnetic potential and nodal coefficients",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "grad",
+      "latex": "\\nabla",
+      "meaning": "Spatial gradient operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "div",
+      "latex": "\\nabla\\cdot",
+      "meaning": "Spatial divergence operator",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "K",
+      "latex": "\\mathbf{K}",
+      "meaning": "Unscaled Poisson stiffness matrix",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "vecu",
+      "latex": "\\mathbf{u}",
+      "meaning": "Vector of scalar-potential coefficients",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "b",
+      "latex": "\\mathbf{b}",
+      "meaning": "Assembled Poisson right-hand side",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "r",
+      "latex": "\\mathbf{r}",
+      "meaning": "Algebraic residual vector",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "norm2",
+      "latex": "\\lVert\\cdot\\rVert_2",
+      "meaning": "Euclidean norm over algebraic coefficients",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "rtol",
+      "latex": "\\mathrm{rtol}",
+      "meaning": "Relative linear-solver tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "atol",
+      "latex": "\\mathrm{atol}",
+      "meaning": "Absolute residual tolerance for the unscaled system",
+      "si_unit": "\\mathrm{A\\,m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Defines policy defaults, field validation, and the serialized policy fragment."
+    },
+    {
+      "id": "positive-tolerance",
+      "path": "packages/fullmag-py/src/fullmag/_validation.py",
+      "symbol": "require_positive",
+      "responsibility": "Rejects nonfinite and nonpositive relative or absolute tolerances."
+    },
+    {
+      "id": "fem-policy-container",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FEM",
+      "responsibility": "Carries the optional demag solver policy in FEM discretization hints."
+    },
+    {
+      "id": "study-builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Exposes study-level solver-policy and CPU-thread selection methods."
+    },
+    {
+      "id": "runtime-selection",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class RuntimeSelection",
+      "responsibility": "Carries the optional requested cpu_threads value in runtime metadata."
+    },
+    {
+      "id": "fem-hints",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "Stores the optional canonical FEM policy hint."
+    },
+    {
+      "id": "fem-plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Carries the FEM solver policy into the execution plan."
+    },
+    {
+      "id": "policy-resolution",
+      "path": "crates/fullmag-runner/src/native_fem/plan.rs",
+      "symbol": "resolved_native_fem_demag_solver_policy",
+      "responsibility": "Preserves explicit policy values and resolves omitted lane-specific defaults."
+    },
+    {
+      "id": "gpu-default-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "unresolved_gpu_demag_policy_prefers_jacobi_preconditioner_for_non_pgbb",
+      "responsibility": "Tests the omitted strict GPU policy for non-PGBB execution."
+    },
+    {
+      "id": "pgbb-default-test",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb",
+      "responsibility": "Tests the omitted strict GPU policy for projected-gradient BB."
+    },
+    {
+      "id": "cpu-poisson-solve",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp",
+      "symbol": "solve_demag_poisson_hypre",
+      "responsibility": "Configures and applies the CPU Hypre Poisson solver."
+    },
+    {
+      "id": "gpu-poisson-validation",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "validate_demag_poisson_hypre_device_solve",
+      "responsibility": "Validates device solver convergence and residual/tolerance evidence."
+    },
+    {
+      "id": "poisson-rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp",
+      "symbol": "assemble_demag_poisson_rhs",
+      "responsibility": "Assembles the finite-element Poisson source from magnetization."
+    },
+    {
+      "id": "poisson-field-recovery",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
+      "symbol": "recover_demag_poisson_field",
+      "responsibility": "Recovers the demagnetizing field from the scalar-potential gradient."
+    },
+    {
+      "id": "native-threads",
+      "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
+      "symbol": "configure_fem_host_runtime_threads",
+      "responsibility": "Resolves and applies native FEM OpenMP settings when its context starts."
+    },
+    {
+      "id": "runner-thread-request",
+      "path": "crates/fullmag-runner/src/lib.rs",
+      "symbol": "requested_cpu_threads",
+      "responsibility": "Reads the requested CPU count from typed resources or runtime metadata."
+    },
+    {
+      "id": "runtime-thread-summary",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "runtime_threading_summary",
+      "responsibility": "Publishes requested/resolved runner counts and unavailable native counts as null."
+    },
+    {
+      "id": "thread-provenance",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "provenance_with_runtime_threading",
+      "responsibility": "Adds native FEM thread counts from step statistics when reported."
+    },
+    {
+      "id": "script-policy-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_fem_demag_solver_policy",
+      "responsibility": "Exports an authored solver policy for Python script round-trip."
+    },
+    {
+      "id": "sp4-policy-test",
+      "path": "packages/fullmag-py/tests/test_standard_problem_4_fem.py",
+      "symbol": "test_sp4_requests_qualified_demag_linear_solver_policy",
+      "responsibility": "Checks the FEM SP4 script's authored demag solver policy."
+    },
+    {
+      "id": "native-thread-test",
+      "path": "backends/fem/tests/cpu_threads_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Exercises native FEM CPU thread request and setup behavior."
+    },
+    {
+      "id": "shared-linear-validation",
+      "path": "backends/fem/core/demag_linear_solve_validation.cpp",
+      "symbol": "validate_demag_linear_solve_result",
+      "responsibility": "Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/core/demag_linear_solve_validation.cpp#L9"
+    },
+    {
+      "id": "shared-linear-validation-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "demag_linear_solve_validation_rejects_invalid_results",
+      "responsibility": "Exercises rejection of unverified false convergence and acceptance of an independently certified result.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/demag_poisson_contract.cpp#L151"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "Literal[\"CG\", \"GMRES\"]",
+        "default": "\"CG\"",
+        "si_unit": "1",
+        "validation": "Must be `CG` or `GMRES`; other values raise `ValueError`.",
+        "meaning": "Outer Krylov solver.",
+        "backend_support": "Native FEM CPU/GPU; selected tuple remains backend-validated.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "Literal[\"AMG\", \"JACOBI\", \"NONE\"]",
+        "default": "\"AMG\"",
+        "si_unit": "1",
+        "validation": "Must be `AMG`, `JACOBI`, or `NONE`; other values raise `ValueError`.",
+        "meaning": "Preconditioner for the Poisson solve.",
+        "backend_support": "Native FEM CPU/GPU; selected tuple remains backend-validated.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "Converts with `float`; the converted value must be finite and greater than zero, otherwise `ValueError`. Conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original field value rather than coercing it.",
+        "meaning": "Relative residual tolerance.",
+        "backend_support": "Native FEM CPU/GPU; `rtol` is dimensionless.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m}",
+        "validation": "`None` or converts with `float` to a finite value greater than zero; nonfinite/nonpositive values raise `ValueError`, conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original value.",
+        "meaning": "Optional absolute residual threshold for the unscaled Poisson system.",
+        "backend_support": "Native FEM CPU/GPU; backend applies it only when present and positive.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "Only checks `< 1`; values below 1 raise `ValueError`, incomparable values raise `TypeError`. The annotation is not enforced; a non-int comparable value can pass and is serialized unchanged. The IR field is unsigned 32-bit.",
+        "meaning": "Maximum outer solver iterations.",
+        "backend_support": "Native FEM CPU/GPU; IR representation uses an unsigned 32-bit field.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "Only checks `< 0`; negative values raise `ValueError`, incomparable values raise `TypeError`. The annotation is not enforced; a non-int comparable value can pass and is serialized unchanged. The IR field is unsigned 32-bit.",
+        "meaning": "Native linear-solver diagnostic verbosity.",
+        "backend_support": "Native FEM CPU/GPU; IR representation uses an unsigned 32-bit field.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy.print_level"
+      },
+      {
+        "python": "FEM.demag_solver_policy",
+        "type": "FemLinearSolverPolicy or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Type annotation is optional; constructor stores the value without an `isinstance` check, so a wrong non-None object raises `AttributeError` when `to_ir()` is called.",
+        "meaning": "Explicit FEM Poisson solver request.",
+        "backend_support": "Native FEM CPU/GPU only; not an FDM setting.",
+        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
+      }
+    ]
+  },
+  "bibliography": [
+    {
+      "title": "Non-uniform FFT for the finite element computation of the micromagnetic scalar potential",
+      "doi": "10.1016/j.jcp.2014.04.013",
+      "url": "https://doi.org/10.1016/j.jcp.2014.04.013"
+    },
+    {
+      "title": "BoomerAMG: A Parallel Algebraic Multigrid Solver and Preconditioner",
+      "doi": "10.1016/S0168-9274(01)00115-5",
+      "url": "https://doi.org/10.1016/S0168-9274(01)00115-5"
+    }
+  ],
+  "validation": {
+    "object_example": "Policy.to_ir checked without Solve.",
+    "gpu_residual_norm": "Current CG uses preconditioned norm; independent Euclidean GPU check is conditional. Planned every-solve certificate and corrupted-potential RED/GREEN remain pending.",
+    "unchanged_tolerances": "SP4 uses rtol1e-12,atolNone,max500; the transport probe did not change these.",
+    "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed."
+  }
+}
