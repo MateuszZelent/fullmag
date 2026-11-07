@@ -36,6 +36,7 @@ pub(crate) mod scalar_history;
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 use accepted_worker_execution_receipt::{
+    validate_reported_native_failure_started,
     worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
     WORKER_EXECUTION_STARTED_RECEIPT,
@@ -1480,21 +1481,161 @@ pub(crate) fn existing_private_attempt_output_dir(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<PathBuf> {
-    for (value, label) in [
-        (claim.run_id.as_str(), "run_id"),
-        (claim.task_id.as_str(), "task_id"),
-        (claim.attempt_id.as_str(), "attempt_id"),
-    ] {
+    existing_private_attempt_output_dir_for_identity(
+        store,
+        claim.run_id.as_str(),
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+    )
+}
+
+fn existing_private_attempt_output_dir_for_identity(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+) -> Result<PathBuf> {
+    for (value, label) in [(run_id, "run_id"), (task_id, "task_id"), (attempt_id, "attempt_id")] {
         fullmag_session::repository_path::validate_store_id(value)
             .with_context(|| format!("worker attempt {label} is invalid"))?;
     }
+    if ownership_epoch == 0 {
+        bail!("worker attempt ownership epoch must be positive");
+    }
     let root = store.root();
     let runs_root = require_real_directory(&root.join("runs"))?;
-    let run_root = require_real_directory(&runs_root.join(claim.run_id.as_str()))?;
+    let run_root = require_real_directory(&runs_root.join(run_id))?;
     let worker_root = require_real_directory(&run_root.join("worker-attempts"))?;
-    let task_root = require_real_directory(&worker_root.join(claim.task_id.as_str()))?;
-    let attempt_root = require_real_directory(&task_root.join(claim.attempt_id.as_str()))?;
-    require_real_directory(&attempt_root.join(format!("epoch-{}", claim.ownership_epoch.value())))
+    let task_root = require_real_directory(&worker_root.join(task_id))?;
+    let attempt_root = require_real_directory(&task_root.join(attempt_id))?;
+    require_real_directory(&attempt_root.join(format!("epoch-{ownership_epoch}")))
+}
+
+/// Establish the narrow prelaunch-failure proof from the attempt receipts and
+/// the durable worker inbox. The caller verifies the catalog against the
+/// accepted Study before relying on this evidence.
+pub(crate) fn prelaunch_failure_proves_applied_start(
+    store: &SessionStore,
+    catalog: &fullmag_session::FmsRunCatalog,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+) -> Result<bool> {
+    let (Some(attempt_id), Some(ownership_epoch)) =
+        (task.attempt_id.as_deref(), task.ownership_epoch)
+    else {
+        return Ok(false);
+    };
+    let read_transaction = store.read_transaction()?;
+    let current_catalog = store
+        .read_run_catalog(&catalog.run_id)?
+        .context("prelaunch failure run catalog disappeared")?;
+    if &current_catalog != catalog {
+        bail!("prelaunch failure run catalog changed since its projection snapshot");
+    }
+    let attempt = match existing_private_attempt_output_dir_for_identity(
+        store,
+        catalog.run_id.as_str(),
+        &task.task_id,
+        attempt_id,
+        ownership_epoch,
+    ) {
+        Ok(path) => path,
+        Err(error) if is_not_found_error(&error) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let Some(started) = read_attempt_receipt::<WorkerExecutionStartedReceipt>(
+        &attempt,
+        WORKER_EXECUTION_STARTED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let Some(failure) = read_attempt_receipt::<WorkerPrelaunchFailedReceipt>(
+        &attempt,
+        WORKER_PRELAUNCH_FAILED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let claim = &started.identity.claim;
+    if failure.error.trim().is_empty()
+        || !started.identity.matches_same_attempt(&failure.identity)
+        || claim.run_id.as_str() != catalog.run_id.as_str()
+        || claim.task_id.as_str() != task.task_id.as_str()
+        || claim.attempt_id.as_str() != attempt_id
+        || claim.ownership_epoch.value() != ownership_epoch
+        || task.resource_id.as_deref() != Some(claim.lease.resource_id.as_str())
+    {
+        bail!("prelaunch failure receipts differ from the current run task attempt");
+    }
+
+    // The actual prelaunch storage failure is published before any solver
+    // output exists. Unknown files and directories fail closed, including
+    // live magnetization sidecars with their own file names.
+    let mut receipt_count = 0;
+    for entry in fs::read_dir(&attempt).context("list prelaunch failure attempt evidence")? {
+        let entry = entry.context("read prelaunch failure attempt entry")?;
+        receipt_count += 1;
+        if receipt_count > 2 {
+            bail!("prelaunch failure attempt contains extra execution evidence");
+        }
+        let name = entry.file_name().into_string()
+            .map_err(|_| anyhow::anyhow!("prelaunch failure attempt has a non-UTF8 entry"))?;
+        if !matches!(name.as_str(), WORKER_EXECUTION_STARTED_RECEIPT | WORKER_PRELAUNCH_FAILED_RECEIPT) {
+            bail!("prelaunch failure attempt contains unexpected execution evidence");
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .context("inspect prelaunch failure attempt evidence")?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            bail!("prelaunch failure attempt receipts must be regular files");
+        }
+    }
+    if receipt_count != 2 {
+        bail!("prelaunch failure attempt must contain exactly two receipts");
+    }
+
+    let empty_checkpoint = fullmag_application::WorkerCommandInbox::new(claim).checkpoint();
+    let inbox_path = fullmag_session::FmsWorkerInboxRecord::new(
+        serde_json::to_value(empty_checkpoint)?,
+    )?
+    .relative_path()?;
+    let inbox_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        store.root(),
+        &inbox_path,
+        usize::try_from(fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
+            .context("worker inbox metadata budget does not fit in memory")?,
+    )
+    .context("read bounded durable worker inbox for prelaunch failure proof")?;
+    let record: fullmag_session::FmsWorkerInboxRecord = serde_json::from_slice(&inbox_bytes)
+        .context("decode durable worker inbox for prelaunch failure proof")?;
+    record.validate().context("validate durable worker inbox record")?;
+    if record.relative_path()? != inbox_path {
+        bail!("prelaunch failure worker inbox path differs from its claim");
+    }
+    let checkpoint = serde_json::from_value(record.payload)
+        .context("decode typed worker inbox checkpoint for prelaunch failure proof")?;
+    let inbox = fullmag_application::WorkerCommandInbox::restore(claim, checkpoint)
+        .context("restore typed worker inbox for prelaunch failure proof")?;
+    let checkpoint = inbox.checkpoint();
+    if checkpoint.pending.is_some() || checkpoint.claim != claim.identity() {
+        bail!("prelaunch failure worker inbox has an uncertain or foreign command");
+    }
+    let starts = checkpoint.applied.iter()
+        .filter(|command| matches!(&command.command, fullmag_application::WorkerCommand::Start))
+        .collect::<Vec<_>>();
+    if starts.len() != 1 {
+        bail!("prelaunch failure worker inbox must contain exactly one applied Start");
+    }
+    let start = starts[0];
+    if start.message_id != started.identity.start_message_id
+        || start.sequence != started.identity.start_sequence
+        || !start.claim.matches_claim(claim)
+    {
+        bail!("prelaunch failure Started receipt differs from its applied Start");
+    }
+    drop(read_transaction);
+    validate_reported_native_failure_started(store, &attempt, claim, start)
+        .context("validate prelaunch failure Started receipt against the accepted plan")?;
+    Ok(true)
 }
 
 pub(crate) fn write_immutable_attempt_receipt<T: Serialize>(

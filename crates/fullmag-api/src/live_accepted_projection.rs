@@ -696,14 +696,21 @@ fn load_durable_projection_with_journal(
             "a previously observed accepted artifact catalog is now missing",
         ));
     }
-    let terminal_without_outputs = artifact_catalog.is_none()
+    let mut terminal_without_outputs = artifact_catalog.is_none()
         && matches!(catalog_lifecycle_status, "failed" | "cancelled")
         && terminal_catalog_without_outputs(&run_catalog.tasks);
+    let prelaunch_failure_candidate = artifact_catalog.is_none()
+        && catalog_lifecycle_status == "failed"
+        && prelaunch_failed_catalog_candidate(&run_catalog.tasks);
     let terminal_status = matches!(
         catalog_lifecycle_status,
         "completed" | "failed" | "cancelled"
     );
-    if artifact_catalog.is_none() && terminal_status && !terminal_without_outputs {
+    if artifact_catalog.is_none()
+        && terminal_status
+        && !terminal_without_outputs
+        && !prelaunch_failure_candidate
+    {
         return Err(ApiError::conflict_with_code(
             "accepted_projection_artifact_catalog_required",
             "terminal accepted run has outputs or task state that requires an artifact catalog",
@@ -727,6 +734,7 @@ fn load_durable_projection_with_journal(
         });
     if artifact_catalog.is_none()
         && !terminal_without_outputs
+        && !prelaunch_failure_candidate
         && !outputless_nonterminal_catalog
     {
         return Ok(None);
@@ -744,7 +752,7 @@ fn load_durable_projection_with_journal(
     }
     // The start gate only remaps waiting_for_compute. When this is a valid
     // terminal no-output run, the RunCatalog lifecycle is the exact status.
-    let status = if terminal_without_outputs {
+    let status = if terminal_without_outputs || prelaunch_failure_candidate {
         catalog_lifecycle_status
     } else {
         accepted_projection_status(&store, &context.run_id, &run_catalog.tasks)?
@@ -778,11 +786,13 @@ fn load_durable_projection_with_journal(
             && cursor.live_observation_sequence.is_none()
             && cursor.live_magnetization_sequence.is_none()
     });
-    if durable_unchanged && previous_journal_pending && !stage_journal_attempted
+    if !prelaunch_failure_candidate
+        && durable_unchanged && previous_journal_pending && !stage_journal_attempted
         && !has_active_task && previous_live_observation_is_empty {
         return Ok(None);
     }
-    if durable_unchanged && !previous_journal_pending && !has_active_task && previous_live_observation_is_empty {
+    if !prelaunch_failure_candidate && durable_unchanged && !previous_journal_pending
+        && !has_active_task && previous_live_observation_is_empty {
         // RunIntent, catalog identities, lifecycle, start gate, and current
         // session binding were freshly checked above. With no active attempt
         // there can be no new live sidecar sequence, so avoid reloading and
@@ -820,6 +830,30 @@ fn load_durable_projection_with_journal(
                 })
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    if prelaunch_failure_candidate {
+        let plan_matches = prelaunch_failed_catalog_matches_accepted_study(
+            &specification,
+            &accepted,
+            &run_catalog,
+        )?;
+        let first_task = run_catalog.tasks.first().expect("candidate has a failed task");
+        let applied_start_matches = plan_matches
+            && crate::accepted_study_worker::prelaunch_failure_proves_applied_start(
+                &store,
+                &run_catalog,
+                first_task,
+            )
+            .map_err(|error| {
+                ApiError::conflict(format!("validate accepted prelaunch failure proof: {error:#}"))
+            })?;
+        if !applied_start_matches {
+            return Err(ApiError::conflict_with_code(
+                "accepted_projection_artifact_catalog_required",
+                "terminal accepted run has outputs or task state that requires an artifact catalog",
+            ));
+        }
+        terminal_without_outputs = true;
+    }
     if artifact_catalog.is_none() && preclaim_cancelled_without_artifacts(&store, &run_catalog)? {
         let planned_count = accepted.lowered.steps.iter()
             .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
@@ -2260,6 +2294,110 @@ fn terminal_catalog_without_outputs(tasks: &[fullmag_session::FmsTaskCatalogEntr
                     | fullmag_session::FmsTaskLifecycle::Cancelled
             ) && task.artifact_ids.is_empty()
         })
+}
+
+fn prelaunch_failed_catalog_candidate(tasks: &[fullmag_session::FmsTaskCatalogEntry]) -> bool {
+    let Some(first) = tasks.first() else {
+        return false;
+    };
+    tasks.len() > 1
+        && first.lifecycle == fullmag_session::FmsTaskLifecycle::Failed
+        && first.attempt_id.is_some()
+        && first.ownership_epoch.is_some()
+        && first.resource_id.is_some()
+        && matches!(
+            first.observation,
+            None | Some(fullmag_session::FmsObservationState::Disconnected)
+        )
+        && first.artifact_ids.is_empty()
+        && tasks.iter().skip(1).all(|task| {
+            task.lifecycle == fullmag_session::FmsTaskLifecycle::Accepted
+                && task.attempt_id.is_none()
+                && task.ownership_epoch.is_none()
+                && task.resource_id.is_none()
+                && task.resolved_input_fingerprint.is_none()
+                && task.observation.is_none()
+                && task.artifact_ids.is_empty()
+                && task.coordinator_watermark.is_none()
+                && task.coordinator_genesis.is_none()
+        })
+}
+
+fn prelaunch_failed_catalog_matches_accepted_study(
+    specification: &fullmag_application::RunSpecification,
+    accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
+    catalog: &fullmag_session::FmsRunCatalog,
+) -> Result<bool, ApiError> {
+    let planned = accepted
+        .lowered
+        .steps
+        .iter()
+        .filter(|step| matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned))
+        .collect::<Vec<_>>();
+    if planned.len() < 2 || planned.len() != catalog.tasks.len() {
+        return Ok(false);
+    }
+    let first_step_id = planned[0].step_id.as_str();
+    for (index, (step, task)) in planned.iter().zip(&catalog.tasks).enumerate() {
+        let task_id = fullmag_session::task_id_for_study_step(
+            catalog.run_id.as_str(),
+            &step.step_id,
+        )
+        .map_err(|error| ApiError::conflict(format!("prelaunch Study task identity is invalid: {error}")))?;
+        let fingerprint = fullmag_application::study_task_input_fingerprint(specification, step)
+            .map_err(|error| ApiError::conflict(format!("prelaunch Study task input is invalid: {error}")))?;
+        if !matches!(step.status, fullmag_plan::StudyStepLoweringStatus::Planned)
+            || task.task_id != task_id
+            || task.input_fingerprint != fingerprint
+            || (index > 0
+                && !study_step_depends_on(accepted, &step.step_id, first_step_id))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn study_step_depends_on<'a>(
+    accepted: &'a fullmag_runtime_control::AcceptedStudySnapshot,
+    step_id: &'a str,
+    target_step_id: &'a str,
+) -> bool {
+    let steps = accepted
+        .lowered
+        .steps
+        .iter()
+        .map(|step| (step.step_id.as_str(), step))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut pending = vec![step_id];
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        let Some(step) = steps.get(current) else {
+            continue;
+        };
+        let dependencies = step
+            .completion_dependencies
+            .iter()
+            .map(String::as_str)
+            .chain(step.inputs.iter().filter(|input| input.required).filter_map(|input| {
+                match &input.source {
+                    fullmag_authoring::StudyInputSource::StepOutput { step_id, .. } => {
+                        Some(step_id.as_str())
+                    }
+                    _ => None,
+                }
+            }));
+        for dependency in dependencies {
+            if dependency == target_step_id {
+                return true;
+            }
+            pending.push(dependency);
+        }
+    }
+    false
 }
 
 fn accepted_projection_status(
@@ -3994,9 +4132,141 @@ mod tests {
         accepted_projection_fixture(authored, &["step:run", "step:run-2"], true)
     }
 
+    fn prelaunch_failed_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+        std::path::PathBuf,
+        String,
+    ) {
+        prelaunch_failed_fixture_with_chain(true)
+    }
+
+    fn prelaunch_failed_fixture_with_chain(serial_completion_chain: bool) -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+        std::path::PathBuf,
+        String,
+    ) {
+        use fullmag_application::{
+            AttemptId, OwnershipEpoch, ResourceBudget, ResourceKind, ResourceLease, RunId,
+            TaskClaim, TaskId, WorkerCommand, WorkerCommandEnvelope, WorkerCommandInbox,
+        };
+
+        let (directory, store, context, mut catalog) = accepted_projection_fixture_with_chain(
+            None,
+            &["step:run", "step:run-2", "step:run-3"],
+            false,
+            serial_completion_chain,
+        );
+        let task = &mut catalog.tasks[0];
+        task.lifecycle = fullmag_session::FmsTaskLifecycle::Failed;
+        task.observation = Some(fullmag_session::FmsObservationState::Disconnected);
+        task.attempt_id = Some("attempt-prelaunch".into());
+        task.ownership_epoch = Some(1);
+        task.resource_id = Some("resource-prelaunch".into());
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+
+        let claim = TaskClaim {
+            run_id: RunId::parse(context.run_id.clone()).unwrap(),
+            task_id: TaskId::parse(catalog.tasks[0].task_id.clone()).unwrap(),
+            attempt_id: AttemptId::parse("attempt-prelaunch").unwrap(),
+            ownership_epoch: OwnershipEpoch::INITIAL,
+            lease: ResourceLease::new(
+                "resource-prelaunch",
+                ResourceKind::Cpu,
+                ResourceBudget {
+                    cpu_millis: 1,
+                    memory_bytes: 1,
+                    gpu_memory_bytes: 0,
+                    storage_bytes: 1,
+                },
+            )
+            .unwrap(),
+        };
+        let start = WorkerCommandEnvelope {
+            schema_version: fullmag_application::TERMINAL_WORKER_PROTOCOL_SCHEMA.into(),
+            message_id: "start-prelaunch".into(),
+            sequence: 1,
+            claim: claim.identity(),
+            command: WorkerCommand::Start,
+        };
+        let mut inbox = WorkerCommandInbox::new(&claim);
+        inbox.receive(&start, |_| Ok(())).unwrap();
+        let record = fullmag_session::FmsWorkerInboxRecord::new(
+            serde_json::to_value(inbox.checkpoint()).unwrap(),
+        )
+        .unwrap();
+        let inbox_path = record.relative_path().unwrap();
+        let inbox_absolute = store.root().join(&inbox_path);
+        std::fs::create_dir_all(inbox_absolute.parent().unwrap()).unwrap();
+        std::fs::write(&inbox_absolute, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+
+        let accepted = fullmag_runtime_control::load_accepted_study_snapshot(
+            &store,
+            &claim.run_id,
+            &fullmag_application::ProjectId::parse("project-cancel").unwrap(),
+        )
+        .unwrap();
+        let plan = accepted.lowered.steps[0].execution_plan.as_ref().unwrap();
+        let identity = json!({
+            "schema_version": "fullmag.accepted_worker_execution.v1",
+            "claim": claim,
+            "start_message_id": start.message_id,
+            "start_sequence": start.sequence,
+            "case_id": "default",
+            "plan_fingerprint": fullmag_session::canonical_json_sha256(
+                &serde_json::to_value(plan).unwrap(),
+            ),
+        });
+        let attempt = store
+            .root()
+            .join("runs")
+            .join(&context.run_id)
+            .join("worker-attempts")
+            .join(&catalog.tasks[0].task_id)
+            .join("attempt-prelaunch")
+            .join("epoch-1");
+        std::fs::create_dir_all(&attempt).unwrap();
+        std::fs::write(
+            attempt.join("worker_execution_started.v1.json"),
+            serde_json::to_vec(&json!({ "identity": identity.clone() })).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            attempt.join("worker_prelaunch_failed.v1.json"),
+            serde_json::to_vec(&json!({
+                "identity": identity,
+                "error": "project storage preparation failed",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        (directory, store, context, catalog, attempt, inbox_path)
+    }
+
     fn accepted_projection_fixture(
         authored: Option<&fullmag_authoring::SceneDocument>, step_ids: &[&str], cancel: bool,
     ) -> (tempfile::TempDir, fullmag_session::SessionStore, ProjectionContext, fullmag_session::FmsRunCatalog) {
+        accepted_projection_fixture_with_chain(authored, step_ids, cancel, false)
+    }
+
+    fn accepted_projection_fixture_with_chain(
+        authored: Option<&fullmag_authoring::SceneDocument>,
+        step_ids: &[&str],
+        cancel: bool,
+        serial_completion_chain: bool,
+    ) -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        ProjectionContext,
+        fullmag_session::FmsRunCatalog,
+    ) {
         use fullmag_application::{ProjectEnvelope, ProjectId, ProjectSnapshot, RequestedExecution,
             RequestedResourceBudget, RunId, RunIntent, RunSpecification, StudyId, StudyReference};
         use fullmag_authoring::{PrimitiveStageNode, StudyDiscretizationReference,
@@ -4033,6 +4303,14 @@ mod tests {
             discretization: StudyDiscretizationReference { recipe_id: "mesh:default".into(), version: "v1".into() },
             execution_profile: StudyExecutionProfileReference { profile_id: "exec:auto".into(), version: "v1".into() },
         }).unwrap();
+        if serial_completion_chain {
+            study.schema_version = fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION.into();
+            for index in 1..study.steps.len() {
+                study.steps[index].completion_dependencies =
+                    vec![study.steps[index - 1].step_id.clone()];
+            }
+            study.validate().unwrap();
+        }
         if !cancel {
             // Declare the scalar port before the immutable Study/RunIntent is
             // hashed. Run's legacy authored default has no explicit outputs.
@@ -4043,9 +4321,15 @@ mod tests {
             }
             study.validate().unwrap();
         }
-        let problem_catalog = StudyProblemCatalog::from_entries(&study, study.steps.iter().map(|step|
-            StudyProblemCatalogEntry::from_step(step, fullmag_ir::ProblemIR::bootstrap_example()),
-        ).collect()).unwrap();
+        let problem_catalog = StudyProblemCatalog::from_entries(&study, study.steps.iter().map(|step| {
+            let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+            if serial_completion_chain {
+                // Keep the prelaunch regression at a tiny, exact 2x2x2 = 8 cell domain.
+                problem.backend_policy.discretization_hints.as_mut().unwrap()
+                    .fdm.as_mut().unwrap().cell = [100e-9, 10e-9, 3e-9];
+            }
+            StudyProblemCatalogEntry::from_step(step, problem)
+        }).collect()).unwrap();
         let context = ProjectionContext {
             session_id: "session-cancel".into(), run_id: "run-cancel".into(), session_epoch: 4,
             scene_revision: authored.map_or(9, |scene| scene.revision),
@@ -5046,6 +5330,239 @@ mod tests {
         assert_eq!(snapshot.runtime_status.code, "awaiting_command");
         assert_eq!(snapshot.session.finished_at_unix_ms, 0);
         assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn prelaunch_failed_first_task_projects_terminal_run_without_failing_unstarted_steps() {
+        let (directory, store, context, catalog, _attempt, _inbox_path) =
+            prelaunch_failed_fixture();
+        assert_eq!(catalog.tasks.len(), 3);
+        assert_eq!(catalog.tasks[0].lifecycle, fullmag_session::FmsTaskLifecycle::Failed);
+        assert_eq!(catalog.tasks[0].observation, Some(fullmag_session::FmsObservationState::Disconnected));
+        assert!(catalog.tasks[1..].iter().all(|task|
+            task.lifecycle == fullmag_session::FmsTaskLifecycle::Accepted
+                && task.attempt_id.is_none()
+                && task.observation.is_none()
+                && task.artifact_ids.is_empty()));
+        assert!(store.read_artifact_catalog(&context.run_id).unwrap().is_none());
+
+        let writer_lock_before = std::fs::read(store.root().join("WRITER.lock")).unwrap();
+        let writer_owner_before = std::fs::read(store.root().join("WRITER.owner.json")).unwrap();
+        assert!(crate::accepted_study_worker::prelaunch_failure_proves_applied_start(
+            &store,
+            &catalog,
+            &catalog.tasks[0],
+        )
+        .unwrap());
+        assert_eq!(
+            std::fs::read(store.root().join("WRITER.lock")).unwrap(),
+            writer_lock_before,
+        );
+        assert_eq!(
+            std::fs::read(store.root().join("WRITER.owner.json")).unwrap(),
+            writer_owner_before,
+        );
+
+        let projection = load_durable_projection(store.root(), &context, None, &mut None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(projection.status, "failed");
+        assert!(projection.terminal_without_outputs);
+        assert_eq!(projection.artifact_catalog_revision, None);
+        assert!(projection.latest_state.is_none());
+        assert!(projection.latest_total_energy.is_none());
+        assert!(projection.latest_output_identity.is_none());
+        assert!(projection.live_observation.is_none());
+        assert_eq!(
+            projection.stage_execution.stages.iter().map(|stage| stage.status).collect::<Vec<_>>(),
+            vec![
+                crate::types::StageLifecycleState::Failed,
+                crate::types::StageLifecycleState::Pending,
+                crate::types::StageLifecycleState::Pending,
+            ]
+        );
+
+        let mut state = projection_workspace(&context).await;
+        Arc::get_mut(&mut state).unwrap().current_command_journal_store_root =
+            Some(directory.path().join("live-journal"));
+        state.current_command_ledger.lock().await.push_back(
+            serde_json::from_value(json!({
+                "command":{"seq":1,"command_id":"live-preparation-mesh-command","kind":"solve","created_at_unix_ms":1},
+                "status":"running"
+            }))
+            .unwrap(),
+        );
+        apply_projection(&state, &context, projection).await.unwrap();
+
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().unwrap();
+        assert_eq!(snapshot.session.status, "awaiting_command");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "failed");
+        assert_eq!(snapshot.runtime_status.code, "awaiting_command");
+        assert_eq!(
+            snapshot.stage_execution.as_ref().unwrap().stages.iter()
+                .map(|stage| stage.status).collect::<Vec<_>>(),
+            vec![
+                crate::types::StageLifecycleState::Failed,
+                crate::types::StageLifecycleState::Pending,
+                crate::types::StageLifecycleState::Pending,
+            ]
+        );
+        drop(current);
+        assert_eq!(
+            state.current_command_ledger.lock().await[0].status,
+            crate::types::CommandLifecycleState::Failed,
+        );
+        let durable = store.read_run_catalog(&context.run_id).unwrap().unwrap();
+        assert!(durable.tasks[1..].iter().all(|task|
+            task.lifecycle == fullmag_session::FmsTaskLifecycle::Accepted));
+    }
+
+    #[test]
+    fn prelaunch_failure_without_either_receipt_keeps_artifact_catalog_required() {
+        let (_directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        std::fs::remove_file(attempt.join("worker_execution_started.v1.json")).unwrap();
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+
+        let (_directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        std::fs::remove_file(attempt.join("worker_prelaunch_failed.v1.json")).unwrap();
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+    }
+
+    #[test]
+    fn prelaunch_failure_rejects_mismatched_applied_start_and_receipt_identity() {
+        let (_directory, store, context, _catalog, _attempt, inbox_path) =
+            prelaunch_failed_fixture();
+        let absolute = store.root().join(inbox_path);
+        let mut record: fullmag_session::FmsWorkerInboxRecord = serde_json::from_slice(
+            &std::fs::read(&absolute).unwrap(),
+        )
+        .unwrap();
+        record.payload["applied"][0]["message_id"] = json!("foreign-start");
+        record.payload_sha256 = fullmag_session::canonical_json_sha256(&record.payload);
+        std::fs::write(&absolute, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+
+        let (_directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        let path = attempt.join("worker_prelaunch_failed.v1.json");
+        let mut receipt: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        receipt["identity"]["start_message_id"] = json!("foreign-start");
+        std::fs::write(&path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+    }
+
+    #[test]
+    fn prelaunch_failure_rejects_corrupt_receipts_and_output_observations() {
+        let (_directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        std::fs::write(attempt.join("worker_prelaunch_failed.v1.json"), b"{").unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+
+        let (_directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        std::fs::write(
+            attempt.join(crate::accepted_study_worker::ACCEPTED_LIVE_OBSERVATION_FILE),
+            b"output observation present",
+        )
+        .unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+
+        let (_directory, store, context, mut catalog, _attempt, _) = prelaunch_failed_fixture();
+        catalog.tasks[1].artifact_ids.push("artifact-unexpected".into());
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+
+        let (_directory, store, context, mut catalog, _attempt, _) = prelaunch_failed_fixture();
+        catalog.tasks[1].observation = Some(fullmag_session::FmsObservationState::Live);
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prelaunch_failure_rejects_symlinked_receipts() {
+        let (directory, store, context, _catalog, attempt, _) = prelaunch_failed_fixture();
+        let target = directory.path().join("receipt-target.json");
+        std::fs::write(&target, b"{}").unwrap();
+        let proof = attempt.join("worker_prelaunch_failed.v1.json");
+        std::fs::remove_file(&proof).unwrap();
+        std::os::unix::fs::symlink(target, proof).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+    }
+
+    #[test]
+    fn prelaunch_failure_proof_rejects_catalog_changes_after_the_projection_snapshot() {
+        let (_directory, store, _context, catalog, _attempt, _) = prelaunch_failed_fixture();
+        let mut changed = catalog.clone();
+        changed.tasks[1].lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+        changed.tasks[1].attempt_id = Some("attempt-later".into());
+        changed.tasks[1].ownership_epoch = Some(1);
+        changed.tasks[1].resource_id = Some("resource-later".into());
+        changed.revision += 1;
+        assert_eq!(changed.tasks[0], catalog.tasks[0]);
+        store.commit_run_catalog(&changed).unwrap();
+
+        let error = crate::accepted_study_worker::prelaunch_failure_proves_applied_start(
+            &store,
+            &catalog,
+            &catalog.tasks[0],
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("catalog changed since its projection snapshot"));
+    }
+
+    #[test]
+    fn prelaunch_failure_requires_exact_study_task_coverage_and_terminal_catalog_evidence() {
+        let (_directory, store, context, _catalog, _attempt, _) =
+            prelaunch_failed_fixture_with_chain(false);
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+
+        let (_directory, store, context, mut catalog, _attempt, _) = prelaunch_failed_fixture();
+        catalog.tasks[1].lifecycle = fullmag_session::FmsTaskLifecycle::Running;
+        catalog.tasks[1].attempt_id = Some("attempt-later".into());
+        catalog.tasks[1].ownership_epoch = Some(1);
+        catalog.tasks[1].resource_id = Some("resource-later".into());
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+
+        let (_directory, store, context, mut catalog, _attempt, _) = prelaunch_failed_fixture();
+        catalog.tasks.swap(1, 2);
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+
+        let (_directory, store, context, mut catalog, _attempt, _) = prelaunch_failed_fixture();
+        catalog.tasks[2].input_fingerprint = "f".repeat(64);
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        assert!(load_durable_projection(store.root(), &context, None, &mut None).is_err());
+
+        let (_directory, store, context, _catalog) = succeeded_projection_fixture();
+        std::fs::remove_file(store.root().join(format!(
+            "runs/{}/artifact_catalog.json", context.run_id,
+        )))
+        .unwrap();
+        let error = load_durable_projection(store.root(), &context, None, &mut None).unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_required"));
+
+        let (_directory, store, context, _) = succeeded_projection_fixture();
+        let projection = load_durable_projection(store.root(), &context, None, &mut None)
+            .unwrap()
+            .unwrap();
+        let cursor = pending_cursor(&context, &projection);
+        std::fs::remove_file(store.root().join(format!(
+            "runs/{}/artifact_catalog.json", context.run_id,
+        )))
+        .unwrap();
+        let error = load_durable_projection(store.root(), &context, Some(&cursor), &mut None)
+            .unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("accepted_projection_artifact_catalog_disappeared"));
     }
 
     #[tokio::test]
