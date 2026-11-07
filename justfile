@@ -215,6 +215,14 @@ docker-dev-capture-terminal attempt config_sha256 source_root port="3197":
 docker-dev-stop-prelaunch-failure attempt config_sha256 source_root port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --quiesce-api --capture-prelaunch-failure
 
+# Preserve a stale public Running run only after exact native terminal inspection.
+docker-dev-stop-native-terminal attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --quiesce-api --capture-native-terminal
+
+# Archive the exact preserved namespace before building a fresh development runtime.
+docker-dev-recreate-native-terminal attempt config_sha256 source_root stop_attempt stop_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --fresh-state --native-terminal-stop {{quote(stop_attempt)}} --native-terminal-stop-sha256 {{quote(stop_sha256)}}
+
 # Recreate the pinned group and restore the exact capture from the stop receipt.
 docker-dev-restore-terminal attempt config_sha256 source_root stop_attempt port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --terminal-observation-stop {{quote(stop_attempt)}}

@@ -35,7 +35,12 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                     [b'--stop-only', b'--quiesce-api', b'--capture-prelaunch-failure']),
                    ('docker-dev-recreate-prelaunch-failure', base + ['c' * 32, 'd' * 64, '3242'],
                     [b'--fresh-state', b'--prelaunch-failure-stop', b'c' * 32,
-                     b'--prelaunch-failure-stop-sha256', b'd' * 64])]
+                     b'--prelaunch-failure-stop-sha256', b'd' * 64]),
+                   ('docker-dev-stop-native-terminal', base + ['3242'],
+                    [b'--stop-only', b'--quiesce-api', b'--capture-native-terminal']),
+                   ('docker-dev-recreate-native-terminal', base + ['c' * 32, 'd' * 64, '3242'],
+                    [b'--fresh-state', b'--native-terminal-stop', b'c' * 32,
+                     b'--native-terminal-stop-sha256', b'd' * 64])]
         for name, args, suffix in recipes:
             with self.subTest(recipe=name):
                 dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run', name, *args],
