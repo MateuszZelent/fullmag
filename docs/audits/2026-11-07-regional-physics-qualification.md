@@ -104,3 +104,23 @@ w parach `fem_dg0_analytic_abi_checks.py/.zarr` i
 te pary poza usuwanym drzewem na WSL oraz uaktualnić lokalizację w rejestrze.
 Pozostają: pełna macierz regionalna, publiczne wykonanie i browser QA,
 mapowanie FEM, CI/integracja kolejnych zmian i kwalifikowany cleanup.
+
+## Kontrolowany stop przed przebudową
+
+Próba stopu `9bb673ef87ed4eb2a2cb494f2e6a5455` odmówiła przed drain:
+preparation zawierało początek `1794071334511` i koniec `1794071277906` ms.
+Różnica wynosi −56605 ms; przyczyny rozbieżności zegara nie ustalono.
+Nie zmieniano surowych timestampów, receiptów ani ownera w celu obejścia odmowy.
+
+Dodano wykonywalną regresję `scripts/test_docker_preaccepted_clock.py`.
+Preflight odróżnia teraz porządek zegara jako metadane diagnostyczne; nadal
+wymaga oryginalnego odrzucenia tej aktywacji, dwóch identycznych widoków API,
+braku przyjętego run, pustej kolejki i command ledger oraz gotowego runtime.
+Nie stanowi to dowodu drain — ten musi zakończyć się osobno. Testy: 3 nowe,
+12 runtime-state i 25 stop-unadmitted PASS.
+
+Ponowny managed stop-only zakończył się sukcesem:
+`d8f675cacfa044488fd21ec5672bded3`. Bieżąca przebudowa i wykonanie naprawionego
+Run pozostają do potwierdzenia. Pierwszy CI portu wskazał brak pomocniczego
+parsera `payload_string_value`; zależność uzupełniono z tego samego źródła P22
+wraz z regresją nieprawidłowego typu integratora.
