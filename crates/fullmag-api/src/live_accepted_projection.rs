@@ -4271,7 +4271,10 @@ mod tests {
         assert_eq!(snapshot.run.as_ref().unwrap().status, "completed");
         assert_eq!(snapshot.session.status, "awaiting_command");
         assert_eq!(snapshot.runtime_status.code, "awaiting_command");
-        assert!(snapshot.stage_execution.stages.iter().all(|stage|
+        let stages = snapshot.stage_execution.as_ref()
+            .expect("terminal projection publishes stage execution");
+        assert_eq!(stages.stages.len(), 3);
+        assert!(stages.stages.iter().all(|stage|
             stage.status == crate::types::StageLifecycleState::Completed && stage.completed_at_unix_ms.is_none()));
     }
 
