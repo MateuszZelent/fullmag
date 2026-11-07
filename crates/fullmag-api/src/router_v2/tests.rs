@@ -135,6 +135,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         output_storage: None,
         initial_state: None,
         geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+            geometry_name: None,
             name: "body".to_string(),
             object_id: None,
             region_name: None,
@@ -13050,6 +13051,7 @@ async fn mesh_build_command_lowers_difference_geometry_from_scene() {
         scene.objects[0].id = "permalloy_box".to_string();
         scene.objects[0].name = "permalloy_box".to_string();
         scene.objects[0].geometry = fullmag_authoring::SceneGeometry {
+            geometry_name: None,
             geometry_kind: "Difference".to_string(),
             geometry_params: serde_json::json!({
                 "base": {

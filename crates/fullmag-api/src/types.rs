@@ -2291,6 +2291,7 @@ mod tests {
             output_storage: None,
             initial_state: None,
             geometries: vec![fullmag_authoring::ScriptBuilderGeometryEntry {
+                geometry_name: None,
                 name: "body".to_string(),
                 object_id: None,
                 region_name: None,

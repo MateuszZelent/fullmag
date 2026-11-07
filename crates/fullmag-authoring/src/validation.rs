@@ -336,7 +336,20 @@ fn validate_scene_document_with_mode(
         }
     }
 
+    let mut geometry_keys = std::collections::BTreeSet::new();
     for object in &scene.objects {
+        let key = object.geometry.geometry_name.clone().unwrap_or_else(|| {
+            if object.role == "magnet" {
+                format!("{}_geom", crate::adapters::builder_geometry_name_for_object(object))
+            } else {
+                crate::adapters::builder_geometry_name_for_object(object)
+            }
+        });
+        if key.is_empty() || key.trim() != key || !geometry_keys.insert(key.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "empty, whitespace or duplicate geometry key '{key}'"
+            )));
+        }
         if object.id.trim().is_empty() {
             return Err(SceneDocumentValidationError::new(
                 "scene object ids must not be empty",

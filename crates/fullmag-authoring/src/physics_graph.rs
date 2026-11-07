@@ -473,7 +473,10 @@ fn normalize_auxiliary_objects(
                 "immutable object ID must not contain surrounding whitespace".to_string(),
             ));
         }
-        let geometry_id = crate::adapters::builder_geometry_name_for_object(object);
+        let label = crate::adapters::builder_geometry_name_for_object(object);
+        let geometry_id = object.geometry.geometry_name.clone().unwrap_or_else(|| {
+            if object.role == "magnet" { format!("{label}_geom") } else { label.clone() }
+        });
         if geometry_owners
             .insert(geometry_id.clone(), object.id.as_str())
             .is_some()
@@ -506,7 +509,7 @@ fn normalize_auxiliary_objects(
         };
         objects.push(PhysicsObjectIR::new(
             &object.id,
-            &geometry_id,
+            &label,
             object_type,
             &geometry_id,
         ));

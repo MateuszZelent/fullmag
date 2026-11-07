@@ -575,9 +575,11 @@ class MagnetHandle:
         name: str = "body",
         *,
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> None:
         object.__setattr__(self, "_owner_state", _state.current())
         self._shape = shape
+        self._geometry_name = _validate_geometry_key(geometry_name)
         self._name = name
         self._object_id = (
             require_non_empty(object_id, "object_id") if object_id is not None else None
@@ -683,7 +685,7 @@ class MagnetHandle:
             import copy
 
             geom = copy.copy(geom)
-            object.__setattr__(geom, "name", f"{self._name}_geom")
+            object.__setattr__(geom, "name", self._geometry_name or f"{self._name}_geom")
         return geom
 
     def _to_ferromagnet(self) -> Ferromagnet:
@@ -2591,6 +2593,7 @@ class _WorldState:
     _auxiliary_geometries: list[object] = field(default_factory=list)
     _auxiliary_mesh_owners: dict[str, _AuxiliaryMeshOwner] = field(default_factory=dict)
     _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
+    _auxiliary_geometry_names: dict[str, str] = field(default_factory=dict)
     _auxiliary_geometry_object_ids: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
@@ -6596,8 +6599,9 @@ class StudyBuilder:
         name: str = "body",
         *,
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> MagnetHandle:
-        return geometry(shape, name=name, object_id=object_id)
+        return geometry(shape, name=name, object_id=object_id, geometry_name=geometry_name)
 
     def geometry_object(
         self,
@@ -6606,18 +6610,19 @@ class StudyBuilder:
         *,
         type: str = "geometry",
         object_id: str | None = None,
+        geometry_name: str | None = None,
     ) -> object:
-        return geometry_object(shape, name=name, type=type, object_id=object_id)
+        return geometry_object(shape, name=name, type=type, object_id=object_id, geometry_name=geometry_name)
 
     def conductor(
-        self, shape: object, name: str = "conductor", *, object_id: str | None = None
+        self, shape: object, name: str = "conductor", *, object_id: str | None = None, geometry_name: str | None = None
     ) -> object:
-        return geometry_object(shape, name=name, type="conductor", object_id=object_id)
+        return geometry_object(shape, name=name, type="conductor", object_id=object_id, geometry_name=geometry_name)
 
     def antenna_object(
-        self, shape: object, name: str = "antenna", *, object_id: str | None = None
+        self, shape: object, name: str = "antenna", *, object_id: str | None = None, geometry_name: str | None = None
     ) -> object:
-        return antenna_object(shape, name=name, object_id=object_id)
+        return antenna_object(shape, name=name, object_id=object_id, geometry_name=geometry_name)
 
     def solver(
         self,
@@ -8462,7 +8467,10 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
     per_geometry = []
     for handle in [*_state._magnets, *_state._auxiliary_mesh_owners.values()]:
         entry = {
-            "geometry": handle._name,
+            "geometry": (handle._resolved_geometry().geometry_name
+                         if isinstance(handle, MagnetHandle) and handle._geometry_name is not None
+                         and handle._geometry_name != f"{handle._name}_geom"
+                         else handle._name),
             "mode": "custom" if _mesh_spec_declares_override(handle._mesh_spec) else "inherit",
         }
         entry.update(_mesh_spec_to_metadata(handle._mesh_spec))
@@ -8851,11 +8859,28 @@ def _cache_mesh_quality_reports(assets: dict[str, Any] | None) -> None:
 # Geometry → MagnetHandle
 # ---------------------------------------------------------------------------
 
+def _validate_geometry_key(value: str | None) -> str | None:
+    if value is not None and (
+        not isinstance(value, str) or not value or value.strip() != value
+    ):
+        raise ValueError("geometry_name must be nonempty without surrounding whitespace")
+    return value
+
+
+def _require_unique_geometry_key(key: str, *, exclude: MagnetHandle | None = None) -> None:
+    keys = [magnet._resolved_geometry().geometry_name
+            for magnet in _state._magnets if magnet is not exclude]
+    keys.extend(geometry.geometry_name for geometry in _state._auxiliary_geometries)
+    if key in keys:
+        raise ValueError(f"duplicate geometry key {key!r}")
+
+
 def geometry(
     shape: object,
     name: str = "body",
     *,
     object_id: str | None = None,
+    geometry_name: str | None = None,
 ) -> MagnetHandle:
     """Register a magnet and return its configuration handle.
 
@@ -8875,9 +8900,13 @@ def geometry(
         live_id = require_non_empty(object_id, "object_id") if object_id is not None else name
         for existing in _state._magnets:
             if live_id == (existing.object_id if existing.object_id is not None else existing._name):
+                key = _validate_geometry_key(geometry_name)
+                _require_unique_geometry_key(key or f"{existing._name}_geom", exclude=existing)
                 existing._shape = shape
+                existing._geometry_name = key
                 return existing
-    handle = MagnetHandle(shape, name, object_id=object_id)
+    handle = MagnetHandle(shape, name, object_id=object_id, geometry_name=geometry_name)
+    _require_unique_geometry_key(handle._resolved_geometry().geometry_name)
     resolved_id = handle.object_id if handle.object_id is not None else handle._name
     if resolved_id in _state._auxiliary_geometry_object_ids.values() or any(
         resolved_id == (magnet.object_id if magnet.object_id is not None else magnet._name)
@@ -8894,6 +8923,7 @@ def geometry_object(
     *,
     type: str = "geometry",
     object_id: str | None = None,
+    geometry_name: str | None = None,
 ) -> object:
     """Register a non-magnetic geometry with an explicit physical object type.
 
@@ -8906,17 +8936,17 @@ def geometry_object(
         raise ValueError(
             "geometry_object(type=...) must be one of: geometry, conductor, electrode, antenna"
         )
+    key = _validate_geometry_key(geometry_name)
     resolved = shape
     if hasattr(resolved, "name"):
         import copy
 
         resolved = copy.copy(resolved)
-        object.__setattr__(resolved, "name", require_non_empty(name, "name"))
+        object.__setattr__(resolved, "name", key or require_non_empty(name, "name"))
     geometry_name = getattr(resolved, "geometry_name", None)
     if not isinstance(geometry_name, str) or not geometry_name:
         raise TypeError("geometry_object() requires a geometry with a geometry_name")
-    if geometry_name in _state._auxiliary_geometry_roles:
-        raise ValueError(f"duplicate geometry object name {geometry_name!r}")
+    _require_unique_geometry_key(geometry_name)
     resolved_id = (
         require_non_empty(object_id, "object_id") if object_id is not None else geometry_name
     )
@@ -8928,6 +8958,7 @@ def geometry_object(
     _state._auxiliary_geometries.append(resolved)
     _state._auxiliary_mesh_owners[geometry_name] = _AuxiliaryMeshOwner(resolved, geometry_name)
     _state._auxiliary_geometry_roles[geometry_name] = normalized_type
+    _state._auxiliary_geometry_names[geometry_name] = require_non_empty(name, "name")
     _state._auxiliary_geometry_object_ids[geometry_name] = resolved_id
     if normalized_type == "antenna":
         _state._register_geometry_visualization_hint(
@@ -8943,10 +8974,10 @@ def geometry_object(
 
 
 def antenna_object(
-    shape: object, name: str = "antenna", *, object_id: str | None = None
+    shape: object, name: str = "antenna", *, object_id: str | None = None, geometry_name: str | None = None
 ) -> object:
     """Register a non-magnetic geometry object for prescribed antenna masks."""
-    return geometry_object(shape, name=name, type="antenna", object_id=object_id)
+    return geometry_object(shape, name=name, type="antenna", object_id=object_id, geometry_name=geometry_name)
 
 
 # ---------------------------------------------------------------------------
@@ -10071,6 +10102,7 @@ def _build_problem(
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
+        auxiliary_geometry_names=dict(s._auxiliary_geometry_names),
         auxiliary_geometry_object_ids=dict(s._auxiliary_geometry_object_ids),
         current_modules=tuple(s._current_modules),
         antenna_port_modes=tuple(s._antenna_port_modes),

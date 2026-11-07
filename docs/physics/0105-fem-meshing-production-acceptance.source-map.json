@@ -883,6 +883,25 @@
       "symbol": "DOC-ANCHOR:fem-binary-residue-validation-gates-v2",
       "responsibility": "Planned storage-only binary representation, strict versioned resource authority and nonactivation controls.",
       "evidence_status": "planned_contract"
+    },
+    {
+      "id": "geometry-asset-identity",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-geometry-asset-identity",
+      "responsibility": "Rozdzielenie klucza geometrii, etykiety i object_id; pełne drzewo transformacji; authoring bez nowej fizyki.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "geometry-key-python",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_validate_geometry_key",
+      "responsibility": "Jawny klucz geometrii, legacy default i globalna unikalność."
+    },
+    {
+      "id": "geometry-tree-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_geometry_descriptor",
+      "responsibility": "Pełne nazwy i zagnieżdżone drzewa Translate/CSG w eksporcie."
     }
   ],
   "public_api": {

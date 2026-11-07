@@ -2744,6 +2744,7 @@ class Problem:
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     auxiliary_geometries: Sequence[object] = ()
     auxiliary_geometry_roles: Mapping[str, str] = field(default_factory=dict)
+    auxiliary_geometry_names: Mapping[str, str] = field(default_factory=dict)
     auxiliary_geometry_object_ids: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
@@ -2835,6 +2836,17 @@ class Problem:
                 + ", ".join(unknown_ids)
             )
         object.__setattr__(self, "auxiliary_geometry_object_ids", auxiliary_object_ids)
+        geometry_keys = [geometry.geometry_name for geometry in (
+            *(magnet.geometry for magnet in self.magnets), *self.auxiliary_geometries
+        )]
+        if len(geometry_keys) != len(set(geometry_keys)):
+            raise ValueError("duplicate geometry keys in Problem")
+        labels = dict(self.auxiliary_geometry_names)
+        if set(labels) - auxiliary_names:
+            raise ValueError("auxiliary_geometry_names references unknown geometry")
+        for label in labels.values():
+            require_non_empty(label, "auxiliary_geometry_names.label")
+        object.__setattr__(self, "auxiliary_geometry_names", labels)
         field_only = isinstance(self.study, FieldOnly)
         if not self.magnets and not (field_only or isinstance(self.study, AntennaFieldSolve)):
             raise ValueError("Problem requires at least one magnet")
@@ -3311,7 +3323,7 @@ class Problem:
             {
                 "schema_version": "physics_object.v1",
                 "object_id": self.auxiliary_geometry_object_ids.get(name, name),
-                "name": name,
+                "name": self.auxiliary_geometry_names.get(name, name),
                 "type": role,
                 "geometry_id": name,
                 "material_assignment_ids": [],

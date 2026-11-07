@@ -119,8 +119,10 @@ jobs:
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_runtime_flags_export.py
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_script_builder_roundtrip.py
           python -B -m unittest discover -s packages/fullmag-py/tests -p test_object_region_owner_identity.py
+          python -B -m unittest discover -s packages/fullmag-py/tests -p test_geometry_asset_identity.py
           cargo test --locked -p fullmag-authoring --lib execution_intent_
           cargo test --locked -p fullmag-authoring --lib magnetic_object_id_
+          cargo test --locked -p fullmag-authoring --lib geometry_asset_identity_
           cargo test --locked -p fullmag-application --lib primitive_execution_intent_
           cargo test --locked -p fullmag-application --lib disabled_primitive_does_not_change_execution_intent
           cargo test --locked -p fullmag-api --bin fullmag-api scene_resource_preserves_execution_intent_and_stage_extras

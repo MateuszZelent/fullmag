@@ -1248,6 +1248,8 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_object, Mapping):
             raise ValueError(f"SceneDocument geometry {index} must be an object.")
         role = str(raw_object.get("role") or "magnet").lower()
+        key = raw_object.get("geometry_name")
+        key_arg = f", geometry_name={_python_literal(key)}" if key is not None else ""
         if role != "magnet":
             name = str(raw_object.get("name") or raw_object.get("id") or f"object_{index}")
             object_id = str(raw_object.get("object_id") or raw_object.get("id") or name)
@@ -1256,13 +1258,13 @@ def _render_scene_document_bootstrap(
             if role == "antenna":
                 lines.append(
                     f"{auxiliary} = study.antenna_object({shape}, "
-                    f"name={_python_literal(name)}, object_id={_python_literal(object_id)})"
+                    f"name={_python_literal(name)}, object_id={_python_literal(object_id)}{key_arg})"
                 )
             else:
                 lines.append(
                     f"{auxiliary} = study.geometry_object({shape}, "
                     f"name={_python_literal(name)}, type={_python_literal(role)}, "
-                    f"object_id={_python_literal(object_id)})"
+                    f"object_id={_python_literal(object_id)}{key_arg})"
                 )
             mesh = raw_object.get("mesh")
             if isinstance(mesh, Mapping):
@@ -1274,7 +1276,7 @@ def _render_scene_document_bootstrap(
         shape = _render_shape_expression(raw_object)
         lines.append(
             f"{handle} = study.geometry({shape}, name={_python_literal(name)}, "
-            f"object_id={_python_literal(object_id)})"
+            f"object_id={_python_literal(object_id)}{key_arg})"
         )
         handles.append(handle)
         snapshot_handles[name] = handle
@@ -2519,19 +2521,23 @@ def _render_shape_expression(entry: Mapping[str, object]) -> str:
         translation = _scene_float_sequence(params.get("translation"), count=3)
         if not isinstance(base, Mapping) or translation is None:
             raise ValueError("Translate geometry requires a base and three finite coordinates.")
-        return f"({_render_shape_expression(base)}).translate({_python_literal(translation)})"
+        name_arg = f", name={_python_literal(params['name'])}" if "name" in params else ""
+        return f"fm.Translate({_render_shape_expression(base)}, {_python_literal(translation)}{name_arg})"
     elif kind in {"difference", "union", "intersection"}:
         operands = ("base", "tool") if kind == "difference" else ("a", "b")
-        operator = {"difference": "-", "union": "+", "intersection": "&"}[kind]
         rendered_operands: list[str] = []
         for operand in operands:
             child = params.get(operand)
             if not isinstance(child, Mapping):
                 raise ValueError(f"{kind} geometry requires a '{operand}' operand.")
             rendered_operands.append("(" + _render_shape_expression(child) + ")")
-        expression = f"({rendered_operands[0]} {operator} {rendered_operands[1]})"
+        constructor = {"difference": "Difference", "union": "Union", "intersection": "Intersection"}[kind]
+        name_arg = f", name={_python_literal(params['name'])}" if "name" in params else ""
+        expression = f"fm.{constructor}({rendered_operands[0]}, {rendered_operands[1]}{name_arg})"
     else:
         raise ValueError(f"SceneDocument export does not support geometry kind '{kind}'.")
+    if "name" in params and kind in {"box", "cylinder", "sphere", "ellipsoid", "archwaveguide", "arch_waveguide"}:
+        expression = expression[:-1] + f", name={_python_literal(params['name'])})"
     translation = params.get("translation")
     if _is_vector3(translation) and any(float(value) != 0.0 for value in translation):
         expression += f".translate({_python_literal(tuple(translation))})"
@@ -4093,7 +4099,7 @@ def _render_geometry_and_materials(
             else ""
         )
         lines.append(
-            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)}{object_id_arg})"
+            f"{var_name} = {_surface_call(surface, 'geometry')}({_render_geometry_expr(magnet.geometry, magnet_name=magnet.name, source_root=source_root)}, name={_py_repr(magnet.name)}{object_id_arg}, geometry_name={_py_repr(magnet.geometry.geometry_name)})"
         )
         if canonical_fdm and fdm is not None and fdm.per_magnet:
             grid = fdm.per_magnet.get(magnet.name)
@@ -4156,7 +4162,7 @@ def _render_geometry_and_materials(
             constructor = "geometry_object"
             type_suffix = f", type={_py_repr(role)}"
         lines.append(
-            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix}, object_id={_py_repr(object_id)})"
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(problem.auxiliary_geometry_names.get(geometry.geometry_name, geometry.geometry_name))}{type_suffix}, object_id={_py_repr(object_id)}, geometry_name={_py_repr(geometry.geometry_name)})"
         )
         lines.append("")
     if lines[-1] == "":
@@ -4676,6 +4682,9 @@ def _render_geometries_from_override(
             if isinstance(object_id, str) and object_id
             else ""
         )
+        geometry_key = g.get("geometry_name")
+        if geometry_key is not None:
+            object_id_arg += f", geometry_name={_py_repr(geometry_key)}"
         if role != "magnet":
             if role == "antenna":
                 lines.append(
@@ -7702,14 +7711,15 @@ def _render_study_mesh_workflow(
         if not _mesh_entry_requires_explicit_render(mesh_config):
             continue
         target_var = magnet_vars.get(magnet_name)
-        if magnet_name in problem.auxiliary_geometry_object_ids or target_var is None:
-            object_id = problem.auxiliary_geometry_object_ids.get(magnet_name, magnet_name)
-            geometries_override = overrides.get("geometries")
-            if isinstance(geometries_override, list):
-                for geometry in geometries_override:
-                    if isinstance(geometry, Mapping) and geometry.get("name") == magnet_name:
-                        object_id = str(geometry.get("object_id") or magnet_name)
-                        break
+        geometries_override = overrides.get("geometries")
+        geometry_override = next((
+            geometry for geometry in geometries_override
+            if isinstance(geometry, Mapping) and geometry.get("name") == magnet_name
+        ), {}) if isinstance(geometries_override, list) else {}
+        is_auxiliary = geometry_override.get("role", "magnet") != "magnet"
+        if is_auxiliary or magnet_name in problem.auxiliary_geometry_object_ids or target_var is None:
+            object_id = str(geometry_override.get("object_id") or
+                            problem.auxiliary_geometry_object_ids.get(magnet_name, magnet_name))
             lines.extend(_render_object_id_mesh_workflow(object_id, mesh_config, source_root=source_root))
             continue
         mesh_call = _render_geometry_mesh_call(
@@ -9853,6 +9863,7 @@ def _render_geometry_expr_from_override(
     name: str,
     source_root: Path,
 ) -> str:
+    name = str(params.get("name", name))
     if kind == "Box":
         size = params.get("size")
         if isinstance(size, list) and len(size) == 3:
@@ -9941,21 +9952,21 @@ def _render_geometry_expr_from_override(
         base = _normalize_mapping(params.get("base"))
         base_kind = str(base.get("geometry_kind", "Box"))
         base_params = _normalize_mapping(base.get("geometry_params"))
-        expr = _render_geometry_expr_from_override(
+        base_expr = _render_geometry_expr_from_override(
             base_kind,
             base_params,
             name=name,
             source_root=source_root,
         )
+        offset = params.get("translation", params.get("translate", [0, 0, 0]))
+        expr = f"fm.Translate({base_expr}, {_py_literal(tuple(offset))}, name={_py_repr(name)})"
     elif kind in {"Difference", "Union", "Intersection"}:
         if kind == "Difference":
             left_raw = _normalize_mapping(params.get("base"))
             right_raw = _normalize_mapping(params.get("tool"))
-            operator = "-"
         else:
             left_raw = _normalize_mapping(params.get("a"))
             right_raw = _normalize_mapping(params.get("b"))
-            operator = "+" if kind == "Union" else "&"
         left_expr = _render_geometry_expr_from_override(
             str(left_raw.get("geometry_kind", "Box")),
             _normalize_mapping(left_raw.get("geometry_params")),
@@ -9968,14 +9979,14 @@ def _render_geometry_expr_from_override(
             name=f"{name}_{'rhs' if kind != 'Difference' else 'tool'}",
             source_root=source_root,
         )
-        expr = f"({left_expr} {operator} {right_expr})"
+        expr = f"fm.{kind}({left_expr}, {right_expr}, name={_py_repr(name)})"
     else:
         expr = f"fm.Box(1e-9, 1e-9, 1e-9, name={_py_repr(name)})"
 
     translation = params.get("translation")
     if not isinstance(translation, list):
         translation = params.get("translate")
-    if isinstance(translation, list) and len(translation) == 3 and any(float(value) != 0 for value in translation):
+    if kind != "Translate" and isinstance(translation, list) and len(translation) == 3 and any(float(value) != 0 for value in translation):
         expr = (
             f"{expr}.translate(({_py_float_roundtrip(translation[0])}, "
             f"{_py_float_roundtrip(translation[1])}, "
@@ -9985,87 +9996,10 @@ def _render_geometry_expr_from_override(
 
 
 def _render_geometry_expr(geometry: object, *, magnet_name: str, source_root: Path) -> str:
-    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
-        return _render_antenna_layout_expr(
-            type(geometry).__name__,
-            {key: value for key, value in geometry.to_ir().items() if key not in {"name", "kind"}},
-            name=geometry.geometry_name,
-        )
-    if isinstance(geometry, ImportedGeometry):
-        kwargs = [f"source={_py_repr(_relativize_path(geometry.source, source_root))}"]
-        if geometry.scale != 1.0:
-            kwargs.append(f"scale={_py_literal(geometry.scale)}")
-        if geometry.volume != "full":
-            kwargs.append(f"volume={_py_repr(geometry.volume)}")
-        default_name = Path(geometry.source).stem
-        if geometry.name is not None and geometry.name not in {default_name, f"{magnet_name}_geom"}:
-            kwargs.append(f"name={_py_repr(geometry.name)}")
-        return f"fm.ImportedGeometry({', '.join(kwargs)})"
-    if isinstance(geometry, Box):
-        args = ", ".join(_py_number(value) for value in geometry.size)
-        if geometry.name in {"box", f"{magnet_name}_geom"}:
-            return f"fm.Box({args})"
-        return f"fm.Box({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, Cylinder):
-        args = f"radius={_py_number(geometry.radius)}, height={_py_number(geometry.height)}"
-        if geometry.axis != (0.0, 0.0, 1.0):
-            args = f"{args}, axis={_py_tuple3(geometry.axis)}"
-        if geometry.name in {"cylinder", f"{magnet_name}_geom"}:
-            return f"fm.Cylinder({args})"
-        return f"fm.Cylinder({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, ArchWaveguide):
-        args = (
-            f"length={_py_number(geometry.length)}, width={_py_number(geometry.width)}, "
-            f"height={_py_number(geometry.height)}, arch_height={_py_number(geometry.arch_height)}, "
-            f"z0={_py_number(geometry.z0)}"
-        )
-        if geometry.name in {"arch_waveguide", f"{magnet_name}_geom"}:
-            return f"fm.ArchWaveguide({args})"
-        return f"fm.ArchWaveguide({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, SinWaveguide):
-        args = (
-            f"length={_py_number(geometry.length)}, width={_py_number(geometry.width)}, "
-            f"height={_py_number(geometry.height)}, period={_py_number(geometry.period)}, "
-            f"amplitude={_py_number(geometry.amplitude)}, phase={_py_number(geometry.phase)}, "
-            f"z0={_py_number(geometry.z0)}"
-        )
-        if geometry.name in {"sin_waveguide", f"{magnet_name}_geom"}:
-            return f"fm.SinWaveguide({args})"
-        return f"fm.SinWaveguide({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, Ellipsoid):
-        args = f"{_py_number(geometry.rx)}, {_py_number(geometry.ry)}, {_py_number(geometry.rz)}"
-        if geometry.name in {"ellipsoid", f"{magnet_name}_geom"}:
-            return f"fm.Ellipsoid({args})"
-        return f"fm.Ellipsoid({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, Ellipse):
-        args = f"{_py_number(geometry.rx)}, {_py_number(geometry.ry)}, {_py_number(geometry.height)}"
-        if geometry.name in {"ellipse", f"{magnet_name}_geom"}:
-            return f"fm.Ellipse({args})"
-        return f"fm.Ellipse({args}, name={_py_repr(geometry.name)})"
-    if isinstance(geometry, Difference):
-        base = _render_geometry_expr(geometry.base, magnet_name=magnet_name, source_root=source_root)
-        tool = _render_geometry_expr(geometry.tool, magnet_name=magnet_name, source_root=source_root)
-        expr = f"{base} - {tool}"
-        if geometry.name not in {"difference", f"{magnet_name}_geom"}:
-            expr = f"({expr})"
-        return expr
-    if isinstance(geometry, Union):
-        return (
-            f"{_render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)}"
-            f" + "
-            f"{_render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)}"
-        )
-    if isinstance(geometry, Intersection):
-        return (
-            f"{_render_geometry_expr(geometry.a, magnet_name=magnet_name, source_root=source_root)}"
-            f" & "
-            f"{_render_geometry_expr(geometry.b, magnet_name=magnet_name, source_root=source_root)}"
-        )
-    if isinstance(geometry, Translate):
-        base = _render_geometry_expr(geometry.geometry, magnet_name=magnet_name, source_root=source_root)
-        offset = ", ".join(_py_float_roundtrip(value) for value in geometry.offset)
-        return f"{base}.translate(({offset}))"
-    raise ValueError(f"unsupported geometry kind for canonical rewrite: {type(geometry).__name__}")
+    kind, params = _export_geometry_kind_params(geometry)
+    return _render_geometry_expr_from_override(
+        kind, params, name=geometry.geometry_name, source_root=source_root
+    )
 
 
 def _render_initial_magnetization(
@@ -10656,10 +10590,13 @@ def _export_geometry_entry(
             }
 
     # --- Per-geometry mesh ---
-    per_mesh = _export_geometry_mesh_entry(magnet.name, problem)
+    mesh_key = (geom.geometry_name if _mesh_workflow_per_geometry_entry(problem, geom.geometry_name)
+                else magnet.name)
+    per_mesh = _export_geometry_mesh_entry(mesh_key, problem)
 
     return {
         "name": magnet.name,
+        "geometry_name": geom.geometry_name,
         "object_id": magnet.object_id,
         "region_name": magnet.region_name,
         "geometry_kind": geometry_kind,
@@ -10696,7 +10633,8 @@ def _export_auxiliary_geometry_entry(
     geometry_hints = _normalize_mapping(visualization_hint.get("geometry_hints"))
     hint = _normalize_mapping(geometry_hints.get(name))
     return {
-        "name": name,
+        "name": problem.auxiliary_geometry_names.get(name, name),
+        "geometry_name": name,
         "object_id": problem.auxiliary_geometry_object_ids.get(name, name),
         "role": str(
             problem.auxiliary_geometry_roles.get(name)
@@ -10815,6 +10753,16 @@ def _export_geometry_descriptor(
     *,
     flatten_translation: bool,
 ) -> dict[str, object]:
+    descriptor = _export_geometry_descriptor_without_name(geom, flatten_translation=False)
+    descriptor["geometry_params"]["name"] = geom.geometry_name
+    return descriptor
+
+
+def _export_geometry_descriptor_without_name(
+    geom: object,
+    *,
+    flatten_translation: bool,
+) -> dict[str, object]:
     if isinstance(geom, (MicrostripAntennaLayout, CPWAntennaLayout)):
         payload = dict(geom.to_ir())
         payload.pop("name", None)
@@ -10878,15 +10826,6 @@ def _export_geometry_descriptor(
             },
         }
     if isinstance(geom, Translate):
-        if flatten_translation:
-            base = _export_geometry_descriptor(geom.geometry, flatten_translation=True)
-            return {
-                "geometry_kind": str(base["geometry_kind"]),
-                "geometry_params": {
-                    **_normalize_mapping(base["geometry_params"]),
-                    "translation": list(geom.offset),
-                },
-            }
         return {
             "geometry_kind": "Translate",
             "geometry_params": {
@@ -12171,6 +12110,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
         ],
         "auxiliary_geometry_roles": dict(problem.auxiliary_geometry_roles),
+        "auxiliary_geometry_names": dict(problem.auxiliary_geometry_names),
         "auxiliary_geometry_object_ids": {
             name: problem.auxiliary_geometry_object_ids.get(name, name)
             for name in problem.auxiliary_geometry_roles

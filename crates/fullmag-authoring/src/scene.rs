@@ -254,6 +254,8 @@ pub struct SceneMeshInterface {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SceneGeometry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry_name: Option<String>,
     pub geometry_kind: String,
     #[serde(default)]
     pub geometry_params: Value,

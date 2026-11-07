@@ -1755,6 +1755,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
                 "name": name,
                 "role": role,
                 "geometry": {
+                    **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
                     "geometry_kind": str(geometry.get("geometry_kind", "")),
                     "geometry_params": geometry_params,
                     "bounds_min": geometry.get("bounds_min"),
@@ -2022,6 +2023,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 
     object_ids: set[str] = set()
     geometry_names: set[str] = set()
+    geometry_keys: set[str] = set()
     magnetic_aliases = {
         str(obj.get("name") or "").strip() or str(obj.get("id") or "")
         for obj in scene.get("objects") or []
@@ -2041,6 +2043,16 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("geometry name must be a string")
         name = raw_name.strip() or object_id
         is_auxiliary = role != "magnet"
+        raw_geometry_key = (obj.get("geometry") or {}).get("geometry_name")
+        if raw_geometry_key is not None and (
+            not isinstance(raw_geometry_key, str) or not raw_geometry_key
+            or raw_geometry_key.strip() != raw_geometry_key
+        ):
+            raise ValueError("geometry_name must be nonempty without surrounding whitespace")
+        geometry_key = raw_geometry_key or (name if is_auxiliary else name + "_geom")
+        if geometry_key in geometry_keys:
+            raise ValueError(f"duplicate geometry key {geometry_key!r}")
+        geometry_keys.add(geometry_key)
         if object_id in object_ids:
             raise ValueError(f"duplicate immutable object ID '{object_id}'")
         if name in geometry_names:
@@ -2113,6 +2125,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             "name": name,
             "role": role,
             "region_name": obj.get("region_name"),
+            **({"geometry_name": geometry["geometry_name"]} if "geometry_name" in geometry else {}),
             "geometry_kind": str(geometry.get("geometry_kind", "")),
             "geometry_params": geometry_params,
             "bounds_min": geometry.get("bounds_min"),

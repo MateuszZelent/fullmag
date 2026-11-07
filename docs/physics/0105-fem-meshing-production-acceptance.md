@@ -1095,3 +1095,36 @@ Wymagane są wszystkie osiem grup: exhaustive mały encoding/V oracle; mutation/
 | controls i nonactivation | ta sama ścieżka, `DOC-ANCHOR:fem-binary-residue-validation-gates-v2` | source-only plan; runtime NOT VERIFIED |
 
 Planned storage symbols `FrozenResidues`, `Context.capture`, `verify_candidate_v2`, `verify_completed_v2` i driver accepted-resource receipt nie są istniejącym publicznym API/repo implementation. Ich future source freeze/index należy do nowego namespace `canonical-residue-validation-once-v2-implementation`; scalar/math/history/v1 pozostają immutable. Primary references: [Python array](https://docs.python.org/3.12/library/array.html), [immutable sequences](https://docs.python.org/3.12/library/stdtypes.html#immutable-sequence-types), [sys.getsizeof](https://docs.python.org/3.12/library/sys.html#sys.getsizeof). Referencje opisują reprezentację i ograniczenia pomiaru, nie kwalifikują siatki ani szybkości.
+
+(fem-geometry-asset-identity)=
+## Trwały klucz geometrii w authoringu
+
+Zatwierdzony kontrakt oddziela klucz zasobu od nazwy prezentacyjnej i
+niezmiennego object_id. Nie zmienia równań, topologii, parametrów SI ani
+writera ProblemIR 0.3.0. Zagnieżdżone Translate i CSG zachowują pełne drzewo,
+nazwy dzieci i kolejność transformacji; nazwa obiektu nie zastępuje nazw dzieci.
+
+| Parametr | Typ / default | Jednostka SI | Walidacja / znaczenie | Python → IR |
+|---|---|---|---|---|
+| geometry_name | str lub None, None | $1$ | Jawny niepusty klucz bez otaczających spacji, unikalny globalnie; brak zachowuje legacy name_geom dla magnetyka, name dla auxiliary | world.geometry/geometry_object/antenna_object i StudyBuilder.conductor → geometry.entries[].name oraz geometry_id |
+| auxiliary_geometry_names | mapa str→str, pusta | $1$ | Etykiety istniejących auxiliary keys; nie aktywują fizyki | Problem → physics_objects[].name i physics_graph.objects[].name |
+| geometry_params.name | str, rzeczywista nazwa kształtu | $1$ | Zachowana na każdym poziomie istniejących konstruktorów, niezależnie od etykiety ownera | builder/scena → geometry.entries[] i zagnieżdżone deskryptory |
+
+FDM CPU/GPU zachowują istniejącą siatkę regularną i per-magnet aliasy; jest to
+zmiana tożsamości authoringu, bez kwalifikacji urządzenia. FEM CPU/GPU używają
+tych samych kluczy do referencji istniejącej siatki; brak nowego meshingu lub
+dowodu jakości. Kolizje magnetyk–magnetyk, auxiliary–auxiliary i mieszane
+odmawiają przed materializacją, również przy pustych mapach all-air.
+
+Starsze sceny bez geometry_name zachowują fallback. Nowa scena wymaga spójnego
+czytnika i eksportera; nie obiecujemy odczytu nowego pola przez starszy pakiet.
+Requested backend/device/precision, materiały, moduły i źródłowe artefakty
+pozostają bez zmian. Testy authoringu nie dowodzą runtime ani zbieżności.
+
+Mapa implementacji: packages/fullmag-py/src/fullmag/world.py::geometry,
+geometry_object, MagnetHandle._resolved_geometry; model/problem.py::Problem;
+model/physics_scope.py::build_physics_graph; runtime/script_builder.py::
+_export_geometry_descriptor i _render_geometry_expr_from_override; runtime/
+scene_document.py::build_scene_document_from_builder oraz
+build_builder_from_scene_document. Odbiór: test_geometry_asset_identity.py;
+adaptery Rust i ciągły odbiór Python–Rust–Python wymagają CI.

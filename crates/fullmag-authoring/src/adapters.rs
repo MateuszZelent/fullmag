@@ -219,6 +219,7 @@ pub fn scene_document_to_script_builder(
             }
 
             Ok(ScriptBuilderGeometryEntry {
+                geometry_name: object.geometry.geometry_name.clone(),
                 name: builder_geometry_name_for_object(object),
                 object_id: Some(object.id.clone()),
                 region_name: object.region_name.clone(),
@@ -498,7 +499,7 @@ pub fn scene_document_to_script_builder_overrides(
         if !is_zero_vec3(object.transform.translation) {
             insert_translation(&mut geometry_params, object.transform.translation);
         }
-        geometries.push(serde_json::json!({
+        let mut value = serde_json::json!({
             "name": builder_geometry_name_for_object(object),
             "object_id": object.id,
             "role": object.role,
@@ -509,7 +510,11 @@ pub fn scene_document_to_script_builder_overrides(
             "bounds_max": object.geometry.bounds_max,
             "mesh": object.object_mesh.as_ref().or(object.mesh_override.as_ref())
                 .map(geometry_mesh_override_value),
-        }));
+        });
+        if let Some(key) = &object.geometry.geometry_name {
+            value["geometry_name"] = Value::String(key.clone());
+        }
+        geometries.push(value);
     }
     let mut overrides = serde_json::json!({
         "runtime_selection": {
@@ -982,6 +987,9 @@ pub fn scene_document_problem_projection(
 fn geometry_override_value(geo: &ScriptBuilderGeometryEntry) -> Value {
     let mut map = Map::new();
     map.insert("name".to_string(), Value::String(geo.name.clone()));
+    if let Some(key) = &geo.geometry_name {
+        map.insert("geometry_name".to_string(), Value::String(key.clone()));
+    }
     map.insert(
         "region_name".to_string(),
         geo.region_name
@@ -1388,6 +1396,7 @@ fn scene_object_from_geometry(geometry: &ScriptBuilderGeometryEntry) -> SceneObj
         name: geometry.name.clone(),
         role: "magnet".to_string(),
         geometry: SceneGeometry {
+            geometry_name: geometry.geometry_name.clone(),
             geometry_kind: geometry.geometry_kind.clone(),
             geometry_params,
             bounds_min: geometry.bounds_min,
@@ -2861,6 +2870,7 @@ mod tests {
                 sample_index: Some(0),
             }),
             geometries: vec![ScriptBuilderGeometryEntry {
+                geometry_name: None,
                 name: "flower".to_string(),
                 object_id: Some("flower".to_string()),
                 region_name: Some("core".to_string()),
@@ -5257,4 +5267,72 @@ mod tests {
         let restored = scene_fdm_from_builder(Some(&fdm), &scene.objects).unwrap();
         assert_eq!(restored.per_object_grid["immutable-A"].cell, [1e-9, 2e-9, 3e-9]);
     }
+    #[test]
+    fn geometry_asset_identity_key_survives_scene_rename_and_overrides() {
+        let mut builder = sample_builder();
+        builder.geometries[0].geometry_name = Some("persisted_geom".to_string());
+        let mut scene = scene_document_from_script_builder(&builder);
+        scene.objects[0].name = "Renamed display".to_string();
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.geometries[0].geometry_name.as_deref(), Some("persisted_geom"));
+        assert_eq!(restored.geometries[0].object_id, builder.geometries[0].object_id);
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["geometries"][0]["geometry_name"], "persisted_geom");
+    }
+
+    #[test]
+    fn geometry_asset_identity_json_preserves_legacy_and_explicit_keys() {
+        let builder = sample_builder();
+        let value = serde_json::to_value(&builder).unwrap();
+        assert!(value["geometries"][0].get("geometry_name").is_none());
+        let mut explicit = value;
+        explicit["geometries"][0]["geometry_name"] = serde_json::json!("stable");
+        let restored: ScriptBuilderState = serde_json::from_value(explicit).unwrap();
+        let scene = scene_document_from_script_builder(&restored);
+        assert_eq!(scene.objects[0].geometry.geometry_name.as_deref(), Some("stable"));
+        assert_eq!(scene_document_to_script_builder(&scene).unwrap().geometries[0].geometry_name,
+                   Some("stable".to_string()));
+    }
+
+    #[test]
+    fn geometry_asset_identity_rejects_empty_whitespace_and_duplicate_keys() {
+        for key in ["", " key", "key "] {
+            let mut builder = sample_builder();
+            builder.geometries[0].geometry_name = Some(key.to_string());
+            let scene = scene_document_from_script_builder(&builder);
+            assert!(scene_document_to_script_builder(&scene).is_err(), "{key:?}");
+        }
+        for roles in [["magnet", "magnet"], ["antenna", "geometry"], ["magnet", "antenna"]] {
+            let mut scene = scene_document_from_script_builder(&sample_builder());
+            let mut other = scene.objects[0].clone();
+            other.id = "different-id".to_string();
+            other.name = "Other display".to_string();
+            scene.objects[0].role = roles[0].to_string();
+            other.role = roles[1].to_string();
+            scene.objects[0].geometry.geometry_name = Some("shared".to_string());
+            other.geometry.geometry_name = Some("shared".to_string());
+            scene.objects.push(other);
+            assert!(scene_document_to_script_builder(&scene).is_err(), "{roles:?}");
+        }
+    }
+
+    #[test]
+    fn geometry_asset_identity_preserves_named_nested_translate() {
+        let mut builder = sample_builder();
+        builder.geometries[0].geometry_kind = "Translate".to_string();
+        let params = serde_json::json!({
+            "name": "outer", "translation": [4.0, 5.0, 6.0],
+            "base": {"geometry_kind": "Translate", "geometry_params": {
+                "name": "middle", "translation": [1.0, 2.0, 3.0],
+                "base": {"geometry_kind": "Box", "geometry_params": {
+                    "name": "inner", "size": [10.0, 20.0, 30.0]
+                }}
+            }}
+        });
+        builder.geometries[0].geometry_params = params.clone();
+        let scene = scene_document_from_script_builder(&builder);
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.geometries[0].geometry_params, params);
+    }
+
 }
