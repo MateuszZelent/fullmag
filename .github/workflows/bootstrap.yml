@@ -164,6 +164,8 @@ jobs:
           RUST_MIN_STACK: 8388608
         run: |
           cargo check --locked -p fullmag-api --bins
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker::accepted_fdm_precision_tests:: --no-fail-fast
           cargo test -p fullmag-plan --lib preparation::tests::fdm_
           cargo test -p fullmag-api --bin fullmag-api docker_startup::tests
           cargo test --locked -p fullmag-api --bin fullmag-api accepted_solver_profile:: --no-fail-fast
@@ -980,6 +982,7 @@ jobs:
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
           python -B scripts/test_docker_preaccepted_clock.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_interaction_abi_checks.py -v
+          python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_pbc_abi_checks.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v

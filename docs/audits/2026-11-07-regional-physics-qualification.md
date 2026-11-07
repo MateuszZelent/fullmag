@@ -211,3 +211,109 @@ niepoprawny zapis dwóch symboli w source-map i brak dwóch wierszy indeksu 0910
 Poprawiono odwołania na jednoznaczne `class GradientMeasurementTests` i
 `class StudyBuilder` oraz uzupełniono indeks. Walidatory obu zmienionych
 manifestów źródłowych zakończyły się kodem 0. Nie zmieniano kryteriów naukowych.
+
+
+## Publiczna macierz CPU/CUDA i wznowienie fp32
+
+Plan wejść `public_matrix_plan.json` przypiął 20 jawnych skryptów, pięć przypadków
+(two_materials, two_materials_scaled, uniform, uniform_regions, grains=1000)
+oraz limity istniejącego benchmarku przed pomiarem. Pierwszy fixture a1 został
+odrzucony bez solvera: `.autosave(...)` należy do `study.stages.add_run`,
+nie do zwracanego przez `study.run` obiektu Problem. Poprawione 20 fixture a2
+przeszło lekkie wczytanie w backendzie; pierwotny plan zachowano.
+
+Pierwsza para two_materials CPU/GPU double: **PASS** przez publiczne API,
+demag + Zeeman + lokalne Ms/A/alpha + jawna wymiana między regionami.
+Zakończono czas fizyczny 2e-11 s: 2000 nominalnych kroków i jeden krok końcowy
+wynikający z akumulacji roundoff, łącznie 2001 zaakceptowanych kroków. Dla CPU
+ostatni dt wynosi 5,9454e-25 s; terminalny GPU snapshot raportuje dt=0,
+co nie jest pomiarem ostatniego rzeczywistego dt. Nie nazywamy tego dokładnie
+2000 zaakceptowanymi krokami. Wejścia fizyczne planów porównano jako równe.
+
+- CPU run: `run-live-e590d6537da4bd87bbed1f049db0252dd849629dc4203e6b5161ef3c50bb6fe2`.
+- GPU run: `run-live-747b743829aec80e2b35bbb583a6aef6089e522fdde6843b34a02c11d4e7736a`.
+- max |dm| = 3,3865e-8 przy limicie 1e-6.
+- max względna różnica porównywanych energii = 5,3303e-11 przy limicie 1e-8.
+- Moment początkowy odtworzony niezależnie z M i lokalnych wag Ms: zgodny
+  z tabelą do 1e-12. CPU ma dodatkowo zgodność readback Ms z planem; GPU
+  nie publikuje tu readback tablicy materiałowej, więc jego wagi pochodzą
+  z zaakceptowanego planu, a poprawność wykonania wspiera parytet pól/energii.
+- CPU: energia maleje w pełnym śladzie 2001 zaakceptowanych kroków, także
+  względem stanu początkowego. GPU zapisuje w tym biegu tylko trzy obserwacje
+  (0/2000/2001); monotoniczność tych próbek nie jest dowodem dla każdego kroku.
+
+Surowe stany, pola, tabele, konfigurację, mesh/provenance i hashe wyeksportowano
+na WSL do odpowiednich par `regional_two_materials_*_double_long.py/.zarr`.
+Krótki CPU/double 10 kroków również zakończył się i zachował dane. Kampania
+zatrzymała się na następnym GPU/single, zanim rozpoczęła pozostałe przypadki.
+
+Próba `regional-matrix-a2-two_materials_gpu_single_short`, aktywacja
+`6a7ecb46f4f345be9378b42717e5fb57`, run
+`run-live-1f0e8d9f30edb2d597cde8cdd6ab803831d46a7e2ad2d28d8cd769a6a09385dd`
+została przyjęta przez API, ale worker odmówił **przed rezerwacją attempt i
+uruchomieniem solvera**: `accepted worker currently supports only FDM CPU/GPU
+double strict`. Nie było fallbacku ani replay. Przygotowanie i diagnostyka
+znajdują się w sąsiednim Zarr tego nieudanego przypadku.
+
+Źródłowa poprawka wiązania request/IR/plan/precision policy dopuszcza tylko
+single-grid GPU/single w strict i zachowuje odmowy CPU/single,
+multilayer/single oraz frozen terminal/single. Dodano trzy testy Rust
+legalności i mismatch oraz ich bramki CI. Review źródeł: bez uwag.
+Kompilacja poprawki oraz pierwszy publiczny GPU/single: **PASS**. Po ponowieniu
+kontroli uprawnień oficjalny drain/stop `c2841aa5a57e484bb79fe6540f66fcc9`
+zakończył oba kontenery z exit code 0 i PID 0. Resume
+`51ed941194ca487e8fd5189169a842bd` przebudował aplikację w tym samym backendzie
+(`cache_hit=false`), na HEAD `0f4479a7d84ac87442d758eaaabdedc7471aa90b`
+i dirty snapshot SHA-256
+`6dc3881503622a317d682a585af26f9094a0b60350ae7b9f6836e9df46d4d54f`.
+Nie zmieniono grupy, container ID, źródeł WSL ani granic mountów.
+Nowe testy Rust nadal wymagają wykonania w CI po commicie tego etapu.
+
+Nowy request `regional-matrix-a3-two_materials_gpu_single_short`, run
+`run-live-20b780ac4eda0d9870b0efd28d923e1b9b3f550d20baab15d52a545cc11ae66c`,
+zakończył 10 kroków i porównanie z zachowanym CPU/double. Max |dm| = 1,8382e-7,
+max względna różnica energii = 1,3847e-7, względne różnice H_ex/H_eff =
+1,6531e-7 / 1,5959e-7, poniżej wcześniej przyjętych limitów 1e-5.
+Receipt potwierdza CUDA, brak fallbacku i operatorów host/unknown, single
+storage/compute/FFT oraz double reduction. Kanoniczny transfer pól f64
+nie stanowi deklaracji wewnętrznego wykonania fp64.
+
+Kampania phase2 zachowuje trzy wcześniej zaakceptowane lane i uruchamia
+pozostałe żądania sekwencyjnie; nie odtwarza starej odmowy a2 GPU/single.
+Dla two_materials_scaled również przeszły oba porównania: fp64 max |dm|
+6,1163e-8 i max względna różnica energii 6,6033e-11; fp32 max |dm|
+1,8385e-7, energia 1,1006e-7, H_ex/H_eff 1,6534e-7 / 1,5757e-7.
+Przypadki uniform i uniform_regions przeszły zarówno fp64, jak i fp32;
+max |dm| względem CPU wynosi odpowiednio 7,7993e-8 i 1,8944e-7. Największa
+względna różnica energii to 6,0030e-9 dla fp64 i 1,9282e-7 dla fp32.
+Osobne porównanie uniform z uniform_regions w każdej z czterech ścieżek
+również przeszło: max |dm| = 0, max względna różnica energii 1,0050e-14,
+a H_ex/H_eff w fp32 są identyczne. Tolerancje tego porównania zapisano
+w `uniform-invariance-plan.v1.json` przed wykonaniem przypadków uniform.
+
+Przypadek 1000 ziaren i osobny dowód Compute Fields z zaakceptowanego stanu
+fp32 są jeszcze **NOT VERIFIED**. Stan i surowe dowody
+są zachowywane w `regional_public_matrix_campaign_phase2.zarr` na ext4 WSL.
+
+## Dodatkowa natywna kontrola PBC, singleton axes i u32
+
+`scripts/benchmarks/fdm_regions_pbc_abi_checks.py`: **52 przypadki PASS**.
+Osie o długości 1/2, wszystkie trzy orientacje pary, włączana okresowość
+osi singleton, etykiety [0,u32::MAX]/[257,1] oraz lokalne A/FACES. Pole i energię
+porównano z niezależną wyrocznią jednej/dwóch krawędzi. Tolerancje przed pomiarem:
+1e-12 dla fp64 i 1e-6 dla fp32. Maksymalne błędy względne fp64:
+H 8,99e-17, E 1,16e-16; fp32: H 7,38e-8, E 0.
+
+Review wykrył błąd harnessu pod `python -O`: assert usuwał także wywołanie
+snapshot i kontrole. Nowa regresja z błędem native oraz niepoprawnym H/E dała
+2 RED subcases, potem GREEN po zmianie na jawne wywołania i `if: raise`.
+Rzeczywiste 52 przypadki pod `python -O` także PASS. Początkowy raport bez
+optymalizacji zachowano (SHA 48030973953d98c06ff15d1f7d19c9e009f07f2770813f69a15ca3dfa6c31d5b);
+raport po poprawce z optymalizacją:
+`7883ba7b71a946f65f2cf182cef8678f90b4fad151fe82dab4ee4e0e03db2f59`.
+Oba mają samowystarczalne pary skrypt/Zarr, nagłówek i źródła helperów na WSL.
+Biblioteka pozostaje `6ef5859d1b732eb1477b5eed5b6c7b677bcb9939457a65b16cf5323ab617d72c`.
+Ponowny niezależny review poprawek harnessu również nie uruchomił się z powodu
+`builder error`; wynik testów jest odrębnym dowodem. Publiczna bramka
+GPU/fp32/PBC pozostaje bez zmian. To nie jest kwalifikacja całej macierzy,
+większych siatek okresowych ani zakończenie mapowania FEM.

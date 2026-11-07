@@ -614,6 +614,24 @@
   ],
   "sources": [
     {
+      "id": "accepted-fdm-precision-binding",
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "symbol": "accepted_fdm_execution_precision",
+      "responsibility": "Bind accepted request, ProblemIR and single-grid CUDA precision policy while preserving CPU, multilayer and frozen-terminal restrictions."
+    },
+    {
+      "id": "regional-periodic-exchange-oracle",
+      "path": "scripts/benchmarks/fdm_regions_pbc_abi_checks.py",
+      "symbol": "main",
+      "responsibility": "Check one versus two periodic exchange links, singleton axes, sparse u32 labels and local-A FACES against an analytic energy/field oracle."
+    },
+    {
+      "id": "regional-periodic-oracle-optimization-regression",
+      "path": "scripts/benchmarks/test_fdm_regions_pbc_abi_checks.py",
+      "symbol": "test_optimized_python_keeps_native_call_and_measurement_failures",
+      "responsibility": "Ensure Python optimization cannot remove native snapshot execution or suppress a failed physical measurement."
+    },
+    {
       "id": "regional-cuda-variational-energy-llg-qualification",
       "path": "scripts/benchmarks/fdm_regions_interaction_abi_checks.py",
       "symbol": "main",

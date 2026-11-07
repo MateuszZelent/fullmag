@@ -1222,6 +1222,25 @@ jako współczynniki FACES; raw ABI bez widm Newella ma jawnie odmówić demagu.
 Dokładne tolerancje, biblioteka i wyniki znajdują się w audycie kwalifikacji
 z 7 listopada 2026; ten punkt nie zastępuje publicznych testów CPU/CUDA.
 
+Accepted worker musi zachować precyzję dopuszczonego planu single-grid CUDA:
+requested `single` oznacza storage/compute/FFT FP32 i redukcje FP64 zgodnie
+z `FdmPrecisionPolicyIR`, także dla zakwalifikowanych pól regionalnych.
+Kanoniczny readback pól i accepted-state w f64 jest formatem transferu;
+nie zmienia precyzji integratora. Request, ProblemIR i plan muszą wskazywać
+tę samą precyzję i politykę. CPU/single, multilayer/single oraz frozen terminal
+context/single pozostają niedopuszczone; pozostałe bramki planera/native
+nie są przez worker omijane. Samo rozszerzenie tej walidacji nie jest dowodem
+wykonania: wymagane są osobne testy publicznego Run, pól, publikacji i recovery.
+
+Natywny harness `fdm_regions_pbc_abi_checks.py` rozróżnia jedną krawędź otwartą
+i dwie różne krawędzie okresowe przy dwóch komórkach na wybranej osi. Wyrocznia
+ma `E_ex = L A V |m1-m0|²/h²` i
+`H_ex,i = 2 L A (m_j-m_i)/(mu0 Ms_i h²)`, gdzie `L=1` lub `2`.
+Pozostałe osie długości jeden nie dodają energii ani pola. Test obejmuje trzy
+orientacje osi, okresowość osi singleton oraz rzadkie etykiety u32 do `u32::MAX`;
+oddzielny przypadek sprawdza lokalne A przez FACES. Nie otwiera to publicznej
+bramki GPU/fp32/PBC ani nie kwalifikuje większych siatek okresowych.
+
 (material-regions-implementation-mapping)=
 ### 4.7 Implementation mapping
 
