@@ -614,6 +614,54 @@
   ],
   "sources": [
     {
+      "id": "base-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_geometry_and_materials",
+      "responsibility": "Preserve base material coefficient values in direct canonical Python export."
+    },
+    {
+      "id": "scene-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_geometries_from_override",
+      "responsibility": "Preserve base material coefficient values supplied through SceneDocument overrides."
+    },
+    {
+      "id": "metric-material-transition-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_material_transition_kwargs",
+      "responsibility": "Preserve metric material transition width without significant-digit truncation."
+    },
+    {
+      "id": "interface-coupling-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_couplings",
+      "responsibility": "Preserve authored exchange scales and coupling energy strengths in canonical Python."
+    },
+    {
+      "id": "regional-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_material_parameter_field_expr",
+      "responsibility": "Preserve exact f64 field payloads with the existing round-trip parameter literal renderer instead of display rounding."
+    },
+    {
+      "id": "regional-material-numeric-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_regional_material_precision.py",
+      "symbol": "test_material_fields_and_interface_parameters_preserve_f64_values",
+      "responsibility": "Verify both Problem and Scene Python export paths preserve base materials, regional fields, metric widths and exchange strengths."
+    },
+    {
+      "id": "sharp-regional-parity-fixture",
+      "path": "scripts/benchmarks/fdm_regions_parity_case.py",
+      "symbol": "_half",
+      "responsibility": "Author explicit discontinuous material transitions for regional parity rather than inheriting smooth DSL defaults."
+    },
+    {
+      "id": "sharp-regional-parity-fixture-regression",
+      "path": "packages/fullmag-py/tests/test_regional_parity_fixture.py",
+      "symbol": "test_heterogeneous_parity_cases_author_sharp_coefficients",
+      "responsibility": "Load each heterogeneous public fixture and require explicit sharp coefficient intent before the native seeded-material oracle."
+    },
+    {
       "id": "cpu-observation-demag-workspace",
       "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
       "symbol": "observable_demag_field_with_workspace",

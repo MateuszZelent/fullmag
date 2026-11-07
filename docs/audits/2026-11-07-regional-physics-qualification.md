@@ -366,3 +366,51 @@ Długi CPU ma nowy request `regional-matrix-a3-grains_cpu_double_long`;
 anulowany request a2 nie jest odtwarzany. Długie porównanie ziaren nadal trwa,
 a osobna kontrola 1000 zwycięskich regionów i ich wartości materiałowych
 pozostaje wymaganą bramką po ukończeniu wszystkich czterech lane.
+
+## Niezależna kontrola ujawniła brak jawnego sharp w benchmarku
+
+Macierz phase3 ukończyła **20/20 wykonań**, a końcowy odczyt potwierdził
+rzeczywiste CPU/rustfft i CUDA oraz brak fallbacku. Dla ziaren po 2000
+nominalnych krokach max |dm| = 2,7145e-7, max względna różnica energii =
+9,5064e-11. Dodatkowe porównanie pól fp64 dla wszystkich pięciu przypadków
+również przeszło: max względny błąd 1,8973e-7 przy limicie 1e-6.
+
+Jednak niezależna wyrocznia wartości materiałowych odmówiła kwalifikacji
+**ostrych** ziaren. Maska ma poprawnie 1000 ID po 64 komórki, ale pierwszy Ms
+wynosi 855 283,3820 A/m zamiast zadanego dla ziarna 874 632,5657 A/m.
+Powód: benchmark odziedziczył udokumentowaną politykę
+mesh_relative(cells=3, scope="boundary"). Film ma jedną komórkę grubości;
+waga mieszania pierwszego ziarna wynosi 20/27. Ten sam wpływ dotyczy A i alpha.
+Nie jest to dowód błędu domyślnej polityki solvera: domyślne wygładzanie jest
+jawnie opisane w nocie 0104, sekcja 2.4. Błąd dotyczył doboru fixture do oracle.
+
+Wyniki phase3 pozostają ważnym dowodem parytetu dla **rzeczywiście wykonanych
+przejść wygładzonych** i nie są promowane do kwalifikacji ostrych współczynników.
+Raport odrzucenia zachowano jako grain-cardinality-rejection.v1.json.
+
+Benchmark teraz jawnie ustawia material_transition(kind="sharp") przed
+nadpisaniem materiału. Nowa wykonywalna regresja publicznego skryptu do IR
+pokazała RED dla wszystkich trzech przypadków niejednorodnych, następnie GREEN.
+Odrębna kampania sharp ma 12 nowych wejść/requestów: dwa rodzaje pary materiałów
+i 1000 ziaren, CPU/double oraz CUDA/double i CUDA/single. Każdy lane musi przed
+zaliczeniem przejść niezależną kontrolę wszystkich wartości Ms/A/alpha
+i przestrzennego przypisania. Kadencja i tolerancje parytetu nie zostały
+poluzowane; niezmienione przypadki jednorodne zachowują poprzednie dowody.
+Ostra macierz jest jeszcze **NOT VERIFIED**.
+
+Pierwszy nowy lane sharp zakończył solve, ale dokładna wyrocznia wykryła jeszcze
+zaokrąglenie przy kanonicznym eksporcie: Ms 874632.565711 zamiast
+874632.5657107424, analogicznie A i alpha. Jest to niezależny problem round-trip,
+wynikający z użycia formatera .12g w eksporcie współczynników. Wyrocznia nie
+została poluzowana. Poprawka wykorzystuje istniejące renderery z dokładnym
+repr dla parametrów materiału, lokalnych pól, szerokości przejść i sił sprzężeń.
+Nowa regresja stałego/liniowego/radialnego pola przez eksport Problem i Scene
+pokazała RED w sześciu podprzypadkach, następnie GREEN na źródłowym SDK.
+Test podaje jawnie oś anizotropii, aby nie utożsamiać braku wartości z jej
+kanonicznym domyślnym wektorem.
+
+Źródłowy GREEN uruchomiono we własnym backendzie z PYTHONPATH wskazującym
+czytane źródła worktree. Domyślny interpreter tego kontenera używa SDK shadow
+z opublikowanego pakietu; potrzebna jest oficjalna przebudowa przed ponowieniem
+bramki publicznego runtime. Pierwszy request sharp a1 nie będzie odtwarzany.
+Aktualna poprawka SDK w runtime pozostaje **NOT VERIFIED**.

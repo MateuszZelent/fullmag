@@ -4073,9 +4073,9 @@ def _render_geometry_and_materials(
                 lines.append(f"{var_name}.mesh(cell_size={_py_tuple3(grid.cell)})")
         if magnet.region is not None and magnet.region.name != magnet.name:
             lines.append(f"{var_name}.region_name = {_py_repr(magnet.region.name)}")
-        lines.append(f"{var_name}.Ms = {_py_number(magnet.material.Ms)}")
-        lines.append(f"{var_name}.Aex = {_py_number(magnet.material.A)}")
-        lines.append(f"{var_name}.alpha = {_py_number(magnet.material.alpha)}")
+        lines.append(f"{var_name}.Ms = {_py_float_roundtrip(magnet.material.Ms)}")
+        lines.append(f"{var_name}.Aex = {_py_float_roundtrip(magnet.material.A)}")
+        lines.append(f"{var_name}.alpha = {_py_float_roundtrip(magnet.material.alpha)}")
         lines.extend(
             _render_absorbing_boundary(
                 var_name,
@@ -4085,11 +4085,11 @@ def _render_geometry_and_materials(
             )
         )
         if magnet.material.Ku1 is not None:
-            lines.append(f"{var_name}.Ku1 = {_py_number(magnet.material.Ku1)}")
+            lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(magnet.material.Ku1)}")
         if magnet.material.anisU is not None:
             lines.append(
-                f"{var_name}.anisU = ({_py_number(magnet.material.anisU[0])}, "
-                f"{_py_number(magnet.material.anisU[1])}, {_py_number(magnet.material.anisU[2])})"
+                f"{var_name}.anisU = ({_py_float_roundtrip(magnet.material.anisU[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisU[1])}, {_py_float_roundtrip(magnet.material.anisU[2])})"
             )
         rendered_initial_override = _render_initial_state_override(
             initial_state_override,
@@ -4111,10 +4111,10 @@ def _render_geometry_and_materials(
                 lines.append(rendered_initial)
         dmi = _magnet_dmi(problem, magnet.name)
         if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+            lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
         bulk_dmi = _magnet_bulk_dmi(problem, magnet.name)
         if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+            lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         lines.append("")
     for geometry in problem.auxiliary_geometries:
         role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
@@ -4449,7 +4449,7 @@ def _render_material_transition_kwargs(transition: dict[str, object]) -> list[st
     if transition.get("cells") is not None:
         kwargs.append(f"cells={int(transition['cells'])}")
     if transition.get("width") is not None:
-        kwargs.append(f"width={_py_literal(transition['width'])}")
+        kwargs.append(f"width={_py_parameter_literal(transition['width'])}")
     scope = transition.get("scope")
     if isinstance(scope, str) and scope != "boundary" and kind != "sharp":
         kwargs.append(f"scope={_py_repr(scope)}")
@@ -4462,15 +4462,15 @@ def _render_material_parameter_field_expr(value: object) -> str:
         raise ValueError("material parameter field must render from a dict payload")
     kind = payload.get("kind")
     if kind == "constant":
-        args = [_py_literal(payload.get("value"))]
+        args = [_py_parameter_literal(payload.get("value"))]
         unit = payload.get("unit")
         if unit is not None:
             args.append(f"unit={_py_repr(str(unit))}")
         return f"fm.fields.constant({', '.join(args)})"
     if kind == "linear":
         kwargs = [
-            f"base={_py_literal(payload.get('base'))}",
-            f"gradient={_py_literal(payload.get('gradient'))}",
+            f"base={_py_parameter_literal(payload.get('base'))}",
+            f"gradient={_py_parameter_literal(payload.get('gradient'))}",
         ]
         frame = payload.get("frame")
         if frame not in (None, "object"):
@@ -4481,10 +4481,10 @@ def _render_material_parameter_field_expr(value: object) -> str:
         return f"fm.fields.linear({', '.join(kwargs)})"
     if kind == "radial":
         kwargs = [
-            f"center={_py_literal(payload.get('center'))}",
-            f"radius={_py_literal(payload.get('radius'))}",
-            f"inside={_py_literal(payload.get('inside'))}",
-            f"outside={_py_literal(payload.get('outside'))}",
+            f"center={_py_parameter_literal(payload.get('center'))}",
+            f"radius={_py_parameter_literal(payload.get('radius'))}",
+            f"inside={_py_parameter_literal(payload.get('inside'))}",
+            f"outside={_py_parameter_literal(payload.get('outside'))}",
         ]
         frame = payload.get("frame")
         if frame not in (None, "object"):
@@ -4549,16 +4549,16 @@ def _render_couplings(
                 f"mode={_py_repr(str(params.get('mode', 'harmonic_mean')))}",
             ]
             if params.get("scale") is not None:
-                kwargs.append(f"scale={_py_literal(params.get('scale'))}")
+                kwargs.append(f"scale={_py_parameter_literal(params.get('scale'))}")
             if params.get("inter_exchange") is not None:
-                kwargs.append(f"inter_exchange={_py_literal(params.get('inter_exchange'))}")
+                kwargs.append(f"inter_exchange={_py_parameter_literal(params.get('inter_exchange'))}")
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.exchange({', '.join(kwargs)})")
         elif kind == "rkky":
             kwargs = [
                 source_expr,
                 target_expr,
-                f"J1={_py_literal(params.get('j1'))}",
+                f"J1={_py_parameter_literal(params.get('j1'))}",
                 *_render_common_coupling_kwargs(coupling),
             ]
             lines.append(f"{root}.rkky({', '.join(kwargs)})")
@@ -4566,10 +4566,10 @@ def _render_couplings(
             kwargs = [
                 source_expr,
                 target_expr,
-                f"J1={_py_literal(params.get('j1'))}",
+                f"J1={_py_parameter_literal(params.get('j1'))}",
             ]
             if params.get("j2") is not None:
-                kwargs.append(f"J2={_py_literal(params.get('j2'))}")
+                kwargs.append(f"J2={_py_parameter_literal(params.get('j2'))}")
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.interlayer_exchange({', '.join(kwargs)})")
         else:
@@ -4678,9 +4678,9 @@ def _render_geometries_from_override(
             lines.append(f"{var_name}.region_name = {_py_repr(region_name)}")
 
         mat = _normalize_mapping(g.get("material"))
-        lines.append(f"{var_name}.Ms = {_py_number(float(str(mat.get('Ms', 800000))))}")
-        lines.append(f"{var_name}.Aex = {_py_number(float(str(mat.get('Aex', 1.3e-11))))}")
-        lines.append(f"{var_name}.alpha = {_py_number(float(str(mat.get('alpha', 0.02))))}")
+        lines.append(f"{var_name}.Ms = {_py_float_roundtrip(float(str(mat.get('Ms', 800000))))}")
+        lines.append(f"{var_name}.Aex = {_py_float_roundtrip(float(str(mat.get('Aex', 1.3e-11))))}")
+        lines.append(f"{var_name}.alpha = {_py_float_roundtrip(float(str(mat.get('alpha', 0.02))))}")
         lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
         physics_stack = _ensure_geometry_physics_stack(
             g.get("physics_stack"),
@@ -4689,20 +4689,20 @@ def _render_geometries_from_override(
         )
         dmi = _physics_stack_dmi_value(physics_stack)
         if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+            lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
         bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
         if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+            lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
-            lines.append(f"{var_name}.Ku1 = {_py_number(ku1_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(ku1_val)}")  # type: ignore[arg-type]
             axis = uniaxial["axis"]  # type: ignore[index]
             axis0 = axis[0]  # type: ignore[index]
             axis1 = axis[1]  # type: ignore[index]
             axis2 = axis[2]  # type: ignore[index]
             lines.append(
-                f"{var_name}.anisU = ({_py_number(axis0)}, {_py_number(axis1)}, {_py_number(axis2)})"
+                f"{var_name}.anisU = ({_py_float_roundtrip(axis0)}, {_py_float_roundtrip(axis1)}, {_py_float_roundtrip(axis2)})"
             )
 
         rendered_initial_override = _render_initial_state_override(

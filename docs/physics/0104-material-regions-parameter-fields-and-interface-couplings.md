@@ -1309,6 +1309,22 @@ They are part of the physics contract, not implementation preferences.
 
 ### 5.2 Cross-backend checks
 
+Canonical Python export must preserve the IEEE-754 values of material
+coefficients, regional parameter-field payloads, metric transition widths and
+interface-coupling strengths. Use round-trip numeric literals rather than a
+display formatter with a fixed significant-digit limit. This is preservation
+of the existing SI inputs; it does not change the material law, default
+transition policy or execution precision. Verify both Problem-to-Python and
+SceneDocument-to-Python paths for constant, linear and radial material fields.
+
+Sharp-interface and grain-assignment fixtures must explicitly author
+`material_transition(kind="sharp")` before local overrides. The public
+mesh-relative default remains intentional. CPU/CUDA agreement for that
+smoothed default does not qualify a discontinuous-coefficient oracle.
+For a sharp grain fixture, independently verify the winning cell count and
+the realized local Ms/A/alpha against the authored seeded values, in addition
+to comparing the two solver lanes.
+
 1. Smooth `Ms(x)` and `Aex(x)` field authoring lowers to FDM cell fields and FEM
    coefficient fields with matching provenance.
 2. FEM conformal split preserves domain markers and exchange flux continuity for
@@ -1454,3 +1470,11 @@ must include:
 | CPU observation FFT | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `observable_effective_field_with_workspace` | Current accepted effective field without rebuilding observation FFT plans. |
 | CPU accepted capture | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `capture_full_active_cpu_fields` | Separate observation workspace lifetime and integrator telemetry. |
 | CPU observation regression | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `cpu_snapshot_reuses_observation_fft_workspace_across_states` | Fresh/reused field and density equality, current states, inactive cells and local Ms. |
+| Sharp parity fixture | `scripts/benchmarks/fdm_regions_parity_case.py` | `_half` | Explicit sharp intent instead of the smooth authoring default. |
+| Sharp parity authoring regression | `packages/fullmag-py/tests/test_regional_parity_fixture.py` | `test_heterogeneous_parity_cases_author_sharp_coefficients` | Public fixture to ProblemIR verification for both material-pair cases and grains. |
+| Material numeric export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_material_parameter_field_expr` | Exact f64 parameter payloads through canonical Python. |
+| Material numeric regression | `packages/fullmag-py/tests/test_regional_material_precision.py` | `test_material_fields_and_interface_parameters_preserve_f64_values` | Direct and Scene exports preserve material values, metric widths and exchange strengths. |
+| Base material export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_geometry_and_materials` | Exact material coefficients in direct export. |
+| Scene material export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_geometries_from_override` | Exact material coefficients from scene overrides. |
+| Transition width export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_material_transition_kwargs` | Exact metric transition width. |
+| Coupling strength export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_couplings` | Exact exchange scale and coupling energy strengths. |
