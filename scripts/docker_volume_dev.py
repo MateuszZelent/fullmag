@@ -3556,7 +3556,8 @@ def startup_failed_preacceptance(status,run,identity):
             or isinstance(preparation.get("started_at_unix_ms"),bool)
             or not isinstance(preparation.get("completed_at_unix_ms"),int)
             or isinstance(preparation.get("completed_at_unix_ms"),bool)
-            or preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"]
+            or preparation["started_at_unix_ms"]<0
+            or preparation["completed_at_unix_ms"]<0
             or not isinstance(failure,dict)
             or not failure_code_matches
             or not isinstance(failure.get("summary"),str) or not failure["summary"].strip()
@@ -3618,6 +3619,11 @@ def startup_failed_preacceptance(status,run,identity):
                if "cuda_trace_sha256" in activation else {})},
         "session_status":{"solver":status.get("solver"),"lifecycle":status.get("lifecycle"),
             "resources":status.get("resources"),"session":session},
+        # Wall-clock order is diagnostic metadata. Admission is pinned by the
+        # original rejection, two stable API views and empty queues; graceful
+        # native drain remains mandatory. Keep both original times unchanged.
+        "preparation_wall_clock_order":("reversed" if
+            preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"] else "ordered"),
         "preparation":preparation,"compute_queue":queue,"commands":commands,
         "runtime_service":runtime}
 def held_run_proofs(items):

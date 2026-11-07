@@ -1203,6 +1203,25 @@ markery, projection/conformal mode oraz capability result. Validation errors
 blokują niepoprawne zakresy i `Ms<=0`; unsupported combinations blokują planner.
 Nie wolno porzucać regionu lub coupling po cichu.
 
+Eksport Python i SceneDocument zachowuje także `shape.center` dla box/sphere,
+`shape.center` i `shape.axis` dla cylinder oraz pełne wyrażenie CSG. Zastąpienie
+CSG pudełkiem lub wyzerowanie przesunięcia zmienia wsparcie parametrów, a więc
+problem fizyczny. Nieznany typ kształtu musi zostać odrzucony. Regresje obu
+ścieżek eksportu porównują kanoniczny shape IR, a publiczny przypadek dwóch
+połówek z Ms 400/800 kA/m sprawdza niezależnie moment globalny `mx=-1/3`.
+
+Ograniczony harness `scripts/benchmarks/fdm_regions_interaction_abi_checks.py`
+sprawdza w natywnym CUDA lokalne wagi Ms w tożsamości
+`dE/dε = -mu0 * sum_i Ms_i V_i H_i · dm_i/dε` oraz niezależne różnice energii
+Zeeman/uniaxial/cubic/MEL. Dla stałego pola +z i początkowego m=+x wyrocznia LLG
+ma `ω_i=gamma H/(1+alpha_i²)`, `m_z=tanh(alpha_i ω_i t)` oraz
+`m_x+i m_y=sech(alpha_i ω_i t) exp(i ω_i t)`. Czas pochodzi z zaakceptowanych
+statystyk solvera. Sprawdzenie pięciu integratorów nie włącza adaptacji ani
+nie kwalifikuje długich trajektorii fp32. Heterogeniczne A trafia do ABI v2
+jako współczynniki FACES; raw ABI bez widm Newella ma jawnie odmówić demagu.
+Dokładne tolerancje, biblioteka i wyniki znajdują się w audycie kwalifikacji
+z 7 listopada 2026; ten punkt nie zastępuje publicznych testów CPU/CUDA.
+
 (material-regions-implementation-mapping)=
 ### 4.7 Implementation mapping
 

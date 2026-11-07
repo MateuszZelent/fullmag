@@ -614,6 +614,36 @@
   ],
   "sources": [
     {
+      "id": "regional-cuda-variational-energy-llg-qualification",
+      "path": "scripts/benchmarks/fdm_regions_interaction_abi_checks.py",
+      "symbol": "main",
+      "responsibility": "Check local material weights against energy derivatives, independent polynomial energies and constant-field Gilbert solutions in bounded CUDA fp64/fp32 cases."
+    },
+    {
+      "id": "regional-qualification-measurement-controls",
+      "path": "scripts/benchmarks/test_fdm_regions_interaction_abi_checks.py",
+      "symbol": "class GradientMeasurementTests",
+      "responsibility": "Reject global-Ms substitution, a wrong field factor, nonfinite and uninformative measurements."
+    },
+    {
+      "id": "canonical-region-shape-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_region_shape_expr_from_payload",
+      "responsibility": "Preserve region center, cylinder axis and CSG support in canonical script export."
+    },
+    {
+      "id": "canonical-region-shape-roundtrip",
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_region_shape_center_and_cylinder_axis_survive_both_export_routes",
+      "responsibility": "Compare canonical shape IR after Python and SceneDocument exports."
+    },
+    {
+      "id": "canonical-region-csg-roundtrip",
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_csg_region_shape_is_preserved_instead_of_becoming_a_box",
+      "responsibility": "Preserve the complete CSG expression instead of replacing it with a bounding box."
+    },
+    {
       "id": "region-api",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class ObjectRegion",

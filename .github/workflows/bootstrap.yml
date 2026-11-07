@@ -978,6 +978,8 @@ jobs:
           python -B scripts/test_docker_completed_cache_reconcile.py -v
           python -B scripts/test_docker_volume_preparation_abort_archive.py -v
           python -B scripts/test_docker_volume_dev_runtime_state.py -v
+          python -B scripts/test_docker_preaccepted_clock.py -v
+          python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_interaction_abi_checks.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v

@@ -4168,7 +4168,7 @@ def _render_region_owned_authoring(
             region_vars[region.region_id] = region_var
             kwargs = [
                 _py_repr(region.name),
-                _render_geometry_expr(region.shape, magnet_name=region.name, source_root=source_root),
+                _render_region_shape_expr_from_payload(region.to_ir()["shape"], region_name=region.name, source_root=source_root),
             ]
             optional_kwargs: list[str] = []
             optional_kwargs.append(f"region_id={_py_repr(region.region_id)}")
@@ -4363,9 +4363,9 @@ def _render_region_shape_expr_from_payload(
     source_root: Path,
 ) -> str:
     shape = _normalize_mapping(raw_shape)
-    kind = str(shape.get("kind") or "box")
+    kind = str(shape.get("kind") or "")
     if kind == "box":
-        params = {"size": shape.get("size")}
+        params = {"size": shape.get("size"), "translation": shape.get("center")}
         return _render_geometry_expr_from_override(
             "Box",
             params,
@@ -4377,6 +4377,7 @@ def _render_region_shape_expr_from_payload(
             "radius": shape.get("radius"),
             "height": shape.get("height"),
             "translation": shape.get("center"),
+            "axis": shape.get("axis"),
         }
         return _render_geometry_expr_from_override(
             "Cylinder",
@@ -4386,19 +4387,18 @@ def _render_region_shape_expr_from_payload(
         )
     if kind == "sphere":
         radius = shape.get("radius")
-        params = {"rx": radius, "ry": radius, "rz": radius}
+        params = {"rx": radius, "ry": radius, "rz": radius, "translation": shape.get("center")}
         return _render_geometry_expr_from_override(
             "Ellipsoid",
             params,
             name=region_name,
             source_root=source_root,
         )
-    return _render_geometry_expr_from_override(
-        "Box",
-        {},
-        name=region_name,
-        source_root=source_root,
-    )
+    if kind == "csg":
+        # The public region API accepts the canonical shape IR dictionary.
+        # Preserve its complete expression; a bounding box changes support.
+        return _py_literal(shape)
+    raise ValueError(f"unsupported object region shape kind {kind!r} in canonical export")
 
 
 def _render_initial_magnetization_expr_from_payload(
@@ -7936,7 +7936,29 @@ def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -
         return []
     if not isinstance(value, Mapping):
         raise ValueError("SceneDocument run sampling must be an object")
-    _reject_unrendered_scene_nested_fields(value, context="run_sampling", rendered_fields={"outputs"})
+    _reject_unrendered_scene_nested_fields(value, context="run_sampling", rendered_fields={"outputs", "table_autosave"})
+    table_lines: list[str] = ["study.tableautosave(enabled=False)"]
+    raw_table = value.get("table_autosave")
+    if raw_table is not None:
+        if not isinstance(raw_table, Mapping):
+            raise ValueError("SceneDocument run table_autosave must be an object")
+        _reject_unrendered_scene_nested_fields(raw_table, context="run_table_autosave", rendered_fields={
+            "kind", "table_id", "every_steps", "quantities", "expressions", "sample_period_s",
+            "sample_period_policy", "resolved_sample_period_s", "requested_policy",
+        })
+        if "every_steps" in raw_table and (
+            type(raw_table["every_steps"]) is not int or raw_table["every_steps"] <= 0
+        ):
+            raise ValueError("SceneDocument run table_autosave requires positive every_steps")
+        for key in ("quantities", "expressions"):
+            if key in raw_table and not isinstance(raw_table[key], list):
+                raise ValueError(f"SceneDocument run table_autosave {key} must be a list")
+        if "table_id" in raw_table and (not isinstance(raw_table["table_id"], str) or not raw_table["table_id"].strip()):
+            raise ValueError("SceneDocument run table_autosave table_id must be a nonempty string")
+        table = _table_autosave_from_override(dict(raw_table))
+        if table is None:
+            raise ValueError("SceneDocument run table_autosave requires a supported kind and cadence")
+        table_lines = _render_table_autosave_policy(table, surface="study")
     raw_outputs = value.get("outputs", [])
     if not isinstance(raw_outputs, list):
         raise ValueError("SceneDocument run sampling outputs must be a list")
@@ -7963,7 +7985,7 @@ def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -
             outputs.append(Snapshot(field=raw.get("field"), component=raw.get("component"), every=every, layer=layer))
         else:
             raise ValueError(f"SceneDocument run sampling output kind {kind!r} is unsupported")
-    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study")]
+    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study"), *table_lines]
 
 
 def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: str) -> list[str]:
@@ -8182,6 +8204,10 @@ def _render_table_autosave(
     ) or _study_table_autosave(problem.study)
     if table_autosave is None:
         return []
+    return _render_table_autosave_policy(table_autosave, surface=surface)
+
+
+def _render_table_autosave_policy(table_autosave: TableAutosave, *, surface: str) -> list[str]:
 
     kwargs = (
         [f"every_steps={table_autosave.every_steps}"]
@@ -8987,6 +9013,11 @@ def _render_stages(
             )
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
+        stage_table = _study_table_autosave(study)
+        if stage_table is not None:
+            lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
+        else:
+            lines.append(f"{_surface_call(surface, 'tableautosave')}(enabled=False)")
         if not is_study_surface:
             lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
             lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
