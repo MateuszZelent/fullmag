@@ -696,3 +696,10 @@ Projektor otrzymał osobną ścieżkę dla pierwszego Failed/Disconnected i nieu
 Regresje obejmują publikację Failed/Pending/Pending, awaiting_command i błędu związanej komendy bez zmiany trwałego stanu następców, a także zmianę B między snapshotami i niezmienność bajtów WRITER.lock/WRITER.owner.json podczas odczytu. Parser obu zmienionych plików Rust i diff check przeszły. Wykonanie testów Rust wymaga jeszcze CI; nie jest to dowód poprawy bieżącego runtime, który nadal korzysta z pakietu 6ee3.
 
 Dodatkowy odczyt poza sandboxem wykazał dostępność RTX 4080 SUPER przez natywne linuksowe /usr/lib/wsl/lib/nvidia-smi. Wcześniejsza odmowa NVML w sandboxie nie dowodzi niedostępności GPU hosta. Bieżąca grupa i fixture nadal jawnie używają CPU; dostęp Docker GPU i wykonanie solverów GPU pozostają osobnymi bramkami.
+
+
+### Kandydat poprawki dostępu do wyjścia WSL
+
+Launcher przygotowuje ACL katalogów jawnie wybranego aliasu wyjściowego w Linux/WSL. Ograniczony, descriptor-relative spacer odrzuca dowiązania, przekroczenie filesystemu, obce nieprzygotowane katalogi i zagnieżdżony Git przed zmianą praw. Zachowuje efektywne wcześniejsze granty przy poszerzaniu maski, nadaje dostęp UID 65532 oraz dziedziczone prawa operatora i nie zmienia plików. Rollback przywraca własną zmianę tylko wtedy, gdy ACL nadal odpowiada zapisanym przez nas bajtom; cudza zmiana pozostaje zachowana.
+
+Pełny zestaw 19 testów helpera i hooka przeszedł poza sandboxem, bez skipów, w tym rzeczywiste ACL na ext4, zachowanie plików i sąsiadów, maski, limity, odmowa dowiązań/Git oraz oba warianty rollback. Backend otrzymał osobny preflight nonce po mapowaniu ścieżek, przed zwróceniem LoadedStartupScene i placeholderem aktywacji. Używa istniejącego resolvera output/scratch, nie tworzy kontenera wyników i sprawdza tożsamość własnego pliku przed usunięciem. Regresje Rust pokrywają sukces, kolizję, odrębny scratch i dowiązanie; wymagają CI. Kolejność przed akceptacją potwierdza kod; test endpointu i rzeczywisty nowy start DEV pozostają do wykonania. Zgodność kompilacji Windows także wymaga CI; lokalnych procesów Windows nie użyto.

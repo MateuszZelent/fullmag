@@ -159,6 +159,10 @@ Może technicznie zmieniać również inne jego pliki. Główny checkout nie mo�
 zostać wybrany jako writable alias. Zmiana grantu wymaga odtworzenia usług;
 `docker-dev` wybiera kontrolowaną ścieżkę odtworzenia i zachowuje wolumeny.
 
+Na Linux/WSL launcher nadaje UID 65532 dostęp POSIX ACL wyłącznie do katalogów wewnątrz jawnie wybranego podkatalogu. Zachowuje dotychczasowe efektywne uprawnienia innych użytkowników i grup oraz właścicieli; pliki źródeł i wyników nie są przepisywane. Domyślne ACL zapewniają operatorowi dostęp do nowych wyników kontenera. Dowiązania, obca własność bez gotowego grantu, zagnieżdżone dane Git i przekroczenie limitu drzewa powodują odmowę przed startem usług. Nie jest to grant na cały checkout.
+
+Przed przyjęciem skryptu backend sprawdza zapis i usunięcie własnego pliku kontrolnego w faktycznych katalogach wyjścia i scratch objętych aliasem. Błąd zwraca `docker_startup_output_mapping_invalid` przed publikacją placeholdera aktywacji i RunIntent; launcher rozpoznaje go jako odrzucenie, bez powtórnego POST. Ten punktowy test nie gwarantuje późniejszego zapisu po zmianie praw lub zapełnieniu dysku.
+
 Skrypt `examples/model.py` używa domyślnie sąsiedniego `model.zarr`.
 HDF5 zachowuje obecny kontener `model.results` z plikami `.h5`.
 Jawna OutputStorage jest nadrzędna. Zapis sesji wskazuje `model.fms`,

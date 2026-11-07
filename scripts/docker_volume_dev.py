@@ -40,6 +40,44 @@ def _session_host():
     return host
 
 
+def _prepare_script_output_permissions(document):
+    """Grant UID 65532 access only to the explicitly opted-in Linux output tree."""
+    from docker_script_output_mounts import OUTPUT_ROOT
+
+    backend = document["services"]["backend"]
+    outputs = [mount for mount in backend.get("volumes", [])
+               if mount.get("target") == OUTPUT_ROOT]
+    if not outputs:
+        return 0
+    if len(outputs) != 1 or outputs[0].get("type") != "bind" or outputs[0].get("read_only") is not False:
+        raise BuildControlError("Script output permission setup requires one explicit writable alias")
+    if os.name == "nt":
+        return 0
+    if not sys.platform.startswith("linux"):
+        raise BuildControlError("Script output permission setup supports only Linux or Windows hosts")
+
+    output_directory = Path(outputs[0].get("source", ""))
+    if not output_directory.is_absolute() or ".." in output_directory.parts:
+        raise BuildControlError("Script output permission setup requires an absolute child directory")
+    try:
+        filesystem = storage.filesystem_type(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError("Cannot inspect opted-in script-output filesystem: " + str(error)) from error
+    if filesystem not in {"ext4", "xfs", "btrfs"}:
+        raise BuildControlError(
+            "Script output permission setup requires local ext4, xfs or btrfs storage; observed "
+            + repr(filesystem)
+        )
+    try:
+        import docker_script_output_permissions as permissions
+        return permissions.prepare_output_tree(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError(
+            "Cannot safely admit the opted-in script-output directory to backend UID 65532: "
+            + str(error)
+        ) from error
+
+
 def _capture_helper_source_binding(args, selected_source):
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     import docker_helper_source as helper_source
@@ -2864,6 +2902,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_script_output_mounts import configure as configure_script_output, validate as validate_script_output
         configure_script_output(document, selected)
         validate_script_output(document)
+        _prepare_script_output_permissions(document)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
             for mount in service["volumes"]:
