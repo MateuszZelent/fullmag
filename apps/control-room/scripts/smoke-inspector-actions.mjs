@@ -207,6 +207,61 @@ try {
   await inspector.locator('footer[data-edit-mode="staged"]').waitFor();
   await inspector.locator(".fm-inspector__action-btn--apply").waitFor();
 
+  for (const target of ["object", "airbox"]) {
+    await step(target + "-number-control-ack-scope-and-reset", async () => {
+      await setTarget(target);
+      await page.evaluate(() => {
+        const driver = window.__fullmagInspectorActionsFixture;
+        driver.setNumberMax(40);
+        driver.setNumberValue(10);
+      });
+      const slider = inspector.getByRole("slider", { name: "Arrow budget", exact: true });
+      await page.waitForFunction(() =>
+        document.querySelector('[role="slider"][aria-label="Arrow budget"]')
+          ?.getAttribute("aria-valuenow") === "10");
+      const commitsBefore = (await snapshot()).numberCommitCalls;
+      await slider.focus();
+      await slider.press("ArrowLeft");
+      await page.waitForFunction((count) =>
+        window.__fullmagInspectorActionsFixture?.read().numberCommitCalls === count + 1,
+      commitsBefore);
+      assert.equal((await snapshot()).numberValue, 9);
+      const stableField = inspector.getByRole("textbox", { name: "Unchanged fixture field", exact: true });
+      await stableField.evaluate((element) => element.focus({ preventScroll: true }));
+      await pinIdentity();
+      const commitBaseline = (await snapshot()).reactCommits;
+      await capture("inspector-number-" + target + "-ack-before.png");
+      await page.evaluate(() => window.__fullmagInspectorActionsFixture.setNumberValue(12));
+      await page.waitForFunction(() =>
+        document.querySelector('[role="slider"][aria-label="Arrow budget"]')
+          ?.getAttribute("aria-valuenow") === "12");
+      assert.equal(await inspector.locator("output").first().textContent(), "12");
+      await assertPinnedIdentity(target + " number canonical value");
+      await page.evaluate(() => {
+        const driver = window.__fullmagInspectorActionsFixture;
+        driver.setNumberValue(10);
+        driver.setNumberMax(20);
+      });
+      await page.waitForFunction(() =>
+        document.querySelector('[role="slider"][aria-label="Arrow budget"]')
+          ?.getAttribute("aria-valuenow") === "10");
+      assert.equal(await slider.getAttribute("aria-valuemax"), "20");
+      assert.equal(await inspector.locator("output").first().textContent(), "10");
+      await assertPinnedIdentity(target + " number reset");
+      await assertNoOpacityTransitions(inspector, target + " number updates");
+      assert.equal((await snapshot()).numberCommitCalls, commitsBefore + 1);
+      assert.ok((await snapshot()).reactCommits - commitBaseline < 16,
+        target + " number updates exceeded the React commit bound");
+      await capture("inspector-number-" + target + "-reset-after.png");
+    });
+  }
+  await setTarget("object");
+  await page.evaluate(() => {
+    const driver = window.__fullmagInspectorActionsFixture;
+    driver.setMode("staged");
+    driver.setValid(false);
+  });
+
   await step("object-staged-validation-and-production-controls", async () => {
     assert.equal(await inspector.getByRole("heading", { name: "Fixture Object" }).count(), 1);
     const apply = inspector.getByRole("button", { name: "Apply", exact: true });

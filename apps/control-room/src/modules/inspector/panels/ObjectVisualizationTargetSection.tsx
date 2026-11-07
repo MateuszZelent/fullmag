@@ -10,7 +10,7 @@ import {
   Box,
   SquareDashed,
 } from "lucide-react";
-import React, { useCallback, useEffect, useId, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   type FieldCatalogResource,
   type FieldMetaResource,
@@ -1366,16 +1366,24 @@ export function NumberField({
   onChange: (value: number) => void;
 }) {
   const [draftOverride, setDraftOverride] = useState<number | null>(null);
+  const [controlInput, setControlInput] = useState({ value, min, max, step });
+  if (
+    controlInput.value !== value || controlInput.min !== min ||
+    controlInput.max !== max || controlInput.step !== step
+  ) {
+    setControlInput({ value, min, max, step });
+    setDraftOverride(null);
+  }
   const displayValue = draftOverride ?? value;
   const pendingCommitFrameRef = useRef<number | null>(null);
   const pendingCommitValueRef = useRef<number | null>(null);
   const onChangeRef = useRef(onChange);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     return () => {
       const frame = pendingCommitFrameRef.current;
       if (frame !== null && typeof cancelAnimationFrame === "function") {
@@ -1384,7 +1392,7 @@ export function NumberField({
       }
       pendingCommitValueRef.current = null;
     };
-  }, []);
+  }, [value, min, max, step]);
 
   const commitValueInAnimationFrame = (nextValue: number) => {
     pendingCommitValueRef.current = nextValue;
