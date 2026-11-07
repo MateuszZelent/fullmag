@@ -1286,3 +1286,8 @@ deklarację. crates/fullmag-ir/src/spin_transport.rs + StructuredCurrentClosureI
 waliduje typowane X/Z; crates/fullmag-authoring/src/geometry.rs +
 cpw_layout_bounds uwzględnia połączenia w bounds. To zgodność czytnika
 authoringu z istniejącym Pythonem GSG, bez zmiany wykonawcy transportu.
+
+Eksport rewrite_overrides Rust przekazuje również typowane current_transports
+w liście current_modules czytanej przez kanoniczny renderer Python, tak jak
+adapter Python sceny. Zachowuje to istniejący transport i pełny fizyczny IR;
+nie jest nowym modułem, równaniem ani ścieżką wykonania.

@@ -754,7 +754,9 @@ pub fn scene_document_to_script_builder_overrides(
                 "phase_rad": module.drive.phase_rad,
                 "waveform": module.drive.waveform,
             },
-        })).collect::<Vec<_>>(),
+        })).chain(builder.current_transports.iter()
+            .map(|transport| serde_json::to_value(transport).expect("validated current transport is serializable")))
+            .collect::<Vec<_>>(),
         "current_transports": builder.current_transports.iter()
             .map(|transport| serde_json::to_value(transport).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
@@ -5036,6 +5038,8 @@ mod tests {
 
         let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
         assert_eq!(overrides["current_transports"][0]["name"], "transport");
+        assert_eq!(overrides["current_modules"].as_array().unwrap().last(),
+                   Some(&serde_json::to_value(&scene.current_transports[0]).unwrap()));
         assert_eq!(overrides["spin_transports"][0]["id"], "spin");
         assert_eq!(overrides["spin_torques"][0]["kind"], "zhang_li");
         assert!(overrides["spin_torques"][0].get("id").is_none());

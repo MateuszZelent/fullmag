@@ -41,6 +41,8 @@ fn pinned_gsg_sources_preserve_full_ir_through_real_rust_adapters() {
         // The typed solver builder is magnetic-only. The canonical export
         // adapter must preserve every auxiliary object in its full inventory.
         assert_eq!(projection.rewrite_overrides["geometries"].as_array().unwrap().len(), scene.objects.len());
+        assert_eq!(projection.rewrite_overrides["current_modules"].as_array().unwrap().len(),
+                   initial["builder"]["current_modules"].as_array().unwrap().len());
         let result = bridge(json!({
             "action": "render_and_reimport", "fixture": fixture,
             "scene": serde_json::to_value(&scene).unwrap(),

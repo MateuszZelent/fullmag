@@ -126,6 +126,7 @@ jobs:
           cargo test --locked -p fullmag-authoring --lib magnetic_object_id_
           cargo test --locked -p fullmag-authoring --lib geometry_asset_identity_
           cargo test --locked -p fullmag-authoring --lib shared_domain_source_
+          cargo test --locked -p fullmag-authoring --lib scene_builder_adapters_preserve_typed_spin_authoring_collections
           cargo test --locked -p fullmag-authoring --lib closed_loop_authoring_tests
           cargo test --locked -p fullmag-authoring --lib cpw_closed_loop_bounds_include_transformed_end_connections
           cargo test --locked -p fullmag-authoring --test explicit_domain_python_roundtrip -- --nocapture
