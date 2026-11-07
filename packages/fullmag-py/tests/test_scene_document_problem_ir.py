@@ -465,6 +465,7 @@ def test_scene_document_problem_ir_matches_fem_authoring_surface(
 study = fm.study('scene-fem-authoring-surface')
 study.engine('fem')
 study.device('cpu', precision='double')
+study.wait_for_solve(True)
 film = study.geometry(fm.Box(120e-9, 40e-9, 5e-9, name='film'), name='film', object_id='film')
 film.Ms = 800000
 film.Aex = 13e-12
