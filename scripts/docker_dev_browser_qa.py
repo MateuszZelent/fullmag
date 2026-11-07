@@ -76,6 +76,16 @@ STUDY_STAGE_RERUN_SOURCES = {
     "command_contributions": "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts",
     "study_compute_input": "apps/control-room/src/kernel/runtime/studyComputeInput.ts",
 }
+STUDY_STAGE_MATERIAL_SOURCES = {
+    "object_nodes": "apps/control-room/src/modules/explorer/builders/objectExplorerNodes.ts",
+    "material_panel": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx",
+    "material_panel_model": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelModel.ts",
+    "material_edit_session": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelEditSession.ts",
+    "material_edit_session_bridge": "apps/control-room/src/modules/inspector/panels/ObjectMaterialPanelEditSessionBridge.tsx",
+    "authoring_history": "apps/control-room/src/kernel/authoring/authoringHistoryMutation.ts",
+    "api_client": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+    "api_paths": "apps/control-room/src/kernel/api/apiPaths.ts",
+}
 SAVED_PLAYBACK_RESULT_SCHEMA = "fullmag.docker-dev-saved-playback-result.v1"
 OPERATION_SCHEMA = "fullmag.docker-dev-browser-qa.v1"
 BROWSER_IMAGE_RE = re.compile(
@@ -431,9 +441,18 @@ def _validate_inspector_ack_hashes(value) -> None:
         raise BuildControlError("Inspector ACK proof source pins are malformed")
 
 
-def _study_stage_rerun_source_sha256(selected: Path) -> dict[str, str]:
+def _study_stage_rerun_source_paths(mode: str) -> dict[str, str]:
+    if mode not in {"stage-b", "study", "material-stage-a"}:
+        raise BuildControlError("Study stage rerun requires a fixed mode")
+    sources = dict(STUDY_STAGE_RERUN_SOURCES)
+    if mode == "material-stage-a":
+        sources.update(STUDY_STAGE_MATERIAL_SOURCES)
+    return sources
+
+
+def _study_stage_rerun_source_sha256(selected: Path, mode: str = "stage-b") -> dict[str, str]:
     hashes = {}
-    for key, relative in STUDY_STAGE_RERUN_SOURCES.items():
+    for key, relative in _study_stage_rerun_source_paths(mode).items():
         path = selected / relative
         try:
             with path.open("rb") as source:
@@ -446,8 +465,12 @@ def _study_stage_rerun_source_sha256(selected: Path) -> dict[str, str]:
     return hashes
 
 
-def _validate_study_stage_rerun_hashes(value) -> None:
-    if (not isinstance(value, Mapping) or set(value) != set(STUDY_STAGE_RERUN_SOURCES)
+def _validate_study_stage_rerun_hashes(value, mode: str = "stage-b") -> None:
+    try:
+        expected_sources = _study_stage_rerun_source_paths(mode)
+    except BuildControlError:
+        raise
+    if (not isinstance(value, Mapping) or set(value) != set(expected_sources)
             or any(not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) for digest in value.values())):
         raise BuildControlError("Study stage rerun source pins are malformed")
 
@@ -1212,9 +1235,9 @@ def _compose_document(
     elif inspector_ack_source_sha256 is not None:
         raise BuildControlError("Inspector ACK source pins require their scenario")
     if study_stage_rerun is not None:
-        if study_stage_rerun not in {"stage-b", "study"}:
-            raise BuildControlError("Study stage rerun requires the fixed stage-b or study mode")
-        _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+        if study_stage_rerun not in {"stage-b", "study", "material-stage-a"}:
+            raise BuildControlError("Study stage rerun requires one of the fixed profiles")
+        _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
                 or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
                 or airbox_inspector or saved_playback_item_id is not None
@@ -1586,11 +1609,11 @@ def _validate_browser_helper(
         raise ControlOutcomeUnknown("Browser helper reported an unrequested Inspector ACK scenario")
     if study_stage_rerun is not None:
         try:
-            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         except BuildControlError as error:
             raise ControlOutcomeUnknown(str(error)) from error
         expected_pin = canonical(dict(study_stage_rerun_source_sha256)).decode("utf-8")
-        if (study_stage_rerun not in {"stage-b", "study"}
+        if (study_stage_rerun not in {"stage-b", "study", "material-stage-a"}
                 or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
                 or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
                 or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
@@ -1798,10 +1821,10 @@ def _validate_browser_helper(
         raise ControlOutcomeUnknown("Browser helper script is not a readonly selected-source bind")
     if study_stage_rerun is not None:
         try:
-            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         except BuildControlError as error:
             raise ControlOutcomeUnknown(str(error)) from error
-        if _study_stage_rerun_source_sha256(selected) != study_stage_rerun_source_sha256:
+        if _study_stage_rerun_source_sha256(selected, study_stage_rerun) != study_stage_rerun_source_sha256:
             raise ControlOutcomeUnknown("Browser helper Study stage source pins changed")
         configured_mounts = host.get("Mounts")
         if (not isinstance(configured_mounts, list) or len(configured_mounts) != 4
@@ -2911,6 +2934,35 @@ def _parse_inspector_ack_result(output, public_url, browser_url, expected_source
     return dict(payload)
 
 
+def _study_stage_expected_ids(mode: str, phase: str) -> list[str]:
+    if mode not in {"stage-b", "study", "material-stage-a"} or phase not in {"before", "after"}:
+        raise BuildControlError("Study stage rerun mode/phase is invalid")
+    if phase == "before":
+        return ["relax-b"] if mode == "study" else ["relax-a", "relax-b", "relax-c"]
+    if mode == "stage-b":
+        return ["relax-b"]
+    if mode == "material-stage-a":
+        return ["relax-a"]
+    return ["relax-a", "relax-b", "relax-c"]
+
+
+def _expected_study_stage_scene_profile() -> dict[str, object]:
+    return {
+        "requested_backend": "fdm",
+        "requested_device": "cpu",
+        "requested_precision": "double",
+        "pipeline_version": "study_pipeline.v1",
+        "stages": [
+            {"id": "relax-a", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "llg_overdamped", "max_steps": "10"},
+            {"id": "relax-b", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "projected_gradient_bb", "max_steps": "1"},
+            {"id": "relax-c", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "nonlinear_cg", "max_steps": "1"},
+        ],
+    }
+
+
 STUDY_CAMERA_PATCH_KEY = "PATCH /v2/sessions/current/visualization/state"
 
 
@@ -2927,8 +2979,10 @@ def _validate_study_camera_patches(payload, session):
     scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
         session["session_epoch"], safe="") + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
     fields = {"fov_degrees", "orthographic_scale", "position", "projection", "target", "up"}
+
     def finite(value):
         return type(value) in (float, int) and math.isfinite(value)
+
     for receipt in receipts:
         body = receipt.get("payload") if isinstance(receipt, Mapping) else None
         camera = body.get("camera") if isinstance(body, Mapping) else None
@@ -2948,29 +3002,200 @@ def _validate_study_camera_patches(payload, session):
             raise BuildControlError("Study camera autosave changed its scope or camera-only payload")
 
 
-def _study_stage_expected_ids(mode: str, phase: str) -> list[str]:
-    if mode not in {"stage-b", "study"} or phase not in {"before", "after"}:
-        raise BuildControlError("Study stage rerun mode/phase is invalid")
-    if phase == "before":
-        return ["relax-a", "relax-b", "relax-c"] if mode == "stage-b" else ["relax-b"]
-    return ["relax-b"] if mode == "stage-b" else ["relax-a", "relax-b", "relax-c"]
+STUDY_MATERIAL_TRANSACTION_KEY = "POST /v2/sessions/current/model/transactions"
 
 
-def _expected_study_stage_scene_profile() -> dict[str, object]:
-    return {
-        "requested_backend": "fdm",
-        "requested_device": "cpu",
-        "requested_precision": "double",
-        "pipeline_version": "study_pipeline.v1",
-        "stages": [
-            {"id": "relax-a", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
-             "relax_algorithm": "llg_overdamped", "max_steps": "10"},
-            {"id": "relax-b", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
-             "relax_algorithm": "projected_gradient_bb", "max_steps": "1"},
-            {"id": "relax-c", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
-             "relax_algorithm": "nonlinear_cg", "max_steps": "1"},
-        ],
+def _validate_study_material_receipt(payload, session, expected_scene_revision=None):
+    receipt = payload.get("material_receipt")
+    if not isinstance(receipt, Mapping):
+        raise BuildControlError("Material-stage-A result omitted its guarded authoring receipt")
+    base_fields = {
+        "method", "path", "status", "scope_header", "payload", "before_scene_revision",
+        "material_before", "acknowledged",
     }
+    ack_fields = {
+        "transaction_kind", "scene_revision", "material_after",
+        "unmodified_scene_sha256_before", "unmodified_scene_sha256_after",
+    }
+    acknowledged = receipt.get("acknowledged")
+    if (type(acknowledged) is not bool
+            or set(receipt) != (base_fields | ack_fields if acknowledged else base_fields)
+            or receipt.get("method") != "POST"
+            or receipt.get("path") != "/v2/sessions/current/model/transactions"
+            or receipt.get("status") is not None and (
+                type(receipt["status"]) is not int or not 100 <= receipt["status"] <= 599
+            )):
+        raise BuildControlError("Material-stage-A authoring receipt is malformed")
+    if not isinstance(session, Mapping):
+        raise BuildControlError("Material-stage-A receipt omitted its session scope")
+    scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+        session["session_epoch"], safe="") + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    before = receipt.get("material_before")
+    after = receipt.get("material_after") if acknowledged else None
+    request = receipt.get("payload")
+    if (receipt.get("scope_header") != scope or type(receipt.get("before_scene_revision")) is not int
+            or receipt["before_scene_revision"] < 0 or not isinstance(before, Mapping)
+            or not isinstance(request, Mapping)
+            or set(request) != {"base_revision", "kind", "material_id", "patch"}
+            or request.get("kind") != "patch_material"
+            or request.get("base_revision") != receipt["before_scene_revision"]
+            or not isinstance(request.get("material_id"), str) or not request["material_id"]
+            or not isinstance(before.get("object_id"), str) or not before["object_id"]
+            or before.get("material_id") != request["material_id"]
+            or not isinstance(before.get("material_name"), str) or not before["material_name"]
+            or not isinstance(before.get("magnetization_ref"), str) or not before["magnetization_ref"]
+            or not isinstance(before.get("magnetization_asset_sha256"), str)
+            or not SHA256_RE.fullmatch(before["magnetization_asset_sha256"])):
+        raise BuildControlError("Material-stage-A receipt scope or selected material differs")
+    before_properties = before.get("properties")
+    patch = request.get("patch")
+    patch_properties = patch.get("properties") if isinstance(patch, Mapping) else None
+    if (not isinstance(before_properties, Mapping)
+            or before_properties.get("Ms") != 800000 or before_properties.get("Aex") != 13e-12
+            or before_properties.get("alpha") != 0.5
+            or before_properties.get("Dind") is not None or before_properties.get("Dbulk") is not None
+            or not isinstance(patch, Mapping) or set(patch) != {"name", "properties"}
+            or patch.get("name") != before["material_name"]
+            or not isinstance(patch_properties, Mapping)
+            or set(patch_properties) != {"Aex", "Dbulk", "Dind", "Ms", "alpha"}
+            or patch_properties.get("Ms") != 600000 or patch_properties.get("Aex") != 1e-11
+            or patch_properties.get("alpha") != before_properties["alpha"]
+            or patch_properties.get("Dind") != before_properties.get("Dind")
+            or patch_properties.get("Dbulk") != before_properties.get("Dbulk")):
+        raise BuildControlError("Material-stage-A transaction changed an unapproved material field")
+    if not acknowledged:
+        return dict(receipt)
+    after_properties = after.get("properties") if isinstance(after, Mapping) else None
+    if (receipt.get("transaction_kind") != "patch_material"
+            or type(receipt.get("status")) is not int or not 200 <= receipt["status"] < 300
+            or type(receipt.get("scene_revision")) is not int
+            or receipt["scene_revision"] != receipt["before_scene_revision"] + 1
+            or expected_scene_revision is not None and receipt["scene_revision"] != expected_scene_revision
+            or not isinstance(after, Mapping) or after.get("object_id") != before["object_id"]
+            or after.get("material_id") != before["material_id"]
+            or after.get("material_name") != before["material_name"]
+            or after.get("magnetization_ref") != before["magnetization_ref"]
+            or after.get("magnetization_asset_sha256") != before["magnetization_asset_sha256"]
+            or not isinstance(after_properties, Mapping)
+            or after_properties.get("Ms") != 600000 or after_properties.get("Aex") != 1e-11
+            or after_properties.get("alpha") != before_properties["alpha"]
+            or after_properties.get("Dind") != before_properties.get("Dind")
+            or after_properties.get("Dbulk") != before_properties.get("Dbulk")
+            or {key: value for key, value in after_properties.items() if key not in {"Ms", "Aex"}}
+            != {key: value for key, value in before_properties.items() if key not in {"Ms", "Aex"}}):
+        raise BuildControlError("Material-stage-A ACK does not match its accepted exact edit")
+    old_scene_sha = receipt.get("unmodified_scene_sha256_before")
+    new_scene_sha = receipt.get("unmodified_scene_sha256_after")
+    if (not isinstance(old_scene_sha, str) or not SHA256_RE.fullmatch(old_scene_sha)
+            or new_scene_sha != old_scene_sha):
+        raise BuildControlError("Material-stage-A ACK changed scene state outside the material asset")
+    return dict(receipt)
+
+
+def _validate_material_stage_a_unknown_payload(payload, public_url, browser_url, expected_sources):
+    if (payload.get("state") != "outcome-unknown" or payload.get("outcome") != "unknown"
+            or payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources
+            or not isinstance(payload.get("failure"), str) or not 1 <= len(payload["failure"]) <= 512
+            or payload.get("phase") not in {"material-dispatched", "material-acknowledged", "ui-submit"}):
+        raise BuildControlError("Material-stage-A unknown outcome omitted its pinned phase/source evidence")
+    session = payload.get("session_before")
+    if (not isinstance(session, Mapping) or session.get("name") != "P22 three Relax stages"
+            or payload.get("session_after") != session
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))):
+        raise BuildControlError("Material-stage-A unknown outcome changed its session scope")
+    before = payload.get("before")
+    precondition = before.get("precondition") if isinstance(before, Mapping) else None
+    previous_run = before.get("run_id") if isinstance(before, Mapping) else None
+    if (not isinstance(before, Mapping) or not isinstance(previous_run, str) or not previous_run
+            or before.get("run_status") != "completed" or before.get("solver_state") != "awaiting_command"
+            or before.get("execution_state") != "completed"
+            or before.get("stage_ids") != ["relax-a", "relax-b", "relax-c"]
+            or before.get("authored_stage_ids") != ["relax-a", "relax-b", "relax-c"]
+            or before.get("stage_statuses") != ["completed", "completed", "completed"]
+            or before.get("completed_stage_indexes") != [0, 1, 2]
+            or before.get("scene_profile") != _expected_study_stage_scene_profile()
+            or not isinstance(before.get("profile"), Mapping)
+            or before["profile"].get("domain_discretization") != "fdm"
+            or before["profile"].get("domain_cell_count") != 8
+            or before["profile"].get("script_sha256") != expected_sources["fixture"]
+            or before["profile"].get("script_path") != "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py"
+            or not isinstance(precondition, Mapping)
+            or precondition.get("current_run") != {"kind": "run", "run_id": previous_run}
+            or type(precondition.get("scene_revision")) is not int or precondition["scene_revision"] < 0):
+        raise BuildControlError("Material-stage-A unknown outcome omitted its completed ABC baseline")
+    receipt = _validate_study_material_receipt(payload, session)
+    if (receipt.get("acknowledged") is True
+            and precondition.get("scene_revision") not in (receipt["before_scene_revision"], receipt["scene_revision"])):
+        raise BuildControlError("Material-stage-A unknown outcome lost its scene revision boundary")
+    if (payload.get("command_receipt") is not None
+            or payload.get("after") is not None
+            or payload.get("history_identity_preserved") is not None
+            or payload.get("public_terminal_proven") is not False
+            or payload.get("native_execution_proven") is not False
+            or payload.get("field_data_proven") is not False
+            or payload.get("ui_command_proven") is not False
+            or type(payload.get("command_count")) is not int or payload["command_count"] != 0
+            or type(payload.get("command_attempt_count")) is not int or payload["command_attempt_count"] != 0
+            or payload.get("material_count") != 1 or payload.get("material_attempt_count") != 1
+            or payload.get("ui_material_proven") is not True):
+        raise BuildControlError("Material-stage-A unknown outcome overstates or repeats a UI action")
+    before_results = before.get("result_identities")
+    if not isinstance(before_results, list) or len(before_results) != 3:
+        raise BuildControlError("Material-stage-A unknown outcome omitted immutable prior result identities")
+    for result, stage_id in zip(before_results, ("relax-a", "relax-b", "relax-c"), strict=True):
+        source = result.get("source") if isinstance(result, Mapping) else None
+        if (not isinstance(source, Mapping) or source.get("run_id") != previous_run
+                or result.get("authored_stage_id") != stage_id
+                or any(not isinstance(source.get(key), str) or not source[key]
+                       for key in ("task_id", "step_id", "case_id", "attempt_id"))
+                or type(source.get("ownership_epoch")) is not int or source["ownership_epoch"] < 0
+                or not isinstance(result.get("artifact_sha256"), str)
+                or not SHA256_RE.fullmatch(result["artifact_sha256"])):
+            raise BuildControlError("Material-stage-A unknown outcome has malformed old result identities")
+    _validate_study_camera_patches(payload, session)
+    request_counts = payload.get("request_counts")
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    if (not isinstance(request_counts, Mapping) or request_counts.get(STUDY_MATERIAL_TRANSACTION_KEY) != 1
+            or request_counts.get("POST /v2/sessions/current/simulation/commands", 0) != 0
+            or not 1 <= len(request_counts) <= 128):
+        raise BuildControlError("Material-stage-A unknown outcome does not pin one transaction and zero computes")
+    for key, count in request_counts.items():
+        if (not isinstance(key, str) or " " not in key or len(key) > 2048
+                or type(count) is not int or count < 1 or count > 512):
+            raise BuildControlError("Material-stage-A request inventory is malformed")
+        method, path = key.split(" ", 1)
+        if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == STUDY_MATERIAL_TRANSACTION_KEY and count == 1:
+            continue
+        if key == STUDY_CAMERA_PATCH_KEY and count <= 4:
+            continue
+        if key == ack_key and count <= 16:
+            continue
+        raise BuildControlError("Material-stage-A unknown outcome attempted another API mutation")
+    read_counts = payload.get("read_counts")
+    required = {"status", "current_session", "scene", "commands", "current_run", "stage_execution",
+                "solver_status", "stage_results", "command_details"}
+    if (not isinstance(read_counts, Mapping) or set(read_counts) != required
+            or any(type(value) is not int or value < 0 or value > 512 for value in read_counts.values())
+            or payload.get("violations") != []):
+        raise BuildControlError("Material-stage-A unknown outcome omitted bounded reads or clean guards")
+    if (type(payload.get("total_requests")) is not int
+            or payload["total_requests"] != sum(request_counts.values()) or payload["total_requests"] > 512
+            or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
+            or payload.get("per_path_read_limit") != 128):
+        raise BuildControlError("Material-stage-A unknown outcome exceeded its request budget")
+    for key in ("errors", "proxy_failures"):
+        values = payload.get(key)
+        if (not isinstance(values, list) or len(values) > 16
+                or any(not isinstance(value, str) or len(value) > 512 for value in values)):
+            raise BuildControlError("Material-stage-A unknown outcome diagnostics are malformed")
+    return dict(payload)
 
 
 def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url, expected_sources, expected_mode):
@@ -3024,6 +3249,13 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
                 "region_coefficients_revision", "region_initial_state_revision",
             ))):
         raise BuildControlError("Study stage rerun unknown outcome omitted its exact command precondition")
+    if expected_mode == "material-stage-a":
+        receipt = _validate_study_material_receipt(
+            payload, session, precondition.get("scene_revision"),
+        )
+        if (payload.get("material_count") != 1 or payload.get("material_attempt_count") != 1
+                or payload.get("ui_material_proven") is not True or receipt.get("acknowledged") is not True):
+            raise BuildControlError("Material-stage-A unknown compute outcome lacks its acknowledged edit")
     if "stage_execution_revision" in precondition:
         raise BuildControlError("Unknown Study compute command includes a stage-control revision")
     before_results = before.get("result_identities")
@@ -3044,9 +3276,11 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
     expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
         session["session_epoch"], safe=""
     ) + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    stage_target = {"kind": "stage_id", "stage_id": "relax-b" if expected_mode == "stage-b" else "relax-a"}
     expected_command = (
-        {"kind": "relax", "target": {"kind": "stage_id", "stage_id": "relax-b"}}
-        if expected_mode == "stage-b" else {"kind": "solve", "target": {"kind": "study"}}
+        {"kind": "relax", "target": stage_target}
+        if expected_mode in {"stage-b", "material-stage-a"}
+        else {"kind": "solve", "target": {"kind": "study"}}
     )
     if (not isinstance(receipt, Mapping)
             or receipt.get("method") != "POST"
@@ -3060,14 +3294,14 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
             or command.get("precondition") != precondition
             or not isinstance(command.get("client_intent_id"), str)
             or not command["client_intent_id"].startswith(
-                "study:" + ("relax" if expected_mode == "stage-b" else "solve") + ":"
+                "study:" + ("relax" if expected_mode in {"stage-b", "material-stage-a"} else "solve") + ":"
             )
             or len(command["client_intent_id"]) > 128
             or command.get("reason") != "user_requested"
             or type(command.get("requested_at_unix_ms")) is not int
             or command["requested_at_unix_ms"] <= 0):
         raise BuildControlError("Study stage rerun unknown outcome lacks its exact guarded UI command")
-    if expected_mode == "stage-b":
+    if expected_mode in {"stage-b", "material-stage-a"}:
         if command.get("initial_state") != {"kind": "default_for_target"}:
             raise BuildControlError("Unknown Stage B command changed its initial state")
     elif "initial_state" in command:
@@ -3077,7 +3311,8 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
         expected_target = expected_command["target"]
         if (not isinstance(binding, Mapping) or binding.get("requested_target") != expected_target
                 or not isinstance(binding.get("run_id"), str) or not binding["run_id"]
-                or (expected_mode == "stage-b" and binding.get("step_id") != "relax-b")
+                or (expected_mode in {"stage-b", "material-stage-a"}
+                    and binding.get("step_id") != stage_target["stage_id"])
                 or (expected_mode == "study" and binding.get("step_id") is not None)):
             raise BuildControlError("Unknown Study command retained a conflicting execution binding")
     if (payload.get("after") is not None or payload.get("history_identity_preserved") is not None
@@ -3102,12 +3337,16 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
     if (not isinstance(request_counts, Mapping) or not 1 <= len(request_counts) <= 128
             or request_counts.get(command_key) != 1):
         raise BuildControlError("Study stage rerun unknown outcome does not prove one exact command POST")
+    if expected_mode == "material-stage-a" and request_counts.get(STUDY_MATERIAL_TRANSACTION_KEY) != 1:
+        raise BuildControlError("Material-stage-A unknown compute outcome omitted one authoring transaction")
     for key, count in request_counts.items():
         if (not isinstance(key, str) or " " not in key or len(key) > 2048
                 or type(count) is not int or count < 1 or count > 512):
             raise BuildControlError("Study stage rerun unknown outcome request inventory is malformed")
         method, path = key.split(" ", 1)
         if method == "GET" and path.startswith("/v2/"):
+            continue
+        if expected_mode == "material-stage-a" and key == STUDY_MATERIAL_TRANSACTION_KEY and count == 1:
             continue
         if key == STUDY_CAMERA_PATCH_KEY and count <= 4:
             continue
@@ -3132,7 +3371,7 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
 
 def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mode) -> bool:
     try:
-        _validate_study_stage_rerun_hashes(expected_sources)
+        _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
     except BuildControlError:
         return False
     if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
@@ -3181,6 +3420,11 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
             or candidate["command_attempt_count"] < 0
             or candidate.get("command_receipt", object()) is not None
             or candidate.get("ui_command_proven") is not False):
+        return False
+    if expected_mode == "material-stage-a" and (
+        candidate.get("material_count") != 0 or candidate.get("material_attempt_count") != 0
+        or candidate.get("material_receipt") is not None or candidate.get("ui_material_proven") is not False
+    ):
         return False
     try:
         _validate_study_camera_patches(candidate, candidate.get("session_before"))
@@ -3233,8 +3477,8 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
 
 
 def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode):
-    _validate_study_stage_rerun_hashes(expected_sources)
-    if expected_mode not in {"stage-b", "study"}:
+    _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
+    if expected_mode not in {"stage-b", "study", "material-stage-a"}:
         raise BuildControlError("Study stage rerun expected mode is invalid")
     if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
         raise BuildControlError("Study stage rerun result exceeds its evidence budget")
@@ -3253,6 +3497,10 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("mode") != expected_mode):
         raise BuildControlError("Study stage rerun helper reported another scenario or mode")
     if payload.get("outcome") == "unknown":
+        if expected_mode == "material-stage-a" and payload.get("command_count") == 0:
+            return _validate_material_stage_a_unknown_payload(
+                payload, public_url, browser_url, expected_sources,
+            )
         return _validate_study_stage_rerun_unknown_payload(
             payload, public_url, browser_url, expected_sources, expected_mode,
         )
@@ -3342,14 +3590,27 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     if "stage_execution_revision" in precondition:
         raise BuildControlError("Study compute command includes a stage-control revision")
 
+    if expected_mode == "material-stage-a":
+        material_receipt = _validate_study_material_receipt(
+            payload, session, precondition.get("scene_revision"),
+        )
+        if (payload.get("material_count") != 1 or payload.get("material_attempt_count") != 1
+                or payload.get("ui_material_proven") is not True
+                or material_receipt.get("acknowledged") is not True):
+            raise BuildControlError("Material-stage-A result omitted exactly one acknowledged material edit")
+    elif (payload.get("material_count", 0) != 0 or payload.get("material_attempt_count", 0) != 0
+          or payload.get("material_receipt") is not None or payload.get("ui_material_proven", False) is not False):
+        raise BuildControlError("Legacy Study rerun profile reported an unrequested material edit")
+
     receipt = payload.get("command_receipt")
     command = receipt.get("payload") if isinstance(receipt, Mapping) else None
     expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
         session["session_epoch"], safe=""
     ) + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    stage_target = {"kind": "stage_id", "stage_id": "relax-b" if expected_mode == "stage-b" else "relax-a"}
     expected_command = (
-        {"kind": "relax", "target": {"kind": "stage_id", "stage_id": "relax-b"}}
-        if expected_mode == "stage-b"
+        {"kind": "relax", "target": stage_target}
+        if expected_mode in {"stage-b", "material-stage-a"}
         else {"kind": "solve", "target": {"kind": "study"}}
     )
     if (not isinstance(receipt, Mapping)
@@ -3362,13 +3623,14 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or any(command.get(key) != value for key, value in expected_command.items())
             or command.get("precondition") != precondition
             or not isinstance(command.get("client_intent_id"), str)
-            or not command["client_intent_id"].startswith("study:" + ("relax" if expected_mode == "stage-b" else "solve") + ":")
+            or not command["client_intent_id"].startswith(
+                "study:" + ("relax" if expected_mode in {"stage-b", "material-stage-a"} else "solve") + ":")
             or len(command["client_intent_id"]) > 128
             or command.get("reason") != "user_requested"
             or type(command.get("requested_at_unix_ms")) is not int
             or command["requested_at_unix_ms"] <= 0):
         raise BuildControlError("Study stage rerun command receipt has the wrong method, scope or target")
-    if expected_mode == "stage-b":
+    if expected_mode in {"stage-b", "material-stage-a"}:
         if command.get("initial_state") != {"kind": "default_for_target"}:
             raise BuildControlError("Stage B command did not retain its default target initial state")
     elif "initial_state" in command:
@@ -3378,8 +3640,8 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("ui_command_proven") is not True):
         raise BuildControlError("Study stage rerun did not submit exactly one command")
     expected_binding = {"requested_target": expected_command["target"], "run_id": new_run}
-    if expected_mode == "stage-b":
-        expected_binding["step_id"] = "relax-b"
+    if expected_mode in {"stage-b", "material-stage-a"}:
+        expected_binding["step_id"] = stage_target["stage_id"]
     if receipt.get("execution_binding") != expected_binding:
         raise BuildControlError("Study stage rerun terminal run is not bound to its accepted PPM command")
 
@@ -3467,6 +3729,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         elif key == ack_key:
             if count > 16:
                 raise BuildControlError("Study stage rerun visualization acknowledgements exceeded their bound")
+        elif expected_mode == "material-stage-a" and key == STUDY_MATERIAL_TRANSACTION_KEY:
+            if count != 1:
+                raise BuildControlError("Material-stage-A transaction count differs from one")
         elif key != command_key or count != 1:
             raise BuildControlError("Study stage rerun attempted an unexpected or duplicate mutation")
     if (request_counts.get(command_key) != 1
@@ -3475,6 +3740,8 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
             or payload.get("per_path_read_limit") != 128):
         raise BuildControlError("Study stage rerun command request count differs from one")
+    if expected_mode == "material-stage-a" and request_counts.get(STUDY_MATERIAL_TRANSACTION_KEY) != 1:
+        raise BuildControlError("Material-stage-A omitted its single scoped material transaction")
     if any(payload.get(key) != [] for key in ("violations", "errors", "proxy_failures")):
         raise BuildControlError("Study stage rerun helper reported browser, proxy or scope violations")
     return dict(payload)
@@ -4572,8 +4839,9 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     elif inspector_ack_sources is not None:
         raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
     if study_stage_rerun:
-        if (study_stage_rerun_mode not in {"stage-b", "study"}
-                or _study_stage_rerun_source_sha256(selected) != study_stage_rerun_sources):
+        if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a"}
+                or _study_stage_rerun_source_sha256(selected, study_stage_rerun_mode)
+                != study_stage_rerun_sources):
             raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
         if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
                 or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
@@ -4973,8 +5241,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
     parser.add_argument(
         "--study-stage-rerun",
-        choices=("stage-b", "study"),
-        help="Run one P22 UI-only Study stage or whole-Study command and verify its public result identities",
+        choices=("stage-b", "study", "material-stage-a"),
+        help="Run one fixed P22 UI-only Study stage profile and verify public results",
     )
     parser.add_argument(
         "--airbox-inspector",
@@ -5139,7 +5407,8 @@ def main(argv: list[str] | None = None) -> int:
     browser_url = "http://frontend:8080"
     inspector_ack_sources = _inspector_ack_source_sha256(selected) if args.inspector_ack else None
     study_stage_rerun_sources = (
-        _study_stage_rerun_source_sha256(selected) if args.study_stage_rerun is not None else None
+        _study_stage_rerun_source_sha256(selected, args.study_stage_rerun)
+        if args.study_stage_rerun is not None else None
     )
     airbox_inspector_script_sha256 = None
     source_script_sha256 = None

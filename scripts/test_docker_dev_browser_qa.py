@@ -2904,6 +2904,90 @@ class StudyStageRerunContractTests(unittest.TestCase):
     def sources(qa):
         return qa._study_stage_rerun_source_sha256(ROOT)
 
+    def test_material_stage_a_guard_pins_one_material_patch_and_preserves_scene_state(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+assert.deepEqual(runner.studyStageCommandForMode('material-stage-a'), {
+  kind:'relax', target:{kind:'stage_id',stage_id:'relax-a'},
+  initial_state:{kind:'default_for_target'},
+});
+assert.deepEqual(runner.studyStageExpectedStageIds('material-stage-a','before'),
+  ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('material-stage-a','after'), ['relax-a']);
+const session = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
+const sceneBefore = {
+  revision:31,
+  objects:[{id:'film',name:'film',material_ref:'material-film',magnetization_ref:'mag-film'}],
+  materials:[{id:'material-film',name:'film',properties:{Ms:800000,Aex:13e-12,alpha:0.5,Dind:null,Dbulk:null},
+    references:[{label:'fixture'}]}],
+  magnetization_assets:[{id:'mag-film',kind:'uniform',value:[1,0,0]}],
+};
+const before = runner.studyStageMaterialState(sceneBefore);
+assert.deepEqual(before, {
+  object_id:'film', material_id:'material-film', material_name:'film',
+  properties:{Ms:800000,Aex:13e-12,alpha:0.5,Dind:null,Dbulk:null},
+  magnetization_ref:'mag-film',magnetization_asset_sha256:'9f5b7db421041ddbe7884ecb073a3dd6221e40e01a5e4e0f71ecb1acf8bc988b',
+});
+const request = {method:'POST',path:'/v2/sessions/current/model/transactions',scope,body:{
+  kind:'patch_material',material_id:'material-film',base_revision:31,
+  patch:{name:'film',properties:{Aex:1e-11,Dind:null,Dbulk:null,Ms:600000,alpha:0.5}},
+}};
+const context = {phase:'material-submit',materialCount:0,session,beforeRevision:31,before};
+assert.equal(runner.studyStageMaterialRequestAllowed(request,context),true);
+assert.equal(runner.studyStageMaterialRequestAllowed(request,{...context,phase:'ui-submit'}),false);
+assert.equal(runner.studyStageMaterialRequestAllowed(request,{...context,materialCount:1}),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,base_revision:30}},context),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,patch:{...request.body.patch,properties:{...request.body.patch.properties,alpha:0.7}}}},context),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,patch:{...request.body.patch,properties:{...request.body.patch.properties,texture:'bad'}}}},context),false);
+const sceneAfter = structuredClone(sceneBefore);
+sceneAfter.revision = 32;
+sceneAfter.materials[0].properties.Ms = 600000;
+sceneAfter.materials[0].properties.Aex = 1e-11;
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,sceneAfter),true);
+const changedM0 = structuredClone(sceneAfter);
+changedM0.magnetization_assets[0].value = [0,1,0];
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,changedM0),false);
+const changedAlpha = structuredClone(sceneAfter);
+changedAlpha.materials[0].properties.alpha = 0.7;
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,changedAlpha),false);
+const accepted = runner.studyStageMaterialTransactionOutcome(200, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:sceneAfter,
+}, sceneBefore);
+assert.deepEqual(accepted,{outcome:'accepted',scene_revision:32,material: {
+  object_id:'film',material_id:'material-film',material_name:'film',
+  properties:{Ms:600000,Aex:1e-11,alpha:0.5,Dind:null,Dbulk:null},magnetization_ref:'mag-film',
+  magnetization_asset_sha256:'9f5b7db421041ddbe7884ecb073a3dd6221e40e01a5e4e0f71ecb1acf8bc988b',
+}});
+assert.equal(runner.studyStageMaterialTransactionOutcome(409, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:sceneAfter,
+}, sceneBefore).outcome,'unknown');
+const foreignAck = structuredClone(sceneAfter); foreignAck.objects[0].name = 'other';
+assert.equal(runner.studyStageMaterialTransactionOutcome(200, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:foreignAck,
+}, sceneBefore).outcome,'unknown');
+"""
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source.as_uri()],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mode_specific_source_pins_leave_legacy_profiles_unchanged(self):
+        qa = self.qa
+        stage_b = qa._study_stage_rerun_source_sha256(ROOT, "stage-b")
+        material = qa._study_stage_rerun_source_sha256(ROOT, "material-stage-a")
+        self.assertEqual(set(stage_b), set(self.SOURCE_KEYS))
+        self.assertEqual(set(material), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_MATERIAL_SOURCES))
+        qa._validate_study_stage_rerun_hashes(stage_b, "stage-b")
+        qa._validate_study_stage_rerun_hashes(material, "material-stage-a")
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_study_stage_rerun_hashes(material, "stage-b")
+
     @staticmethod
     def result_identity(run_id, stage_id, index):
         return {
@@ -2935,14 +3019,15 @@ class StudyStageRerunContractTests(unittest.TestCase):
         }
         previous_run = "run-before"
         new_run = "run-after"
-        before_ids = ["relax-a", "relax-b", "relax-c"] if mode == "stage-b" else ["relax-b"]
-        after_ids = ["relax-b"] if mode == "stage-b" else ["relax-a", "relax-b", "relax-c"]
+        before_ids = ["relax-b"] if mode == "study" else ["relax-a", "relax-b", "relax-c"]
+        after_ids = (["relax-b"] if mode == "stage-b" else ["relax-a"] if mode == "material-stage-a"
+                     else ["relax-a", "relax-b", "relax-c"])
         before_results = [self.result_identity(previous_run, stage_id, index + 1)
                           for index, stage_id in enumerate(before_ids)]
         new_results = [self.result_identity(new_run, stage_id, index + 4)
                        for index, stage_id in enumerate(after_ids)]
         precondition = {
-            "scene_revision": 31,
+            "scene_revision": 32 if mode == "material-stage-a" else 31,
             "mesh_revision": 18,
             "domain_generation_id": "fdm-domain-8",
             "region_topology_revision": 3,
@@ -2953,10 +3038,11 @@ class StudyStageRerunContractTests(unittest.TestCase):
             "runtime_state": "awaiting_command",
             "command_revision": 0,
         }
-        if mode == "stage-b":
+        if mode in {"stage-b", "material-stage-a"}:
+            selected_stage = "relax-b" if mode == "stage-b" else "relax-a"
             command = {
                 "kind": "relax",
-                "target": {"kind": "stage_id", "stage_id": "relax-b"},
+                "target": {"kind": "stage_id", "stage_id": selected_stage},
                 "initial_state": {"kind": "default_for_target"},
                 "precondition": deepcopy(precondition),
                 "client_intent_id": "study:relax:p22-stage-b",
@@ -2974,9 +3060,9 @@ class StudyStageRerunContractTests(unittest.TestCase):
             }
         scope = "session=session-p22&epoch=session-p22%401&request_scope_epoch=api%3Ap22%3A1"
         execution_binding = {"requested_target": command["target"], "run_id": new_run}
-        if mode == "stage-b":
-            execution_binding["step_id"] = "relax-b"
-        return {
+        if mode in {"stage-b", "material-stage-a"}:
+            execution_binding["step_id"] = command["target"]["stage_id"]
+        payload = {
             "schema": qa.STUDY_STAGE_RERUN_RESULT_SCHEMA,
             "scenario": "study-stage-rerun",
             "state": "passed",
@@ -3018,6 +3104,11 @@ class StudyStageRerunContractTests(unittest.TestCase):
                 "payload": command,
                 "execution_binding": execution_binding,
             },
+            "phase": "await-terminal",
+            "material_receipt": None,
+            "material_count": 0,
+            "material_attempt_count": 0,
+            "ui_material_proven": False,
             "command_count": 1,
             "command_attempt_count": 1,
             "ui_command_proven": True,
@@ -3084,6 +3175,46 @@ class StudyStageRerunContractTests(unittest.TestCase):
             "errors": [],
             "proxy_failures": [],
         }
+        if mode == "material-stage-a":
+            magnetization_hash = "d" * 64
+            material_before = {
+                "object_id": "film", "material_id": "mat-film", "material_name": "film",
+                "properties": {"Ms": 800000, "Aex": 13e-12, "alpha": 0.5, "Dind": None, "Dbulk": None},
+                "magnetization_ref": "mag-film", "magnetization_asset_sha256": magnetization_hash,
+            }
+            material_after = {
+                **deepcopy(material_before),
+                "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
+            }
+            material_payload = {
+                "base_revision": 31,
+                "kind": "patch_material",
+                "material_id": "mat-film",
+                "patch": {"name": "film", "properties": {
+                    "Aex": 1e-11, "Dind": None, "Dbulk": None, "Ms": 600000, "alpha": 0.5,
+                }},
+            }
+            payload["material_count"] = 1
+            payload["material_attempt_count"] = 1
+            payload["ui_material_proven"] = True
+            payload["material_receipt"] = {
+                "method": "POST",
+                "path": "/v2/sessions/current/model/transactions",
+                "status": 200,
+                "scope_header": scope,
+                "payload": material_payload,
+                "before_scene_revision": 31,
+                "material_before": material_before,
+                "acknowledged": True,
+                "transaction_kind": "patch_material",
+                "scene_revision": 32,
+                "material_after": material_after,
+                "unmodified_scene_sha256_before": "e" * 64,
+                "unmodified_scene_sha256_after": "e" * 64,
+            }
+            payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
+            payload["total_requests"] += 1
+        return payload
 
     def test_terminal_scope_keeps_authored_rows_but_requires_only_selected_execution(self):
         import shutil
@@ -3167,8 +3298,8 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
 
     def test_result_validator_requires_exact_target_terminal_scope_and_old_history(self):
         qa = self.qa
-        sources = self.sources(qa)
-        for mode in ("stage-b", "study"):
+        for mode in ("stage-b", "study", "material-stage-a"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
             payload = self.result_fixture(mode, sources)
             parsed = qa._parse_study_stage_rerun_result(
                 json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode,
@@ -3179,7 +3310,8 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                 ("source drift", lambda item: item.update(source_sha256_after={**sources, "runner": "b" * 64})),
                 ("collapsed authored rows", lambda item: item["after"].update(authored_stage_ids=["relax-b"])),
                 ("missing public statuses", lambda item: item["after"].pop("stage_statuses")),
-                ("wrong completed index", lambda item: item["after"].update(completed_stage_indexes=[0])),
+                ("wrong completed index", lambda item: item["after"].update(
+                    completed_stage_indexes=[1] if mode == "material-stage-a" else [0])),
                 ("missing reload", lambda item: item.pop("reload_proof")),
                 ("reload foreign run", lambda item: item["reload_proof"].update(run_id="foreign")),
                 ("reload duplicate submit", lambda item: item["reload_proof"].update(command_attempt_count=2)),
@@ -3211,6 +3343,17 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                 ("field claim", lambda item: item.update(field_data_proven=True)),
                 ("result shape", lambda item: item["after"]["result_identities"].pop()),
             )
+            if mode == "material-stage-a":
+                bad_cases += (
+                    ("material edit missing", lambda item: item.update(material_receipt=None)),
+                    ("material duplicate", lambda item: item.update(material_attempt_count=2)),
+                    ("material target changed", lambda item: item["material_receipt"]["material_after"].update(
+                        material_id="foreign-material")),
+                    ("material alpha changed", lambda item: item["material_receipt"]["material_after"]
+                     ["properties"].update(alpha=0.7)),
+                    ("material texture changed", lambda item: item["material_receipt"].update(
+                        unmodified_scene_sha256_after="f" * 64)),
+                )
             for name, mutate in bad_cases:
                 with self.subTest(mode=mode, reason=name):
                     invalid = deepcopy(payload)
@@ -3219,6 +3362,36 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                         qa._parse_study_stage_rerun_result(
                             json.dumps(invalid).encode(), payload["public_url"], payload["probe_url"], sources, mode,
                         )
+
+    def test_camera_autosave_is_scoped_bounded_and_cannot_carry_model_edits(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        payload = self.result_fixture("stage-b", sources)
+        camera = {"fov_degrees": 45, "orthographic_scale": None, "position": [1, 2, 3],
+                  "projection": "perspective", "target": [0, 0, 0], "up": [0, 1, 0]}
+        receipt = {"method": "PATCH", "path": "/v2/sessions/current/visualization/state",
+                   "scope_header": payload["command_receipt"]["scope_header"], "payload": {"camera": camera}}
+        key = "PATCH /v2/sessions/current/visualization/state"
+        payload["camera_patch_receipts"] = [receipt]
+        payload["request_counts"][key] = 1
+        payload["total_requests"] += 1
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b"), payload)
+        for name, change in (
+            ("foreign scope", lambda x: x["camera_patch_receipts"][0].update(scope_header="foreign")),
+            ("material smuggled", lambda x: x["camera_patch_receipts"][0]["payload"].update(material={})),
+            ("unknown camera field", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(extra=1)),
+            ("nonfinite coordinate", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(up=[0, float("nan"), 0])),
+            ("invalid projection", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(projection="invalid")),
+            ("unreported write", lambda x: x.update(camera_patch_receipts=[])),
+            ("over budget", lambda x: x.update(camera_patch_receipts=[receipt] * 5,
+                request_counts={**x["request_counts"], key: 5}, total_requests=x["total_requests"] + 4)),
+        ):
+            value = deepcopy(payload)
+            change(value)
+            with self.subTest(name=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(json.dumps(value).encode(), value["public_url"],
+                    value["probe_url"], sources, "stage-b")
 
     def test_post_dispatch_unknown_is_retained_without_claiming_terminal_or_history(self):
         qa = self.qa
@@ -3417,36 +3590,6 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     study_stage_rerun_source_sha256=sources if changed != "unrequested" else None,
                 )
 
-    def test_camera_autosave_is_scoped_bounded_and_cannot_carry_model_edits(self):
-        qa = self.qa
-        sources = self.sources(qa)
-        payload = self.result_fixture("stage-b", sources)
-        camera = {"fov_degrees": 45, "orthographic_scale": None, "position": [1, 2, 3],
-                  "projection": "perspective", "target": [0, 0, 0], "up": [0, 1, 0]}
-        receipt = {"method": "PATCH", "path": "/v2/sessions/current/visualization/state",
-                   "scope_header": payload["command_receipt"]["scope_header"], "payload": {"camera": camera}}
-        key = "PATCH /v2/sessions/current/visualization/state"
-        payload["camera_patch_receipts"] = [receipt]
-        payload["request_counts"][key] = 1
-        payload["total_requests"] += 1
-        self.assertEqual(qa._parse_study_stage_rerun_result(
-            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b"), payload)
-        for name, change in (
-            ("foreign scope", lambda x: x["camera_patch_receipts"][0].update(scope_header="foreign")),
-            ("material smuggled", lambda x: x["camera_patch_receipts"][0]["payload"].update(material={})),
-            ("unknown camera field", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(extra=1)),
-            ("nonfinite coordinate", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(up=[0,float("nan"),0])),
-            ("invalid projection", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(projection="invalid")),
-            ("unreported write", lambda x: x.update(camera_patch_receipts=[])),
-            ("over budget", lambda x: x.update(camera_patch_receipts=[receipt]*5,
-                request_counts={**x["request_counts"], key:5}, total_requests=x["total_requests"]+4)),
-        ):
-            value = deepcopy(payload)
-            change(value)
-            with self.subTest(name=name), self.assertRaises(qa.BuildControlError):
-                qa._parse_study_stage_rerun_result(json.dumps(value).encode(), value["public_url"],
-                    value["probe_url"], sources, "stage-b")
-
     def test_javascript_guard_allows_only_one_scoped_exact_command(self):
         node = shutil.which("node")
         if node is None:
@@ -3515,6 +3658,9 @@ const request = {method:'POST', path:'/v2/sessions/current/simulation/commands',
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};
 const context = {mode:'stage-b', session, expectedPrecondition:precondition, commandCount:0, phase:'ui-submit'};
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'running'}}, 'new'), false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'old'},solver:{state:'awaiting_command'}}, 'new'), false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'awaiting_command'}}, 'new'), true);
 const activeStatus = {session,lifecycle:{connectivity:'connected',session_resource:'active',commandability:'allowed'}};
 assert.deepEqual(runner.readStudyStageSessionIdentity(activeStatus), session);
 const runningStatus = {...activeStatus,lifecycle:{...activeStatus.lifecycle,commandability:'forbidden'}};

@@ -21,6 +21,7 @@ const executionPath = "/v2/sessions/current/simulation/stages/execution";
 const solverStatusPath = "/v2/sessions/current/simulation/solver/status";
 const resultsBasePath = "/v2/sessions/current/simulation/stages/results";
 const commandPath = "/v2/sessions/current/simulation/commands";
+const modelTransactionsPath = "/v2/sessions/current/model/transactions";
 const clientAckPath = "/v2/sessions/current/visualization/client-acks";
 const reportDir = "/tmp/fullmag-study-stage-rerun";
 const identityKeys = ["session_id", "session_epoch", "request_scope_epoch"];
@@ -41,6 +42,16 @@ const sourceFiles = {
   command_adapter: new URL("../src/kernel/runtime/studyRuntimeCommandAdapters.ts", import.meta.url),
   command_contributions: new URL("../src/kernel/runtime/studyRuntimeCommandContributions.ts", import.meta.url),
   study_compute_input: new URL("../src/kernel/runtime/studyComputeInput.ts", import.meta.url),
+};
+const materialSourceFiles = {
+  object_nodes: new URL("../src/modules/explorer/builders/objectExplorerNodes.ts", import.meta.url),
+  material_panel: new URL("../src/modules/inspector/panels/ObjectMaterialPanel.tsx", import.meta.url),
+  material_panel_model: new URL("../src/modules/inspector/panels/ObjectMaterialPanelModel.ts", import.meta.url),
+  material_edit_session: new URL("../src/modules/inspector/panels/ObjectMaterialPanelEditSession.ts", import.meta.url),
+  material_edit_session_bridge: new URL("../src/modules/inspector/panels/ObjectMaterialPanelEditSessionBridge.tsx", import.meta.url),
+  authoring_history: new URL("../src/kernel/authoring/authoringHistoryMutation.ts", import.meta.url),
+  api_client: new URL("../src/kernel/api/ControlRoomApi.ts", import.meta.url),
+  api_paths: new URL("../src/kernel/api/apiPaths.ts", import.meta.url),
 };
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
@@ -77,15 +88,157 @@ export function studyStageCommandForMode(mode) {
       initial_state: { kind: "default_for_target" },
     };
   }
+  if (mode === "material-stage-a") {
+    return {
+      kind: "relax",
+      target: { kind: "stage_id", stage_id: "relax-a" },
+      initial_state: { kind: "default_for_target" },
+    };
+  }
   if (mode === "study") return { kind: "solve", target: { kind: "study" } };
-  throw new TypeError("Study stage rerun mode must be stage-b or study");
+  throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
 }
 
 export function studyStageExpectedStageIds(mode, phase) {
-  if (mode !== "stage-b" && mode !== "study") throw new TypeError("Study stage rerun mode must be stage-b or study");
-  if (phase === "before") return mode === "stage-b" ? [...stageIds] : ["relax-b"];
-  if (phase === "after") return mode === "stage-b" ? ["relax-b"] : [...stageIds];
+  if (!["stage-b", "study", "material-stage-a"].includes(mode)) {
+    throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
+  }
+  if (phase === "before") return mode === "study" ? ["relax-b"] : [...stageIds];
+  if (phase === "after") return mode === "stage-b" ? ["relax-b"]
+    : mode === "material-stage-a" ? ["relax-a"] : [...stageIds];
   throw new TypeError("Study stage rerun phase must be before or after");
+}
+
+export function studyStageMaterialState(scene) {
+  assert(plainRecord(scene) && Array.isArray(scene.objects) && Array.isArray(scene.materials),
+    "P22 material scene is missing object or material resources");
+  const objects = scene.objects.filter((value) => plainRecord(value) && value.name === "film");
+  assert.equal(objects.length, 1, "P22 material target film is absent or duplicated");
+  const object = objects[0];
+  assert(typeof object.id === "string" && object.id.length > 0);
+  assert(typeof object.material_ref === "string" && object.material_ref.length > 0,
+    "P22 film has no committed material reference");
+  assert(typeof object.magnetization_ref === "string" && object.magnetization_ref.length > 0,
+    "P22 film has no authored magnetization reference");
+  const materials = scene.materials.filter((value) => plainRecord(value) && value.id === object.material_ref);
+  assert.equal(materials.length, 1, "P22 film material resource is absent or duplicated");
+  const material = materials[0];
+  assert(typeof material.name === "string" && material.name.length > 0);
+  assert(plainRecord(material.properties), "P22 film material properties are malformed");
+  const assets = Array.isArray(scene.magnetization_assets) ? scene.magnetization_assets : [];
+  const magnetizationAssets = assets.filter((value) => plainRecord(value) && value.id === object.magnetization_ref);
+  assert.equal(magnetizationAssets.length, 1, "P22 authored magnetization asset is absent or duplicated");
+  const magnetizationAssetSha256 = createHash("sha256")
+    .update(canonical(magnetizationAssets[0])).digest("hex");
+  return {
+    object_id: object.id,
+    material_id: material.id,
+    material_name: material.name,
+    properties: structuredClone(material.properties),
+    magnetization_ref: object.magnetization_ref,
+    magnetization_asset_sha256: magnetizationAssetSha256,
+  };
+}
+
+function studyStageSceneWithoutMaterial(scene, materialId) {
+  const projection = structuredClone(scene);
+  delete projection.revision;
+  delete projection.scene_revision;
+  projection.materials = projection.materials.filter((value) => value?.id !== materialId);
+  return projection;
+}
+
+export function studyStageUnmodifiedSceneSha256(scene, materialId) {
+  return createHash("sha256").update(canonical(studyStageSceneWithoutMaterial(scene, materialId))).digest("hex");
+}
+
+function studyStageMaterialProjection(scene, materialId) {
+  const material = scene.materials.find((value) => value?.id === materialId);
+  if (!plainRecord(material) || !plainRecord(material.properties)) return null;
+  const projection = structuredClone(material);
+  delete projection.properties;
+  const otherProperties = Object.fromEntries(Object.entries(material.properties)
+    .filter(([key]) => key !== "Ms" && key !== "Aex"));
+  return { material: projection, otherProperties };
+}
+
+export function studyStageMaterialSceneMatches(beforeScene, afterScene) {
+  try {
+    const before = studyStageMaterialState(beforeScene);
+    const after = studyStageMaterialState(afterScene);
+    if (before.object_id !== after.object_id || before.material_id !== after.material_id
+        || before.material_name !== after.material_name || before.magnetization_ref !== after.magnetization_ref
+        || before.magnetization_asset_sha256 !== after.magnetization_asset_sha256
+        || after.properties.Ms !== 600000 || after.properties.Aex !== 1e-11
+        || after.properties.alpha !== before.properties.alpha
+        || (after.properties.Dind ?? null) !== (before.properties.Dind ?? null)
+        || (after.properties.Dbulk ?? null) !== (before.properties.Dbulk ?? null)) return false;
+    if (canonical(studyStageSceneWithoutMaterial(beforeScene, before.material_id))
+        !== canonical(studyStageSceneWithoutMaterial(afterScene, after.material_id))) return false;
+    const beforeMaterial = studyStageMaterialProjection(beforeScene, before.material_id);
+    const afterMaterial = studyStageMaterialProjection(afterScene, after.material_id);
+    if (!beforeMaterial || !afterMaterial
+        || canonical(beforeMaterial.material) !== canonical(afterMaterial.material)
+        || canonical(beforeMaterial.otherProperties) !== canonical(afterMaterial.otherProperties)) return false;
+    return before.properties.Ms === 800000 && before.properties.Aex === 13e-12
+      && before.properties.alpha === 0.5
+      && (before.properties.Dind ?? null) === null && (before.properties.Dbulk ?? null) === null;
+  } catch {
+    return false;
+  }
+}
+
+export function studyStageMaterialRequestAllowed(request, context) {
+  try {
+    const body = request?.body;
+    const before = context?.before;
+    if (context.phase !== "material-submit" || context.materialCount !== 0
+        || request?.method !== "POST" || request?.path !== modelTransactionsPath
+        || request?.scope !== sessionScope(context.session) || !plainRecord(body)
+        || canonical(Object.keys(body).sort()) !== canonical(["base_revision", "kind", "material_id", "patch"].sort())
+        || body.kind !== "patch_material" || body.material_id !== before.material_id
+        || body.base_revision !== context.beforeRevision || !Number.isSafeInteger(context.beforeRevision)
+        || !plainRecord(body.patch)
+        || canonical(Object.keys(body.patch).sort()) !== canonical(["name", "properties"].sort())
+        || body.patch.name !== before.material_name || !plainRecord(body.patch.properties)
+        || canonical(Object.keys(body.patch.properties).sort()) !== canonical(["Aex", "Dbulk", "Dind", "Ms", "alpha"].sort())) {
+      return false;
+    }
+    const properties = body.patch.properties;
+    return properties.Ms === 600000 && properties.Aex === 1e-11
+      && properties.alpha === before.properties.alpha
+      && properties.Dind === (before.properties.Dind ?? null)
+      && properties.Dbulk === (before.properties.Dbulk ?? null);
+  } catch {
+    return false;
+  }
+}
+
+export function studyStageMaterialTransactionOutcome(status, body, beforeScene) {
+  try {
+    const before = studyStageMaterialState(beforeScene);
+    const scene = body?.committed_scene;
+    const nextRevision = beforeScene.revision ?? beforeScene.scene_revision;
+    if (!Number.isSafeInteger(nextRevision) || !Number.isSafeInteger(status) || status < 200 || status >= 300
+        || !plainRecord(body) || body.transaction_kind !== "patch_material"
+        || body.scene_revision !== nextRevision + 1 || !plainRecord(scene)
+        || (scene.revision ?? scene.scene_revision) !== body.scene_revision
+        || !studyStageMaterialSceneMatches(beforeScene, scene)) {
+      return { outcome: "unknown", scene_revision: null, material: null };
+    }
+    return {
+      outcome: "accepted",
+      scene_revision: body.scene_revision,
+      material: studyStageMaterialState(scene),
+    };
+  } catch {
+    return { outcome: "unknown", scene_revision: null, material: null };
+  }
+}
+
+export function studyStageShouldReadTerminalResources(status, runId) {
+  return typeof runId === "string" && runId.length > 0
+    && status?.run?.run_id === runId && status?.solver?.state === "awaiting_command";
 }
 
 export function studyStageCommandResponseOutcome(status, body) {
@@ -103,7 +256,7 @@ export function studyStageExecutionBindingMatches(binding, mode, runId) {
         || binding.run_id !== runId) return false;
     const target = studyStageCommandForMode(mode).target;
     if (canonical(binding.requested_target) !== canonical(target)) return false;
-    if (mode === "stage-b") return binding.step_id === target.stage_id;
+    if (mode === "stage-b" || mode === "material-stage-a") return binding.step_id === target.stage_id;
     return binding.step_id === undefined || binding.step_id === null;
   } catch {
     return false;
@@ -117,17 +270,17 @@ export function studyStageRerunRequestAllowed(request, context) {
     if (context.phase !== "ui-submit" || context.commandCount !== 0
         || request?.method !== "POST" || request?.path !== commandPath
         || request?.scope !== sessionScope(context.session) || !plainRecord(body)) return false;
-    const isStageB = context.mode === "stage-b";
-    const expectedKeys = isStageB
+    const isStageTarget = context.mode === "stage-b" || context.mode === "material-stage-a";
+    const expectedKeys = isStageTarget
       ? ["kind", "target", "initial_state", "precondition", "client_intent_id", "reason", "requested_at_unix_ms"]
       : ["kind", "target", "precondition", "client_intent_id", "reason", "requested_at_unix_ms"];
     if (canonical(Object.keys(body).sort()) !== canonical(expectedKeys.sort())) return false;
     if (body.kind !== expected.kind || canonical(body.target) !== canonical(expected.target)
-        || (isStageB && canonical(body.initial_state) !== canonical(expected.initial_state))
+        || (isStageTarget && canonical(body.initial_state) !== canonical(expected.initial_state))
         || canonical(body.precondition) !== canonical(context.expectedPrecondition)) return false;
     return typeof body.client_intent_id === "string"
       && body.client_intent_id.length > 0 && body.client_intent_id.length <= 128
-      && body.client_intent_id.startsWith("study:" + (isStageB ? "relax" : "solve") + ":")
+      && body.client_intent_id.startsWith("study:" + (isStageTarget ? "relax" : "solve") + ":")
       && body.reason === "user_requested"
       && Number.isSafeInteger(body.requested_at_unix_ms) && body.requested_at_unix_ms > 0;
   } catch {
@@ -233,8 +386,12 @@ function deadline(promise, milliseconds, message) {
   return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
-async function sourceHashes() {
-  const entries = await Promise.all(Object.entries(sourceFiles).map(async ([key, path]) => {
+async function sourceHashes(mode) {
+  const files = {
+    ...sourceFiles,
+    ...(mode === "material-stage-a" ? materialSourceFiles : {}),
+  };
+  const entries = await Promise.all(Object.entries(files).map(async ([key, path]) => {
     const raw = await fs.readFile(path);
     assert(raw.length <= MAX_SOURCE_BYTES, "Study stage rerun source exceeds its pin bound");
     return [key, createHash("sha256").update(raw).digest("hex")];
@@ -500,7 +657,7 @@ export async function runStudyStageRerun() {
   const upstreamUrl = process.env.CONTROL_ROOM_URL;
   const publicUrl = process.env.CONTROL_ROOM_PUBLIC_URL;
   const expectedSources = JSON.parse(process.env.CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256 ?? "null");
-  const beforeHashes = await sourceHashes();
+  const beforeHashes = await sourceHashes(mode);
   assert.deepEqual(beforeHashes, expectedSources, "Study stage rerun source pins differ");
   const expectedVersion = process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION;
   const require = createRequire(import.meta.url);
@@ -525,6 +682,13 @@ export async function runStudyStageRerun() {
   let beforeSnapshot = null;
   let after = null;
   let reloadProof = null;
+  let materialBeforeState = null;
+  let materialSourceScene = null;
+  let materialReceipt = null;
+  let materialRequest = null;
+  let materialCount = 0;
+  let materialAttemptCount = 0;
+  let uiMaterialProven = false;
   let commandCount = 0;
   let commandAttemptCount = 0;
   let clientAckCount = 0;
@@ -687,12 +851,30 @@ export async function runStudyStageRerun() {
     assert.equal(snapshot.profile.requested_device, "cpu");
     assert.equal(snapshot.profile.requested_precision, "double");
     assert.equal(snapshot.profile.script_sha256, expectedSources.fixture);
+    if (mode === "material-stage-a") {
+      const material = studyStageMaterialState(snapshot.scene);
+      assert.equal(material.object_id, materialBeforeState.object_id);
+      assert.equal(material.material_id, materialBeforeState.material_id);
+      assert.equal(material.material_name, materialBeforeState.material_name);
+      assert.equal(material.properties.Ms, 600000);
+      assert.equal(material.properties.Aex, 1e-11);
+      assert.equal(material.properties.alpha, materialBeforeState.properties.alpha);
+      assert.equal(material.properties.Dind ?? null, materialBeforeState.properties.Dind ?? null);
+      assert.equal(material.properties.Dbulk ?? null, materialBeforeState.properties.Dbulk ?? null);
+      assert.equal(material.magnetization_ref, materialBeforeState.magnetization_ref);
+      assert.equal(material.magnetization_asset_sha256, materialBeforeState.magnetization_asset_sha256);
+    }
   }
 
   async function readAfterCommand(expectedSession) {
     const status = await apiGet(statusPath, expectedSession, false);
     readCounts.status++;
     assertSameSession(expectedSession, readStudyStageSessionIdentity(status, { requireCommandable: false }));
+    for (const key of ["scene_revision", "mesh_revision", "domain_generation_id", ...regionRevisionKeys]) {
+      assert.equal(status.resources?.[key], beforeSnapshot?.status.resources?.[key],
+        "P22 authoring/resource precondition changed");
+    }
+    if (!studyStageShouldReadTerminalResources(status, executionBinding?.run_id)) return { status };
     const currentRun = await apiGet(currentRunPath, expectedSession);
     readCounts.current_run++;
     const execution = await apiGet(executionPath, expectedSession);
@@ -701,10 +883,6 @@ export async function runStudyStageRerun() {
     readCounts.solver_status++;
     const commands = await apiGet(commandsPath, expectedSession);
     readCounts.commands++;
-    for (const key of ["scene_revision", "mesh_revision", "domain_generation_id", ...regionRevisionKeys]) {
-      assert.equal(status.resources?.[key], beforeSnapshot?.status.resources?.[key],
-        "P22 authoring/resource precondition changed");
-    }
     return { status, currentRun, execution, solverStatus, commands };
   }
 
@@ -768,6 +946,15 @@ export async function runStudyStageRerun() {
     });
 
     const initial = await readSnapshot(null, { requireIdle: true });
+    if (mode === "material-stage-a") {
+      materialBeforeState = studyStageMaterialState(initial.scene);
+      assert.equal(materialBeforeState.properties.Ms, 800000, "P22 fixture Ms baseline differs");
+      assert.equal(materialBeforeState.properties.Aex, 13e-12, "P22 fixture Aex baseline differs");
+      assert.equal(materialBeforeState.properties.alpha, 0.5, "P22 fixture alpha baseline differs");
+      assert.equal(materialBeforeState.properties.Dind ?? null, null, "P22 fixture Dind baseline differs");
+      assert.equal(materialBeforeState.properties.Dbulk ?? null, null, "P22 fixture Dbulk baseline differs");
+      materialSourceScene = structuredClone(initial.scene);
+    }
     session = initial.session;
     assert.deepEqual(stableProjection(initial), stableProjection(await readSnapshot(session, { requireIdle: true })),
       "P22 public resources changed between initial bounded snapshots");
@@ -808,6 +995,40 @@ export async function runStudyStageRerun() {
           }
           return route.continue();
         }
+        if (url.pathname === modelTransactionsPath) {
+          materialAttemptCount++;
+          const body = request.postDataJSON();
+          const allowed = mode === "material-stage-a" && studyStageMaterialRequestAllowed(
+            { method, path, scope, body },
+            {
+              phase,
+              materialCount,
+              session,
+              beforeRevision: materialSourceScene?.revision ?? materialSourceScene?.scene_revision,
+              before: materialBeforeState,
+            },
+          );
+          if (!allowed || materialCount !== 0) {
+            if (violations.length < 16) violations.push("Rejected a duplicate or out-of-scope material transaction");
+            return route.abort();
+          }
+          materialRequest = request;
+          materialReceipt = {
+            method,
+            path: url.pathname,
+            status: null,
+            scope_header: scope,
+            payload: body,
+            before_scene_revision: materialSourceScene.revision ?? materialSourceScene.scene_revision,
+            material_before: materialBeforeState,
+            acknowledged: false,
+          };
+          materialCount++;
+          uiMaterialProven = true;
+          outcome = "unknown";
+          phase = "material-dispatched";
+          return route.continue();
+        }
         if (url.pathname === commandPath) {
           commandAttemptCount++;
           const body = request.postDataJSON();
@@ -845,8 +1066,125 @@ export async function runStudyStageRerun() {
     before = summary(beforeClick);
     expectedPrecondition = beforeClick.precondition;
 
+    if (mode === "material-stage-a") {
+      const expandParent = async (parentId) => {
+        const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
+        await parent.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+        await parent.focus();
+        if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
+      };
+      const ownerId = materialBeforeState.object_id;
+      const materialNodeId = "model:object:" + ownerId + ":magnetic-parameters:material";
+      await expandParent("model:objects");
+      await expandParent("model:object:" + ownerId);
+      await expandParent("model:object:" + ownerId + ":magnetic-parameters");
+      const materialRow = page.locator('[role="treeitem"][data-node-id="' + materialNodeId + '"]');
+      await materialRow.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+      assert.equal(await materialRow.count(), 1, "The task-owned material Explorer row is absent or duplicated");
+      await materialRow.click();
+
+      const nameField = page.getByLabel("Name", { exact: true });
+      const msField = page.getByLabel("Ms", { exact: true });
+      const aexField = page.getByLabel("Aex", { exact: true });
+      const alphaField = page.getByLabel("alpha", { exact: true });
+      const dindField = page.getByLabel("Dind", { exact: true });
+      const dbulkField = page.getByLabel("Dbulk", { exact: true });
+      await msField.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      const unchangedFields = {
+        name: await nameField.inputValue(),
+        alpha: await alphaField.inputValue(),
+        dind: await dindField.inputValue(),
+        dbulk: await dbulkField.inputValue(),
+      };
+      assert.equal(unchangedFields.name, materialBeforeState.material_name);
+      assert.equal(Number(await msField.inputValue()), 800000);
+      assert.equal(Number(await aexField.inputValue()), 13e-12);
+      assert.equal(Number(unchangedFields.alpha), 0.5);
+      await msField.fill("600000");
+      await aexField.fill("1e-11");
+      assert.equal(await nameField.inputValue(), unchangedFields.name);
+      assert.equal(await alphaField.inputValue(), unchangedFields.alpha);
+      assert.equal(await dindField.inputValue(), unchangedFields.dind);
+      assert.equal(await dbulkField.inputValue(), unchangedFields.dbulk);
+      const applyParameters = page.getByRole("button", { name: "Apply Parameters", exact: true });
+      await applyParameters.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      assert.equal(await applyParameters.isEnabled(), true, "Material Parameters Apply is disabled in the real UI");
+      const materialResponseWait = page.waitForResponse((response) => {
+        const request = response.request();
+        const url = new URL(request.url());
+        return request.method() === "POST" && url.pathname === modelTransactionsPath
+          && request.headers()["x-fullmag-session-scope"] === sessionScope(session);
+      }, { timeout: Math.min(20_000, timerBudget()) }).catch((error) => {
+        throw new Error("P22 material transaction response was not observed: " + boundedMessage(error));
+      });
+      phase = "material-submit";
+      await applyParameters.click();
+      const materialResponse = await deadline(materialResponseWait, Math.min(20_000, timerBudget()),
+        "P22 material transaction response timed out; authoring outcome is unknown");
+      if (!materialRequest || materialCount !== 1 || !uiMaterialProven) {
+        throw new Error("The real Material Parameters UI did not submit exactly one guarded transaction");
+      }
+      assert.equal(materialResponse.request(), materialRequest,
+        "The observed response was not for the exact guarded material transaction");
+      materialReceipt.status = materialResponse.status();
+      const materialBody = await materialResponse.body();
+      assert(materialBody.length <= 256 * 1024, "P22 material transaction response exceeded its bound");
+      const materialAck = JSON.parse(materialBody.toString("utf8"));
+      const materialAcceptance = studyStageMaterialTransactionOutcome(
+        materialResponse.status(), materialAck, materialSourceScene,
+      );
+      if (materialAcceptance.outcome !== "accepted") {
+        outcome = "unknown";
+        throw new Error("The P22 material transaction ACK did not prove the exact committed edit");
+      }
+      materialReceipt.transaction_kind = materialAck.transaction_kind;
+      materialReceipt.scene_revision = materialAcceptance.scene_revision;
+      materialReceipt.acknowledged = true;
+      materialReceipt.material_after = materialAcceptance.material;
+      materialReceipt.unmodified_scene_sha256_before = studyStageUnmodifiedSceneSha256(
+        materialSourceScene, materialBeforeState.material_id,
+      );
+      materialReceipt.unmodified_scene_sha256_after = studyStageUnmodifiedSceneSha256(
+        materialAck.committed_scene, materialBeforeState.material_id,
+      );
+      assert.equal(materialReceipt.unmodified_scene_sha256_after, materialReceipt.unmodified_scene_sha256_before,
+        "Material ACK changed authored scene state outside the selected asset");
+      phase = "material-acknowledged";
+
+      const postMaterial = await readSnapshot(session, { requireIdle: true });
+      assert.equal(postMaterial.currentRun.run_id, beforeClick.currentRun.run_id,
+        "Material authoring unexpectedly changed the completed pre-command run");
+      assert.equal(postMaterial.scene.revision ?? postMaterial.scene.scene_revision, materialReceipt.scene_revision,
+        "Fresh P22 scene revision differs from the material ACK");
+      assert(studyStageMaterialSceneMatches(materialSourceScene, postMaterial.scene),
+        "Fresh P22 scene differs from the exact material ACK or changed authored m0");
+      assert.deepEqual(postMaterial.resultIdentities, beforeClick.resultIdentities,
+        "Material authoring changed immutable prior Study result identities");
+      assert.deepEqual(postMaterial.stageIds, beforeClick.stageIds,
+        "Material authoring changed the prior completed stage scope");
+      beforeSnapshot = postMaterial;
+      before = summary(postMaterial);
+      expectedPrecondition = postMaterial.precondition;
+    }
+
     let action;
-    if (mode === "stage-b") {
+    if (mode === "material-stage-a") {
+      const expandParent = async (parentId) => {
+        const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
+        await parent.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+        await parent.focus();
+        if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
+      };
+      await expandParent("model:study");
+      await expandParent("model:study:stages");
+      const selectedStage = beforeClick.execution.stages.find((stage) => stage?.stage_id === "relax-a");
+      assert(selectedStage, "The fresh completed stage execution omitted the exact Stage A target");
+      const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-a"]');
+      await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+      assert.equal(await row.count(), 1, "The authored relax-a Explorer row is absent or duplicated");
+      await row.click({ button: "right" });
+      action = page.getByRole("menuitem", { name: "Run This Stage", exact: true });
+    } else if (mode === "stage-b") {
       const expandParent = async (parentId) => {
         const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
         await parent.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
@@ -914,7 +1252,7 @@ export async function runStudyStageRerun() {
       if (!executionBinding) {
         await readExecutionBinding(accepted.command_id);
         if (!executionBinding) {
-          await delay(Math.min(1_000, Math.max(0, pollDeadline - Date.now())));
+          await delay(Math.min(5_000, Math.max(0, pollDeadline - Date.now())));
           continue;
         }
       }
@@ -933,7 +1271,7 @@ export async function runStudyStageRerun() {
         terminal = current;
         break;
       }
-      await delay(Math.min(1_000, Math.max(0, pollDeadline - Date.now())));
+      await delay(Math.min(5_000, Math.max(0, pollDeadline - Date.now())));
     }
     if (!terminal) {
       outcome = "unknown";
@@ -1023,9 +1361,9 @@ export async function runStudyStageRerun() {
     outcome = "terminal-confirmed";
   } catch (error) {
     failure = boundedMessage(error);
-    if (commandCount === 1) outcome = "unknown";
+    if (commandCount === 1 || materialCount === 1) outcome = "unknown";
   } finally {
-    const afterHashes = await sourceHashes().catch((error) => {
+    const afterHashes = await sourceHashes(mode).catch((error) => {
       errors.push(boundedMessage(error));
       return null;
     });
@@ -1050,6 +1388,11 @@ export async function runStudyStageRerun() {
       session_before: session,
       session_after: session,
       before,
+      phase,
+      material_receipt: materialReceipt,
+      material_count: materialCount,
+      material_attempt_count: materialAttemptCount,
+      ui_material_proven: uiMaterialProven,
       command_receipt: commandReceipt,
       command_count: commandCount,
       command_attempt_count: commandAttemptCount,
