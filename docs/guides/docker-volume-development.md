@@ -1253,3 +1253,36 @@ uwierzytelnionego native drainu, zgodnych inkarnacji i zamkniętych procesów.
 `--stop-frontend` zamyka następnie wyłącznie frontend tej samej grupy.
 Nie zmienia stanów tasków, nie usuwa wyników ani nie ponawia Solve.
 Niepotwierdzony efekt zachowuje lease i dowody do recovery.
+
+
+### Nieudany prelaunch i archiwizacja przed nową sesją
+
+Jeżeli pierwszy worker Study zakończył się błędem przed solverem, a pozostałe
+etapy nadal czekają na jego wynik, zwykły idle stop ani dowód wszystkich
+Succeeded nie pasują do tego stanu. Dedykowany tryb wymaga zwolnionych lease
+i rezerwacji hosta, dokładnego receiptu wyjścia workera oraz nieprzydzielonych,
+zablokowanych zależnościami następców:
+
+```sh
+just docker-dev-stop-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <port>
+```
+
+Operacja zapisuje intent przed pojedynczym SIGTERM do przypiętej inkarnacji
+API, potwierdza jego wyjście oraz graceful drain runtime, następnie sprawdza
+zachowane rekordy pod blokadami. Przypina także kod launchera, kontrolera
+i helpera. Niepotwierdzony efekt wymaga odczytania tej samej operacji;
+nie ponawiaj sygnału ani aktywacji skryptu.
+
+Po potwierdzonym sukcesie zachowaj identyfikator operacji stop i SHA-256
+surowego terminalnego receiptu. Tylko ta para pozwala na odtworzenie ze świeżym
+stanem i zachowaniem starego store w archiwum:
+
+```sh
+just docker-dev-recreate-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <stop-attempt> <raw-stop-terminal-sha256> <port>
+```
+
+Dowody są sprawdzane przed lease odtworzenia oraz ponownie pod nim.
+Plików kontrolera nie zmieniaj pomiędzy stopem i odtworzeniem. Tryb nie
+przywraca starego runu, nie powtarza skryptu ani Compute i nie zmienia
+nieudanych lub oczekujących etapów na Succeeded. Nową pracę można przyjąć
+dopiero po potwierdzeniu gotowości nowego runtime.

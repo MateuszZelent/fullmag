@@ -713,3 +713,14 @@ Po połączeniu źródeł przeszło 40 testów Pythona: pełne 19 testów ACL po
 
 
 Po wypchnięciu scalenia CI wystartowało. Dwie bramki Pythona zatrzymał ten sam test post-build: jego atrapowy moduł mapowania wyjścia nie eksportował stałej OUTPUT_ROOT potrzebnej nowemu hookowi ACL. Odtworzono błąd lokalnie, uzupełniono atrapę rzeczywistą stałą bez usuwania asercji, a następnie przeszły trzy testy post-build i cały zestaw 178 testów storage-guard. Poprawka wymaga kolejnego CI. Pozostałe zakończone bramki scalenia, w tym Control Room, browser fixture i generated API, przeszły; Rust i Windows checkpoint były jeszcze w toku w chwili odczytu.
+
+
+### P22: prelaunch failure recovery validation (2026-11-07)
+
+Added a dedicated stop-only capture and fresh-state archival path for the exact failed-first-stage / unclaimed-dependent-stage case. This preserves the failed run offline; it does not grant restore authority or fabricate terminal success. The operation pins launcher/controller/helper source bytes, exact API process incarnation, local and host release proofs, native drain, service identities and locked record hashes. A dedicated CI command runs the new regressions.
+
+Validation before any signal: 137 stop-path tests and 23 empty-API recovery tests passed. The canonical helper passed a real read-only prepare against S29e with 23 pinned records (SHA-256 9fb4e67364d319d850356b5cf1afd2beaf3c023704a398c04e24abc6ab09a849). No API signal, Docker stop, real output-directory ACL grant, new activation or solver execution was performed during this checkpoint. Direct fresh-archive validation regressions and actual managed recovery/rebuild remain pending. P22 runtime/UI acceptance remains open.
+
+Follow-up evidence: e93 bootstrap Rust job 128484637104 completed successfully; Python and Windows contract jobs also succeeded. Root review added a current-file SHA check to fresh archival, in addition to operation/intent/capture equality. Canonical helper d489dd68fc21e24ff82cb5cea8b98c8d50921c95181c8fa38fe7e690311919b4 passed the real read-only 23-record S29e prepare again; its 21 focused tests passed. Existing recreation and pre-admission suites added 82 passing regressions (242 total relevant tests). Direct fresh-authority tests remain in progress before any signal.
+
+Direct fresh-archive validation is now covered: 22 focused tests pass, including valid archival and rejection of changed current source bytes, raw stop SHA, native config, current process drain, postdrain proof and container incarnation. Removing the current-source check in an isolated scratch copy reproduces the expected regression failure; canonical code passes. This brings relevant local coverage to 243 passing tests. The root agent completed this test after the delegated scratch delivery failed. Actual stop/recreation and browser acceptance remain pending.

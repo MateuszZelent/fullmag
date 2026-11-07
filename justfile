@@ -211,9 +211,17 @@ docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepare
 docker-dev-capture-terminal attempt config_sha256 source_root port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --allow-prepared-session --capture-terminal-observation
 
+# Stop one exact released prelaunch-failed Study only after API quiescence proof.
+docker-dev-stop-prelaunch-failure attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --quiesce-api --capture-prelaunch-failure
+
 # Recreate the pinned group and restore the exact capture from the stop receipt.
 docker-dev-restore-terminal attempt config_sha256 source_root stop_attempt port="3197":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --terminal-observation-stop {{quote(stop_attempt)}}
+
+# Archive only the exact released prelaunch-failure stop into fresh state.
+docker-dev-recreate-prelaunch-failure attempt config_sha256 source_root stop_attempt stop_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --fresh-state --prelaunch-failure-stop {{quote(stop_attempt)}} --prelaunch-failure-stop-sha256 {{quote(stop_sha256)}}
 
 # Restart only the explicitly saved, pinned, unadmitted authoring session.
 docker-dev-restart-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":

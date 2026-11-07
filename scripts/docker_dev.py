@@ -2668,6 +2668,8 @@ def _parser() -> argparse.ArgumentParser:
                               help="with native capture stop-only: close only the exact pinned API before native inspection")
     idle_restart.add_argument("--capture-native-terminal", action="store_true",
                               help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
+    idle_restart.add_argument("--capture-prelaunch-failure", action="store_true",
+                              help="stop-only with --quiesce-api: preserve one exact released prelaunch-failed Study run for offline archival")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
@@ -2898,6 +2900,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--empty-api-abort-stop-sha256", help="SHA-256 of that exact raw stop terminal receipt")
     recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
     recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
+    recreate_volume.add_argument("--prelaunch-failure-stop", help="Fresh-state only: exact prelaunch-failure stop attempt")
+    recreate_volume.add_argument("--prelaunch-failure-stop-sha256", help="SHA-256 of the exact prelaunch-failure stop terminal receipt")
     recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",

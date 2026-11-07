@@ -1009,6 +1009,7 @@ jobs:
           python -B scripts/test_docker_script_output_source.py -v
           python -B scripts/test_docker_volume_idle_stop.py -v
           python -B scripts/test_docker_volume_native_terminal_stop.py -v
+          python -B scripts/test_docker_volume_prelaunch_failure_stop.py -v
           python -B scripts/test_docker_volume_empty_api_abort.py -v
           python -B scripts/test_docker_dev_defaults.py -v
           python -B scripts/test_docker_dev_run_script.py -v
