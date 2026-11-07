@@ -14,12 +14,14 @@ pub enum ScratchSessionBackend {
 #[serde(rename_all = "lowercase")]
 pub enum ScratchSessionDevice {
     Cpu,
+    Gpu,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ScratchSessionPrecision {
     Double,
+    Single,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
