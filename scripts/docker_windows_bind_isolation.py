@@ -1159,20 +1159,23 @@ def _validate_windows_bind_observation(observed, context, *, source, container_i
                             external_junctions=external_junctions)
 
 
-def prove_windows_bind_disjoint(control, backend, container, source, reference_root):
+def prove_windows_bind_disjoint(control, backend, container, source, reference_root, *, prepared_reference=None):
     """Prove and archive one exact literal Windows bind, without entering a container."""
+    from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+
     _windows_source_path(source)
-    first_backend, first_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    inspect_backend = _recovery_backend_inspector(control, _inspect, prepared_reference)
+    first_backend, first_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(first_backend) == _container_pin(backend)
             and _container_pin(first_foreign) == _container_pin(container),
             "Consumer changed before Windows isolation proof")
     context = _context(control, first_backend, first_foreign, source, reference_root)
     before = _observation(context, first_backend, first_foreign, source)
-    after_backend, after_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    after_backend, after_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_context(control, after_backend, after_foreign, source, reference_root) == context,
             "Registered proof context changed")
     after = _observation(context, after_backend, after_foreign, source)
-    final_backend, final_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    final_backend, final_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(final_backend) == after["backend"]
             and _container_pin(final_foreign) == after["foreign"] and _engine() == after["engine"],
             "Consumer or engine changed after native Windows identity observation")
@@ -1180,10 +1183,9 @@ def prove_windows_bind_disjoint(control, backend, container, source, reference_r
              "source_sha256": _sha(source.encode("utf-8")), "context": context,
              "provider_sha256": _sha(WINDOWS_PROVIDER.encode("utf-8")), "before": before, "after": after}
     validate_windows_bind_disjoint_proof(proof, source=source, container_id=container["Id"])
-    from docker_bind_overlap_probe import _archive_foreign_proof
     # Read-only preflight has no lease. The repeated destructive-boundary
     # observation is archived by the existing active-operation publisher.
-    _archive_foreign_proof(control, proof)
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
     return proof
 
 
@@ -1376,20 +1378,23 @@ def _validate_windows_junction_observation(observed, context, *, source, contain
     return observed
 
 
-def prove_windows_junction_bind_disjoint(control, backend, container, source, reference_root):
+def prove_windows_junction_bind_disjoint(control, backend, container, source, reference_root, *, prepared_reference=None):
     """Prove one registered Windows bind with separately qualified external directory junctions."""
+    from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+
     _windows_source_path(source)
-    first_backend, first_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    inspect_backend = _recovery_backend_inspector(control, _inspect, prepared_reference)
+    first_backend, first_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(first_backend) == _container_pin(backend)
             and _container_pin(first_foreign) == _container_pin(container),
             "Consumer changed before Windows junction isolation proof")
     context = _context(control, first_backend, first_foreign, source, reference_root)
     before = _junction_observation(context, first_backend, first_foreign, source)
-    after_backend, after_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    after_backend, after_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_context(control, after_backend, after_foreign, source, reference_root) == context,
             "Registered junction proof context changed")
     after = _junction_observation(context, after_backend, after_foreign, source)
-    final_backend, final_foreign = _inspect(backend["Id"]), _inspect(container["Id"])
+    final_backend, final_foreign = inspect_backend(backend["Id"]), _inspect(container["Id"])
     require(_container_pin(final_backend) == after["backend"]
             and _container_pin(final_foreign) == after["foreign"] and _engine() == after["engine"],
             "Consumer or engine changed after native Windows junction observation")
@@ -1397,6 +1402,5 @@ def prove_windows_junction_bind_disjoint(control, backend, container, source, re
              "source_sha256": _sha(source.encode("utf-8")), "context": context,
              "provider_sha256": WINDOWS_JUNCTION_PROVIDER_SHA256, "before": before, "after": after}
     validate_windows_junction_bind_disjoint_proof(proof, source=source, container_id=container["Id"])
-    from docker_bind_overlap_probe import _archive_foreign_proof
-    _archive_foreign_proof(control, proof)
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
     return proof

@@ -1987,13 +1987,14 @@ def _retained_compose_state_root(backend, compose, *, project="fullmag-master"):
     return path
 
 
-def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose):
+def _prove_foreign_alias_for_abrupt(control, backend, container, alias, compose, *, prepared_reference=None):
     from docker_bind_overlap_probe import prove_foreign_alias_disjoint, prove_worktree_foreign_alias_disjoint
     state_root = _retained_compose_state_root(backend, compose, project=control.project)
     if control.project == "fullmag-master":
         return prove_foreign_alias_disjoint(control, backend, container, alias, state_root)
     return prove_worktree_foreign_alias_disjoint(
-        control, backend, container, alias, state_root, compose=compose)
+        control, backend, container, alias, state_root, compose=compose,
+        **({"prepared_reference": prepared_reference} if prepared_reference is not None else {}))
 
 
 def _posix_paths_overlap(left, right):
@@ -2033,22 +2034,23 @@ def _read_foreign_docker_consumers(excluded):
     _fail("Docker consumer inventory did not stabilize")
 
 
-def _prove_foreign_windows_bind(control, backend, item, source, compose):
+def _prove_foreign_windows_bind(control, backend, item, source, compose, *, prepared_reference=None):
     state_root = _retained_compose_state_root(backend, compose, project=control.project)
     from docker_windows_bind_isolation import (
         WindowsBindObservationDrift, WindowsExternalJunctionDetected,
         prove_windows_bind_disjoint, validate_windows_bind_disjoint_proof,
         prove_windows_junction_bind_disjoint, validate_windows_junction_bind_disjoint_proof)
+    reference = {"prepared_reference": prepared_reference} if prepared_reference is not None else {}
     try:
         for observation in range(3):
             try:
                 try:
-                    proof = prove_windows_bind_disjoint(control, backend, item, source, state_root)
+                    proof = prove_windows_bind_disjoint(control, backend, item, source, state_root, **reference)
                 except WindowsExternalJunctionDetected:
                     # The legacy proof rejects external targets. This separate
                     # schema independently qualifies every target; detecting a
                     # junction alone is never isolation evidence.
-                    proof = prove_windows_junction_bind_disjoint(control, backend, item, source, state_root)
+                    proof = prove_windows_junction_bind_disjoint(control, backend, item, source, state_root, **reference)
                     validate_windows_junction_bind_disjoint_proof(
                         proof, source=source, container_id=item.get("Id"))
                 else:
@@ -2068,7 +2070,7 @@ def _prove_foreign_windows_bind(control, backend, item, source, compose):
         try:
             from docker_windows_absent_bind_isolation import (
                 prove_absent_stopped_windows_bind, validate_absent_stopped_windows_bind_proof)
-            proof = prove_absent_stopped_windows_bind(control, backend, item, source, state_root)
+            proof = prove_absent_stopped_windows_bind(control, backend, item, source, state_root, **reference)
             validate_absent_stopped_windows_bind_proof(proof, source=source, container_id=item.get("Id"))
         except Exception as absent_error:
             _fail("foreign Windows bind has unresolved storage identity: container="
@@ -2077,8 +2079,11 @@ def _prove_foreign_windows_bind(control, backend, item, source, compose):
 
 
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
-                                         prove_foreign_disjoint=None):
+                                         prove_foreign_disjoint=None, prepared_reference=None):
     """Fence every Docker consumer, including stopped containers able to restart."""
+    if prepared_reference is not None and prove_foreign_disjoint is not None:
+        _fail("prepared recovery requires the managed physical proof")
+    reference = {"prepared_reference": prepared_reference} if prepared_reference is not None else {}
     protected = set()
     for container in (backend, frontend):
         for mount in container.get("Mounts", []):
@@ -2124,7 +2129,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
                                  or PureWindowsPath(path) in windows_source.parents)
                             for kind, path in protected):
                         _fail("a foreign Docker container references the recovery store/control/ledger")
-                    _prove_foreign_windows_bind(control, backend, item, source, compose)
+                    _prove_foreign_windows_bind(control, backend, item, source, compose, **reference)
                     continue
                 if (not isinstance(source, str) or not source.startswith("/") or source.startswith("//")
                         or ".." in PurePosixPath(source).parts
@@ -2160,7 +2165,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
                 # Daemon drive aliases require the same independent native
                 # Windows/DrvFs proof as literal drive paths. Their textual
                 # difference from WSL storage is never isolation evidence.
-                _prove_foreign_windows_bind(control, backend, item, alias, compose)
+                _prove_foreign_windows_bind(control, backend, item, alias, compose, **reference)
                 continue
             if (isinstance(alias, str)
                     and alias.startswith("/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/")):
@@ -2189,7 +2194,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
             if needs_physical_proof:
                 callback = prove_foreign_disjoint or (
                     lambda current, current_alias: _prove_foreign_alias_for_abrupt(
-                        control, backend, current, current_alias, compose))
+                        control, backend, current, current_alias, compose, **reference))
                 try:
                     proof = callback(item, alias)
                     from docker_bind_overlap_probe import validate_foreign_alias_disjoint_proof
@@ -2206,6 +2211,16 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
                     for kind, path in protected)
             if overlap:
                 _fail("a foreign Docker container references the recovery store/control/ledger")
+    if prepared_reference is not None:
+        prepared_reference.revalidate()
+        from docker_windows_bind_isolation import _container_pin as consumer_pin
+
+        observed = {item["Id"]: (consumer_pin(item), item.get("RestartCount")) for item in records}
+        for current in _read_foreign_docker_consumers(own):
+            if current["Id"] not in observed:
+                _fail("prepared recovery found a new Docker consumer after physical isolation")
+            if (consumer_pin(current), current.get("RestartCount")) != observed[current["Id"]]:
+                _fail("prepared recovery Docker consumer identity or lifecycle changed after physical isolation")
 
 
 def prepare_abrupt_stop_proof(
@@ -2377,6 +2392,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     if control is not None:
         if _docker_engine_sha() != proof["docker_engine_id_sha256"]:
             _fail("abrupt Docker engine changed")
+        prepared_reference = None
         if transition is None:
             current = _inspect_pair(authorization, control.project, compose)
             if {"backend": _stable_container_observation(current[0]),
@@ -2395,7 +2411,16 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
             # Old containers may now be absent; network can only be absent or
             # the exact owned bridge without consumers other than the old pair.
             _abrupt_network(containers["backend"], containers["frontend"], control.project)
-        _assert_no_foreign_storage_consumers(control, containers["backend"], containers["frontend"], compose)
+            if (transition.get("absence") is not None
+                    and getattr(control, "identity", {}).get("checkout_kind") == "worktree"):
+                from docker_prepared_backend_reference import PreparedBackendReference
+                prepared_reference = PreparedBackendReference(
+                    control, authorization, compose, transition, containers, proof["docker_engine_id_sha256"],
+                )
+        _assert_no_foreign_storage_consumers(
+            control, containers["backend"], containers["frontend"], compose,
+            **({"prepared_reference": prepared_reference} if prepared_reference is not None else {}),
+        )
         observed = _ledger_and_store_snapshot(
             control, containers["backend"], compose=compose,
             retained_terminal_runs=terminal_pins,
@@ -2907,6 +2932,11 @@ def _validate_proof_process_owner(process, owner, proof, authorization, *, contr
         _fail("bootstrap frontend incarnation differs from failed resume")
 
 
+def _assert_retained_terminal_matches(terminal, terminal_raw, expected_terminal, expected_terminal_raw):
+    if terminal != expected_terminal or terminal_raw != expected_terminal_raw:
+        _fail("retained terminal changed before the destructive boundary")
+
+
 def _revalidate_recovery_boundary(
     control: BuildControl,
     authorization: Mapping[str, object],
@@ -2921,6 +2951,8 @@ def _revalidate_recovery_boundary(
     expected_config_sha: str,
     expected_launch_sha: str,
     expected_storage: Mapping[str, object],
+    expected_terminal: Mapping[str, object],
+    expected_terminal_raw: bytes,
     transition: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Re-read every destructive-boundary proof under the lifecycle lease.
@@ -2930,7 +2962,7 @@ def _revalidate_recovery_boundary(
     the empty accepted store may have changed while BuildKit was running.
     """
 
-    terminal, _ = _control_json(control, f"development/attempts/{attempt}/terminal.json")
+    terminal, terminal_raw = _control_json(control, f"development/attempts/{attempt}/terminal.json")
     current_compose, compose_raw = _control_json(
         control, f"development/attempts/{attempt}/compose.json"
     )
@@ -2941,8 +2973,12 @@ def _revalidate_recovery_boundary(
         or compose_raw is None
         or journal is None
         or journal_raw is None
+        or terminal_raw is None
     ):
         _fail("recovery proof disappeared before the destructive boundary")
+    _assert_retained_terminal_matches(
+        terminal, terminal_raw, expected_terminal, expected_terminal_raw
+    )
     if _sha256(_canonical(current_compose)) != authorization["compose_config_sha256"]:
         _fail("Compose configuration changed before the destructive boundary")
     if _sha256(journal_raw) != authorization["stop_journal_sha256"]:
@@ -3168,7 +3204,7 @@ def _prepared_context(toolchain: Mapping[str, object], images: Mapping[str, obje
     }
 
 
-def _recover_args(args: argparse.Namespace, selected: Path) -> argparse.Namespace:
+def _recover_args(args: argparse.Namespace, selected: Path, *, native_contracts=(), include_untracked=()) -> argparse.Namespace:
     result = copy.copy(args)
     result.source_root = selected
     result.script = None
@@ -3176,8 +3212,36 @@ def _recover_args(args: argparse.Namespace, selected: Path) -> argparse.Namespac
     result.image = None
     result.toolchain_image = None
     result.source_manifest = None
-    result.include_untracked = []
+    result.native_contract = list(native_contracts)
+    result.include_untracked = list(include_untracked)
     return result
+
+
+def _retained_start_selections(args, terminal: Mapping[str, object], compose: Mapping[str, object]):
+    from docker_volume_dev import (
+        _native_contracts,
+        _retained_native_contracts,
+        include_untracked_from_compose,
+        normalize_include_untracked_paths,
+    )
+
+    native_contracts = _retained_native_contracts(terminal, compose)
+    include_untracked = include_untracked_from_compose(compose)
+    requested_contracts = getattr(args, "native_contract", None)
+    if (requested_contracts is not None
+            and _native_contracts(requested_contracts) != native_contracts):
+        _fail("Recovery native contracts differ from the retained Compose command")
+    requested_allowlist = getattr(args, "include_untracked", None)
+    if (requested_allowlist is not None
+            and normalize_include_untracked_paths(requested_allowlist) != include_untracked):
+        _fail("Recovery source allowlist differs from the retained Compose document")
+    return native_contracts, include_untracked
+
+
+def _pin_recovery_private_group_storage(control, operation, terminal):
+    from docker_volume_dev import _pin_private_group_storage
+
+    return _pin_private_group_storage(control, operation, new_render=False, previous=terminal)
 
 
 def recover(args: argparse.Namespace) -> None:
@@ -3243,6 +3307,12 @@ def recover(args: argparse.Namespace) -> None:
         _fail("retained attempt is not the selected development operation")
     if compose.get("name") != control.project:
         _fail("retained Compose document belongs to another project")
+    retained_operation = terminal.get("inputs")
+    if not isinstance(retained_operation, Mapping):
+        _fail("retained development attempt has no operation inputs")
+    retained_native_contracts, retained_include_untracked = _retained_start_selections(
+        args, terminal, compose
+    )
     transition = _load_recovery_transition(
         control, authorization, control.project, compose
     )
@@ -3310,9 +3380,6 @@ def recover(args: argparse.Namespace) -> None:
     images_control = BuildControl(identity, toolchain["inputs"]["build_args"]["FULLMAG_CUDA_BASE_IMAGE"])
     images = build_volume_runtime_images(selected, images_control, toolchain)
     backend_image = images["backend"]["image_id"]
-    retained_operation = terminal.get("inputs")
-    if not isinstance(retained_operation, Mapping):
-        _fail("retained development attempt has no operation inputs")
     operator_probe = _operator_probe_record_from_retained(retained_operation, compose)
     policy = retained_operation.get("gpu_access_requested")
     if policy not in {"auto", "required", "disabled"}:
@@ -3329,6 +3396,7 @@ def recover(args: argparse.Namespace) -> None:
         "gpu_access_requested": policy,
         "device_access": device_access,
         "gpu_preflight": "PASS" if device_access == "gpu" else "NOT_REQUIRED",
+        **({"native_contracts": list(retained_native_contracts)} if retained_native_contracts else {}),
         **operator_probe,
         "container_recovery": {
             "authorization_sha256": _sha256(authorization_raw),
@@ -3362,6 +3430,8 @@ def recover(args: argparse.Namespace) -> None:
             expected_config_sha=config_sha,
             expected_launch_sha=launch_sha,
             expected_storage=storage_proof,
+            expected_terminal=terminal,
+            expected_terminal_raw=terminal_raw,
             transition=transition,
         )
         backend = fresh["backend"]
@@ -3380,12 +3450,15 @@ def recover(args: argparse.Namespace) -> None:
         pins = fresh["pins"]
         storage_proof = fresh["storage_proof"]
         transition = fresh["transition"]
+        _pin_recovery_private_group_storage(control, operation, terminal)
         retained_session = _validate_reused_session_before_removal(
             layout,
             terminal.get("state_root"),
             authorization["old_image_id"],
             engine_id,
         )
+        from fullmag_docker_runtime import assert_loopback_port_available
+        assert_loopback_port_available(args.port, control.project)
         transition_root = f"{RECOVERY_RELATIVE_ROOT}/{authorization['request_id']}"
         if transition is None:
             manifest = _manifest(
@@ -3565,7 +3638,10 @@ def recover(args: argparse.Namespace) -> None:
             "receipt": {"image_id": authorization["old_image_id"]},
             "operator_probe_environment_record": operator_probe,
         }
-        start_args = _recover_args(args, selected)
+        start_args = _recover_args(
+            args, selected, native_contracts=retained_native_contracts,
+            include_untracked=retained_include_untracked,
+        )
         start_args.gpu_access = policy
         prepared = _prepared_context(toolchain, images)
         start(

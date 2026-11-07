@@ -908,6 +908,26 @@ def _worktree_foreign_container_pin(container, alias, selected_project):
     return {**snapshot, "sha256": hashlib.sha256(encoded).hexdigest()}
 
 
+def _recovery_backend_inspector(control, live_inspect, prepared_reference):
+    """Select the live inspector or the authenticated, removed backend reference."""
+    if prepared_reference is None:
+        return live_inspect
+    from docker_prepared_backend_reference import PreparedBackendReference
+    if not isinstance(prepared_reference, PreparedBackendReference) or prepared_reference.control is not control:
+        raise BuildControlError("Foreign proof requires an authenticated prepared backend reference")
+    return prepared_reference.inspect_backend
+
+
+def _archive_recovery_foreign_proof(control, proof, prepared_reference):
+    if prepared_reference is not None:
+        proof = {
+            "schema": "fullmag.foreign-bind-proof-after-recovery-removal.v1",
+            "prepared_reference": prepared_reference.evidence(),
+            "proof": proof,
+        }
+    _archive_foreign_proof(control, proof)
+
+
 def _archive_foreign_proof(control, proof):
     operation = getattr(control, "_active_operation", None)
     if operation is None:
@@ -1449,13 +1469,18 @@ def validate_worktree_foreign_alias_disjoint_proof(
 
 
 def prove_worktree_foreign_alias_disjoint(control, backend, container, alias,
-                                          reference_root, *, compose):
+                                          reference_root, *, compose, prepared_reference=None):
     """Prove a foreign alias against one exact registered worktree state root."""
     selected_alias = _safe_alias(alias)
     backend_observation = _strict_stopped_backend_observation(backend)
     context = _worktree_probe_context(control, backend, compose, reference_root)
     backend_id = context["backend_container_id"]
-    admission_backend = _inspect_exact_container(backend_id, "selected worktree backend")
+    inspect_backend = _recovery_backend_inspector(
+        control,
+        lambda identifier: _inspect_exact_container(identifier, "selected worktree backend"),
+        prepared_reference,
+    )
+    admission_backend = inspect_backend(backend_id)
     if _strict_stopped_backend_observation(admission_backend) != backend_observation:
         raise BuildControlError("selected worktree backend incarnation changed at proof admission")
     if _worktree_probe_context(control, admission_backend, compose, reference_root) != context:
@@ -1499,7 +1524,7 @@ def prove_worktree_foreign_alias_disjoint(control, backend, container, alias,
             raise BuildControlError("foreign consumer lifecycle remained unstable during overlap proof")
         before = after
 
-    fresh_backend = _inspect_exact_container(backend_id, "selected worktree backend")
+    fresh_backend = inspect_backend(backend_id)
     if _strict_stopped_backend_observation(fresh_backend) != backend_observation:
         raise BuildControlError("selected worktree backend lifecycle changed during proof")
     if _worktree_probe_context(control, fresh_backend, compose, reference_root) != context:
@@ -1521,5 +1546,5 @@ def prove_worktree_foreign_alias_disjoint(control, backend, container, alias,
     }
     validate_foreign_alias_disjoint_proof(
         proof, alias=selected_alias, container_id=before["id"])
-    _archive_foreign_proof(control, proof)
+    _archive_recovery_foreign_proof(control, proof, prepared_reference)
     return proof

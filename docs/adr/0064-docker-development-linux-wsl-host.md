@@ -123,10 +123,23 @@ konsumenta są sprawdzane przed pomiarem i po nim. Archiwalny dowód jest
 materiałem audytowym: walidator metadanych nie zastępuje nowej sondy fizycznej
 przy granicy mutacji. Ścieżka master zachowuje swój dotychczasowy schemat.
 
-Ten wariant nie kwalifikuje kontynuacji `prepared` po usunięciu starego
-backendu. Taka kontynuacja wymaga osobnego dowodu manifestu i autorytatywnej
-absencji; bez niego odmawia, zachowując dane. Implementacja i regresje źródłowe
-nie dowodzą przejścia pełnej kontroli wszystkich konsumentów na danym hoście.
+Kontynuacja abrupt recovery worktree po pełnym usunięciu pary używa
+historycznego manifestu dopiero po uwierzytelnieniu zgodnego `absence.json`.
+Przed całym skanem i po nim kontroler ponawia odczyt łańcucha rekordów,
+Compose, silnika i sieci. Każda sonda sprawdza absencję obu dokładnych ID
+przez `inspect` i `ps -a`. Obce montowania nadal przechodzą świeże sondy
+fizyczne WSL albo native Windows/DrvFs. Referencja wymaga nadal rozwiązywalnych
+przypiętych aliasów starego backendu i zgodnego kanonicznego magazynu. Nowy
+konsument lub zmiana jego tożsamości, montowań, sieci albo stanu procesu po
+skanie powoduje odmowę startu.
+
+Archiwum sondy po usunięciu wiąże jej wynik z digestami manifestu, requestu,
+`prepared` i `absence`. Stare obserwacje kontenerów pozostają historyczne.
+Ponowienie używa istniejących rekordów i pomija ponowne usuwanie pary.
+Po ponownym sprawdzeniu bajtów terminala start dziedziczy przypięty prywatny
+układ wolumenu. Kontrakt natywny i dokładna lista plików spoza indeksu
+pochodzą z zachowanego Compose.
+Kwalifikacja tej kontynuacji wymaga rzeczywistego przebiegu na danym hoście.
 
 ### Zewnętrzne junctiony w obcym bindzie Windows
 
