@@ -1,0 +1,154 @@
+{
+  "document": {
+    "path": "docs/specs/execution-intent-roundtrip.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-execution-intent-override",
+      "symbols": [
+        "q",
+        "p",
+        "k",
+        "n",
+        "P"
+      ],
+      "sources": [
+        "primitive"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q_k^{(n)}",
+      "meaning": "Stan klucza przed etapem",
+      "si_unit": "1"
+    },
+    {
+      "id": "p",
+      "latex": "p_k^{(n)}",
+      "meaning": "Jawna wartość w payloadzie",
+      "si_unit": "1"
+    },
+    {
+      "id": "k",
+      "latex": "k",
+      "meaning": "Klucz interactive_session_requested lub wait_for_solve",
+      "si_unit": "1"
+    },
+    {
+      "id": "n",
+      "latex": "n",
+      "meaning": "Indeks deklaracji etapu",
+      "si_unit": "1"
+    },
+    {
+      "id": "P",
+      "latex": "P_n",
+      "meaning": "Zbiór obecnych kluczy etapu",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "capture",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "capture_workspace_problem",
+      "responsibility": "Zachować stan końcowego workspace."
+    },
+    {
+      "id": "render",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_stages",
+      "responsibility": "Odtworzyć flagi przed każdym etapem."
+    },
+    {
+      "id": "copy",
+      "path": "packages/fullmag-py/src/fullmag/runtime/execution_intent.py",
+      "symbol": "copy_execution_intent",
+      "responsibility": "Kopiować surowe wartości."
+    },
+    {
+      "id": "validate",
+      "path": "packages/fullmag-py/src/fullmag/runtime/execution_intent.py",
+      "symbol": "validate_execution_intent_fields",
+      "responsibility": "Walidować typowane granice."
+    },
+    {
+      "id": "builder",
+      "path": "crates/fullmag-authoring/src/builder.rs",
+      "symbol": "ScriptBuilderState",
+      "responsibility": "Przenieść opcjonalną intencję."
+    },
+    {
+      "id": "scene",
+      "path": "crates/fullmag-authoring/src/scene.rs",
+      "symbol": "SceneStudyState",
+      "responsibility": "Przenieść opcjonalną intencję sceny."
+    },
+    {
+      "id": "overrides",
+      "path": "crates/fullmag-authoring/src/adapters.rs",
+      "symbol": "scene_document_to_script_builder_overrides",
+      "responsibility": "Zachować obecność w eksporcie."
+    },
+    {
+      "id": "primitive",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "materialize_pipeline_primitive",
+      "responsibility": "Zastosować flagi; odtworzyć po błędzie."
+    },
+    {
+      "id": "regression",
+      "path": "packages/fullmag-py/tests/test_execution_intent_roundtrip.py",
+      "symbol": "class ExecutionIntentRoundtripTests",
+      "responsibility": "Sprawdzić roundtrip i odmowy."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.interactive(enabled)",
+        "type": "bool",
+        "default": "True przy wywołaniu; początkowy stan False",
+        "si_unit": "1",
+        "validation": "setter zachowuje bool(enabled); scena wymaga bool",
+        "meaning": "Żądanie pozostawienia sesji otwartej",
+        "backend_support": "wspólny authoring FDM/FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.interactive_session_requested"
+      },
+      {
+        "python": "fm.wait_for_solve(enabled)",
+        "type": "bool",
+        "default": "True przy wywołaniu; początkowy stan False",
+        "si_unit": "1",
+        "validation": "setter zachowuje bool(enabled); scena wymaga bool",
+        "meaning": "Żądanie bramki Compute",
+        "backend_support": "wspólny authoring FDM/FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.wait_for_solve"
+      }
+    ]
+  }
+}

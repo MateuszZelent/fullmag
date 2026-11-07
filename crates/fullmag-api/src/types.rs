@@ -2210,6 +2210,8 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            interactive_session_requested: None,
+            wait_for_solve: None,
             revision: 3,
             execution_profile: None,
             execution_layers: vec![],

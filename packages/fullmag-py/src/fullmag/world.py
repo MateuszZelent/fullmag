@@ -4048,12 +4048,7 @@ def capture_workspace_problem() -> Problem | None:
         _state._magnets or _state._auxiliary_geometries or has_antenna_stage
     ):
         return None
-    previous_interactive = _state._interactive
-    _state._interactive = True
-    try:
-        return _build_problem()
-    finally:
-        _state._interactive = previous_interactive
+    return _build_problem()
 
 
 def capture_declared_stages() -> list[CapturedStage]:

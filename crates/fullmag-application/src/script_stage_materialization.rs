@@ -231,6 +231,79 @@ mod canonical_relaxation_time_tests {
     }
 
     #[test]
+    fn primitive_execution_intent_applies_before_materialization() {
+        let inventory = ScriptAntennaAuthoringInventory::default();
+        let mut problem = ProblemIR::bootstrap_example();
+        let flags = BTreeMap::from([
+            ("interactive_session_requested".into(), serde_json::json!(false)),
+            ("wait_for_solve".into(), serde_json::json!(true)),
+        ]);
+        let stage = materialize_pipeline_primitive(&mut problem, &inventory, "run", &flags, Some(1e-12))
+            .unwrap().unwrap();
+        assert_eq!(stage.ir.problem_meta.runtime_metadata["interactive_session_requested"], false);
+        assert_eq!(stage.ir.problem_meta.runtime_metadata["wait_for_solve"], true);
+        let action = BTreeMap::from([
+            ("interactive_session_requested".into(), serde_json::json!(true)),
+            ("wait_for_solve".into(), serde_json::json!(false)),
+            ("current_density".into(), serde_json::json!(2.0)),
+        ]);
+        assert!(materialize_pipeline_primitive(&mut problem, &inventory, "set_current", &action, None).unwrap().is_none());
+        assert_eq!(problem.problem_meta.runtime_metadata["interactive_session_requested"], true);
+        assert_eq!(problem.problem_meta.runtime_metadata["wait_for_solve"], false);
+        let inherited = materialize_pipeline_primitive(&mut problem, &inventory, "run", &BTreeMap::new(), Some(2e-12))
+            .unwrap().unwrap();
+        assert_eq!(inherited.ir.problem_meta.runtime_metadata["interactive_session_requested"], true);
+        assert_eq!(inherited.ir.problem_meta.runtime_metadata["wait_for_solve"], false);
+    }
+
+    #[test]
+    fn primitive_execution_intent_failure_restores_previous_metadata() {
+        for initial in [None, Some(serde_json::json!("legacy raw value")), Some(serde_json::json!(true))] {
+            for (kind, extra_key, extra_value) in [
+                ("unknown_stage", "until_seconds", serde_json::json!(1e-12)),
+                ("run", "unknown_payload_key", serde_json::json!(1)),
+                ("run", "wait_for_solve", serde_json::json!(null)),
+                ("antenna_field_solve", "stage_id", serde_json::json!("missing")),
+            ] {
+                let mut problem = ProblemIR::bootstrap_example();
+                problem.problem_meta.runtime_metadata.remove("wait_for_solve");
+                problem.problem_meta.runtime_metadata.remove("interactive_session_requested");
+                if let Some(value) = &initial {
+                    problem.problem_meta.runtime_metadata.insert("interactive_session_requested".into(), value.clone());
+                }
+                let before = problem.problem_meta.runtime_metadata.clone();
+                let mut payload = BTreeMap::from([
+                    ("interactive_session_requested".into(), serde_json::json!(false)),
+                    ("wait_for_solve".into(), serde_json::json!(true)),
+                ]);
+                payload.insert(extra_key.into(), extra_value);
+                assert!(materialize_pipeline_primitive(&mut problem, &ScriptAntennaAuthoringInventory::default(),
+                    kind, &payload, Some(1e-12)).is_err(), "{kind}");
+                assert_eq!(problem.problem_meta.runtime_metadata, before, "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_primitive_does_not_change_execution_intent() {
+        let mut disabled = relax_primitive("disabled");
+        let StudyPipelineNode::Primitive { enabled, payload, .. } = &mut disabled else { unreachable!() };
+        *enabled = false;
+        payload.insert("interactive_session_requested".into(), serde_json::json!(true));
+        payload.insert("wait_for_solve".into(), serde_json::json!(true));
+        let mut config = pipeline_config(vec![StudyPipelineNode::Group {
+            id: "group".into(), label: "group".into(), enabled: true, notes: None, source: None,
+            collapsed: false, children: vec![disabled, relax_primitive("enabled")],
+        }]);
+        config.ir.problem_meta.runtime_metadata.insert("interactive_session_requested".into(), serde_json::json!(false));
+        config.ir.problem_meta.runtime_metadata.insert("wait_for_solve".into(), serde_json::json!(false));
+        let stages = materialize_script_stages_with_output_policy(config, fullmag_ir::configure_project_autosave_policy).unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].ir.problem_meta.runtime_metadata["interactive_session_requested"], false);
+        assert_eq!(stages[0].ir.problem_meta.runtime_metadata["wait_for_solve"], false);
+    }
+
+    #[test]
     fn preview_budget_counts_stages_across_nested_enabled_groups() {
         let nodes = vec![StudyPipelineNode::Group {
             id: "outer".to_string(),
@@ -1361,8 +1434,50 @@ fn materialize_pipeline_primitive(
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
-    let normalized_kind = stage_kind.trim().to_ascii_lowercase();
-    match normalized_kind.as_str() {
+    const EXECUTION_KEYS: [&str; 2] = ["interactive_session_requested", "wait_for_solve"];
+    // Validate both fields before changing mutable workspace metadata. Keep raw
+    // previous values so any parser/materializer refusal restores them exactly.
+    let flags = EXECUTION_KEYS
+        .iter()
+        .filter_map(|key| payload.get(*key).map(|value| (*key, value)))
+        .map(|(key, value)| {
+            value
+                .as_bool()
+                .with_context(|| {
+                    format!("study pipeline primitive payload.{key} must be a boolean")
+                })
+                .map(|value| (key, value))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let previous = flags
+        .iter()
+        .map(|(key, _)| {
+            (
+                (*key).to_string(),
+                current_ir.problem_meta.runtime_metadata.get(*key).cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let filtered;
+    let payload = if flags.is_empty() {
+        payload
+    } else {
+        filtered = payload
+            .iter()
+            .filter(|(key, _)| !EXECUTION_KEYS.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        &filtered
+    };
+    for (key, value) in flags {
+        current_ir
+            .problem_meta
+            .runtime_metadata
+            .insert(key.into(), Value::Bool(value));
+    }
+    let result = (|| {
+        let normalized_kind = stage_kind.trim().to_ascii_lowercase();
+        match normalized_kind.as_str() {
         "antenna_field_solve" => {
             materialize_pipeline_antenna_field_solve(current_ir, payload, antenna_inventory).map(Some)
         }
@@ -1413,6 +1528,17 @@ fn materialize_pipeline_primitive(
             other
         ),
     }
+    })();
+    if result.is_err() {
+        for (key, value) in previous {
+            if let Some(value) = value {
+                current_ir.problem_meta.runtime_metadata.insert(key, value);
+            } else {
+                current_ir.problem_meta.runtime_metadata.remove(&key);
+            }
+        }
+    }
+    result
 }
 
 fn check_antenna_declaration<T: PartialEq>(

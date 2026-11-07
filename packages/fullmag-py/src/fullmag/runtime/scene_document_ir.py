@@ -20,8 +20,11 @@ from fullmag.model.selection import SelectionDefinition
 from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.loader import LoadedProblem, load_problem_from_script
 from fullmag.runtime.run_config_export import RunConfigExportOptions, export_run_config
-from fullmag.runtime.scene_document import validate_fem_domain_mesh_reference
-from fullmag.runtime.script_builder import render_scene_document_as_script
+from fullmag.runtime.execution_intent import validate_execution_intent_fields
+from fullmag.runtime.scene_document import build_builder_from_scene_document, validate_fem_domain_mesh_reference
+from fullmag.runtime.script_builder import (
+    _enabled_scene_stages, _scene_antenna_stage_sequence, render_scene_document_as_script,
+)
 
 _SCENE_DOCUMENT_FIELDS = frozenset(
     {
@@ -64,6 +67,8 @@ _STUDY_FIELDS = frozenset(
         "requested_precision",
         "requested_mode",
         "requested_cpu_threads",
+        "interactive_session_requested",
+        "wait_for_solve",
         "parallel_execution",
         "pbc",
         "execution_profile",
@@ -202,8 +207,10 @@ def _capture_scene_document(
     if study_pipeline is not None and not isinstance(study_pipeline, Mapping):
         raise ValueError("SceneDocument.study.study_pipeline must be an object")
 
-    def attach_scene_semantics(problem):
+    def attach_scene_semantics(problem, execution_intent=None):
         runtime_metadata = dict(problem.runtime_metadata)
+        execution_intent = execution_intent or {}
+        runtime_metadata.update(execution_intent)
         if accuracy_contract is None:
             runtime_metadata.pop("fem_demag_accuracy_contract", None)
         else:
@@ -216,7 +223,9 @@ def _capture_scene_document(
             pipeline = copy.deepcopy(dict(study_pipeline))
             runtime_metadata["study_pipeline"] = pipeline
             if (
-                runtime_metadata.get("interactive_session_requested") is True
+                "wait_for_solve" not in study
+                and "wait_for_solve" not in execution_intent
+                and runtime_metadata.get("interactive_session_requested") is True
                 and _has_enabled_study_pipeline_node(pipeline.get("nodes"))
             ):
                 runtime_metadata["wait_for_solve"] = True
@@ -237,16 +246,31 @@ def _capture_scene_document(
         script_path = Path(temporary) / "scene_document.py"
         script_path.write_text(script_source, encoding="utf-8")
         loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        builder = build_builder_from_scene_document(scene)
+        if include_authored_stages:
+            authored_stages = _enabled_scene_stages(_scene_antenna_stage_sequence(builder))
+        elif include_legacy_relax_stages:
+            authored_stages = [stage for stage in builder.get("stages") or []
+                               if isinstance(stage, Mapping) and str(stage.get("kind") or "relax") == "relax"]
+        else:
+            authored_stages = []
+        if len(authored_stages) != len(loaded.stages):
+            raise ValueError("SceneDocument execution intent requires exact ordered stage snapshots")
+        active_execution_intent = validate_execution_intent_fields(study, context="SceneDocument.study")
+        stage_intents = {}
+        for stage, authored in zip(loaded.stages, authored_stages):
+            active_execution_intent.update(validate_execution_intent_fields(authored, context="SceneDocument stage"))
+            stage_intents[id(stage.problem)] = dict(active_execution_intent)
         loaded = replace(
             loaded,
-            problem=attach_scene_semantics(loaded.problem),
+            problem=attach_scene_semantics(loaded.problem, stage_intents.get(id(loaded.problem))),
             workspace_problem=(
                 attach_scene_semantics(loaded.workspace_problem)
                 if loaded.workspace_problem is not None
                 else None
             ),
             stages=tuple(
-                replace(stage, problem=attach_scene_semantics(stage.problem))
+                replace(stage, problem=attach_scene_semantics(stage.problem, stage_intents[id(stage.problem)]))
                 for stage in loaded.stages
             ),
         )

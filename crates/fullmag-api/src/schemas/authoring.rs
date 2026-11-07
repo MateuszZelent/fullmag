@@ -2180,3 +2180,37 @@ mod stage_autosave_tests {
         }));
     }
 }
+
+#[cfg(test)]
+mod execution_intent_tests {
+    use super::*;
+
+    #[test]
+    fn scene_resource_preserves_execution_intent_and_stage_extras() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": {
+                "interactive_session_requested": false,
+                "wait_for_solve": true,
+                "stages": [{"kind": "run", "until_seconds": 1e-9,
+                            "interactive_session_requested": true, "wait_for_solve": false}],
+                "study_pipeline": {"nodes": [{"node_kind": "group", "id": "group", "label": "Group",
+                    "enabled": false, "children": [{"node_kind": "primitive", "id": "run", "label": "Run",
+                        "stage_kind": "run", "payload": {"interactive_session_requested": false, "wait_for_solve": true}}]}]}
+            }
+        })).unwrap();
+        let persisted = serde_json::to_vec(&scene).unwrap();
+        let reloaded: SceneDocument = serde_json::from_slice(&persisted).unwrap();
+        assert_eq!(reloaded, scene);
+        let expected = serde_json::to_value(&scene.study).unwrap();
+        let resource = SceneResource::from_scene_document(reloaded).unwrap();
+        let wire = serde_json::to_value(&resource).unwrap();
+        assert_eq!(wire["study"], expected);
+        let decoded: SceneResource = serde_json::from_slice(&serde_json::to_vec(&resource).unwrap()).unwrap();
+        assert_eq!(decoded.study, resource.study);
+        assert_eq!(wire["study"]["interactive_session_requested"], false);
+        assert_eq!(wire["study"]["wait_for_solve"], true);
+        assert_eq!(wire["study"]["stages"][0]["interactive_session_requested"], true);
+        assert_eq!(wire["study"]["stages"][0]["wait_for_solve"], false);
+    }
+}

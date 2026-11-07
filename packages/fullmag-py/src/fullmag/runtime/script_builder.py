@@ -8,6 +8,9 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+from fullmag.runtime.execution_intent import (
+    EXECUTION_INTENT_KEYS, copy_execution_intent, validate_execution_intent_fields,
+)
 from fullmag._validation import (
     AUTO_SINC_NYQUIST_GUARD_FACTOR,
     SamplingPeriod,
@@ -272,6 +275,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         pbc_ir = FdmPbc(tuple(bool(value) for value in pbc)).to_ir()
 
     draft = {
+        **copy_execution_intent(authored_problem.runtime_metadata),
         "revision": 1,
         "study_name": base_problem.name,
         "backend": base_problem.runtime.backend_target.value,
@@ -728,6 +732,7 @@ def render_loaded_problem_as_script(
     if authored_pipeline is not None:
         lines.append(f"fm.runtime_metadata('study_pipeline', {_py_literal(authored_pipeline)})")
 
+    lines.extend(_render_execution_intent(authored_problem.runtime_metadata, overrides=overrides, surface=surface))
     normalized = "\n".join(lines).rstrip() + "\n"
     return normalized
 
@@ -862,7 +867,8 @@ def _reject_unrendered_scene_stage_fields(
     kind: str,
     rendered_fields: set[str],
 ) -> None:
-    common_fields = {"kind", "entrypoint_kind", "stage_id"}
+    validate_execution_intent_fields(stage, context=f"SceneDocument {kind} stage")
+    common_fields = {"kind", "entrypoint_kind", "stage_id", *EXECUTION_INTENT_KEYS}
     unsupported = sorted(
         key
         for key, value in stage.items()
@@ -1198,6 +1204,7 @@ def _render_scene_document_bootstrap(
     )
     if demag_policy is not None:
         lines.append(_render_fem_demag_solver_call(demag_policy, surface="study"))
+    lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     lines.extend(_render_output_storage(builder.get("output_storage"), surface="study"))
 
     solver = builder.get("solver")
@@ -1383,6 +1390,7 @@ def _render_scene_document_bootstrap(
         lines.append(_render_antenna_port_mode_payload_line(mode))
 
     authored_stages = []
+    active_execution_intent = validate_execution_intent_fields(builder, context="builder")
     raw_stages = builder.get("stages") or []
     if include_authored_stages:
         if not isinstance(raw_stages, list):
@@ -1391,15 +1399,20 @@ def _render_scene_document_bootstrap(
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
+            active_execution_intent.update(validate_execution_intent_fields(stage, context="SceneDocument stage"))
+            lines.extend(_render_execution_intent(None, overrides=active_execution_intent, surface="study"))
             lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver, magnet_vars=snapshot_handles))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
                 continue
+            active_execution_intent.update(validate_execution_intent_fields(stage, context="SceneDocument stage"))
+            lines.extend(_render_execution_intent(None, overrides=active_execution_intent, surface="study"))
             kwargs = _scene_relax_stage_kwargs(stage, solver=solver)
             lines.append(f"study.stages.add_relax({_python_keyword_args(kwargs)})")
 
     lines.extend(_render_antenna_inventory_declarations(builder, authored_stages))
+    lines.extend(_render_execution_intent({}, overrides=builder, surface="study"))
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -2825,6 +2838,7 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
 
 def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
     payload = _export_stage_draft(stage)
+    payload.update(copy_execution_intent(stage.problem.runtime_metadata))
     if stage.stage_id is not None:
         payload["stage_id"] = stage.stage_id
     if stage.output_every_seconds is not None:
@@ -2841,6 +2855,7 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
         definition = cast(dict[str, object], draft["definition"])
         # The executor resolves the definition from the canonical problem model.
         draft = {
+            **copy_execution_intent(stage.problem.runtime_metadata),
             "kind": "antenna_field_solve",
             "entrypoint_kind": stage.entrypoint_kind,
             "stage_id": definition["id"],
@@ -3412,6 +3427,22 @@ def _fdm_number(value: object, label: str) -> float | None:
     return number
 
 
+def _render_execution_intent(
+    metadata: Mapping[str, object] | None,
+    *,
+    overrides: Mapping[str, object],
+    surface: str,
+) -> list[str]:
+    values = copy_execution_intent(metadata) if metadata is not None else {}
+    values.update(validate_execution_intent_fields(overrides, context="execution intent override"))
+    values = validate_execution_intent_fields(values, context="runtime_metadata")
+    return [
+        f"{_surface_call(surface, method)}({values[key]!r})"
+        for key, method in (("interactive_session_requested", "interactive"), ("wait_for_solve", "wait_for_solve"))
+        if key in values
+    ]
+
+
 def _render_runtime(
     problem: Problem,
     *,
@@ -3710,10 +3741,7 @@ def _render_runtime(
                 lines.append(
                     f"{_surface_call(surface, 'universe')}.mesh({', '.join(universe_mesh_kwargs)})"
                 )
-    if runtime_metadata.get("interactive_session_requested") is True:
-        lines.append(f"{_surface_call(surface, 'interactive')}(True)")
-    if runtime_metadata.get("wait_for_solve") is True:
-        lines.append(f"{_surface_call(surface, 'wait_for_solve')}(True)")
+    lines.extend(_render_execution_intent(runtime_metadata, overrides=overrides, surface=surface))
     visualization_hint = _normalize_mapping(runtime_metadata.get("visualization_hint"))
     scene_visualization_hint = overrides.get("visualization_hint")
     if scene_visualization_hint is not None:
@@ -8282,6 +8310,8 @@ def _render_stages(
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
+        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
+        lines.extend(_render_execution_intent(stage.problem.runtime_metadata, overrides=stage_override, surface=surface))
         if is_study_surface and stage.problem.study is not None:
             output_lines, active_outputs = _sync_stage_output_snapshot(
                 active_outputs,
@@ -8551,7 +8581,6 @@ def _render_stages(
         if stage.problem.study is None:
             continue
         study = stage.problem.study
-        stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
         if isinstance(study, Hysteresis):
             if not is_study_surface:
                 raise ValueError("canonical hysteresis rewrite requires the study API surface")
@@ -12164,8 +12193,6 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         "discretization": problem.discretization.to_ir() if problem.discretization else None,
         "mesh_workflow": runtime_metadata.get("mesh_workflow"),
         "output_storage": runtime_metadata.get("output_storage"),
-        "interactive": runtime_metadata.get("interactive_session_requested"),
-        "wait_for_solve": runtime_metadata.get("wait_for_solve"),
         "domain_frame": runtime_metadata.get("domain_frame"),
         "study_universe": runtime_metadata.get("study_universe"),
     }

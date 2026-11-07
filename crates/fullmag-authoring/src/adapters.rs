@@ -90,6 +90,8 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         solved_antenna_drives: builder.solved_antenna_drives.clone(),
         antenna_spectrum_requests: builder.antenna_spectrum_requests.clone(),
         study: SceneStudyState {
+            interactive_session_requested: builder.interactive_session_requested,
+            wait_for_solve: builder.wait_for_solve,
             backend: builder.backend.clone(),
             requested_backend: builder
                 .requested_backend
@@ -244,6 +246,8 @@ pub fn scene_document_to_script_builder(
         .collect::<Result<Vec<_>, SceneDocumentValidationError>>()?;
 
     Ok(ScriptBuilderState {
+        interactive_session_requested: normalized_scene.study.interactive_session_requested,
+        wait_for_solve: normalized_scene.study.wait_for_solve,
         revision: scene.revision,
         backend: normalized_scene.study.backend.clone(),
         requested_backend: Some(normalized_scene.study.requested_backend.clone()),
@@ -650,6 +654,8 @@ pub fn scene_document_to_script_builder_overrides(
                 .as_object_mut()
                 .expect("script builder stage overrides are an object");
             for key in [
+                "interactive_session_requested",
+                "wait_for_solve",
                 "eigen_solver_rtol",
                 "eigen_solver_max_outer_iterations",
                 "eigen_solver_max_linear_iterations",
@@ -776,6 +782,14 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     });
+    for (key, value) in [
+        ("interactive_session_requested", builder.interactive_session_requested),
+        ("wait_for_solve", builder.wait_for_solve),
+    ] {
+        if let Some(value) = value {
+            overrides[key] = Value::Bool(value);
+        }
+    }
     if scene.study.pbc.is_none() {
         overrides
             .as_object_mut()
@@ -2453,6 +2467,77 @@ mod tests {
     use super::*;
 
     #[test]
+    fn execution_intent_serde_preserves_absent_false_true() {
+        for interactive in [None, Some(false), Some(true)] {
+            for wait in [None, Some(false), Some(true)] {
+                let mut input = serde_json::to_value(sample_builder()).unwrap();
+                for (key, value) in [
+                    ("interactive_session_requested", interactive),
+                    ("wait_for_solve", wait),
+                ] {
+                    input.as_object_mut().unwrap().remove(key);
+                    if let Some(value) = value {
+                        input[key] = serde_json::json!(value);
+                    }
+                }
+                let mut builder: ScriptBuilderState = serde_json::from_value(input).unwrap();
+                builder.stages[0].extra.insert("interactive_session_requested".into(), Value::Bool(false));
+                builder.stages[0].extra.insert("wait_for_solve".into(), Value::Bool(true));
+                builder.stages[0].extra.insert("unrelated_stage_setting".into(), serde_json::json!({"kept": 7}));
+                if let StudyPipelineNode::Primitive(node) = &mut builder.study_pipeline.as_mut().unwrap().nodes[0] {
+                    node.payload.insert("interactive_session_requested".into(), Value::Bool(true));
+                    node.payload.insert("wait_for_solve".into(), Value::Bool(false));
+                } else {
+                    panic!("fixture must start with a primitive stage");
+                }
+                let scene = scene_document_from_script_builder(&builder);
+                let scene: SceneDocument = serde_json::from_value(serde_json::to_value(scene).unwrap()).unwrap();
+                let restored = scene_document_to_script_builder(&scene).unwrap();
+                let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+                assert_eq!(overrides["stages"][0]["interactive_session_requested"], Value::Bool(false));
+                assert_eq!(overrides["stages"][0]["wait_for_solve"], Value::Bool(true));
+                assert_eq!(overrides["study_pipeline"], serde_json::to_value(&builder.study_pipeline).unwrap());
+                let encoded_builder = serde_json::to_value(&restored).unwrap();
+                let encoded_scene = serde_json::to_value(&scene.study).unwrap();
+                for (key, value) in [
+                    ("interactive_session_requested", interactive),
+                    ("wait_for_solve", wait),
+                ] {
+                    let expected = value.map(Value::Bool);
+                    assert_eq!(encoded_builder.get(key), expected.as_ref(), "builder {key}");
+                    assert_eq!(encoded_scene.get(key), expected.as_ref(), "scene {key}");
+                    assert_eq!(overrides.get(key), expected.as_ref(), "override {key}");
+                }
+                assert_eq!(restored.stages, builder.stages);
+                assert_eq!(restored.study_pipeline, builder.study_pipeline);
+            }
+        }
+    }
+
+    #[test]
+    fn execution_intent_serde_rejects_present_non_boolean() {
+        for key in ["interactive_session_requested", "wait_for_solve"] {
+            for invalid in [Value::Null, serde_json::json!("false"), serde_json::json!(0),
+                            serde_json::json!([]), serde_json::json!({})] {
+                let mut builder = serde_json::to_value(sample_builder()).unwrap();
+                builder[key] = invalid.clone();
+                assert!(serde_json::from_value::<ScriptBuilderState>(builder).is_err(), "builder {key}={invalid}");
+                let mut study = serde_json::json!({});
+                study[key] = invalid.clone();
+                assert!(serde_json::from_value::<SceneStudyState>(study).is_err(), "scene {key}={invalid}");
+            }
+        }
+        let builder: ScriptBuilderState = serde_json::from_value(serde_json::json!({
+            "revision": 0, "solver": {}, "mesh": {}
+        })).unwrap();
+        let study: SceneStudyState = serde_json::from_value(serde_json::json!({})).unwrap();
+        for encoded in [serde_json::to_value(builder).unwrap(), serde_json::to_value(study).unwrap()] {
+            assert!(encoded.get("interactive_session_requested").is_none());
+            assert!(encoded.get("wait_for_solve").is_none());
+        }
+    }
+
+    #[test]
     fn rotated_dmi_authoring_normalization_preserves_signed_d() {
         let entry = ScriptBuilderMagneticInteractionEntry {
             kind: ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
@@ -2622,6 +2707,8 @@ mod tests {
 
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
+            interactive_session_requested: None,
+            wait_for_solve: None,
             revision: 7,
             backend: Some("fem".to_string()),
             requested_backend: None,

@@ -54,6 +54,8 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        interactive_session_requested: None,
+        wait_for_solve: None,
         execution_profile: None,
         execution_layers: vec![],
         revision: 3,
@@ -17928,6 +17930,99 @@ async fn authoring_script_sync_renders_empty_workspace_scene_document() {
     );
 
     let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[tokio::test]
+async fn scene_execution_intent_survives_unrelated_patch_and_export() {
+    let mut state = test_app_state_with_live_session().await;
+    let script_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-execution-intent-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    ));
+    fs::create_dir_all(&script_dir).unwrap();
+    {
+        let state_mut = Arc::get_mut(&mut state).expect("test state should be uniquely owned");
+        state_mut.repo_root = crate::script::repo_root();
+        state_mut.current_workspace_root = script_dir.clone();
+    }
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "kind": "run", "until_seconds": 1e-9,
+        "interactive_session_requested": true, "wait_for_solve": false,
+    }));
+    scene.study.interactive_session_requested = Some(false);
+    scene.study.wait_for_solve = Some(true);
+    let expected_study = serde_json::to_value(&scene.study).unwrap();
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app.clone().oneshot(Request::builder().method("GET")
+        .uri("/v2/sessions/current/model/scene").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["study"], expected_study);
+    let response = app.clone().oneshot(Request::builder().method("POST")
+        .uri("/v2/sessions/current/model/transactions").header("content-type", "application/json")
+        .body(Body::from(serde_json::json!({"kind": "merge_patch", "base_revision": 3,
+            "merge_patch": {"scene": {"name": "Preserved execution intent"}}
+        }).to_string())).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let ack = body_json(response).await;
+    assert_eq!(ack["committed_scene"]["study"], expected_study);
+    let committed = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let projected = crate::schemas::authoring::SceneResource::from_scene_document(committed.clone()).unwrap();
+    assert_eq!(serde_json::to_value(projected).unwrap()["study"], expected_study);
+    let persisted_path = script_dir.join("scene.json");
+    fs::write(&persisted_path, serde_json::to_vec(&committed).unwrap()).unwrap();
+    let reloaded: fullmag_authoring::SceneDocument = serde_json::from_slice(&fs::read(&persisted_path).unwrap()).unwrap();
+    assert_eq!(reloaded.study, committed.study);
+    state.current_live_state.write().await.as_mut().unwrap().scene_document = Some(reloaded);
+    let response = app.oneshot(Request::builder().method("POST")
+        .uri("/v2/sessions/current/model/syncs").header("content-type", "application/json")
+        .body(Body::from("{}")).unwrap()).await.unwrap();
+    let status = response.status();
+    let json = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "canonical export: {json:?}");
+    assert_eq!(json["source_kind"], "scene_document");
+    let source = fs::read_to_string(script_dir.join("scene_document.py")).unwrap();
+    let stage_interactive = source.find(".interactive(True)").expect("stage flag is exported");
+    let stage_wait = source.find(".wait_for_solve(False)").expect("stage wait is exported");
+    assert!(source.rfind(".interactive(False)").expect("workspace flag is exported") > stage_interactive);
+    assert!(source.rfind(".wait_for_solve(True)").expect("workspace wait is exported") > stage_wait);
+    let _ = fs::remove_dir_all(&script_dir);
+}
+
+#[tokio::test]
+async fn scene_execution_intent_null_merge_patch_removes_keys_before_deserialization() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document_with_stage(serde_json::json!({
+        "kind": "run", "until_seconds": 1e-9,
+        "interactive_session_requested": true, "wait_for_solve": false,
+    }));
+    scene.study.interactive_session_requested = Some(false);
+    scene.study.wait_for_solve = Some(true);
+    state.current_live_state.write().await.as_mut().unwrap().scene_document = Some(scene);
+    let app = build_v2_router().with_state(state.clone());
+    let response = app.clone().oneshot(Request::builder().method("PATCH")
+        .uri("/v2/sessions/current/model/scene").header("content-type", "application/json")
+        .body(Body::from(serde_json::json!({"merge_patch": {"study": {
+            "interactive_session_requested": null, "wait_for_solve": null,
+        }}}).to_string())).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let resource = body_json(response).await;
+    assert!(resource["study"].get("interactive_session_requested").is_none());
+    assert!(resource["study"].get("wait_for_solve").is_none());
+    assert_eq!(resource["study"]["stages"][0]["interactive_session_requested"], true);
+    assert_eq!(resource["study"]["stages"][0]["wait_for_solve"], false);
+    let response = app.oneshot(Request::builder().method("GET")
+        .uri("/v2/sessions/current/model/scene").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, resource);
+    let committed = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    assert_eq!(committed.study.interactive_session_requested, None);
+    assert_eq!(committed.study.wait_for_solve, None);
 }
 
 #[tokio::test]

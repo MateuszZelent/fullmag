@@ -870,9 +870,22 @@ fn default_fdm_demag_mode() -> String {
     "auto".to_string()
 }
 
+pub(crate) fn deserialize_present_execution_bool<'de, D>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderState {
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_execution_bool")]
+    pub interactive_session_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_execution_bool")]
+    pub wait_for_solve: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

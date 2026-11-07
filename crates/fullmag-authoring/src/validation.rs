@@ -41,6 +41,22 @@ impl Display for SceneDocumentValidationError {
 
 impl std::error::Error for SceneDocumentValidationError {}
 
+fn validate_stage_execution_intent(
+    values: &BTreeMap<String, Value>,
+    path: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    for key in ["interactive_session_requested", "wait_for_solve"] {
+        if let Some(value) = values.get(key) {
+            if !value.is_boolean() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{path}.{key} must be a boolean"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_execution_profile_intent(
     study: &crate::SceneStudyState,
 ) -> Result<(), SceneDocumentValidationError> {
@@ -274,6 +290,7 @@ fn validate_scene_document_with_mode(
         ));
     }
     for (index, stage) in scene.study.stages.iter().enumerate() {
+        validate_stage_execution_intent(&stage.extra, &format!("study.stages[{index}]"))?;
         let builder_stage = stage.to_script_builder();
         validate_stage_solver_state(&builder_stage, index)?;
     }
@@ -3569,6 +3586,10 @@ fn validate_study_pipeline_nodes(
     for node in nodes {
         match node {
             StudyPipelineNode::Primitive(node) => {
+                validate_stage_execution_intent(
+                    &node.payload,
+                    &format!("study pipeline primitive '{}'.payload", node.id),
+                )?;
                 if node.id.trim().is_empty() {
                     return Err(SceneDocumentValidationError::new(
                         "study pipeline primitive node ids must not be empty",
@@ -3634,6 +3655,62 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_execution_intent_validates_flat_and_nested_payloads() {
+        for require_solve_refs in [false, true] {
+            for key in ["interactive_session_requested", "wait_for_solve"] {
+                for invalid in [Value::Null, serde_json::json!("false"), serde_json::json!(0),
+                                serde_json::json!([]), serde_json::json!({})] {
+                    let mut flat = serde_json::json!({"kind": "run", "until_seconds": 1e-9, "enabled": false});
+                    flat[key] = invalid.clone();
+                    let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                        "version": "scene.v2", "study": {"stages": [flat]}
+                    })).unwrap();
+                    let error = validate_scene_document_with_mode(&scene, require_solve_refs).unwrap_err();
+                    assert!(error.message.contains(key), "{}", error.message);
+                    assert!(error.message.contains("study.stages[0]"), "{}", error.message);
+                    for enabled in [false, true] {
+                        let mut payload = serde_json::json!({"kind": "run", "until_seconds": 1e-9});
+                        payload[key] = invalid.clone();
+                        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                            "version": "scene.v2", "study": {"study_pipeline": {"nodes": [{
+                                "node_kind": "group", "id": "outer", "label": "Outer", "enabled": enabled,
+                                "children": [{"node_kind": "group", "id": "inner", "label": "Inner", "children": [{
+                                    "node_kind": "primitive", "id": "run", "label": "Run", "enabled": enabled,
+                                    "stage_kind": "run", "payload": payload
+                                }]}]
+                            }]}}
+                        })).unwrap();
+                        let error = validate_scene_document_with_mode(&scene, require_solve_refs).unwrap_err();
+                        assert!(error.message.contains(key), "{}", error.message);
+                        assert!(error.message.contains("primitive 'run'"), "{}", error.message);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stage_execution_intent_accepts_missing_and_boolean_values() {
+        for values in [serde_json::json!({}),
+                       serde_json::json!({"interactive_session_requested": false, "wait_for_solve": true}),
+                       serde_json::json!({"interactive_session_requested": true, "wait_for_solve": false})] {
+            let mut flat = values.clone();
+            flat["kind"] = serde_json::json!("run");
+            flat["until_seconds"] = serde_json::json!(1e-9);
+            let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+                "version": "scene.v2", "study": {"stages": [flat], "study_pipeline": {"nodes": [{
+                    "node_kind": "group", "id": "outer", "label": "Outer", "enabled": false,
+                    "children": [{"node_kind": "primitive", "id": "run", "label": "Run", "enabled": false,
+                                  "stage_kind": "run", "payload": values}]
+                }]}}
+            })).unwrap();
+            for require_solve_refs in [false, true] {
+                validate_scene_document_with_mode(&scene, require_solve_refs).unwrap();
+            }
+        }
+    }
 
     fn pipeline_with_nodes(nodes: Value) -> StudyPipelineDocument {
         serde_json::from_value(serde_json::json!({

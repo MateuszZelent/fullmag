@@ -34,14 +34,10 @@ def build_world_scene(source_path: Path) -> dict[str, Any]:
     state = world._state
     if not (state._magnets or state._auxiliary_geometries):
         raise SceneNotReady("no geometry defined yet")
-    previous_interactive = state._interactive
-    state._interactive = True
     try:
         problem = world._build_problem()
     except ValueError as error:
         raise SceneNotReady(str(error)) from error
-    finally:
-        state._interactive = previous_interactive
     stages = tuple(
         LoadedStage(
             problem=stage.problem,
@@ -82,6 +78,8 @@ def build_world_scene(source_path: Path) -> dict[str, Any]:
 # in fullmag-application). The shared Python exporter still emits the full
 # stage draft for run nodes, so the live scene keeps only the accepted keys.
 _PIPELINE_RUN_PAYLOAD_KEYS = (
+    "interactive_session_requested",
+    "wait_for_solve",
     "kind",
     "entrypoint_kind",
     "stage_id",

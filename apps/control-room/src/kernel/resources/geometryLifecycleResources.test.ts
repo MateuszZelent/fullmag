@@ -29,6 +29,10 @@ import {
   MODEL_SCENE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
+import {
+  buildStudyGlobalMergePatch,
+  createStudyGlobalDraft,
+} from "@/modules/inspector/panels/StudyGlobalAuthoringModel";
 import { ResourceInvalidationController } from "./ResourceInvalidationController";
 import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
 import { resourceRuntimeKeyForClientScope } from "./resourceClientScope";
@@ -621,6 +625,90 @@ describe("geometry lifecycle resources", () => {
       "mesh:shared-domain:41:7:film-b:shared:fem_shared_domain",
     );
   });
+
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "preserves execution intent through unrelated study edits (interactive=%s, wait=%s)",
+    async (interactive, wait) => {
+      const sceneExecutionIntent = {
+        interactive_session_requested: interactive,
+        wait_for_solve: wait,
+      };
+      const stages = [
+        { id: "first", kind: "run", ...sceneExecutionIntent, wait_for_solve: !wait },
+        { id: "last", kind: "run", ...sceneExecutionIntent, interactive_session_requested: !interactive },
+      ];
+      const initial: SceneResource = {
+        objects: [],
+        revision: 4,
+        study: {
+          ...sceneExecutionIntent,
+          requested_backend: "fem",
+          exchange_enabled: true,
+          stages,
+        },
+      };
+      const request = buildStudyGlobalMergePatch(
+        { ...createStudyGlobalDraft(initial), exchangeEnabled: false },
+        { baseRevision: 4 },
+      );
+      expect(request.kind).toBe("merge_patch");
+      if (request.kind !== "merge_patch") throw new Error("Expected a merge patch");
+      expect(request.base_revision).toBe(4);
+      expect(Object.keys(request.merge_patch)).toEqual(["study"]);
+      expect(request.merge_patch.study).toMatchObject({ exchange_enabled: false });
+      expect(request.merge_patch.study).not.toHaveProperty("interactive_session_requested");
+      expect(request.merge_patch.study).not.toHaveProperty("wait_for_solve");
+      expect(request.merge_patch.study).not.toHaveProperty("stages");
+
+      // The server owns merge semantics; the client must retain its full response.
+      const committed: SceneResource = {
+        ...initial,
+        revision: 5,
+        study: { ...initial.study, exchange_enabled: false },
+      };
+      const resources = new ResourceInvalidationController(new EventBus<KernelEventMap>());
+      const runtimeStore = new ResourceRuntimeStore<SceneResource>();
+      const sessionScopeKey = "session=session-a&epoch=2&request_scope_epoch=4";
+      const resourceKey = sessionScopeKey + "|" + MODEL_SCENE_PATH;
+      const clientScope = "api-client-a";
+      const runtimeKey = resourceRuntimeKeyForClientScope(resourceKey, clientScope);
+      const unsubscribe = runtimeStore.subscribe(runtimeKey, () => {});
+      try {
+        runtimeStore.updateData(runtimeKey, initial, 4);
+        publishCommittedSceneResource(
+          resources, committed, 5, runtimeStore, false, sessionScopeKey, clientScope,
+        );
+        expect(runtimeStore.getSnapshot(runtimeKey).data).toEqual(committed);
+        expect(runtimeStore.getSnapshot(runtimeKey).data?.study).toMatchObject({
+          ...sceneExecutionIntent,
+          stages,
+        });
+
+        const pending = deferred<SceneResource>();
+        resources.invalidate(resourceKey, 6);
+        const refresh = runtimeStore.ensureLoad({
+          externalRevision: 6,
+          load: () => pending.promise,
+          resourceKey: runtimeKey,
+          resolveRevision: resolveSceneResourceRevision,
+        });
+        expect(runtimeStore.getSnapshot(runtimeKey)).toMatchObject({
+          data: committed,
+          status: "stale",
+        });
+        pending.resolve({ ...committed, revision: 6 });
+        await refresh;
+        expect(runtimeStore.getSnapshot(runtimeKey).data?.study).toEqual(committed.study);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("seeds committed SceneDocument data even when the scene revision is unchanged", () => {
     const resources = new ResourceInvalidationController(

@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.execution_intent import validate_execution_intent_fields
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
@@ -1691,7 +1692,25 @@ def _validated_rotated_dmi_object_ids(
     return list(term.object_ids or ())
 
 
+def _validate_stage_execution_intent(stages: object, pipeline: object) -> None:
+    for index, stage in enumerate(stages if isinstance(stages, list) else []):
+        if isinstance(stage, Mapping):
+            validate_execution_intent_fields(stage, context=f"study.stages[{index}]")
+
+    def visit(nodes: object) -> None:
+        for node in nodes if isinstance(nodes, list) else []:
+            if isinstance(node, Mapping):
+                payload = node.get("payload")
+                if isinstance(payload, Mapping):
+                    validate_execution_intent_fields(payload, context="study.study_pipeline.payload")
+                visit(node.get("children"))
+    if isinstance(pipeline, Mapping):
+        visit(pipeline.get("nodes"))
+
+
 def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]:
+    execution_intent = validate_execution_intent_fields(builder, context="builder")
+    _validate_stage_execution_intent(builder.get("stages"), builder.get("study_pipeline"))
     geometries = builder.get("geometries") or []
     rotated_dmi_object_ids = _validated_rotated_dmi_object_ids(
         builder.get("rotated_interfacial_dmi_object_ids"),
@@ -1912,6 +1931,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    document["study"].update(execution_intent)
     if rotated_dmi_object_ids is not None:
         document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
     if builder.get("fem_domain_mesh") is not None:
@@ -2111,6 +2131,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         geometries.append(entry)
 
     study = dict(scene.get("study") or {})
+    execution_intent = validate_execution_intent_fields(study, context="SceneDocument.study")
+    _validate_stage_execution_intent(study.get("stages"), study.get("study_pipeline"))
     output_storage = study.get("output_storage")
     if output_storage is not None:
         if not isinstance(output_storage, Mapping):
@@ -2269,6 +2291,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
     }
+    builder.update(execution_intent)
     fem_domain_mesh = study.get("fem_domain_mesh")
     if fem_domain_mesh is not None:
         builder["fem_domain_mesh"] = validate_fem_domain_mesh_reference(
@@ -2562,6 +2585,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "universe": builder.get("universe"),
         "stages": [
             {
+                **validate_execution_intent_fields(stage, context="SceneDocument.study.stages"),
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
                 "integrator": stage.get("integrator") or None,
@@ -2695,6 +2719,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                         for key, value in raw_grid.items()
                     }
         overrides["fdm"] = fdm
+    overrides.update(validate_execution_intent_fields(builder, context="SceneDocument.study"))
     overrides.update(_execution_profile_fields(builder, "SceneDocument.study"))
     overrides.update(_compute_resources_fields(builder, "SceneDocument.study"))
     return overrides

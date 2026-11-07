@@ -839,6 +839,10 @@ impl SceneStudyStageState {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SceneStudyState {
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::builder::deserialize_present_execution_bool")]
+    pub interactive_session_requested: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::builder::deserialize_present_execution_bool")]
+    pub wait_for_solve: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
     #[serde(default = "default_auto")]
