@@ -7687,6 +7687,12 @@ def _retained_operation(
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
+    from docker_volume_native_terminal_stop import validate_options as native_terminal_options
+    capture_native, native_terminal_pin = native_terminal_options(
+        args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
     if capture_terminal and (not restart_idle_service or not stop_after_drain
             or getattr(args, "saved_authoring_checkpoint", None)
             or getattr(args, "saved_authoring_checkpoint_sha256", None)):
@@ -7925,7 +7931,7 @@ def _retained_operation(
         certificate = _retained_certificate(state, document)
         environment = document["services"]["backend"]["environment"]
         startup_enabled = _retained_startup_enabled(actual["backend"])
-        if startup_enabled and not capture_terminal:
+        if startup_enabled and not (capture_terminal or capture_native):
             raise BuildControlError("Startup activation requires dedicated recovery; idle restart will not repeat Solve")
         if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
             raise BuildControlError("Original accepted activation helper still holds the control lease")
@@ -7942,6 +7948,7 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
+                                            **({"capture_native_terminal": True} if capture_native else {}),
                                             **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
@@ -8002,27 +8009,30 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Diagnostic process changed before stop archival")
                     control.write_bytes(operation["root"] + "/diagnostic-terminal-process-before.json", diagnostic_process)
                 elif active_session is True:
-                    if startup_enabled and not capture_terminal:
-                        raise BuildControlError("Backend has an active session; idle restart refused")
-                    terminal_session = _terminal_session_restart_probe(
-                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                    )
-                    if terminal_session is not None:
-                        control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
-                        operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
-                            canonical(terminal_session)
-                        ).hexdigest()
-                    elif capture_terminal:
-                        raise BuildControlError("There is no terminal run to capture")
+                    if capture_native:
+                        pass  # The separate native capture below authenticates this stale Running case.
                     else:
-                        cancelled_activation = _validate_cancelled_activation_preflight(
-                            control, previous_root, previous, document, selected, args.config_sha256,
-                            ids["backend"], environment, require_quiesced_activation=False,
+                        if startup_enabled and not capture_terminal:
+                            raise BuildControlError("Backend has an active session; idle restart refused")
+                        terminal_session = _terminal_session_restart_probe(
+                            ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
                         )
-                        health = cancelled_activation["probe"]["health"]
-                        operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
-                            cancelled_activation["proof_sha256"]
-                        )
+                        if terminal_session is not None:
+                            control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
+                            operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
+                                canonical(terminal_session)
+                            ).hexdigest()
+                        elif capture_terminal:
+                            raise BuildControlError("There is no terminal run to capture")
+                        else:
+                            cancelled_activation = _validate_cancelled_activation_preflight(
+                                control, previous_root, previous, document, selected, args.config_sha256,
+                                ids["backend"], environment, require_quiesced_activation=False,
+                            )
+                            health = cancelled_activation["probe"]["health"]
+                            operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
+                                cancelled_activation["proof_sha256"]
+                            )
                 elif active_session is not False:
                     raise BuildControlError("Backend has an active or unknown session; idle restart refused")
                 if capture_terminal:
@@ -8040,6 +8050,27 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     capture_raw = canonical(native_capture) + b"\n"
                     control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)
                     operation["receipt"]["terminal_native_observation_sha256"] = hashlib.sha256(capture_raw).hexdigest()
+                if capture_native:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Native terminal capture requires a healthy active stale Running session")
+                    from docker_volume_native_terminal_stop import capture as capture_native_terminal
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "native terminal accepted store",
+                    )
+                    native_terminal_capture = capture_native_terminal(ids["backend"], store_root)
+                    captured_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                         for service, identifier in ids.items()}
+                    for service, observed in captured_services.items():
+                        before = fresh[service]
+                        if (any(observed.get(key) != before.get(key)
+                                for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                or observed.get("State", {}).get("Running") is not (service == "backend")):
+                            raise BuildControlError("Native terminal capture service incarnation changed")
+                    _assert_private_restart_network(captured_services, ids, control.project)
+                    capture_raw = canonical(native_terminal_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/native-terminal-stop.json", capture_raw)
+                    operation["receipt"]["native_terminal_capture_sha256"] = hashlib.sha256(capture_raw).hexdigest()
                 if saved_authoring:
                     # The operator window is explicit; repeat archive, API, ledger and
                     # service pins immediately before crossing the backend stop boundary.
@@ -8073,6 +8104,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 raise BuildControlError("Backend termination is not confirmed graceful; restart withheld")
             from docker_volume_stop_unadmitted import _read_terminal_process_receipt
             drained_raw, drained = _read_terminal_process_receipt(stopped, control)
+            if capture_native:
+                from docker_volume_native_terminal_stop import validate_drain as validate_native_terminal_drain
+                validate_native_terminal_drain(native_terminal_capture, drained)
             if saved_authoring:
                 _saved_authoring_validate_drain(authoring_probe, drained)
                 _saved_authoring_verify_retained_history(saved_authoring, state)
@@ -8122,9 +8156,24 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        native_terminal_archive = None
+        if native_terminal_pin is not None:
+            from docker_volume_native_terminal_stop import validate_fresh as validate_native_terminal_fresh
+            native_terminal_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "native terminal retained sessions",
+            )
+            native_terminal_store = storage.validate_path(
+                native_terminal_state / "runs" / "docker-all" / "session-store", native_terminal_state,
+                "native terminal retained accepted store",
+            )
+            native_terminal_archive = validate_native_terminal_fresh(
+                control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                actual=actual, store_root=native_terminal_store,
+            )
         pre_activation_stop = None
         if (document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
-                and preparation_abort is None):
+                and preparation_abort is None and native_terminal_pin is None):
             stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
             stop = control.read(stop_path)
             failure = stop.get("failure_receipt", {}).get("receipt", {})
@@ -8529,6 +8578,15 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     if service == "backend" and observed.get("State", {}).get("Running"):
                         raise BuildControlError("Fresh session requires the backend stopped")
                     actual[service] = observed
+            if native_terminal_pin is not None:
+                leased_native_terminal = validate_native_terminal_fresh(
+                    control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                    source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                    actual=actual, store_root=native_terminal_store,
+                )
+                if leased_native_terminal != native_terminal_archive:
+                    raise BuildControlError("Native terminal fresh-state proof changed under recreation lease")
+                operation["receipt"]["native_terminal_fresh_archive"] = leased_native_terminal
             if reconciliation is not None:
                 operation["receipt"]["activation_reconciliation"] = {
                     key: reconciliation[key]

@@ -2656,6 +2656,8 @@ def _parser() -> argparse.ArgumentParser:
         "--capture-terminal-observation", action="store_true",
         help="capture native evidence for a completed or failed run during a managed stop-only drain",
     )
+    idle_restart.add_argument("--capture-native-terminal", action="store_true",
+                              help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
     idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
@@ -2850,6 +2852,8 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
+    recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
     recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
