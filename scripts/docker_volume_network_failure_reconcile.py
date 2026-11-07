@@ -614,7 +614,9 @@ def _retained_record_checks(control, records):
                 for path in ("development/current.json", "development/verified.json")),
             "Retained history must pin both prior pointers")
     script = "history_record() { local p=\"$1\" h=\"$2\" q; q=$(dirname \"$p\"); "
-    script += "while test \"$q\" != /; do test ! -L \"$q\"; test -d \"$q\"; q=$(dirname \"$q\"); done; "
+    script += "while test \"$q\" != /; do test ! -L \"$q\"; "
+    script += "if test -e \"$q\"; then test -d \"$q\"; else test \"$h\" = absent; fi; "
+    script += "q=$(dirname \"$q\"); done; "
     script += "test ! -L \"$p\"; if test \"$h\" = absent; then test ! -e \"$p\"; else "
     script += "test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
     script += "test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = \"$h\"; fi; }; "

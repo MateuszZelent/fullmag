@@ -828,7 +828,7 @@ exit "$status"
 
 
 class PreparedGenerationShellTests(unittest.TestCase):
-    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False, atomic_prepare=False, history=False, corrupt_history=False, symlink_history=False, late_owner=False):
+    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False, atomic_prepare=False, history=False, corrupt_history=False, symlink_history=False, late_owner=False, missing_parent_absence=False, symlink_absence_parent=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
             control = SimpleNamespace(path=lambda relative: str(base / relative))
@@ -869,6 +869,10 @@ class PreparedGenerationShellTests(unittest.TestCase):
                 records = {"development/" + name: reconcile.digest(b"old-success")
                            for name in ("current.json", "verified.json")}
                 records["development/absent-owner.json"] = None
+                if missing_parent_absence:
+                    records["new-runtime/process-tree.json"] = None
+                    if symlink_absence_parent:
+                        (base / "new-runtime").symlink_to(base / "uncreated-target")
                 if late_owner:
                     (base / "development/absent-owner.json").write_bytes(b"new-owner")
                 recovery_args["retained_records"] = records
@@ -901,7 +905,7 @@ class PreparedGenerationShellTests(unittest.TestCase):
                 self.assertEqual((base / "development/verified.json").read_bytes(), b"old-success")
             else:
                 self.assertFalse((base / "development/verified.json").exists())
-            if corrupt or symlink or corrupt_previous or corrupt_history or symlink_history or late_owner:
+            if corrupt or symlink or corrupt_previous or corrupt_history or symlink_history or late_owner or symlink_absence_parent:
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertEqual((root / "receipt.json").read_bytes(), b"original")
                 self.assertFalse((root / "terminal.json").exists())
@@ -916,6 +920,13 @@ class PreparedGenerationShellTests(unittest.TestCase):
                 for path in (root / "receipt.json", root / "terminal.json", *((base / "development/current.json",) if not history else ())):
                     self.assertEqual(path.read_bytes(), b"result")
                 self.assertEqual((root / "unknown-receipt.json").read_bytes(), b"original")
+
+    def test_recreated_failure_refuses_dangling_symlink_in_absent_owner_parent(self):
+        self.run_publication(history=True, missing_parent_absence=True,
+                             symlink_absence_parent=True, atomic_prepare=True)
+
+    def test_recreated_failure_accepts_absent_process_under_uncreated_runtime_directory(self):
+        self.run_publication(history=True, missing_parent_absence=True, atomic_prepare=True)
 
     def test_recreated_failure_refuses_new_owner_before_any_preparation(self):
         self.run_publication(history=True, late_owner=True, atomic_prepare=True)
