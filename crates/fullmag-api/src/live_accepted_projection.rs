@@ -6,7 +6,7 @@
 //! solver, allocates a device, or writes a durable catalog.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -21,6 +21,45 @@ const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// durable outputs, which on a multi-million-cell grid kept a core busy and
 /// the API's memory high for as long as the deferral lasted.
 const MAX_DEFERRAL_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Diagnostics only: observe the original future without cancelling or replaying it.
+pub(crate) async fn observe_projection_phase<T>(
+    phase: &'static str,
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    let elapsed = ProjectionPhaseTimer::new(phase);
+    tokio::pin!(operation);
+    let result = tokio::select! {
+        result = &mut operation => result,
+        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            tracing::warn!(phase, "accepted projection phase still pending after one second");
+            operation.await
+        }
+    };
+    drop(elapsed);
+    result
+}
+
+pub(crate) struct ProjectionPhaseTimer {
+    phase: &'static str,
+    started: Instant,
+}
+
+impl ProjectionPhaseTimer {
+    pub(crate) fn new(phase: &'static str) -> Self {
+        Self { phase, started: Instant::now() }
+    }
+}
+
+impl Drop for ProjectionPhaseTimer {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            tracing::warn!(phase = self.phase, elapsed_ms = elapsed.as_millis() as u64,
+                "accepted projection phase finished slowly");
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ProjectionContext {
@@ -226,7 +265,9 @@ pub(crate) fn spawn(state: Arc<AppState>) {
             if let Err(error) = crate::accepted_run_performance::publish_if_changed(&state, &mut performance).await {
                 tracing::debug!(error = %error, "automatic performance invalidation deferred");
             }
-            match poll_once(&state, &mut cursor, &mut study_cache, &mut published_demand).await {
+            match observe_projection_phase("poll", poll_once(
+                &state, &mut cursor, &mut study_cache, &mut published_demand,
+            )).await {
                 Ok(()) => {
                     last_deferral = None;
                     repeated_deferrals = 0;
@@ -301,7 +342,7 @@ async fn poll_once(
     let expected = context.clone();
     let previous_cursor = cursor.clone();
     let mut cached_study = study_cache.take();
-    let (projection, cached_study) = tokio::task::spawn_blocking(move || {
+    let (projection, cached_study) = observe_projection_phase("durable_load", tokio::task::spawn_blocking(move || {
         let projection = load_durable_projection(
             &store_root,
             &expected,
@@ -309,7 +350,7 @@ async fn poll_once(
             &mut cached_study,
         );
         (projection, cached_study)
-    })
+    }))
     .await
     .map_err(|error| ApiError::internal(format!("accepted projection task failed: {error}")))?;
     *study_cache = cached_study;
@@ -345,38 +386,40 @@ async fn poll_once(
     // Preparation performs catalog/plan validation outside the transition
     // fence and uses its own exact final CAS.
     let mut running_capabilities = None;
-    let stage_preparation = if projection.terminal_without_outputs {
-        // A terminal catalog without outputs still carries authoritative
-        // lifecycle state. Do not require preparation/materialization or clear
-        // existing live fields before publishing that terminal state.
-        Ok(None)
-    } else if let Some((_, observation)) = projection
-        .live_observation
-        .as_ref()
-        .filter(|(_, observation)| observation.magnetization_values.is_some())
-    {
-        ensure_stage_preparation_for_step(state, &context, &observation.header.step_id, None)
-            .await
-        .and_then(|prepared| {
-            validate_live_magnetization_domain(observation, &prepared.execution_plan)?;
-            if !matches!(projection.status, "completed" | "failed" | "cancelled") {
-                running_capabilities = projection
-                    .accepted_runtime_problem
-                    .as_ref()
-                    .and_then(|problem| {
-                        running_runtime_capabilities(
-                            problem,
-                            &prepared.execution_plan,
-                            &observation.header.realization,
-                        )
-                    })
-                    .map(|capabilities| (capabilities, prepared.execution_plan.common.execution_mode));
-            }
+    let stage_preparation = observe_projection_phase("stage_preparation", async {
+        if projection.terminal_without_outputs {
+            // A terminal catalog without outputs still carries authoritative
+            // lifecycle state. Do not require preparation/materialization or clear
+            // existing live fields before publishing that terminal state.
             Ok(None)
-        })
-    } else {
-        ensure_stage_preparation(state, &context, &projection).await
-    };
+        } else if let Some((_, observation)) = projection
+            .live_observation
+            .as_ref()
+            .filter(|(_, observation)| observation.magnetization_values.is_some())
+        {
+            ensure_stage_preparation_for_step(state, &context, &observation.header.step_id, None)
+                .await
+            .and_then(|prepared| {
+                validate_live_magnetization_domain(observation, &prepared.execution_plan)?;
+                if !matches!(projection.status, "completed" | "failed" | "cancelled") {
+                    running_capabilities = projection
+                        .accepted_runtime_problem
+                        .as_ref()
+                        .and_then(|problem| {
+                            running_runtime_capabilities(
+                                problem,
+                                &prepared.execution_plan,
+                                &observation.header.realization,
+                            )
+                        })
+                        .map(|capabilities| (capabilities, prepared.execution_plan.common.execution_mode));
+                }
+                Ok(None)
+            })
+        } else {
+            ensure_stage_preparation(state, &context, &projection).await
+        }
+    }).await;
     let prepared_state_domain = match stage_preparation {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -469,7 +512,7 @@ async fn poll_once(
             }
         }
     }
-    apply_projection(state, &context, projection).await?;
+    observe_projection_phase("apply", apply_projection(state, &context, projection)).await?;
     *cursor = Some(next_cursor);
     Ok(())
 }
@@ -845,14 +888,17 @@ fn load_durable_projection(
         // or rebuild the read model until a durable or live sequence changes.
         return Ok(None);
     }
-    let verified = if durable_changed {
-        if let Some(artifact_catalog) = artifact_catalog.as_ref() {
-            load_verified_outputs(&store, &run_catalog, artifact_catalog, &task_order)?
+    let verified = {
+        let _elapsed = ProjectionPhaseTimer::new("verified_outputs");
+        if durable_changed {
+            if let Some(artifact_catalog) = artifact_catalog.as_ref() {
+                load_verified_outputs(&store, &run_catalog, artifact_catalog, &task_order)?
+            } else {
+                Vec::new()
+            }
         } else {
             Vec::new()
         }
-    } else {
-        Vec::new()
     };
     let previous_stage_details = previous_cursor
         .filter(|cursor| cursor_matches_context(cursor, context))
@@ -1722,6 +1768,7 @@ fn load_stage_journal_details(
     previous: Option<&StageJournalDetailsCache>,
 ) -> Result<StageJournalDetailsCache, ApiError> {
     use fullmag_session::FmsTaskLifecycle as Life;
+    let _elapsed = ProjectionPhaseTimer::new("stage_journal_total");
 
     let mut details = StageJournalDetailsCache::new();
     let mut missing = Vec::new();
@@ -1765,9 +1812,12 @@ fn load_stage_journal_details(
 
     // This is a real shared native fence, not an unlocked snapshot or writer
     // takeover. A busy store defers the existing projector poll with its cursor intact.
-    let transaction = store.read_transaction().map_err(|error| {
-        ApiError::conflict(format!("read accepted stage journal fence: {error}"))
-    })?;
+    let transaction = {
+        let _elapsed = ProjectionPhaseTimer::new("stage_journal_fence");
+        store.read_transaction().map_err(|error| {
+            ApiError::conflict(format!("read accepted stage journal fence: {error:#}"))
+        })?
+    };
     if store
         .read_run_catalog(&catalog.run_id)
         .map_err(|error| ApiError::conflict(format!("read accepted stage catalog: {error}")))?
@@ -1778,9 +1828,18 @@ fn load_stage_journal_details(
             "accepted stage catalog changed before journal capture",
         ));
     }
-    let journal = store
-        .read_coordinator_journal_readonly(&catalog.run_id, &transaction)
-        .map_err(|error| ApiError::conflict(format!("read accepted stage journal: {error}")))?;
+    let journal = {
+        let elapsed = ProjectionPhaseTimer::new("stage_journal_snapshot");
+        let journal = store
+            .read_coordinator_journal_readonly(&catalog.run_id, &transaction)
+            .map_err(|error| ApiError::conflict(format!("read accepted stage journal: {error:#}")))?;
+        if elapsed.started.elapsed() >= Duration::from_secs(1) {
+            tracing::warn!(entries = journal.len(), tasks = missing.len(),
+                "slow accepted stage journal snapshot size");
+        }
+        journal
+    };
+    let _interpretation_elapsed = ProjectionPhaseTimer::new("stage_journal_interpretation");
     for task in missing {
         details
             .get_mut(&task.task_id)
