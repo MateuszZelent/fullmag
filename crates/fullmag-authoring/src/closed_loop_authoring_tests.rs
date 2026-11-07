@@ -78,13 +78,14 @@ fn authored_gsg_scene() -> SceneDocument {
     let mut scene = authored_scene();
     let geometry = &mut scene.objects[0].geometry;
     geometry.geometry_kind = "CPWAntennaLayout".into();
+    let stations = [0.0, 1.0].map(|s| serde_json::json!({
+        "s": s, "signal_width_m": 200e-9, "left_gap_m": 250e-9,
+        "right_gap_m": 250e-9, "left_ground_width_m": 200e-9,
+        "right_ground_width_m": 200e-9
+    }));
     geometry.geometry_params = serde_json::json!({
         "length_m": 20e-6, "thickness_m": 90e-9, "conductivity_s_per_m": 58e6,
-        "stations": [0.0, 1.0].map(|s| serde_json::json!({
-            "s": s, "signal_width_m": 200e-9, "left_gap_m": 250e-9,
-            "right_gap_m": 250e-9, "left_ground_width_m": 200e-9,
-            "right_ground_width_m": 200e-9
-        })),
+        "stations": stations,
         "conductors": [
             {"id": "center", "kind": "signal"},
             {"id": "left", "kind": "ground_left"},
@@ -99,9 +100,10 @@ fn authored_gsg_scene() -> SceneDocument {
         }
     });
     mutate_current(&mut scene, |current| {
-        current["materials"] = serde_json::json!(["center", "left", "right", "feed", "end"].map(|id|
+        let materials = ["center", "left", "right", "feed", "end"].map(|id|
             serde_json::json!({"region": {"object_id": "object", "region_id": id},
-                "material": {"sigma_Spm": if matches!(id, "feed" | "end") {30e6} else {58e6}}})));
+                "material": {"sigma_Spm": if matches!(id, "feed" | "end") {30e6} else {58e6}}}));
+        current["materials"] = serde_json::to_value(materials).unwrap();
         let cut = &mut current["structured_current_closure"]["source_cuts"][0];
         cut["region"]["region_id"] = serde_json::json!("feed");
         cut["plane"]["axis"] = serde_json::json!("x");
