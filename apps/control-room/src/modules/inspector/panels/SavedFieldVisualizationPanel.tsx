@@ -5,6 +5,8 @@ import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
 import { quantityDisplayName } from "@/kernel/api/quantityIds";
 import { resolveSavedFieldViewportMetadataEligibility } from "@/kernel/resources/savedFieldViewportResources";
 import { useMaterializedDatasetResource } from "@/kernel/resources/solutionSetResources";
+import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { selectionRefEquals, type PinnedMaterializedDatasetSelectionRef } from "@/kernel/selection/selectionTypes";
 import { useObjectVisualizationController, useSavedFieldPresentation } from "@/kernel/visualization/useObjectVisualization";
 import type { SavedFieldPresentation, VisualizationColorMode, VisualizationTargetPatch } from "@/kernel/visualization/ObjectVisualizationController";
@@ -13,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { VisualizationInspectorOverview } from "./ObjectVisualizationOverview";
 import { NumberField } from "./ObjectVisualizationTargetSection";
 import { ViewportCameraControls } from "../visualization/ViewportCameraControls";
+import { ViewportClippingControls } from "../visualization/ViewportClippingControls";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 import { FieldRow } from "../primitives/FieldRow";
@@ -45,6 +48,9 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
   refreshWarning?: string | null;
 }) {
   const { selection } = useKernel();
+  const sectionState = useVisualizationStateResource();
+  const sectionOwner = useSessionResourceIdentity();
+  const clip = (sectionState.optimisticData ?? sectionState.data)?.clip;
   const controller = useObjectVisualizationController();
   const ref = presentation.selection;
   const settings = presentation.settings;
@@ -134,7 +140,7 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
       <p role="note">The renderer also limits arrows to active samples and its scene budget. Arrow size represents display gain, not a new field value.</p>
     </InspectorGroup> : null;
   const advanced = <>
-    <p role="note">Only active saved samples contain values. Clipping controls for this saved carrier are not qualified in this panel. To select another quantity, choose its saved result in Results.</p>
+    <p role="note">Only active saved samples contain values. The global section clips the displayed scene without resampling the saved field or creating a new 2D field map. To select another quantity, choose its saved result in Results.</p>
     <InspectorGroup title="Result identity" collapsible defaultOpen={false}>
       <FieldRow label="Run" value={ref.runId} mono />
       <FieldRow label="Revision" value={ref.containingRevision} mono />
@@ -149,6 +155,8 @@ export function SavedFieldVisualizationPanel({ presentation, dataset, error = nu
       display={display}
       surfaceColoring={surfaceColoring}
       vectors={vectors}
+      clipping={<ViewportClippingControls resource={sectionState} ownerKey={JSON.stringify([sectionOwner, ref.nodeId])} />}
+      clippingSummary={clip ? clip.enabled ? `On: ${clip.axis.toUpperCase()} ${clip.position_percent.toFixed(1)}%` : "Section: Off" : "Unavailable"}
       camera={<ViewportCameraControls />}
       advanced={advanced}
       quantitySource={quantitySource}
