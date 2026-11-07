@@ -190,8 +190,10 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
         ):
             qualify, verify = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
             qualify({}, source)
-            with self.assertRaisesRegex(BuildControlError, "changed before failure publication"):
+            with self.assertRaisesRegex(BuildControlError, "changed before failure publication") as refused:
                 verify(refresh_windows=True)
+            self.assertIn(source, str(refused.exception))
+            self.assertIn('observation.inode', str(refused.exception))
 
     def test_vanishing_container_retries_full_inventory(self):
         error = BuildControlError("error: no such object: " + "c" * 64)

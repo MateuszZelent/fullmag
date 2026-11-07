@@ -405,8 +405,10 @@ def _initial_desktop_qualifier(identity, compose, engine_id):
             # Recheck early sources last so the oldest Windows evidence is
             # refreshed closest to the failure publication boundary.
             for source, (evidence, pin) in reversed(by_source.items()):
-                require(_observe_windows_source(source, windows._windows_source_path(source), context, pin) == evidence,
-                        "Foreign Windows bind changed before failure publication")
+                refreshed = _observe_windows_source(source, windows._windows_source_path(source), context, pin)
+                require(refreshed == evidence,
+                        "Foreign Windows bind changed before failure publication: " + source
+                        + "; changed fields: " + ", ".join(windows._observation_differences(evidence, refreshed)))
         for identifier, pin in pins.items():
             require(windows._container_pin(windows._inspect(identifier)) == pin,
                     "Foreign container changed during initial Desktop bind isolation")
