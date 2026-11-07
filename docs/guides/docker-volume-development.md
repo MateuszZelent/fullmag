@@ -159,6 +159,10 @@ Może technicznie zmieniać również inne jego pliki. Główny checkout nie mo�
 zostać wybrany jako writable alias. Zmiana grantu wymaga odtworzenia usług;
 `docker-dev` wybiera kontrolowaną ścieżkę odtworzenia i zachowuje wolumeny.
 
+Na Linux/WSL launcher nadaje UID 65532 dostęp POSIX ACL wyłącznie do katalogów wewnątrz jawnie wybranego podkatalogu. Zachowuje dotychczasowe efektywne uprawnienia innych użytkowników i grup oraz właścicieli; pliki źródeł i wyników nie są przepisywane. Domyślne ACL zapewniają operatorowi dostęp do nowych wyników kontenera. Dowiązania, obca własność bez gotowego grantu, zagnieżdżone dane Git i przekroczenie limitu drzewa powodują odmowę przed startem usług. Nie jest to grant na cały checkout.
+
+Przed przyjęciem skryptu backend sprawdza zapis i usunięcie własnego pliku kontrolnego w faktycznych katalogach wyjścia i scratch objętych aliasem. Błąd zwraca `docker_startup_output_mapping_invalid` przed publikacją placeholdera aktywacji i RunIntent; launcher rozpoznaje go jako odrzucenie, bez powtórnego POST. Ten punktowy test nie gwarantuje późniejszego zapisu po zmianie praw lub zapełnieniu dysku.
+
 Skrypt `examples/model.py` używa domyślnie sąsiedniego `model.zarr`.
 HDF5 zachowuje obecny kontener `model.results` z plikami `.h5`.
 Jawna OutputStorage jest nadrzędna. Zapis sesji wskazuje `model.fms`,
@@ -307,22 +311,53 @@ just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <c
 Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
 Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
 próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
-`operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
-kontrolnego i checkoutu tej grupy. Dla początkowej próby WSL ext4 punktem
-odniesienia jest marker hosta w przypiętym bindzie `/state` z Compose. Alias
-WSL wymaga zgodności korzenia montowania i inode. Montowanie Windows wymaga
-dowodu natywnego Windows i mapowania DrvFs. Brakującą ścieżkę można
-zakwalifikować wyłącznie dla kontenera w stanie `exited` z PID 0. Junction
-wychodzący poza montowany katalog wymaga zgodnego odsyłacza w DrvFs i pełnego
-dowodu dla jego celu. Zagnieżdżone zewnętrzne junctiony kończą się odmową.
-Dowody i stan kontenerów są ponownie sprawdzane przed publikacją.
-Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
-wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
-BuildKit zachowują własne, globalne kontrole.
+`operation.lock`. Pełny spis kontenerów wyklucza konsumentów zasobów
+tej grupy we wszystkich stanach. Obejmuje jej tożsamość projektu i źródła,
+prywatną sieć oraz nazwany wolumen kontrolny. Uwierzytelniony `Mountpoint`
+wolumenu z daemona pozwala także odrzucić bezpośredni bind jego katalogu,
+rodzica albo podkatalogu. Stan zasobów jest ponownie sprawdzany przed publikacją.
+
+Zakres tej procedury failure-only stanowią metadane wskazanej grupy zgodnie
+z ADR 0067. Jej transakcja zapisuje receipty i marker w wolumenie kontrolnym.
+Obce bindy samego checkoutu pozostają poza tym zakresem. Admisja buildu,
+przenoszenie źródeł i kwalifikacja retencji mają własne wymagania dotyczące
+checkoutu, danych i konsumentów.
 Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
-`verified`, nie uruchamia usług i nie usuwa danych. Wyłącznie oryginalny helper
-zwalnia swój marker `active` po odebraniu terminalnego wyniku. Nieznany wynik
-publikacji wymaga odczytu zachowanych dowodów; nie ponawiaj mutacji w ciemno.
+`verified`, nie uruchamia usług i nie usuwa danych. Domyślnie oryginalny helper
+zwalnia swój marker `active` po odebraniu terminalnego wyniku.
+
+Jeżeli oryginalny helper został utracony, istnieje osobny, jawnie wybierany tryb
+`recover_absent_helper`. Najpierw wykonaj preview z argumentami `false true`:
+
+```text
+just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <compose-sha256> <engine-id> false true
+```
+
+Po autoryzacji i sprawdzeniu preview argumenty `true true` wykonują recovery.
+Tryb wymaga potwierdzonej przez daemon nieobecności helpera, również jako
+zatrzymanego kontenera, zgodnego wolumenu kontrolnego oraz wolnej, istniejącej
+blokady `operation.lock`. Zachowuje wszystkie pozostałe kontrole początkowej
+próby, konsumentów, sieci i braku wcześniejszych publikacji. Nowy helper
+kontrolny uzyskuje tę blokadę bez tworzenia ani obcinania pliku, sprawdza jej
+tożsamość oraz przypięte receipty i marker. Pod jedną blokadą archiwizuje
+oryginał, publikuje dowód i trzy zgodne zapisy `failed-confirmed`, a dopiero
+wtedy usuwa dokładnie marker tej próby. Nie odtwarza starego helpera ani
+nie przypisuje sobie jego tożsamości.
+
+Nieznany wynik publikacji lub częściowy zapis wymaga odczytu zachowanych
+dowodów; nie ponawiaj mutacji w ciemno. Potwierdzone zamknięcie błędu pozwala
+ponowić zwykły launcher `docker-dev`; samo nie dowodzi dostępności puli
+adresowej ani poprawnego buildu aplikacji.
+
+Jeżeli domyślne pule Dockera są nadal wyczerpane, launcher przyjmuje jawną
+opcję `--network-subnet <CIDR>` (ostatni argument recepty `docker-dev`).
+Dotyczy ona wyłącznie prywatnego bridge tej grupy i jest zapisywana w jej
+przypiętym dokumencie Compose. Dopuszczalna jest kanoniczna podsieć IPv4 RFC1918
+z prefiksem od /16 do /29. Przed wyborem sprawdź bieżące trasy hosta; launcher
+sprawdza dodatkowo kolizje z sieciami Dockera. Nie zmienia konfiguracji daemona,
+nie usuwa innych sieci i nie dobiera zastępczego zakresu. Dla istniejącej grupy
+jawnie podany zakres musi zgadzać się z jej utrwalonym Compose.
+
 Dopiero potwierdzony terminal i zwolnienie helpera pozwalają na nowy start
 standardową receptą. Ta procedura nie służy do odzyskiwania zatrzymanego
 mastera z istniejącą sesją.
@@ -717,6 +752,23 @@ uruchamia Solve ani Compute Fields. Receipt zapisuje identyfikator oraz SHA-256
 źródłowego harnessu, a wynik potwierdza odczyt payloadów ramek, widoczny canvas,
 żywy kontekst WebGL i stabilność Inspectora oraz kamery. Tryb SwiftShader jest
 dowodem przeglądarki, nie dowodem sprzętowego GPU ani fizyki FEM.
+
+Osobny scenariusz `--inspector-ack` sprawdza stabilność Inspectora podczas
+rzeczywistego PATCH i ACK. Wymaga przygotowanego, oczekującego modelu
+`examples/airbox_inspector_mixed.py`. Uruchom go dla zdrowej grupy:
+
+```powershell
+python -B scripts/docker_dev_browser_qa.py --repo-root "$source" --source-root "$source" --port 3197 --inspector-ack
+```
+
+Próba przypina sesję i obiekt `mixed_p1_box_prism`, zmienia jego nazwę na
+unikalną wartość testową i potwierdza przywrócenie nazwy przez API. Wynik
+obejmuje zachowanie węzła, fokusu i scrolla, dostępność pól, budżet żądań,
+rewizje obu ACK oraz hashe harnessu i bibliotek. Przywracanie używa aktualnej
+rewizji i własnej nazwy testowej. Konflikt sesji, obca zmiana nazwy albo
+niepotwierdzony wynik zapisuje nieudaną próbę wymagającą odczytu obiektu przed
+kolejnym uruchomieniem. Scenariusz ma własny trwały wynik i wyklucza pozostałe
+tryby Browser QA w tej samej operacji.
 
 ## Budżet backendu podczas trwającego startu
 
@@ -1201,3 +1253,36 @@ uwierzytelnionego native drainu, zgodnych inkarnacji i zamkniętych procesów.
 `--stop-frontend` zamyka następnie wyłącznie frontend tej samej grupy.
 Nie zmienia stanów tasków, nie usuwa wyników ani nie ponawia Solve.
 Niepotwierdzony efekt zachowuje lease i dowody do recovery.
+
+
+### Nieudany prelaunch i archiwizacja przed nową sesją
+
+Jeżeli pierwszy worker Study zakończył się błędem przed solverem, a pozostałe
+etapy nadal czekają na jego wynik, zwykły idle stop ani dowód wszystkich
+Succeeded nie pasują do tego stanu. Dedykowany tryb wymaga zwolnionych lease
+i rezerwacji hosta, dokładnego receiptu wyjścia workera oraz nieprzydzielonych,
+zablokowanych zależnościami następców:
+
+```sh
+just docker-dev-stop-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <port>
+```
+
+Operacja zapisuje intent przed pojedynczym SIGTERM do przypiętej inkarnacji
+API, potwierdza jego wyjście oraz graceful drain runtime, następnie sprawdza
+zachowane rekordy pod blokadami. Przypina także kod launchera, kontrolera
+i helpera. Niepotwierdzony efekt wymaga odczytania tej samej operacji;
+nie ponawiaj sygnału ani aktywacji skryptu.
+
+Po potwierdzonym sukcesie zachowaj identyfikator operacji stop i SHA-256
+surowego terminalnego receiptu. Tylko ta para pozwala na odtworzenie ze świeżym
+stanem i zachowaniem starego store w archiwum:
+
+```sh
+just docker-dev-recreate-prelaunch-failure <dev-attempt> <config-sha256> <source-root> <stop-attempt> <raw-stop-terminal-sha256> <port>
+```
+
+Dowody są sprawdzane przed lease odtworzenia oraz ponownie pod nim.
+Plików kontrolera nie zmieniaj pomiędzy stopem i odtworzeniem. Tryb nie
+przywraca starego runu, nie powtarza skryptu ani Compute i nie zmienia
+nieudanych lub oczekujących etapów na Succeeded. Nową pracę można przyjąć
+dopiero po potwierdzeniu gotowości nowego runtime.

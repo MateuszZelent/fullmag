@@ -1,16 +1,18 @@
 """Focused guards for the initial Compose pool-failure reconciler."""
 from __future__ import annotations
 
-import json
+import base64
 import fcntl
-import stat
+import json
+import os
+import signal
 import tempfile
+import time
 from pathlib import Path
 import subprocess
 import unittest
-import threading
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import docker_volume_network_failure_reconcile as reconcile
 from docker_build_control import BuildControlError, canonical
@@ -19,6 +21,8 @@ from docker_build_control import BuildControlError, canonical
 ATTEMPT = "d9071f5ad22f492e9efcaab3d3e5abae"
 PROJECT = "fullmag-worktree-fullmag-465ed74fce6e7ce0"
 NETWORK = PROJECT + "_fullmag"
+CONTROL_VOLUME = "own-control"
+CONTROL_MOUNTPOINT = "/var/lib/docker/volumes/own-control/_data"
 IDENTITY = {
     "project_name": PROJECT,
     "network_name": NETWORK,
@@ -39,6 +43,18 @@ COMPOSE_ERROR = "\n".join((
 ))
 
 
+class RecreatedNetworkFailureTests(unittest.TestCase):
+    def test_exact_owned_network_removal_then_pool_failure(self):
+        prefix = f"Network {NETWORK} Removing\nNetwork {NETWORK} Removed\n"
+        expected = reconcile.validate_pool_failure(COMPOSE_ERROR, NETWORK, PROJECT)
+        self.assertEqual(reconcile.validate_pool_failure(prefix + COMPOSE_ERROR, NETWORK, PROJECT), expected)
+        for bad in (prefix.replace(NETWORK, "foreign") + COMPOSE_ERROR,
+                    f"Network {NETWORK} Removing\n" + COMPOSE_ERROR,
+                    prefix + "unexpected\n" + COMPOSE_ERROR):
+            with self.subTest(output=bad), self.assertRaises(BuildControlError):
+                reconcile.validate_pool_failure(bad, NETWORK, PROJECT)
+
+
 def helper_doc():
     labels = {
         "com.docker.compose.project": PROJECT,
@@ -55,92 +71,34 @@ def helper_doc():
         "HostConfig": {"NetworkMode": "none"},
         "State": {"Running": True},
         "NetworkSettings": {"Networks": {}},
-            "Mounts": [],
+        "Mounts": [],
     }
 
 
-class WindowsBatchTests(unittest.TestCase):
-    def test_full_sources_run_in_bounded_parallel_and_preserve_deterministic_results(self):
-        sources={f'C:\\foreign\\{i}':{'id':str(i)} for i in range(8)}
-        lock=threading.Lock()
-        barrier=threading.Barrier(4,timeout=10)
-        active=maximum=0
-        seen=[]
-        context={'linux':{'root_device':1},'distro':'Ubuntu'}
-        def observe(source,native,ctx,pin):
-            nonlocal active,maximum
-            with lock:
-                active+=1
-                maximum=max(maximum,active)
-                seen.append(source)
-            try:
-                barrier.wait()
-                ctx['linux']['root_device']=2
-                return {'kind':'present','native':{'source':source},'mapping':{'path':native}}
-            finally:
-                with lock: active-=1
-        with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
-            results=reconcile._windows_source_batch(sources,context)
-        self.assertEqual(maximum,4)
-        self.assertEqual(active,0)
-        self.assertCountEqual(seen,sources)
-        self.assertEqual(list(results),list(sources))
-        self.assertEqual(context['linux']['root_device'],1)
-        self.assertEqual(set(results),set(sources))
-        for source,evidence in results.items(): self.assertEqual(evidence['native']['source'],source)
+def foreign_container(**overrides):
+    document = {
+        "Id": "b" * 64,
+        "Name": "/foreign-consumer",
+        "Config": {"Labels": {}},
+        "HostConfig": {"NetworkMode": "default"},
+        "State": {"Running": True},
+        "NetworkSettings": {"Networks": {}},
+        "Mounts": [],
+    }
+    document.update(overrides)
+    return document
 
-    def test_failure_or_incomplete_result_discards_whole_batch_and_joins_workers(self):
-        for result in (BuildControlError('native qualification refused'),TimeoutError('timeout'),None,{}):
-            with self.subTest(result=result):
-                def observe(*args):
-                    if isinstance(result,Exception): raise result
-                    return result
-                with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
-                    with self.assertRaises((BuildControlError,TimeoutError)):
-                        reconcile._windows_source_batch({'C:\\foreign':{'id':'b'}},{})
 
-    def test_prewarm_deduplicates_source_but_never_consumer_authorization(self):
-        source=r'C:\git\foreign'
-        stopped={'id':'b'*64,'running':False}
-        running={'id':'c'*64,'running':True}
-        docs=[{**stopped,'Mounts':[{'Type':'bind','Source':source}]},
-              {**running,'Mounts':[{'Type':'bind','Source':source}]}]
-        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
-        evidence={'kind':'absent-stopped','native':{},'mapping':{}}
-        def must_stay_stopped(pin):
-            if pin['running']: raise BuildControlError('running consumer')
-        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
-             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
-             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
-             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id'],'running':d['running']}), \
-             patch.object(reconcile,'_observe_windows_source',return_value=evidence) as measure, \
-             patch.object(reconcile.absent_windows,'_stopped',side_effect=must_stay_stopped):
-            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=docs)
-            self.assertEqual(measure.call_count,1)
-            qualify(stopped,source)
-            with self.assertRaisesRegex(BuildControlError,'running consumer'): qualify(running,source)
-
-    def test_prewarm_matches_lazy_proof_and_rechecks_context_after_full_refresh(self):
-        source=r'C:\git\foreign'
-        doc={'id':'b'*64,'Mounts':[{'Type':'bind','Source':source}]}
-        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
-        linux={'root_device':1,'engine_id':'engine','source_root':'/source','reference_root':'/reference'}
-        proof={'kind':'present','native':{'identity':'full'},'mapping':{'path':'/mapped'}}
-        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
-             patch.object(reconcile.windows,'_linux_identity',return_value=linux), \
-             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}) as engine, \
-             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id']}), \
-             patch.object(reconcile.windows,'_inspect',return_value=doc), \
-             patch.object(reconcile,'_observe_windows_source',return_value=proof):
-            lazy,verify_lazy=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
-            expected=lazy(doc,source)
-            verify_lazy(refresh_windows=True)
-            parallel,verify_parallel=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=[doc])
-            self.assertEqual(parallel(doc,source),expected)
-            verify_parallel(refresh_windows=True)
-            engine.return_value={'ID':'changed'}
-            with self.assertRaisesRegex(BuildControlError,'context changed'):
-                verify_parallel(refresh_windows=True)
+def inventory_args(helper_id="a" * 64):
+    return {
+        "helper_id": helper_id,
+        "helper_name": "fullmag-control-" + ATTEMPT,
+        "project": PROJECT,
+        "network_name": NETWORK,
+        "identity": IDENTITY,
+        "control_volume": CONTROL_VOLUME,
+        "control_mountpoint": CONTROL_MOUNTPOINT,
+    }
 
 
 class NetworkFailureValidatorsTests(unittest.TestCase):
@@ -206,133 +164,110 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
                     identity=IDENTITY, network_name=NETWORK,
                 )
 
-    def test_windows_binds_require_and_retain_exact_evidence(self):
-        foreign = {**helper_doc(), "Id": "b" * 64, "Name": "/foreign", "Config": {}}
-        sources = [r"C:\git\foreign", "/run/desktop/mnt/host/e/git/foreign"]
-        foreign["Mounts"] = [{"Type": "bind", "Source": source} for source in sources]
-        args = dict(helper_id="a" * 64, helper_name="fullmag-control-" + ATTEMPT,
-                    project=PROJECT, network_name=NETWORK, identity=IDENTITY, control_volume="own-control")
-        with self.assertRaisesRegex(BuildControlError, "requires initial recovery isolation evidence"):
-            reconcile.validate_container_inventory([helper_doc(), foreign], **args)
-        proof = Mock(side_effect=lambda doc, source: (None, {"bind": source, "id": doc["Id"]}))
-        result = reconcile.validate_container_inventory([helper_doc(), foreign], qualify_desktop_bind=proof, **args)
-        self.assertEqual({entry["bind"] for entry in result if "bind" in entry}, set(sources))
-        self.assertEqual([call.args for call in proof.call_args_list], [(foreign, source) for source in sources])
-
-    def test_desktop_alias_cannot_hide_checkout_overlap(self):
-        foreign = {**helper_doc(), "Id": "b" * 64, "Name": "/foreign", "Config": {}}
-        alias = reconcile.WSL_ALIAS + "Ubuntu/" + "0" * 64
-        args = dict(helper_id="a" * 64, helper_name="fullmag-control-" + ATTEMPT,
-                    project=PROJECT, network_name=NETWORK, identity=IDENTITY, control_volume="own-control")
-        for source in (alias, "/run/desktop/mnt/host/c"):
-            foreign["Mounts"] = [{"Type": "bind", "Source": source}]
-            with self.subTest(source=source), self.assertRaisesRegex(BuildControlError, "requires initial"):
-                reconcile.validate_container_inventory([helper_doc(), foreign], **args)
-        foreign["Mounts"] = [{"Type": "bind", "Source": alias}]
-        with self.assertRaisesRegex(BuildControlError, "consumes this group"):
-            reconcile.validate_container_inventory(
-                [helper_doc(), foreign], **args,
-                qualify_desktop_bind=lambda *_: (IDENTITY["source_root"], {"source": alias}),
-            )
-
-    def test_external_junction_requires_exact_drvfs_target_and_own_proof(self):
-        source = r"C:\git\foreign"
-        target = r"E:\git\storage\target"
-        origin = {"path": "/mnt/c/git/foreign", "mode": stat.S_IFDIR, "device": 2}
-        destination = {"path": "/mnt/e/git/storage/target", "mode": stat.S_IFDIR, "device": 3}
-        native = {"candidate": {"path": source, "kind": "directory"}}
-        target_native = {"candidate": {"path": target, "kind": "directory"}}
-        record = {"tag": "0xa0000003", "target": target}
-        with (
-            patch.object(reconcile.windows, "_mapping", side_effect=lambda s: origin if s == source else destination),
-            patch.object(reconcile.windows, "_native", side_effect=lambda s, *a, **kw: native if s == source else target_native) as observe,
-            patch.object(reconcile.windows, "_link_paths", return_value=[("target", "target", record)]),
-            patch.object(reconcile.windows, "_link_parent_directories"),
-            patch.object(reconcile.windows, "_file_identity", return_value={"mode": stat.S_IFLNK, "device": 2}),
-            patch.object(reconcile.windows, "_qualify_links", return_value=[]),
-            patch.object(reconcile.os, "readlink", return_value=destination["path"]) as readlink,
-        ):
-            proof = reconcile._observe_present_windows_bind(source, "Ubuntu", 1)
-            self.assertEqual(proof["external_junctions"]["target"]["native"], target_native)
-            observe.assert_any_call(target, "Ubuntu")
-            readlink.return_value = "/home/user/protected"
-            with self.assertRaisesRegex(BuildControlError, "exact disjoint DrvFs"):
-                reconcile._observe_present_windows_bind(source, "Ubuntu", 1)
-
-    def test_publication_refresh_rejects_changed_windows_evidence(self):
-        compose = {"services": {"backend": {"volumes": [
-            {"type": "bind", "target": "/state", "source": "/state/reference"},
-        ]}}}
-        source = r"C:\git\foreign"
-        pin = {"id": "b" * 64}
-        with (
-            patch.dict(reconcile.os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
-            patch.object(reconcile.windows, "_linux_identity", return_value={"root_device": 1, "engine_id": "engine"}),
-            patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
-            patch.object(reconcile.windows, "_container_pin", return_value=pin),
-            patch.object(reconcile, "_observe_windows_source",
-                         side_effect=[{"kind": "present", "inode": 12, "native": {}, "mapping": {}}, {"kind": "present", "inode": 13, "native": {}, "mapping": {}}]),
-        ):
-            qualify, verify = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
-            qualify({}, source)
-            with self.assertRaisesRegex(BuildControlError, "changed before failure publication") as refused:
-                verify(refresh_windows=True)
-            self.assertIn(source, str(refused.exception))
-            self.assertIn('observation.inode', str(refused.exception))
-
-    def test_parallel_refresh_still_rejects_ordinary_inventory_drift(self):
-        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
-        source=r'C:\git\foreign'
-        before={'kind':'present','native':{'candidate':{'descendants':{'entries':1}}},'mapping':{}}
-        after={'kind':'present','native':{'candidate':{'descendants':{'entries':2}}},'mapping':{}}
-        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
-             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
-             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
-             patch.object(reconcile.windows,'_container_pin',return_value={'id':'b'*64}), \
-             patch.object(reconcile,'_observe_windows_source',side_effect=[before,after]):
-            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
-            qualify({},source)
-            with self.assertRaisesRegex(BuildControlError,'observation.native.candidate.descendants.entries'):
-                verify(refresh_windows=True)
-
     def test_vanishing_container_retries_full_inventory(self):
         error = BuildControlError("error: no such object: " + "c" * 64)
         with patch.object(reconcile, "_inspect_inventory_snapshot", side_effect=[error, [helper_doc()]]) as inspect:
             self.assertEqual(reconcile._container_inventory(), [helper_doc()])
             self.assertEqual(inspect.call_count, 2)
 
-    def test_absent_windows_evidence_cannot_be_reused_after_container_starts(self):
-        source = r"C:\git\missing"
-        compose = {"services": {"backend": {"volumes": [
-            {"type": "bind", "target": "/state", "source": "/state/reference"},
-        ]}}}
-        stopped = {"id": "b" * 64, "state": {
-            "Status": "exited", "Running": False, "Paused": False, "Restarting": False,
-            "Dead": False, "Pid": 0,
-        }}
-        running = {"id": "c" * 64, "state": {**stopped["state"], "Status": "running", "Running": True}}
-        with (
-            patch.dict(reconcile.os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}),
-            patch.object(reconcile.windows, "_linux_identity", return_value={"root_device": 1, "engine_id": "engine"}),
-            patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
-            patch.object(reconcile.windows, "_container_pin", side_effect=lambda value: value),
-            patch.object(reconcile.windows, "_capture", return_value=b"/mnt/c/git/missing"),
-            patch.object(reconcile.Path, "lstat", side_effect=FileNotFoundError),
-            patch.object(reconcile.absent_windows, "_native", return_value={"missing": True}) as native,
-            patch.object(reconcile.absent_windows, "_mapping", return_value={"device": 2}),
-        ):
-            qualify, _ = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
-            self.assertEqual(qualify(stopped, source)[1]["kind"], "absent-stopped")
-            with self.assertRaisesRegex(BuildControlError, "exactly stopped"):
-                qualify(running, source)
-            native.assert_called_once_with(source)
-
-    def test_container_inventory_requires_exact_helper_and_rejects_stopped_app(self):
+    def test_unrelated_checkout_windows_wsl_and_raw_binds_are_allowed_without_external_reads(self):
         helper = helper_doc()
-        other_group = {
-            "Id": "f" * 64,
-            "Name": "/another-checkout-helper",
-            "Config": {"Labels": {
+        foreign = foreign_container(Mounts=[
+            {"Type": "bind", "Source": IDENTITY["source_root"]},
+            {"Type": "bind", "Source": "/work/fullmag/scripts"},
+            {"Type": "bind", "Source": r"C:\git\foreign"},
+            {"Type": "bind", "Source": r"\\wsl$\Ubuntu\home\foreign"},
+            {"Type": "bind", "Source": "/run/desktop/mnt/host/e/git/foreign"},
+            {"Type": "bind", "Source": "opaque-storage://foreign"},
+            {"Type": "bind", "Source": CONTROL_MOUNTPOINT + "-sibling"},
+            {"Type": "volume", "Name": "unrelated-volume"},
+        ])
+        modes = (
+            ("live", [helper], inventory_args()),
+            ("absent", [], inventory_args(helper_id=None)),
+        )
+        with (
+            patch.object(reconcile, "docker_capture", side_effect=AssertionError("unexpected Docker call")),
+            patch.object(reconcile, "bounded_capture", side_effect=AssertionError("unexpected host probe")),
+        ):
+            for mode, owned, args in modes:
+                with self.subTest(mode=mode):
+                    listed = reconcile.validate_container_inventory([*owned, foreign], **args)
+                    expected = ([{"id": "a" * 64, "name": "fullmag-control-" + ATTEMPT,
+                                  "service": "build-control"}] if mode == "live" else [])
+                    self.assertEqual(listed, expected)
+
+    def test_selected_project_identity_names_and_network_references_refuse_in_both_modes(self):
+        helper = helper_doc()
+        modes = (
+            ("live", [helper], inventory_args()),
+            ("absent", [], inventory_args(helper_id=None)),
+        )
+        identity_labels = {
+            "org.fullmag.source.project-id": IDENTITY["project_id"],
+            "org.fullmag.source.worktree-id": IDENTITY["worktree_id"],
+            "org.fullmag.source.checkout-kind": IDENTITY["checkout_kind"],
+            "org.fullmag.compose.project": PROJECT,
+        }
+        selected = (
+            {"Config": {"Labels": {"com.docker.compose.project": PROJECT}}},
+            {"Config": {"Labels": identity_labels}},
+            {"Name": "/" + PROJECT + "-backend-1"},
+            {"Name": "/" + PROJECT + "_frontend_1"},
+        )
+        for mode, owned, args in modes:
+            for selection in selected:
+                document = foreign_container(**selection, State={"Running": False})
+                with self.subTest(mode=mode, selection=selection), self.assertRaises(BuildControlError):
+                    reconcile.validate_container_inventory([*owned, document], **args)
+
+            target_network = foreign_container(
+                State={"Running": False},
+                NetworkSettings={"Networks": {NETWORK: {}}},
+            )
+            with self.subTest(mode=mode, target_network=True), self.assertRaisesRegex(
+                BuildControlError, "references the expected private network"
+            ):
+                reconcile.validate_container_inventory([*owned, target_network], **args)
+
+    def test_control_volume_consumers_and_overlapping_daemon_binds_refuse_in_both_modes(self):
+        helper = helper_doc()
+        modes = (
+            ("live", [helper], inventory_args()),
+            ("absent", [], inventory_args(helper_id=None)),
+        )
+        overlaps = (
+            CONTROL_MOUNTPOINT,
+            "/var/lib/docker/volumes/own-control",
+            CONTROL_MOUNTPOINT + "/nested",
+        )
+        for mode, owned, args in modes:
+            for running in (False, True):
+                volume_consumer = foreign_container(
+                    State={"Running": running},
+                    Mounts=[{"Type": "volume", "Name": CONTROL_VOLUME}],
+                )
+                with self.subTest(mode=mode, running=running), self.assertRaisesRegex(
+                    BuildControlError, "control volume"
+                ):
+                    reconcile.validate_container_inventory([*owned, volume_consumer], **args)
+
+            for source in overlaps:
+                bind_consumer = foreign_container(
+                    State={"Running": False},
+                    Mounts=[{"Type": "bind", "Source": source}],
+                )
+                with self.subTest(mode=mode, source=source), self.assertRaisesRegex(
+                    BuildControlError, "control volume"
+                ):
+                    reconcile.validate_container_inventory([*owned, bind_consumer], **args)
+
+    def test_live_inventory_requires_exact_helper_and_absent_inventory_rejects_reappearing_helper(self):
+        helper = helper_doc()
+        unrelated = foreign_container(
+            Id="f" * 64,
+            Name="/another-checkout-helper",
+            Config={"Labels": {
                 "com.docker.compose.project": "another-project",
                 "com.docker.compose.service": "build-control",
                 "org.fullmag.source.project-id": IDENTITY["project_id"],
@@ -340,55 +275,28 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
                 "org.fullmag.source.checkout-kind": "worktree",
                 "org.fullmag.compose.project": "another-project",
             }},
-            "State": {"Running": True},
-            "HostConfig": {"NetworkMode": "none"},
-            "NetworkSettings": {"Networks": {}},
-            "Mounts": [],
-        }
-        listed = reconcile.validate_container_inventory(
-            [helper, other_group], helper_id="a" * 64, helper_name="fullmag-control-" + ATTEMPT,
-            project=PROJECT, network_name=NETWORK, identity=IDENTITY, control_volume="own-control",
+            HostConfig={"NetworkMode": "none"},
         )
-        self.assertEqual(listed, [{"id": "a" * 64, "name": "fullmag-control-" + ATTEMPT,
-                                   "service": "build-control"}])
-        for mount in ({"Name": "own-control"}, *({"Type": "bind", "Source": source} for source in (IDENTITY["source_root"], "/work/fullmag/scripts", "/work"))):
-            foreign_consumer = {**other_group, "Mounts": [mount]}
-            with self.subTest(mount=mount), self.assertRaises(BuildControlError):
-                reconcile.validate_container_inventory(
-                    [helper, foreign_consumer], helper_id="a" * 64,
-                    helper_name="fullmag-control-" + ATTEMPT, project=PROJECT,
-                    network_name=NETWORK, identity=IDENTITY, control_volume="own-control",
-                )
-        stopped = {
-            "Id": "b" * 64,
-            "Name": "/" + PROJECT + "-backend-1",
-            "Config": {"Labels": {"com.docker.compose.project": PROJECT,
-                                    "com.docker.compose.service": "backend"}},
-            "State": {"Running": False},
-            "HostConfig": {"NetworkMode": "default"},
-            "NetworkSettings": {"Networks": {}},
-            "Mounts": [],
-        }
+        self.assertEqual(
+            reconcile.validate_container_inventory([helper, unrelated], **inventory_args()),
+            [{"id": "a" * 64, "name": "fullmag-control-" + ATTEMPT,
+              "service": "build-control"}],
+        )
         with self.assertRaises(BuildControlError):
-            reconcile.validate_container_inventory(
-                [helper, stopped], helper_id="a" * 64,
-                helper_name="fullmag-control-" + ATTEMPT, project=PROJECT,
-                network_name=NETWORK, identity=IDENTITY, control_volume="own-control",
-            )
-        attached = {**helper, "NetworkSettings": {"Networks": {NETWORK: {}}}}
-        with self.assertRaises(BuildControlError):
-            reconcile.validate_container_inventory(
-                [attached], helper_id="a" * 64,
-                helper_name="fullmag-control-" + ATTEMPT, project=PROJECT,
-                network_name=NETWORK, identity=IDENTITY, control_volume="own-control",
-            )
-        unrelated_network_consumer = {**other_group, "NetworkSettings": {"Networks": {NETWORK: {}}}}
-        with self.assertRaises(BuildControlError):
-            reconcile.validate_container_inventory(
-                [helper, unrelated_network_consumer], helper_id="a" * 64,
-                helper_name="fullmag-control-" + ATTEMPT, project=PROJECT,
-                network_name=NETWORK, identity=IDENTITY, control_volume="own-control",
-            )
+            reconcile.validate_container_inventory([unrelated], **inventory_args())
+
+        absent_args = inventory_args(helper_id=None)
+        self.assertEqual(reconcile.validate_container_inventory([], **absent_args), [])
+        for state in ({"Running": True}, {"Running": False}):
+            selected_helper = {**helper, "State": state}
+            with self.subTest(state=state), self.assertRaises(BuildControlError):
+                reconcile.validate_container_inventory([selected_helper], **absent_args)
+
+    def test_vanishing_container_retries_full_inventory(self):
+        error = BuildControlError("error: no such object: " + "c" * 64)
+        with patch.object(reconcile, "_inspect_inventory_snapshot", side_effect=[error, [helper_doc()]]) as inspect:
+            self.assertEqual(reconcile._container_inventory(), [helper_doc()])
+            self.assertEqual(inspect.call_count, 2)
 
     def test_attempt_and_prior_publication_gates_are_fail_closed(self):
         reconcile.validate_initial_artifacts([(ATTEMPT, "d")], ATTEMPT)
@@ -406,13 +314,48 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
         with self.assertRaises(BuildControlError):
             reconcile.validate_absent_publications({**absent, "development/current.json": b"{}"}, ATTEMPT)
 
-    def test_cas_has_no_helper_active_removal_or_verified_publication(self):
-        control = SimpleNamespace(path=lambda value: "/control/" + value)
-        script = reconcile._cas_script(control, ATTEMPT, "a" * 64, "b" * 64,
-                                       "c" * 64, "d" * 64, "e" * 64)
-        self.assertNotIn("rm /control/active", script)
-        self.assertNotRegex(script, r"mv[^;]*verified\.json")
-        self.assertIn("flock -n 8", script)
+class AbsentHelperEvidenceTests(unittest.TestCase):
+    def test_volume_refusal_precedes_any_control_mount(self):
+        control = SimpleNamespace(volume="selected-control", shared_labels={"owner": "selected"})
+        volume = {"Name": "selected-control", "Driver": "local", "Options": None,
+                  "Labels": {"owner": "foreign"}, "Mountpoint": CONTROL_MOUNTPOINT}
+        with (
+            patch.object(reconcile, "_probe_helper_absence", return_value="a" * 64),
+            patch.object(reconcile, "docker_capture", return_value=subprocess.CompletedProcess(
+                ["docker"], 0, json.dumps([volume]).encode(), b"")),
+            patch.object(reconcile, "bounded_capture") as mount,
+        ):
+            with self.assertRaisesRegex(BuildControlError, "ownership or driver differs"):
+                reconcile._absent_helper_evidence(control, "fullmag-control-" + ATTEMPT)
+        mount.assert_not_called()
+
+    def test_malformed_control_mountpoint_is_rejected_before_any_helper_mount(self):
+        control = SimpleNamespace(volume="selected-control", shared_labels={"owner": "selected"})
+        for mountpoint in ("", "relative/path", "/var/lib/docker/../escape", "//server/share"):
+            volume = {"Name": "selected-control", "Driver": "local", "Options": None,
+                      "Labels": {"owner": "selected"}, "Mountpoint": mountpoint}
+            with self.subTest(mountpoint=mountpoint), patch.object(
+                reconcile, "_probe_helper_absence", return_value="a" * 64
+            ), patch.object(
+                reconcile, "docker_capture", return_value=subprocess.CompletedProcess(
+                    ["docker"], 0, json.dumps([volume]).encode(), b"")
+            ), patch.object(reconcile, "bounded_capture") as mount:
+                with self.assertRaises(BuildControlError):
+                    reconcile._absent_helper_evidence(control, "fullmag-control-" + ATTEMPT)
+                mount.assert_not_called()
+
+    def test_missing_helper_admission_precedes_first_receipt_read(self):
+        args = SimpleNamespace(engine_id="engine-test", attempt=ATTEMPT, recover_absent_helper=True)
+        with (
+            patch.object(reconcile, "docker_capture", return_value=subprocess.CompletedProcess(
+                ["docker"], 0, b"engine-test\n", b"")),
+            patch.object(reconcile, "_absent_helper_evidence",
+                         side_effect=BuildControlError("volume absent")),
+            patch.object(reconcile, "read_raw") as read,
+        ):
+            with self.assertRaisesRegex(BuildControlError, "volume absent"):
+                reconcile._observe(SimpleNamespace(), IDENTITY, args)
+        read.assert_not_called()
 
 
 class ReconcileTransactionTests(unittest.TestCase):
@@ -444,6 +387,7 @@ class ReconcileTransactionTests(unittest.TestCase):
         self.control = SimpleNamespace(
             namespace="", project=PROJECT, volume="fullmag-control-volume",
             helper_args=lambda script: ["docker", "run", script],
+            path=lambda value: "/control/" + value,
         )
         self.args = SimpleNamespace(
             source_root=IDENTITY["source_root"], attempt=ATTEMPT,
@@ -463,8 +407,6 @@ class ReconcileTransactionTests(unittest.TestCase):
                 return None if state["committed"] else (ATTEMPT + "\n").encode()
             return None
 
-        writes = []
-
         def commit(*_args, **_kwargs):
             state["committed"] = True
             return subprocess.CompletedProcess(["docker"], 0, b"", b"")
@@ -473,28 +415,37 @@ class ReconcileTransactionTests(unittest.TestCase):
             patch.object(reconcile, "_identity_and_control", return_value=(Path(IDENTITY["source_root"]), IDENTITY, self.control)),
             patch.object(reconcile, "_observe", return_value=self.observation) as observe,
             patch.object(reconcile, "read_raw", side_effect=read),
-            patch.object(reconcile, "write_immutable", side_effect=lambda *_args: writes.append(_args[1])),
             patch.object(reconcile, "_proof_bytes", return_value=b"proof\n"),
             patch.object(reconcile, "_failure_result", return_value=self.result_raw),
             patch.object(reconcile, "_cas_script", return_value="cas"),
-            patch.object(reconcile, "bounded_capture", side_effect=commit),
+            patch.object(reconcile, "bounded_capture", side_effect=commit) as capture,
             patch.object(reconcile, "_probe_helper_absence", return_value="f" * 64),
             patch.object(reconcile.time, "sleep"),
         ):
             result = reconcile.reconcile(self.args)
         self.assertEqual(result["state"], "failed-confirmed")
-        self.assertEqual(len(writes), 4)
-        self.assertIn(f"development/attempts/{ATTEMPT}/unknown-receipt.json", writes)
         self.assertEqual(observe.call_count, 3)
-        self.assertEqual(observe.call_args_list[-1].kwargs,
-                         {"allowed_archive": self.original_raw})
+        self.assertEqual(observe.call_args_list[-1].kwargs, {"allowed_archive": None})
+        self.assertEqual(capture.call_count, 1)
+        payloads = [base64.b64decode(line) for line in capture.call_args.kwargs["data"].splitlines()]
+        self.assertEqual(payloads[:3], [self.original_raw, b"proof\n", self.result_raw])
+        prepared = json.loads(payloads[3])
+        self.assertEqual(prepared, {
+            "schema": reconcile.SCHEMA,
+            "attempt": ATTEMPT,
+            "original_receipt_sha256": reconcile.digest(self.original_raw),
+            "compose_sha256": "b" * 64,
+            "proof_sha256": reconcile.digest(b"proof\n"),
+            "result_sha256": reconcile.digest(self.result_raw),
+        })
 
     def test_changed_second_observation_refuses_before_any_write(self):
         changed = {**self.observation, "engine_id": "different-engine"}
         with (
             patch.object(reconcile, "_identity_and_control", return_value=(Path(IDENTITY["source_root"]), IDENTITY, self.control)),
             patch.object(reconcile, "_observe", side_effect=[self.observation, changed]),
-            patch.object(reconcile, "write_immutable") as write,
+            patch.object(reconcile, "bounded_capture") as write,
+            patch.object(reconcile, "bounded_capture") as publish,
             patch.object(reconcile.time, "sleep"),
         ):
             with self.assertRaises(BuildControlError):
@@ -546,12 +497,17 @@ class ReconcileTransactionTests(unittest.TestCase):
             self.assertNotIn(p,files)
             files[p]=raw
         def publish(*a,**kw):
+            paths = reconcile._publication_paths(ATTEMPT, self.args.recovery_id)
+            payloads = [base64.b64decode(line) for line in kw['data'].splitlines()]
+            self.assertEqual(len(payloads), 3)
+            for path, payload in zip(paths.values(), payloads):
+                self.assertNotIn(path, files)
+                files[path] = payload
             result=files[root+'/reconciliation/recoveries/'+self.args.recovery_id+'/result.json']
             for p in (root+'/receipt.json',root+'/terminal.json','development/current.json'): files[p]=result
             return subprocess.CompletedProcess([],0,b'',b'')
         with patch.object(reconcile,'_identity_and_control',return_value=(Path(IDENTITY['source_root']),IDENTITY,self.control)), \
              patch.object(reconcile,'read_raw',side_effect=read), \
-             patch.object(reconcile,'write_immutable',side_effect=write), \
              patch.object(reconcile,'_observe',return_value=self.observation) as observe, \
              patch.object(reconcile,'_cas_script',return_value='cas'), \
              patch.object(reconcile,'bounded_capture',side_effect=publish), \
@@ -577,7 +533,289 @@ class ReconcileTransactionTests(unittest.TestCase):
 
 
 class FailurePublicationShellTests(unittest.TestCase):
-    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False):
+    @staticmethod
+    def _cas_script_for(base, prepared_documents, *, recover_absent_helper=False):
+        control = SimpleNamespace(path=lambda relative: str(base / relative))
+        return reconcile._cas_script(
+            control, ATTEMPT, *[
+                reconcile.digest(value) for value in
+                (b"original", b"compose", b"proof", b"result", b"prepared")
+            ], recover_absent_helper=recover_absent_helper,
+            prepared_documents=prepared_documents,
+        )
+
+    def run_publication(self, *, corrupt=False, symlink=False, recover_absent_helper=False,
+                        busy_operation_lock=False, missing_operation_lock=False,
+                        wrong_active=False, tamper_current_on_terminal=False,
+                        live_operation_lock_unheld=False):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            root = base / "development/attempts" / ATTEMPT
+            (root / "reconciliation").mkdir(parents=True)
+            prepared_documents = {
+                str(root / "unknown-receipt.json"): b"original",
+                str(root / "reconciliation/network-failure-proof.json"): b"proof",
+                str(root / "reconciliation/result.json"): b"result",
+                str(root / "reconciliation/prepared.json"): b"prepared",
+            }
+            (root / "receipt.json").write_bytes(b"original")
+            (root / "compose.json").write_bytes(b"compose")
+
+            marker = "b" * 32 + "\n" if wrong_active else ATTEMPT + "\n"
+            (base / "active").write_text(marker)
+            if corrupt:
+                (root / "compose.json").write_bytes(b"changed")
+            if symlink:
+                (root / "compose.json").rename(root / "real-compose.json")
+                (root / "compose.json").symlink_to(root / "real-compose.json")
+
+            operation_lock = base / "operation.lock"
+            operation_lock_bytes = b"existing-operation-lock\n"
+            if not missing_operation_lock:
+                operation_lock.write_bytes(operation_lock_bytes)
+
+            script = self._cas_script_for(
+                base, prepared_documents, recover_absent_helper=recover_absent_helper,
+            )
+            environment = os.environ.copy()
+            if tamper_current_on_terminal:
+                shim = base / "bin"
+                shim.mkdir()
+                mv = shim / "mv"
+                mv.write_text(
+                    """#!/bin/sh
+destination=
+for argument do destination=$argument; done
+/usr/bin/mv "$@" || exit $?
+case $destination in */terminal.json) printf tampered > "$FULLMAG_TEST_CURRENT_PATH";; esac
+"""
+                )
+                mv.chmod(0o755)
+                environment["PATH"] = str(shim) + os.pathsep + environment["PATH"]
+                environment["FULLMAG_TEST_CURRENT_PATH"] = str(base / "development/current.json")
+
+            def execute():
+                return subprocess.run(
+                    ["bash", "-euc", script],
+                    input=reconcile._prepared_input(prepared_documents),
+                    capture_output=True,
+                    env=environment,
+                )
+
+            if missing_operation_lock:
+                completed = execute()
+            else:
+                with operation_lock.open("r+") as lock:
+                    if busy_operation_lock or (not recover_absent_helper and not live_operation_lock_unheld):
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    completed = execute()
+
+            if missing_operation_lock:
+                self.assertFalse(operation_lock.exists())
+            else:
+                self.assertEqual(operation_lock.read_bytes(), operation_lock_bytes)
+            self.assertFalse((base / "development/verified.json").exists())
+            failed = (corrupt or symlink or wrong_active or busy_operation_lock
+                      or missing_operation_lock or tamper_current_on_terminal
+                      or live_operation_lock_unheld)
+            if failed:
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertEqual((base / "active").read_text(), marker)
+                if tamper_current_on_terminal:
+                    self.assertEqual((root / "receipt.json").read_bytes(), b"result")
+                    self.assertEqual((base / "development/current.json").read_bytes(), b"tampered")
+                    self.assertEqual((root / "terminal.json").read_bytes(), b"result")
+                    for relative, value in prepared_documents.items():
+                        self.assertEqual(Path(relative).read_bytes(), value)
+                else:
+                    self.assertEqual((root / "receipt.json").read_bytes(), b"original")
+                    self.assertFalse((root / "terminal.json").exists())
+                    self.assertFalse((base / "development/current.json").exists())
+                    for path in prepared_documents:
+                        self.assertFalse(Path(path).exists(), path)
+                if busy_operation_lock or missing_operation_lock or live_operation_lock_unheld:
+                    self.assertFalse((root / "network-failure-reconcile.lock").exists())
+            else:
+                self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+                for path in (root / "receipt.json", root / "terminal.json",
+                             base / "development/current.json"):
+                    self.assertEqual(path.read_bytes(), b"result")
+                self.assertTrue((root / "unknown-receipt.json").is_file())
+                self.assertEqual((root / "unknown-receipt.json").read_bytes(), b"original")
+                for relative, value in prepared_documents.items():
+                    self.assertEqual(Path(relative).read_bytes(), value)
+                if recover_absent_helper:
+                    self.assertFalse((base / "active").exists())
+                else:
+                    self.assertEqual((base / "active").read_text(), ATTEMPT + "\n")
+
+    def test_failure_publication_preserves_owner_and_original(self):
+        self.run_publication()
+
+    def test_changed_input_refuses_publication(self):
+        self.run_publication(corrupt=True)
+
+    def test_symlink_input_refuses_publication(self):
+        self.run_publication(symlink=True)
+
+    def test_live_helper_recovery_requires_the_original_operation_lock(self):
+        self.run_publication(live_operation_lock_unheld=True)
+
+    def test_live_helper_recovery_does_not_create_missing_operation_lock_or_journal(self):
+        self.run_publication(missing_operation_lock=True)
+
+    def test_absent_and_live_cas_serialize_before_journal_publication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp).resolve()
+            root = base / "development/attempts" / ATTEMPT
+            (root / "reconciliation").mkdir(parents=True)
+            prepared_documents = {
+                str(root / "unknown-receipt.json"): b"original",
+                str(root / "reconciliation/network-failure-proof.json"): b"proof",
+                str(root / "reconciliation/result.json"): b"result",
+                str(root / "reconciliation/prepared.json"): b"prepared",
+            }
+            receipt = root / "receipt.json"
+            compose = root / "compose.json"
+            active = base / "active"
+            operation_lock = base / "operation.lock"
+            current = base / "development/current.json"
+            verified = base / "development/verified.json"
+            terminal = root / "terminal.json"
+            reconciliation_lock = root / "network-failure-reconcile.lock"
+            marker = ATTEMPT + "\n"
+            operation_lock_bytes = b"existing-operation-lock\n"
+            receipt.write_bytes(b"original")
+            compose.write_bytes(b"compose")
+            active.write_text(marker)
+            operation_lock.write_bytes(operation_lock_bytes)
+
+            shim = base / "bin"
+            shim.mkdir()
+            signal_dir = base / "signals"
+            signal_dir.mkdir()
+            compose_acquired = signal_dir / "compose-acquired"
+            absent_ready = signal_dir / "absent-ready"
+            release_absent = signal_dir / "release-absent"
+            flock = shim / "flock"
+            flock.write_text(
+                """#!/bin/sh
+/usr/bin/flock "$@"
+status=$?
+if test "$status" -eq 0; then
+    case "$*" in
+        "-n 6") : > "$FULLMAG_TEST_COMPOSE_ACQUIRED" ;;
+        "-n 8")
+            test -f "$FULLMAG_TEST_COMPOSE_ACQUIRED" || exit 91
+            : > "$FULLMAG_TEST_ABSENT_READY"
+            while test ! -e "$FULLMAG_TEST_RELEASE_ABSENT"; do sleep 0.02; done
+            ;;
+    esac
+fi
+exit "$status"
+"""
+            )
+            flock.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = str(shim) + os.pathsep + environment["PATH"]
+            environment["FULLMAG_TEST_COMPOSE_ACQUIRED"] = str(compose_acquired)
+            environment["FULLMAG_TEST_ABSENT_READY"] = str(absent_ready)
+            environment["FULLMAG_TEST_RELEASE_ABSENT"] = str(release_absent)
+
+            absent_script = self._cas_script_for(
+                base, prepared_documents, recover_absent_helper=True,
+            )
+            live_script = self._cas_script_for(base, prepared_documents)
+            shell = ["bash", "-euc"]
+            prepared_input = reconcile._prepared_input(prepared_documents)
+            absent = None
+            try:
+                absent = subprocess.Popen(
+                    [*shell, absent_script], stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    env=environment, start_new_session=True,
+                )
+                assert absent.stdin is not None
+                absent.stdin.write(prepared_input)
+                absent.stdin.close()
+                absent.stdin = None
+
+                deadline = time.monotonic() + 3
+                while not absent_ready.exists() and absent.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if not absent_ready.exists():
+                    stdout, stderr = absent.communicate(timeout=2)
+                    self.fail(
+                        "absent CAS did not acquire both locks before timeout; "
+                        f"exit={absent.returncode}, stdout={stdout!r}, stderr={stderr!r}"
+                    )
+                self.assertTrue(compose_acquired.is_file())
+
+                live = subprocess.run(
+                    [*shell, live_script], input=prepared_input,
+                    capture_output=True, env=environment, timeout=3,
+                )
+                self.assertNotEqual(live.returncode, 0, live.stderr.decode("utf-8", "replace"))
+                self.assertEqual(active.read_text(), marker)
+                self.assertEqual(receipt.read_bytes(), b"original")
+                self.assertEqual(compose.read_bytes(), b"compose")
+                self.assertEqual(operation_lock.read_bytes(), operation_lock_bytes)
+                for path in (*prepared_documents, str(current), str(verified), str(terminal),
+                             str(reconciliation_lock)):
+                    self.assertFalse(Path(path).exists(), path)
+
+                release_absent.touch()
+                stdout, stderr = absent.communicate(timeout=4)
+                self.assertEqual(absent.returncode, 0, stderr.decode("utf-8", "replace"))
+                for path in (receipt, current, terminal):
+                    self.assertEqual(path.read_bytes(), b"result", path)
+                archive = root / "unknown-receipt.json"
+                self.assertEqual(archive.read_bytes(), b"original")
+                for path, expected in prepared_documents.items():
+                    self.assertEqual(Path(path).read_bytes(), expected, path)
+                self.assertFalse(active.exists())
+                self.assertFalse(verified.exists())
+                self.assertEqual(operation_lock.read_bytes(), operation_lock_bytes)
+            finally:
+                if absent is not None and absent.poll() is None:
+                    release_absent.touch()
+                    try:
+                        absent.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(absent.pid, signal.SIGTERM)
+                        try:
+                            absent.communicate(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(absent.pid, signal.SIGKILL)
+                            absent.wait(timeout=2)
+                            for stream in (absent.stdout, absent.stderr):
+                                if stream is not None:
+                                    stream.close()
+
+    def test_absent_helper_recovery_publishes_before_releasing_marker_and_preserves_archive(self):
+        self.run_publication(recover_absent_helper=True)
+
+    def test_absent_helper_recovery_busy_lock_fails_before_any_publication(self):
+        self.run_publication(recover_absent_helper=True, busy_operation_lock=True)
+
+    def test_absent_helper_recovery_does_not_create_missing_operation_lock(self):
+        self.run_publication(recover_absent_helper=True, missing_operation_lock=True)
+
+    def test_absent_helper_recovery_rejects_wrong_active_marker(self):
+        self.run_publication(recover_absent_helper=True, wrong_active=True)
+
+    def test_absent_helper_recovery_rejects_changed_compose(self):
+        self.run_publication(recover_absent_helper=True, corrupt=True)
+
+    def test_absent_helper_recovery_rejects_symlink_compose(self):
+        self.run_publication(recover_absent_helper=True, symlink=True)
+
+    def test_absent_helper_recovery_keeps_marker_if_publications_differ(self):
+        self.run_publication(recover_absent_helper=True, tamper_current_on_terminal=True)
+
+
+class PreparedGenerationShellTests(unittest.TestCase):
+    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False, atomic_prepare=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
             control = SimpleNamespace(path=lambda relative: str(base / relative))
@@ -605,6 +843,11 @@ class FailurePublicationShellTests(unittest.TestCase):
                         f'development/attempts/{ATTEMPT}/reconciliation/prepared.json':reconcile.digest(b'prepared'),
                         f'development/attempts/{ATTEMPT}/reconciliation/network-failure-proof.json':reconcile.digest(b'proof'),
                         f'development/attempts/{ATTEMPT}/reconciliation/result.json':reconcile.digest(b'result')}}
+                if atomic_prepare:
+                    docs = {str(generation/name): raw for name, raw in (('network-failure-proof.json', b'proof'), ('result.json', b'result'), ('prepared.json', b'prepared'))}
+                    for path in docs: Path(path).unlink()
+                    generation.rmdir()
+                    recovery_args['prepared_documents'] = docs
                 if corrupt_previous:
                     (root/'reconciliation/prepared.json').write_bytes(b'changed')
             (base / "active").write_text(ATTEMPT + "\n")
@@ -619,7 +862,7 @@ class FailurePublicationShellTests(unittest.TestCase):
                     reconcile.digest(value) for value in
                     (b"original", b"compose", b"proof", b"result", b"prepared")
                 ], **recovery_args)
-                completed = subprocess.run(["bash", "-euc", script], capture_output=True)
+                completed = subprocess.run(["bash", "-euc", script], input=reconcile._prepared_input(recovery_args.get("prepared_documents")), capture_output=True)
             self.assertEqual((base / "active").read_text(), ATTEMPT + "\n")
             self.assertFalse((base / "development/verified.json").exists())
             if corrupt or symlink or corrupt_previous:
@@ -642,11 +885,18 @@ class FailurePublicationShellTests(unittest.TestCase):
     def test_symlink_input_refuses_publication(self):
         self.run_publication(symlink=True)
 
+    def test_prepared_generation_atomically_prepares_new_generation(self):
+        self.run_publication(recovery=True, atomic_prepare=True)
+
+    def test_prepared_generation_refuses_tamper_before_preparation(self):
+        self.run_publication(recovery=True, corrupt_previous=True, atomic_prepare=True)
+
     def test_prepared_generation_cas_preserves_old_files(self):
         self.run_publication(recovery=True)
 
     def test_prepared_generation_cas_rejects_old_preparation_changed_after_observation(self):
         self.run_publication(recovery=True, corrupt_previous=True)
+
 
 
 if __name__ == "__main__":

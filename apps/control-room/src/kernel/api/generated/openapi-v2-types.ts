@@ -420,6 +420,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/magnetization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/scalars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/support": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/persistence/projects/{project_id}/runs/{run_id}/tasks/{task_id}/cancellation": {
         parameters: {
             query?: never;
@@ -4587,6 +4683,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/stages/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_stages_results"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/simulation/stages/results/scalars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_simulation_stages_results_scalars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/simulation/stages/{stage_id}/hysteresis/execution-tree": {
         parameters: {
             query?: never;
@@ -5128,6 +5256,7 @@ export interface components {
             task_id: string;
         };
         AcceptedObservationFrameRef: {
+            authored_initial_state?: null | components["schemas"]["AuthoredInitialStateOrigin"];
             domain_generation_id: string;
             observation_frame_id: string;
             session_epoch: string;
@@ -6271,6 +6400,19 @@ export interface components {
             orcid?: string | null;
             role: string;
         };
+        /**
+         * @description Input identity of an authored initial-state publication. It has its own
+         *     generation even when its domain and solver clock have not changed.
+         */
+        AuthoredInitialStateOrigin: {
+            /** Format: int64 */
+            initial_state_revision: number;
+            plan_fingerprint: string;
+            preparation_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+            values_sha256: string;
+        };
         AuthoringTransactionRequest: {
             /** Format: int64 */
             base_revision: number;
@@ -6283,7 +6425,15 @@ export interface components {
             base_revision?: number | null;
             /** @enum {string} */
             kind: "replace_scene";
+            magnetization_apply?: null | components["schemas"]["MagnetizationApplyRequest"];
             scene: Record<string, unknown>;
+        } | {
+            /** Format: int64 */
+            base_revision: number;
+            /** @enum {string} */
+            kind: "apply_magnetization";
+            operation_id: string;
+            target: components["schemas"]["MagnetizationApplyTarget"];
         } | {
             /** Format: int64 */
             base_revision?: number | null;
@@ -6430,6 +6580,7 @@ export interface components {
         };
         AuthoringTransactionResponse: {
             committed_scene: components["schemas"]["SceneResource"];
+            magnetization_apply?: null | components["schemas"]["MagnetizationApplyReceiptResource"];
             /** Format: int64 */
             scene_revision: number;
             transaction_kind: string;
@@ -6609,6 +6760,7 @@ export interface components {
             /** Format: double */
             energy_tolerance_j?: number | null;
             error?: string | null;
+            execution_binding?: null | components["schemas"]["CommandExecutionBinding"];
             field_materialization_requirements?: components["schemas"]["FieldMaterializationRequirement"][];
             /** Format: double */
             fixed_timestep?: number | null;
@@ -6662,6 +6814,13 @@ export interface components {
             revision: number;
             severity: string;
         };
+        /** @description Immutable binding of an accepted command to its own execution. */
+        CommandExecutionBinding: {
+            requested_target?: null | components["schemas"]["RuntimeCommandTarget"];
+            run_id: string;
+            /** @description The selected authored step for a single-stage execution. */
+            step_id?: string | null;
+        };
         CommandExecutionReadbackResource: {
             backend?: string | null;
             device?: string | null;
@@ -6706,6 +6865,7 @@ export interface components {
             accepted: boolean;
             command_id: string;
             error?: string | null;
+            execution_binding?: null | components["schemas"]["CommandExecutionBinding"];
             request_id?: string | null;
         };
         CommandStatusResource: {
@@ -9382,6 +9542,21 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        /** @enum {string} */
+        HistoricalScalarCoverage: "solver_series" | "terminal_sample";
+        /** @description Archived physical samples read from one claim-qualified artifact. */
+        HistoricalScalarWindow: {
+            artifact_id: string;
+            columns: string[];
+            content_sha256: string;
+            coverage: components["schemas"]["HistoricalScalarCoverage"];
+            /** Format: int64 */
+            next_start?: number | null;
+            rows: number[][];
+            series: components["schemas"]["ScalarSeriesIdentity"];
+            /** Format: int64 */
+            total_rows: number;
+        };
         HistoryEntry: {
             at: string;
             by?: string | null;
@@ -10190,6 +10365,37 @@ export interface components {
             session: components["schemas"]["SessionSummary"];
             /** @description Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`. */
             solver: components["schemas"]["SolverSummary"];
+        };
+        MagnetizationApplyReceiptResource: {
+            operation_id: string;
+            prepared_initial_state?: null | components["schemas"]["PreparedInitialStateResource"];
+            reason?: string | null;
+            /** Format: int64 */
+            scene_revision: number;
+            scopes: components["schemas"]["MagnetizationApplyScope"][];
+            status: components["schemas"]["MagnetizationApplyStatus"];
+        };
+        MagnetizationApplyRequest: {
+            operation_id: string;
+            scopes: components["schemas"]["MagnetizationApplyScope"][];
+        };
+        MagnetizationApplyScope: {
+            object_id: string;
+            region_id?: string | null;
+        };
+        /** @enum {string} */
+        MagnetizationApplyStatus: "initial_state_pending" | "initial_state_ready";
+        MagnetizationApplyTarget: {
+            asset: Record<string, unknown> | null;
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+            texture_override: null | components["schemas"]["SceneTextureOverride"];
         };
         MagnetizationAssetPatchRequest: {
             asset: {
@@ -11316,6 +11522,11 @@ export interface components {
             topology_fingerprint: string;
             /** Format: int32 */
             topology_schema_version?: number | null;
+            /**
+             * Format: int64
+             * @description Current scene whose mesher inputs still match this immutable publication.
+             */
+            validated_for_scene_revision?: number | null;
         };
         MeshSharedDomainQualityResource: {
             quality?: unknown;
@@ -11552,6 +11763,8 @@ export interface components {
             blockers: string[];
             capabilities: components["schemas"]["ModelAuthoringCapabilities"];
             checks: components["schemas"]["ModelReadinessCheck"][];
+            initial_state_pending?: null | components["schemas"]["MagnetizationApplyReceiptResource"];
+            prepared_initial_state?: null | components["schemas"]["PreparedInitialStateResource"];
             ready_to_export: boolean;
             ready_to_run: boolean;
             /** Format: int64 */
@@ -12573,6 +12786,16 @@ export interface components {
         PreparationStageStatus: "pending" | "active" | "completed" | "failed" | "skipped";
         /** @enum {string} */
         PreparationStatus: "connecting" | "running" | "ready" | "failed";
+        PreparedInitialStateResource: {
+            domain_generation_id: string;
+            /** Format: int64 */
+            initial_state_revision: number;
+            observation_frame_id: string;
+            publication_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+            values_sha256: string;
+        };
         /** @enum {string} */
         PrescribedSotFormulaVersion: "prescribed_sot.fullmag.v1" | "prescribed_sot.legacy_fullmag.v0";
         /** @enum {string} */
@@ -13707,12 +13930,33 @@ export interface components {
             stage_label: string;
             started_at: string;
         };
+        RuntimeAuthoredInitialStateSource: {
+            /** @enum {string} */
+            kind: "study";
+            /** Format: int64 */
+            scene_revision: number;
+        } | {
+            /** @enum {string} */
+            kind: "stage";
+            /** Format: int64 */
+            scene_revision: number;
+            stage_id: string;
+        } | {
+            /** Format: int64 */
+            initial_state_revision: number;
+            /** @enum {string} */
+            kind: "prepared";
+            publication_id: string;
+            /** Format: int64 */
+            scene_revision: number;
+        };
         RuntimeCapabilityMatrix: {
             engines: components["schemas"]["HostEngineEntry"][];
             profile_version: string;
         };
         RuntimeCommandIntent: {
             client_intent_id?: string | null;
+            initial_state?: null | components["schemas"]["RuntimeInitialStateRequest"];
             precondition?: null | components["schemas"]["RuntimeCommandPrecondition"];
             reason?: string | null;
             /** Format: int64 */
@@ -13722,6 +13966,8 @@ export interface components {
         RuntimeCommandPrecondition: {
             /** Format: int64 */
             command_revision?: number | null;
+            current_run?: null | components["schemas"]["RuntimeCommandRunPrecondition"];
+            domain_generation_id?: string | null;
             /** Format: int64 */
             mesh_revision?: number | null;
             /** Format: int64 */
@@ -13742,6 +13988,15 @@ export interface components {
             enabled: boolean;
             kind: string;
             reason?: string | null;
+        };
+        /** @description Pin the current run seen when Compute was requested, including its absence. */
+        RuntimeCommandRunPrecondition: {
+            /** @enum {string} */
+            kind: "none";
+        } | {
+            /** @enum {string} */
+            kind: "run";
+            run_id: string;
         };
         RuntimeCommandTarget: {
             /** @enum {string} */
@@ -13767,6 +14022,26 @@ export interface components {
             command_id: string;
             /** @enum {string} */
             kind: "command_id";
+        };
+        RuntimeInitialStateRequest: {
+            /** @enum {string} */
+            kind: "default_for_target";
+        } | {
+            /** @enum {string} */
+            kind: "authored_initial_state";
+            source: components["schemas"]["RuntimeAuthoredInitialStateSource"];
+        } | {
+            allow_stale_model?: boolean;
+            artifact_id: string;
+            case_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "stage_result";
+            run_id: string;
+            step_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "latest_compatible_state";
         };
         RuntimeServiceStatusReason: {
             code: string;
@@ -13953,6 +14228,16 @@ export interface components {
             /** Format: int64 */
             source_step: number;
         };
+        /** @description Run, authored execution step, case and worker attempt of one scalar series. */
+        ScalarSeriesIdentity: {
+            attempt_id: string;
+            case_id: string;
+            /** Format: int64 */
+            ownership_epoch: number;
+            run_id: string;
+            step_id: string;
+            task_id: string;
+        };
         ScalarWindow: {
             columns: string[];
             current_observation?: null | components["schemas"]["ScalarObservationSource"];
@@ -13962,6 +14247,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             rows: number[][];
+            series?: null | components["schemas"]["ScalarSeriesIdentity"];
             /** Format: int64 */
             total_rows: number;
         };
@@ -16222,8 +16508,11 @@ export interface components {
             /** Format: int64 */
             max_steps?: number | null;
             solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
-            /** Format: double */
-            until_seconds: number;
+            /**
+             * Format: double
+             * @description Omit for an exact authored StageId in the accepted Study lane.
+             */
+            until_seconds?: number | null;
         } & {
             /** @enum {string} */
             kind: "run";
@@ -16309,6 +16598,103 @@ export interface components {
             shape: number[];
             spacing: number[];
         };
+        /** @enum {string} */
+        StudyResultAuthoredRelation: "matching_authored_input" | "authored_input_changed" | "stage_absent" | "authoring_unavailable";
+        /** @description Terminal solver evidence qualified against the same final state and attempt. */
+        StudyResultCompletion: {
+            /** @description Absent when this completion carries no relaxation evidence. */
+            converged?: boolean | null;
+            metric_kind?: null | components["schemas"]["StageMetricKind"];
+            metric_name?: string | null;
+            metric_unit?: null | components["schemas"]["StageMetricUnit"];
+            /** Format: double */
+            metric_value?: number | null;
+            reason?: null | components["schemas"]["StageStopReason"];
+            /** Format: double */
+            threshold?: number | null;
+        };
+        /** @enum {string} */
+        StudyResultDomainRelation: "matching_published_layout" | "different_published_layout" | "unavailable";
+        StudyResultGeometry: {
+            cell_size_m: number[];
+            grid_cells: number[];
+            /** @enum {string} */
+            kind: "fdm";
+            origin_m: number[];
+        } | {
+            /** @enum {string} */
+            kind: "fdm_multilayer";
+            layers: components["schemas"]["StudyResultLayerGeometry"][];
+        } | {
+            /** Format: int64 */
+            element_count: number;
+            /** @enum {string} */
+            kind: "fem";
+            /** Format: int64 */
+            node_count: number;
+        };
+        StudyResultInitialState: {
+            /** @description Authored samples that replaced the base state at the named scopes. */
+            reset_scopes: components["schemas"]["StudyResultResetScope"][];
+            source: components["schemas"]["StudyResultInitialStateSource"];
+        };
+        StudyResultInitialStateSource: {
+            /** @enum {string} */
+            kind: "authored";
+            reference: string;
+        } | {
+            artifact_id: string;
+            case_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "stage_result";
+            run_id: string;
+            selection: components["schemas"]["StudyResultInputSelection"];
+            step_id: string;
+        } | {
+            artifact_id: string;
+            content_sha256: string;
+            /** @enum {string} */
+            kind: "prepared";
+            publication_id: string;
+        };
+        /** @enum {string} */
+        StudyResultInputSelection: "predecessor" | "selected_result" | "latest_compatible" | "pinned_result";
+        StudyResultLayerGeometry: {
+            cell_size_m: number[];
+            grid_cells: number[];
+            layer_id: string;
+            object_id: string;
+            origin_m: number[];
+            /** Format: int64 */
+            value_count: number;
+            /** Format: int64 */
+            value_offset: number;
+        };
+        /** @enum {string} */
+        StudyResultPredecessorRelation: "newer_different_output" | "earlier_predecessor_changed" | "newer_same_output" | "no_later_matching_input" | "not_applicable" | "unavailable";
+        StudyResultResetScope: {
+            object_id: string;
+            region_id?: string | null;
+        };
+        StudyResultStateResource: {
+            artifact_id: string;
+            artifact_sha256: string;
+            /** @description Exact layout fingerprint, including the magnetically active support. */
+            domain_generation_id: string;
+            geometry: components["schemas"]["StudyResultGeometry"];
+            project_id: string;
+            /** Format: int64 */
+            sample_count: number;
+            source: components["schemas"]["ScalarSeriesIdentity"];
+            /** Format: int64 */
+            step: number;
+            /** @description If true, the support subresource returns FMSP in sample order. */
+            support_available: boolean;
+            /** Format: double */
+            time_s: number;
+            topology_fingerprint: string;
+        };
         StudyRuntimePatchRequest: {
             parallel_execution?: null | components["schemas"]["ParallelExecutionResource"];
             requested_backend?: string | null;
@@ -16326,6 +16712,39 @@ export interface components {
             requested_device: string;
             requested_mode: string;
             requested_precision: string;
+        };
+        StudyStageResult: {
+            accepted_at: string;
+            artifact_id: string;
+            artifact_sha256: string;
+            authored_relation: components["schemas"]["StudyResultAuthoredRelation"];
+            /** @description Authored stage identity when it can be mapped to the durable execution. */
+            authored_stage_id?: string | null;
+            codec_id: string;
+            codec_version: string;
+            completion?: null | components["schemas"]["StudyResultCompletion"];
+            /** @description Comparison with the published live magnetization layout. */
+            domain_relation?: components["schemas"]["StudyResultDomainRelation"];
+            initial_state?: null | components["schemas"]["StudyResultInitialState"];
+            /** @description Later successful results along the inherited chain of admitted inputs. */
+            predecessor_relation?: components["schemas"]["StudyResultPredecessorRelation"];
+            project_id: string;
+            /** @description The owner of both the final state and the archived scalar series. */
+            source: components["schemas"]["ScalarSeriesIdentity"];
+            study_id: string;
+            /** @description Same-space and input-port admission are verified when a command is submitted. */
+            supports_magnetization_input: boolean;
+        };
+        StudyStageResultsResource: {
+            authored_input_sha256?: string | null;
+            authored_stage_ids: string[];
+            next_cursor?: string | null;
+            /** @description Current project. Each result retains the original project for playback. */
+            project_id: string;
+            results: components["schemas"]["StudyStageResult"][];
+            revision: string;
+            /** Format: int64 */
+            scene_revision?: number | null;
         };
         /** @enum {string} */
         SurfaceColorSource: "solid" | "orientation" | "component_x" | "component_y" | "component_z" | "magnitude" | "colormap";
@@ -18800,6 +19219,294 @@ export interface operations {
             };
             /** @description Corrupt, oversized or invalid scalar */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results: {
+        parameters: {
+            query?: {
+                /** @description Authored stage ID or exact durable execution ID. Omit to include all final states. */
+                stage_id?: string;
+                /** @description Exact durable run in the owning workspace. */
+                run_id?: string;
+                /** @description Opaque continuation from a previous response with the same filters. */
+                cursor?: string;
+                /** @description Page size, from 1 to 100. The default is 25. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published final states for the selected durable run */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyStageResultsResource"];
+                };
+            };
+            /** @description Invalid filter or page */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown run */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Run or result ownership differs */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable Study state with its exact spatial carrier */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyResultStateResource"];
+                };
+            };
+            /** @description Unknown result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inconsistent project, run or carrier binding */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMVP v3 magnetization bound to the saved result and its exact domain */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description FMVP;version=3 */
+                    "x-fullmag-encoding"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged immutable magnetization */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unknown result */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars: {
+        parameters: {
+            query?: {
+                columns?: string;
+                start?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable scalar series owned by this saved Study state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalScalarWindow"];
+                };
+            };
+            /** @description Invalid row limit */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Qualified archived scalars unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMSP support mask in exact saved sample order */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description No explicit support mask */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Unchanged immutable mask */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous response for this saved result */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                project_id: string;
+                run_id: string;
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FMMT v2 topology of the saved FEM state */
+            200: {
+                headers: {
+                    /** @description Strong ETag for this saved result payload */
+                    ETag?: string;
+                    /** @description Exact saved sample layout fingerprint */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description Saved result artifact SHA-256 */
+                    "x-fullmag-field-generation-id"?: string;
+                    /** @description Exact saved topology fingerprint */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Saved Study result artifact ID */
+                    "x-fullmag-source-id"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Unchanged immutable topology */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description FEM topology is unavailable */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -25545,6 +26252,8 @@ export interface operations {
             header?: {
                 /** @description Strong ETag from a previous field-vector response */
                 "If-None-Match"?: string | null;
+                /** @description Expected authored magnetization frame from the current field metadata */
+                "x-fullmag-expected-observation-frame-id"?: string | null;
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
@@ -25583,6 +26292,8 @@ export interface operations {
                     "x-fullmag-n-comp"?: number;
                     /** @description Optional FMVP v3/v5 node-index count */
                     "x-fullmag-node-index-count"?: number;
+                    /** @description Identity of the authored magnetization frame, when served */
+                    "x-fullmag-observation-frame-id"?: string;
                     /** @description current for metadata-complete FMVP v3 through v5; legacy_unverified for FMVP v2 */
                     "x-fullmag-payload-state"?: string;
                     /** @description Decoded point count */
@@ -30946,6 +31657,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                /** @description Required for a scoped magnetization apply */
+                "idempotency-key"?: string | null;
                 /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
                 "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
             };
@@ -32034,6 +32747,106 @@ export interface operations {
                 content?: never;
             };
             /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_stages_results: {
+        parameters: {
+            query?: {
+                /** @description Authored stage ID or exact durable execution ID. Omit to include all final states. */
+                stage_id?: string;
+                /** @description Exact durable run in the owning workspace. */
+                run_id?: string;
+                /** @description Opaque continuation from a previous response with the same filters. */
+                cursor?: string;
+                /** @description Page size, from 1 to 100. The default is 25. */
+                limit?: number;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded durable Study results and their current authored relation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StudyStageResultsResource"];
+                };
+            };
+            /** @description Invalid filter, page size or cursor */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Workspace or requested run is unavailable */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Workspace changed or the result binding is inconsistent */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_simulation_stages_results_scalars: {
+        parameters: {
+            query: {
+                /** @description Exact accepted run */
+                run_id: string;
+                /** @description Exact accepted Study step */
+                step_id: string;
+                /** @description Exact output case */
+                case_id: string;
+                /** @description Succeeded worker attempt */
+                attempt_id: string;
+                /** @description Succeeded worker ownership epoch */
+                ownership_epoch: number;
+                /** @description Comma-separated scalar columns */
+                columns?: string;
+                /** @description First archived row ordinal */
+                start?: number;
+                /** @description Number of rows, 1 to 2048 */
+                limit?: number;
+            };
+            header?: {
+                /** @description Optional current-session identity in canonical form `session=<encodeURIComponent(session_id)>&epoch=<encodeURIComponent(session_epoch)>&request_scope_epoch=<encodeURIComponent(request_scope_epoch)>`. Bootstrap, legacy, and input-only inspection requests may omit it; context-bound current-session handlers reject a stale value with 409. */
+                "x-fullmag-session-scope"?: components["parameters"]["FullmagSessionScope"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived scalar samples and their exact source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalScalarWindow"];
+                };
+            };
+            /** @description Qualified scalar history unavailable */
             404: {
                 headers: {
                     [name: string]: unknown;

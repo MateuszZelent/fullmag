@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildObjectMagneticTextureAssetDraft,
   buildMagnetizationAssignmentPatch,
-  buildMagnetizationTransactionRequest,
+  buildMagnetizationApplyTarget,
   normalizeUniformMagnetizationDirection,
   normalizeMagnetizationRef,
   objectMagneticTextureDraftFromModel,
@@ -638,7 +638,7 @@ describe("ObjectMagneticTexturePanelModel", () => {
     });
   });
 
-  it("builds one revision-checked transaction for object and region assignments", () => {
+  it("prepares a scoped object asset and retains the exact clean region initializer", () => {
     const objectModel = {
       assignment: "object",
       asset: null,
@@ -654,25 +654,21 @@ describe("ObjectMagneticTexturePanelModel", () => {
       targetKind: "object" as const,
       textureTransform: "not configured",
     };
-    const asset = buildObjectMagneticTextureAssetDraft(
-      objectModel,
-      objectMagneticTextureDraftFromModel(objectModel),
-    );
-    expect(buildMagnetizationTransactionRequest(objectModel, asset, asset.id)).toEqual({
-      base_revision: 12,
-      kind: "patch_magnetization",
-      object_id: "body",
-      asset,
-      magnetization_ref: asset.id,
+    const draft = objectMagneticTextureDraftFromModel(objectModel);
+    expect(buildMagnetizationApplyTarget(objectModel, draft)).toEqual({
+      kind: "object", object_id: "body", asset: buildObjectMagneticTextureAssetDraft(objectModel, draft),
     });
 
-    const regionModel = { ...objectModel, regionId: "region:body", targetKind: "region" as const };
-    expect(buildMagnetizationTransactionRequest(regionModel, asset, null)).toMatchObject({
-      base_revision: 12,
-      kind: "patch_magnetization",
-      object_id: "body",
-      region_id: "region:body",
-      magnetization_ref: null,
+    const textureOverride = { initial_magnetization: { kind: "uniform" as const, value: [0, 1, 0] } };
+    const regionModel = {
+      ...objectModel, authoredRegion: true, assignment: "region-override",
+      regionId: "core", targetKind: "region" as const, regionTextureOverride: textureOverride,
+    };
+    expect(buildMagnetizationApplyTarget(regionModel, objectMagneticTextureDraftFromModel(regionModel))).toEqual({
+      kind: "region", object_id: "body", region_id: "core", texture_override: textureOverride,
     });
+    expect(buildMagnetizationApplyTarget(regionModel, null)).toMatchObject({ texture_override: null });
+    expect(() => buildMagnetizationApplyTarget({ ...regionModel, authoredRegion: false }, null))
+      .toThrow("Select an authored magnetic region");
   });
 });

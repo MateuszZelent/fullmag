@@ -3346,6 +3346,17 @@ pub fn materialize_study_magnetization_input(
     source_layout: &serde_json::Value,
     values: &[[f64; 3]],
 ) -> Result<fullmag_ir::ExecutionPlanIR, RunError> {
+    materialize_study_magnetization_input_with_overlay(plan, source_layout, values, None)
+}
+
+/// Apply an accepted predecessor and keep the canonical authored samples only
+/// at degrees of freedom selected by the qualified overlay scopes.
+pub fn materialize_study_magnetization_input_with_overlay(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    source_layout: &serde_json::Value,
+    values: &[[f64; 3]],
+    overlay: Option<(&fullmag_ir::ProblemIR, &[fullmag_ir::RegionRefIR])>,
+) -> Result<fullmag_ir::ExecutionPlanIR, RunError> {
     let expected_layout = study_magnetization_layout_for_plan(plan)?;
     if &expected_layout != source_layout {
         return Err(RunError {
@@ -3369,24 +3380,40 @@ pub fn materialize_study_magnetization_input(
         });
     }
 
+    let authored_mask = overlay.map(|(problem, scopes)| {
+        fullmag_plan::study_magnetization_overlay_mask(problem, plan, scopes)
+            .map_err(|error| RunError { message: error.to_string() })
+    }).transpose()?;
+    if authored_mask.as_ref().is_some_and(|mask| mask.len() != expected_samples) {
+        return Err(RunError {
+            message: "study magnetization overlay does not match the native sample layout".into(),
+        });
+    }
+
+    let copy_predecessor = |target: &mut [[f64; 3]], offset: usize| {
+        let range = offset..offset + target.len();
+        let predecessor = &values[range.clone()];
+        if let Some(mask) = authored_mask.as_ref() {
+            for ((target, value), &authored) in target.iter_mut().zip(predecessor).zip(&mask[range]) {
+                if !authored {
+                    *target = *value;
+                }
+            }
+        } else {
+            target.copy_from_slice(predecessor);
+        }
+    };
     let mut materialized = plan.clone();
     match &mut materialized.backend_plan {
-        fullmag_ir::BackendPlanIR::Fdm(fdm) => {
-            fdm.initial_magnetization.copy_from_slice(values);
-        }
+        fullmag_ir::BackendPlanIR::Fdm(fdm) => copy_predecessor(&mut fdm.initial_magnetization, 0),
         fullmag_ir::BackendPlanIR::FdmMultilayer(multilayer) => {
             let mut offset = 0usize;
             for layer in &mut multilayer.layers {
-                let end = offset + layer.initial_magnetization.len();
-                layer
-                    .initial_magnetization
-                    .copy_from_slice(&values[offset..end]);
-                offset = end;
+                copy_predecessor(&mut layer.initial_magnetization, offset);
+                offset += layer.initial_magnetization.len();
             }
         }
-        fullmag_ir::BackendPlanIR::Fem(fem) => {
-            fem.initial_magnetization.copy_from_slice(values);
-        }
+        fullmag_ir::BackendPlanIR::Fem(fem) => copy_predecessor(&mut fem.initial_magnetization, 0),
         _ => unreachable!("accepted layout was validated above"),
     }
     Ok(materialized)
@@ -7379,6 +7406,40 @@ mod tests {
             "cpu"
         );
         assert_eq!(effective, "gpu");
+    }
+
+    #[test]
+    fn scoped_fdm_state_copies_the_predecessor_outside_the_authored_region() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions.push(serde_json::from_value(serde_json::json!({
+            "region_id": "strip:changed", "owner_object": "strip", "name": "changed",
+            "shape": {"kind": "box", "size": [80e-9, 20e-9, 6e-9], "center": [0.0, 0.0, 0.0]},
+            "texture_override": {"initial_magnetization": {"kind": "uniform", "value": [0.0, 1.0, 0.0]}},
+        })).unwrap());
+        let plan = fullmag_plan::plan(&problem).expect("region texture plans on FDM");
+        let layout = study_magnetization_layout_for_plan(&plan).unwrap();
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else { panic!("expected FDM") };
+        let source_m = [0.0, 0.0, -1.0];
+        let predecessor = vec![source_m; fdm.initial_magnetization.len()];
+        let scope = fullmag_ir::RegionRefIR {
+            object_id: "strip".into(), region_id: Some("strip:changed".into()),
+        };
+
+        let bound = materialize_study_magnetization_input_with_overlay(
+            &plan, &layout, &predecessor, Some((&problem, &[scope.clone()])),
+        ).unwrap();
+        let BackendPlanIR::Fdm(bound) = bound.backend_plan else { panic!("expected FDM") };
+        assert!(fdm.region_mask.contains(&0));
+        assert!(fdm.region_mask.contains(&1));
+        for (&region, &value) in fdm.region_mask.iter().zip(&bound.initial_magnetization) {
+            assert_eq!(value, if region == 1 { [0.0, 1.0, 0.0] } else { source_m });
+        }
+
+        let mut foreign_layout = layout;
+        foreign_layout["grid_fingerprint"] = serde_json::json!("foreign");
+        assert!(materialize_study_magnetization_input_with_overlay(
+            &plan, &foreign_layout, &predecessor, Some((&problem, &[scope])),
+        ).is_err());
     }
 
     #[test]

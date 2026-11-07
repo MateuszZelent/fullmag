@@ -492,6 +492,7 @@ pub(crate) async fn restore_before_listen(state: &Arc<AppState>) -> Result<()> {
         state,
         &context,
         "isolated_snapshot_restore",
+        None,
     )
     .await
     .map_err(|error| anyhow::anyhow!("isolated snapshot preparation projection failed: {error}"))?;

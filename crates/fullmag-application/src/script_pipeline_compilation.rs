@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::script_stage_contract::{
-    ResolvedScriptStage, ScriptExecutionConfig, StudyPipelineDocument, StudyPipelineNode, ScriptStageProvenance,
+    ResolvedScriptStage, ScriptExecutionConfig, ScriptExecutionStageAction, StageMagnetizationAssignments, StudyPipelineDocument, StudyPipelineNode, ScriptStageProvenance,
 };
 use crate::script_stage_materialization::{
     materialize_script_stages_with_output_policy_bounded, StageOutputPolicy,
@@ -43,6 +43,20 @@ pub struct ScriptPipelineCompilation {
     pub authored_pipeline_sha256: String,
     pub nodes: Vec<ScriptPipelineNodeBinding>,
     pub executions: Vec<CompiledScriptExecution>,
+    pub(crate) magnetization_assignments: BTreeMap<String, StageMagnetizationAssignments>,
+}
+
+/// Stable durable ID for one execution of an authored pipeline node.
+pub fn script_execution_id(
+    authored_step_id: &str,
+    expansion_index: u64,
+) -> Result<String, serde_json::Error> {
+    let digest = fullmag_ir::canonical_ir_json_sha256(&serde_json::json!({
+        "schema": "fullmag.script-execution-identity.v1",
+        "authored_step_id": authored_step_id,
+        "expansion_index": expansion_index,
+    }))?;
+    Ok(format!("script-execution-{digest}"))
 }
 
 /// Materialize through the existing sequential owner exactly once. The binding
@@ -58,6 +72,7 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         .as_ref()
         .context("pipeline compilation requires an authored study_pipeline")?
         .clone();
+    let magnetization_assignments = authored_pipeline.magnetization_assignments_by_stage()?;
     let explicit = !config.stages.is_empty();
     let mut nodes = Vec::new();
     collect_node_bindings(&authored_pipeline.nodes, &[], true, &mut nodes);
@@ -104,14 +119,10 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         {
             bail!("pipeline execution provenance disagrees with its authored node");
         }
-        let digest = fullmag_ir::canonical_ir_json_sha256(&serde_json::json!({
-            "schema": "fullmag.script-execution-identity.v1",
-            "authored_step_id": source.authored_step_id,
-            "expansion_index": source.expansion_index,
-        }))?;
-        // The identity is also a durable repository component. Keep authored
-        // text inside the digest, not in a platform-dependent path segment.
-        let execution_id = format!("script-execution-{digest}");
+        let execution_id = script_execution_id(
+            &source.authored_step_id,
+            u64::try_from(source.expansion_index)?,
+        )?;
         if !execution_ids.insert(execution_id.clone()) {
             bail!("duplicate generated script execution identity");
         }
@@ -126,6 +137,7 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         authored_pipeline_sha256,
         nodes,
         executions,
+        magnetization_assignments,
     })
 }
 
@@ -138,17 +150,26 @@ pub(crate) fn authored_node<'a>(nodes:&'a [StudyPipelineNode], id:&str) -> Optio
     None
 }
 
+pub(crate) fn is_input_configuration_node(node: &StudyPipelineNode) -> bool {
+    let StudyPipelineNode::Primitive { stage_kind, .. } = node else {
+        return false;
+    };
+    serde_json::from_value::<fullmag_authoring::StudyPrimitiveStageKind>(
+        serde_json::Value::String(stage_kind.clone()),
+    ).is_ok_and(|kind| kind.is_pipeline_input_configuration())
+}
+
 /// Dual representations require complete ordered snapshots with matching authored selections.
 /// The existing explicit materializer owns numerical state; final base IR is never replayed over it.
 fn validate_physical_snapshot_coverage(document:&StudyPipelineDocument,nodes:&[ScriptPipelineNodeBinding],config:&ScriptExecutionConfig)->Result<()> {
-    let reject=||anyhow::anyhow!("pipeline compilation cannot mix explicit stages with study_pipeline unless complete ordered Relax/Run or antenna_field_solve snapshots match authored nodes");
-    if document.version!="study_pipeline.v1" {return Err(reject());}
+    let reject=||anyhow::anyhow!("pipeline compilation cannot mix explicit stages with study_pipeline unless complete ordered physical and supported configuration snapshots match authored nodes");
     let mut ids=BTreeSet::new();
     for node in nodes {
         if node.authored_step_id.trim().is_empty() || !ids.insert(&node.authored_step_id) {return Err(reject());}
         match authored_node(&document.nodes,&node.authored_step_id) {
             Some(StudyPipelineNode::Group{..})=>{},
             Some(StudyPipelineNode::Primitive{stage_kind,..}) if matches!(stage_kind.as_str(),"relax"|"run"|"antenna_field_solve")=>{},
+            Some(node) if is_input_configuration_node(node)=>{},
             _=>return Err(reject()),
         }
     }
@@ -170,6 +191,20 @@ fn validate_physical_snapshot_coverage(document:&StudyPipelineDocument,nodes:&[S
                 let snapshot_port_id = crate::script_stage_materialization::select_antenna_port_reference(
                     port_mode_id.as_deref(), port_mode_ids)?;
                 if stage_id != &authored_stage_id || snapshot_port_id != authored_port_id { return Err(reject()); }
+            },
+            (_, Some(action), _) if matches!(action,
+                ScriptExecutionStageAction::TableAutosave { .. }
+                | ScriptExecutionStageAction::Autosave { .. }
+                | ScriptExecutionStageAction::AddFieldDrive { .. }
+                | ScriptExecutionStageAction::RemoveFieldDrive { .. }
+            ) => {
+                let mut authored = serde_json::to_value(payload)?;
+                authored["kind"] = serde_json::Value::String(stage_kind.clone());
+                let expected: ScriptExecutionStageAction = serde_json::from_value(authored)
+                    .with_context(|| format!("invalid authored configuration for '{}'", binding.authored_step_id))?;
+                if action != &expected {
+                    bail!("configuration snapshot for '{}' differs from its authored payload", binding.authored_step_id);
+                }
             },
             _ => return Err(reject()),
         }

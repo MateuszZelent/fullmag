@@ -23,6 +23,7 @@ AcceptedInspectionArtifactOwner = TypedDict(
 AcceptedObservationFrameRef = TypedDict(
     'AcceptedObservationFrameRef',
     {
+        'authored_initial_state': 'Optional[AuthoredInitialStateOrigin]',
         'domain_generation_id': 'str',
         'observation_frame_id': 'str',
         'session_epoch': 'str',
@@ -198,7 +199,30 @@ ArtifactFieldOwnerBinding = TypedDict(
 
 ArtifactSampleIndexing = Literal['source_nodes', 'sample_nodes', 'point_samples', 'tet4_cell_local_nodes', 'cell_centers']
 
-AuthoringTransactionRequest = Union['AuthoringTransactionRequestAssignStudyExecution', 'AuthoringTransactionRequestReplaceScene', 'AuthoringTransactionRequestMergePatch', 'AuthoringTransactionRequestPatchMagnetization', 'AuthoringTransactionRequestPatchObjectGeometry', 'AuthoringTransactionRequestCreateObject', 'AuthoringTransactionRequestCreateMaterial', 'AuthoringTransactionRequestPatchMaterial', 'AuthoringTransactionRequestDeleteMaterial', 'AuthoringTransactionRequestDeleteObject', 'AuthoringTransactionRequestRenameObject', 'AuthoringTransactionRequestCommitObjectTransform', 'AuthoringTransactionRequestPatchUniverse', 'AuthoringTransactionRequestCreateObjectRegion', 'AuthoringTransactionRequestPatchObjectRegion', 'AuthoringTransactionRequestPatchObjectMaterialFields', 'AuthoringTransactionRequestDeleteObjectRegion', 'AuthoringTransactionRequestReorderObjectRegions', 'AuthoringTransactionRequestCreateCoupling', 'AuthoringTransactionRequestPatchCoupling', 'AuthoringTransactionRequestDeleteCoupling']
+AuthoredInitialStateOrigin = TypedDict(
+    'AuthoredInitialStateOrigin',
+    {
+        'initial_state_revision': 'int',
+        'plan_fingerprint': 'str',
+        'preparation_id': 'str',
+        'scene_revision': 'int',
+        'values_sha256': 'str',
+    },
+    total=False,
+)
+
+AuthoringTransactionRequest = Union['AuthoringTransactionRequestAssignStudyExecution', 'AuthoringTransactionRequestReplaceScene', 'AuthoringTransactionRequestApplyMagnetization', 'AuthoringTransactionRequestMergePatch', 'AuthoringTransactionRequestPatchMagnetization', 'AuthoringTransactionRequestPatchObjectGeometry', 'AuthoringTransactionRequestCreateObject', 'AuthoringTransactionRequestCreateMaterial', 'AuthoringTransactionRequestPatchMaterial', 'AuthoringTransactionRequestDeleteMaterial', 'AuthoringTransactionRequestDeleteObject', 'AuthoringTransactionRequestRenameObject', 'AuthoringTransactionRequestCommitObjectTransform', 'AuthoringTransactionRequestPatchUniverse', 'AuthoringTransactionRequestCreateObjectRegion', 'AuthoringTransactionRequestPatchObjectRegion', 'AuthoringTransactionRequestPatchObjectMaterialFields', 'AuthoringTransactionRequestDeleteObjectRegion', 'AuthoringTransactionRequestReorderObjectRegions', 'AuthoringTransactionRequestCreateCoupling', 'AuthoringTransactionRequestPatchCoupling', 'AuthoringTransactionRequestDeleteCoupling']
+
+AuthoringTransactionRequestApplyMagnetization = TypedDict(
+    'AuthoringTransactionRequestApplyMagnetization',
+    {
+        'base_revision': 'int',
+        'kind': "Literal['apply_magnetization']",
+        'operation_id': 'str',
+        'target': 'MagnetizationApplyTarget',
+    },
+    total=False,
+)
 
 AuthoringTransactionRequestAssignStudyExecution = TypedDict(
     'AuthoringTransactionRequestAssignStudyExecution',
@@ -435,6 +459,7 @@ AuthoringTransactionRequestReplaceScene = TypedDict(
     {
         'base_revision': 'Optional[int]',
         'kind': "Literal['replace_scene']",
+        'magnetization_apply': 'Optional[MagnetizationApplyRequest]',
         'scene': 'Dict[str, Any]',
     },
     total=False,
@@ -444,6 +469,7 @@ AuthoringTransactionResponse = TypedDict(
     'AuthoringTransactionResponse',
     {
         'committed_scene': 'SceneResource',
+        'magnetization_apply': 'Optional[MagnetizationApplyReceiptResource]',
         'scene_revision': 'int',
         'transaction_kind': 'str',
     },
@@ -471,6 +497,7 @@ CommandDetailResource = TypedDict(
         'energy_tolerance': 'Optional[float]',
         'energy_tolerance_j': 'Optional[float]',
         'error': 'Optional[str]',
+        'execution_binding': 'Optional[CommandExecutionBinding]',
         'field_materialization_requirements': 'List[FieldMaterializationRequirement]',
         'fixed_timestep': 'Optional[float]',
         'integrator': 'Optional[str]',
@@ -516,6 +543,16 @@ CommandDiagnosticReferenceResource = TypedDict(
         'resource_key': 'str',
         'revision': 'int',
         'severity': 'str',
+    },
+    total=False,
+)
+
+CommandExecutionBinding = TypedDict(
+    'CommandExecutionBinding',
+    {
+        'requested_target': 'Optional[RuntimeCommandTarget]',
+        'run_id': 'str',
+        'step_id': 'Optional[str]',
     },
     total=False,
 )
@@ -569,6 +606,7 @@ CommandResponse = TypedDict(
         'accepted': 'bool',
         'command_id': 'str',
         'error': 'Optional[str]',
+        'execution_binding': 'Optional[CommandExecutionBinding]',
         'request_id': 'Optional[str]',
     },
     total=False,
@@ -1054,6 +1092,62 @@ LiveStatus = TypedDict(
     total=False,
 )
 
+MagnetizationApplyReceiptResource = TypedDict(
+    'MagnetizationApplyReceiptResource',
+    {
+        'operation_id': 'str',
+        'prepared_initial_state': 'Optional[PreparedInitialStateResource]',
+        'reason': 'Optional[str]',
+        'scene_revision': 'int',
+        'scopes': 'List[MagnetizationApplyScope]',
+        'status': 'MagnetizationApplyStatus',
+    },
+    total=False,
+)
+
+MagnetizationApplyRequest = TypedDict(
+    'MagnetizationApplyRequest',
+    {
+        'operation_id': 'str',
+        'scopes': 'List[MagnetizationApplyScope]',
+    },
+    total=False,
+)
+
+MagnetizationApplyScope = TypedDict(
+    'MagnetizationApplyScope',
+    {
+        'object_id': 'str',
+        'region_id': 'Optional[str]',
+    },
+    total=False,
+)
+
+MagnetizationApplyStatus = Literal['initial_state_pending', 'initial_state_ready']
+
+MagnetizationApplyTarget = Union['MagnetizationApplyTargetObject', 'MagnetizationApplyTargetRegion']
+
+MagnetizationApplyTargetObject = TypedDict(
+    'MagnetizationApplyTargetObject',
+    {
+        'asset': 'Optional[Dict[str, Any]]',
+        'kind': "Literal['object']",
+        'object_id': 'str',
+    },
+    total=False,
+)
+
+MagnetizationApplyTargetRegion = TypedDict(
+    'MagnetizationApplyTargetRegion',
+    {
+        'kind': "Literal['region']",
+        'object_id': 'str',
+        'region_id': 'str',
+        'texture_override': 'Optional[SceneTextureOverride]',
+    },
+    total=False,
+)
+
 MaterialPatchRequest = TypedDict(
     'MaterialPatchRequest',
     {
@@ -1231,6 +1325,19 @@ ParallelExecutionTelemetryResource = TypedDict(
 
 PositiveThreadCountSchema = int
 
+PreparedInitialStateResource = TypedDict(
+    'PreparedInitialStateResource',
+    {
+        'domain_generation_id': 'str',
+        'initial_state_revision': 'int',
+        'observation_frame_id': 'str',
+        'publication_id': 'str',
+        'scene_revision': 'int',
+        'values_sha256': 'str',
+    },
+    total=False,
+)
+
 QuantityCatalogEntry = TypedDict(
     'QuantityCatalogEntry',
     {
@@ -1394,10 +1501,44 @@ RunSummary = TypedDict(
     total=False,
 )
 
+RuntimeAuthoredInitialStateSource = Union['RuntimeAuthoredInitialStateSourceStudy', 'RuntimeAuthoredInitialStateSourceStage', 'RuntimeAuthoredInitialStateSourcePrepared']
+
+RuntimeAuthoredInitialStateSourcePrepared = TypedDict(
+    'RuntimeAuthoredInitialStateSourcePrepared',
+    {
+        'initial_state_revision': 'int',
+        'kind': "Literal['prepared']",
+        'publication_id': 'str',
+        'scene_revision': 'int',
+    },
+    total=False,
+)
+
+RuntimeAuthoredInitialStateSourceStage = TypedDict(
+    'RuntimeAuthoredInitialStateSourceStage',
+    {
+        'kind': "Literal['stage']",
+        'scene_revision': 'int',
+        'stage_id': 'str',
+    },
+    total=False,
+)
+
+RuntimeAuthoredInitialStateSourceStudy = TypedDict(
+    'RuntimeAuthoredInitialStateSourceStudy',
+    {
+        'kind': "Literal['study']",
+        'scene_revision': 'int',
+    },
+    total=False,
+)
+
 RuntimeCommandPrecondition = TypedDict(
     'RuntimeCommandPrecondition',
     {
         'command_revision': 'Optional[int]',
+        'current_run': 'Optional[RuntimeCommandRunPrecondition]',
+        'domain_generation_id': 'Optional[str]',
         'mesh_revision': 'Optional[int]',
         'region_coefficients_revision': 'Optional[int]',
         'region_initial_state_revision': 'Optional[int]',
@@ -1416,6 +1557,25 @@ RuntimeCommandReadinessResource = TypedDict(
         'enabled': 'bool',
         'kind': 'str',
         'reason': 'Optional[str]',
+    },
+    total=False,
+)
+
+RuntimeCommandRunPrecondition = Union['RuntimeCommandRunPreconditionNone', 'RuntimeCommandRunPreconditionRun']
+
+RuntimeCommandRunPreconditionNone = TypedDict(
+    'RuntimeCommandRunPreconditionNone',
+    {
+        'kind': "Literal['none']",
+    },
+    total=False,
+)
+
+RuntimeCommandRunPreconditionRun = TypedDict(
+    'RuntimeCommandRunPreconditionRun',
+    {
+        'kind': "Literal['run']",
+        'run_id': 'str',
     },
     total=False,
 )
@@ -1475,6 +1635,47 @@ RuntimeCommandTargetStudy = TypedDict(
     total=False,
 )
 
+RuntimeInitialStateRequest = Union['RuntimeInitialStateRequestDefaultForTarget', 'RuntimeInitialStateRequestAuthoredInitialState', 'RuntimeInitialStateRequestStageResult', 'RuntimeInitialStateRequestLatestCompatibleState']
+
+RuntimeInitialStateRequestAuthoredInitialState = TypedDict(
+    'RuntimeInitialStateRequestAuthoredInitialState',
+    {
+        'kind': "Literal['authored_initial_state']",
+        'source': 'RuntimeAuthoredInitialStateSource',
+    },
+    total=False,
+)
+
+RuntimeInitialStateRequestDefaultForTarget = TypedDict(
+    'RuntimeInitialStateRequestDefaultForTarget',
+    {
+        'kind': "Literal['default_for_target']",
+    },
+    total=False,
+)
+
+RuntimeInitialStateRequestLatestCompatibleState = TypedDict(
+    'RuntimeInitialStateRequestLatestCompatibleState',
+    {
+        'kind': "Literal['latest_compatible_state']",
+    },
+    total=False,
+)
+
+RuntimeInitialStateRequestStageResult = TypedDict(
+    'RuntimeInitialStateRequestStageResult',
+    {
+        'allow_stale_model': 'bool',
+        'artifact_id': 'str',
+        'case_id': 'str',
+        'content_sha256': 'str',
+        'kind': "Literal['stage_result']",
+        'run_id': 'str',
+        'step_id': 'str',
+    },
+    total=False,
+)
+
 ScalarObservationSource = TypedDict(
     'ScalarObservationSource',
     {
@@ -1483,6 +1684,19 @@ ScalarObservationSource = TypedDict(
         'scalar_revision': 'int',
         'session_id': 'str',
         'source_step': 'int',
+    },
+    total=False,
+)
+
+ScalarSeriesIdentity = TypedDict(
+    'ScalarSeriesIdentity',
+    {
+        'attempt_id': 'str',
+        'case_id': 'str',
+        'ownership_epoch': 'int',
+        'run_id': 'str',
+        'step_id': 'str',
+        'task_id': 'str',
     },
     total=False,
 )
@@ -1496,6 +1710,7 @@ ScalarWindow = TypedDict(
         'returned_rows': 'int',
         'revision': 'int',
         'rows': 'List[List[float]]',
+        'series': 'Optional[ScalarSeriesIdentity]',
         'total_rows': 'int',
     },
     total=False,
@@ -2217,6 +2432,7 @@ StructuredCommandRequestClose = TypedDict(
     'StructuredCommandRequestClose',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['close']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2230,6 +2446,7 @@ StructuredCommandRequestComputeEnergies = TypedDict(
     'StructuredCommandRequestComputeEnergies',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['compute_energies']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2243,6 +2460,7 @@ StructuredCommandRequestComputeFields = TypedDict(
     'StructuredCommandRequestComputeFields',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['compute_fields']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2256,6 +2474,7 @@ StructuredCommandRequestFdmGridRefresh = TypedDict(
     'StructuredCommandRequestFdmGridRefresh',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['fdm_grid_refresh']",
         'mesh_options': 'Optional[Dict[str, Any]]',
         'precondition': 'Optional[RuntimeCommandPrecondition]',
@@ -2270,6 +2489,7 @@ StructuredCommandRequestMeshBuild = TypedDict(
     'StructuredCommandRequestMeshBuild',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['mesh_build']",
         'mesh_options': 'Optional[Dict[str, Any]]',
         'mesh_reason': 'Optional[str]',
@@ -2286,6 +2506,7 @@ StructuredCommandRequestPause = TypedDict(
     'StructuredCommandRequestPause',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['pause']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2302,6 +2523,7 @@ StructuredCommandRequestRelax = TypedDict(
         'energy_tolerance': 'Optional[float]',
         'energy_tolerance_j': 'Optional[float]',
         'fixed_timestep': 'Optional[float]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['relax']",
         'max_error': 'Optional[float]',
         'max_relaxation_time_s': 'Optional[float]',
@@ -2325,6 +2547,7 @@ StructuredCommandRequestResume = TypedDict(
     'StructuredCommandRequestResume',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['resume']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2339,6 +2562,7 @@ StructuredCommandRequestRun = TypedDict(
     {
         'client_intent_id': 'Optional[str]',
         'fixed_timestep': 'Optional[float]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'integrator': 'Optional[str]',
         'kind': "Literal['run']",
         'max_steps': 'Optional[int]',
@@ -2347,7 +2571,7 @@ StructuredCommandRequestRun = TypedDict(
         'requested_at_unix_ms': 'Optional[int]',
         'solver_policy': 'Optional[SolverPolicyRequest]',
         'target': 'Optional[RuntimeCommandTarget]',
-        'until_seconds': 'float',
+        'until_seconds': 'Optional[float]',
     },
     total=False,
 )
@@ -2356,6 +2580,7 @@ StructuredCommandRequestSaveVtk = TypedDict(
     'StructuredCommandRequestSaveVtk',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['save_vtk']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2369,6 +2594,7 @@ StructuredCommandRequestSetSolverProfile = TypedDict(
     'StructuredCommandRequestSetSolverProfile',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['set_solver_profile']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'profile': 'SolverProfileCommandConfig',
@@ -2383,6 +2609,7 @@ StructuredCommandRequestSkip = TypedDict(
     'StructuredCommandRequestSkip',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['skip']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2396,6 +2623,7 @@ StructuredCommandRequestSolve = TypedDict(
     'StructuredCommandRequestSolve',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['solve']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2409,6 +2637,7 @@ StructuredCommandRequestStop = TypedDict(
     'StructuredCommandRequestStop',
     {
         'client_intent_id': 'Optional[str]',
+        'initial_state': 'Optional[RuntimeInitialStateRequest]',
         'kind': "Literal['stop']",
         'precondition': 'Optional[RuntimeCommandPrecondition]',
         'reason': 'Optional[str]',
@@ -2524,6 +2753,8 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'ApiErrorResponse': frozenset({'code', 'error', 'message'}),
     'ArtifactFieldLocatorResource': frozenset({'carrier_digest', 'carrier_id', 'carrier_revision', 'carrier_scope_kind', 'coordinate_frame', 'coordinate_unit', 'indexing', 'owner', 'sample_count', 'topology_binary_schema'}),
     'ArtifactFieldOwnerBinding': frozenset({'authored_stage_id', 'content_digest', 'historical_inspection', 'module_id', 'native_mesh_identity', 'native_topology_identity', 'object_id', 'observation_mesh_revision', 'observation_topology_revision', 'output_id', 'request_scope_epoch', 'run_id', 'runtime_stage_id', 'session_epoch', 'session_id', 'source_digest'}),
+    'AuthoredInitialStateOrigin': frozenset({'initial_state_revision', 'plan_fingerprint', 'preparation_id', 'scene_revision', 'values_sha256'}),
+    'AuthoringTransactionRequestApplyMagnetization': frozenset({'base_revision', 'kind', 'operation_id', 'target'}),
     'AuthoringTransactionRequestAssignStudyExecution': frozenset({'base_revision', 'execution_layers', 'execution_profile', 'kind'}),
     'AuthoringTransactionRequestCommitObjectTransform': frozenset({'kind', 'object_id', 'transform'}),
     'AuthoringTransactionRequestCreateCoupling': frozenset({'coupling', 'kind'}),
@@ -2548,6 +2779,7 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'AuthoringTransactionResponse': frozenset({'committed_scene', 'scene_revision', 'transaction_kind'}),
     'CommandDetailResource': frozenset({'command_id', 'created_at_unix_ms', 'kind', 'seq', 'status'}),
     'CommandDiagnosticReferenceResource': frozenset({'message', 'resource_key', 'revision', 'severity'}),
+    'CommandExecutionBinding': frozenset({'run_id'}),
     'CommandExecutionReadbackResource': frozenset(),
     'CommandQueueStatusResource': frozenset({'accepted_count', 'can_accept_commands', 'commands', 'completed_count', 'dispatched_count', 'failed_count', 'pending_count', 'rejected_count', 'revision', 'running_count', 'runtime_controls'}),
     'CommandResourceInvalidationResource': frozenset({'reason', 'resource_key', 'revision', 'state'}),
@@ -2583,6 +2815,11 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'GpuResourcesSchema': frozenset(),
     'HealthResponse': frozenset({'active_session', 'api_contract_version', 'status', 'uptime_seconds'}),
     'LiveStatus': frozenset({'api_contract_version', 'capabilities', 'display', 'domain', 'energies', 'lifecycle', 'metrics', 'resources', 'runtime_bundle_version', 'session', 'solver'}),
+    'MagnetizationApplyReceiptResource': frozenset({'operation_id', 'scene_revision', 'scopes', 'status'}),
+    'MagnetizationApplyRequest': frozenset({'operation_id', 'scopes'}),
+    'MagnetizationApplyScope': frozenset({'object_id'}),
+    'MagnetizationApplyTargetObject': frozenset({'asset', 'kind', 'object_id'}),
+    'MagnetizationApplyTargetRegion': frozenset({'kind', 'object_id', 'region_id', 'texture_override'}),
     'MaterialPatchRequest': frozenset(),
     'MaterialPropertiesPatchRequest': frozenset(),
     'MaterialPropertiesResource': frozenset({'alpha'}),
@@ -2597,6 +2834,7 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'ObservationFrameResource': frozenset({'accepted_state_ref', 'adapter_id', 'attempt_id', 'frame_id', 'grid_cells', 'magnetization_href', 'ownership_epoch', 'quantity_ids', 'run_id', 'schema_version', 'stage_id', 'state_codec_id', 'state_codec_version', 'status', 'task_id'}),
     'OutputStorageSettingsSchema': frozenset(),
     'ParallelExecutionTelemetryResource': frozenset({'active_workers', 'admission_desired_workers', 'admission_pending_samples', 'admission_reason', 'cpu_target_kind', 'cpu_target_percent', 'memory_reserve_bytes', 'memory_target_percent', 'sampled_at_unix_ms', 'terminal'}),
+    'PreparedInitialStateResource': frozenset({'domain_generation_id', 'initial_state_revision', 'observation_frame_id', 'publication_id', 'scene_revision', 'values_sha256'}),
     'QuantityCatalogEntry': frozenset({'capability_state', 'description', 'domain', 'id', 'interactive_preview', 'label', 'location', 'materializable', 'materialization_state', 'n_comp', 'normalization_hint', 'publication_state', 'renderable', 'requestable', 'shape', 'solver_capability', 'supports_export', 'supports_history', 'supports_preview_2d', 'supports_preview_3d', 'unit'}),
     'QuantityCatalogResponse': frozenset({'quantities', 'schema_version'}),
     'QuantityProjectionCapability': frozenset({'components', 'output_shape', 'publication', 'render', 'token'}),
@@ -2605,15 +2843,25 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'ResolvedQuantityCapability': frozenset({'carriers', 'lane', 'materialization', 'precision', 'provider', 'publication', 'quantity_id', 'render', 'request', 'scope'}),
     'ResourceRevisionMap': frozenset({'artifact_revision', 'artifacts_revision', 'command_completion_revision', 'commands_revision', 'display_revision', 'domain_generation_id', 'engine_log_revision', 'field_catalog_revision', 'field_revision', 'fields_revision', 'mesh_build_revision', 'mesh_revision', 'mode_composition_revision', 'region_coefficients_revision', 'region_initial_state_revision', 'region_membership_revision', 'region_topology_revision', 'scalars_revision', 'simulation_preparation_revision', 'slice_revision', 'solver_profile_revision', 'stages_revision', 'topology_revision', 'visualization_state_revision', 'workspace_revision'}),
     'RunSummary': frozenset({'requested_device', 'resolved_device', 'run_id', 'selection_reason', 'solver_steps', 'solver_time', 'stage_count', 'stage_index', 'stage_label', 'started_at'}),
+    'RuntimeAuthoredInitialStateSourcePrepared': frozenset({'initial_state_revision', 'kind', 'publication_id', 'scene_revision'}),
+    'RuntimeAuthoredInitialStateSourceStage': frozenset({'kind', 'scene_revision', 'stage_id'}),
+    'RuntimeAuthoredInitialStateSourceStudy': frozenset({'kind', 'scene_revision'}),
     'RuntimeCommandPrecondition': frozenset(),
     'RuntimeCommandReadinessResource': frozenset({'enabled', 'kind'}),
+    'RuntimeCommandRunPreconditionNone': frozenset({'kind'}),
+    'RuntimeCommandRunPreconditionRun': frozenset({'kind', 'run_id'}),
     'RuntimeCommandTargetCommandId': frozenset({'command_id', 'kind'}),
     'RuntimeCommandTargetCurrentStage': frozenset({'kind'}),
     'RuntimeCommandTargetRun': frozenset({'kind'}),
     'RuntimeCommandTargetStageId': frozenset({'kind', 'stage_id'}),
     'RuntimeCommandTargetStageIndex': frozenset({'kind', 'stage_index'}),
     'RuntimeCommandTargetStudy': frozenset({'kind'}),
+    'RuntimeInitialStateRequestAuthoredInitialState': frozenset({'kind', 'source'}),
+    'RuntimeInitialStateRequestDefaultForTarget': frozenset({'kind'}),
+    'RuntimeInitialStateRequestLatestCompatibleState': frozenset({'kind'}),
+    'RuntimeInitialStateRequestStageResult': frozenset({'artifact_id', 'case_id', 'content_sha256', 'kind', 'run_id', 'step_id'}),
     'ScalarObservationSource': frozenset({'request_scope_epoch', 'run_id', 'scalar_revision', 'session_id', 'source_step'}),
+    'ScalarSeriesIdentity': frozenset({'attempt_id', 'case_id', 'ownership_epoch', 'run_id', 'step_id', 'task_id'}),
     'ScalarWindow': frozenset({'columns', 'observation_frames', 'returned_rows', 'revision', 'rows', 'total_rows'}),
     'SceneCoupling': frozenset({'coupling_id', 'kind', 'parameters', 'source', 'target'}),
     'SceneCouplingEndpointObject': frozenset({'kind', 'object'}),
@@ -2676,7 +2924,7 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
     'StructuredCommandRequestPause': frozenset({'kind'}),
     'StructuredCommandRequestRelax': frozenset({'kind'}),
     'StructuredCommandRequestResume': frozenset({'kind'}),
-    'StructuredCommandRequestRun': frozenset({'kind', 'until_seconds'}),
+    'StructuredCommandRequestRun': frozenset({'kind'}),
     'StructuredCommandRequestSaveVtk': frozenset({'kind'}),
     'StructuredCommandRequestSetSolverProfile': frozenset({'kind', 'profile'}),
     'StructuredCommandRequestSkip': frozenset({'kind'}),
@@ -2692,11 +2940,15 @@ REQUIRED_FIELDS: Dict[str, frozenset] = {
 
 DISCRIMINATED_UNIONS: Dict[str, Dict[str, Any]] = {
     'AntennaFieldTargetResource': {'field': 'kind', 'variants': {'global': 'AntennaFieldTargetResourceGlobal', 'object': 'AntennaFieldTargetResourceObject', 'region': 'AntennaFieldTargetResourceRegion'}},
-    'AuthoringTransactionRequest': {'field': 'kind', 'variants': {'assign_study_execution': 'AuthoringTransactionRequestAssignStudyExecution', 'commit_object_transform': 'AuthoringTransactionRequestCommitObjectTransform', 'create_coupling': 'AuthoringTransactionRequestCreateCoupling', 'create_material': 'AuthoringTransactionRequestCreateMaterial', 'create_object': 'AuthoringTransactionRequestCreateObject', 'create_object_region': 'AuthoringTransactionRequestCreateObjectRegion', 'delete_coupling': 'AuthoringTransactionRequestDeleteCoupling', 'delete_material': 'AuthoringTransactionRequestDeleteMaterial', 'delete_object': 'AuthoringTransactionRequestDeleteObject', 'delete_object_region': 'AuthoringTransactionRequestDeleteObjectRegion', 'merge_patch': 'AuthoringTransactionRequestMergePatch', 'patch_coupling': 'AuthoringTransactionRequestPatchCoupling', 'patch_magnetization': 'AuthoringTransactionRequestPatchMagnetization', 'patch_material': 'AuthoringTransactionRequestPatchMaterial', 'patch_object_geometry': 'AuthoringTransactionRequestPatchObjectGeometry', 'patch_object_material_fields': 'AuthoringTransactionRequestPatchObjectMaterialFields', 'patch_object_region': 'AuthoringTransactionRequestPatchObjectRegion', 'patch_universe': 'AuthoringTransactionRequestPatchUniverse', 'rename_object': 'AuthoringTransactionRequestRenameObject', 'reorder_object_regions': 'AuthoringTransactionRequestReorderObjectRegions', 'replace_scene': 'AuthoringTransactionRequestReplaceScene'}},
+    'AuthoringTransactionRequest': {'field': 'kind', 'variants': {'apply_magnetization': 'AuthoringTransactionRequestApplyMagnetization', 'assign_study_execution': 'AuthoringTransactionRequestAssignStudyExecution', 'commit_object_transform': 'AuthoringTransactionRequestCommitObjectTransform', 'create_coupling': 'AuthoringTransactionRequestCreateCoupling', 'create_material': 'AuthoringTransactionRequestCreateMaterial', 'create_object': 'AuthoringTransactionRequestCreateObject', 'create_object_region': 'AuthoringTransactionRequestCreateObjectRegion', 'delete_coupling': 'AuthoringTransactionRequestDeleteCoupling', 'delete_material': 'AuthoringTransactionRequestDeleteMaterial', 'delete_object': 'AuthoringTransactionRequestDeleteObject', 'delete_object_region': 'AuthoringTransactionRequestDeleteObjectRegion', 'merge_patch': 'AuthoringTransactionRequestMergePatch', 'patch_coupling': 'AuthoringTransactionRequestPatchCoupling', 'patch_magnetization': 'AuthoringTransactionRequestPatchMagnetization', 'patch_material': 'AuthoringTransactionRequestPatchMaterial', 'patch_object_geometry': 'AuthoringTransactionRequestPatchObjectGeometry', 'patch_object_material_fields': 'AuthoringTransactionRequestPatchObjectMaterialFields', 'patch_object_region': 'AuthoringTransactionRequestPatchObjectRegion', 'patch_universe': 'AuthoringTransactionRequestPatchUniverse', 'rename_object': 'AuthoringTransactionRequestRenameObject', 'reorder_object_regions': 'AuthoringTransactionRequestReorderObjectRegions', 'replace_scene': 'AuthoringTransactionRequestReplaceScene'}},
     'ComputeParallelismSchema': {'field': 'kind', 'variants': {'distributed': 'ComputeParallelismSchemaDistributed', 'single_process': 'ComputeParallelismSchemaSingleProcess'}},
     'ComputeTargetSchema': {'field': 'kind', 'variants': {'local': 'ComputeTargetSchemaLocal', 'node': 'ComputeTargetSchemaNode', 'pool': 'ComputeTargetSchemaPool'}},
+    'MagnetizationApplyTarget': {'field': 'kind', 'variants': {'object': 'MagnetizationApplyTargetObject', 'region': 'MagnetizationApplyTargetRegion'}},
     'MeshCommandTarget': {'field': 'kind', 'variants': {'adaptive_followup': 'MeshCommandTargetAdaptiveFollowup', 'airbox': 'MeshCommandTargetAirbox', 'object_mesh': 'MeshCommandTargetObjectMesh', 'study_domain': 'MeshCommandTargetStudyDomain'}},
+    'RuntimeAuthoredInitialStateSource': {'field': 'kind', 'variants': {'prepared': 'RuntimeAuthoredInitialStateSourcePrepared', 'stage': 'RuntimeAuthoredInitialStateSourceStage', 'study': 'RuntimeAuthoredInitialStateSourceStudy'}},
+    'RuntimeCommandRunPrecondition': {'field': 'kind', 'variants': {'none': 'RuntimeCommandRunPreconditionNone', 'run': 'RuntimeCommandRunPreconditionRun'}},
     'RuntimeCommandTarget': {'field': 'kind', 'variants': {'command_id': 'RuntimeCommandTargetCommandId', 'current_stage': 'RuntimeCommandTargetCurrentStage', 'run': 'RuntimeCommandTargetRun', 'stage_id': 'RuntimeCommandTargetStageId', 'stage_index': 'RuntimeCommandTargetStageIndex', 'study': 'RuntimeCommandTargetStudy'}},
+    'RuntimeInitialStateRequest': {'field': 'kind', 'variants': {'authored_initial_state': 'RuntimeInitialStateRequestAuthoredInitialState', 'default_for_target': 'RuntimeInitialStateRequestDefaultForTarget', 'latest_compatible_state': 'RuntimeInitialStateRequestLatestCompatibleState', 'stage_result': 'RuntimeInitialStateRequestStageResult'}},
     'SceneCouplingEndpoint': {'field': 'kind', 'variants': {'object': 'SceneCouplingEndpointObject', 'region': 'SceneCouplingEndpointRegion', 'surface': 'SceneCouplingEndpointSurface'}},
     'SceneCouplingParameters': {'field': 'kind', 'variants': {'exchange': 'SceneCouplingParametersExchange', 'interlayer_exchange': 'SceneCouplingParametersInterlayerExchange', 'rkky': 'SceneCouplingParametersRkky'}},
     'SceneInitialMagnetization': {'field': 'kind', 'variants': {'preset_texture': 'SceneInitialMagnetizationPresetTexture', 'random_seeded': 'SceneInitialMagnetizationRandomSeeded', 'sampled_field': 'SceneInitialMagnetizationSampledField', 'uniform': 'SceneInitialMagnetizationUniform'}},
@@ -2707,4 +2959,4 @@ DISCRIMINATED_UNIONS: Dict[str, Dict[str, Any]] = {
     'StructuredCommandRequest': {'field': 'kind', 'variants': {'close': 'StructuredCommandRequestClose', 'compute_energies': 'StructuredCommandRequestComputeEnergies', 'compute_fields': 'StructuredCommandRequestComputeFields', 'fdm_grid_refresh': 'StructuredCommandRequestFdmGridRefresh', 'mesh_build': 'StructuredCommandRequestMeshBuild', 'pause': 'StructuredCommandRequestPause', 'relax': 'StructuredCommandRequestRelax', 'resume': 'StructuredCommandRequestResume', 'run': 'StructuredCommandRequestRun', 'save_vtk': 'StructuredCommandRequestSaveVtk', 'set_solver_profile': 'StructuredCommandRequestSetSolverProfile', 'skip': 'StructuredCommandRequestSkip', 'solve': 'StructuredCommandRequestSolve', 'stop': 'StructuredCommandRequestStop'}},
 }
 
-__all__ = ['AcceptedInspectionArtifactOwner', 'AcceptedObservationFrameRef', 'AcceptedStateGenerationResource', 'AcceptedStateIdResource', 'AcceptedStateRefResource', 'AdaptiveSolverIntegratorRequest', 'AntennaFieldTargetResource', 'AntennaFieldTargetResourceGlobal', 'AntennaFieldTargetResourceObject', 'AntennaFieldTargetResourceRegion', 'AntennaInspectionDiscoveryResource', 'AntennaInspectionDiscoveryState', 'AntennaOperationProgressResource', 'AntennaSampleCarrierResource', 'ApiErrorDiagnosticResponse', 'ApiErrorResponse', 'ArtifactFieldLocatorResource', 'ArtifactFieldOwnerBinding', 'ArtifactSampleIndexing', 'AuthoringTransactionRequest', 'AuthoringTransactionRequestAssignStudyExecution', 'AuthoringTransactionRequestCommitObjectTransform', 'AuthoringTransactionRequestCreateCoupling', 'AuthoringTransactionRequestCreateMaterial', 'AuthoringTransactionRequestCreateObject', 'AuthoringTransactionRequestCreateObjectRegion', 'AuthoringTransactionRequestDeleteCoupling', 'AuthoringTransactionRequestDeleteMaterial', 'AuthoringTransactionRequestDeleteObject', 'AuthoringTransactionRequestDeleteObjectRegion', 'AuthoringTransactionRequestMergePatch', 'AuthoringTransactionRequestPatchCoupling', 'AuthoringTransactionRequestPatchMagnetization', 'AuthoringTransactionRequestPatchMaterial', 'AuthoringTransactionRequestPatchObjectGeometry', 'AuthoringTransactionRequestPatchObjectMaterialFields', 'AuthoringTransactionRequestPatchObjectRegion', 'AuthoringTransactionRequestPatchUniverse', 'AuthoringTransactionRequestRenameObject', 'AuthoringTransactionRequestReorderObjectRegions', 'AuthoringTransactionRequestReplaceScene', 'AuthoringTransactionResponse', 'CapabilityMap', 'CommandDetailResource', 'CommandDiagnosticReferenceResource', 'CommandExecutionReadbackResource', 'CommandQueueStatusResource', 'CommandResourceInvalidationResource', 'CommandResponse', 'CommandStatusResource', 'ComputeParallelismSchema', 'ComputeParallelismSchemaDistributed', 'ComputeParallelismSchemaSingleProcess', 'ComputePlacementSchema', 'ComputeResourcePatchSchema', 'ComputeTargetSchema', 'ComputeTargetSchemaLocal', 'ComputeTargetSchemaNode', 'ComputeTargetSchemaPool', 'CpuAffinitySchema', 'CpuCorePolicySchema', 'CpuResourcePatchSchema', 'CreateSessionRequest', 'CreateSessionResponse', 'CurrentRunResource', 'DISCRIMINATED_UNIONS', 'DisplaySelection', 'DisplayViewMode', 'DomainSummary', 'EnergySummary', 'ExecutionBackendSchema', 'ExecutionDeviceSchema', 'ExecutionLayerSchema', 'ExecutionModeSchema', 'ExecutionOriginKindSchema', 'ExecutionOriginSchema', 'ExecutionPrecisionSchema', 'ExecutionProfileSchema', 'ExecutionProfileSchemaVersion', 'ExecutionRequestPatchSchema', 'ExistingOutputSchema', 'FieldCarrierDescriptor', 'FieldCatalog', 'FieldComponent', 'FieldDescriptor', 'FieldMaterializationRequirement', 'FieldMaterializationState', 'FieldMeta', 'FieldPayloadState', 'FieldPublicationBinding', 'FieldPublicationBundle', 'FieldPublicationResponseRevisions', 'FieldStats', 'FieldVectorPendingResponse', 'FixedSolverIntegratorRequest', 'GpuResourcesSchema', 'GpuSelectorSchema', 'HealthResponse', 'LiveStatus', 'MaterialPatchRequest', 'MaterialPropertiesPatchRequest', 'MaterialPropertiesResource', 'MaterialReferenceResource', 'MemoryResourcePatchSchema', 'MeshCommandTarget', 'MeshCommandTargetAdaptiveFollowup', 'MeshCommandTargetAirbox', 'MeshCommandTargetObjectMesh', 'MeshCommandTargetStudyDomain', 'MetricsSummary', 'NullableF64PatchValue', 'NullableStringPatchValue', 'ObservationFrameListResource', 'ObservationFrameResource', 'ObservationFrameStatus', 'OutputDataFormatSchema', 'OutputStorageSettingsSchema', 'ParallelExecutionTelemetryResource', 'PositiveThreadCountSchema', 'QuantityCatalogEntry', 'QuantityCatalogResponse', 'QuantityMaterializationCapability', 'QuantityProjectionCapability', 'QuantityProviderCapability', 'QuantityPublicationCapability', 'QuantityRenderCapability', 'QuantityRequestCapability', 'QuantityTensorDescriptor', 'REQUIRED_FIELDS', 'RelaxationAlgorithm', 'RequestedThreadsSchema', 'ResolvedFallbackResource', 'ResolvedQuantityCapability', 'ResourceRevisionMap', 'RunSummary', 'RuntimeCommandPrecondition', 'RuntimeCommandReadinessResource', 'RuntimeCommandTarget', 'RuntimeCommandTargetCommandId', 'RuntimeCommandTargetCurrentStage', 'RuntimeCommandTargetRun', 'RuntimeCommandTargetStageId', 'RuntimeCommandTargetStageIndex', 'RuntimeCommandTargetStudy', 'ScalarObservationSource', 'ScalarWindow', 'SceneCoupling', 'SceneCouplingCapabilityPolicy', 'SceneCouplingEndpoint', 'SceneCouplingEndpointObject', 'SceneCouplingEndpointRegion', 'SceneCouplingEndpointSurface', 'SceneCouplingKind', 'SceneCouplingParameters', 'SceneCouplingParametersExchange', 'SceneCouplingParametersInterlayerExchange', 'SceneCouplingParametersRkky', 'SceneCouplingPatch', 'SceneExchangeCouplingMode', 'SceneInitialMagnetization', 'SceneInitialMagnetizationPresetTexture', 'SceneInitialMagnetizationRandomSeeded', 'SceneInitialMagnetizationSampledField', 'SceneInitialMagnetizationUniform', 'SceneMaterialFieldLocation', 'SceneMaterialParameterAssignment', 'SceneMaterialParameterField', 'SceneMaterialParameterFieldConstant', 'SceneMaterialParameterFieldLinear', 'SceneMaterialParameterFieldRadial', 'SceneMaterialParameterFieldSampled', 'SceneMaterialParameterName', 'SceneMaterialParameterValue', 'SceneMaterialTransition', 'SceneMaterialTransitionMeshRelative', 'SceneMaterialTransitionMetric', 'SceneMaterialTransitionScope', 'SceneMaterialTransitionSharp', 'SceneObjectRegion', 'SceneObjectRegionPatch', 'ScenePatchRequest', 'SceneRegionConflictPolicy', 'SceneRegionFrame', 'SceneRegionMaterialOverride', 'SceneRegionMeshPolicy', 'SceneRegionRealizationPolicy', 'SceneRegionShape', 'SceneRegionShapeBox', 'SceneRegionShapeCsg', 'SceneRegionShapeCylinder', 'SceneRegionShapeSphere', 'SceneResource', 'SceneTextureMapping', 'SceneTextureOverride', 'SceneTextureTransform3D', 'ScratchSceneDocumentResource', 'ScratchSessionBackend', 'ScratchSessionDevice', 'ScratchSessionPrecision', 'ScratchSessionRevisionsResource', 'ScratchSessionStatusResource', 'ScriptSourceResponse', 'ScriptSyncRequest', 'ScriptSyncResponse', 'SessionClientEntry', 'SessionClientHeartbeatRequest', 'SessionClientKind', 'SessionClientsResource', 'SessionCommandability', 'SessionConnectivity', 'SessionExecutionResource', 'SessionLifecycleSummary', 'SessionListResource', 'SessionResourceLifecycle', 'SessionScriptSummary', 'SessionSummary', 'SessionSummaryResource', 'SolverPolicyRequest', 'SolverPolicyRequestAdaptiveAdvanced', 'SolverPolicyRequestAdaptiveMaxError', 'SolverPolicyRequestFixed', 'SolverProfileCommandConfig', 'SolverSummary', 'StageExecutionRecordResource', 'StageExecutionResource', 'StageMetricKind', 'StageMetricUnit', 'StageStopReason', 'StructuredCommandRequest', 'StructuredCommandRequestClose', 'StructuredCommandRequestComputeEnergies', 'StructuredCommandRequestComputeFields', 'StructuredCommandRequestFdmGridRefresh', 'StructuredCommandRequestMeshBuild', 'StructuredCommandRequestPause', 'StructuredCommandRequestRelax', 'StructuredCommandRequestResume', 'StructuredCommandRequestRun', 'StructuredCommandRequestSaveVtk', 'StructuredCommandRequestSetSolverProfile', 'StructuredCommandRequestSkip', 'StructuredCommandRequestSolve', 'StructuredCommandRequestStop', 'TableColumnMeta', 'TableDecimationMeta', 'TableListResource', 'TableResource', 'TableRowsBinaryDescriptor', 'TableRowsResource', 'TempCleanupSchema', 'ThreadAutoSchema']
+__all__ = ['AcceptedInspectionArtifactOwner', 'AcceptedObservationFrameRef', 'AcceptedStateGenerationResource', 'AcceptedStateIdResource', 'AcceptedStateRefResource', 'AdaptiveSolverIntegratorRequest', 'AntennaFieldTargetResource', 'AntennaFieldTargetResourceGlobal', 'AntennaFieldTargetResourceObject', 'AntennaFieldTargetResourceRegion', 'AntennaInspectionDiscoveryResource', 'AntennaInspectionDiscoveryState', 'AntennaOperationProgressResource', 'AntennaSampleCarrierResource', 'ApiErrorDiagnosticResponse', 'ApiErrorResponse', 'ArtifactFieldLocatorResource', 'ArtifactFieldOwnerBinding', 'ArtifactSampleIndexing', 'AuthoredInitialStateOrigin', 'AuthoringTransactionRequest', 'AuthoringTransactionRequestApplyMagnetization', 'AuthoringTransactionRequestAssignStudyExecution', 'AuthoringTransactionRequestCommitObjectTransform', 'AuthoringTransactionRequestCreateCoupling', 'AuthoringTransactionRequestCreateMaterial', 'AuthoringTransactionRequestCreateObject', 'AuthoringTransactionRequestCreateObjectRegion', 'AuthoringTransactionRequestDeleteCoupling', 'AuthoringTransactionRequestDeleteMaterial', 'AuthoringTransactionRequestDeleteObject', 'AuthoringTransactionRequestDeleteObjectRegion', 'AuthoringTransactionRequestMergePatch', 'AuthoringTransactionRequestPatchCoupling', 'AuthoringTransactionRequestPatchMagnetization', 'AuthoringTransactionRequestPatchMaterial', 'AuthoringTransactionRequestPatchObjectGeometry', 'AuthoringTransactionRequestPatchObjectMaterialFields', 'AuthoringTransactionRequestPatchObjectRegion', 'AuthoringTransactionRequestPatchUniverse', 'AuthoringTransactionRequestRenameObject', 'AuthoringTransactionRequestReorderObjectRegions', 'AuthoringTransactionRequestReplaceScene', 'AuthoringTransactionResponse', 'CapabilityMap', 'CommandDetailResource', 'CommandDiagnosticReferenceResource', 'CommandExecutionBinding', 'CommandExecutionReadbackResource', 'CommandQueueStatusResource', 'CommandResourceInvalidationResource', 'CommandResponse', 'CommandStatusResource', 'ComputeParallelismSchema', 'ComputeParallelismSchemaDistributed', 'ComputeParallelismSchemaSingleProcess', 'ComputePlacementSchema', 'ComputeResourcePatchSchema', 'ComputeTargetSchema', 'ComputeTargetSchemaLocal', 'ComputeTargetSchemaNode', 'ComputeTargetSchemaPool', 'CpuAffinitySchema', 'CpuCorePolicySchema', 'CpuResourcePatchSchema', 'CreateSessionRequest', 'CreateSessionResponse', 'CurrentRunResource', 'DISCRIMINATED_UNIONS', 'DisplaySelection', 'DisplayViewMode', 'DomainSummary', 'EnergySummary', 'ExecutionBackendSchema', 'ExecutionDeviceSchema', 'ExecutionLayerSchema', 'ExecutionModeSchema', 'ExecutionOriginKindSchema', 'ExecutionOriginSchema', 'ExecutionPrecisionSchema', 'ExecutionProfileSchema', 'ExecutionProfileSchemaVersion', 'ExecutionRequestPatchSchema', 'ExistingOutputSchema', 'FieldCarrierDescriptor', 'FieldCatalog', 'FieldComponent', 'FieldDescriptor', 'FieldMaterializationRequirement', 'FieldMaterializationState', 'FieldMeta', 'FieldPayloadState', 'FieldPublicationBinding', 'FieldPublicationBundle', 'FieldPublicationResponseRevisions', 'FieldStats', 'FieldVectorPendingResponse', 'FixedSolverIntegratorRequest', 'GpuResourcesSchema', 'GpuSelectorSchema', 'HealthResponse', 'LiveStatus', 'MagnetizationApplyReceiptResource', 'MagnetizationApplyRequest', 'MagnetizationApplyScope', 'MagnetizationApplyStatus', 'MagnetizationApplyTarget', 'MagnetizationApplyTargetObject', 'MagnetizationApplyTargetRegion', 'MaterialPatchRequest', 'MaterialPropertiesPatchRequest', 'MaterialPropertiesResource', 'MaterialReferenceResource', 'MemoryResourcePatchSchema', 'MeshCommandTarget', 'MeshCommandTargetAdaptiveFollowup', 'MeshCommandTargetAirbox', 'MeshCommandTargetObjectMesh', 'MeshCommandTargetStudyDomain', 'MetricsSummary', 'NullableF64PatchValue', 'NullableStringPatchValue', 'ObservationFrameListResource', 'ObservationFrameResource', 'ObservationFrameStatus', 'OutputDataFormatSchema', 'OutputStorageSettingsSchema', 'ParallelExecutionTelemetryResource', 'PositiveThreadCountSchema', 'PreparedInitialStateResource', 'QuantityCatalogEntry', 'QuantityCatalogResponse', 'QuantityMaterializationCapability', 'QuantityProjectionCapability', 'QuantityProviderCapability', 'QuantityPublicationCapability', 'QuantityRenderCapability', 'QuantityRequestCapability', 'QuantityTensorDescriptor', 'REQUIRED_FIELDS', 'RelaxationAlgorithm', 'RequestedThreadsSchema', 'ResolvedFallbackResource', 'ResolvedQuantityCapability', 'ResourceRevisionMap', 'RunSummary', 'RuntimeAuthoredInitialStateSource', 'RuntimeAuthoredInitialStateSourcePrepared', 'RuntimeAuthoredInitialStateSourceStage', 'RuntimeAuthoredInitialStateSourceStudy', 'RuntimeCommandPrecondition', 'RuntimeCommandReadinessResource', 'RuntimeCommandRunPrecondition', 'RuntimeCommandRunPreconditionNone', 'RuntimeCommandRunPreconditionRun', 'RuntimeCommandTarget', 'RuntimeCommandTargetCommandId', 'RuntimeCommandTargetCurrentStage', 'RuntimeCommandTargetRun', 'RuntimeCommandTargetStageId', 'RuntimeCommandTargetStageIndex', 'RuntimeCommandTargetStudy', 'RuntimeInitialStateRequest', 'RuntimeInitialStateRequestAuthoredInitialState', 'RuntimeInitialStateRequestDefaultForTarget', 'RuntimeInitialStateRequestLatestCompatibleState', 'RuntimeInitialStateRequestStageResult', 'ScalarObservationSource', 'ScalarSeriesIdentity', 'ScalarWindow', 'SceneCoupling', 'SceneCouplingCapabilityPolicy', 'SceneCouplingEndpoint', 'SceneCouplingEndpointObject', 'SceneCouplingEndpointRegion', 'SceneCouplingEndpointSurface', 'SceneCouplingKind', 'SceneCouplingParameters', 'SceneCouplingParametersExchange', 'SceneCouplingParametersInterlayerExchange', 'SceneCouplingParametersRkky', 'SceneCouplingPatch', 'SceneExchangeCouplingMode', 'SceneInitialMagnetization', 'SceneInitialMagnetizationPresetTexture', 'SceneInitialMagnetizationRandomSeeded', 'SceneInitialMagnetizationSampledField', 'SceneInitialMagnetizationUniform', 'SceneMaterialFieldLocation', 'SceneMaterialParameterAssignment', 'SceneMaterialParameterField', 'SceneMaterialParameterFieldConstant', 'SceneMaterialParameterFieldLinear', 'SceneMaterialParameterFieldRadial', 'SceneMaterialParameterFieldSampled', 'SceneMaterialParameterName', 'SceneMaterialParameterValue', 'SceneMaterialTransition', 'SceneMaterialTransitionMeshRelative', 'SceneMaterialTransitionMetric', 'SceneMaterialTransitionScope', 'SceneMaterialTransitionSharp', 'SceneObjectRegion', 'SceneObjectRegionPatch', 'ScenePatchRequest', 'SceneRegionConflictPolicy', 'SceneRegionFrame', 'SceneRegionMaterialOverride', 'SceneRegionMeshPolicy', 'SceneRegionRealizationPolicy', 'SceneRegionShape', 'SceneRegionShapeBox', 'SceneRegionShapeCsg', 'SceneRegionShapeCylinder', 'SceneRegionShapeSphere', 'SceneResource', 'SceneTextureMapping', 'SceneTextureOverride', 'SceneTextureTransform3D', 'ScratchSceneDocumentResource', 'ScratchSessionBackend', 'ScratchSessionDevice', 'ScratchSessionPrecision', 'ScratchSessionRevisionsResource', 'ScratchSessionStatusResource', 'ScriptSourceResponse', 'ScriptSyncRequest', 'ScriptSyncResponse', 'SessionClientEntry', 'SessionClientHeartbeatRequest', 'SessionClientKind', 'SessionClientsResource', 'SessionCommandability', 'SessionConnectivity', 'SessionExecutionResource', 'SessionLifecycleSummary', 'SessionListResource', 'SessionResourceLifecycle', 'SessionScriptSummary', 'SessionSummary', 'SessionSummaryResource', 'SolverPolicyRequest', 'SolverPolicyRequestAdaptiveAdvanced', 'SolverPolicyRequestAdaptiveMaxError', 'SolverPolicyRequestFixed', 'SolverProfileCommandConfig', 'SolverSummary', 'StageExecutionRecordResource', 'StageExecutionResource', 'StageMetricKind', 'StageMetricUnit', 'StageStopReason', 'StructuredCommandRequest', 'StructuredCommandRequestClose', 'StructuredCommandRequestComputeEnergies', 'StructuredCommandRequestComputeFields', 'StructuredCommandRequestFdmGridRefresh', 'StructuredCommandRequestMeshBuild', 'StructuredCommandRequestPause', 'StructuredCommandRequestRelax', 'StructuredCommandRequestResume', 'StructuredCommandRequestRun', 'StructuredCommandRequestSaveVtk', 'StructuredCommandRequestSetSolverProfile', 'StructuredCommandRequestSkip', 'StructuredCommandRequestSolve', 'StructuredCommandRequestStop', 'TableColumnMeta', 'TableDecimationMeta', 'TableListResource', 'TableResource', 'TableRowsBinaryDescriptor', 'TableRowsResource', 'TempCleanupSchema', 'ThreadAutoSchema']

@@ -87,7 +87,7 @@ Potwierdzono `terminal.error == readiness.error` oraz dokładną kopertę `Runti
 - [ ] Sprawdzić receipt, rzeczywiste mounty/etykiety obu usług, API, natywny kontrakt i zarządzany browser QA `--canvas-only`. Dopiero te wyniki kwalifikują docelową grupę worktree.
 - [ ] Potwierdzić integrację kodu na `master`, wykonać adekwatną retencję i zapisać faktyczny stan oraz ewentualne aktywne zasoby w rejestrze.
 
-### Uzupełnienie wykonania: krótsze okno kwalifikacji Windows
+### Historyczne uzupełnienie przed kontraktem group-local: kwalifikacja Windows
 
 Po scaleniu PR #416 rzeczywista kwalifikacja nadal odmówiła publikacji z powodu
 zmiany zwykłego inwentarza obcego `C:\git\fullmag\fullmag\.git`. Dwa bezpośrednie
@@ -100,3 +100,9 @@ wykonawcza skraca je bez zmiany rodziny dowodu i kryteriów akceptacji.
 - [x] Dedup stosować wyłącznie do dokładnego tekstu źródła. Każdy kontener nadal podlega autoryzacji, szczególnie `absent-stopped`; prewarming nie zastępuje `validate_container_inventory`.
 - [x] Zachować pełne odświeżanie oraz końcowe kontrole engine/root i pinów kontenerów. Nie pomijać pól inwentarza i nie zmieniać równości wszystkich trzech obserwacji ani CAS.
 - [ ] Przeprowadzić niezależne review delty, CI/integrację i ponowić właściwą kwalifikację. Równoległość nie upoważnia do zaakceptowania ciągłego churnu.
+
+## Integracja z kontraktem group-local P22
+
+Po scaleniu zakres obserwacji tego initial-failure recovery obejmuje logicznych konsumentów własnego projektu i wolumenu oraz bezpośrednie bindy. Zatwierdzony kontrakt P22 zastępuje w tej ścieżce wcześniejsze wymaganie fizycznej kwalifikacji cudzych mountów. Wznowienie przygotowanej generacji wymaga nadal tego samego żywego helpera i nie łączy się z `--recover-absent-helper`. Stara generacja pozostaje niezmienna; świeża generacja i kanoniczne publikacje przechodzą pod wspólnymi blokadami transakcji. Testy scalonego kontraktu: 38/38; direct bootstrap stop: 6/6.
+
+Integracja z PR #417 zachowuje historię wcześniejszego podejścia, ale nie przywraca fizycznej analizy cudzych checkoutów ani jej równoległych obserwatorów do tej ścieżki group-local.

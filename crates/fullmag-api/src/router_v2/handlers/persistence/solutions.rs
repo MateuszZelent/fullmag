@@ -2,6 +2,7 @@
 
 pub mod saved_geometry;
 pub mod scalar;
+pub mod study_state;
 pub use scalar::get_solution_scalar;
 pub use saved_geometry::{
     get_saved_field_geometry, get_saved_field_geometry_support,

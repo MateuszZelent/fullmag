@@ -37,6 +37,7 @@ import {
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
 import { createStudyGlobalDraft } from "./StudyGlobalAuthoringModel";
+import { StageInspectorFrame } from "./stages/StageInspectorFrame";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
 
 function testBoundary(overrides: Record<string, string> = {}) {
@@ -63,6 +64,105 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("renders the Run action outside the read-only pipeline authoring fieldset", () => {
+    const html = renderToStaticMarkup(<StageInspectorFrame
+      authoringBusy={false}
+      authoringFeedback={null}
+      draft={{ ...createDefaultStudyStageDraft("relax", 0), pipelineNodeId: "relax-b" }}
+      draftIndex={0}
+      expectedKind="relax"
+      kindLabel="Relax"
+      onCommit={() => undefined}
+      onUpdateDraft={() => undefined}
+      stage={null}
+      stageExecutionRevision={null}
+      stageLaunch={{
+        disabledReason: null,
+        feedback: null,
+        label: "Run this stage",
+        onRun: () => undefined,
+      }}
+      validation={[]}
+    />);
+
+    expect(html).toContain("<fieldset");
+    expect(html).toContain("Canonical pipeline stage (read-only)");
+    expect(html.indexOf("Run this stage")).toBeGreaterThan(html.indexOf("</fieldset>"));
+    expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>(?:(?!<\/button>).)*Run this stage/);
+  });
+
+  it("opens the canonical Relax editor while keeping the stage identity fixed", () => {
+    const html = renderToStaticMarkup(<StageInspectorFrame
+      authoringBusy={false}
+      authoringFeedback={null}
+      draft={{
+        ...createDefaultStudyStageDraft("relax", 0),
+        pipelineNodeId: "relax-b", stageId: "relax-b",
+        rawStage: { kind: "relax", max_steps: "50" },
+      }}
+      draftIndex={0}
+      expectedKind="relax"
+      kindLabel="Relax"
+      onCommit={() => undefined}
+      onUpdateDraft={() => undefined}
+      pipelineDraftDirty
+      stage={null}
+      stageExecutionRevision={null}
+      validation={[]}
+    />);
+
+    expect(html).not.toMatch(/<fieldset[^>]*disabled=""/);
+    expect(html).not.toContain("Field every");
+    expect(html).toContain("Max steps");
+    expect(html).toContain("Save stage");
+    expect(html).toMatch(/<input[^>]*disabled=""[^>]*value="relax-b"/);
+  });
+
+  it("keeps changes typed after the submitted stage draft while applying the ACK", () => {
+    const globalDraft = createStudyGlobalDraft(null);
+    const baseline = createDefaultStudyStageDraft("relax", 0);
+    const submitted = { ...baseline, maxSteps: "250" };
+    const newer = { ...submitted, maxSteps: "500" };
+    const state = studyInspectorPanelReducer({
+      authoringBusy: true,
+      authoringDraftsInitialized: true,
+      authoringFeedback: null,
+      authoringFeedbackScope: null,
+      baselineGlobalDraft: globalDraft,
+      baselineStageDrafts: [baseline],
+      draftSceneRevision: 4,
+      draftSceneSignature: "scene",
+      globalDraft,
+      importDialogOpen: false,
+      importError: null,
+      importFileName: null,
+      importFmsBase64: null,
+      importInspection: null,
+      importInspecting: false,
+      importRestoreMode: "state_only",
+      restoreDialogOpen: false,
+      selectedCommandId: null,
+      selectedDraftIndex: 0,
+      selectedRestoreCheckpointId: null,
+      stageDrafts: [newer],
+    }, { type: "acceptStageDrafts", submittedDrafts: [submitted] });
+
+    expect(state.baselineStageDrafts).toEqual([submitted]);
+    expect(state.stageDrafts).toEqual([newer]);
+
+    const submittedPipeline = {
+      ...submitted, pipelineNodeId: "relax-b", rawStage: { max_steps: "50" },
+    };
+    const newerPipeline = { ...submittedPipeline, maxSteps: "500" };
+    const committed = { ...submittedPipeline, rawStage: { max_steps: "250" } };
+    const afterPipelineAck = studyInspectorPanelReducer(
+      { ...state, stageDrafts: [newerPipeline] },
+      { type: "acceptStageDrafts", submittedDrafts: [submittedPipeline], committedPipelineDraft: committed },
+    );
+    expect(afterPipelineAck.baselineStageDrafts).toEqual([committed]);
+    expect(afterPipelineAck.stageDrafts).toEqual([{ ...newerPipeline, rawStage: committed.rawStage }]);
+  });
+
   it("reports a partial Apply after globals commit and keeps stage drafts for review", async () => {
     const baselineGlobalDraft = createStudyGlobalDraft(null);
     const globalDraft = { ...baselineGlobalDraft, requestedBackend: "fdm" };

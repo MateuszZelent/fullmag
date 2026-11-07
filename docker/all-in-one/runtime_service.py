@@ -6080,7 +6080,8 @@ def _terminal_observation_documents(paths):
     if _sha256_bytes(proof_raw) != request["proof_sha256"]:
         _fail("terminal observation proof CAS differs")
     proof = _accepted_reattach_json(proof_raw, "terminal observation proof")
-    if proof.get("schema") != "fullmag.development-terminal-observation-proof.v1":
+    if proof.get("schema") not in ("fullmag.development-terminal-observation-proof.v1",
+                                   "fullmag.development-terminal-observation-proof.v2"):
         _fail("terminal observation proof schema differs")
     for key in ("run_id", "session_id", "source_root", "compose_project", "control_volume"):
         if not isinstance(proof.get(key), str) or not proof[key] or len(proof[key]) > 4096:

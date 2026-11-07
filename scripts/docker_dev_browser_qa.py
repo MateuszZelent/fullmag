@@ -55,6 +55,27 @@ BROWSER_IMAGE_DIGESTS = frozenset({
 })
 RESULT_SCHEMA = "fullmag.docker-dev-browser-qa-result.v1"
 AIRBOX_INSPECTOR_RESULT_SCHEMA = "fullmag.docker-dev-airbox-inspector-result.v1"
+INSPECTOR_ACK_RESULT_SCHEMA = "fullmag.docker-dev-inspector-ack-result.v1"
+INSPECTOR_ACK_SOURCES = {
+    "runner": "apps/control-room/scripts/check-inspector-ack-browser.mjs",
+    "loopback_proxy": "apps/control-room/scripts/lib/browser-qa-loopback-proxy.mjs",
+    "request_budget": "apps/control-room/scripts/lib/inspector-request-budget.mjs",
+}
+STUDY_STAGE_RERUN_RESULT_SCHEMA = "fullmag.docker-dev-study-stage-rerun-result.v1"
+STUDY_STAGE_RERUN_SRC_TARGET = "/state/development/workspace/apps/control-room/src"
+STUDY_STAGE_RERUN_FIXTURE_TARGET = "/opt/fullmag/p22-fixture.py"
+STUDY_STAGE_RERUN_SOURCES = {
+    "runner": "apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+    "loopback_proxy": "apps/control-room/scripts/lib/browser-qa-loopback-proxy.mjs",
+    "fixture": "examples/interactive_study/fdm_cpu_three_relax_continue.py",
+    "scene_adapter": "apps/control-room/src/modules/explorer/builders/sceneModelTreeAdapter.ts",
+    "tree_view": "apps/control-room/src/modules/explorer/ExplorerTreeView.tsx",
+    "study_nodes": "apps/control-room/src/modules/explorer/builders/study/studyExplorerNodes.ts",
+    "stage_builder": "apps/control-room/src/modules/explorer/builders/study/studyStageCommon.ts",
+    "command_adapter": "apps/control-room/src/kernel/runtime/studyRuntimeCommandAdapters.ts",
+    "command_contributions": "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts",
+    "study_compute_input": "apps/control-room/src/kernel/runtime/studyComputeInput.ts",
+}
 SAVED_PLAYBACK_RESULT_SCHEMA = "fullmag.docker-dev-saved-playback-result.v1"
 OPERATION_SCHEMA = "fullmag.docker-dev-browser-qa.v1"
 BROWSER_IMAGE_RE = re.compile(
@@ -387,6 +408,48 @@ def _script_bind_groups(selected: Path) -> list[str]:
         return []
     gid = (selected / "apps/control-room/scripts").stat().st_gid
     return [str(gid)] if gid not in (0, 65532) else []
+
+
+def _inspector_ack_source_sha256(selected: Path) -> dict[str, str]:
+    hashes = {}
+    for key, relative in INSPECTOR_ACK_SOURCES.items():
+        path = selected / relative
+        try:
+            with path.open("rb") as source:
+                payload = source.read(2 * 1024 * 1024 + 1)
+        except OSError as error:
+            raise BuildControlError("Selected checkout is missing an Inspector ACK proof source") from error
+        if len(payload) > 2 * 1024 * 1024:
+            raise BuildControlError("Inspector ACK proof source exceeds its pin bound")
+        hashes[key] = hashlib.sha256(payload).hexdigest()
+    return hashes
+
+
+def _validate_inspector_ack_hashes(value) -> None:
+    if (not isinstance(value, Mapping) or set(value) != set(INSPECTOR_ACK_SOURCES)
+            or any(not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) for digest in value.values())):
+        raise BuildControlError("Inspector ACK proof source pins are malformed")
+
+
+def _study_stage_rerun_source_sha256(selected: Path) -> dict[str, str]:
+    hashes = {}
+    for key, relative in STUDY_STAGE_RERUN_SOURCES.items():
+        path = selected / relative
+        try:
+            with path.open("rb") as source:
+                payload = source.read(2 * 1024 * 1024 + 1)
+        except OSError as error:
+            raise BuildControlError("Selected checkout is missing a Study stage rerun proof source") from error
+        if len(payload) > 2 * 1024 * 1024:
+            raise BuildControlError("Study stage rerun proof source exceeds its pin bound")
+        hashes[key] = hashlib.sha256(payload).hexdigest()
+    return hashes
+
+
+def _validate_study_stage_rerun_hashes(value) -> None:
+    if (not isinstance(value, Mapping) or set(value) != set(STUDY_STAGE_RERUN_SOURCES)
+            or any(not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) for digest in value.values())):
+        raise BuildControlError("Study stage rerun source pins are malformed")
 
 
 def _saved_playback_harness_sha256(selected: Path) -> str:
@@ -1131,7 +1194,35 @@ def _compose_document(
     expect_planar_airbox: bool = False,
     control: BuildControl | None = None,
     private_group_storage: bool = False,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun: str | None = None,
+    study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
+    if type(inspector_ack) is not bool:
+        raise BuildControlError("Inspector ACK scenario marker must be boolean")
+    if inspector_ack:
+        _validate_inspector_ack_hashes(inspector_ack_source_sha256)
+        if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
+                or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
+                or airbox_inspector or saved_playback_item_id is not None
+                or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_planar_airbox):
+            raise BuildControlError("Inspector ACK QA is a separate task-owned live-resource scenario")
+    elif inspector_ack_source_sha256 is not None:
+        raise BuildControlError("Inspector ACK source pins require their scenario")
+    if study_stage_rerun is not None:
+        if study_stage_rerun not in {"stage-b", "study"}:
+            raise BuildControlError("Study stage rerun requires the fixed stage-b or study mode")
+        _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+        if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
+                or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
+                or airbox_inspector or saved_playback_item_id is not None
+                or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_planar_airbox or inspector_ack):
+            raise BuildControlError("Study stage rerun is a separate task-owned runtime command scenario")
+    elif study_stage_rerun_source_sha256 is not None:
+        raise BuildControlError("Study stage rerun source pins require their scenario")
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
     if type(expect_planar_airbox) is not bool:
@@ -1267,7 +1358,16 @@ def _compose_document(
     }
     if private_group_storage:
         environment["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
-    if airbox_inspector:
+    if inspector_ack:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "inspector-ack"
+        environment["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256"] = canonical(dict(inspector_ack_source_sha256)).decode("utf-8")
+    elif study_stage_rerun is not None:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "study-stage-rerun"
+        environment["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE"] = study_stage_rerun
+        environment["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256"] = canonical(
+            dict(study_stage_rerun_source_sha256)
+        ).decode("utf-8")
+    elif airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "saved-playback"
@@ -1294,6 +1394,33 @@ def _compose_document(
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS"] = (
             "1" if expect_ambiguous_compute_fields else "0"
         )
+    browser_volumes = [
+        frontend_state_volume,
+        {
+            "type": "bind",
+            "source": str(selected / "apps/control-room/scripts"),
+            "target": "/state/development/workspace/apps/control-room/scripts",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        },
+    ]
+    if study_stage_rerun is not None:
+        browser_volumes.extend([
+            {
+                "type": "bind",
+                "source": str(selected / "apps/control-room/src"),
+                "target": STUDY_STAGE_RERUN_SRC_TARGET,
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            },
+            {
+                "type": "bind",
+                "source": str(selected / STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                "target": STUDY_STAGE_RERUN_FIXTURE_TARGET,
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            },
+        ])
     return {
         "name": identity["project_name"],
         "services": {
@@ -1325,20 +1452,18 @@ def _compose_document(
                     if saved_playback_item_id is not None
                     else [
                         "node",
+                        "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                        study_stage_rerun,
+                    ]
+                    if study_stage_rerun is not None
+                    else [
+                        "node",
                         "/state/development/workspace/apps/control-room/scripts/"
-                        + ("verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
+                        + ("check-inspector-ack-browser.mjs" if inspector_ack
+                           else "verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
                     ]
                 ),
-                "volumes": [
-                    frontend_state_volume,
-                    {
-                        "type": "bind",
-                        "source": str(selected / "apps/control-room/scripts"),
-                        "target": "/state/development/workspace/apps/control-room/scripts",
-                        "read_only": True,
-                        "bind": {"create_host_path": False},
-                    },
-                ],
+                "volumes": browser_volumes,
                 "tmpfs": ["/tmp:rw,nosuid,nodev,size=256m"],
                 "networks": {"fullmag": {"aliases": ["browser-qa"]}},
             }
@@ -1350,6 +1475,20 @@ def _compose_document(
             "fullmag": {"name": identity["network_name"], "external": True},
         },
     }
+
+
+def _validate_browser_helper_source_mount(document, selected: Path, relative_source: str, target: str) -> None:
+    host = document.get("HostConfig") or {}
+    host_mounts = host.get("Mounts")
+    resolved_mounts = document.get("Mounts") or []
+    configured = [mount for mount in host_mounts or [] if isinstance(mount, Mapping) and mount.get("Target") == target]
+    resolved = [mount for mount in resolved_mounts if isinstance(mount, Mapping) and mount.get("Destination") == target]
+    if (not isinstance(host_mounts, list) or len(configured) != 1 or len(resolved) != 1
+            or configured[0].get("Type") != "bind" or configured[0].get("ReadOnly") is not True
+            or not _source_mount_matches_selected(configured[0].get("Source"), selected / relative_source)
+            or resolved[0].get("Type") != "bind" or resolved[0].get("RW") is not False
+            or not _source_mount_matches_selected(resolved[0].get("Source"), selected / relative_source)):
+        raise ControlOutcomeUnknown("Browser helper proof source is not the exact selected readonly bind: " + target)
 
 
 def _validate_browser_helper(
@@ -1372,6 +1511,10 @@ def _validate_browser_helper(
     expect_run_performance: bool | None = None,
     expect_planar_airbox: bool = False,
     private_group_storage: bool = False,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun: str | None = None,
+    study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
 ) -> None:
     if type(private_group_storage) is not bool:
         raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
@@ -1417,6 +1560,47 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper private group storage profile differs")
     elif private_storage_environment:
         raise ControlOutcomeUnknown("Legacy browser helper unexpectedly declares a private group profile")
+    ack_environment = [entry for entry in raw_environment
+                       if entry.startswith("CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256=")]
+    ack_scenario = [entry for entry in raw_environment
+                    if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=")]
+    rerun_source_environment = [entry for entry in raw_environment
+                                if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=")]
+    rerun_mode_environment = [entry for entry in raw_environment
+                              if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=")]
+    rerun_scenario = [entry for entry in raw_environment
+                      if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun")]
+    if inspector_ack:
+        try:
+            _validate_inspector_ack_hashes(inspector_ack_source_sha256)
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        expected_pin = canonical(dict(inspector_ack_source_sha256)).decode("utf-8")
+        if (ack_environment != ["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256=" + expected_pin]
+                or ack_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=inspector-ack"]
+                or config.get("Cmd") != [
+                    "node", "/state/development/workspace/apps/control-room/scripts/check-inspector-ack-browser.mjs",
+                ]):
+            raise ControlOutcomeUnknown("Browser helper Inspector ACK command or source pins differ")
+    elif ack_environment or "CONTROL_ROOM_BROWSER_QA_SCENARIO=inspector-ack" in environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested Inspector ACK scenario")
+    if study_stage_rerun is not None:
+        try:
+            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        expected_pin = canonical(dict(study_stage_rerun_source_sha256)).decode("utf-8")
+        if (study_stage_rerun not in {"stage-b", "study"}
+                or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
+                or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
+                or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
+                or config.get("Cmd") != [
+                    "node", "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                    study_stage_rerun,
+                ]):
+            raise ControlOutcomeUnknown("Browser helper Study stage rerun command or source pins differ")
+    elif rerun_source_environment or rerun_mode_environment or rerun_scenario:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested Study stage rerun scenario")
     if saved_playback_item_id is not None:
         if (not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
                 or not isinstance(source_script_sha256, str)
@@ -1559,6 +1743,8 @@ def _validate_browser_helper(
         "/state/development",
         "/state/development/workspace/apps/control-room/scripts",
     }
+    if study_stage_rerun is not None:
+        expected.update({STUDY_STAGE_RERUN_SRC_TARGET, STUDY_STAGE_RERUN_FIXTURE_TARGET})
     if destinations != expected:
         raise ControlOutcomeUnknown("Browser helper has an unexpected mount boundary")
     if private_group_storage:
@@ -1576,7 +1762,8 @@ def _validate_browser_helper(
         except BuildControlError as error:
             raise ControlOutcomeUnknown(str(error)) from error
         host_mounts = host.get("Mounts")
-        if not isinstance(host_mounts, list) or len(host_mounts) != 2:
+        expected_mount_count = 4 if study_stage_rerun is not None else 2
+        if not isinstance(host_mounts, list) or len(host_mounts) != expected_mount_count:
             raise ControlOutcomeUnknown("Browser helper has a missing or unknown configured mount")
         host_binds = [mount for mount in host_mounts if isinstance(mount, Mapping)
                       and mount.get("Target") == "/state/development/workspace/apps/control-room/scripts"]
@@ -1609,6 +1796,32 @@ def _validate_browser_helper(
         )
     ):
         raise ControlOutcomeUnknown("Browser helper script is not a readonly selected-source bind")
+    if study_stage_rerun is not None:
+        try:
+            _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256)
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        if _study_stage_rerun_source_sha256(selected) != study_stage_rerun_source_sha256:
+            raise ControlOutcomeUnknown("Browser helper Study stage source pins changed")
+        configured_mounts = host.get("Mounts")
+        if (not isinstance(configured_mounts, list) or len(configured_mounts) != 4
+                or {mount.get("Target") for mount in configured_mounts if isinstance(mount, Mapping)} != expected):
+            raise ControlOutcomeUnknown("Browser helper configured mount inventory differs from the pinned P22 sources")
+        state_configured = [mount for mount in configured_mounts if isinstance(mount, Mapping)
+                            and mount.get("Target") == "/state/development"]
+        if (len(state_configured) != 1 or state_configured[0].get("Type") != "volume"
+                or state_configured[0].get("Source") != frontend_volume
+                or state_configured[0].get("ReadOnly") is not True):
+            raise ControlOutcomeUnknown("Browser helper configured state volume differs from the frontend")
+        _validate_browser_helper_source_mount(
+            document, selected, "apps/control-room/scripts", "/state/development/workspace/apps/control-room/scripts",
+        )
+        _validate_browser_helper_source_mount(
+            document, selected, "apps/control-room/src", STUDY_STAGE_RERUN_SRC_TARGET,
+        )
+        _validate_browser_helper_source_mount(
+            document, selected, STUDY_STAGE_RERUN_SOURCES["fixture"], STUDY_STAGE_RERUN_FIXTURE_TARGET,
+        )
 
 
 def _probe_public_loopback(public_url: str, timeout: int) -> dict[str, object]:
@@ -2593,6 +2806,606 @@ def _validate_startup_unmount_cancellation_probes(events_value: object, probes_v
         raise BuildControlError("Airbox Inspector startup request failure was not resolved by an exact follow-up probe")
 
 
+def _parse_inspector_ack_result(output, public_url, browser_url, expected_sources):
+    _validate_inspector_ack_hashes(expected_sources)
+    if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
+        raise BuildControlError("Inspector ACK result exceeds its evidence budget")
+    payload = None
+    for line in reversed(output.decode("utf-8", "replace").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if (not isinstance(payload, Mapping)
+            or payload.get("schema") != INSPECTOR_ACK_RESULT_SCHEMA
+            or payload.get("scenario") != "inspector-ack" or payload.get("state") != "passed"
+            or payload.get("failure") is not None):
+        raise BuildControlError("Inspector ACK helper did not report a passing proof")
+    if (payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources):
+        raise BuildControlError("Inspector ACK helper URL, browser or source pins differ")
+    session = payload.get("session")
+    if (not isinstance(session, Mapping) or session.get("name") != "airbox_inspector_mixed"
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))):
+        raise BuildControlError("Inspector ACK helper did not pin its task-owned session")
+    if payload.get("session_after") != session:
+        raise BuildControlError("Inspector ACK helper session changed before restoration readback")
+    object_id = payload.get("object_id")
+    original = payload.get("original_name")
+    generated = payload.get("generated_name")
+    if (not isinstance(object_id, str) or not 1 <= len(object_id) <= 512
+            or original != "mixed_p1_box_prism"
+            or not isinstance(generated, str)
+            or re.fullmatch(re.escape(original) + r"_ui_ack_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", generated) is None):
+        raise BuildControlError("Inspector ACK helper object/name identity differs")
+    if payload.get("node_preserved") is not True or payload.get("focus_preserved") is not True:
+        raise BuildControlError("Inspector ACK helper lost its node or focus")
+    snapshots = [payload.get(key) for key in ("baseline", "pending", "ack")]
+    for snapshot in snapshots:
+        if (not isinstance(snapshot, Mapping) or set(snapshot) != {"fields", "opacity_animations", "scroll"}
+                or type(snapshot["opacity_animations"]) is not int or snapshot["opacity_animations"] != 0
+                or type(snapshot["scroll"]) not in (int, float) or not math.isfinite(snapshot["scroll"])
+                or not isinstance(snapshot["fields"], list) or not 1 <= len(snapshot["fields"]) <= 128):
+            raise BuildControlError("Inspector ACK helper field/scroll snapshot is malformed")
+        for field in snapshot["fields"]:
+            if (not isinstance(field, Mapping) or set(field) != {"label", "disabled", "opacity"}
+                    or type(field["disabled"]) is not bool
+                    or not (field["label"] is None or isinstance(field["label"], str) and len(field["label"]) <= 256)
+                    or not isinstance(field["opacity"], str) or len(field["opacity"]) > 32):
+                raise BuildControlError("Inspector ACK field availability evidence is malformed")
+    baseline, pending, acknowledged = snapshots
+    if (baseline["fields"] != pending["fields"] or baseline["fields"] != acknowledged["fields"]
+            or pending["scroll"] <= 0 or pending["scroll"] != acknowledged["scroll"]):
+        raise BuildControlError("Inspector ACK helper field state or nonzero scroll was not preserved")
+    receipts = payload.get("receipts")
+    if (not isinstance(receipts, list) or len(receipts) != 2
+            or [entry.get("phase") if isinstance(entry, Mapping) else None for entry in receipts] != ["commit", "restore"]):
+        raise BuildControlError("Inspector ACK helper omitted exact commit/restore acknowledgements")
+    for receipt in receipts:
+        if (set(receipt) != {"phase", "status", "revision"} or type(receipt["status"]) is not int
+                or not 200 <= receipt["status"] < 300 or type(receipt["revision"]) is not int
+                or receipt["revision"] < 0):
+            raise BuildControlError("Inspector ACK helper acknowledgement is malformed")
+    restoration = payload.get("restoration")
+    if (receipts[1]["revision"] <= receipts[0]["revision"] or not isinstance(restoration, Mapping)
+            or restoration.get("state") != "restored" or restoration.get("name") != original
+            or type(restoration.get("revision")) is not int
+            or restoration["revision"] < receipts[1]["revision"]):
+        raise BuildControlError("Inspector ACK helper did not confirm restoration through the API")
+    counts = payload.get("request_counts")
+    if (not isinstance(counts, Mapping) or not 1 <= len(counts) <= 128
+            or payload.get("request_limit") != 128 or payload.get("per_path_read_limit") != 16):
+        raise BuildControlError("Inspector ACK request budget is missing")
+    object_path = "/v2/sessions/current/model/objects/" + quote(object_id, safe="")
+    for key, count in counts.items():
+        if (not isinstance(key, str) or len(key) > 2048 or type(count) is not int or count < 1
+                or " " not in key):
+            raise BuildControlError("Inspector ACK request counts are malformed")
+        method, path = key.split(" ", 1)
+        if method in {"GET", "HEAD"}:
+            if not path.startswith("/v2/") or count > 16:
+                raise BuildControlError("Inspector ACK read budget was exceeded")
+        elif key == "PATCH " + object_path:
+            if count != 2:
+                raise BuildControlError("Inspector ACK submitted duplicate or missing object writes")
+        elif key == "POST /v2/sessions/current/visualization/client-acks":
+            if count > 16:
+                raise BuildControlError("Inspector ACK visualization acknowledgements exceeded their bound")
+        else:
+            raise BuildControlError("Inspector ACK reported an unrelated mutation")
+    measured = payload.get("measured_requests")
+    total = payload.get("total_requests")
+    if (counts.get("PATCH " + object_path) != 2 or type(measured) is not int
+            or measured != sum(counts.values()) or not 2 <= measured <= 128
+            or type(total) is not int or not measured <= total <= 512):
+        raise BuildControlError("Inspector ACK helper exceeded its request budget")
+    if any(payload.get(key) != [] for key in ("errors", "violations", "proxy_failures")):
+        raise BuildControlError("Inspector ACK helper reported browser, proxy or request failures")
+    return dict(payload)
+
+
+def _study_stage_expected_ids(mode: str, phase: str) -> list[str]:
+    if mode not in {"stage-b", "study"} or phase not in {"before", "after"}:
+        raise BuildControlError("Study stage rerun mode/phase is invalid")
+    if phase == "before":
+        return ["relax-a", "relax-b", "relax-c"] if mode == "stage-b" else ["relax-b"]
+    return ["relax-b"] if mode == "stage-b" else ["relax-a", "relax-b", "relax-c"]
+
+
+def _expected_study_stage_scene_profile() -> dict[str, object]:
+    return {
+        "requested_backend": "fdm",
+        "requested_device": "cpu",
+        "requested_precision": "double",
+        "pipeline_version": "study_pipeline.v1",
+        "stages": [
+            {"id": "relax-a", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "llg_overdamped", "max_steps": "10"},
+            {"id": "relax-b", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "projected_gradient_bb", "max_steps": "1"},
+            {"id": "relax-c", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
+             "relax_algorithm": "nonlinear_cg", "max_steps": "1"},
+        ],
+    }
+
+
+def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url, expected_sources, expected_mode):
+    if (payload.get("state") != "outcome-unknown" or payload.get("outcome") != "unknown"
+            or not isinstance(payload.get("failure"), str) or not 1 <= len(payload["failure"]) <= 512
+            or payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources):
+        raise BuildControlError("Study stage rerun unknown outcome omitted its fixed source/runtime pins")
+    session = payload.get("session_before")
+    if (not isinstance(session, Mapping) or session.get("name") != "P22 three Relax stages"
+            or payload.get("session_after") != session
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))):
+        raise BuildControlError("Study stage rerun unknown outcome did not retain its exact session scope")
+    before = payload.get("before")
+    if not isinstance(before, Mapping):
+        raise BuildControlError("Study stage rerun unknown outcome omitted its fresh pre-command snapshot")
+    previous_run = before.get("run_id")
+    expected_before = _study_stage_expected_ids(expected_mode, "before")
+    precondition = before.get("precondition")
+    expected_profile = {
+        "domain_discretization": "fdm",
+        "domain_cell_count": 8,
+        "domain_generation_id": precondition.get("domain_generation_id") if isinstance(precondition, Mapping) else None,
+        "requested_backend": "fdm",
+        "requested_device": "cpu",
+        "requested_precision": "double",
+        "script_sha256": expected_sources["fixture"],
+        "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+    }
+    if (not isinstance(previous_run, str) or not previous_run
+            or before.get("run_status") != "completed"
+            or before.get("solver_state") != "awaiting_command"
+            or before.get("execution_state") != "completed"
+            or before.get("stage_ids") != expected_before
+            or before.get("scene_profile") != _expected_study_stage_scene_profile()
+            or not isinstance(before.get("profile"), Mapping)
+            or any(before["profile"].get(key) != value for key, value in expected_profile.items())):
+        raise BuildControlError("Study stage rerun unknown outcome omitted its qualified baseline")
+    if (not isinstance(precondition, Mapping)
+            or precondition.get("current_run") != {"kind": "run", "run_id": previous_run}
+            or precondition.get("runtime_state") != "awaiting_command"
+            or not isinstance(precondition.get("domain_generation_id"), str)
+            or not precondition["domain_generation_id"]
+            or any(type(precondition.get(key)) is not int or precondition[key] < 0 for key in (
+                "scene_revision", "mesh_revision", "command_revision",
+                "region_topology_revision", "region_membership_revision",
+                "region_coefficients_revision", "region_initial_state_revision",
+            ))):
+        raise BuildControlError("Study stage rerun unknown outcome omitted its exact command precondition")
+    if "stage_execution_revision" in precondition:
+        raise BuildControlError("Unknown Study compute command includes a stage-control revision")
+    before_results = before.get("result_identities")
+    if not isinstance(before_results, list) or len(before_results) != len(expected_before):
+        raise BuildControlError("Study stage rerun unknown outcome omitted its old result identities")
+    for result, stage_id in zip(before_results, expected_before, strict=True):
+        source = result.get("source") if isinstance(result, Mapping) else None
+        if (not isinstance(source, Mapping) or source.get("run_id") != previous_run
+                or result.get("authored_stage_id") != stage_id
+                or any(not isinstance(source.get(key), str) or not source[key]
+                       for key in ("task_id", "step_id", "case_id", "attempt_id"))
+                or type(source.get("ownership_epoch")) is not int or source["ownership_epoch"] < 0
+                or not isinstance(result.get("artifact_sha256"), str)
+                or not SHA256_RE.fullmatch(result["artifact_sha256"])):
+            raise BuildControlError("Study stage rerun unknown outcome has malformed old result identities")
+    receipt = payload.get("command_receipt")
+    command = receipt.get("payload") if isinstance(receipt, Mapping) else None
+    expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+        session["session_epoch"], safe=""
+    ) + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    expected_command = (
+        {"kind": "relax", "target": {"kind": "stage_id", "stage_id": "relax-b"}}
+        if expected_mode == "stage-b" else {"kind": "solve", "target": {"kind": "study"}}
+    )
+    if (not isinstance(receipt, Mapping)
+            or receipt.get("method") != "POST"
+            or receipt.get("path") != "/v2/sessions/current/simulation/commands"
+            or receipt.get("scope_header") != expected_scope
+            or receipt.get("status") is not None and (
+                type(receipt.get("status")) is not int or not 100 <= receipt["status"] <= 599
+            )
+            or not isinstance(command, Mapping)
+            or any(command.get(key) != value for key, value in expected_command.items())
+            or command.get("precondition") != precondition
+            or not isinstance(command.get("client_intent_id"), str)
+            or not command["client_intent_id"].startswith(
+                "study:" + ("relax" if expected_mode == "stage-b" else "solve") + ":"
+            )
+            or len(command["client_intent_id"]) > 128
+            or command.get("reason") != "user_requested"
+            or type(command.get("requested_at_unix_ms")) is not int
+            or command["requested_at_unix_ms"] <= 0):
+        raise BuildControlError("Study stage rerun unknown outcome lacks its exact guarded UI command")
+    if expected_mode == "stage-b":
+        if command.get("initial_state") != {"kind": "default_for_target"}:
+            raise BuildControlError("Unknown Stage B command changed its initial state")
+    elif "initial_state" in command:
+        raise BuildControlError("Unknown whole-Study command has a stage-only initial state")
+    binding = receipt.get("execution_binding")
+    if binding is not None:
+        expected_target = expected_command["target"]
+        if (not isinstance(binding, Mapping) or binding.get("requested_target") != expected_target
+                or not isinstance(binding.get("run_id"), str) or not binding["run_id"]
+                or (expected_mode == "stage-b" and binding.get("step_id") != "relax-b")
+                or (expected_mode == "study" and binding.get("step_id") is not None)):
+            raise BuildControlError("Unknown Study command retained a conflicting execution binding")
+    if (payload.get("after") is not None or payload.get("history_identity_preserved") is not None
+            or payload.get("public_terminal_proven") is not False
+            or payload.get("native_execution_proven") is not False
+            or payload.get("field_data_proven") is not False
+            or payload.get("ui_command_proven") is not True
+            or type(payload.get("command_count")) is not int or payload["command_count"] != 1
+            or type(payload.get("command_attempt_count")) is not int or payload["command_attempt_count"] != 1):
+        raise BuildControlError("Study stage rerun unknown outcome overstates the completed command evidence")
+    read_counts = payload.get("read_counts")
+    required_counts = {"status": 3, "current_session": 3, "scene": 3, "commands": 3, "current_run": 3,
+                       "stage_execution": 3, "solver_status": 3, "stage_results": 3, "command_details": 0}
+    if (not isinstance(read_counts, Mapping) or set(read_counts) != set(required_counts)
+            or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
+                   or read_counts[key] > 512 for key, minimum in required_counts.items())):
+        raise BuildControlError("Study stage rerun unknown outcome omitted bounded public reads")
+    request_counts = payload.get("request_counts")
+    command_key = "POST /v2/sessions/current/simulation/commands"
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    if (not isinstance(request_counts, Mapping) or not 1 <= len(request_counts) <= 128
+            or request_counts.get(command_key) != 1):
+        raise BuildControlError("Study stage rerun unknown outcome does not prove one exact command POST")
+    for key, count in request_counts.items():
+        if (not isinstance(key, str) or " " not in key or len(key) > 2048
+                or type(count) is not int or count < 1 or count > 512):
+            raise BuildControlError("Study stage rerun unknown outcome request inventory is malformed")
+        method, path = key.split(" ", 1)
+        if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == ack_key and count <= 16:
+            continue
+        if key == command_key and count == 1:
+            continue
+        raise BuildControlError("Study stage rerun unknown outcome attempted an unexpected API mutation")
+    if (type(payload.get("total_requests")) is not int
+            or sum(request_counts.values()) != payload.get("total_requests") or payload["total_requests"] > 512
+            or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
+            or payload.get("per_path_read_limit") != 128
+            or payload.get("violations") != []):
+        raise BuildControlError("Study stage rerun unknown outcome exceeded its guard or request budget")
+    for key in ("errors", "proxy_failures"):
+        values = payload.get(key)
+        if (not isinstance(values, list) or len(values) > 16
+                or any(not isinstance(value, str) or len(value) > 512 for value in values)):
+            raise BuildControlError("Study stage rerun unknown outcome diagnostic list is malformed")
+    return dict(payload)
+
+
+def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mode) -> bool:
+    try:
+        _validate_study_stage_rerun_hashes(expected_sources)
+    except BuildControlError:
+        return False
+    if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
+        return False
+    candidate = None
+    for line in reversed(output.decode("utf-8", "replace").splitlines()):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, Mapping):
+            candidate = value
+            break
+    required_fields = {
+        "schema", "scenario", "mode", "state", "outcome", "failure",
+        "public_url", "probe_url", "playwright_version", "browser_gpu_mode",
+        "source_sha256_before", "source_sha256_after", "session_before", "session_after", "before",
+        "command_receipt", "command_count", "command_attempt_count", "client_ack_count", "ui_command_proven",
+        "after", "history_identity_preserved", "public_terminal_proven", "native_execution_proven",
+        "field_data_proven", "read_counts", "request_counts", "total_requests", "request_limit",
+        "request_path_limit", "per_path_read_limit", "violations", "errors", "proxy_failures",
+    }
+    if (not isinstance(candidate, Mapping)
+            or not required_fields.issubset(candidate)
+            or candidate.get("schema") != STUDY_STAGE_RERUN_RESULT_SCHEMA
+            or candidate.get("scenario") != "study-stage-rerun"
+            or candidate.get("mode") != expected_mode
+            or candidate.get("state") != "failed"
+            or candidate.get("outcome") != "not-dispatched"
+            or candidate.get("source_sha256_before") != expected_sources
+            or candidate.get("source_sha256_after") != expected_sources
+            or candidate.get("playwright_version") != PLAYWRIGHT_VERSION
+            or candidate.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or not isinstance(candidate.get("public_url"), str)
+            or not isinstance(candidate.get("probe_url"), str)
+            or not isinstance(candidate.get("failure"), str)
+            or not 1 <= len(candidate["failure"]) <= 512
+            or candidate.get("session_after") != candidate.get("session_before")
+            or candidate.get("after") is not None
+            or candidate.get("history_identity_preserved") is not None
+            or candidate.get("public_terminal_proven") is not False
+            or candidate.get("native_execution_proven") is not False
+            or candidate.get("field_data_proven") is not False
+            or type(candidate.get("command_count")) is not int or candidate["command_count"] != 0
+            or type(candidate.get("command_attempt_count")) is not int
+            or candidate["command_attempt_count"] < 0
+            or candidate.get("command_receipt", object()) is not None
+            or candidate.get("ui_command_proven") is not False):
+        return False
+    request_counts = candidate.get("request_counts")
+    total_requests = candidate.get("total_requests")
+    if not isinstance(request_counts, Mapping) or len(request_counts) > 128:
+        return False
+    for key, count in request_counts.items():
+        if (not isinstance(key, str) or len(key) > 2048 or " " not in key
+                or type(count) is not int or count < 1 or count > 512):
+            return False
+    command_key = "POST /v2/sessions/current/simulation/commands"
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    for key, count in request_counts.items():
+        method, path = key.split(" ", 1)
+        if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == ack_key and count <= 16:
+            continue
+        if key == command_key and count == candidate["command_attempt_count"]:
+            continue
+        return False
+    read_counts = candidate.get("read_counts")
+    required_reads = {
+        "status", "current_session", "scene", "commands", "current_run",
+        "stage_execution", "solver_status", "stage_results", "command_details",
+    }
+    if (not isinstance(read_counts, Mapping) or set(read_counts) != required_reads
+            or any(type(value) is not int or value < 0 or value > 512 for value in read_counts.values())):
+        return False
+    for key in ("violations", "errors", "proxy_failures"):
+        values = candidate.get(key)
+        if (not isinstance(values, list) or len(values) > 16
+                or any(not isinstance(value, str) or len(value) > 512 for value in values)):
+            return False
+    return (
+        type(total_requests) is int and 0 <= total_requests <= 512
+        and total_requests == sum(request_counts.values())
+        and type(candidate.get("client_ack_count")) is int and 0 <= candidate["client_ack_count"] <= 16
+        and candidate.get("client_ack_count") == request_counts.get(ack_key, 0)
+        and candidate.get("request_limit") == 512
+        and candidate.get("request_path_limit") == 128
+        and candidate.get("per_path_read_limit") == 128
+        and request_counts.get(command_key, 0) == candidate["command_attempt_count"]
+    )
+
+
+def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode):
+    _validate_study_stage_rerun_hashes(expected_sources)
+    if expected_mode not in {"stage-b", "study"}:
+        raise BuildControlError("Study stage rerun expected mode is invalid")
+    if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
+        raise BuildControlError("Study stage rerun result exceeds its evidence budget")
+    payload = None
+    for line in reversed(output.decode("utf-8", "replace").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if (not isinstance(payload, Mapping)
+            or payload.get("schema") != STUDY_STAGE_RERUN_RESULT_SCHEMA
+            or payload.get("scenario") != "study-stage-rerun"
+            or payload.get("mode") != expected_mode):
+        raise BuildControlError("Study stage rerun helper reported another scenario or mode")
+    if payload.get("outcome") == "unknown":
+        return _validate_study_stage_rerun_unknown_payload(
+            payload, public_url, browser_url, expected_sources, expected_mode,
+        )
+    if (payload.get("state") != "passed" or payload.get("failure") is not None
+            or payload.get("outcome") != "terminal-confirmed"):
+        raise BuildControlError("Study stage rerun helper did not report the selected terminal proof")
+    if (payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources):
+        raise BuildControlError("Study stage rerun helper URL, browser or source pins differ")
+
+    session = payload.get("session_before")
+    session_after = payload.get("session_after")
+    if (not isinstance(session, Mapping)
+            or session.get("name") != "P22 three Relax stages"
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))
+            or session_after != session):
+        raise BuildControlError("Study stage rerun helper did not preserve the pinned P22 session")
+
+    before = payload.get("before")
+    after = payload.get("after")
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        raise BuildControlError("Study stage rerun helper omitted before/after public resources")
+    previous_run = before.get("run_id")
+    new_run = after.get("run_id")
+    if (not isinstance(previous_run, str) or not previous_run or not isinstance(new_run, str)
+            or not new_run or new_run == previous_run):
+        raise BuildControlError("Study stage rerun helper did not establish a distinct new run")
+    precondition = before.get("precondition")
+    if not isinstance(precondition, Mapping):
+        raise BuildControlError("Study stage rerun omitted the fresh runtime command precondition")
+
+    expected_before = _study_stage_expected_ids(expected_mode, "before")
+    expected_after = _study_stage_expected_ids(expected_mode, "after")
+    expected_profile = {
+        "domain_discretization": "fdm",
+        "domain_cell_count": 8,
+        "domain_generation_id": precondition.get("domain_generation_id"),
+        "requested_backend": "fdm",
+        "requested_device": "cpu",
+        "requested_precision": "double",
+        "script_sha256": expected_sources["fixture"],
+        "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+    }
+    for value, expected_ids, label in (
+        (before, expected_before, "before"),
+        (after, expected_after, "after"),
+    ):
+        if (value.get("run_status") != "completed"
+                or value.get("solver_state") != "awaiting_command"
+                or value.get("execution_state") != "completed"
+                or value.get("stage_ids") != expected_ids
+                or value.get("scene_profile") != _expected_study_stage_scene_profile()
+                or not isinstance(value.get("profile"), Mapping)
+                or any(value["profile"].get(key) != expected for key, expected in expected_profile.items())
+                ):
+            raise BuildControlError(f"Study stage rerun {label} public run/stage state differs")
+
+    current_run = precondition.get("current_run")
+    if (current_run != {"kind": "run", "run_id": previous_run}
+            or type(precondition.get("scene_revision")) is not int
+            or precondition["scene_revision"] < 0
+            or type(precondition.get("mesh_revision")) is not int
+            or precondition["mesh_revision"] < 0
+            or not isinstance(precondition.get("domain_generation_id"), str)
+            or not precondition["domain_generation_id"]
+            or precondition.get("runtime_state") != "awaiting_command"
+            or type(precondition.get("command_revision")) is not int
+            or precondition["command_revision"] < 0):
+        raise BuildControlError("Study stage rerun precondition is stale or incomplete")
+    region_revision_keys = (
+        "region_topology_revision", "region_membership_revision",
+        "region_coefficients_revision", "region_initial_state_revision",
+    )
+    if any(type(precondition.get(key)) is not int or precondition[key] < 0 for key in region_revision_keys):
+        raise BuildControlError("Study stage rerun omitted one of the current region revision preconditions")
+    if "stage_execution_revision" in precondition:
+        raise BuildControlError("Study compute command includes a stage-control revision")
+
+    receipt = payload.get("command_receipt")
+    command = receipt.get("payload") if isinstance(receipt, Mapping) else None
+    expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+        session["session_epoch"], safe=""
+    ) + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    expected_command = (
+        {"kind": "relax", "target": {"kind": "stage_id", "stage_id": "relax-b"}}
+        if expected_mode == "stage-b"
+        else {"kind": "solve", "target": {"kind": "study"}}
+    )
+    if (not isinstance(receipt, Mapping)
+            or receipt.get("method") != "POST"
+            or receipt.get("path") != "/v2/sessions/current/simulation/commands"
+            or type(receipt.get("status")) is not int
+            or not 200 <= receipt["status"] < 300
+            or receipt.get("scope_header") != expected_scope
+            or not isinstance(command, Mapping)
+            or any(command.get(key) != value for key, value in expected_command.items())
+            or command.get("precondition") != precondition
+            or not isinstance(command.get("client_intent_id"), str)
+            or not command["client_intent_id"].startswith("study:" + ("relax" if expected_mode == "stage-b" else "solve") + ":")
+            or len(command["client_intent_id"]) > 128
+            or command.get("reason") != "user_requested"
+            or type(command.get("requested_at_unix_ms")) is not int
+            or command["requested_at_unix_ms"] <= 0):
+        raise BuildControlError("Study stage rerun command receipt has the wrong method, scope or target")
+    if expected_mode == "stage-b":
+        if command.get("initial_state") != {"kind": "default_for_target"}:
+            raise BuildControlError("Stage B command did not retain its default target initial state")
+    elif "initial_state" in command:
+        raise BuildControlError("Whole-Study command unexpectedly supplied a stage initial state")
+    if (type(payload.get("command_count")) is not int or payload["command_count"] != 1
+            or type(payload.get("command_attempt_count")) is not int or payload["command_attempt_count"] != 1
+            or payload.get("ui_command_proven") is not True):
+        raise BuildControlError("Study stage rerun did not submit exactly one command")
+    expected_binding = {"requested_target": expected_command["target"], "run_id": new_run}
+    if expected_mode == "stage-b":
+        expected_binding["step_id"] = "relax-b"
+    if receipt.get("execution_binding") != expected_binding:
+        raise BuildControlError("Study stage rerun terminal run is not bound to its accepted PPM command")
+
+    def validate_result_identities(value, run_id, stage_ids, label):
+        if not isinstance(value, list) or len(value) != len(stage_ids):
+            raise BuildControlError(f"Study stage rerun {label} result set is incomplete")
+        found = []
+        for result in value:
+            if not isinstance(result, Mapping):
+                raise BuildControlError(f"Study stage rerun {label} result identity is malformed")
+            source = result.get("source")
+            stage_id = result.get("authored_stage_id")
+            if (not isinstance(source, Mapping) or source.get("run_id") != run_id
+                    or any(not isinstance(source.get(key), str) or not source[key]
+                           for key in ("task_id", "step_id", "case_id", "attempt_id"))
+                    or type(source.get("ownership_epoch")) is not int or source["ownership_epoch"] < 0
+                    or not isinstance(stage_id, str) or stage_id not in stage_ids
+                    or not isinstance(result.get("project_id"), str) or not result["project_id"]
+                    or not isinstance(result.get("study_id"), str) or not result["study_id"]
+                    or not isinstance(result.get("artifact_id"), str) or not result["artifact_id"]
+                    or not isinstance(result.get("artifact_sha256"), str)
+                    or not SHA256_RE.fullmatch(result["artifact_sha256"])
+                    or not isinstance(result.get("codec_id"), str) or not result["codec_id"]
+                    or not isinstance(result.get("codec_version"), str) or not result["codec_version"]
+                    or not isinstance(result.get("accepted_at"), str) or not result["accepted_at"]):
+                raise BuildControlError(f"Study stage rerun {label} result identity is malformed")
+            found.append(stage_id)
+        if found != stage_ids:
+            raise BuildControlError(f"Study stage rerun {label} results include a missing, duplicate or extra stage")
+
+    before_results = before.get("result_identities")
+    after_results = after.get("result_identities")
+    preserved_results = after.get("preserved_prior_result_identities")
+    validate_result_identities(before_results, previous_run, expected_before, "previous run")
+    validate_result_identities(after_results, new_run, expected_after, "new run")
+    validate_result_identities(preserved_results, previous_run, expected_before, "preserved previous run")
+    if (preserved_results != before_results or payload.get("history_identity_preserved") is not True):
+        raise BuildControlError("Study stage rerun changed an existing immutable result identity")
+    if (payload.get("public_terminal_proven") is not True
+            or payload.get("native_execution_proven") is not False
+            or payload.get("field_data_proven") is not False):
+        raise BuildControlError("Study stage rerun claims unsupported execution or field evidence")
+
+    read_counts = payload.get("read_counts")
+    required_counts = {"status": 2, "current_session": 2, "scene": 2, "commands": 1, "current_run": 2,
+                       "stage_execution": 2, "solver_status": 2, "stage_results": 3, "command_details": 0}
+    if (not isinstance(read_counts, Mapping) or set(read_counts) != set(required_counts)
+            or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
+                   or read_counts[key] > 512 for key, minimum in required_counts.items())):
+        raise BuildControlError("Study stage rerun omitted bounded before/after public resource reads")
+    request_counts = payload.get("request_counts")
+    if not isinstance(request_counts, Mapping) or not 1 <= len(request_counts) <= 128:
+        raise BuildControlError("Study stage rerun omitted its measured API request inventory")
+    command_key = "POST /v2/sessions/current/simulation/commands"
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    for key, count in request_counts.items():
+        if (not isinstance(key, str) or " " not in key or len(key) > 2048
+                or type(count) is not int or count < 1 or count > 512):
+            raise BuildControlError("Study stage rerun API request inventory is malformed")
+        method, path = key.split(" ", 1)
+        if method == "GET":
+            if not path.startswith("/v2/"):
+                raise BuildControlError("Study stage rerun read escaped the public v2 API")
+        elif key == ack_key:
+            if count > 16:
+                raise BuildControlError("Study stage rerun visualization acknowledgements exceeded their bound")
+        elif key != command_key or count != 1:
+            raise BuildControlError("Study stage rerun attempted an unexpected or duplicate mutation")
+    if (request_counts.get(command_key) != 1
+            or type(payload.get("total_requests")) is not int
+            or sum(request_counts.values()) != payload.get("total_requests") or payload["total_requests"] > 512
+            or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
+            or payload.get("per_path_read_limit") != 128):
+        raise BuildControlError("Study stage rerun command request count differs from one")
+    if any(payload.get(key) != [] for key in ("violations", "errors", "proxy_failures")):
+        raise BuildControlError("Study stage rerun helper reported browser, proxy or scope violations")
+    return dict(payload)
+
+
 def _parse_airbox_inspector_result(
     output: bytes,
     public_url: str,
@@ -3339,6 +4152,10 @@ def _run(
     expect_planar_airbox: bool = False,
     planar_airbox_harness_sha256: str | None = None,
     planar_field_evidence_sha256: str | None = None,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun: str | None = None,
+    study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -3394,10 +4211,15 @@ def _run(
         expect_run_performance=(True if expect_run_performance else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
-            if not airbox_inspector and saved_playback_item_id is None
+            if not airbox_inspector and not inspector_ack and saved_playback_item_id is None
+            and study_stage_rerun is None
             else None
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_source_sha256,
+        study_stage_rerun=study_stage_rerun,
+        study_stage_rerun_source_sha256=study_stage_rerun_source_sha256,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
@@ -3421,6 +4243,14 @@ def _run(
             payload = _parse_saved_playback_result(
                 raw, public_url, browser_url, saved_playback_item_id, source_script_sha256,
             )
+        elif inspector_ack:
+            payload = _parse_inspector_ack_result(raw, public_url, browser_url, inspector_ack_source_sha256)
+        elif study_stage_rerun is not None:
+            payload = _parse_study_stage_rerun_result(
+                raw, public_url, browser_url, study_stage_rerun_source_sha256, study_stage_rerun,
+            )
+            if payload.get("outcome") == "unknown" and result.returncode == 0:
+                raise BuildControlError("Study stage rerun helper returned success with an unknown command outcome")
         elif airbox_inspector:
             if not airbox_inspector_script_sha256:
                 raise BuildControlError("Airbox Inspector helper source hash is missing")
@@ -3440,6 +4270,12 @@ def _run(
                 planar_airbox_harness_sha256=planar_airbox_harness_sha256,
                 planar_field_evidence_sha256=planar_field_evidence_sha256)
     except BuildControlError as error:
+        study_no_dispatch_proven = (
+            study_stage_rerun is not None
+            and _study_stage_no_dispatch_proven(
+                raw, study_stage_rerun_source_sha256, study_stage_rerun,
+            )
+        )
         control.write(root + "/result.json", {
             "schema": RESULT_SCHEMA,
             "state": "failed-confirmed",
@@ -3447,12 +4283,23 @@ def _run(
             "stdout_tail": _text(result.stdout),
             "stderr_tail": _text(result.stderr),
             "error": str(error),
+            **({"inspector_ack_restoration": "unknown", "requires_object_readback": True} if inspector_ack else {}),
+            **({"study_stage_rerun_native_outcome": "not-dispatched"}
+               if study_no_dispatch_proven else {}),
+            **({"study_stage_rerun_native_outcome": "unknown", "requires_current_run_readback": True}
+               if study_stage_rerun is not None and not study_no_dispatch_proven else {}),
         })
         _remove_helper(operation, observed["Id"])
         operation["receipt"].update(state="failed-confirmed", error=str(error), exit_code=result.returncode)
         raise
     if result.returncode != 0:
-        payload = {**payload, "state": "failed-confirmed", "error": "Browser helper exit code was non-zero"}
+        payload = {
+            **payload,
+            "state": "failed-confirmed",
+            "error": "Browser helper exited before a passing public terminal proof",
+            **({"study_stage_rerun_native_outcome": "unknown", "requires_current_run_readback": True}
+               if study_stage_rerun is not None and payload.get("outcome") == "unknown" else {}),
+        }
     control.write(root + "/result.json", payload)
     if result.returncode != 0:
         _remove_helper(operation, observed["Id"])
@@ -3629,8 +4476,39 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     if private_group_storage and inputs.get("frontend_volume") != control.volume:
         raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
     scenario = inputs.get("scenario", "standard")
-    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox"}:
+    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox", "inspector-ack", "study-stage-rerun"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
+    inspector_ack = scenario == "inspector-ack"
+    study_stage_rerun = scenario == "study-stage-rerun"
+    inspector_ack_sources = inputs.get("inspector_ack_source_sha256")
+    study_stage_rerun_mode = inputs.get("study_stage_rerun")
+    study_stage_rerun_sources = inputs.get("study_stage_rerun_source_sha256")
+    if inspector_ack:
+        _validate_inspector_ack_hashes(inspector_ack_sources)
+        if _inspector_ack_source_sha256(selected) != inspector_ack_sources:
+            raise BuildControlError("QA reconciliation Inspector ACK proof sources changed")
+        if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
+                or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
+                or inputs.get("expect_fem_airbox_vectors", False) is not False
+                or inputs.get("expect_terminal_telemetry") is not False or inputs.get("expect_run_performance") is not False
+                or inputs.get("expect_ambiguous_compute_fields") is not False):
+            raise BuildControlError("QA reconciliation Inspector ACK receipt includes another scenario")
+    elif inspector_ack_sources is not None:
+        raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
+    if study_stage_rerun:
+        if (study_stage_rerun_mode not in {"stage-b", "study"}
+                or _study_stage_rerun_source_sha256(selected) != study_stage_rerun_sources):
+            raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
+        if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
+                or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
+                or inputs.get("expect_fem_airbox_vectors", False) is not False
+                or inputs.get("expect_terminal_telemetry") is not False
+                or inputs.get("expect_run_performance") is not False
+                or inputs.get("expect_ambiguous_compute_fields") is not False
+                or inputs.get("expect_planar_airbox") is not False):
+            raise BuildControlError("QA reconciliation Study stage rerun receipt includes another scenario")
+    elif study_stage_rerun_mode is not None or study_stage_rerun_sources is not None:
+        raise BuildControlError("QA reconciliation has unrequested Study stage rerun pins")
     expect_planar_airbox_input = inputs.get("expect_planar_airbox", False)
     if type(expect_planar_airbox_input) is not bool:
         raise BuildControlError("QA reconciliation Planar Airbox expectation must be boolean")
@@ -3805,7 +4683,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
         inputs["frontend_volume"], args.port, inputs["browser_runtime_timeout"],
         prepare_viewport_fixture=prepare_viewport_fixture,
-        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector or inspector_ack
+                     or study_stage_rerun else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
         expect_fem_airbox_vectors=(
@@ -3815,10 +4694,14 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         expect_run_performance=(True if expect_run_performance_input else None),
         expect_planar_airbox=expect_planar_airbox_input,
         expect_ambiguous_compute_fields=(
-            None if scenario == "saved-playback" or airbox_inspector
+            None if scenario == "saved-playback" or airbox_inspector or inspector_ack or study_stage_rerun
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
+        study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
+        study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -3875,7 +4758,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         raise BuildControlError("QA reconciliation browser image pin differs")
     _validate_browser_helper(observed, control, identity, inputs["frontend_volume"],
         image_id, state["ExitCode"], selected,
-        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector or inspector_ack
+                     or study_stage_rerun else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
         expect_fem_airbox_vectors=(
@@ -3884,10 +4768,14 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_run_performance=(True if expect_run_performance_input else None),
         expect_ambiguous_compute_fields=(
-            None if scenario == "saved-playback" or airbox_inspector
+            None if scenario == "saved-playback" or airbox_inspector or inspector_ack or study_stage_rerun
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
+        study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
+        study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
@@ -3901,7 +4789,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         "observed_exit_code": state["ExitCode"], "browser_container_id": observed["Id"],
         "receipt_sha256": args.expected_receipt_sha256, "compose_sha256": args.expected_compose_sha256,
         "helper_id": helper_id, "helper_log": helper_log, "browser_inspect": observed,
-        "verification": "NOT VERIFIED"}
+        "verification": "NOT VERIFIED",
+        **({"inspector_ack_restoration": "unknown", "requires_object_readback": True} if inspector_ack else {})}
     if retained_evidence is not None:
         stable = {key: value for key, value in retained_evidence.items() if key != "reconciled_at"}
         if canonical(stable) != canonical(evidence) or type(retained_evidence.get("reconciled_at")) not in (int, float):
@@ -4004,6 +4893,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Exercise one real Compute Fields command with its accepted response dropped (canvas-only)",
     )
+    parser.add_argument("--inspector-ack", action="store_true",
+                        help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
+    parser.add_argument(
+        "--study-stage-rerun",
+        choices=("stage-b", "study"),
+        help="Run one P22 UI-only Study stage or whole-Study command and verify its public result identities",
+    )
     parser.add_argument(
         "--airbox-inspector",
         action="store_true",
@@ -4026,6 +4922,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.reconcile_prestart and not args.reconcile_attempt:
         raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
+    if args.study_stage_rerun is not None and (
+        args.reconcile_attempt or args.reconcile_prestart
+        or args.prepare_viewport_fixture or args.canvas_only or args.expect_live_field is not None
+        or args.expect_airbox_vectors or args.expect_fem_airbox_vectors or args.expect_planar_airbox
+        or args.expect_terminal_telemetry or args.expect_run_performance or args.expect_ambiguous_compute_fields
+        or args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError("--study-stage-rerun cannot be combined with another browser QA scenario")
     defaults = resolve_defaults(args.repo_root, source_root=args.source_root, port=args.port)
     args.source_root = defaults.source_root
     args.port = defaults.port
@@ -4035,6 +4939,13 @@ def main(argv: list[str] | None = None) -> int:
         or not 60 <= args.pull_timeout <= 1800
     ):
         raise BuildControlError("Browser QA port/timeout/pull-timeout is outside its bounded range")
+    if args.inspector_ack and (
+        args.prepare_viewport_fixture or args.canvas_only or args.expect_live_field is not None
+        or args.expect_airbox_vectors or args.expect_fem_airbox_vectors or args.expect_planar_airbox
+        or args.expect_terminal_telemetry or args.expect_run_performance or args.expect_ambiguous_compute_fields
+        or args.airbox_inspector or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError("--inspector-ack cannot be combined with other browser QA scenarios")
     if args.canvas_only and args.prepare_viewport_fixture:
         raise BuildControlError("--canvas-only cannot be combined with --prepare-viewport-fixture")
     if args.expect_live_field is not None:
@@ -4150,6 +5061,10 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError(f"Live development group validation failed: {error}") from error
     public_url = f"http://127.0.0.1:{args.port}"
     browser_url = "http://frontend:8080"
+    inspector_ack_sources = _inspector_ack_source_sha256(selected) if args.inspector_ack else None
+    study_stage_rerun_sources = (
+        _study_stage_rerun_source_sha256(selected) if args.study_stage_rerun is not None else None
+    )
     airbox_inspector_script_sha256 = None
     source_script_sha256 = None
     if args.airbox_inspector:
@@ -4181,7 +5096,8 @@ def main(argv: list[str] | None = None) -> int:
         args.port,
         args.timeout,
         prepare_viewport_fixture=args.prepare_viewport_fixture,
-        canvas_only=(None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
+        canvas_only=(None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
+                     or args.study_stage_rerun is not None else args.canvas_only),
         expect_live_field=args.expect_live_field,
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
@@ -4189,10 +5105,15 @@ def main(argv: list[str] | None = None) -> int:
         expect_run_performance=(True if args.expect_run_performance else None),
         expect_planar_airbox=args.expect_planar_airbox,
         expect_ambiguous_compute_fields=(
-            None if args.airbox_inspector or args.saved_playback_item_id is not None
+            None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
+            or args.study_stage_rerun is not None
             else args.expect_ambiguous_compute_fields
         ),
         airbox_inspector=args.airbox_inspector,
+        inspector_ack=args.inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
+        study_stage_rerun=args.study_stage_rerun,
+        study_stage_rerun_source_sha256=study_stage_rerun_sources,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -4230,13 +5151,20 @@ def main(argv: list[str] | None = None) -> int:
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
         "expect_planar_airbox": args.expect_planar_airbox,
         "scenario": (
-            "saved-playback" if args.saved_playback_item_id is not None
+            "study-stage-rerun" if args.study_stage_rerun is not None
+            else "saved-playback" if args.saved_playback_item_id is not None
+            else "inspector-ack" if args.inspector_ack
             else "airbox-inspector" if args.airbox_inspector
             else "planar-airbox" if args.expect_planar_airbox
             else "standard"
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if args.inspector_ack:
+        inputs["inspector_ack_source_sha256"] = inspector_ack_sources
+    if args.study_stage_rerun is not None:
+        inputs["study_stage_rerun"] = args.study_stage_rerun
+        inputs["study_stage_rerun_source_sha256"] = study_stage_rerun_sources
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
@@ -4269,7 +5197,8 @@ def main(argv: list[str] | None = None) -> int:
             public_url,
             browser_url,
             args.timeout,
-            (None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
+            (None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
+             or args.study_stage_rerun is not None else args.canvas_only),
             args.expect_live_field,
             args.expect_airbox_vectors,
             args.expect_ambiguous_compute_fields,
@@ -4286,6 +5215,10 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_planar_airbox,
             planar_airbox_harness_sha256,
             planar_field_evidence_sha256,
+            inspector_ack=args.inspector_ack,
+            inspector_ack_source_sha256=inspector_ack_sources,
+            study_stage_rerun=args.study_stage_rerun,
+            study_stage_rerun_source_sha256=study_stage_rerun_sources,
         )
     return 0
 

@@ -45,8 +45,8 @@ docker-dev-reconcile-completed-cache registry volume recovery_id apply="false" e
 
 # Start or reconcile the selected two-service group; reuse matching sources and caches.
 # The source parameter selects the main checkout or a registered worktree.
-docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }}
+docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="" network_subnet="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }} {{if network_subnet == "" { "" } else { "--network-subnet " + quote(network_subnet) } }}
 
 # Run a managed console session in the selected Docker DEV group.
 # Two arguments use GUI mode; prefix gui or headless to choose explicitly.
@@ -126,8 +126,8 @@ docker-dev-recover-package source_root backend_container_id image_id request req
 # Reuse the exact pinned image or acquire it through this Compose group's
 # BuildControl operation; no browser install or source/build/cache write happens
 # on the host.
-docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull_timeout="1800" saved_playback_item_id="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if port == "" { "" } else { "--port " + quote(port) } }} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) } }} {{if saved_playback_item_id == "" { "" } else { "--saved-playback-item-id " + quote(saved_playback_item_id) } }}
+docker-dev-browser-qa source_root="" port="" browser_image="" timeout="180" pull_timeout="1800" saved_playback_item_id="" study_stage_rerun="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_browser_qa.py" --repo-root "{{repo_root}}" {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if port == "" { "" } else { "--port " + quote(port) } }} --timeout {{quote(timeout)}} --pull-timeout {{quote(pull_timeout)}} {{if browser_image == "" { "" } else { "--browser-image " + quote(browser_image) } }} {{if saved_playback_item_id == "" { "" } else { "--saved-playback-item-id " + quote(saved_playback_item_id) } }}{{if study_stage_rerun == "" { "" } else { if study_stage_rerun == "stage-b" { " --study-stage-rerun stage-b" } else { if study_stage_rerun == "study" { " --study-stage-rerun study" } else { error("study_stage_rerun must be empty, stage-b, or study") } } } }}
 
 # Resume observation of one retained volume DEV start without restarting backend.
 docker-dev-resume attempt config_sha256 source_root port="3197" restart_backend="false" prestart_reconciliation="" prestart_reconciliation_sha256="":
@@ -146,8 +146,8 @@ docker-dev-reconcile-development request request_sha256 source_root apply="false
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_development_interrupted.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Failure-only recovery for an initial Compose rejection before either service exists.
-docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false" recover_absent_helper="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if recover_absent_helper == "true" { " --recover-absent-helper" } else if recover_absent_helper == "false" { "" } else { error("recover_absent_helper must be true or false") } }}
 
 # Confirm one exact post-reboot resume failure; never start services or change native ownership.
 docker-dev-reconcile-resume request request_sha256 source_root apply="false":
@@ -206,6 +206,22 @@ docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
+
+# Drain a terminal session and pin its native evidence for a retained restore.
+docker-dev-capture-terminal attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --allow-prepared-session --capture-terminal-observation
+
+# Stop one exact released prelaunch-failed Study only after API quiescence proof.
+docker-dev-stop-prelaunch-failure attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only --quiesce-api --capture-prelaunch-failure
+
+# Recreate the pinned group and restore the exact capture from the stop receipt.
+docker-dev-restore-terminal attempt config_sha256 source_root stop_attempt port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --terminal-observation-stop {{quote(stop_attempt)}}
+
+# Archive only the exact released prelaunch-failure stop into fresh state.
+docker-dev-recreate-prelaunch-failure attempt config_sha256 source_root stop_attempt stop_sha256 port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" recreate-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --fresh-state --prelaunch-failure-stop {{quote(stop_attempt)}} --prelaunch-failure-stop-sha256 {{quote(stop_sha256)}}
 
 # Restart only the explicitly saved, pinned, unadmitted authoring session.
 docker-dev-restart-saved-authoring attempt config_sha256 source_root checkpoint checkpoint_sha256 port="3197":

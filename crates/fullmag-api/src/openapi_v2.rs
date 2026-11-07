@@ -73,6 +73,14 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::planar_fields::planar_profile::get_planar_default_field_profile,
         crate::router_v2::handlers::data::planar_fields::get_planar_default_field_render_png,
         crate::router_v2::handlers::data::scalars::get_scalars,
+        crate::router_v2::handlers::data::scalars::get_historical_scalars,
+        crate::router_v2::handlers::data::stage_results::get_study_stage_results,
+        crate::router_v2::handlers::persistence::solutions::study_state::list_project_study_results,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_state,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_magnetization,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_topology,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_support,
+        crate::router_v2::handlers::persistence::solutions::study_state::get_study_result_scalars,
         crate::router_v2::handlers::data::tables::list_tables,
         crate::router_v2::handlers::data::tables::get_table,
         crate::router_v2::handlers::data::tables::get_table_columns,
@@ -514,6 +522,7 @@ use utoipa::OpenApi;
         crate::schemas::fields::TargetFieldAvailabilityState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::common::AcceptedObservationFrameRef,
+        crate::schemas::common::AuthoredInitialStateOrigin,
         crate::schemas::common::AcceptedStateRefResource,
         crate::schemas::common::AcceptedStateIdResource,
         crate::schemas::solutions::SolutionScalarResource,
@@ -677,6 +686,22 @@ use utoipa::OpenApi;
         crate::schemas::planar_fields::PlanarSampleSourceResource,
         crate::schemas::logs::EngineLogResource,
         crate::schemas::scalars::ScalarWindow,
+        crate::schemas::scalars::ScalarSeriesIdentity,
+        crate::schemas::scalars::HistoricalScalarWindow,
+        crate::schemas::stage_results::StudyResultAuthoredRelation,
+        crate::schemas::stage_results::StudyResultCompletion,
+        crate::schemas::stage_results::StudyResultDomainRelation,
+        crate::schemas::stage_results::StudyResultPredecessorRelation,
+        crate::schemas::stage_results::StudyResultInputSelection,
+        crate::schemas::stage_results::StudyResultInitialStateSource,
+        crate::schemas::stage_results::StudyResultResetScope,
+        crate::schemas::stage_results::StudyResultInitialState,
+        crate::schemas::stage_results::StudyStageResult,
+        crate::schemas::stage_results::StudyStageResultsResource,
+        crate::schemas::stage_results::StudyResultLayerGeometry,
+        crate::schemas::stage_results::StudyResultGeometry,
+        crate::schemas::stage_results::StudyResultStateResource,
+        crate::schemas::scalars::HistoricalScalarCoverage,
         crate::schemas::scalars::ScalarObservationSource,
         crate::schemas::tables::TableColumnMeta,
         crate::schemas::tables::TableListResource,
@@ -860,8 +885,12 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshBuildHistoryResource,
         crate::schemas::mesh::MeshLastSuccessfulBuildResource,
         crate::schemas::mesh::MeshBuildCommandRequest,
+        crate::schemas::commands::RuntimeCommandRunPrecondition,
+        crate::schemas::commands::RuntimeInitialStateRequest,
+        crate::schemas::commands::RuntimeAuthoredInitialStateSource,
         crate::schemas::commands::StructuredCommandRequest,
         crate::schemas::commands::CommandResponse,
+        crate::schemas::commands::CommandExecutionBinding,
         crate::schemas::relaxation::RelaxationAlgorithm,
         crate::schemas::relaxation::StageStopReason,
         crate::schemas::relaxation::StageMetricKind,
@@ -948,6 +977,12 @@ use utoipa::OpenApi;
         fullmag_authoring::SceneOerstedField,
         crate::schemas::authoring::AuthoringTransactionRequest,
         crate::schemas::authoring::AuthoringTransactionResponse,
+        crate::schemas::authoring::MagnetizationApplyRequest,
+        crate::schemas::authoring::MagnetizationApplyTarget,
+        crate::schemas::authoring::MagnetizationApplyScope,
+        crate::schemas::authoring::MagnetizationApplyReceiptResource,
+        crate::schemas::authoring::MagnetizationApplyStatus,
+        crate::schemas::authoring::PreparedInitialStateResource,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
         crate::schemas::authoring::ParallelExecutionResource,
@@ -1455,6 +1490,77 @@ mod tests {
                 "export"
             ])
         );
+    }
+
+    #[test]
+    fn openapi_exposes_interactive_study_commands_and_exact_result_reads() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let preconditions = &schemas["RuntimeCommandPrecondition"];
+        for field in ["scene_revision", "mesh_revision", "domain_generation_id", "current_run"] {
+            assert!(
+                preconditions["properties"].get(field).is_some(),
+                "RuntimeCommandPrecondition.{field} must be exported"
+            );
+            assert!(
+                !preconditions["required"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|required| required == field),
+                "Legacy clients must be able to omit {field}"
+            );
+        }
+        assert!(schemas["RuntimeCommandIntent"]["properties"].get("initial_state").is_some());
+        assert!(schemas["RuntimeAuthoredInitialStateSource"].to_string().contains("publication_id"));
+        assert!(schemas["CommandResponse"]["properties"].get("execution_binding").is_some());
+
+        let live = "/v2/sessions/current/simulation/stages/results";
+        let project = "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results";
+        let state = format!("{project}/{{artifact_id}}");
+        for (path, schema, live_scope) in [
+            (live.to_string(), "StudyStageResultsResource", true),
+            (format!("{live}/scalars"), "HistoricalScalarWindow", true),
+            (project.to_string(), "StudyStageResultsResource", false),
+            (state.clone(), "StudyResultStateResource", false),
+            (format!("{state}/scalars"), "HistoricalScalarWindow", false),
+        ] {
+            let operation = &document["paths"][&path]["get"];
+            assert_eq!(
+                operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+                format!("#/components/schemas/{schema}"),
+                "{path} must expose its typed response"
+            );
+            let has_scope_header = operation["parameters"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|item| item["$ref"] == "#/components/parameters/FullmagSessionScope");
+            assert_eq!(has_scope_header, live_scope, "{path} has incorrect session scope");
+        }
+        for kind in ["magnetization", "topology", "support"] {
+            let path = format!("{state}/{kind}");
+            let operation = &document["paths"][&path]["get"];
+            let response = &operation["responses"]["200"];
+            assert!(response["content"].get("application/octet-stream").is_some(), "{path}");
+            for header in [
+                "ETag",
+                "x-fullmag-source-id",
+                "x-fullmag-field-generation-id",
+                "x-fullmag-domain-generation-id",
+                "x-fullmag-mesh-topology-hash",
+            ] {
+                assert!(response["headers"].get(header).is_some(), "{path} omitted {header}");
+            }
+            assert!(
+                operation["parameters"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|item| item["in"] == "header" && item["name"] == "If-None-Match"),
+                "{path} omitted its conditional request parameter"
+            );
+        }
     }
 
     #[test]

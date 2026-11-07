@@ -467,15 +467,19 @@ fn prepared_domain_publication(
         |error| ApiError::internal(format!("failed to encode prepared execution plan: {error}")),
     )?;
     metadata.insert("execution_plan".into(), execution_plan_metadata);
-    if matches!(
-        &read_model.execution_plan.backend_plan,
-        fullmag_ir::BackendPlanIR::FdmMultilayer(_)
-    ) {
-        let (_, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
-        // A previous multilayer run may have a valid-looking layout with
-        // different native grids. The pinned plan is the current authority;
-        // retaining that older layout would misroute native-layer offsets.
-        metadata.insert("artifact_layout".into(), layout);
+    match &read_model.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(_) => {
+            let layout = fullmag_runner::study_magnetization_layout_for_plan(&read_model.execution_plan)
+                .map_err(|error| ApiError::conflict(error.message))?;
+            metadata.insert("artifact_layout".into(), layout);
+        }
+        fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
+            let (_, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
+            metadata.insert("artifact_layout".into(), layout);
+        }
+        _ => {
+            metadata.remove("artifact_layout");
+        }
     }
     if matches!(
         &read_model.execution_plan.backend_plan,
@@ -536,15 +540,35 @@ fn publish_prepared_initial_state(
     snapshot: &mut SessionStateResponse,
     read_model: &LiveScenePreparationReadModel,
 ) -> Result<(), ApiError> {
+    if let Some(carrier) = prepare_initial_magnetization(&read_model.execution_plan)? {
+        carrier.publish(
+            snapshot, &read_model.preparation_id, &read_model.plan_fingerprint,
+            read_model.scene_revision, serde_json::json!({"source_kind": "prepared_initial_state"}),
+        )?;
+    }
+    Ok(())
+}
+
+/// Dense payload encoded outside the live transition lock. Publication binds
+/// it to the actual session domain and the committed initial-state revision.
+pub(crate) struct PreparedInitialMagnetization {
+    start_time_s: f64,
+    values_sha256: String,
+    field: Value,
+}
+
+pub(crate) fn prepare_initial_magnetization(
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<Option<PreparedInitialMagnetization>, ApiError> {
     let (values, start_time_s, layout): (Vec<[f64; 3]>, f64, Value) =
-        match &read_model.execution_plan.backend_plan {
+        match &execution_plan.backend_plan {
             fullmag_ir::BackendPlanIR::Fdm(plan) => (
                 plan.initial_magnetization.clone(),
                 plan.time_stage.start_time_s,
                 serde_json::json!({"backend": "fdm", "grid_cells": plan.grid.cells}),
             ),
             fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
-                let (values, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
+                let (values, layout) = prepared_multilayer_initial_state(execution_plan)?;
                 (values, 0.0, layout)
             }
             fullmag_ir::BackendPlanIR::Fem(plan) => (
@@ -554,7 +578,7 @@ fn publish_prepared_initial_state(
                     plan.mesh.nodes.len(),
                 ),
             ),
-            _ => return Ok(()),
+            _ => return Ok(None),
         };
     if values.is_empty()
         || values.iter().flatten().any(|value| !value.is_finite())
@@ -566,41 +590,51 @@ fn publish_prepared_initial_state(
             "prepared plan has no finite initial magnetization at a valid stage origin",
         ));
     }
-    let frame = crate::session::accepted_observation_frame_ref(
-        snapshot,
-        0,
-        Some(start_time_s),
-    );
-    let mut fields = crate::types::LatestFields::default();
-    fields.insert(
-        "m".into(),
-        serde_json::json!({
-            "values": values,
-            "layout": layout,
-            "source_step": 0,
-            "source_time_seconds": start_time_s,
-            "source_revision": read_model.scene_revision,
-            "provenance": {
-                "source_kind": "prepared_initial_state",
-                "preparation_id": read_model.preparation_id,
-                "plan_fingerprint": read_model.plan_fingerprint,
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for value in values.iter().flatten() {
+        digest.update(value.to_le_bytes());
+    }
+    Ok(Some(PreparedInitialMagnetization {
+        start_time_s,
+        values_sha256: format!("{:x}", digest.finalize()),
+        field: serde_json::json!({"values": values, "layout": layout}),
+    }))
+}
+
+impl PreparedInitialMagnetization {
+    pub(crate) fn publish(
+        self,
+        snapshot: &mut SessionStateResponse,
+        preparation_id: &str,
+        plan_fingerprint: &str,
+        scene_revision: u64,
+        mut provenance: Value,
+    ) -> Result<(), ApiError> {
+        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            snapshot,
+            crate::schemas::common::AuthoredInitialStateOrigin {
+                preparation_id: preparation_id.into(),
+                plan_fingerprint: plan_fingerprint.into(),
+                scene_revision,
+                initial_state_revision: snapshot.region_realization_revisions.initial_state,
+                values_sha256: self.values_sha256,
             },
-            "observation_frame": frame,
-        }),
-    );
-    let session_id = snapshot.session.session_id.clone();
-    crate::session::apply_current_live_accepted_field_frame(
-        snapshot,
-        crate::types::CurrentLiveFieldFrameRequest {
-            session_id,
-            latest_fields: Some(fields),
-            replace_latest_fields: false,
-            field_generation: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-        },
-        frame,
-    )
+            self.start_time_s,
+        );
+        provenance["preparation_id"] = preparation_id.into();
+        provenance["plan_fingerprint"] = plan_fingerprint.into();
+        let mut field = self.field;
+        field["source_step"] = 0.into();
+        field["source_time_seconds"] = self.start_time_s.into();
+        field["source_revision"] = scene_revision.into();
+        field["provenance"] = provenance;
+        field["observation_frame"] = serde_json::to_value(&publication.frame)
+            .map_err(|error| ApiError::internal(format!("encode prepared magnetization frame: {error}")))?;
+        let mut fields = crate::types::LatestFields::default();
+        fields.insert("m".into(), field);
+        crate::session::apply_current_live_authored_initial_state(snapshot, publication, fields)
+    }
 }
 
 const ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT: std::time::Duration =
@@ -947,6 +981,7 @@ pub(crate) async fn publish_accepted_frontier_preparation(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
     command_kind: &str,
+    mesh_command_id: Option<&str>,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     let run_id = {
         let current = state.current_live_state.read().await;
@@ -1190,12 +1225,14 @@ pub(crate) async fn publish_accepted_frontier_preparation(
         // The bridge holds the transition only for its initial identity
         // capture and final CAS/commit. Native preparation may take minutes;
         // Stop and session replacement remain available during store reads.
-        let publication = publish_accepted_task_preparation(
+        let publication = publish_accepted_task_preparation_with_mode(
             state,
             context,
             &run_id,
             &step_id,
             command_kind,
+            AcceptedPreparationPublicationMode::Active,
+            mesh_command_id,
         )
         .await;
         match publication {
@@ -1387,7 +1424,7 @@ pub(crate) async fn publish_accepted_task_preparation(
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     publish_accepted_task_preparation_with_mode(
-        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active,
+        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active, None,
     ).await
 }
 
@@ -1405,6 +1442,7 @@ pub(crate) async fn restore_terminal_task_domain(
     publish_accepted_task_preparation_with_mode(
         state, context, run_id, step_id, "accepted_projection_stage_preparation",
         AcceptedPreparationPublicationMode::TerminalObservation(identity),
+        None,
     ).await
 }
 
@@ -1415,6 +1453,7 @@ async fn publish_accepted_task_preparation_with_mode(
     step_id: &str,
     command_kind: &str,
     mode: AcceptedPreparationPublicationMode,
+    mesh_command_id: Option<&str>,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     let terminal_observation = matches!(&mode, AcceptedPreparationPublicationMode::TerminalObservation(_));
     let (fence, scene_revision, display_projection, preparation_revision, existing_preparation) = {
@@ -1626,7 +1665,7 @@ async fn publish_accepted_task_preparation_with_mode(
         serde_json::to_value(&read_model.execution_plan).map_err(|error| {
             ApiError::internal(format!("failed to encode accepted execution plan: {error}"))
         })?;
-    let mesh_workspace = serde_json::json!({
+    let mut mesh_workspace = serde_json::json!({
         "schema_version": LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
         "preparation_id": &read_model.preparation_id,
         "source_scene_revision": read_model.scene_revision,
@@ -1644,6 +1683,15 @@ async fn publish_accepted_task_preparation_with_mode(
             "detail": "accepted task preparation receipt ready",
         }],
     });
+    if let Some(command_id) = mesh_command_id {
+        mesh_workspace["last_build_summary"] = serde_json::json!({
+            "command_id": command_id,
+            "build_id": format!("mesh:{command_id}"),
+            "status": "completed",
+            "source_scene_revision": read_model.scene_revision,
+            "preparation_id": &read_model.preparation_id,
+        });
+    }
     let mut completed_stages = canonical_completed_preparation_stages(
         now, "accepted task preparation receipt committed",
     );
@@ -1775,6 +1823,18 @@ async fn publish_accepted_task_preparation_with_mode(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
+    }
+    if let Some(command_id) = mesh_command_id {
+        let ledger = state.current_command_ledger.lock().await;
+        if !ledger.iter().any(|record| {
+            record.command.command_id == command_id
+                && record.status == crate::types::CommandLifecycleState::Accepted
+        }) {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_run_stopped",
+                "the command that requested this domain is no longer active",
+            ));
+        }
     }
     let durable_disposition = commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
         state,
@@ -4089,6 +4149,10 @@ mod tests {
         assert_eq!(field["layout"]["layers"][1]["value_offset"], 2);
         assert_eq!(field["source_time_seconds"], 0.0);
         assert!(snapshot.scalar_rows.is_empty());
+        let bundle = snapshot.field_publication_bundles.get("m").expect("multilayer m0 bundle");
+        assert!(bundle.observation_frame.authored_initial_state.is_some());
+        assert!(bundle.field.carrier_id.starts_with("fdm-multilayer:sha256:"));
+        assert_eq!(bundle.field.scope_kind, "full");
     }
 
     #[test]
@@ -4155,6 +4219,9 @@ mod tests {
             "preparation must not fabricate solver observations"
         );
         assert!(snapshot.live_state.is_none());
+        let bundle = snapshot.field_publication_bundles.get("m").expect("FEM m0 bundle");
+        assert!(bundle.observation_frame.authored_initial_state.is_some());
+        assert_eq!(bundle.domain_generation_id, generation);
     }
 
     #[test]

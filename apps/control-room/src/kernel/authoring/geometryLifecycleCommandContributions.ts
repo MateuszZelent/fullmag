@@ -34,6 +34,7 @@ import type {
   LiveStatusResource,
   MeshCapabilitiesResource,
   RequestOptions,
+  RuntimeCommandPrecondition,
 } from "../api/apiTypes";
 import type { CommandDetailResource, StructuredCommandRequest } from "../api/apiTypes";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
@@ -65,6 +66,7 @@ import {
   recordAuthoringMutationHistory,
 } from "./authoringHistoryMutation";
 import { awaitMeshBuildConfirmation, type MeshBuildConfirmCommandId } from "./meshBuildConfirmation";
+import { studyComputeDraftBlockedReason } from "./studyComputeDraftGuard";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import {
   resolveActiveLaneOperation,
@@ -765,6 +767,8 @@ async function observeMeshBuildOperation(
   }
   const terminal = await awaitMeshCommandTerminal(api, commandId, {
     baseMeshRevision: operation.baseMeshRevision,
+    // The compound command separately checks which build owns the published domain.
+    allowSameMeshRevision: Boolean(context.meshBuildPin),
     requestOptions: operation.scopeKey ? { sessionScopeKey: operation.scopeKey } : undefined,
   });
   const obsoleteAfterPoll = obsoleteSessionResult(context);
@@ -812,14 +816,19 @@ function trackMeshBuildOperation(
     const obsolete = obsoleteSessionResult(context);
     operation.observationPaused = result.status === "pending" || (operation.submitted && Boolean(obsolete));
     if (result.status !== "pending" && (!obsolete || !operation.submitted)) releaseMeshOperation(api, operation);
-    return result;
+    return context.meshBuildPin && operation.submitted
+      ? { ...result, clientIntentId: operation.requestId, clientIntentKind: operation.commandKind }
+      : result;
   }).finally(() => { operation.promise = undefined; });
   return operation.promise;
 }
 
 /** Resume only the retained command identity or client intent; never confirm or submit another build. */
-export function resumeMeshBuildObservation(context: CommandContext): Promise<CommandResult> {
+export function resumeMeshBuildObservation(context: CommandContext, expectedIntent?: string): Promise<CommandResult> {
   const operation = currentMeshOperation(context);
+  if (expectedIntent && operation?.requestId !== expectedIntent) {
+    return Promise.resolve({ message: "The requested mesh intent is no longer observed here.", status: "cancelled" });
+  }
   if (!operation) return Promise.resolve({ message: "No mesh command observation is available to resume.", status: "cancelled" });
   return operation.promise ?? trackMeshBuildOperation(context, operation, () => observeMeshBuildOperation(context, operation));
 }
@@ -905,6 +914,35 @@ function meshSubmissionRejection(
   context.bus?.emit("mesh:build-observed", { ...result, requestId: operation.requestId });
   return result;
 }
+function meshBuildPinChanged(context: CommandContext, requestId: string): CommandResult {
+  const result = {
+    status: "failed" as const,
+    message: "The scene or mesh changed before confirming Build + Study. Review the current model and try again.",
+  };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId });
+  return result;
+}
+
+function rejectCompoundMeshBuildDraft(context: CommandContext, requestId: string): CommandResult | null {
+  if (!context.meshBuildPin) return null;
+  const message = studyComputeDraftBlockedReason(context);
+  if (!message) return null;
+  const result = { message, status: "failed" as const };
+  context.bus?.emit("mesh:build-observed", { ...result, requestId });
+  return result;
+}
+
+function meshPreconditionAfterConfirmation(
+  context: CommandContext,
+  confirmed: RuntimeCommandPrecondition | undefined,
+): RuntimeCommandPrecondition | undefined | false {
+  const pin = context.meshBuildPin;
+  if (!pin) return confirmed;
+  if (confirmed && (confirmed.scene_revision !== pin.scene_revision ||
+      confirmed.mesh_revision !== pin.mesh_revision)) return false;
+  return { ...confirmed, ...pin };
+}
+
 function runMeshBuildOperation(
   context: CommandContext,
   registryCommandId: MeshBuildConfirmCommandId,
@@ -913,7 +951,7 @@ function runMeshBuildOperation(
   const api = context.api!.commands;
   const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
   const sceneRevision = asRecord(status?.resources)?.scene_revision ?? sceneBaseRevision(context);
-  const key = JSON.stringify({ scene_revision: sceneRevision, mesh_options: request.mesh_options ?? null, mesh_target: request.mesh_target });
+  const key = JSON.stringify({ scene_revision: sceneRevision, mesh_options: request.mesh_options ?? null, mesh_target: request.mesh_target, compound: context.meshBuildPin });
   const previous = currentMeshOperation(context);
   if (previous) {
     if (previous.key === key && !previous.observationPaused && previous.promise) return previous.promise;
@@ -939,13 +977,17 @@ function runMeshBuildOperation(
     const obsoleteAfterConfirmation = obsoleteSessionResult(context);
     if (obsoleteAfterConfirmation) return obsoleteAfterConfirmation;
     if (!confirmation.confirmed) return { status: "cancelled" };
-    operation.baseMeshRevision = confirmation.precondition?.mesh_revision ?? operation.baseMeshRevision;
+    const draftBlocked = rejectCompoundMeshBuildDraft(context, confirmation.requestId);
+    if (draftBlocked) return draftBlocked;
+    const precondition = meshPreconditionAfterConfirmation(context, confirmation.precondition);
+    if (precondition === false) return meshBuildPinChanged(context, confirmation.requestId);
+    operation.baseMeshRevision = precondition?.mesh_revision ?? operation.baseMeshRevision;
     operation.submitted = true;
     try {
       const meshRequest = {
         ...request,
         client_intent_id: operation.requestId,
-        ...(confirmation.precondition ? { precondition: confirmation.precondition } : {}),
+        ...(precondition ? { precondition } : {}),
       };
       const requestOptions = sessionRequestOptions(context);
       const response = requestOptions
@@ -999,6 +1041,7 @@ export function runFdmGridRefreshOperation(
     kind: request.kind,
     precondition: request.precondition ?? null,
     reason: request.reason ?? null,
+    compound: context.meshBuildPin,
   });
   const previous = currentMeshOperation(context);
   if (previous) {
@@ -1501,9 +1544,15 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!confirmation.confirmed) {
         return { status: "cancelled" };
       }
+      const obsolete = obsoleteSessionResult(context);
+      if (obsolete) return obsolete;
+      const draftBlocked = rejectCompoundMeshBuildDraft(context, confirmation.requestId);
+      if (draftBlocked) return draftBlocked;
+      const precondition = meshPreconditionAfterConfirmation(context, confirmation.precondition);
+      if (precondition === false) return meshBuildPinChanged(context, confirmation.requestId);
       return runFdmGridRefreshOperation(context, {
         kind: "fdm_grid_refresh",
-        precondition: confirmation.precondition ?? { scene_revision: sceneRevision },
+        precondition: precondition ?? { scene_revision: sceneRevision },
         reason: "explicit_build_grid",
       }, confirmation.requestId);
     },

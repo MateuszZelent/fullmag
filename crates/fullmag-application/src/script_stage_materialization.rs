@@ -8,7 +8,8 @@ use crate::script_stage_contract::{
     ResolvedScriptStage, ResolvedScriptStageAction, ScriptAntennaAuthoringInventory,
     ScriptExecutionConfig, ScriptExecutionStageAction, StageTransitionKind, StageTransitionMetadata,
     StageTransitionReason, StateTransferOperatorKind, StudyPipelineDocument, StudyPipelineNode,
-    ScriptStageProvenance,
+    ScriptStageProvenance, StageMagnetizationAssignments, MAGNETIZATION_ASSIGNMENTS_KEY,
+    STAGE_MAGNETIZATION_ASSIGNMENTS_KEY,
 };
 use anyhow::{bail, Context, Result};
 use fullmag_ir::{
@@ -644,6 +645,10 @@ fn materialize_script_stages_with_stage_limit(
         return Ok(vec![stage]);
     }
 
+    let mut local_assignments = study_pipeline.as_ref()
+        .map(StudyPipelineDocument::magnetization_assignments_by_stage)
+        .transpose()?.unwrap_or_default();
+    local_assignments.retain(|_, assignments| !assignments.local().is_empty());
     let mut materialized = Vec::with_capacity(stages.len());
     let mut device_override: Option<String> = None;
     for mut stage in stages {
@@ -652,6 +657,21 @@ fn materialize_script_stages_with_stage_limit(
         }
         if let Some(device) = device_override.as_deref() {
             set_runtime_selection_device(&mut stage.ir, device);
+        }
+        if let Some(id) = stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+            .and_then(Value::as_str).map(str::to_owned)
+        {
+            if let Some(assignments) = local_assignments.remove(&id) {
+                if stage.action.is_some() {
+                    bail!("authored stage '{id}' has no physical snapshot for its magnetization");
+                }
+                // Captured snapshots already include the independent DSL setters.
+                for assignment in assignments.local() {
+                    assignment.apply(&mut stage.ir).with_context(|| {
+                        format!("invalid authored magnetization assignment for stage '{id}'")
+                    })?;
+                }
+            }
         }
         normalize_stage_sampling(&mut stage.ir);
         if let Some(action) = stage.action {
@@ -674,6 +694,9 @@ fn materialize_script_stages_with_stage_limit(
             resolve_stage_auto_sampling(&mut resolved)?;
             materialized.push(resolved);
         }
+    }
+    if let Some(id) = local_assignments.keys().next() {
+        bail!("authored stage '{id}' has no physical snapshot for its magnetization");
     }
     validate_antenna_equilibrium_dependencies(&materialized)?;
     Ok(annotate_stage_transitions(materialized))
@@ -1193,13 +1216,8 @@ fn materialize_study_pipeline(
     default_until_seconds: Option<f64>,
     expansion_budget: &mut Option<StageExpansionBudget>,
 ) -> Result<Vec<ResolvedScriptStage>> {
-    if document.version != "study_pipeline.v1" {
-        bail!(
-            "unsupported study pipeline version '{}' while materializing script stages",
-            document.version
-        );
-    }
     validate_pipeline_node_ids(&document.nodes, &mut BTreeSet::new())?;
+    let assignments_by_stage = document.magnetization_assignments_by_stage()?;
     let mut stages = Vec::new();
     let mut current_ir = base_ir.clone();
     current_ir.problem_meta.runtime_metadata.insert(
@@ -1208,6 +1226,7 @@ fn materialize_study_pipeline(
     );
     walk_study_pipeline_nodes(
         &document.nodes,
+        &assignments_by_stage,
         &mut current_ir,
         antenna_inventory,
         default_until_seconds,
@@ -1243,6 +1262,7 @@ fn validate_pipeline_node_ids(
 
 fn walk_study_pipeline_nodes(
     nodes: &[StudyPipelineNode],
+    assignments_by_stage: &BTreeMap<String, StageMagnetizationAssignments>,
     current_ir: &mut ProblemIR,
     antenna_inventory: &ScriptAntennaAuthoringInventory,
     default_until_seconds: Option<f64>,
@@ -1264,15 +1284,31 @@ fn walk_study_pipeline_nodes(
                 if !enabled {
                     continue;
                 }
+                let assignments = assignments_by_stage.get(id);
+                if let Some(assignments) = assignments {
+                    for assignment in assignments.independent() {
+                        assignment.apply(current_ir).with_context(|| {
+                            format!("invalid magnetization assignment before stage '{id}'")
+                        })?;
+                    }
+                }
                 if let Some(mut stage) = materialize_pipeline_primitive(
                     current_ir,
                     antenna_inventory,
                     stage_kind,
+                    source.as_deref(),
                     payload,
                     default_until_seconds,
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?
                 {
+                    if let Some(assignments) = assignments {
+                        for assignment in assignments.local() {
+                            assignment.apply(&mut stage.ir).with_context(|| {
+                                format!("invalid authored magnetization assignment for stage '{id}'")
+                            })?;
+                        }
+                    }
                     stage.provenance = Some(ScriptStageProvenance {
                         authored_step_id: id.clone(),
                         expansion_index: 0,
@@ -1341,6 +1377,7 @@ fn walk_study_pipeline_nodes(
                 ancestors.push(id.clone());
                 walk_study_pipeline_nodes(
                     children,
+                    assignments_by_stage,
                     current_ir,
                     antenna_inventory,
                     default_until_seconds,
@@ -1358,6 +1395,7 @@ fn materialize_pipeline_primitive(
     current_ir: &mut ProblemIR,
     antenna_inventory: &ScriptAntennaAuthoringInventory,
     stage_kind: &str,
+    source: Option<&str>,
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
@@ -1373,8 +1411,13 @@ fn materialize_pipeline_primitive(
             materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
         }
         "run" => {
-            validate_pipeline_run_primitive_payload(payload)?;
-            materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
+            let script_imported = source == Some("script_imported");
+            validate_pipeline_run_primitive_payload(payload, script_imported)?;
+            let mut stage = materialize_pipeline_run(current_ir, payload, default_until_seconds)?;
+            if script_imported {
+                apply_imported_run_capture(&mut stage.ir, payload)?;
+            }
+            Ok(Some(stage))
         }
         "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
@@ -2074,10 +2117,24 @@ fn reject_direct_minimizer_llg_payload(
     if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
         return Ok(());
     }
-    let rejected = ["integrator", "fixed_timestep", "max_error", "relax_alpha"]
-        .into_iter()
-        .filter(|field| payload_field_is_set(payload, field))
-        .collect::<Vec<_>>();
+    let rejected = [
+        "integrator",
+        "solver",
+        "fixed_timestep",
+        "dt",
+        "max_error",
+        "max_err",
+        "dt_initial",
+        "dt_min",
+        "dt_max",
+        "adaptive_timestep",
+        "field_refresh",
+        "demag_interval_s",
+        "relax_alpha",
+    ]
+    .into_iter()
+    .filter(|field| payload_field_is_set(payload, field))
+    .collect::<Vec<_>>();
     if !rejected.is_empty() {
         bail!(
             "relaxation algorithm '{}' is a direct minimizer and rejects LLG-only controls: {}",
@@ -2115,19 +2172,75 @@ fn materialize_pipeline_run(
     ))
 }
 
-fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) -> Result<()> {
+#[cfg(test)]
+#[test]
+fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration_edit() {
+    let base = ProblemIR::bootstrap_example();
+    let payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
+        "kind": "run",
+        "entrypoint_kind": "build",
+        "integrator": "rk4",
+        "fixed_timestep": "2e-15",
+        "demag_interval_s": "5e-12",
+        "until_seconds": "8e-12",
+        "relax_algorithm": "",
+        "torque_tolerance": "",
+        "energy_tolerance": "",
+        "max_steps": "",
+        "sampling": {"outputs": [{"kind": "scalar", "name": "E_total", "every_seconds": 1e-12}]},
+        "spin_wave_response": null,
+    })).unwrap();
+    let materialize = |source: &str, payload: &BTreeMap<String, Value>| {
+        materialize_pipeline_primitive(
+            &mut base.clone(), &ScriptAntennaAuthoringInventory::default(),
+            "run", Some(source), payload, None,
+        )
+    };
+    assert!(materialize("ui_authored", &payload).is_err());
+    let stage = materialize("script_imported", &payload).unwrap().unwrap();
+    assert_eq!(stage.until_seconds, 8e-12);
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &stage.ir.study else {
+        panic!("expected an imported Run");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator, fixed_timestep, adaptive_timestep, field_refresh, ..
+    } = dynamics;
+    assert_eq!(integrator, "rk4");
+    assert_eq!(*fixed_timestep, Some(2e-15));
+    assert!(adaptive_timestep.is_none());
+    assert_eq!(field_refresh.as_ref().and_then(|refresh| refresh.demag_interval_s), Some(5e-12));
+    assert!(matches!(sampling.outputs.as_slice(),
+        [OutputIR::Scalar { name, every_seconds, .. }] if name == "E_total" && *every_seconds == 1e-12
+    ));
+    let mut unsupported = payload;
+    unsupported.insert("relax_algorithm".into(), Value::String("nonlinear_cg".into()));
+    assert!(materialize("script_imported", &unsupported).is_err());
+}
+
+fn validate_pipeline_run_primitive_payload(
+    payload: &BTreeMap<String, Value>,
+    script_imported: bool,
+) -> Result<()> {
     let unsupported = payload
         .keys()
         .filter(|key| {
-            !matches!(
-                key.as_str(),
+            let key = key.as_str();
+            let run_fields = matches!(
+                key,
                 "entrypoint_kind"
                     | "kind"
                     | "stage_id"
                     | "until_seconds"
                     | "output_every_seconds"
                     | "autosave"
-            )
+                    | MAGNETIZATION_ASSIGNMENTS_KEY
+                    | STAGE_MAGNETIZATION_ASSIGNMENTS_KEY
+            );
+            let imported_fields = script_imported
+                && (matches!(key, "integrator" | "fixed_timestep" | "demag_interval_s" | "sampling" | "spin_wave_response")
+                    || (matches!(key, "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps")
+                        && !payload_field_is_set(payload, key)));
+            !run_fields && !imported_fields
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -2137,6 +2250,49 @@ fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) ->
             unsupported.join(", ")
         );
     }
+    Ok(())
+}
+
+/// Imported Python Run nodes carry the solver and output snapshot that was
+/// captured for that particular Run. Preserve it on Scene-based re-execution.
+fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &mut ir.study else {
+        bail!("script-imported Run did not materialize a time-evolution stage");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator, fixed_timestep, adaptive_timestep, field_refresh, ..
+    } = dynamics;
+    if let Some(value) = payload_string_value(payload.get("integrator"), "integrator")? {
+        *integrator = value;
+    }
+    if payload.contains_key("fixed_timestep") {
+        *fixed_timestep = payload_f64(payload, "fixed_timestep")?;
+        if fixed_timestep.is_some() {
+            *adaptive_timestep = None;
+        }
+    }
+    if payload.contains_key("demag_interval_s") {
+        *field_refresh = payload_f64(payload, "demag_interval_s")?.map(|interval| {
+            fullmag_ir::FieldRefreshPolicyIR { demag_interval_s: Some(interval) }
+        });
+    }
+    if let Some(value) = payload.get("sampling").filter(|value| !value.is_null()) {
+        let mut captured: fullmag_ir::SamplingIR = serde_json::from_value(value.clone())
+            .context("script-imported Run sampling is invalid")?;
+        captured.stage_autosave = sampling.stage_autosave.clone();
+        *sampling = time_domain_sampling_from(&captured);
+    }
+    if let Some(value) = payload.get("spin_wave_response") {
+        let metadata = &mut ir.problem_meta.runtime_metadata;
+        match value {
+            Value::Null => { metadata.remove("spin_wave_response"); }
+            Value::Object(_) => { metadata.insert("spin_wave_response".into(), value.clone()); }
+            _ => bail!("script-imported Run spin_wave_response must be an object"),
+        }
+    }
+    ir.validate().map_err(|errors| anyhow::anyhow!(
+        "script-imported Run IR validation failed: {}", errors.join("; ")
+    ))?;
     Ok(())
 }
 
@@ -2166,7 +2322,8 @@ pub fn materialize_pipeline_relax(
     reject_direct_minimizer_llg_payload(algorithm, payload)?;
     let dynamics = if algorithm == fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped {
         let mut dynamics = required_study_dynamics(&ir.study, "LLG relaxation pipeline stage")?;
-        apply_dynamics_overrides(&mut dynamics, payload)?;
+        apply_relax_dynamics_overrides(&mut dynamics, payload)?;
+        apply_relax_alpha(&mut ir, payload)?;
         Some(dynamics)
     } else {
         None
@@ -2178,6 +2335,12 @@ pub fn materialize_pipeline_relax(
         sampling,
     };
     attach_stage_autosave_from_payload(&mut ir, payload, "relax")?;
+    ir.validate().map_err(|errors| {
+        anyhow::anyhow!(
+            "relax stage IR validation failed: {}",
+            errors.join("; ")
+        )
+    })?;
     let until_seconds = resolve_script_until_seconds(&ir, None)?;
     Ok(ResolvedScriptStage::solver(
         ir,
@@ -3148,6 +3311,320 @@ fn apply_dynamics_overrides(
     Ok(())
 }
 
+fn apply_relax_dynamics_overrides(
+    dynamics: &mut fullmag_ir::DynamicsIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    match dynamics {
+        fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep,
+            field_refresh,
+            ..
+        } => {
+            let integrator_override = payload_relax_integrator(payload)?;
+            if let Some(value) = integrator_override.as_ref() {
+                *integrator = value.clone();
+            }
+
+            let (fixed_step, dt_is_auto, fixed_step_was_provided) =
+                payload_fixed_timestep(payload)?;
+            let adaptive_value = payload_adaptive_timestep(payload)?;
+            let max_error = payload_f64(payload, "max_error")?;
+            let max_err = payload_f64(payload, "max_err")?;
+            let dt_initial = payload_f64(payload, "dt_initial")?;
+            let dt_min = payload_f64(payload, "dt_min")?;
+            let dt_max = payload_f64(payload, "dt_max")?;
+
+            if max_error.is_some() && max_err.is_some() {
+                bail!("relax stage max_error and max_err cannot both be provided");
+            }
+            if adaptive_value.is_some()
+                && (fixed_step.is_some()
+                    || dt_is_auto
+                    || max_error.is_some()
+                    || max_err.is_some()
+                    || dt_initial.is_some()
+                    || dt_min.is_some()
+                    || dt_max.is_some())
+            {
+                bail!(
+                    "relax stage adaptive_timestep cannot be mixed with fixed timestep, max_error/max_err, or direct dt_initial/dt_min/dt_max controls"
+                );
+            }
+
+            if dt_is_auto && max_error.is_none() {
+                bail!("relax stage dt='auto' requires max_error with explicit dt_min and dt_max");
+            }
+
+            let requested_max_error = max_err.or(max_error);
+            let requested_adaptive = if let Some(adaptive) = adaptive_value {
+                Some(adaptive)
+            } else if let Some(max_error) = requested_max_error {
+                if max_error.is_finite() && max_error > 0.0 {
+                    if max_err.is_none() && dt_initial.is_some() {
+                        bail!(
+                            "relax stage deprecated max_error cannot be mixed with dt_initial"
+                        );
+                    }
+                    let dt_min = dt_min.context(
+                        "executable adaptive relax stages require explicit dt_min and dt_max",
+                    )?;
+                    let dt_max = dt_max.context(
+                        "executable adaptive relax stages require explicit dt_min and dt_max",
+                    )?;
+                    Some(fullmag_ir::AdaptiveTimeStepIR {
+                        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                        atol: max_error,
+                        rtol: 0.0,
+                        dt_initial,
+                        dt_min,
+                        dt_max: Some(dt_max),
+                        safety: 0.9,
+                        growth_limit: 2.0,
+                        shrink_limit: 0.2,
+                        max_spin_rotation: None,
+                        norm_tolerance: None,
+                    })
+                } else {
+                    bail!("relax stage max_error/max_err must be finite and positive");
+                }
+            } else {
+                if dt_initial.is_some() || dt_min.is_some() || dt_max.is_some() {
+                    bail!("relax stage dt_initial/dt_min/dt_max require max_err or adaptive_timestep");
+                }
+                None
+            };
+
+            if let Some(adaptive) = requested_adaptive {
+                if fixed_step.is_some() {
+                    bail!(
+                        "relax stage fixed_timestep cannot be combined with adaptive timestep controls"
+                    );
+                }
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(adaptive);
+            } else if let Some(fixed) = fixed_step {
+                if !fixed.is_finite() || fixed <= 0.0 {
+                    bail!("relax stage fixed timestep must be finite and positive");
+                }
+                *fixed_timestep = Some(fixed);
+                *adaptive_timestep = None;
+            } else if fixed_step_was_provided {
+                *fixed_timestep = None;
+            } else if integrator_override
+                .as_deref()
+                .is_some_and(|value| matches!(value, "rk23" | "rk45"))
+                && adaptive_timestep.is_none()
+            {
+                *fixed_timestep = None;
+            }
+
+            if fixed_timestep.is_some() && adaptive_timestep.is_some() {
+                bail!(
+                    "relax stage fixed_timestep and adaptive_timestep are mutually exclusive"
+                );
+            }
+            if adaptive_timestep.is_some() && !matches!(integrator.as_str(), "rk23" | "rk45" | "auto") {
+                bail!("relax stage adaptive_timestep requires integrator rk23, rk45, or auto");
+            }
+            if let Some(policy) = payload_relax_field_refresh(payload)? {
+                *field_refresh = Some(policy);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn payload_relax_field_refresh(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::FieldRefreshPolicyIR>> {
+    let nested = payload.get("field_refresh").filter(|value| !value.is_null())
+        .map(|value| -> Result<_> {
+            let object = value.as_object().context("relax stage field_refresh must be an object")?;
+            if object.keys().any(|key| key != "demag_interval_s") {
+                bail!("unknown relax stage field_refresh field");
+            }
+            payload_value_f64(object.get("demag_interval_s"), "field_refresh.demag_interval_s")
+        })
+        .transpose()?
+        .flatten();
+    let direct = payload_f64(payload, "demag_interval_s")?;
+    if nested.zip(direct).is_some_and(|(nested, direct)| nested != direct) {
+        bail!("relax stage demag_interval_s conflicts with field_refresh");
+    }
+    let Some(interval) = direct.or(nested) else {
+        return Ok(None);
+    };
+    if !interval.is_finite() || interval <= 0.0 {
+        bail!("relax stage demag_interval_s must be finite and positive");
+    }
+    Ok(Some(fullmag_ir::FieldRefreshPolicyIR { demag_interval_s: Some(interval) }))
+}
+
+fn apply_relax_alpha(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let Some(relax_alpha) = payload_f64(payload, "relax_alpha")? else {
+        return Ok(());
+    };
+    if !relax_alpha.is_finite() || relax_alpha < 0.0 {
+        bail!("relax stage relax_alpha must be finite and nonnegative");
+    }
+    let magnetic_materials = ir
+        .magnets
+        .iter()
+        .map(|magnet| magnet.material.clone())
+        .collect::<BTreeSet<_>>();
+    for material in &mut ir.materials {
+        if magnetic_materials.contains(&material.name) {
+            material.damping = relax_alpha;
+        }
+    }
+    Ok(())
+}
+
+fn payload_relax_integrator(payload: &BTreeMap<String, Value>) -> Result<Option<String>> {
+    let mut resolved: Option<(&str, String)> = None;
+    for key in ["integrator", "solver"] {
+        let Some(raw) = payload_string_value(payload.get(key), key)? else {
+            continue;
+        };
+        let canonical = canonical_relax_integrator(&raw)?;
+        if let Some((previous_key, previous)) = resolved.as_ref() {
+            if previous != &canonical {
+                bail!("relax stage integrator '{previous_key}' resolves to '{previous}' but '{key}' resolves to '{canonical}'");
+            }
+        } else {
+            resolved = Some((key, canonical));
+        }
+    }
+    Ok(resolved.map(|(_, value)| value))
+}
+
+fn canonical_relax_integrator(value: &str) -> Result<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let canonical = match normalized.as_str() {
+        "dp54" => "rk45",
+        "bs23" | "rk32" | "auto" => "rk23",
+        "heun" | "rk4" | "rk23" | "rk45" | "abm3" | "coupled_imex_ark2" => normalized.as_str(),
+        _ => bail!("unsupported relax integrator/solver '{value}'"),
+    };
+    Ok(canonical.to_string())
+}
+
+fn payload_fixed_timestep(
+    payload: &BTreeMap<String, Value>,
+) -> Result<(Option<f64>, bool, bool)> {
+    let mut fixed: Option<f64> = None;
+    let mut auto = false;
+    let mut specified = false;
+    for key in ["fixed_timestep", "dt"] {
+        let Some(raw) = payload.get(key) else {
+            continue;
+        };
+        specified = true;
+        if key == "dt"
+            && raw
+                .as_str()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("auto"))
+        {
+            auto = true;
+            continue;
+        }
+        let parsed = payload_value_f64(Some(raw), key)?;
+        if let Some(value) = parsed {
+            if fixed.is_some_and(|previous| previous != value) {
+                bail!("relax stage dt and fixed_timestep aliases conflict");
+            }
+            fixed = Some(value);
+        }
+    }
+    if auto && fixed.is_some() {
+        bail!("relax stage dt='auto' conflicts with fixed_timestep");
+    }
+    Ok((fixed, auto, specified))
+}
+
+fn payload_adaptive_timestep(
+    payload: &BTreeMap<String, Value>,
+) -> Result<Option<fullmag_ir::AdaptiveTimeStepIR>> {
+    let Some(raw) = payload.get("adaptive_timestep") else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    let object = raw
+        .as_object()
+        .context("relax stage adaptive_timestep must be an object")?;
+    const ALLOWED_FIELDS: &[&str] = &[
+        "tolerance_mode",
+        "atol",
+        "rtol",
+        "dt_initial",
+        "dt_min",
+        "dt_max",
+        "safety",
+        "growth_limit",
+        "shrink_limit",
+        "max_spin_rotation",
+        "norm_tolerance",
+    ];
+    if let Some(unsupported) = object
+        .keys()
+        .find(|key| !ALLOWED_FIELDS.contains(&key.as_str()))
+    {
+        bail!("unsupported relax stage adaptive_timestep field '{unsupported}'");
+    }
+
+    let tolerance_mode = match object.get("tolerance_mode") {
+        None | Some(Value::Null) => fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+        Some(Value::String(value)) => match value.trim().to_ascii_lowercase().as_str() {
+            "advanced" => fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+            "max_error" | "maximum_error" => fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+            _ => bail!("unsupported relax adaptive_timestep tolerance_mode '{value}'"),
+        },
+        Some(_) => bail!("relax adaptive_timestep tolerance_mode must be a string"),
+    };
+    let dt_min = adaptive_required_f64(object, "dt_min", None)?;
+    let dt_max = adaptive_required_f64(object, "dt_max", None)?;
+    Ok(Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode,
+        atol: adaptive_required_f64(object, "atol", Some(1.0e-6))?,
+        rtol: adaptive_required_f64(object, "rtol", Some(1.0e-3))?,
+        dt_initial: adaptive_optional_f64(object, "dt_initial")?,
+        dt_min,
+        dt_max: Some(dt_max),
+        safety: adaptive_required_f64(object, "safety", Some(0.9))?,
+        growth_limit: adaptive_required_f64(object, "growth_limit", Some(2.0))?,
+        shrink_limit: adaptive_required_f64(object, "shrink_limit", Some(0.2))?,
+        max_spin_rotation: adaptive_optional_f64(object, "max_spin_rotation")?,
+        norm_tolerance: adaptive_optional_f64(object, "norm_tolerance")?,
+    }))
+}
+
+fn adaptive_required_f64(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    default: Option<f64>,
+) -> Result<f64> {
+    match object.get(key) {
+        None => default.context(format!("adaptive relax stage requires '{key}'")),
+        Some(raw) => payload_value_f64(Some(raw), key)?
+            .with_context(|| format!("relax adaptive_timestep.{key} is required")),
+    }
+}
+
+fn adaptive_optional_f64(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<f64>> {
+    match object.get(key) {
+        None => Ok(None),
+        Some(raw) => payload_value_f64(Some(raw), key),
+    }
+}
+
 fn payload_string(payload: &BTreeMap<String, Value>, key: &str) -> Option<String> {
     match payload.get(key) {
         Some(Value::String(value)) => {
@@ -3161,6 +3638,23 @@ fn payload_string(payload: &BTreeMap<String, Value>, key: &str) -> Option<String
         Some(Value::Number(value)) => Some(value.to_string()),
         Some(Value::Bool(value)) => Some(value.to_string()),
         _ => None,
+    }
+}
+
+fn payload_string_value(value: Option<&Value>, key: &str) -> Result<Option<String>> {
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Some(Value::Number(value)) => Ok(Some(value.to_string())),
+        Some(Value::Bool(value)) => Ok(Some(value.to_string())),
+        Some(_) => bail!("payload field '{key}' must be a string, number, boolean, or null"),
     }
 }
 
@@ -3217,8 +3711,8 @@ pub fn set_runtime_selection_device(ir: &mut ProblemIR, device: &str) {
     );
 }
 
-fn payload_f64(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<f64>> {
-    let Some(raw_value) = payload.get(key) else {
+fn payload_value_f64(raw_value: Option<&Value>, key: &str) -> Result<Option<f64>> {
+    let Some(raw_value) = raw_value else {
         return Ok(None);
     };
     match raw_value {
@@ -3239,6 +3733,10 @@ fn payload_f64(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<f6
             .ok_or_else(|| anyhow::anyhow!("invalid numeric value for payload field '{key}'")),
         _ => bail!("payload field '{key}' must be a number or numeric string"),
     }
+}
+
+fn payload_f64(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<f64>> {
+    payload_value_f64(payload.get(key), key)
 }
 
 fn payload_u64(payload: &BTreeMap<String, Value>, key: &str) -> Result<Option<u64>> {
@@ -3412,12 +3910,24 @@ fn payload_vec3(
 fn payload_relaxation_algorithm(
     payload: &BTreeMap<String, Value>,
 ) -> Result<Option<fullmag_ir::RelaxationAlgorithmIR>> {
-    match payload_string(payload, "relax_algorithm") {
-        Some(value) => serde_json::from_value(Value::String(value))
-            .context("invalid relax_algorithm in study pipeline payload")
-            .map(Some),
-        None => Ok(None),
+    let mut resolved: Option<(&str, fullmag_ir::RelaxationAlgorithmIR)> = None;
+    for key in ["algorithm", "relax_algorithm"] {
+        let Some(value) = payload_string_value(payload.get(key), key)? else {
+            continue;
+        };
+        let algorithm = serde_json::from_value::<fullmag_ir::RelaxationAlgorithmIR>(
+            Value::String(value.clone()),
+        )
+        .with_context(|| format!("invalid {key} in study pipeline payload"))?;
+        if let Some((previous_key, previous)) = resolved.as_ref() {
+            if *previous != algorithm {
+                bail!("relax stage algorithm '{previous_key}' conflicts with '{key}'");
+            }
+        } else {
+            resolved = Some((key, algorithm));
+        }
     }
+    Ok(resolved.map(|(_, algorithm)| algorithm))
 }
 
 fn payload_relax_stop(
@@ -4579,6 +5089,309 @@ mod pipeline_eigen_solver_policy_tests {
             let error = materialize_pipeline_eigenmodes(&base, &payload)
                 .expect_err("invalid solver policy must fail before a stage can be solved");
             assert!(error.to_string().contains(key), "{error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod pipeline_relax_solver_payload_tests {
+    use super::*;
+
+    fn relax_node(id: &str, payload: Value) -> StudyPipelineNode {
+        StudyPipelineNode::Primitive {
+            id: id.to_string(),
+            label: id.to_string(),
+            enabled: true,
+            notes: None,
+            source: None,
+            stage_kind: "relax".to_string(),
+            payload: serde_json::from_value(payload)
+                .expect("fixture relax payload must be a JSON object"),
+        }
+    }
+
+    fn materialize_relax_nodes(
+        base: ProblemIR,
+        nodes: Vec<StudyPipelineNode>,
+    ) -> Result<Vec<ResolvedScriptStage>> {
+        materialize_script_stages_with_output_policy_bounded(
+            ScriptExecutionConfig {
+                ir: base,
+                antenna_inventory: ScriptAntennaAuthoringInventory::default(),
+                shared_geometry_assets: None,
+                default_until_seconds: None,
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes,
+                }),
+                stages: Vec::new(),
+            },
+            fullmag_ir::configure_project_autosave_policy,
+            8,
+        )
+    }
+
+    fn dynamics(stage: &ResolvedScriptStage) -> &fullmag_ir::DynamicsIR {
+        let fullmag_ir::StudyIR::Relaxation {
+            dynamics: Some(dynamics),
+            ..
+        } = &stage.ir.study
+        else {
+            panic!("expected a relaxation stage with LLG dynamics");
+        };
+        dynamics
+    }
+
+    #[test]
+    fn pipeline_relax_payloads_materialize_canonical_controls_per_stage() {
+        let mut base = ProblemIR::bootstrap_example();
+        for material in &mut base.materials {
+            material.damping = 0.45;
+        }
+
+        let stages = materialize_relax_nodes(
+            base.clone(),
+            vec![
+                relax_node(
+                    "adaptive",
+                    serde_json::json!({
+                        "kind": "relax",
+                        "algorithm": "llg_overdamped",
+                        "integrator": "dp54",
+                        "relax_alpha": 0.25,
+                        "field_refresh": {"demag_interval_s": 2e-12},
+                        "adaptive_timestep": {
+                            "tolerance_mode": "advanced",
+                            "atol": 1e-6,
+                            "rtol": 1e-3,
+                            "dt_initial": 2e-15,
+                            "dt_min": 1e-16,
+                            "dt_max": 1e-12,
+                            "safety": 0.9,
+                            "growth_limit": 2.0,
+                            "shrink_limit": 0.2
+                        }
+                    }),
+                ),
+                relax_node(
+                    "fixed",
+                    serde_json::json!({
+                        "kind": "relax",
+                        "relax_algorithm": "llg_overdamped",
+                        "integrator": "heun",
+                        "relax_alpha": "0.7",
+                        "fixed_timestep": "5e-14",
+                        "dt": "5e-14"
+                    }),
+                ),
+                relax_node(
+                    "max-error-alias",
+                    serde_json::json!({
+                        "kind": "relax",
+                        "relax_algorithm": "llg_overdamped",
+                        "solver": "bs23",
+                        "relax_alpha": 0.8,
+                        "max_err": "1e-5",
+                        "dt_initial": "2e-15",
+                        "dt_min": "1e-16",
+                        "dt_max": "1e-12"
+                    }),
+                ),
+                relax_node(
+                    "deprecated-max-error",
+                    serde_json::json!({
+                        "kind": "relax",
+                        "algorithm": "llg_overdamped",
+                        "solver": "dp54",
+                        "relax_alpha": 0.9,
+                        "dt": "auto",
+                        "max_error": "1e-4",
+                        "dt_min": "1e-16",
+                        "dt_max": "1e-12"
+                    }),
+                ),
+            ],
+        )
+        .expect("valid Scene pipeline Relax payloads should materialize");
+
+        assert_eq!(stages.len(), 4);
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep: Some(adaptive),
+            field_refresh: Some(field_refresh),
+            ..
+        } = dynamics(&stages[0])
+        else {
+            panic!("first stage should retain its adaptive dynamics");
+        };
+        assert_eq!(integrator, "rk45", "Python's dp54 alias resolves to rk45");
+        assert_eq!(*fixed_timestep, None);
+        assert_eq!(adaptive.tolerance_mode, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        assert_eq!(adaptive.atol, 1e-6);
+        assert_eq!(adaptive.rtol, 1e-3);
+        assert_eq!(adaptive.dt_initial, Some(2e-15));
+        assert_eq!(adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive.dt_max, Some(1e-12));
+        assert_eq!(adaptive.safety, 0.9);
+        assert_eq!(adaptive.growth_limit, 2.0);
+        assert_eq!(adaptive.shrink_limit, 0.2);
+        assert_eq!(field_refresh.demag_interval_s, Some(2e-12));
+
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep,
+            ..
+        } = dynamics(&stages[1])
+        else {
+            panic!("second stage should retain its fixed dynamics");
+        };
+        assert_eq!(integrator, "heun");
+        assert_eq!(*fixed_timestep, Some(5e-14));
+        assert_eq!(*adaptive_timestep, None);
+
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep: Some(adaptive),
+            ..
+        } = dynamics(&stages[2])
+        else {
+            panic!("third stage should materialize the max_err convenience policy");
+        };
+        assert_eq!(integrator, "rk23", "Python's bs23 alias resolves to rk23");
+        assert_eq!(*fixed_timestep, None);
+        assert_eq!(adaptive.tolerance_mode, fullmag_ir::AdaptiveToleranceModeIR::MaxError);
+        assert_eq!(adaptive.atol, 1e-5);
+        assert_eq!(adaptive.rtol, 0.0);
+        assert_eq!(adaptive.dt_initial, Some(2e-15));
+        assert_eq!(adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive.dt_max, Some(1e-12));
+
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep: Some(adaptive),
+            ..
+        } = dynamics(&stages[3])
+        else {
+            panic!("fourth stage should materialize the deprecated max_error alias");
+        };
+        assert_eq!(integrator, "rk45");
+        assert_eq!(*fixed_timestep, None);
+        assert_eq!(adaptive.tolerance_mode, fullmag_ir::AdaptiveToleranceModeIR::MaxError);
+        assert_eq!(adaptive.atol, 1e-4);
+        assert_eq!(adaptive.rtol, 0.0);
+        assert_eq!(adaptive.dt_initial, None);
+        assert_eq!(adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive.dt_max, Some(1e-12));
+
+        for (stage, expected_alpha) in stages.iter().zip([0.25, 0.7, 0.8, 0.9]) {
+            let magnetic_materials = stage
+                .ir
+                .magnets
+                .iter()
+                .map(|magnet| magnet.material.as_str())
+                .collect::<BTreeSet<_>>();
+            assert!(!magnetic_materials.is_empty());
+            assert!(stage
+                .ir
+                .materials
+                .iter()
+                .filter(|material| magnetic_materials.contains(material.name.as_str()))
+                .all(|material| material.damping == expected_alpha));
+            stage
+                .ir
+                .validate()
+                .unwrap_or_else(|errors| panic!("materialized Relax IR must validate: {errors:?}"));
+        }
+        assert!(base
+            .materials
+            .iter()
+            .all(|material| material.damping == 0.45));
+    }
+
+    #[test]
+    fn pipeline_relax_rejects_conflicting_or_unsupported_llg_controls() {
+        let base = ProblemIR::bootstrap_example();
+        for payload in [
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "max_error": 1e-5,
+                "max_err": 1e-5,
+                "dt_min": 1e-16,
+                "dt_max": 1e-12
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "fixed_timestep": 1e-13,
+                "adaptive_timestep": {
+                    "tolerance_mode": "advanced",
+                    "atol": 1e-6,
+                    "rtol": 1e-3,
+                    "dt_initial": null,
+                    "dt_min": 1e-16,
+                    "dt_max": 1e-12,
+                    "safety": 0.9,
+                    "growth_limit": 2.0,
+                    "shrink_limit": 0.2
+                }
+            }),
+            serde_json::json!({
+                "relax_algorithm": "projected_gradient_bb",
+                "max_err": 1e-5,
+                "dt_min": 1e-16,
+                "dt_max": 1e-12
+            }),
+            serde_json::json!({
+                "algorithm": "projected_gradient_bb",
+                "dt": "1e-13"
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "integrator": "not-a-supported-integrator",
+                "fixed_timestep": 1e-13
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "integrator": "heun",
+                "solver": "rk4",
+                "fixed_timestep": 1e-13
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "fixed_timestep": 1e-13,
+                "dt": 2e-13
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "max_err": 1e-5,
+                "dt_min": 1e-16
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "adaptive_timestep": {
+                    "tolerance_mode": "advanced",
+                    "atol": 1e-6,
+                    "rtol": 1e-3,
+                    "dt_initial": null,
+                    "dt_min": 1e-12,
+                    "dt_max": 1e-13,
+                    "safety": 0.9,
+                    "growth_limit": 2.0,
+                    "shrink_limit": 0.2
+                }
+            }),
+            serde_json::json!({
+                "relax_algorithm": "llg_overdamped",
+                "relax_alpha": "NaN",
+                "fixed_timestep": 1e-13
+            }),
+        ] {
+            let error = materialize_relax_nodes(base.clone(), vec![relax_node("relax", payload)])
+                .expect_err("invalid or dropped Relax controls must fail before acceptance");
+            assert!(!error.to_string().is_empty());
         }
     }
 }

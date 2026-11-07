@@ -70,6 +70,8 @@ export function resolveArtifactAssessment(
 ): ArtifactAssessment {
   const meshRevision = parseRevision(input.statusMeshRevision);
   const manifestSourceRev = sourceSceneRevision(input.manifest);
+  const validatedSceneRev = parseRevision(input.manifest?.validated_for_scene_revision);
+  const manifestSceneRev = validatedSceneRev ?? manifestSourceRev;
   const sceneRev = parseRevision(input.sceneRevision);
   const activeStatus = status(input.activeBuild);
   const isBuilding = ACTIVE_STATUSES.has(activeStatus);
@@ -106,7 +108,7 @@ export function resolveArtifactAssessment(
     latestSourceRev !== null &&
     sceneRev !== null &&
     latestSourceRev === sceneRev &&
-    manifestSourceRev !== sceneRev
+    manifestSceneRev !== sceneRev
   ) {
     return {
       evidence: "legacy-revision",
@@ -118,7 +120,7 @@ export function resolveArtifactAssessment(
   }
 
   // 4. Legal not-built presence check (quiescent state without mesh revision or manifest)
-  if ((meshRevisionIsMissing(meshRevision) && manifestSourceRev === null) || !input.manifest) {
+  if ((meshRevisionIsMissing(meshRevision) && manifestSceneRev === null) || !input.manifest) {
     return {
       evidence: "legacy-revision",
       presence: "not-built",
@@ -128,23 +130,25 @@ export function resolveArtifactAssessment(
     };
   }
 
-  // 5. Inconsistent: source revision is ahead of known scene revision (F19)
+  // 5. Inconsistent: build or validation revision is ahead of the scene (F19).
   if (
-    manifestSourceRev !== null &&
     sceneRev !== null &&
-    manifestSourceRev > sceneRev
+    ((manifestSourceRev !== null && manifestSourceRev > sceneRev) ||
+      (validatedSceneRev !== null && validatedSceneRev > sceneRev))
   ) {
     return {
       evidence: "legacy-revision",
       presence: "present",
-      reason: "mesh manifest source scene revision is ahead of current scene",
+      reason: manifestSourceRev !== null && manifestSourceRev > sceneRev
+        ? "mesh manifest source scene revision is ahead of current scene"
+        : "mesh manifest validation is ahead of current scene",
       runAllowed: false,
       state: "inconsistent",
     };
   }
 
   // 6. Unknown provenance / scene revision is incomplete
-  if (manifestSourceRev === null || sceneRev === null) {
+  if (manifestSceneRev === null || sceneRev === null) {
     return {
       evidence: "legacy-revision",
       presence: "present",
@@ -154,23 +158,27 @@ export function resolveArtifactAssessment(
     };
   }
 
-  // 7. Current: exact revision match
-  if (manifestSourceRev === sceneRev) {
+  // 7. Current: prefer the server's explicit validation of retained mesh inputs.
+  if (manifestSceneRev === sceneRev) {
     return {
       evidence: "legacy-revision",
       presence: "present",
-      reason: "mesh manifest source scene revision matches the current scene",
+      reason: validatedSceneRev !== null
+        ? "mesh manifest is validated for the current scene"
+        : "mesh manifest source scene revision matches the current scene",
       runAllowed: true,
       state: "current",
     };
   }
 
-  // 8. Stale: manifest source revision is older than current scene
-  if (manifestSourceRev < sceneRev) {
+  // 8. Stale: the current scene has no matching validation or build revision.
+  if (manifestSceneRev < sceneRev) {
     return {
       evidence: "legacy-revision",
       presence: "present",
-      reason: "mesh manifest source scene revision is older than the current scene",
+      reason: validatedSceneRev !== null
+        ? "mesh manifest validation is older than the current scene"
+        : "mesh manifest source scene revision is older than the current scene",
       runAllowed: false,
       state: "stale",
     };

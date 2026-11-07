@@ -20,13 +20,15 @@ import {
   serializeCanonicalFieldVectorResourceKey,
   type CanonicalFieldVectorQuery,
 } from "@/kernel/api/fieldQueryIdentity";
-import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
+import { ControlRoomApiError, type ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   ArtifactCarrierGeometryQuery,
+  BinaryRequestOptions,
   BinaryResourceResult,
   FieldCatalogResource,
   FieldVectorResponseMetadata,
   FieldVectorQuery,
+  PreparedInitialStateResource,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import { fieldCatalogQuantitySupportsAirbox } from "@/kernel/api/quantityIds";
@@ -488,7 +490,7 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
   previous: ReadonlyMap<string, Viewport3DFieldVectorEnvelope>;
   requests: ReadonlyMap<
     string,
-    Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">
+    ViewportFieldRequest & { preparedSource?: PreparedInitialStateResource | null }
   >;
   status: Viewport3DFieldVectorCollectionStatus;
   tracker?: Viewport3DResourceTracker;
@@ -503,11 +505,12 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
     return retained;
   }
   for (const [requestId, request] of requests) {
+    const expectedFrameId = request.preparedSource?.observation_frame_id;
     const currentEnvelope = current?.get(requestId);
     const previousEnvelope = previous.get(requestId);
     // While a live refresh revalidates the same key, the store still holds
     // the last good member; showing it avoids a blank or older frame.
-    if (currentEnvelope) {
+    if (currentEnvelope && currentEnvelope.responseMetadata?.preparedObservationFrameId === expectedFrameId) {
       const currentMatch = resolveViewport3DFieldVectorIdentityMatch(
         currentEnvelope,
         request,
@@ -517,7 +520,7 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
         continue;
       }
     }
-    if (previousEnvelope) {
+    if (previousEnvelope && previousEnvelope.responseMetadata?.preparedObservationFrameId === expectedFrameId) {
       const previousMatch = resolveViewport3DFieldVectorIdentityMatch(
         previousEnvelope,
         request,
@@ -802,21 +805,25 @@ function fieldRequestPriority(request: {
 }
 
 function scopeViewport3DFieldVectorRequests<
-  TRequest extends { readonly key: string },
+  TRequest extends { readonly key: string } & ViewportFieldRequest,
 >(
   requests: ReadonlyMap<string, TRequest>,
   sessionIdentity: ReturnType<typeof useViewport3DSessionIdentity>,
-): Map<string, TRequest & { readonly unscopedKey: string }> {
-  if (!sessionIdentity) return new Map();
+  preview?: PreparedInitialStateResource | null,
+) {
+  if (!sessionIdentity) return new Map<string, TRequest & {
+    unscopedKey: string; preparedSource: PreparedInitialStateResource | null;
+  }>();
   return new Map(
-    Array.from(requests, ([requestId, request]) => [
-      requestId,
-      {
+    Array.from(requests, ([requestId, request]) => {
+      const preparedSource = preparedFieldSource(request, preview);
+      return [requestId, {
         ...request,
-        key: sessionScopedResourceKey(sessionIdentity, request.key),
+        key: sessionScopedResourceKey(sessionIdentity, preparedFieldKey(request.key, preparedSource)),
         unscopedKey: request.key,
-      },
-    ]),
+        preparedSource,
+      }] as const;
+    }),
   );
 }
 
@@ -1220,10 +1227,40 @@ export function resolveViewport3DFieldVectorResourceKey(
   );
 }
 
+type ViewportFieldRequest = Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">;
+
+function preparedFieldSource(
+  request: ViewportFieldRequest,
+  source: PreparedInitialStateResource | null | undefined,
+): PreparedInitialStateResource | null {
+  return source && resolveCanonicalQuantityId(request.quantityId) === "m" &&
+    !request.query.carrier_id && !request.query.snapshot_id && !request.query.view &&
+    request.query.scope_kind !== "airbox" ? source : null;
+}
+
+function preparedFieldKey(key: string, source: PreparedInitialStateResource | null): string {
+  return source ? `prepared:${encodeURIComponent(source.observation_frame_id)}|${key}` : key;
+}
+
+function fetchViewportFieldVector(
+  api: ControlRoomApi,
+  request: ViewportFieldRequest,
+  options: BinaryRequestOptions,
+  source: PreparedInitialStateResource | null,
+) {
+  return source
+    ? api.data.fields.preparedMagnetization(source, request.query, options)
+    : api.data.fields.vector(request.quantityId, request.query, options);
+}
+
 export function resolveViewport3DFieldVectorRequestResourceKey(
   request: Viewport3DFieldResourceRequest,
+  preview?: PreparedInitialStateResource | null,
 ): string {
-  return resolveViewport3DFieldVectorResourceKey(request.quantityId, request.query);
+  return preparedFieldKey(
+    resolveViewport3DFieldVectorResourceKey(request.quantityId, request.query),
+    preparedFieldSource(request, preview),
+  );
 }
 
 export function resolveViewport3DAirboxFieldVectorQuery(
@@ -1605,6 +1642,7 @@ export interface Viewport3DFieldVectorRequestOptions {
    */
   notifyOnError?: boolean;
   pauseLoad?: boolean;
+  preparedSource?: PreparedInitialStateResource | null;
 }
 
 export function useViewport3DFieldVectorRequest(
@@ -1616,9 +1654,10 @@ export function useViewport3DFieldVectorRequest(
   const sessionIdentity = useViewport3DSessionIdentity();
   const quantityId = request.quantityId;
   const query = request.query;
+  const preparedSource = preparedFieldSource(request, options.preparedSource);
   const unscopedRequestKey = useMemo(
-    () => resolveViewport3DFieldVectorRequestResourceKey(request),
-    [request],
+    () => resolveViewport3DFieldVectorRequestResourceKey(request, preparedSource),
+    [request, preparedSource],
   );
   const requestKey = sessionIdentity
     ? sessionScopedResourceKey(sessionIdentity, unscopedRequestKey)
@@ -1629,11 +1668,9 @@ export function useViewport3DFieldVectorRequest(
         fieldVectorCache,
         requestKey,
         (etag, requestSignal) =>
-          api.data.fields.vector(quantityId, query, {
-            etag,
-            sessionScopeKey,
-            signal: requestSignal,
-          }),
+          fetchViewportFieldVector(api, { quantityId, query }, {
+            etag, sessionScopeKey, signal: requestSignal,
+          }, preparedSource),
         {
           onFreshAdoption: recordFieldVectorCacheAdoption,
           preferCached: cachedBinaryResourceMatchesRevision(
@@ -1656,7 +1693,7 @@ export function useViewport3DFieldVectorRequest(
         ? null
         : resolveCachedFieldVectorEnvelope(fieldVectorCache, requestKey, data);
     },
-    [api, quantityId, query, requestKey, resources],
+    [api, preparedSource, quantityId, query, requestKey, resources],
   );
   const resolveRevision = useCallback(
     () => fieldVectorCache.peek(requestKey)?.etag ?? null,
@@ -2052,6 +2089,7 @@ export function useViewport3DQuantityFieldVectors(
   enabled = true,
   options: {
     pauseLoad?: boolean;
+    preparedSource?: PreparedInitialStateResource | null;
     selectedTargetId?: string | null;
     tracker?: Viewport3DResourceTracker;
   } = {},
@@ -2082,8 +2120,8 @@ export function useViewport3DQuantityFieldVectors(
     );
   }, [quantitySource]);
   const requestKeys = useMemo(
-    () => scopeViewport3DFieldVectorRequests(unscopedRequestKeys, sessionIdentity),
-    [sessionIdentity, unscopedRequestKeys],
+    () => scopeViewport3DFieldVectorRequests(unscopedRequestKeys, sessionIdentity, options.preparedSource),
+    [options.preparedSource, sessionIdentity, unscopedRequestKeys],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
@@ -2108,11 +2146,9 @@ export function useViewport3DQuantityFieldVectors(
             fieldVectorCache,
             request.key,
             (etag, requestSignal) =>
-              api.data.fields.vector(
-                request.quantityId,
-                request.query,
-                { etag, sessionScopeKey, signal: requestSignal },
-              ),
+              fetchViewportFieldVector(api, request, {
+                etag, sessionScopeKey, signal: requestSignal,
+              }, request.preparedSource),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,
               preferCached: cachedBinaryResourceMatchesRevision(
@@ -2223,10 +2259,12 @@ export function useViewport3DQuantityFieldVectors(
         current: resource.data,
         previous: previousFieldVectorEnvelopes,
         requests: requestKeys,
-        status: resource.status,
+        status: !enabled && options.preparedSource ? "idle" : resource.status,
         tracker: options.tracker,
       }),
     [
+      enabled,
+      options.preparedSource,
       options.tracker,
       previousFieldVectorEnvelopes,
       requestKeys,
@@ -2313,6 +2351,7 @@ export function useViewport3DPartFieldVectors(
   enabled = true,
   options: {
     pauseLoad?: boolean;
+    preparedSource?: PreparedInitialStateResource | null;
     selectedTargetId?: string | null;
     tracker?: Viewport3DResourceTracker;
   } = {},
@@ -2324,8 +2363,8 @@ export function useViewport3DPartFieldVectors(
     [partQueries],
   );
   const requestKeys = useMemo(
-    () => scopeViewport3DFieldVectorRequests(unscopedRequestKeys, sessionIdentity),
-    [sessionIdentity, unscopedRequestKeys],
+    () => scopeViewport3DFieldVectorRequests(unscopedRequestKeys, sessionIdentity, options.preparedSource),
+    [options.preparedSource, sessionIdentity, unscopedRequestKeys],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
@@ -2350,11 +2389,9 @@ export function useViewport3DPartFieldVectors(
             fieldVectorCache,
             request.key,
             (etag, requestSignal) =>
-              api.data.fields.vector(
-                request.quantityId,
-                request.query,
-                { etag, sessionScopeKey, signal: requestSignal },
-              ),
+              fetchViewportFieldVector(api, request, {
+                etag, sessionScopeKey, signal: requestSignal,
+              }, request.preparedSource),
             {
               onFreshAdoption: recordFieldVectorCacheAdoption,
               preferCached: cachedBinaryResourceMatchesRevision(
@@ -2463,10 +2500,12 @@ export function useViewport3DPartFieldVectors(
         current: resource.data,
         previous: previousFieldVectorEnvelopes,
         requests: requestKeys,
-        status: resource.status,
+        status: !enabled && options.preparedSource ? "idle" : resource.status,
         tracker: options.tracker,
       }),
     [
+      enabled,
+      options.preparedSource,
       options.tracker,
       previousFieldVectorEnvelopes,
       requestKeys,

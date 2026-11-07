@@ -10470,6 +10470,11 @@ fn multilayer_planner_materializes_translated_object_frame_region_membership() {
     ir.object_regions.push(region);
 
     let planned = plan(&ir).expect("object-frame region must follow its translated owner");
+    let overlay = study_magnetization_overlay_mask(
+        &ir, &planned, &[fullmag_ir::RegionRefIR {
+            object_id: "free".into(), region_id: Some("free:translated_core".into()),
+        }],
+    ).expect("overlay uses the native layer and its winning region IDs");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
         panic!("expected multilayer FDM plan");
     };
@@ -10489,6 +10494,17 @@ fn multilayer_planner_materializes_translated_object_frame_region_membership() {
                 && entry.region_id == "free:translated_core"
         })
     }));
+    let mut offset = 0;
+    for layer in &multilayer.layers {
+        let end = offset + layer.initial_magnetization.len();
+        let native_regions = layer.native_region_mask.as_ref().unwrap();
+        for (index, &selected) in overlay[offset..end].iter().enumerate() {
+            let active = layer.native_active_mask.as_ref().is_none_or(|mask| mask[index]);
+            assert_eq!(selected, layer.object_id == "free" && active && native_regions[index] == 1);
+        }
+        offset = end;
+    }
+    assert_eq!(offset, overlay.len());
 }
 
 #[test]

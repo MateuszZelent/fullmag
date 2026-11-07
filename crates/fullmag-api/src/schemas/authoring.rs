@@ -1830,6 +1830,59 @@ pub struct ScenePatchRequest {
     pub merge_patch: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MagnetizationApplyScope {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MagnetizationApplyRequest {
+    pub operation_id: String,
+    pub scopes: Vec<MagnetizationApplyScope>,
+}
+
+pub use crate::study_execution_contract::PreparedInitialStateResource;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MagnetizationApplyStatus {
+    InitialStatePending,
+    InitialStateReady,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MagnetizationApplyReceiptResource {
+    pub operation_id: String,
+    pub scene_revision: u64,
+    pub scopes: Vec<MagnetizationApplyScope>,
+    pub status: MagnetizationApplyStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared_initial_state: Option<PreparedInitialStateResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MagnetizationApplyTarget {
+    Object {
+        object_id: String,
+        #[schema(value_type = Object, nullable)]
+        asset: Value,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+        #[serde(deserialize_with = "Deserialize::deserialize")]
+        #[schema(required, nullable)]
+        texture_override: Option<fullmag_authoring::SceneTextureOverride>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthoringTransactionRequest {
@@ -1847,6 +1900,16 @@ pub enum AuthoringTransactionRequest {
         base_revision: Option<u64>,
         #[schema(value_type = Object)]
         scene: Value,
+        /// A deliberate magnetization reset, including repeated assignments
+        /// whose authored texture value is unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        magnetization_apply: Option<MagnetizationApplyRequest>,
+    },
+    /// Save and explicitly reinitialize exactly one authored texture target.
+    ApplyMagnetization {
+        base_revision: u64,
+        operation_id: String,
+        target: MagnetizationApplyTarget,
     },
     MergePatch {
         #[serde(default)]
@@ -2005,6 +2068,8 @@ pub struct AuthoringTransactionResponse {
     pub transaction_kind: String,
     pub scene_revision: u64,
     pub committed_scene: SceneResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_apply: Option<MagnetizationApplyReceiptResource>,
 }
 
 #[cfg(test)]

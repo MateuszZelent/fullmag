@@ -112,7 +112,7 @@ export function SavedResultsPlaybackInspector() {
     }
   }, [frameIndex, kernel.savedResultsPlayback, selectedStage, selection]);
 
-  if (!selection) return null;
+  if (!selection || selection.studyResult) return null;
 
   const selectFrame = (next: number) => {
     kernel.savedResultsPlayback?.selectFrame(clampPlaybackFrameIndex(next, frameCount));

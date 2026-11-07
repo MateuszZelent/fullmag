@@ -66,8 +66,8 @@ describe("ObjectMagneticTexturePanel", () => {
       "utf8",
     );
 
-    expect(source).toContain("buildMagnetizationTransactionRequest(");
-    expect(source).toContain("api.model.commitTransaction(");
+    expect(source).toContain("buildMagnetizationApplyTarget(");
+    expect(source).toContain("commitMagneticTextureApply(");
     expect(source).toContain("initial_magnetization.uniform");
     expect(source).toContain("initial_magnetization.vortex");
     expect(source).not.toContain("patchMagnetizationAsset(");
@@ -86,11 +86,11 @@ describe("ObjectMagneticTexturePanel", () => {
     );
 
     for (const source of [objectPanel, regionPanel]) {
-      expect(source).toContain("runAuthoringMutationWithHistory(");
-      expect(source).toContain("authoringHistory");
+      expect(source).toContain("commitMagneticTextureApply(");
+      expect(source).toContain("model.baseRevision");
     }
-    expect(objectPanel).toContain("base_revision: baseRevision ?? request.base_revision");
-    expect(regionPanel).toContain("const commitRevision = baseRevision ?? request.base_revision;");
-    expect(regionPanel).toContain("base_revision: commitRevision");
+    const shared = readFileSync(new URL("./ObjectMagneticTexturePanelViewModel.ts", import.meta.url), "utf8");
+    expect(shared).toContain("runAuthoringMutationWithHistory(");
+    expect(shared).toContain("before.baseRevision !== baseRevision");
   });
 });

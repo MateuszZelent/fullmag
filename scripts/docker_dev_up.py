@@ -1089,6 +1089,13 @@ def _script_output_mapping_matches(group: RetainedGroup) -> bool:
 
 def _lifecycle_args(group: RetainedGroup, args: argparse.Namespace, **updates) -> argparse.Namespace:
     values = vars(args).copy()
+    if values.get("network_subnet") is None:
+        configurations = group.document.get("networks", {}).get("fullmag", {}).get("ipam", {}).get("config", [])
+        if configurations:
+            from docker_dev_network import parse_requested_subnet, validate_retained_subnet
+            subnet = parse_requested_subnet(configurations[0].get("subnet"))
+            validate_retained_subnet(group.document, subnet)
+            values["network_subnet"] = subnet
     values.update(
         repo_root=group.repo_root,
         source_root=group.source_root,
@@ -1195,6 +1202,8 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
 
 
 def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
+    from docker_dev_network import validate_retained_subnet
+    validate_retained_subnet(group.document, getattr(args, "network_subnet", None))
     from docker_volume_dev import (
         INCLUDE_UNTRACKED_ENV,
         normalize_include_untracked_paths,

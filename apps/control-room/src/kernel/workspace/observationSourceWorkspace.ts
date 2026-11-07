@@ -1,4 +1,5 @@
-import type { ObservationFrameResource } from "../api/apiTypes";
+import type { FieldMetaResource, ObservationFrameResource, PreparedInitialStateResource } from "../api/apiTypes";
+import type { ResourceResult } from "../resources/resourceTypes";
 import type { SessionResourceIdentity } from "../resources/sessionResourceIdentity";
 import { sessionResourceIdentityKey } from "../resources/sessionResourceIdentity";
 
@@ -14,17 +15,47 @@ export interface PinnedObservationSource {
   stateDigest: string;
 }
 
+export interface PreparedMagnetizationPreview {
+  source: PreparedInitialStateResource;
+  objectId: string;
+  regionId: string | null;
+  sessionIdentityKey: string;
+}
+
+export type PreparedMagnetizationAvailability =
+  | "checking" | "current" | "earlier-domain" | "superseded" | "unavailable";
+
+export function resolvePreparedMagnetizationAvailability(
+  source: PreparedInitialStateResource,
+  live: { domainGenerationId: string | null; sceneRevision: number | null },
+  meta: Pick<ResourceResult<FieldMetaResource | null>, "data" | "status">,
+): PreparedMagnetizationAvailability {
+  if (live.sceneRevision === null || live.sceneRevision < source.scene_revision) return "checking";
+  if (live.domainGenerationId && live.domainGenerationId !== source.domain_generation_id) return "earlier-domain";
+  if (live.sceneRevision > source.scene_revision) return "superseded";
+  if (meta.status === "error") return "unavailable";
+  if (!live.domainGenerationId || meta.status !== "ready") return "checking";
+
+  const bundle = meta.data?.publication_bundle;
+  return meta.data?.observation_frame?.observation_frame_id === source.observation_frame_id &&
+    meta.data.domain_generation_id === source.domain_generation_id &&
+    (!bundle || bundle.publication_id === source.publication_id)
+    ? "current"
+    : "superseded";
+}
+
 export interface ObservationSourceWorkspaceState {
   pinned: PinnedObservationSource | null;
+  prepared: PreparedMagnetizationPreview | null;
 }
 
 type ObservationSourceWorkspaceListener = () => void;
 
-const INITIAL_STATE: ObservationSourceWorkspaceState = { pinned: null };
+export const EMPTY_OBSERVATION_SOURCE: ObservationSourceWorkspaceState = { pinned: null, prepared: null };
 
 class ObservationSourceWorkspaceStore {
   private readonly listeners = new Set<ObservationSourceWorkspaceListener>();
-  private state = INITIAL_STATE;
+  private state = EMPTY_OBSERVATION_SOURCE;
 
   getSnapshot = (): ObservationSourceWorkspaceState => this.state;
 
@@ -36,29 +67,30 @@ class ObservationSourceWorkspaceStore {
   pin(source: PinnedObservationSource): void {
     const next = parsePinnedObservationSource(source);
     if (!next || pinnedObservationSourceEquals(this.state.pinned, next)) return;
-    this.state = { pinned: next };
+    this.state = { pinned: next, prepared: null };
+    this.notify();
+  }
+
+  showPrepared(preview: PreparedMagnetizationPreview): void {
+    this.state = { pinned: null, prepared: preview };
     this.notify();
   }
 
   clear(): void {
-    if (!this.state.pinned) return;
-    this.state = INITIAL_STATE;
+    if (!this.state.pinned && !this.state.prepared) return;
+    this.state = EMPTY_OBSERVATION_SOURCE;
     this.notify();
   }
 
   clearForSession(identity: SessionResourceIdentity | null): void {
-    if (
-      !this.state.pinned ||
-      (identity &&
-        this.state.pinned.sessionIdentityKey === sessionResourceIdentityKey(identity))
-    ) {
-      return;
+    const owner = this.state.pinned ?? this.state.prepared;
+    if (owner && (!identity || owner.sessionIdentityKey !== sessionResourceIdentityKey(identity))) {
+      this.clear();
     }
-    this.clear();
   }
 
   reset(): void {
-    this.state = INITIAL_STATE;
+    this.state = EMPTY_OBSERVATION_SOURCE;
     this.notify();
   }
 

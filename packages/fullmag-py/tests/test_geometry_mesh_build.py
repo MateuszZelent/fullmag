@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import unittest
 
 from fullmag.meshing.geometry_mesh_build import (
     GEOMETRY_MESH_BUILD_SCHEMA,
     GeometryMeshBuildError,
     build_geometry_only_mesh,
+    matches_solver_geometry_reuse,
 )
 
 
@@ -63,6 +65,45 @@ class GeometryMeshBuildTests(unittest.TestCase):
     def test_requires_a_surrounding_air_domain(self) -> None:
         with self.assertRaisesRegex(GeometryMeshBuildError, "Universe size"):
             build_geometry_only_mesh(_payload(declared_universe={"mode": "auto", "padding": [0, 0, 0]}))
+
+    def test_reuse_matches_actual_geometry_and_policy_across_stage_labels(self) -> None:
+        payload = _payload()
+        recipe = {
+            "order": payload["order"],
+            "hmax": payload["hmax"],
+            "mesh": None,
+            "geometries": [dict(entry, name=entry["name"] + "_geom") for entry in payload["geometries"]],
+            "geometry_object_ids": {name + "_geom": owner for name, owner in payload["geometry_object_ids"].items()},
+            "study_universe": payload["declared_universe"],
+            "mesh_workflow": {
+                "domain_mesh_mode": "generated_shared_domain_mesh",
+                "mesh_options": payload["mesh_options"],
+                "operations": [],
+                "per_geometry": [{"geometry": "sphere-left", "mode": "inherit"}],
+            },
+        }
+        self.assertTrue(matches_solver_geometry_reuse(payload, [recipe, deepcopy(recipe)]))
+
+        cases = []
+        changed = deepcopy(recipe)
+        changed["geometries"][1]["by"][0] *= 2
+        cases.append(changed)
+        changed = deepcopy(recipe)
+        changed["study_universe"]["airbox_hmax"] *= 2
+        cases.append(changed)
+        changed = deepcopy(recipe)
+        changed["mesh_workflow"]["mesh_options"]["optimize"] = "Gmsh"
+        cases.append(changed)
+        changed = deepcopy(recipe)
+        changed["mesh_workflow"]["per_geometry"] = [{"geometry": "sphere-left", "mode": "override", "hmax": 5e-9}]
+        cases.append(changed)
+        changed = deepcopy(recipe)
+        changed["geometry_object_ids"]["sphere-left_geom"] = "another-owner"
+        cases.append(changed)
+
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.assertFalse(matches_solver_geometry_reuse(payload, [recipe, changed]))
 
     def test_requires_an_authored_maximum_element_size(self) -> None:
         with self.assertRaisesRegex(GeometryMeshBuildError, "h_max"):
