@@ -2996,6 +2996,8 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--port", type=int, default=None,
                              help="loopback frontend port (up only)")
+        command.add_argument("--network-subnet",
+                             help="explicit unused RFC1918 IPv4 subnet for this DEV bridge; verify host routes first")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
         if name == "up":

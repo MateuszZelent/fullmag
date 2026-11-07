@@ -45,8 +45,8 @@ docker-dev-reconcile-completed-cache registry volume recovery_id apply="false" e
 
 # Start or reconcile the selected two-service group; reuse matching sources and caches.
 # The source parameter selects the main checkout or a registered worktree.
-docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }}
+docker-dev source_root="" port="" script="" gpu_access="auto" native_contract="" network_subnet="":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" up {{if port == "" { "" } else { "--port " + quote(port) } }} --gpu-access {{quote(gpu_access)}} {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }} {{if script == "" { "" } else { "--script " + quote(script) } }} {{if native_contract == "" { "" } else { "--native-contract " + quote(native_contract) } }} {{if network_subnet == "" { "" } else { "--network-subnet " + quote(network_subnet) } }}
 
 # Run a managed console session in the selected Docker DEV group.
 # Two arguments use GUI mode; prefix gui or headless to choose explicitly.
@@ -146,8 +146,8 @@ docker-dev-reconcile-development request request_sha256 source_root apply="false
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_development_interrupted.py" --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --source-root {{quote(source_root)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
 
 # Failure-only recovery for an initial Compose rejection before either service exists.
-docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}
+docker-dev-reconcile-network-failure source_root attempt receipt_sha256 compose_sha256 engine_id apply="false" recover_absent_helper="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_network_failure_reconcile.py" --source-root {{quote(source_root)}} --attempt {{quote(attempt)}} --receipt-sha256 {{quote(receipt_sha256)}} --compose-sha256 {{quote(compose_sha256)}} --engine-id {{quote(engine_id)}}{{if apply == "true" { " --apply" } else if apply == "false" { "" } else { error("apply must be true or false") } }}{{if recover_absent_helper == "true" { " --recover-absent-helper" } else if recover_absent_helper == "false" { "" } else { error("recover_absent_helper must be true or false") } }}
 
 # Confirm one exact post-reboot resume failure; never start services or change native ownership.
 docker-dev-reconcile-resume request request_sha256 source_root apply="false":

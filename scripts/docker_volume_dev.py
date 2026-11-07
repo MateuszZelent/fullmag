@@ -2273,6 +2273,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
     identity = _compose_identity(layout)
+    from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
+    requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
+    check_requested_subnet_available(requested_network_subnet, identity["network_name"])
     if validated_post_build_generation is not None:
         if (validated_post_build_generation["compose_project"] != identity["project_name"]
                 or validated_post_build_generation["source_root"] != str(selected)):
@@ -2686,6 +2689,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if configured.returncode or len(configured.stdout) > 1024 * 1024:
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
+        from docker_dev_network import apply_requested_subnet
+        apply_requested_subnet(document, requested_network_subnet)
         from docker_dev_defaults import configured_group_budget
         from docker_volume_resources import apply_development_budget
         if prepared_budget_render is None:

@@ -1013,6 +1013,7 @@ jobs:
           python -B scripts/test_just_development_recovery_shell.py -v
           python -B scripts/test_docker_volume_reconcile.py -v
           python -B scripts/test_docker_volume_network_failure_reconcile.py -v
+          python -B scripts/test_docker_dev_network.py -v
           python -B scripts/test_docker_volume_development_interrupted.py -v
           python -B scripts/test_docker_volume_resume_interrupted.py -v
           python -B scripts/test_linux_native_readmission.py -v

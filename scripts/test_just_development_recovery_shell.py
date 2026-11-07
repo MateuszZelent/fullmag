@@ -360,5 +360,60 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
         self.assertLess(dispatch, source.rindex('"${resolver}" run'))
 
 
+    def test_docker_dev_up_real_just_dry_run_dispatches_bounded_network_subnet(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        script = 'examples/study script.py'
+        dry = subprocess.run(
+            ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+             source, '3342', script, 'auto', 'fem-demag-poisson', '172.16.1.0/24'],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'up', b'--port', b'3342',
+            b'--gpu-access', b'auto', b'--source-root', source.encode(), b'--script', script.encode(),
+            b'--native-contract', b'fem-demag-poisson', b'--network-subnet', b'172.16.1.0/24',
+        ])
+
+    def test_docker_dev_up_without_network_subnet_keeps_existing_argv(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        script = 'examples/study script.py'
+        dry = subprocess.run(
+            ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+             source, '3342', script, 'auto', 'fem-demag-poisson'],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'up', b'--port', b'3342',
+            b'--gpu-access', b'auto', b'--source-root', source.encode(), b'--script', script.encode(),
+            b'--native-contract', b'fem-demag-poisson',
+        ])
+
+    def test_docker_dev_up_rejects_malformed_or_injected_network_subnet(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        for subnet in ('172.16.bad.0/24', '172.16.1.0/24; printf injected',
+                       "172.16.1.0/24' --apply"):
+            with self.subTest(subnet=subnet):
+                dry = subprocess.run(
+                    ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+                     source, '3342', '', 'auto', 'fem-demag-poisson', subnet],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()

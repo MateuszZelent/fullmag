@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Close one initial DEV attempt after Compose exhausted every network pool.
 
-Preview is read-only. Apply publishes only a failure receipt after the original
-BuildControl helper, source identity, compose failure, and absent resources have
-been re-observed. The original helper remains the sole owner that releases the
-active marker.
+Preview is read-only. Apply publishes only a failure receipt after the source
+identity, exact Compose failure, and absent resources have been re-observed.
+Normally the original BuildControl helper releases its active marker. Explicit
+absent-helper recovery instead requires a free operation lock and lets an
+image-owned failure transaction release only that exact orphaned marker.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 from copy import deepcopy
 import json
-import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 import re
-import stat
 import time
 
 from docker_build_control import (
@@ -25,24 +25,19 @@ from docker_build_control import (
     docker_capture,
     toolchain_configuration,
 )
-import docker_windows_absent_bind_isolation as absent_windows
-import docker_windows_bind_isolation as windows
 from docker_compose_identity import source_labels
-from docker_foreign_bind_identity import WSL_ALIAS
-from docker_linux_native_readmission import live_bind_path
 from docker_volume_activation_reconcile import (
     _probe_helper_absence,
     _validate_helper,
     _validate_helper_logged,
 )
-from docker_volume_reconcile import digest, fingerprint, read_raw, require, write_immutable
+from docker_volume_reconcile import digest, fingerprint, read_raw, require
 
 SCHEMA = "fullmag.docker-development-network-failure-reconciliation.v1"
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONTAINERS = 4096
 MAX_INSPECT_BATCH = 64
-WINDOWS_BIND = re.compile(r"^(?:[A-Za-z]:|/(?:run/desktop/mnt/host|host_mnt|mnt/host)/[A-Za-z](?:/|$))")
 POOL_ERROR = "all predefined address pools have been fully subnetted"
 
 
@@ -144,15 +139,16 @@ def validate_initial_receipt(
 def validate_container_inventory(
     documents: list[dict[str, object]],
     *,
-    helper_id: str,
+    helper_id: str | None,
     helper_name: str,
     project: str,
     network_name: str,
     identity: dict[str, str],
     control_volume: str,
-    qualify_desktop_bind=None,
+    control_mountpoint: str,
 ) -> list[dict[str, object]]:
-    """Require the exact live helper to be the sole selected-group consumer."""
+    """Exclude consumers of the group metadata changed by this failure-only CAS."""
+    control_path = _control_mountpoint(control_mountpoint)
     labels_expected = source_labels(identity)
     observed: list[dict[str, object]] = []
     helper_matches = 0
@@ -183,7 +179,7 @@ def validate_container_inventory(
             or name.startswith(project + "_")
         )
         if is_helper:
-            require(identifier == helper_id and name == helper_name
+            require(helper_id is not None and identifier == helper_id and name == helper_name
                     and labels.get("com.docker.compose.project") == project
                     and labels.get("com.docker.compose.service") == "build-control"
                     and all(labels.get(key) == value for key, value in labels_expected.items())
@@ -197,29 +193,27 @@ def validate_container_inventory(
             mounts = document.get("Mounts")
             require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
                     "Foreign container mount inventory is incomplete")
-            source_path = PurePosixPath(identity["source_root"])
-            def overlaps_checkout(mount):
+            for mount in mounts:
+                require(mount.get("Name") != control_volume,
+                        "A foreign container consumes this group's control volume")
                 if mount.get("Type") != "bind":
-                    return False
+                    continue
                 source = mount.get("Source")
-                if isinstance(source, str) and (WINDOWS_BIND.match(source) or source.startswith(WSL_ALIAS)):
-                    require(qualify_desktop_bind is not None,
-                            "Foreign Desktop bind requires initial recovery isolation evidence")
-                    source, evidence = qualify_desktop_bind(document, source)
-                    observed.append(evidence)
-                    if source is None:
-                        return False
-                require(isinstance(source, str) and source.startswith("/")
-                        and not source.startswith("//") and chr(92) not in source
-                        and str(PurePosixPath(source)) == source
-                        and ".." not in PurePosixPath(source).parts,
-                        "Foreign bind mount source is not canonical")
-                path = PurePosixPath(source)
-                return (path == source_path or source_path in path.parents
-                        or path in source_path.parents)
-            require(not any(m.get("Name") == control_volume or overlaps_checkout(m) for m in mounts),
-                    "A foreign container consumes this group's control volume or checkout")
-    require(helper_matches == 1, "The exact BuildControl helper is not the sole selected-group container")
+                require(isinstance(source, str) and source and len(source) <= 32768
+                        and not any(ord(char) < 32 or ord(char) == 127 for char in source),
+                        "Foreign bind source metadata is incomplete")
+                # Only literal daemon paths can directly expose this local
+                # Docker volume. Other source binds are outside the records
+                # mutated here; checkout retirement has its own admission.
+                if source.startswith("/") and not source.startswith("//"):
+                    path = PurePosixPath(source)
+                    require(str(path) == source and ".." not in path.parts,
+                            "Foreign daemon bind source is not canonical")
+                    require(path != control_path and path not in control_path.parents
+                            and control_path not in path.parents,
+                            "A foreign daemon bind exposes this group's control volume")
+    require(helper_matches == (0 if helper_id is None else 1),
+            "The exact BuildControl helper is not the sole selected-group container")
     return sorted(observed, key=canonical)
 
 
@@ -290,142 +284,72 @@ def _inspect_inventory_snapshot() -> list[dict[str, object]]:
     return documents
 
 
-def _observe_present_windows_bind(source, distro, root_device):
-    mapping = windows._mapping(source)
-    native = windows._native(source, distro, allow_external_junctions=True)
-    kind = native["candidate"]["kind"]
-    require((kind == "file" and stat.S_ISREG(mapping["mode"]))
-            or (kind == "directory" and stat.S_ISDIR(mapping["mode"])),
-            "Windows and WSL candidate object types differ")
-    require(mapping["device"] != root_device, "Foreign Windows bind aliases the protected ext4 filesystem")
-
-    native_root = PureWindowsPath(native["candidate"]["path"])
-    root = Path(mapping["path"])
-    external = {}
-    for _, relative, link in windows._link_paths(native):
-        if link["tag"] != "0xa0000003":
-            continue
-        target = PureWindowsPath(link["target"])
-        if target == native_root or native_root in target.parents:
-            continue
-        path = root / relative
-        windows._link_parent_directories(root, path, mapping["device"])
-        link_identity = windows._file_identity(path)
-        require(stat.S_ISLNK(link_identity["mode"]) and link_identity["device"] == mapping["device"],
-                "External Windows junction is not the exact DrvFs link")
-        target_mapping = windows._mapping(str(target))
-        require(os.readlink(path) == target_mapping["path"]
-                and target_mapping["device"] != root_device
-                and stat.S_ISDIR(target_mapping["mode"]),
-                "External Windows junction target is not the exact disjoint DrvFs directory")
-        # An external target gets the full existing proof. Nested external
-        # junctions fail closed, keeping this initial recovery traversal bounded.
-        target_native = windows._native(str(target), distro)
-        require(target_native["candidate"]["kind"] == "directory",
-                "External Windows junction target is not an ordinary directory")
-        links = windows._qualify_links(target_mapping, target_native)
-        windows._link_parent_directories(root, path, mapping["device"])
-        require(windows._file_identity(path) == link_identity and os.readlink(path) == target_mapping["path"],
-                "External Windows junction changed during isolation proof")
-        external[relative] = {"link": link_identity, "mapping": target_mapping,
-                              "native": target_native, "contained_links": links}
-
-    return {"native": native, "mapping": mapping, "kind": "present",
-            "external_junctions": external,
-            "contained_links": windows._qualify_links(mapping, native, external_junctions=external)}
+def _control_mountpoint(value: object) -> PurePosixPath:
+    require(isinstance(value, str) and 1 < len(value) <= 4096
+            and value.startswith("/") and not value.startswith("//")
+            and chr(92) not in value
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value),
+            "Control volume daemon mountpoint is invalid")
+    path = PurePosixPath(value)
+    require(str(path) == value and ".." not in path.parts,
+            "Control volume daemon mountpoint is not canonical")
+    return path
 
 
-def _wsl_kernel_bind_identity(source):
-    path = live_bind_path(source)
-    require(path is not None and path.resolve(strict=True) == path, "Foreign WSL source is not canonical")
-    return {"canonical_source": str(path), **windows._file_identity(path)}
-
-
-def _observe_windows_source(source, native_source, context, pin):
-    translated = windows._capture(["wslpath", "-u", native_source]).decode("utf-8", "strict").strip()
+def _control_volume_evidence(control: BuildControl) -> dict[str, object]:
+    inspected = docker_capture("volume", "inspect", control.volume)
     try:
-        Path(translated).lstat()
-    except FileNotFoundError:
-        absent_windows._stopped(pin)
-        native = absent_windows._native(source)
-        mapping = absent_windows._mapping(source, native)
-        require(mapping["device"] != context["linux"]["root_device"],
-                "Absent Windows bind aliases the protected ext4 filesystem")
-        return {"native": native, "mapping": mapping, "kind": "absent-stopped"}
-    return _observe_present_windows_bind(source, context["distro"], context["linux"]["root_device"])
+        volumes = json.loads(inspected.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Control volume inspection is not valid JSON") from error
+    require(isinstance(volumes, list) and len(volumes) == 1 and isinstance(volumes[0], dict),
+            "Control volume identity is ambiguous")
+    volume = volumes[0]
+    require(volume.get("Name") == control.volume and volume.get("Driver") == "local"
+            and not volume.get("Options") and isinstance(volume.get("Labels"), dict)
+            and all(volume["Labels"].get(key) == value for key, value in control.shared_labels.items()),
+            "Control volume ownership or driver differs")
+    mountpoint = str(_control_mountpoint(volume.get("Mountpoint")))
+    return {"control_volume_fingerprint": digest(canonical(volume)),
+            "control_volume_mountpoint": mountpoint}
 
 
-def _initial_desktop_qualifier(identity, compose, engine_id):
-    """Collect read-only evidence for the authenticated pre-backend attempt."""
-    context = None
-    by_source = {}
-    pins = {}
-    wsl_sources = {}
-
-    def observe(container, source):
-        nonlocal context
-        pin = windows._container_pin(container)
-        pins[pin["id"]] = pin
-        if source.startswith(WSL_ALIAS):
-            evidence = _wsl_kernel_bind_identity(source)
-            wsl_sources[source] = evidence
-            return evidence["canonical_source"], {
-                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
-                "mapping": evidence, "kind": "wsl-kernel",
-            }
-        native_source = windows._windows_source_path(source)
-        if context is None:
-            mounts = compose["services"]["backend"].get("volumes")
-            require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
-                    "Initial Compose backend mount inventory is incomplete")
-            roots = [m for m in mounts if m.get("target") == "/state"]
-            require(len(roots) == 1 and roots[0].get("type") == "bind"
-                    and isinstance(roots[0].get("source"), str),
-                    "Initial Compose has no exact native /state bind")
-            distro = os.environ.get("WSL_DISTRO_NAME", "")
-            require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", distro)
-                    and distro != "docker-desktop", "Current WSL distro identity is unavailable")
-            linux = windows._linux_identity(identity["source_root"], roots[0]["source"])
-            engine = windows._engine()
-            require(engine["ID"] == linux["engine_id"] == engine_id,
-                    "Initial native admission does not match the pinned Docker engine")
-            context = {"linux": linux, "engine": engine, "distro": distro}
-        if source not in by_source:
-            by_source[source] = (_observe_windows_source(source, native_source, context, pin), pin)
-        evidence, _ = by_source[source]
-        if evidence["kind"] == "absent-stopped":
-            absent_windows._stopped(pin)
-        return None, {"schema": "fullmag.initial-network-failure-windows-bind.v1",
-                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
-                "context_sha256": digest(canonical(context)),
-                "evidence_sha256": digest(canonical(evidence)), "kind": evidence["kind"]}
-
-    def verify(*, refresh_windows=False):
-        if refresh_windows:
-            # Recheck early sources last so the oldest Windows evidence is
-            # refreshed closest to the failure publication boundary.
-            for source, (evidence, pin) in reversed(by_source.items()):
-                require(_observe_windows_source(source, windows._windows_source_path(source), context, pin) == evidence,
-                        "Foreign Windows bind changed before failure publication")
-        for identifier, pin in pins.items():
-            require(windows._container_pin(windows._inspect(identifier)) == pin,
-                    "Foreign container changed during initial Desktop bind isolation")
-        for source, evidence in wsl_sources.items():
-            require(_wsl_kernel_bind_identity(source) == evidence, "Foreign WSL kernel mapping changed")
-        if context is None:
-            return
-        linux = context["linux"]
-        require(windows._engine() == context["engine"]
-                and windows._linux_identity(linux["source_root"], linux["reference_root"]) == linux,
-                "Initial Windows isolation context changed")
-
-    return observe, verify
+def _absent_helper_evidence(control: BuildControl, helper_name: str) -> dict[str, object]:
+    """Authenticate an orphan without replacing its owner or changing the volume."""
+    absence_sha = _probe_helper_absence(helper_name)
+    require(absence_sha is not None,
+            "Absent-helper recovery requires the original helper to be absent, including stopped containers")
+    volume_evidence = _control_volume_evidence(control)
+    operation_lock = control.path("operation.lock")
+    lock_probe = (
+        f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+        f"test $(stat -c %h '{operation_lock}') = 1; "
+        f"exec 8<'{operation_lock}'; flock -n 8; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        f"stat -Lc '%d:%i' '{operation_lock}'"
+    )
+    locked = bounded_capture(control.helper_args(lock_probe), data=b"", timeout=60)
+    require(locked.returncode == 0,
+            "Orphaned operation lock is occupied or cannot be authenticated; preserve the active marker")
+    lock_identity = locked.stdout.decode("utf-8", "strict").strip()
+    require(re.fullmatch(r"[0-9]+:[0-9]+", lock_identity) is not None,
+            "Orphaned operation lock identity is invalid")
+    return {
+        "helper_state": "absent-confirmed",
+        "helper_absence_probe_sha256": absence_sha,
+        **volume_evidence,
+        "operation_lock_identity": lock_identity,
+    }
 
 
 def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Namespace,
              *, allowed_archive: bytes | None = None) -> dict[str, object]:
     require(docker_capture("info", "--format", "{{.ID}}").stdout.decode().strip() == args.engine_id,
             "Docker engine identity differs from the operator pin")
+    helper_name = "fullmag-control-" + args.attempt
+    absent_evidence = (_absent_helper_evidence(control, helper_name)
+                       if getattr(args, "recover_absent_helper", False)
+                       else _control_volume_evidence(control))
     root = "development/attempts/" + args.attempt
     original_raw = read_raw(control, root + "/receipt.json")
     require(digest(original_raw) == args.receipt_sha256, "Original receipt digest differs from the operator pin")
@@ -459,11 +383,17 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
                 for key, value in source_labels(identity).items()),
                 "Compose source labels differ from the selected checkout")
 
-    helper_name = "fullmag-control-" + args.attempt
-    helper, helper_id = _validate_helper(control, helper_name, args.attempt, phase="development")
-    log_tail = _validate_helper_logged(helper_id)
-    require("READY\n" in log_tail and "LOGGED\n" in log_tail,
-            "Original helper has not durably acknowledged its log")
+    if getattr(args, "recover_absent_helper", False):
+        helper_id = None
+        helper_fingerprint = None
+        helper_log_sha = None
+    else:
+        helper, helper_id = _validate_helper(control, helper_name, args.attempt, phase="development")
+        log_tail = _validate_helper_logged(helper_id)
+        require("READY\n" in log_tail and "LOGGED\n" in log_tail,
+                "Original helper has not durably acknowledged its log")
+        helper_fingerprint = fingerprint(helper)
+        helper_log_sha = digest(log_tail.encode("utf-8"))
     active = read_raw(control, "active")
     require(active == (args.attempt + "\n").encode(), "Original helper no longer owns the active marker")
 
@@ -497,16 +427,14 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
     network_error = validate_network_absence(
         network_result.returncode, network_result.stdout, network_result.stderr, network_name)
     containers = _container_inventory()
-    qualify_desktop_bind, verify_desktop_binds = _initial_desktop_qualifier(identity, compose, args.engine_id)
     inventory = validate_container_inventory(
         containers, helper_id=helper_id, helper_name=helper_name, project=control.project,
         network_name=network_name, identity=identity, control_volume=control.volume,
-        qualify_desktop_bind=qualify_desktop_bind,
+        control_mountpoint=absent_evidence["control_volume_mountpoint"],
     )
-    verify_desktop_binds(refresh_windows=allowed_archive is not None)
-    # This failure-only transaction is group-local (ADR 0067). The authenticated
-    # original helper has closed its log input and still holds operation.lock;
-    # a new managed producer cannot enter this group before its terminal receipt.
+    # This failure-only transaction is group-local (ADR 0067). The original
+    # helper holds operation.lock, or the absent-helper CAS must acquire it
+    # before any mutation. Active remains pinned until terminal publication.
     # Global process liveness would incorrectly block independent DEV groups.
     active_again = read_raw(control, "active")
     require(active_again == active, "Active helper ownership changed during observation")
@@ -529,8 +457,9 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
         "network_absence_error": network_error,
         "network_name": network_name,
         "helper_id": helper_id,
-        "helper_fingerprint": fingerprint(helper),
-        "helper_log_sha256": digest(log_tail.encode("utf-8")),
+        "helper_fingerprint": helper_fingerprint,
+        "helper_log_sha256": helper_log_sha,
+        **absent_evidence,
         "container_inventory": inventory,
         "development_attempts": attempts,
         "admission_scope": "initial-failure-only-group-local",
@@ -556,6 +485,10 @@ def _proof_bytes(observation: dict[str, object], original: dict[str, object]) ->
         "development_attempts": observation["development_attempts"],
         "admission_scope": observation["admission_scope"],
         "original_error_sha256": digest(str(original["error"]).encode("utf-8")),
+        **{key: observation[key] for key in (
+            "helper_state", "helper_absence_probe_sha256", "control_volume_fingerprint",
+            "operation_lock_identity", "control_volume_mountpoint",
+        ) if key in observation},
     }) + b"\n"
 
 
@@ -578,8 +511,16 @@ def _failure_result(original_raw: bytes, proof_raw: bytes, observation: dict[str
     return canonical(result) + b"\n"
 
 
+def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
+    return b"" if documents is None else b"".join(
+        base64.b64encode(payload) + b"\n" for payload in documents.values()
+    )
+
+
 def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_sha: str,
-                proof_sha: str, result_sha: str, prepared_sha: str) -> str:
+                proof_sha: str, result_sha: str, prepared_sha: str, *,
+                recover_absent_helper: bool = False, operation_lock_identity: str | None = None,
+                prepared_documents: dict[str, bytes] | None = None) -> str:
     root = control.path("development/attempts/" + attempt)
     current = control.path("development/current.json")
     verified = control.path("development/verified.json")
@@ -605,10 +546,84 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
         for path in inputs
     )
-    # Original BuildControl holds operation.lock for this entire transaction.
-    return (
-        "umask 027; " + parent_checks + " " + input_checks + " "
-        f"test ! -L '{lock}'; test ! -e '{lock}'; exec 7>'{lock}'; flock -n 7; "
+    # A missing owner is never impersonated. Its replacement acquires the
+    # existing lock without creating/truncating it, before the first write.
+    admission = (
+        f"test ! -L '{compose}'; test -f '{compose}'; test $(stat -c %h '{compose}') = 1; "
+        f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
+        f"exec 6<'{compose}'; flock -n 6; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/6)\" = \"$(stat -Lc '%d:%i' '{compose}')\"; "
+    )
+    release = ""
+    owner_check = (
+        f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+        f"test $(stat -c %h '{operation_lock}') = 1; exec 8<'{operation_lock}'; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        'if flock -n -E 72 8; then exit 73; else test "$?" = 72; fi; '
+    )
+    if recover_absent_helper:
+        admission += (
+            f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+            f"test $(stat -c %h '{operation_lock}') = 1; "
+            f"exec 8<'{operation_lock}'; flock -n 8; "
+            f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        )
+        if operation_lock_identity is not None:
+            require(re.fullmatch(r"[0-9]+:[0-9]+", operation_lock_identity) is not None,
+                    "Invalid pinned orphan operation lock identity")
+            admission += f"test \"$(stat -Lc '%d:%i' '{operation_lock}')\" = '{operation_lock_identity}'; "
+        active_sha = digest((attempt + "\n").encode())
+        owner_check = f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
+        release = (
+            "; for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
+            "test ! -L \"$p\"; test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
+            f"test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = '{result_sha}'; done; "
+            f"test ! -L '{active}'; test -f '{active}'; test $(stat -c %h '{active}') = 1; "
+            f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
+            f"rm -- '{active}'; sync '{control.path('active').rsplit('/', 1)[0]}'"
+        )
+    preparation = ""
+    if prepared_documents is not None:
+        expected = {archive: original_sha, proof: proof_sha, result: result_sha, prepared: prepared_sha}
+        require(set(prepared_documents) == set(expected)
+                and all(digest(prepared_documents[path]) == sha for path, sha in expected.items()),
+                "Prepared failure documents differ from their exact pins")
+        # Both routes serialize all journal writes. A live-helper preparation
+        # cannot overwrite the absent-helper transaction after losing its owner.
+        preparation = (
+            f"test ! -L '{root}'; test -d '{root}'; test \"$(readlink -f '{root}')\" = '{root}'; "
+            + " ".join(f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
+                       for path in (active, receipt, compose)) + " "
+            + owner_check
+            + f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
+            + f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
+            + " ".join(f"test ! -L '{path}'; test ! -e '{path}';"
+                       for path in (*expected, current, verified, terminal, lock)) + " "
+        )
+        reconciliation = root + "/reconciliation"
+        preparation += (
+            f"test ! -L '{lock}'; test ! -e '{lock}'; set -C; exec 7>'{lock}'; set +C; flock -n 7; "
+            f"test ! -L '{reconciliation}'; "
+            f"if test -e '{reconciliation}'; then test -d '{reconciliation}'; "
+            f"test \"$(readlink -f '{reconciliation}')\" = '{reconciliation}'; fi; "
+            f"mkdir -p '{reconciliation}'; "
+        )
+        for path, payload in prepared_documents.items():
+            parent = path.rsplit("/", 1)[0]
+            preparation += (
+                "IFS= read -r payload; "
+                f"t=$(mktemp '{parent}/.network-proof.XXXXXXXX'); "
+                "printf '%s' \"$payload\" | base64 -d > \"$t\"; unset payload; "
+                f"test \"$(sha256sum \"$t\" | cut -d' ' -f1)\" = '{expected[path]}'; "
+                f"sync \"$t\"; ln -T -- \"$t\" '{path}'; rm -- \"$t\"; sync '{parent}'; "
+            )
+    transaction_lock = "" if prepared_documents is not None else (
+        f"test ! -L '{lock}'; test ! -e '{lock}'; set -C; exec 7>'{lock}'; set +C; flock -n 7; "
+    )
+    script = (
+        "umask 027; " + admission + preparation + parent_checks + " " + input_checks + " "
+        + transaction_lock +
+
         f"test \"$(cat '{active}')\" = '{attempt}'; "
         f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
         f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
@@ -619,8 +634,7 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         f"test ! -L '{current}'; test ! -e '{current}'; "
         f"test ! -L '{verified}'; test ! -e '{verified}'; "
         f"test ! -L '{terminal}'; test ! -e '{terminal}'; "
-        f"exec 8<>'{operation_lock}'; if flock -n 8; then exit 72; fi; "
-        "for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
+        + owner_check + "for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
         "test ! -L \"$p\"; parent=$(dirname \"$p\"); "
         "test \"$(readlink -f \"$parent\")\" = \"$parent\"; "
         f"if test \"$p\" = '{receipt}'; then "
@@ -629,8 +643,11 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         "else test ! -e \"$p\"; fi; "
         f"t=$(mktemp \"$parent/.network-failure.XXXXXXXX\"); "
         f"cat '{result}' > \"$t\"; sync \"$t\"; mv -T -- \"$t\" \"$p\"; sync \"$parent\"; "
-        "done"
+        "done" + release
     )
+    require(len(script.encode("utf-8")) <= 24 * 1024,
+            "Failure transaction exceeds the bounded helper command size")
+    return script
 
 
 def _identity_and_control(source_root: str) -> tuple[Path, dict[str, str], BuildControl]:
@@ -694,6 +711,7 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         "proof_sha256": digest(proof_raw),
         "engine_id": args.engine_id,
         "apply": bool(args.apply),
+        "helper_state": second.get("helper_state", "running"),
     }
     if not args.apply:
         return summary
@@ -705,20 +723,23 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
                      "development/current.json", "development/verified.json", root + "/terminal.json"):
         require(read_raw(control, relative, optional=True) is None,
                 "An earlier or partial failure reconciliation publication exists")
-    write_immutable(control, root + "/unknown-receipt.json", original_raw)
-    write_immutable(control, proof_relative, proof_raw)
-    write_immutable(control, result_relative, result_raw)
-    write_immutable(control, prepared_relative, prepared_raw)
+    absent_helper = bool(getattr(args, "recover_absent_helper", False))
+    prepared_documents = {control.path(relative): payload for relative, payload in (
+        (root + "/unknown-receipt.json", original_raw),
+        (proof_relative, proof_raw), (result_relative, result_raw), (prepared_relative, prepared_raw),
+    )}
 
-    # A complete second observation is taken after immutable proof preparation
-    # and immediately before the atomic pointer/terminal CAS.
-    final_observation = _observe(control, identity, args, allowed_archive=original_raw)
+    # Re-observe the exact group resources before the single journal/publication transaction.
+    final_observation = _observe(control, identity, args, allowed_archive=None)
     require(canonical(final_observation) == canonical(second),
             "Resources or ownership changed immediately before failure publication")
     committed = bounded_capture(control.helper_args(_cas_script(
         control, args.attempt, args.receipt_sha256, args.compose_sha256,
         digest(proof_raw), digest(result_raw), digest(prepared_raw),
-    )), data=b"", timeout=90)
+        recover_absent_helper=absent_helper,
+        operation_lock_identity=second.get("operation_lock_identity"),
+        prepared_documents=prepared_documents,
+    )), data=_prepared_input(prepared_documents), timeout=90)
     require(committed.returncode == 0,
             "Failure publication outcome is unknown; preserve exact attempt and inspect its receipts")
     for relative in (root + "/receipt.json", "development/current.json", root + "/terminal.json"):
@@ -748,6 +769,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt-sha256", required=True)
     parser.add_argument("--compose-sha256", required=True)
     parser.add_argument("--engine-id", required=True)
+    parser.add_argument("--recover-absent-helper", action="store_true",
+                        help="explicitly recover an absent original helper under the existing operation lock")
     parser.add_argument("--apply", action="store_true", help="publish failure-only terminal after full re-observation")
     args = parser.parse_args(argv)
     try:

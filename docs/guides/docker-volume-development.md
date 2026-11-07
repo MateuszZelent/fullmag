@@ -307,22 +307,53 @@ just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <c
 Po sprawdzeniu dowodów końcowy argument `true` wykonuje failure-only CAS.
 Wymagane są: dokładny błąd puli, brak usług (także zatrzymanych) i sieci tej
 próby oraz zgodny oryginalny helper z potwierdzonym `LOGGED`, nadal trzymający
-`operation.lock`. Pełny spis kontenerów wyklucza obcych konsumentów wolumenu
-kontrolnego i checkoutu tej grupy. Dla początkowej próby WSL ext4 punktem
-odniesienia jest marker hosta w przypiętym bindzie `/state` z Compose. Alias
-WSL wymaga zgodności korzenia montowania i inode. Montowanie Windows wymaga
-dowodu natywnego Windows i mapowania DrvFs. Brakującą ścieżkę można
-zakwalifikować wyłącznie dla kontenera w stanie `exited` z PID 0. Junction
-wychodzący poza montowany katalog wymaga zgodnego odsyłacza w DrvFs i pełnego
-dowodu dla jego celu. Zagnieżdżone zewnętrzne junctiony kończą się odmową.
-Dowody i stan kontenerów są ponownie sprawdzane przed publikacją.
-Ta początkowa procedura failure-only jest lokalna dla grupy (ADR 0067); nie
-wymaga zatrzymania procesów innych grup. Starsze procedury odzyskiwania
-BuildKit zachowują własne, globalne kontrole.
+`operation.lock`. Pełny spis kontenerów wyklucza konsumentów zasobów
+tej grupy we wszystkich stanach. Obejmuje jej tożsamość projektu i źródła,
+prywatną sieć oraz nazwany wolumen kontrolny. Uwierzytelniony `Mountpoint`
+wolumenu z daemona pozwala także odrzucić bezpośredni bind jego katalogu,
+rodzica albo podkatalogu. Stan zasobów jest ponownie sprawdzany przed publikacją.
+
+Zakres tej procedury failure-only stanowią metadane wskazanej grupy zgodnie
+z ADR 0067. Jej transakcja zapisuje receipty i marker w wolumenie kontrolnym.
+Obce bindy samego checkoutu pozostają poza tym zakresem. Admisja buildu,
+przenoszenie źródeł i kwalifikacja retencji mają własne wymagania dotyczące
+checkoutu, danych i konsumentów.
 Adapter zachowuje oryginalny receipt i dowód, nie publikuje sukcesu ani
-`verified`, nie uruchamia usług i nie usuwa danych. Wyłącznie oryginalny helper
-zwalnia swój marker `active` po odebraniu terminalnego wyniku. Nieznany wynik
-publikacji wymaga odczytu zachowanych dowodów; nie ponawiaj mutacji w ciemno.
+`verified`, nie uruchamia usług i nie usuwa danych. Domyślnie oryginalny helper
+zwalnia swój marker `active` po odebraniu terminalnego wyniku.
+
+Jeżeli oryginalny helper został utracony, istnieje osobny, jawnie wybierany tryb
+`recover_absent_helper`. Najpierw wykonaj preview z argumentami `false true`:
+
+```text
+just docker-dev-reconcile-network-failure <source> <attempt> <receipt-sha256> <compose-sha256> <engine-id> false true
+```
+
+Po autoryzacji i sprawdzeniu preview argumenty `true true` wykonują recovery.
+Tryb wymaga potwierdzonej przez daemon nieobecności helpera, również jako
+zatrzymanego kontenera, zgodnego wolumenu kontrolnego oraz wolnej, istniejącej
+blokady `operation.lock`. Zachowuje wszystkie pozostałe kontrole początkowej
+próby, konsumentów, sieci i braku wcześniejszych publikacji. Nowy helper
+kontrolny uzyskuje tę blokadę bez tworzenia ani obcinania pliku, sprawdza jej
+tożsamość oraz przypięte receipty i marker. Pod jedną blokadą archiwizuje
+oryginał, publikuje dowód i trzy zgodne zapisy `failed-confirmed`, a dopiero
+wtedy usuwa dokładnie marker tej próby. Nie odtwarza starego helpera ani
+nie przypisuje sobie jego tożsamości.
+
+Nieznany wynik publikacji lub częściowy zapis wymaga odczytu zachowanych
+dowodów; nie ponawiaj mutacji w ciemno. Potwierdzone zamknięcie błędu pozwala
+ponowić zwykły launcher `docker-dev`; samo nie dowodzi dostępności puli
+adresowej ani poprawnego buildu aplikacji.
+
+Jeżeli domyślne pule Dockera są nadal wyczerpane, launcher przyjmuje jawną
+opcję `--network-subnet <CIDR>` (ostatni argument recepty `docker-dev`).
+Dotyczy ona wyłącznie prywatnego bridge tej grupy i jest zapisywana w jej
+przypiętym dokumencie Compose. Dopuszczalna jest kanoniczna podsieć IPv4 RFC1918
+z prefiksem od /16 do /29. Przed wyborem sprawdź bieżące trasy hosta; launcher
+sprawdza dodatkowo kolizje z sieciami Dockera. Nie zmienia konfiguracji daemona,
+nie usuwa innych sieci i nie dobiera zastępczego zakresu. Dla istniejącej grupy
+jawnie podany zakres musi zgadzać się z jej utrwalonym Compose.
+
 Dopiero potwierdzony terminal i zwolnienie helpera pozwalają na nowy start
 standardową receptą. Ta procedura nie służy do odzyskiwania zatrzymanego
 mastera z istniejącą sesją.

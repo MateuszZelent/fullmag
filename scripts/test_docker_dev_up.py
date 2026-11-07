@@ -83,6 +83,16 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True, ui_mode
 
 
 class DockerDevUpReconciliationTests(unittest.TestCase):
+    def test_lifecycle_recreation_preserves_the_pinned_explicit_network_subnet(self):
+        group = _group()
+        group.document["networks"] = {"fullmag": {"driver": "bridge", "ipam": {
+            "driver": "default", "config": [{"subnet": "172.16.1.0/24"}],
+        }}}
+        result = docker_dev_up._lifecycle_args(group, _args(), script=None)
+        self.assertEqual(result.network_subnet, "172.16.1.0/24")
+        self.assertEqual(group.document["networks"]["fullmag"]["ipam"]["config"],
+                         [{"subnet": "172.16.1.0/24"}])
+
     def test_headless_cli_is_explicit_and_gui_remains_the_default(self):
         parser = docker_dev._parser()
         gui = parser.parse_args(["--repo-root", "/repo", "up"])
