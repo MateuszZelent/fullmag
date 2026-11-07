@@ -95,21 +95,19 @@ export function buildDataPreviewStepTimestamp(
   return formatPreviewTimestamp(status.last_step_updated_at_unix_ms);
 }
 
-function centerBiasedSourceIndices(pointCount: number, count: number): number[] {
+function* centerBiasedSourceIndices(pointCount: number, count: number): Generator<number> {
   const start = Math.floor((pointCount - count) / 2);
-  const indices: number[] = [];
   for (let offset = 0; offset < count; offset += 1) {
-    indices.push(start + offset);
+    yield start + offset;
   }
   for (
     let left = start - 1, right = start + count;
-    indices.length < pointCount && (left >= 0 || right < pointCount);
+    left >= 0 || right < pointCount;
     left -= 1, right += 1
   ) {
-    if (left >= 0) indices.push(left);
-    if (right < pointCount) indices.push(right);
+    if (left >= 0) yield left;
+    if (right < pointCount) yield right;
   }
-  return indices;
 }
 
 function isZeroPoint(fieldVector: DecodedFieldVector, offset: number): boolean {
