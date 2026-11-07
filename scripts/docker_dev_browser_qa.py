@@ -375,7 +375,7 @@ def _source_mount_matches_selected(value: object, expected: Path) -> bool:
         return True
 
     # Docker Desktop exposes WSL bind mounts through an opaque daemon path. Only
-    # accept its exact alias form, then prove it names the selected local dir.
+    # accept its exact alias form, then prove it names the selected local source object.
     # Match the raw source so normpath cannot erase traversal or extra segments.
     if isinstance(value, os.PathLike):
         value = os.fspath(value)
@@ -389,8 +389,8 @@ def _source_mount_matches_selected(value: object, expected: Path) -> bool:
     expected_path = Path(expected_key)
     try:
         return (
-            local_alias.is_dir()
-            and expected_path.is_dir()
+            ((local_alias.is_dir() and expected_path.is_dir())
+             or (local_alias.is_file() and expected_path.is_file()))
             and local_alias.samefile(expected_path)
         )
     except OSError:
@@ -4199,6 +4199,15 @@ def _run(
         )
     except ControlOutcomeUnknown:
         raise
+    # Preserve untrusted output before validating the exited helper. A failed
+    # mount/identity check must not discard the only evidence of a possible POST.
+    raw = result.stdout
+    control.write(root + "/runner-output.json", {
+        "schema": "fullmag.docker-dev-browser-qa-runner-output.v1",
+        "exit_code": result.returncode,
+        "stdout": _text(result.stdout, MAX_RESULT_BYTES),
+        "stderr_tail": _text(result.stderr),
+    })
     # Keep resources quarantined until the helper identity, result, durable
     # control-volume evidence, and explicit removal have all been observed.
     observed = _inspect(helper_name)
@@ -4228,13 +4237,6 @@ def _run(
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
     control.write(root + "/receipt.json", operation["receipt"])
-    raw = result.stdout
-    control.write(root + "/runner-output.json", {
-        "schema": "fullmag.docker-dev-browser-qa-runner-output.v1",
-        "exit_code": result.returncode,
-        "stdout": _text(result.stdout, MAX_RESULT_BYTES),
-        "stderr_tail": _text(result.stderr),
-    })
     operation["daemon_pending"] = True
     try:
         if saved_playback_item_id is not None:

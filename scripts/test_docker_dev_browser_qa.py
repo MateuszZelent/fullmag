@@ -1861,6 +1861,49 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         self.assertEqual(service["volumes"][1]["read_only"], True)
         self.assertEqual(document["networks"]["fullmag"]["name"], identity["network_name"])
 
+    def test_desktop_wsl_file_alias_requires_the_exact_selected_regular_file(self):
+        qa = self.qa
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = root / "fixture.py"
+            expected.write_text("fixture")
+            aliases = root / "aliases"
+            local = aliases / "Ubuntu2" / ("a" * 64)
+            local.parent.mkdir(parents=True)
+            local.symlink_to(expected)
+            wire = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+            with patch.object(qa, "LOCAL_WSL_BIND_MOUNT_ROOT", aliases):
+                self.assertTrue(qa._source_mount_matches_selected(wire, expected))
+                foreign = root / "other.py"
+                foreign.write_text("fixture")
+                self.assertFalse(qa._source_mount_matches_selected(wire, foreign))
+                self.assertFalse(qa._source_mount_matches_selected(wire, expected.parent))
+
+    def test_runner_output_survives_failed_helper_identity_validation_without_parsing(self):
+        qa = self.qa
+        writes = []
+        control = SimpleNamespace(project="fullmag-worktree-fixture",
+                                  write=lambda path, value: writes.append((path, deepcopy(value))))
+        operation = {"root": "browser-qa/attempts/" + "a" * 32,
+                     "receipt": {"attempt": "a" * 32}, "daemon_pending": False}
+        result = SimpleNamespace(returncode=1, stdout=b'{"possible_dispatch":true}', stderr=b'failure')
+        with patch.object(qa, "_probe_public_loopback", return_value={"state": "passed"}), \
+             patch.object(qa, "docker_capture", return_value=result) as daemon, \
+             patch.object(qa, "_inspect", return_value={"Id": "b" * 64}), \
+             patch.object(qa, "_validate_browser_helper", side_effect=qa.ControlOutcomeUnknown("mount mismatch")), \
+             patch.object(qa, "_parse_study_stage_rerun_result") as parse:
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._run(operation, control, {"services": {"browser-qa": {"command": ["node"]}}},
+                        {"project_name": control.project}, ROOT, "frontend-volume", "sha256:" + "c" * 64,
+                        "http://127.0.0.1:3242", "http://frontend:8080", 180)
+        saved = [value for path, value in writes if path.endswith('/runner-output.json')]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["stdout"], result.stdout.decode())
+        self.assertEqual(saved[0]["exit_code"], 1)
+        parse.assert_not_called()
+        self.assertTrue(operation["daemon_pending"])
+        self.assertEqual([call.args[0] for call in daemon.call_args_list], ["compose"])
+
     def test_browser_helper_inspect_enforces_uid_environment_and_mount_boundary(self):
         qa = self.qa
         identity = {
