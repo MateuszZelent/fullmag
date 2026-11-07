@@ -6,7 +6,7 @@
 **Architecture:** Zachować już istniejące rozdzielenie object_id, nazwy prezentacyjnej i klucza geometrii w V03. Dodać typowaną deklarację źródła do wspólnego authoringu oraz eksportowalną asercję właścicieli, która wyłącznie sprawdza istniejące przypisanie i nigdy go nie zmienia. Nie dodawać wykonywalnego marker_bindings ani nie przełączać writera IR.
 **Tech Stack:** Python DSL i unittest, Rust serde/fullmag-authoring, istniejące API v2, obecny workflow bootstrap.
 **Spec:** [Projekt źródła domeny i diagnoza](2026-11-07-explicit-domain-mesh-roundtrip-proposal.md), [mesh roundtrip](../../specs/mesh-roundtrip-semantics-v1.md), [ADR0024](../../adr/0024-compositional-physics-object-model.md), [ADR0027](../../adr/0027-canonical-fem-mesh-policy-and-quality-evidence.md), [zatwierdzony projekt domen](../../../.superpowers/brainstorm/2026-11-02-antenna-magnetic-domains/design.md).
-**Status:** ZATWIERDZONY 07.11.2026; W REALIZACJI. T1 zapisany w 1c83cf566933a2a5ce49e42a9bc785ebc47dd22f; T2 ma interpretowane regresje, CI i odbiór T3 pozostają otwarte. Naprawione wcześniej object_id i lookup właściciela podregionu są osobnymi warunkami koniecznymi. Ten etap nie kończy E0–E12, wspólnej siatki antena/LLG ani reprodukcji publikacji.
+**Status:** ZREALIZOWANY ŹRÓDŁOWO 07.11.2026 — T1/T2/T3: 3/3. Końcowy CI 42402270407 dla d8d35943caca6d894562077828ea077555bdbf21: success; wymagane zadania Rust i przeglądarki success. Szczegóły i decyzje: [raport odbioru](2026-11-07-explicit-domain-roundtrip-result.md). Ten etap nie kończy E0–E12, wdrożenia do działającego API/UI, wspólnej siatki antena/LLG ani reprodukcji publikacji.
 
 ## Global Constraints
 
@@ -95,12 +95,12 @@ Generated usuwa tylko wybór źródła domeny, mapy i jego asercję; zachowuje r
 
 **Interfaces:** geometry_name według tabeli; istniejące funkcje export_builder_draft, build_scene_document_from_builder, build_builder_from_scene_document i render_scene_document_as_script zachowują klucz i etykietę. Nowe mapy etykiet nie są źródłem solver physics.
 
-- [ ] Napisać packages/fullmag-py/tests/test_geometry_asset_identity.py: jawny/legacy klucz, identyczne ID po rename, auxiliary label różny od geometry_id w obu producentach graph, dwa obiekty o różnych kluczach, Translate i nazwane dzieci CSG. Dodać osobno Translate(Translate(Box(name=inner), a, name=mid), b, name=outer) z różnymi niezerowymi a i b, oraz trzy kolizje globalnych kluczy przy różnych label/ID. Porównać pełne geometry.entries, oba offsety i referencje; nie tylko liczby elementów.
-- [ ] Uruchomić te testy przed poprawką w obecnym backendzie; wymagany RED na utracie klucza/nazwy, bez setup failure.
-- [ ] Uzupełnić notę 0105, tabelę parametrów i mapę Python→V03, source anchors oraz failure/compatibility. Nie duplikować równań meshu; żadne nowe równanie nie jest potrzebne.
-- [ ] Zaimplementować przeniesienie istniejącego klucza w publicznym DSL, obu exporterach i obu adapterach Rust. Nie przepisywać istniejących ID. Przy tworzeniu per_geometry intent dla jawnego geometry_name użyć rzeczywistego klucza; przy odczycie legacy zachować dotychczasowy lookup aliasów i precedence.
-- [ ] Dodać Rust testy geometry_asset_identity_ dla JSON, rename, overrides, starego braku pola i pustej wartości. Uzupełnić wszystkie pełne inicjalizatory; nie osłabiać walidacji materiału/roli.
-- [ ] GREEN: nowe Python testy i dotychczasowe object_id/mesh-by-id/owned-region testy; Rust wyłącznie CI. Focused scientific validator/source-map i kontrakty dokumentacji. Commit dopiero dla spójnego pionowego slice'u, bez cudzych hunków.
+- [x] Napisać packages/fullmag-py/tests/test_geometry_asset_identity.py: jawny/legacy klucz, identyczne ID po rename, auxiliary label różny od geometry_id w obu producentach graph, dwa obiekty o różnych kluczach, Translate i nazwane dzieci CSG. Dodać osobno Translate(Translate(Box(name=inner), a, name=mid), b, name=outer) z różnymi niezerowymi a i b, oraz trzy kolizje globalnych kluczy przy różnych label/ID. Porównać pełne geometry.entries, oba offsety i referencje; nie tylko liczby elementów.
+- [x] Uruchomić te testy przed poprawką w obecnym backendzie; wymagany RED na utracie klucza/nazwy, bez setup failure.
+- [x] Uzupełnić notę 0105, tabelę parametrów i mapę Python→V03, source anchors oraz failure/compatibility. Nie duplikować równań meshu; żadne nowe równanie nie jest potrzebne.
+- [x] Zaimplementować przeniesienie istniejącego klucza w publicznym DSL, obu exporterach i obu adapterach Rust. Nie przepisywać istniejących ID. Przy tworzeniu per_geometry intent dla jawnego geometry_name użyć rzeczywistego klucza; przy odczycie legacy zachować dotychczasowy lookup aliasów i precedence.
+- [x] Dodać Rust testy geometry_asset_identity_ dla JSON, rename, overrides, starego braku pola i pustej wartości. Uzupełnić wszystkie pełne inicjalizatory; nie osłabiać walidacji materiału/roli.
+- [x] GREEN: nowe Python testy i dotychczasowe object_id/mesh-by-id/owned-region testy; Rust wyłącznie CI. Focused scientific validator/source-map i kontrakty dokumentacji. Commit dopiero dla spójnego pionowego slice'u, bez cudzych hunków.
 
 ## T2. Źródło domeny i asercja przez cały authoring
 
@@ -108,14 +108,14 @@ Generated usuwa tylko wybór źródła domeny, mapy i jego asercję; zachowuje r
 
 **Interfaces projektowane:** Python normalize_shared_domain_mesh_source(value) -> dict, capture_domain_marker_owners(problem) -> list[dict], validate_domain_marker_owners(problem, owners) -> None. Rust ScriptBuilderSharedDomainMeshSource, ScriptBuilderDomainMarkerOwner oraz validate_shared_domain_mesh_source(source, objects) -> Result<(), SceneDocumentValidationError>. Typ enum jest współdzielony przez builder i scenę, nie kopiowany do osobnych DTO.
 
-- [ ] Napisać packages/fullmag-py/tests/test_explicit_domain_roundtrip.py oraz testy Rust shared_domain_source_: brak/generated/explicit, reset, oba rodzaje map, kompletność owners i błędne typy. Wspólny fixture JSON w crates/fullmag-authoring/tests/fixtures/domain_marker_owner_cases.json ma identyczne oczekiwane wyniki w obu językach.
-- [ ] RED obejmuje rename przy ID, usunięcie i nowego ownera pod dawną nazwą, alias regionu po rename, alias kolidujący z innym region_id, wyłączony ID z aktywną nazwą oraz brak coverage. Nie zastępować aliasu nowym kluczem mapy.
-- [ ] Wykonać initial capture tylko na kompletnym modelu przy przyjęciu starego wejścia. Nowa scena z marker_owners zachowuje je literalnie. Nowy model/scratch/import bez materiału lub jednoznacznych właścicieli ma odmówić, nie zgadywać. Dla all-air GSG legalne są puste mapy i owners=[].
-- [ ] Zaimplementować asercję po zebraniu wszystkich obiektów i regionów przed każdym lowering/materializacją, także include_geometry_assets=False. Root geometry musi mieć dokładnie jednego ownera; podregion używa ID przed aliasem tak jak obecny resolver Rust, z owner_object zgodnym z RegionRef.
-- [ ] Przenieść deklarację przez capture, builder, scenę, overrides i renderer domain_mesh. Eksportować statyczne rekordy fm.RegionRef, nigdy bieżące ponowne rozwiązanie oczekiwanego ID. Bez nowego pola FemDomainMeshAssetIR.
-- [ ] Włączyć deklarację do authoring_model.rs::discretization_payload i istniejącej rewizji/fingerprint. Niezwiązany patch musi zachować source/owners. Zmiana źródła unieważnia przygotowanie przez obecny mechanizm, bez zmiany archiwalnych wyników.
-- [ ] Testować pełną scenę i API projection/persistence, w tym Merge Patch null versus generated. Nie dodawać nowego endpointu lub edytora JSON. Stary native fem_domain_mesh nadal oznacza study.mesh.load i nie przejmuje nowego pola.
-- [ ] GREEN i commit całej spójnej ścieżki T2 razem. Nie publikować częściowego writera, który zapisuje pole, lecz pomija je w eksporcie lub walidacji.
+- [x] Napisać packages/fullmag-py/tests/test_explicit_domain_roundtrip.py oraz testy Rust shared_domain_source_: brak/generated/explicit, reset, oba rodzaje map, kompletność owners i błędne typy. Wspólny fixture JSON w crates/fullmag-authoring/tests/fixtures/domain_marker_owner_cases.json ma identyczne oczekiwane wyniki w obu językach.
+- [x] RED obejmuje rename przy ID, usunięcie i nowego ownera pod dawną nazwą, alias regionu po rename, alias kolidujący z innym region_id, wyłączony ID z aktywną nazwą oraz brak coverage. Nie zastępować aliasu nowym kluczem mapy.
+- [x] Wykonać initial capture tylko na kompletnym modelu przy przyjęciu starego wejścia. Nowa scena z marker_owners zachowuje je literalnie. Nowy model/scratch/import bez materiału lub jednoznacznych właścicieli ma odmówić, nie zgadywać. Dla all-air GSG legalne są puste mapy i owners=[].
+- [x] Zaimplementować asercję po zebraniu wszystkich obiektów i regionów przed każdym lowering/materializacją, także include_geometry_assets=False. Root geometry musi mieć dokładnie jednego ownera; podregion używa ID przed aliasem tak jak obecny resolver Rust, z owner_object zgodnym z RegionRef.
+- [x] Przenieść deklarację przez capture, builder, scenę, overrides i renderer domain_mesh. Eksportować statyczne rekordy fm.RegionRef, nigdy bieżące ponowne rozwiązanie oczekiwanego ID. Bez nowego pola FemDomainMeshAssetIR.
+- [x] Włączyć deklarację do authoring_model.rs::discretization_payload i istniejącej rewizji/fingerprint. Niezwiązany patch musi zachować source/owners. Zmiana źródła unieważnia przygotowanie przez obecny mechanizm, bez zmiany archiwalnych wyników.
+- [x] Testować pełną scenę i API projection/persistence, w tym Merge Patch null versus generated. Nie dodawać nowego endpointu lub edytora JSON. Stary native fem_domain_mesh nadal oznacza study.mesh.load i nie przejmuje nowego pola.
+- [x] GREEN i commit całej spójnej ścieżki T2 razem. Nie publikować częściowego writera, który zapisuje pole, lecz pomija je w eksporcie lub walidacji.
 
 ## T3. Odbiór rzeczywistych wejść i bramki integracji
 
@@ -123,12 +123,12 @@ Generated usuwa tylko wybór źródła domeny, mapy i jego asercję; zachowuje r
 
 **Interfaces:** publiczny loader/exporter oraz oba adaptery Rust. Test Rust uruchamia testowy most Python przez stdin/stdout JSON, najpierw export_builder, potem po rzeczywistym przejściu przez adaptery Rust render_and_reimport. Most używa istniejących publicznych funkcji i nie jest nowym endpointem lub narzędziem wykonującym solver. Zwraca pełny IR, flagi/stages i liczniki blokad. Istniejące dane real-gsg-inputs-v1 są bazą porównania, nie dowodem nowych PASS.
 
-- [ ] Dodać do istniejącego kroku roundtrip CI oba nowe pliki Python i prefiksy Rust; nie tworzyć zastępczego solwera lub nowej trasy buildu.
-- [ ] Uruchomić rzeczywisty GSG oraz zachowany kandydat corner25 wyłącznie jako wejścia authoringu, z lightweight_assets i aktywnymi blokadami Popen/Gmsh generation/Solve. Nie stosować kandydata do wykonania i nie zmieniać jego zamrożonych bajtów.
-- [ ] Porównać source, obie mapy, build_target=domain, pełny fizyczny IR i liczbę/parametry etapów. Zastosować wyłącznie ścisłą listę ścieżek i oczekiwanych wartości z sekcji poniżej. Nie ignorować geometry, IDs, materiałów, assetów lub fizyki.
-- [ ] Dla syntetycznego już zapisanego artefaktu wykonać istniejący loader po rename przy trwałych kluczach; potwierdzić te same mapy, topologię i hashe pliku. Przypadek legacy alias drift ma odmówić przed materializacją. Bez tworzenia nowego meshu.
-- [ ] Sprawdzić stary builder/scenę, FDM CPU/GPU authoring oraz FEM CPU/GPU requested intent. Ten test nie jest dowodem wykonania czterech backendów.
-- [ ] Przeczytać rzeczywiste wyniki CI, przeprowadzić review całego diffu i selektywnie commit/push. Zaktualizować raport oraz status E12 bez utożsamiania source-contract PASS z runtime/science/UI E2E.
+- [x] Dodać do istniejącego kroku roundtrip CI oba nowe pliki Python i prefiksy Rust; nie tworzyć zastępczego solwera lub nowej trasy buildu.
+- [x] Uruchomić rzeczywisty GSG oraz zachowany kandydat corner25 wyłącznie jako wejścia authoringu, z lightweight_assets i aktywnymi blokadami Popen/Gmsh generation/Solve. Nie stosować kandydata do wykonania i nie zmieniać jego zamrożonych bajtów.
+- [x] Porównać source, obie mapy, build_target=domain, pełny fizyczny IR i liczbę/parametry etapów. Zastosować wyłącznie ścisłą listę ścieżek i oczekiwanych wartości z sekcji poniżej. Nie ignorować geometry, IDs, materiałów, assetów lub fizyki.
+- [x] Dla syntetycznego już zapisanego artefaktu wykonać istniejący loader po rename przy trwałych kluczach; potwierdzić te same mapy, topologię i hashe pliku. Przypadek legacy alias drift ma odmówić przed materializacją. Bez tworzenia nowego meshu.
+- [x] Sprawdzić stary builder/scenę, FDM CPU/GPU authoring oraz FEM CPU/GPU requested intent. Ten test nie jest dowodem wykonania czterech backendów.
+- [x] Przeczytać rzeczywiste wyniki CI, przeprowadzić review całego diffu i selektywnie commit/push. Zaktualizować raport oraz status E12 bez utożsamiania source-contract PASS z runtime/science/UI E2E.
 
 ## Konkretne kontrole zadań
 
@@ -242,6 +242,8 @@ Publiczny IR writer pozostaje 0.3.0; nie deklarujemy v0.3.1, osobnego mesh write
 
 Managed build, restart, przeglądarka dla zmienionego importu/eksportu, nowe przygotowanie, rzeczywisty Solve, cold-load i reprodukcja publikacji pozostają odrębnymi bramkami pełnego zadania. Ten plan prosi wyłącznie o implementację źródeł i lekką weryfikację/CI. Nie zastępuje tych bramek testami na fixture.
 
+Poniższy self-review i uzupełnienia są historycznym zapisem sprzed zatwierdzenia i wdrożenia; bieżący wynik znajduje się w sekcji odbioru.
+
 ## Self-review przed przekazaniem
 
 - Zachowanie geometrii/etykiet i per-object mesh → T1.
@@ -271,3 +273,19 @@ poprawek przed zatwierdzeniem. Weryfikacja dokumentu: istniejące lokalne
 linki, parzyste ogrodzenia bloków i wymagane sekcje planu. Żaden z nowych
 interfejsów nie został zastosowany, skompilowany lub zakwalifikowany tym
 przeglądem.
+
+## Odbiór 07.11.2026
+
+Zatwierdzony zakres źródłowy T1–T3 jest wykonany. 110 wybranych regresji
+Pythona przeszło, a końcowy ciągły test obu zamrożonych źródeł przez Rust
+i Python potwierdził pełny IR, źródło, mapy, geometrię i etapy przy zerowej
+liczbie nowych meshingów i Solve. Cały wymagany przebieg CI zakończył się
+success: https://github.com/MateuszZelent/fullmag/actions/runs/42402270407.
+
+Wcześniejszy pełny zielony przebieg kodu produkcyjnego:
+https://github.com/MateuszZelent/fullmag/actions/runs/42400481377.
+Odczyt istniejącego nośnika dotyczy małej domeny all-air z pustymi mapami;
+ograniczenie jest jawnie opisane w raporcie. E12 całego worktree pozostaje
+otwarty. Nie wykonano managed native buildu, restartu, nowego przygotowania,
+Solve ani zwolnienia rezerwacji. Integracja całego przedsięwzięcia i zamknięcie
+worktree pozostają w nadrzędnym planie E0–E12.
