@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
-    "reviewed_revision": "51466dfe5d97738859ed8db47fe0c1293845bd30"
+    "reviewed_revision": "70d35b84dae4e840e8cc881c35ef45014c604284"
   },
   "backend_matrix": [
     {
@@ -285,6 +285,22 @@
       "symbol": "mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step",
       "responsibility": "Requires a real successful GPU solve, corrupts only its owned potential after final use, and verifies rejection despite a stale success flag.",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711"
+    },
+    {
+      "id": "gpu-shared-hypre-policy",
+      "path": "backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp",
+      "symbol": "configure_hypre_cuda_device_policy",
+      "responsibility": "Own checked device and vendor sparse setters once per process under a mutex and publish their snapshot.",
+      "evidence_status": "Pinned current source contract; no new runtime, full-residency, or speedup qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L151"
+    },
+    {
+      "id": "gpu-shared-hypre-readiness",
+      "path": "backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp",
+      "symbol": "hypre_cuda_device_policy_is_available",
+      "responsibility": "Require configured device memory/execution and vendor SpTrans/SpMV/SpGEMM with no recorded error.",
+      "evidence_status": "Pinned current source contract; no new runtime, full-residency, or speedup qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L103"
     }
   ],
   "public_api": {

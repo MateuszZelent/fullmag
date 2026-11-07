@@ -666,12 +666,14 @@ device, or workspace changes invalidate the setup and rebuild it explicitly.
 Profiler setup time therefore reports real rebuild work rather than a
 hard-coded zero.
 
-Strict GPU demag solver setup also best-effort enables Hypre's public vendor
-sparse-kernel switches for device builds: SpTrans, SpMV, and SpGEMM. This keeps
-CUDA Hypre AMG setup and solver application on the optimized vendor sparse path
-where the bundled Hypre build supports it, without making optional Hypre
-configuration setters a runtime precondition and without changing the Poisson
-weak form, boundary condition, tolerance, or residual telemetry.
+Current native GPU setup requires the shared process-wide HYPRE device policy.
+Its sole owner enables device memory/execution and vendor SpTrans, SpMV, and
+SpGEMM through checked setters, retaining the first failure. Availability requires
+all flags and successful configuration. The owner attempts configuration once
+under a mutex and shares the resulting snapshot with its native GPU consumers;
+it is not a per-solver switch that can be changed after matrix setup. This policy
+does not change the Poisson weak form, boundary condition, tolerance, or residual
+contract, and setter success alone does not qualify whole-execution GPU residency.
 
 Update 2026-05-15 readiness preset: the benchmark harness exposes
 `--fem-cpu-no-pbc-adaptive-ready-preset` as a shorthand for the existing FEM CPU
@@ -973,6 +975,8 @@ managed-runtime qualification.
 | PGBB strict GPU default test | `crates/fullmag-runner/src/native_fem.rs` | `unresolved_gpu_demag_policy_prefers_amg_preconditioner_for_pgbb` | Checks the omitted-policy PGBB strict GPU default. | FEM GPU | Existing resolver regression test; not run for this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/native_fem.rs#L8654) |
 | CPU Poisson solver | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Configures Hypre solver/preconditioner and validates the attempted solve. | FEM CPU | Source-visible; this page does not claim a fresh CPU runtime qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp#L211) |
 | GPU Poisson residual validation | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Independently certifies Euclidean RHS and residual norms after every device-HYPRE solve. | FEM GPU | Native RED/GREEN and seven-step full-Zarr OFF parity passed; see section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452) |
+| Shared GPU HYPRE policy owner | `backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp` | `configure_hypre_cuda_device_policy` | Configures checked device/vendor setters once per process and shares a snapshot. | Native FEM GPU consumers | Source contract; not a new runtime or speedup qualification. | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L151) |
+| Shared GPU HYPRE readiness | `backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp` | `hypre_cuda_device_policy_is_available` | Requires configured device memory/execution and all vendor sparse flags without an error. | Native FEM GPU consumers | Source contract; setter success does not prove full GPU residency. | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L103) |
 | Potential RHS | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | Assembles the magnetization source for the finite-element Poisson equation. | FEM CPU; shared equation contract | Source-visible; see `fem_demag_poisson_contract`. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L359) |
 | Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Recovers `H_demag` from the potential gradient. | FEM CPU; shared equation contract | Source-visible; manufactured-potential check is described in `docs/physics/fem_demag_poisson.md`. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L709) |
 | Native FEM host threads | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | Resolves and applies the native OpenMP team at run start. | FEM CPU; GPU host initialization | `cpu_threads_contract` source contract; no device-residency claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/runtime/cpu_threads.cpp#L137) |
