@@ -43,6 +43,18 @@ COMPOSE_ERROR = "\n".join((
 ))
 
 
+class RecreatedNetworkFailureTests(unittest.TestCase):
+    def test_exact_owned_network_removal_then_pool_failure(self):
+        prefix = f"Network {NETWORK} Removing\nNetwork {NETWORK} Removed\n"
+        expected = reconcile.validate_pool_failure(COMPOSE_ERROR, NETWORK, PROJECT)
+        self.assertEqual(reconcile.validate_pool_failure(prefix + COMPOSE_ERROR, NETWORK, PROJECT), expected)
+        for bad in (prefix.replace(NETWORK, "foreign") + COMPOSE_ERROR,
+                    f"Network {NETWORK} Removing\n" + COMPOSE_ERROR,
+                    prefix + "unexpected\n" + COMPOSE_ERROR):
+            with self.subTest(output=bad), self.assertRaises(BuildControlError):
+                reconcile.validate_pool_failure(bad, NETWORK, PROJECT)
+
+
 def helper_doc():
     labels = {
         "com.docker.compose.project": PROJECT,

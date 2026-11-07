@@ -72,6 +72,12 @@ def validate_pool_failure(error: object, network_name: str, project: str) -> str
         f"Container {project}-backend-1 Creating",
         terminal,
     ]
+    # Compose may retire this same private network before retrying creation.
+    # Keep the removal prefix exact; resource absence is independently fenced
+    # by _observe before any failure-only reconciliation is published.
+    removed = [f"Network {network_name} Removing", f"Network {network_name} Removed"]
+    if lines[:2] == removed:
+        lines = lines[2:]
     require(lines == expected,
             "Original Compose output differs from the exact observed address-pool failure")
     require(not re.search(r"\b(?:Created|Started|Running|Done)\b", error, re.IGNORECASE),
