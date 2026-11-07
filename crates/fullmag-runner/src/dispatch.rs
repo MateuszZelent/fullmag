@@ -10227,5 +10227,5 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "fem-gpu"))]
+#[cfg(all(test, any(feature = "fem-gpu", feature = "fem-native")))]
 pub(crate) use tests::tiny_fem_plan as test_tiny_fem_plan;

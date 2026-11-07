@@ -2275,7 +2275,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     identity = _compose_identity(layout)
     from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
     requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
-    check_requested_subnet_available(requested_network_subnet, identity["network_name"])
+    if requested_network_subnet is not None:
+        check_requested_subnet_available(requested_network_subnet, identity["network_name"])
     if validated_post_build_generation is not None:
         if (validated_post_build_generation["compose_project"] != identity["project_name"]
                 or validated_post_build_generation["source_root"] != str(selected)):

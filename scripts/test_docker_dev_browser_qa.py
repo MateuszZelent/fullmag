@@ -7,6 +7,8 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1241,6 +1243,151 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 mutate(invalid)
                 with self.assertRaises(qa.BuildControlError):
                     qa._validate_planar_airbox_observation(invalid, session)
+
+    def test_inspector_ack_compose_is_standalone_and_attests_its_exact_command_and_sources(self):
+        qa = self.qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree", "source_root": str(ROOT)}
+        sources = {key: "a" * 64 for key in qa.INSPECTOR_ACK_SOURCES}
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+            inspector_ack=True, inspector_ack_source_sha256=sources,
+        )
+        service = document["services"]["browser-qa"]
+        self.assertEqual(service["command"], [
+            "node", "/state/development/workspace/apps/control-room/scripts/check-inspector-ack-browser.mjs",
+        ])
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "inspector-ack")
+        self.assertEqual(json.loads(service["environment"]["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256"]), sources)
+        self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+        for options in ({"airbox_inspector": True}, {"canvas_only": False}, {"expect_run_performance": True},
+                        {"saved_playback_item_id": "123"}, {"expect_planar_airbox": True}):
+            with self.subTest(options=options), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                    inspector_ack=True, inspector_ack_source_sha256=sources, **options,
+                )
+        helper = {
+            "Image": "sha256:" + "c" * 64,
+            "Config": {
+                "User": "65532:65532", "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {**qa.source_labels(identity), "com.docker.compose.project": identity["project_name"],
+                           "com.docker.compose.service": "browser-qa"},
+            },
+            "HostConfig": {
+                "GroupAdd": qa._script_bind_groups(ROOT), "ReadonlyRootfs": True,
+                "NetworkMode": identity["network_name"], "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": "fullmag-frontend-state", "Destination": "/state/development", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+            ],
+        }
+        control = SimpleNamespace(project=identity["project_name"])
+        qa._validate_browser_helper(helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                                    inspector_ack=True, inspector_ack_source_sha256=sources)
+        for change in ("command", "source", "unrequested"):
+            altered = deepcopy(helper)
+            if change == "command":
+                altered["Config"]["Cmd"][-1] = "/tmp/untrusted.mjs"
+            if change == "source":
+                altered["Config"]["Env"].append("CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256={}")
+            with self.subTest(change=change), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    altered, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                    inspector_ack=change != "unrequested", inspector_ack_source_sha256=sources,
+                )
+
+    def test_inspector_ack_validator_requires_restoration_and_nonvacuous_bounded_proof(self):
+        qa = self.qa
+        sources = {key: "a" * 64 for key in qa.INSPECTOR_ACK_SOURCES}
+        fields = [{"label": "Name", "disabled": False, "opacity": "1"}]
+        payload = {
+            "schema": qa.INSPECTOR_ACK_RESULT_SCHEMA, "scenario": "inspector-ack", "state": "passed", "failure": None,
+            "public_url": "http://127.0.0.1:3242", "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION, "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources, "source_sha256_after": sources,
+            "session": {"name": "airbox_inspector_mixed", "session_id": "owned", "session_epoch": "owned@1",
+                        "request_scope_epoch": "api:1"},
+            "object_id": "box", "original_name": "mixed_p1_box_prism",
+            "generated_name": "mixed_p1_box_prism_ui_ack_00000000-0000-4000-8000-000000000001",
+            "baseline": {"fields": fields, "opacity_animations": 0, "scroll": 0},
+            "pending": {"fields": fields, "opacity_animations": 0, "scroll": 90},
+            "ack": {"fields": fields, "opacity_animations": 0, "scroll": 90},
+            "node_preserved": True, "focus_preserved": True,
+            "receipts": [{"phase": "commit", "status": 200, "revision": 5},
+                         {"phase": "restore", "status": 200, "revision": 6}],
+            "restoration": {"state": "restored", "name": "mixed_p1_box_prism", "revision": 6},
+            "request_counts": {"PATCH /v2/sessions/current/model/objects/box": 2,
+                               "GET /v2/sessions/current/model/scene": 3},
+            "measured_requests": 5, "total_requests": 25, "request_limit": 128, "per_path_read_limit": 16,
+            "errors": [], "violations": [], "proxy_failures": [],
+        }
+
+        payload["session_after"] = dict(payload["session"])
+
+        def parse(value):
+            return qa._parse_inspector_ack_result(json.dumps(value).encode(), payload["public_url"],
+                                                  payload["probe_url"], sources)
+
+        self.assertEqual(parse(payload), payload)
+        cases = [
+            ("foreign session", lambda value: value["session"].update(name="unrelated")),
+            ("foreign command", lambda value: value["request_counts"].update({"POST /v2/sessions/current/simulation/commands": 1})),
+            ("unknown restoration", lambda value: value["restoration"].update(state="unknown")),
+            ("source drift", lambda value: value.update(source_sha256_after={**sources, "runner": "b" * 64})),
+            ("focus lost", lambda value: value.update(focus_preserved=False)),
+            ("scroll reset", lambda value: value["ack"].update(scroll=0)),
+            ("disabled pending input", lambda value: value["pending"].update(fields=[{"label": "Name", "disabled": True, "opacity": "1"}])),
+            ("duplicate object write", lambda value: value["request_counts"].update({"PATCH /v2/sessions/current/model/objects/box": 3})),
+            ("non-ACK", lambda value: value["receipts"][0].update(status=409)),
+            ("reused revision", lambda value: value["receipts"][1].update(revision=5)),
+            ("vacuous fields", lambda value: value["baseline"].update(fields=[])),
+        ]
+        for reason, change in cases:
+            with self.subTest(reason=reason), self.assertRaises(qa.BuildControlError):
+                altered = deepcopy(payload)
+                change(altered)
+                parse(altered)
+
+    def test_inspector_ack_cleanup_refuses_foreign_session_or_concurrent_name(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for the existing browser harness pure cleanup contract")
+        source = (ROOT / "apps/control-room/scripts/check-inspector-ack-browser.mjs").as_uri()
+        javascript = """
+import assert from 'node:assert/strict';
+const { inspectorAckSession, inspectorAckRestoreDecision } = await import(process.argv[1]);
+const status = {
+ session: { name: 'airbox_inspector_mixed', session_id: 'owned', session_epoch: 'owned@1', request_scope_epoch: 'api:1' },
+ solver: { state: 'awaiting_command' },
+ lifecycle: { commandability: 'allowed', connectivity: 'connected', session_resource: 'active' },
+};
+const session = inspectorAckSession(status);
+for (const changed of [
+ {...status, session: {...status.session, name:'foreign'}},
+ {...status, solver: {state:'running'}},
+ {...status, solver: {state:'waiting'}},
+]) assert.throws(() => inspectorAckSession(changed));
+const options = {
+ expectedSession: session, actualSession: session, objectId: 'box', originalName: 'original',
+ generatedName: 'unique-attempt-name', scene: {revision: 8, objects:[{id:'box', name:'unique-attempt-name', notes:'concurrent note'}]},
+};
+assert.deepEqual(inspectorAckRestoreDecision(options), {state:'restore', patch:{name:'original', base_revision:8}});
+assert.equal(inspectorAckRestoreDecision({...options, actualSession:{...session, request_scope_epoch:'new'}}).state,'unknown');
+assert.equal(inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[{id:'box',name:'third-party'}]}}).state,'conflict');
+assert.equal(inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[{id:'box',name:'original'}]}}).state,'original');
+assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[]}}));
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_airbox_inspector_compose_is_opt_in_and_uses_the_managed_readonly_runner(self):
         identity = {

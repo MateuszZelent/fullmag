@@ -55,6 +55,12 @@ BROWSER_IMAGE_DIGESTS = frozenset({
 })
 RESULT_SCHEMA = "fullmag.docker-dev-browser-qa-result.v1"
 AIRBOX_INSPECTOR_RESULT_SCHEMA = "fullmag.docker-dev-airbox-inspector-result.v1"
+INSPECTOR_ACK_RESULT_SCHEMA = "fullmag.docker-dev-inspector-ack-result.v1"
+INSPECTOR_ACK_SOURCES = {
+    "runner": "apps/control-room/scripts/check-inspector-ack-browser.mjs",
+    "loopback_proxy": "apps/control-room/scripts/lib/browser-qa-loopback-proxy.mjs",
+    "request_budget": "apps/control-room/scripts/lib/inspector-request-budget.mjs",
+}
 SAVED_PLAYBACK_RESULT_SCHEMA = "fullmag.docker-dev-saved-playback-result.v1"
 OPERATION_SCHEMA = "fullmag.docker-dev-browser-qa.v1"
 BROWSER_IMAGE_RE = re.compile(
@@ -387,6 +393,27 @@ def _script_bind_groups(selected: Path) -> list[str]:
         return []
     gid = (selected / "apps/control-room/scripts").stat().st_gid
     return [str(gid)] if gid not in (0, 65532) else []
+
+
+def _inspector_ack_source_sha256(selected: Path) -> dict[str, str]:
+    hashes = {}
+    for key, relative in INSPECTOR_ACK_SOURCES.items():
+        path = selected / relative
+        try:
+            with path.open("rb") as source:
+                payload = source.read(2 * 1024 * 1024 + 1)
+        except OSError as error:
+            raise BuildControlError("Selected checkout is missing an Inspector ACK proof source") from error
+        if len(payload) > 2 * 1024 * 1024:
+            raise BuildControlError("Inspector ACK proof source exceeds its pin bound")
+        hashes[key] = hashlib.sha256(payload).hexdigest()
+    return hashes
+
+
+def _validate_inspector_ack_hashes(value) -> None:
+    if (not isinstance(value, Mapping) or set(value) != set(INSPECTOR_ACK_SOURCES)
+            or any(not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) for digest in value.values())):
+        raise BuildControlError("Inspector ACK proof source pins are malformed")
 
 
 def _saved_playback_harness_sha256(selected: Path) -> str:
@@ -1131,7 +1158,21 @@ def _compose_document(
     expect_planar_airbox: bool = False,
     control: BuildControl | None = None,
     private_group_storage: bool = False,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
+    if type(inspector_ack) is not bool:
+        raise BuildControlError("Inspector ACK scenario marker must be boolean")
+    if inspector_ack:
+        _validate_inspector_ack_hashes(inspector_ack_source_sha256)
+        if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
+                or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
+                or airbox_inspector or saved_playback_item_id is not None
+                or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_planar_airbox):
+            raise BuildControlError("Inspector ACK QA is a separate task-owned live-resource scenario")
+    elif inspector_ack_source_sha256 is not None:
+        raise BuildControlError("Inspector ACK source pins require their scenario")
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
     if type(expect_planar_airbox) is not bool:
@@ -1267,7 +1308,10 @@ def _compose_document(
     }
     if private_group_storage:
         environment["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
-    if airbox_inspector:
+    if inspector_ack:
+        environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "inspector-ack"
+        environment["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256"] = canonical(dict(inspector_ack_source_sha256)).decode("utf-8")
+    elif airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "saved-playback"
@@ -1326,7 +1370,8 @@ def _compose_document(
                     else [
                         "node",
                         "/state/development/workspace/apps/control-room/scripts/"
-                        + ("verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
+                        + ("check-inspector-ack-browser.mjs" if inspector_ack
+                           else "verify-airbox-inspector.mjs" if airbox_inspector else "docker-dev-browser-qa.mjs"),
                     ]
                 ),
                 "volumes": [
@@ -1372,6 +1417,8 @@ def _validate_browser_helper(
     expect_run_performance: bool | None = None,
     expect_planar_airbox: bool = False,
     private_group_storage: bool = False,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
 ) -> None:
     if type(private_group_storage) is not bool:
         raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
@@ -1417,6 +1464,24 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper private group storage profile differs")
     elif private_storage_environment:
         raise ControlOutcomeUnknown("Legacy browser helper unexpectedly declares a private group profile")
+    ack_environment = [entry for entry in raw_environment
+                       if entry.startswith("CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256=")]
+    ack_scenario = [entry for entry in raw_environment
+                    if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=")]
+    if inspector_ack:
+        try:
+            _validate_inspector_ack_hashes(inspector_ack_source_sha256)
+        except BuildControlError as error:
+            raise ControlOutcomeUnknown(str(error)) from error
+        expected_pin = canonical(dict(inspector_ack_source_sha256)).decode("utf-8")
+        if (ack_environment != ["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256=" + expected_pin]
+                or ack_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=inspector-ack"]
+                or config.get("Cmd") != [
+                    "node", "/state/development/workspace/apps/control-room/scripts/check-inspector-ack-browser.mjs",
+                ]):
+            raise ControlOutcomeUnknown("Browser helper Inspector ACK command or source pins differ")
+    elif ack_environment or "CONTROL_ROOM_BROWSER_QA_SCENARIO=inspector-ack" in environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested Inspector ACK scenario")
     if saved_playback_item_id is not None:
         if (not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id)
                 or not isinstance(source_script_sha256, str)
@@ -2593,6 +2658,111 @@ def _validate_startup_unmount_cancellation_probes(events_value: object, probes_v
         raise BuildControlError("Airbox Inspector startup request failure was not resolved by an exact follow-up probe")
 
 
+def _parse_inspector_ack_result(output, public_url, browser_url, expected_sources):
+    _validate_inspector_ack_hashes(expected_sources)
+    if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
+        raise BuildControlError("Inspector ACK result exceeds its evidence budget")
+    payload = None
+    for line in reversed(output.decode("utf-8", "replace").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if (not isinstance(payload, Mapping)
+            or payload.get("schema") != INSPECTOR_ACK_RESULT_SCHEMA
+            or payload.get("scenario") != "inspector-ack" or payload.get("state") != "passed"
+            or payload.get("failure") is not None):
+        raise BuildControlError("Inspector ACK helper did not report a passing proof")
+    if (payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources):
+        raise BuildControlError("Inspector ACK helper URL, browser or source pins differ")
+    session = payload.get("session")
+    if (not isinstance(session, Mapping) or session.get("name") != "airbox_inspector_mixed"
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))):
+        raise BuildControlError("Inspector ACK helper did not pin its task-owned session")
+    if payload.get("session_after") != session:
+        raise BuildControlError("Inspector ACK helper session changed before restoration readback")
+    object_id = payload.get("object_id")
+    original = payload.get("original_name")
+    generated = payload.get("generated_name")
+    if (not isinstance(object_id, str) or not 1 <= len(object_id) <= 512
+            or original != "mixed_p1_box_prism"
+            or not isinstance(generated, str)
+            or re.fullmatch(re.escape(original) + r"_ui_ack_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", generated) is None):
+        raise BuildControlError("Inspector ACK helper object/name identity differs")
+    if payload.get("node_preserved") is not True or payload.get("focus_preserved") is not True:
+        raise BuildControlError("Inspector ACK helper lost its node or focus")
+    snapshots = [payload.get(key) for key in ("baseline", "pending", "ack")]
+    for snapshot in snapshots:
+        if (not isinstance(snapshot, Mapping) or set(snapshot) != {"fields", "opacity_animations", "scroll"}
+                or type(snapshot["opacity_animations"]) is not int or snapshot["opacity_animations"] != 0
+                or type(snapshot["scroll"]) not in (int, float) or not math.isfinite(snapshot["scroll"])
+                or not isinstance(snapshot["fields"], list) or not 1 <= len(snapshot["fields"]) <= 128):
+            raise BuildControlError("Inspector ACK helper field/scroll snapshot is malformed")
+        for field in snapshot["fields"]:
+            if (not isinstance(field, Mapping) or set(field) != {"label", "disabled", "opacity"}
+                    or type(field["disabled"]) is not bool
+                    or not (field["label"] is None or isinstance(field["label"], str) and len(field["label"]) <= 256)
+                    or not isinstance(field["opacity"], str) or len(field["opacity"]) > 32):
+                raise BuildControlError("Inspector ACK field availability evidence is malformed")
+    baseline, pending, acknowledged = snapshots
+    if (baseline["fields"] != pending["fields"] or baseline["fields"] != acknowledged["fields"]
+            or pending["scroll"] <= 0 or pending["scroll"] != acknowledged["scroll"]):
+        raise BuildControlError("Inspector ACK helper field state or nonzero scroll was not preserved")
+    receipts = payload.get("receipts")
+    if (not isinstance(receipts, list) or len(receipts) != 2
+            or [entry.get("phase") if isinstance(entry, Mapping) else None for entry in receipts] != ["commit", "restore"]):
+        raise BuildControlError("Inspector ACK helper omitted exact commit/restore acknowledgements")
+    for receipt in receipts:
+        if (set(receipt) != {"phase", "status", "revision"} or type(receipt["status"]) is not int
+                or not 200 <= receipt["status"] < 300 or type(receipt["revision"]) is not int
+                or receipt["revision"] < 0):
+            raise BuildControlError("Inspector ACK helper acknowledgement is malformed")
+    restoration = payload.get("restoration")
+    if (receipts[1]["revision"] <= receipts[0]["revision"] or not isinstance(restoration, Mapping)
+            or restoration.get("state") != "restored" or restoration.get("name") != original
+            or type(restoration.get("revision")) is not int
+            or restoration["revision"] < receipts[1]["revision"]):
+        raise BuildControlError("Inspector ACK helper did not confirm restoration through the API")
+    counts = payload.get("request_counts")
+    if (not isinstance(counts, Mapping) or not 1 <= len(counts) <= 128
+            or payload.get("request_limit") != 128 or payload.get("per_path_read_limit") != 16):
+        raise BuildControlError("Inspector ACK request budget is missing")
+    object_path = "/v2/sessions/current/model/objects/" + quote(object_id, safe="")
+    for key, count in counts.items():
+        if (not isinstance(key, str) or len(key) > 2048 or type(count) is not int or count < 1
+                or " " not in key):
+            raise BuildControlError("Inspector ACK request counts are malformed")
+        method, path = key.split(" ", 1)
+        if method in {"GET", "HEAD"}:
+            if not path.startswith("/v2/") or count > 16:
+                raise BuildControlError("Inspector ACK read budget was exceeded")
+        elif key == "PATCH " + object_path:
+            if count != 2:
+                raise BuildControlError("Inspector ACK submitted duplicate or missing object writes")
+        elif key == "POST /v2/sessions/current/visualization/client-acks":
+            if count > 16:
+                raise BuildControlError("Inspector ACK visualization acknowledgements exceeded their bound")
+        else:
+            raise BuildControlError("Inspector ACK reported an unrelated mutation")
+    measured = payload.get("measured_requests")
+    total = payload.get("total_requests")
+    if (counts.get("PATCH " + object_path) != 2 or type(measured) is not int
+            or measured != sum(counts.values()) or not 2 <= measured <= 128
+            or type(total) is not int or not measured <= total <= 512):
+        raise BuildControlError("Inspector ACK helper exceeded its request budget")
+    if any(payload.get(key) != [] for key in ("errors", "violations", "proxy_failures")):
+        raise BuildControlError("Inspector ACK helper reported browser, proxy or request failures")
+    return dict(payload)
+
+
 def _parse_airbox_inspector_result(
     output: bytes,
     public_url: str,
@@ -3339,6 +3509,8 @@ def _run(
     expect_planar_airbox: bool = False,
     planar_airbox_harness_sha256: str | None = None,
     planar_field_evidence_sha256: str | None = None,
+    inspector_ack: bool = False,
+    inspector_ack_source_sha256: Mapping[str, str] | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -3394,10 +3566,12 @@ def _run(
         expect_run_performance=(True if expect_run_performance else None),
         expect_ambiguous_compute_fields=(
             expect_ambiguous_compute_fields
-            if not airbox_inspector and saved_playback_item_id is None
+            if not airbox_inspector and not inspector_ack and saved_playback_item_id is None
             else None
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_source_sha256,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
@@ -3421,6 +3595,8 @@ def _run(
             payload = _parse_saved_playback_result(
                 raw, public_url, browser_url, saved_playback_item_id, source_script_sha256,
             )
+        elif inspector_ack:
+            payload = _parse_inspector_ack_result(raw, public_url, browser_url, inspector_ack_source_sha256)
         elif airbox_inspector:
             if not airbox_inspector_script_sha256:
                 raise BuildControlError("Airbox Inspector helper source hash is missing")
@@ -3447,6 +3623,7 @@ def _run(
             "stdout_tail": _text(result.stdout),
             "stderr_tail": _text(result.stderr),
             "error": str(error),
+            **({"inspector_ack_restoration": "unknown", "requires_object_readback": True} if inspector_ack else {}),
         })
         _remove_helper(operation, observed["Id"])
         operation["receipt"].update(state="failed-confirmed", error=str(error), exit_code=result.returncode)
@@ -3629,8 +3806,22 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     if private_group_storage and inputs.get("frontend_volume") != control.volume:
         raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
     scenario = inputs.get("scenario", "standard")
-    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox"}:
+    if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox", "inspector-ack"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
+    inspector_ack = scenario == "inspector-ack"
+    inspector_ack_sources = inputs.get("inspector_ack_source_sha256")
+    if inspector_ack:
+        _validate_inspector_ack_hashes(inspector_ack_sources)
+        if _inspector_ack_source_sha256(selected) != inspector_ack_sources:
+            raise BuildControlError("QA reconciliation Inspector ACK proof sources changed")
+        if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
+                or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
+                or inputs.get("expect_fem_airbox_vectors", False) is not False
+                or inputs.get("expect_terminal_telemetry") is not False or inputs.get("expect_run_performance") is not False
+                or inputs.get("expect_ambiguous_compute_fields") is not False):
+            raise BuildControlError("QA reconciliation Inspector ACK receipt includes another scenario")
+    elif inspector_ack_sources is not None:
+        raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
     expect_planar_airbox_input = inputs.get("expect_planar_airbox", False)
     if type(expect_planar_airbox_input) is not bool:
         raise BuildControlError("QA reconciliation Planar Airbox expectation must be boolean")
@@ -3805,7 +3996,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     expected_document = _compose_document(selected, identity, inputs["browser_image"],
         inputs["frontend_volume"], args.port, inputs["browser_runtime_timeout"],
         prepare_viewport_fixture=prepare_viewport_fixture,
-        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector or inspector_ack else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
         expect_fem_airbox_vectors=(
@@ -3815,10 +4006,12 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         expect_run_performance=(True if expect_run_performance_input else None),
         expect_planar_airbox=expect_planar_airbox_input,
         expect_ambiguous_compute_fields=(
-            None if scenario == "saved-playback" or airbox_inspector
+            None if scenario == "saved-playback" or airbox_inspector or inspector_ack
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -3875,7 +4068,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         raise BuildControlError("QA reconciliation browser image pin differs")
     _validate_browser_helper(observed, control, identity, inputs["frontend_volume"],
         image_id, state["ExitCode"], selected,
-        canvas_only=(None if scenario == "saved-playback" or airbox_inspector else canvas_only_compose_pin),
+        canvas_only=(None if scenario == "saved-playback" or airbox_inspector or inspector_ack else canvas_only_compose_pin),
         expect_live_field=(None if scenario == "saved-playback" else expect_live_field_compose_pin),
         expect_airbox_vectors=(None if scenario == "saved-playback" else expect_airbox_compose_pin),
         expect_fem_airbox_vectors=(
@@ -3884,10 +4077,12 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_run_performance=(True if expect_run_performance_input else None),
         expect_ambiguous_compute_fields=(
-            None if scenario == "saved-playback" or airbox_inspector
+            None if scenario == "saved-playback" or airbox_inspector or inspector_ack
             else expect_ambiguous_command_compose_pin
         ),
         airbox_inspector=airbox_inspector,
+        inspector_ack=inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
@@ -3901,7 +4096,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         "observed_exit_code": state["ExitCode"], "browser_container_id": observed["Id"],
         "receipt_sha256": args.expected_receipt_sha256, "compose_sha256": args.expected_compose_sha256,
         "helper_id": helper_id, "helper_log": helper_log, "browser_inspect": observed,
-        "verification": "NOT VERIFIED"}
+        "verification": "NOT VERIFIED",
+        **({"inspector_ack_restoration": "unknown", "requires_object_readback": True} if inspector_ack else {})}
     if retained_evidence is not None:
         stable = {key: value for key, value in retained_evidence.items() if key != "reconciled_at"}
         if canonical(stable) != canonical(evidence) or type(retained_evidence.get("reconciled_at")) not in (int, float):
@@ -4004,6 +4200,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Exercise one real Compute Fields command with its accepted response dropped (canvas-only)",
     )
+    parser.add_argument("--inspector-ack", action="store_true",
+                        help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
     parser.add_argument(
         "--airbox-inspector",
         action="store_true",
@@ -4035,6 +4233,13 @@ def main(argv: list[str] | None = None) -> int:
         or not 60 <= args.pull_timeout <= 1800
     ):
         raise BuildControlError("Browser QA port/timeout/pull-timeout is outside its bounded range")
+    if args.inspector_ack and (
+        args.prepare_viewport_fixture or args.canvas_only or args.expect_live_field is not None
+        or args.expect_airbox_vectors or args.expect_fem_airbox_vectors or args.expect_planar_airbox
+        or args.expect_terminal_telemetry or args.expect_run_performance or args.expect_ambiguous_compute_fields
+        or args.airbox_inspector or args.saved_playback_item_id is not None
+    ):
+        raise BuildControlError("--inspector-ack cannot be combined with other browser QA scenarios")
     if args.canvas_only and args.prepare_viewport_fixture:
         raise BuildControlError("--canvas-only cannot be combined with --prepare-viewport-fixture")
     if args.expect_live_field is not None:
@@ -4150,6 +4355,7 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError(f"Live development group validation failed: {error}") from error
     public_url = f"http://127.0.0.1:{args.port}"
     browser_url = "http://frontend:8080"
+    inspector_ack_sources = _inspector_ack_source_sha256(selected) if args.inspector_ack else None
     airbox_inspector_script_sha256 = None
     source_script_sha256 = None
     if args.airbox_inspector:
@@ -4181,7 +4387,7 @@ def main(argv: list[str] | None = None) -> int:
         args.port,
         args.timeout,
         prepare_viewport_fixture=args.prepare_viewport_fixture,
-        canvas_only=(None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
+        canvas_only=(None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None else args.canvas_only),
         expect_live_field=args.expect_live_field,
         expect_airbox_vectors=(args.expect_airbox_vectors if args.expect_live_field is not None else None),
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
@@ -4189,10 +4395,12 @@ def main(argv: list[str] | None = None) -> int:
         expect_run_performance=(True if args.expect_run_performance else None),
         expect_planar_airbox=args.expect_planar_airbox,
         expect_ambiguous_compute_fields=(
-            None if args.airbox_inspector or args.saved_playback_item_id is not None
+            None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
             else args.expect_ambiguous_compute_fields
         ),
         airbox_inspector=args.airbox_inspector,
+        inspector_ack=args.inspector_ack,
+        inspector_ack_source_sha256=inspector_ack_sources,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -4231,12 +4439,15 @@ def main(argv: list[str] | None = None) -> int:
         "expect_planar_airbox": args.expect_planar_airbox,
         "scenario": (
             "saved-playback" if args.saved_playback_item_id is not None
+            else "inspector-ack" if args.inspector_ack
             else "airbox-inspector" if args.airbox_inspector
             else "planar-airbox" if args.expect_planar_airbox
             else "standard"
         ),
         "airbox_inspector_script_sha256": airbox_inspector_script_sha256,
     }
+    if args.inspector_ack:
+        inputs["inspector_ack_source_sha256"] = inspector_ack_sources
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
@@ -4269,7 +4480,7 @@ def main(argv: list[str] | None = None) -> int:
             public_url,
             browser_url,
             args.timeout,
-            (None if args.airbox_inspector or args.saved_playback_item_id is not None else args.canvas_only),
+            (None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None else args.canvas_only),
             args.expect_live_field,
             args.expect_airbox_vectors,
             args.expect_ambiguous_compute_fields,
@@ -4286,6 +4497,8 @@ def main(argv: list[str] | None = None) -> int:
             args.expect_planar_airbox,
             planar_airbox_harness_sha256,
             planar_field_evidence_sha256,
+            inspector_ack=args.inspector_ack,
+            inspector_ack_source_sha256=inspector_ack_sources,
         )
     return 0
 

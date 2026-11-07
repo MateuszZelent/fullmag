@@ -749,6 +749,23 @@ uruchamia Solve ani Compute Fields. Receipt zapisuje identyfikator oraz SHA-256
 żywy kontekst WebGL i stabilność Inspectora oraz kamery. Tryb SwiftShader jest
 dowodem przeglądarki, nie dowodem sprzętowego GPU ani fizyki FEM.
 
+Osobny scenariusz `--inspector-ack` sprawdza stabilność Inspectora podczas
+rzeczywistego PATCH i ACK. Wymaga przygotowanego, oczekującego modelu
+`examples/airbox_inspector_mixed.py`. Uruchom go dla zdrowej grupy:
+
+```powershell
+python -B scripts/docker_dev_browser_qa.py --repo-root "$source" --source-root "$source" --port 3197 --inspector-ack
+```
+
+Próba przypina sesję i obiekt `mixed_p1_box_prism`, zmienia jego nazwę na
+unikalną wartość testową i potwierdza przywrócenie nazwy przez API. Wynik
+obejmuje zachowanie węzła, fokusu i scrolla, dostępność pól, budżet żądań,
+rewizje obu ACK oraz hashe harnessu i bibliotek. Przywracanie używa aktualnej
+rewizji i własnej nazwy testowej. Konflikt sesji, obca zmiana nazwy albo
+niepotwierdzony wynik zapisuje nieudaną próbę wymagającą odczytu obiektu przed
+kolejnym uruchomieniem. Scenariusz ma własny trwały wynik i wyklucza pozostałe
+tryby Browser QA w tej samej operacji.
+
 ## Budżet backendu podczas trwającego startu
 
 `increase-resources` zwiększa RAM i CPU dokładnie wskazanego backendu przed
