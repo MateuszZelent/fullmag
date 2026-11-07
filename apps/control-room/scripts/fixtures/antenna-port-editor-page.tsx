@@ -66,6 +66,16 @@ function makeScene(name: string): SceneResource {
     target_refs: [{ kind: "object", object_id: returnId }],
     outputs: [{ id: "basis", quantity: "H_ant_basis" }],
   }];
+  if (scenario === "missing-transport") scene.antenna_port_modes![0].current_transport_id = "lost";
+  if (scenario === "transport-picker") {
+    const transport = scene.current_transports![0];
+    scene.current_transports!.push(
+      { ...transport, name: "foreign", domain: [{ object_id: "other" }] },
+      { ...transport, name: "coupled", coupling: "two_way" },
+      { ...transport, name: "timed", time_envelope: { kind: "constant" } },
+      { ...transport, name: "duplicate" }, { ...transport, name: "duplicate" },
+    );
+  }
   if (scenario === "malformed-source") Object.assign(scene.current_transports![0], { conservative_current_source: {} });
   if (scenario === "structured-v3") {
     Object.assign(scene.antenna_port_modes![0], { schema_version: "antenna_port_mode.v3",
@@ -79,6 +89,7 @@ function makeScene(name: string): SceneResource {
     Object.assign(scene.current_transports![0], { conservative_current_source: {
       schema_version: "conservative_current_source.v2", kind: "closed_geometry_potential_jump", object_id: sourceId,
       closure: { kind: "closed_geometry", source_cuts: [{ id: "cut" }] },
+      material_parts: ["signal", "return", "inlet", "outlet"].map(part_id => ({ part_id })),
       terminal_observations: ["signal", "return"].flatMap(part => [
         { id: `${part}-in`, part_id: part, selector: "local_u_min" },
         { id: `${part}-out`, part_id: part, selector: "local_u_max" },

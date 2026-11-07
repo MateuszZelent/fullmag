@@ -875,6 +875,9 @@ jobs:
           FULLMAG_ANTENNA_VISUALIZATION_SAVED_SECTION_ONLY: "1"
         run: python3 scripts/verify_pinned_dataset_browser.py --repo-root "$GITHUB_WORKSPACE" --port 3250 --scenario antenna-visualization
 
+      - name: Run existing antenna port editor browser fixture
+        run: python3 scripts/verify_pinned_dataset_browser.py --repo-root "$GITHUB_WORKSPACE" --port 3264 --scenario antenna-port-editor
+
       - name: Upload Inspector browser receipt and screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -889,6 +892,10 @@ jobs:
             ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-visualization-browser/*/next.log
             ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-visualization-browser/*/browser.log
             ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-visualization-browser/*/browser/**
+            ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-port-editor-browser/*/receipt.json
+            ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-port-editor-browser/*/next.log
+            ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-port-editor-browser/*/browser.log
+            ${{ steps.inspector-storage.outputs.build_root }}/**/antenna-port-editor-browser/*/browser/**
           if-no-files-found: error
 
   fdm-relaxation-qualification:
