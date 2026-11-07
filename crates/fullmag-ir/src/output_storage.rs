@@ -87,7 +87,11 @@ pub enum TempCleanupIR {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExistingOutputIR {
+    /// Keep the existing result and reserve a fresh, suffixed sibling path.
     #[default]
     Timestamp,
+    /// Stop when the requested result path already exists.
     Error,
+    /// Reuse the requested path; an inactive fullmag result there is replaced.
+    Overwrite,
 }

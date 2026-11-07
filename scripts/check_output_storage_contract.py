@@ -267,24 +267,27 @@ study.storage()
 
     with TemporaryDirectory(prefix="fullmag-sequence-contract-") as temporary:
         root = Path(temporary) / "script.zarr"
-        first = _reserve_stage_sequence_root(root, existing_output="timestamp")
-        sentinel = first / "earlier-results.txt"
-        sentinel.write_text("keep earlier data", encoding="utf-8")
-        second = _reserve_stage_sequence_root(root, existing_output="timestamp")
-        require(second != first and second.suffix == ".zarr", "sequence collision did not create a fresh Zarr root")
-        require(sentinel.read_text(encoding="utf-8") == "keep earlier data", "sequence collision changed earlier results")
-        try:
-            _reserve_stage_sequence_root(root, existing_output="error")
-        except FileExistsError:
-            pass
-        else:
-            raise AssertionError("sequence error policy accepted an occupied root")
-        try:
-            _reserve_stage_sequence_root(root / ".." / "escaped.zarr", existing_output="timestamp")
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("sequence output accepted a parent traversal")
+        # The sequence root stays reserved for the whole with block.
+        with _reserve_stage_sequence_root(root, existing_output="timestamp") as first:
+            sentinel = first / "earlier-results.txt"
+            sentinel.write_text("keep earlier data", encoding="utf-8")
+            with _reserve_stage_sequence_root(root, existing_output="timestamp") as second:
+                require(second != first and second.suffix == ".zarr", "sequence collision did not create a fresh Zarr root")
+            require(sentinel.read_text(encoding="utf-8") == "keep earlier data", "sequence collision changed earlier results")
+            try:
+                with _reserve_stage_sequence_root(root, existing_output="error"):
+                    pass
+            except FileExistsError:
+                pass
+            else:
+                raise AssertionError("sequence error policy accepted an occupied root")
+            try:
+                with _reserve_stage_sequence_root(root / ".." / "escaped.zarr", existing_output="timestamp"):
+                    pass
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("sequence output accepted a parent traversal")
         require(not (root.parent / "escaped.zarr").exists(), "invalid sequence path wrote output")
 
     lease_source = (REPO / "crates/fullmag-runner/src/project_storage.rs").read_text(encoding="utf-8")

@@ -839,7 +839,7 @@ ExecutionRequestPatchSchema = TypedDict(
     total=False,
 )
 
-ExistingOutputSchema = Literal['timestamp', 'error']
+ExistingOutputSchema = Literal['timestamp', 'error', 'overwrite']
 
 FieldCarrierDescriptor = TypedDict(
     'FieldCarrierDescriptor',

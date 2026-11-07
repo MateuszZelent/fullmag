@@ -161,7 +161,22 @@ sibling `/path/x.zarr` Zarr v2 group. The bundle has the stable roles:
 The root `.zattrs` declares `fullmag.script_results.v1` and records script and
 session identity. A repeated ordinary launch reserves a fresh directory with
 an execution suffix (`existing_output=timestamp`) or fails explicitly
-(`existing_output=error`). Existing results are never removed or overwritten.
+(`existing_output=error`). Existing results are never removed or overwritten,
+except under the explicit `existing_output=overwrite` policy, which replaces
+only an inactive fullmag result at the requested path and refuses any other
+directory (see [the common project policy](project-output-storage.md)).
+A running multi-stage sequence keeps its root reservation between stages and
+through manifest publication. Stage reservations use fresh children of that root.
+An active root also prevents overwrite of completed descendant results while
+allowing fresh stage children. This protection ends when the root reservation ends.
+Python and native writers use an exclusive sibling gate to serialize overwrite
+checks, removal and reservation against other writers, including entering children.
+Descendant preparation gates also mark the tree active. Before mutation or gate
+cleanup, a writer checks all ancestor gates and its own gate identity. Uncertain
+gates are retained for explicit recovery.
+Before exposing a child reservation, the writer publishes its active token, checks
+all ancestor gates for another owner, and verifies that its token is still current.
+This also covers an ancestor replaced during initial metadata discovery.
 An explicit `--output-dir` overrides the sibling convention with the same
 safe reservation policy. Output format, private temporary storage and cleanup
 follow [the common project policy](project-output-storage.md).

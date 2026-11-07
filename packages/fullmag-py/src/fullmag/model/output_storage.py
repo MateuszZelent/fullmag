@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 _DATA_FORMATS = frozenset({"zarr", "hdf5"})
 _CLEANUP_POLICIES = frozenset({"on_success", "always", "never"})
-_EXISTING_OUTPUT_POLICIES = frozenset({"timestamp", "error"})
+_EXISTING_OUTPUT_POLICIES = frozenset({"timestamp", "error", "overwrite"})
 _WIRE_FIELDS = frozenset(
     {"output_dir", "temp_dir", "data_format", "cleanup", "existing_output"}
 )
@@ -38,6 +38,11 @@ class OutputStorage:
     Relative output and temporary paths are resolved against the authored
     script directory by managed runtimes. temp_dir names a parent directory;
     only a private, run-owned child may be removed.
+
+    existing_output selects the collision policy for a pre-existing result
+    path: "timestamp" reserves a fresh suffixed sibling, "error" stops, and
+    "overwrite" reuses the path, replacing an inactive fullmag result there
+    (a directory that is not an inactive fullmag result is refused).
     """
 
     output_dir: str | None = None
@@ -62,7 +67,9 @@ class OutputStorage:
             not isinstance(self.existing_output, str)
             or self.existing_output not in _EXISTING_OUTPUT_POLICIES
         ):
-            raise ValueError("existing_output must be 'timestamp' or 'error'")
+            raise ValueError(
+                "existing_output must be 'timestamp', 'error', or 'overwrite'"
+            )
         object.__setattr__(self, "output_dir", output_dir)
         object.__setattr__(self, "temp_dir", temp_dir)
         object.__setattr__(self, "data_format", data_format)
