@@ -216,7 +216,6 @@ export function studyStageMaterialRequestAllowed(request, context) {
 
 export function studyStageMaterialTransactionOutcome(status, body, beforeScene) {
   try {
-    const before = studyStageMaterialState(beforeScene);
     const scene = body?.committed_scene;
     const nextRevision = beforeScene.revision ?? beforeScene.scene_revision;
     if (!Number.isSafeInteger(nextRevision) || !Number.isSafeInteger(status) || status < 200 || status >= 300
