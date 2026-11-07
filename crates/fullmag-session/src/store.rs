@@ -3489,42 +3489,120 @@ impl SessionStore {
         self.read_coordinator_journal_unlocked(run_id)
     }
 
-    fn read_coordinator_journal_unlocked(
-        &self,
-        run_id: &str,
-    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
+    fn coordinator_journal_index(
+        &self, run_id: &str,
+    ) -> Result<Vec<(FmsCoordinatorJournalDirection, String, String)>> {
         validate_store_id(run_id)?;
-        self.read_run_catalog(run_id)?
-            .context("coordinator journal snapshot requires a durable run catalog")?;
-        let mut entries = Vec::new();
-        for direction in [
-            FmsCoordinatorJournalDirection::Command,
-            FmsCoordinatorJournalDirection::Event,
-        ] {
-            let Some(root) = read_present_directory(
-                &self.root,
+        let mut index = Vec::new();
+        for direction in [FmsCoordinatorJournalDirection::Command, FmsCoordinatorJournalDirection::Event] {
+            let Some(root) = read_present_directory(&self.root,
                 &format!("runs/{run_id}/coordinator_journal/{}", direction.as_str()),
-                "coordinator journal",
-            )? else {
-                continue;
-            };
+                "coordinator journal")? else { continue; };
             for file in fs::read_dir(root)? {
                 let file = file?;
                 reject_link(&file.path())?;
-                if !file.file_type()?.is_file() {
-                    anyhow::bail!("coordinator journal entry is not a file");
-                }
+                let metadata = fs::symlink_metadata(file.path())?;
+                if !metadata.is_file() { anyhow::bail!("coordinator journal entry is not a file"); }
                 let name = file.file_name();
-                let id = name
-                    .to_str()
-                    .and_then(|name| name.strip_suffix(".json"))
+                let id = name.to_str().and_then(|name| name.strip_suffix(".json"))
                     .context("coordinator journal entry must be UTF-8 JSON")?;
-                let entry = self
-                    .read_coordinator_journal_entry(run_id, direction, id)?
-                    .context("coordinator journal entry disappeared during snapshot")?;
-                entries.push(entry);
+                validate_store_id(id)?;
+                let mut pin = format!("{}:{:?}", metadata.len(), metadata.modified()?);
+                #[cfg(unix)] {
+                    use std::os::unix::fs::MetadataExt;
+                    pin.push_str(&format!(":{}:{}:{}:{}", metadata.dev(), metadata.ino(), metadata.ctime(), metadata.ctime_nsec()));
+                }
+                #[cfg(windows)] {
+                    use std::os::windows::fs::MetadataExt;
+                    pin.push_str(&format!(":{}:{}", metadata.creation_time(), metadata.file_attributes()));
+                }
+                index.push((direction, id.to_owned(), pin));
             }
         }
+        index.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
+        Ok(index)
+    }
+
+    /// Ignore only the catalog's heartbeat revision and publication timestamp.
+    /// A different admitted task set/input is corruption; mutable task authority
+    /// advancing means this optional capture must be retried against a new core.
+    fn journal_catalog_matches(&self, expected: &FmsRunCatalog) -> Result<bool> {
+        let current = self.read_run_catalog(&expected.run_id)?
+            .context("accepted stage catalog disappeared during journal capture")?;
+        if current.schema_version != expected.schema_version || current.run_id != expected.run_id
+            || current.tasks.len() != expected.tasks.len()
+            || current.tasks.iter().zip(&expected.tasks).any(|(next, prior)|
+                next.task_id != prior.task_id || next.input_fingerprint != prior.input_fingerprint) {
+            anyhow::bail!("accepted stage catalog journal identity mismatch");
+        }
+        if current.revision < expected.revision {
+            anyhow::bail!("accepted stage catalog revision regressed during journal capture");
+        }
+        Ok(current.tasks == expected.tasks)
+    }
+
+    /// Capture an immutable journal without holding a shared fence across the
+    /// whole file scan. Each entry is read under a genuine shared transaction;
+    /// its catalog and inventory (including file identity/change stamps) must
+    /// still match at the final fence. Writers get a window between entries.
+    /// `None` means a legitimate task-authority snapshot advance, requiring a
+    /// new core snapshot; `Some(empty)` is a successfully verified empty journal.
+    /// Identity/corruption errors and native lock errors are never downgraded.
+    pub fn read_coordinator_journal_batched_readonly(
+        &self, expected: &FmsRunCatalog,
+    ) -> Result<Option<Vec<FmsCoordinatorJournalEntry>>> {
+        self.read_coordinator_journal_batched_with(expected, || {
+            std::thread::sleep(Duration::from_millis(20));
+        })
+    }
+
+    fn read_coordinator_journal_batched_with(
+        &self, expected: &FmsRunCatalog, mut between_entries: impl FnMut(),
+    ) -> Result<Option<Vec<FmsCoordinatorJournalEntry>>> {
+        expected.validate()?;
+        let index = {
+            let _read = self.read_transaction()?;
+            if !self.journal_catalog_matches(expected)? { return Ok(None); }
+            self.coordinator_journal_index(&expected.run_id)?
+        };
+        let mut entries = Vec::with_capacity(index.len());
+        // Publication is append-only (a conflicting replay is rejected by the
+        // writer). The final inventory also rejects replacement/change while
+        // the independent shared transactions were released.
+        for (direction, id, _) in &index {
+            {
+                let _read = self.read_transaction()?;
+                entries.push(self.read_coordinator_journal_entry(&expected.run_id, *direction, id)?
+                    .context("coordinator journal entry disappeared during snapshot")?);
+            }
+            between_entries();
+        }
+        let entries = Self::validate_coordinator_journal_snapshot(entries)?;
+        {
+            let _read = self.read_transaction()?;
+            if !self.journal_catalog_matches(expected)? { return Ok(None); }
+            if self.coordinator_journal_index(&expected.run_id)? != index {
+                anyhow::bail!("coordinator journal inventory changed during snapshot");
+            }
+        }
+        Ok(Some(entries))
+    }
+
+    fn read_coordinator_journal_unlocked(
+        &self, run_id: &str,
+    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
+        self.read_run_catalog(run_id)?.context("coordinator journal snapshot requires a durable run catalog")?;
+        let mut entries = Vec::new();
+        for (direction, id, _) in self.coordinator_journal_index(run_id)? {
+            entries.push(self.read_coordinator_journal_entry(run_id, direction, &id)?
+                .context("coordinator journal entry disappeared during snapshot")?);
+        }
+        Self::validate_coordinator_journal_snapshot(entries)
+    }
+
+    fn validate_coordinator_journal_snapshot(
+        mut entries: Vec<FmsCoordinatorJournalEntry>,
+    ) -> Result<Vec<FmsCoordinatorJournalEntry>> {
         entries.sort_by(|a, b| {
             (
                 a.direction.as_str(),
@@ -11978,6 +12056,118 @@ mod admission_tests {
 #[cfg(test)]
 mod read_transaction_tests {
     use super::*;
+
+    fn journal_fixture(sequences: &[u64]) -> (tempfile::TempDir, SessionStore, FmsRunCatalog) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let catalog = FmsRunCatalog { schema_version: FMS_RUN_CATALOG_SCHEMA.into(), run_id: "run-read".into(),
+            revision: 1, updated_at: chrono::Utc::now(), tasks: Vec::new() };
+        store.commit_run_catalog(&catalog).unwrap();
+        let root = store.root().join("runs/run-read/coordinator_journal/event");
+        fs::create_dir_all(&root).unwrap();
+        for sequence in sequences {
+            let payload = serde_json::json!({"fixture": sequence});
+            let entry = FmsCoordinatorJournalEntry {
+                schema_version: crate::FMS_COORDINATOR_JOURNAL_SCHEMA.into(), entry_id: format!("event-{sequence}"),
+                run_id: catalog.run_id.clone(), task_id: "task-history".into(), attempt_id: "attempt-history".into(),
+                ownership_epoch: 1, lease_token: "lease-history".into(),
+                direction: FmsCoordinatorJournalDirection::Event, sequence: *sequence, terminal: false,
+                payload_sha256: crate::canonical_json_sha256(&payload), payload, created_at: chrono::Utc::now(),
+            };
+            fs::write(root.join(format!("event-{sequence}.json")), serde_json::to_vec(&entry).unwrap()).unwrap();
+        }
+        (directory, store, catalog)
+    }
+
+    #[test]
+    fn batched_journal_releases_shared_fence_for_writer_between_every_entry() {
+        let (_directory, store, catalog) = journal_fixture(&[1, 2]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let mut writer_windows = 0;
+        let entries = store.read_coordinator_journal_batched_with(&catalog, || {
+            let writer = rival.write_transaction().expect("reader must release its shared fence between entries");
+            writer_windows += 1;
+            drop(writer);
+        }).unwrap().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(writer_windows, 2);
+    }
+
+    #[test]
+    fn batched_journal_preserves_typed_native_busy() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let _writer = rival.write_transaction().unwrap();
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock))));
+    }
+
+    #[test]
+    fn batched_journal_accepts_heartbeat_only_revision_between_entries() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let entries = store.read_coordinator_journal_batched_with(&catalog, || {
+            let mut changed = catalog.clone();
+            changed.revision += 1;
+            changed.updated_at = chrono::Utc::now();
+            rival.commit_run_catalog(&changed).unwrap();
+        }).unwrap().unwrap();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn batched_journal_distinguishes_task_advance_from_identity_corruption() {
+        let (_directory, store, mut catalog) = journal_fixture(&[1]);
+        catalog.tasks.push(FmsTaskCatalogEntry {
+            task_id: "task-history".into(), input_fingerprint: "a".repeat(64),
+            lifecycle: crate::FmsTaskLifecycle::Accepted, readiness: Default::default(),
+            observation: None, attempt_id: None, ownership_epoch: None,
+            resolved_input_fingerprint: None, artifact_ids: vec![], resource_id: None,
+            coordinator_watermark: None, coordinator_genesis: None,
+        });
+        catalog.revision += 1;
+        store.commit_run_catalog(&catalog).unwrap();
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let advanced = store.read_coordinator_journal_batched_with(&catalog, || {
+            let mut changed = catalog.clone();
+            changed.revision += 1;
+            changed.tasks[0].lifecycle = crate::FmsTaskLifecycle::Preparing;
+            rival.commit_run_catalog(&changed).unwrap();
+        }).unwrap();
+        assert!(advanced.is_none());
+        let mut corrupt = catalog.clone();
+        corrupt.revision += 2;
+        corrupt.tasks[0].input_fingerprint = "b".repeat(64);
+        rival.commit_run_catalog(&corrupt).unwrap();
+        assert!(store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err()
+            .to_string().contains("identity mismatch"));
+    }
+
+    #[test]
+    fn batched_journal_rejects_replacement_after_an_entry_was_read() {
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let error = store.read_coordinator_journal_batched_with(&catalog, || {
+            let _writer = rival.write_transaction().unwrap();
+            fs::write(store.root().join("runs/run-read/coordinator_journal/event/event-1.json"), b"corrupt replacement").unwrap();
+        }).unwrap_err();
+        assert!(error.to_string().contains("inventory changed"));
+    }
+
+    #[test]
+    fn batched_journal_keeps_payload_hash_and_contiguous_sequence_validation() {
+        let (_directory, store, catalog) = journal_fixture(&[2]);
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.to_string().contains("gap or duplicate"));
+        let (_directory, store, catalog) = journal_fixture(&[1]);
+        let path = store.root().join("runs/run-read/coordinator_journal/event/event-1.json");
+        let mut entry: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        entry["payload_sha256"] = serde_json::json!("f".repeat(64));
+        fs::write(path, serde_json::to_vec(&entry).unwrap()).unwrap();
+        let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
+        assert!(error.to_string().contains("payload digest mismatch"));
+    }
 
     #[test]
     fn read_transaction_reuses_shared_fence_without_owner_writes() {
