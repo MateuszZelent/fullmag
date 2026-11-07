@@ -67,7 +67,8 @@ def _read_retained_run_inputs(terminal_path, held_path):
 
 def prepare(
     control, pins, compose, *,
-    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None, publish=False
+    retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
+    bootstrap_stop_reference=None, publish=False
 ):
     """Return proof/auth references; publish only after a second frozen read."""
     if retained_held_manual_runs is not None and retained_terminal_runs is None:
@@ -78,6 +79,7 @@ def prepare(
         control, pins, compose, retained_terminal_runs=retained_terminal_runs,
         retained_held_manual_runs=retained_held_manual_runs,
         **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
+        **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
     )
     proof_raw = recovery._canonical(proof)
     root = recovery.RECOVERY_RELATIVE_ROOT + "/" + pins["request_id"]
@@ -118,6 +120,7 @@ def prepare(
             control, pins, compose, retained_terminal_runs=retained_terminal_runs,
             retained_held_manual_runs=retained_held_manual_runs,
             **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
+            **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
         )
         if recovery._canonical(fresh) != proof_raw:
             raise BuildControlError("Abrupt-stop evidence changed before publication")
@@ -139,6 +142,8 @@ def main(argv=None):
     parser.add_argument("--retained-terminal-runs", type=Path)
     parser.add_argument("--retained-held-manual-runs", type=Path)
     parser.add_argument("--retained-attempt-histories", type=Path)
+    parser.add_argument("--bootstrap-stop-reference", type=Path,
+                        help="Explicit JSON {attempt, sha256} of a successful diagnostic bootstrap stop; terminal recovery only")
     parser.add_argument("--publish", action="store_true", help="Publish evidence and operator capability under the group lease; never start services")
     args = parser.parse_args(argv)
     terminal_pins, held_pins = _read_retained_run_inputs(
@@ -159,6 +164,7 @@ def main(argv=None):
     configured = toolchain_configuration(source, identity)
     control = BuildControl(identity, configured["services"]["fem-gpu-toolchain"]["build"]["args"]["FULLMAG_CUDA_BASE_IMAGE"])
     pins = _read_input(args.operator_pins)
+    bootstrap_stop_reference = _read_input(args.bootstrap_stop_reference) if args.bootstrap_stop_reference is not None else None
     if pins.get("source_root") != str(source) or pins.get("compose_project") != control.project:
         raise BuildControlError("Operator pins do not select the registered source/group")
     attempt = pins.get("development_attempt")
@@ -168,7 +174,8 @@ def main(argv=None):
     if hashlib.sha256(recovery._canonical(compose)).hexdigest() != pins.get("compose_config_sha256"):
         raise BuildControlError("Retained Compose bytes differ from the operator pin")
     print(json.dumps(prepare(control, pins, compose, retained_terminal_runs=terminal_pins,
-                             retained_held_manual_runs=held_pins, retained_attempt_histories=history_pins, publish=args.publish), indent=2))
+                             retained_held_manual_runs=held_pins, retained_attempt_histories=history_pins,
+                             bootstrap_stop_reference=bootstrap_stop_reference, publish=args.publish), indent=2))
     return 0
 
 

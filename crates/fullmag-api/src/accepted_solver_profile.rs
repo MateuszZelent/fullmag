@@ -7,7 +7,7 @@ use super::accepted_worker_execution_receipt::WorkerExecutionReceiptIdentity;
 #[path = "accepted_profile_admission.rs"]
 mod admission;
 pub(crate) use admission::{config, parameter, request_digest, validate_study_profile,
-    validate_resolved_study_profile, validate_fem_profile_plan, PARAMETER};
+    validate_resolved_study_profile, validate_fem_profile_plan, cuda_trace, PARAMETER};
 #[cfg(test)]
 use admission::{configure_child, SCHEMA};
 
@@ -16,6 +16,9 @@ const RECEIPT: &str = "worker_operation_profile.v1.json";
 
 #[path = "accepted_step_profile.rs"]
 pub(crate) mod step_profile;
+
+#[path = "accepted_cuda_trace.rs"]
+pub(crate) mod cuda_capture;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

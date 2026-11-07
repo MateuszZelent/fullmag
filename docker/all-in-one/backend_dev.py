@@ -6087,8 +6087,7 @@ def _prepare_locked(
     )
     if required_contracts and cargo_profile != BACKEND_CARGO_PROFILE:
         _fail("native contract qualification requires the backend-dev profile")
-    if required_contracts and required_contracts != ("fem-demag-poisson",):
-        _fail("native contract qualification has no matching Make prebuild selector")
+    # _requested_native_contracts already validates one allowlisted selector.
     environment = _build_environment(workspace, build_root, native, jobs, cargo_profile)
     # These selectors and paths are internal Make inputs. Never trust inherited
     # values from the host or Compose environment.
@@ -6096,7 +6095,7 @@ def _prepare_locked(
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER", None)
     environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT", None)
     if required_contracts:
-        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = "fem-demag-poisson"
+        environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = required_contracts[0]
         environment["FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER"] = str(
             Path(__file__).resolve().with_name("backend_native_contracts.py")
         )
@@ -7164,6 +7163,7 @@ def _maintain_packages(args) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
+    import backend_native_contracts
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
     for name in ("prepare", "build"):
@@ -7198,7 +7198,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--build-root", default=BUILD_ROOT, type=Path)
     start.add_argument("--jobs", default=int(os.environ.get("CARGO_BUILD_JOBS", "2")), type=int)
     start.add_argument("--native-contract", action="append", default=None,
-                       choices=("fem-demag-poisson",),
+                       choices=tuple(sorted(backend_native_contracts.ALLOWED_CONTRACTS)),
                        help="require an allowlisted native contract before package publication and API start")
     maintenance = subparsers.add_parser("maintain-packages", help="retain current/direct rollback and bound shared package cache")
     maintenance.add_argument("--max-shared-entries", type=int, default=8)

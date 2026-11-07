@@ -123,7 +123,7 @@ install-cli install-cli-dev install-cli-static:
 	native_contracts="$${FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}"; \
 	case "$$native_contracts" in \
 		"") ;; \
-		fem-demag-poisson) \
+		fem-demag-poisson|fem-cuda-activity-trace) \
 			if [ "$@" != "install-cli-dev" ] || [ "$${FULLMAG_DIRECT_COMPOSE:-0}" != "1" ] || [ "$${FULLMAG_BACKEND_CARGO_PROFILE:-}" != "backend-dev" ]; then \
 				echo "FULLMAG_INTERNAL_NATIVE_CONTRACTS requires direct Compose install-cli-dev backend-dev" >&2; exit 2; \
 			fi ;; \
@@ -267,8 +267,8 @@ install-cli install-cli-dev install-cli-static:
 	fi; \
 	echo "[backend 3/3] Building native Python core for mesh certification..."; \
 	CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL="$$build_incremental" cargo +nightly build --locked -p fullmag-py-core $$cargo_profile_args; \
-	if [ "$${FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}" = "fem-demag-poisson" ]; then \
-		if [ -z "$$cmake_bin" ]; then echo "CMake is required for the FEM demag Poisson contract build" >&2; exit 2; fi; \
+	if [ -n "$${FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}" ]; then \
+		if [ -z "$$cmake_bin" ]; then echo "CMake is required for the selected FEM native contract build" >&2; exit 2; fi; \
 		fem_native_root="$${FULLMAG_FEM_NATIVE_BUILD_ROOT:-}"; \
 		contract_helper="$${FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER:-}"; \
 		contract_preparation_root="$${FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT:-}"; \
@@ -287,7 +287,7 @@ install-cli install-cli-dev install-cli-static:
 		if [ ! -d "$$fem_native_root" ]; then echo "FULLMAG_FEM_NATIVE_BUILD_ROOT is not a directory: $$fem_native_root" >&2; exit 2; fi; \
 		if [ ! -f "$$contract_helper" ]; then echo "Native contract helper is not a regular file: $$contract_helper" >&2; exit 2; fi; \
 		if [ "$$build_mode" != "cuda-fem-gpu" ] && [ "$$build_mode" != "fem-cpu" ]; then \
-			echo "FEM demag Poisson contract requires a local FEM build; got $$build_mode" >&2; exit 2; \
+			echo "The selected FEM native contract requires a local FEM build; got $$build_mode" >&2; exit 2; \
 		fi; \
 		echo "Building selected FEM native contract target before packaging the FEM library..."; \
 		FULLMAG_CMAKE="$$cmake_bin" python3 "$$contract_helper" prepare; \

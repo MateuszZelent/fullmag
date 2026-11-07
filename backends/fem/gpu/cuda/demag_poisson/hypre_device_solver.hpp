@@ -10,9 +10,15 @@
 
 #include "gpu/cuda/demag_poisson/operators.hpp"
 
+#include <cstdint>
 #include <string>
 
 namespace fullmag::fem {
+
+bool read_device_demag_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error);
 
 bool initialize_demag_poisson_hypre_device_solver(
     Context &ctx,

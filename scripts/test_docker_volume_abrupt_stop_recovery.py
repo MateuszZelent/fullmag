@@ -419,6 +419,31 @@ class AbruptStopTests(unittest.TestCase):
                     r._retained_compose_state_root(backend, compose, project=project)
                 self.assertEqual(validate.call_count, 1)
 
+    def test_foreign_alias_probe_uses_selected_worktree_and_rejects_foreign_project(self):
+        proof, _, _ = self.fixture()
+        backend = copy.deepcopy(proof['containers']['backend'])
+        project = 'fullmag-worktree-selected'
+        control = SimpleNamespace(project=project)
+        backend['Config']['Labels']['com.docker.compose.project'] = project
+        with tempfile.TemporaryDirectory() as directory:
+            state = str(Path(directory).resolve())
+            backend['Mounts'][0]['Source'] = '/daemon/state-alias'
+            compose = {'name': project, 'services': {'backend': {
+                'volumes': [{'type': 'bind', 'source': state, 'target': '/state'}],
+                'x-fullmag-daemon-binds': {'/state': '/daemon/state-alias'}}}}
+            image = {'Id': backend['Image'], 'Config': {}}
+            foreign = {'Id': 'a' * 64}
+            with patch.object(r, 'docker_capture', return_value=SimpleNamespace(stdout=json.dumps([image]).encode())), \
+                 patch('docker_volume_dev._validate_retained_service'), \
+                 patch('docker_bind_overlap_probe.prove_worktree_foreign_alias_disjoint', return_value={'qualified': True}) as probe:
+                self.assertEqual(r._prove_foreign_alias_for_abrupt(
+                    control, backend, foreign, '/daemon/foreign-alias', compose), {'qualified': True})
+                probe.assert_called_once_with(control, backend, foreign, '/daemon/foreign-alias', Path(state), compose=compose)
+                control.project = 'fullmag-master'
+                with self.assertRaisesRegex(r.ContainerRecoveryError, 'selected Compose identity'):
+                    r._prove_foreign_alias_for_abrupt(control, backend, foreign, '/daemon/foreign-alias', compose)
+                self.assertEqual(probe.call_count, 1)
+
     def test_windows_raw_protected_overlap_precedes_qualified_proof(self):
         proof, _, compose = self.fixture()
         backend, frontend = proof['containers'].values()
@@ -467,6 +492,45 @@ class AbruptStopTests(unittest.TestCase):
             with self.assertRaisesRegex(r.ContainerRecoveryError, 'control/ledger'):
                 r._assert_no_foreign_storage_consumers(SimpleNamespace(project=compose['name']), backend, frontend, compose)
 
+    def test_windows_junction_dispatch_requires_separate_complete_proof(self):
+        from docker_windows_bind_isolation import WindowsExternalJunctionDetected
+        proof, _, compose = self.fixture()
+        backend, frontend = proof['containers'].values()
+        source = r'C:\foreign\worktree'
+        foreign = {'Id': 'a'*64, 'Mounts': [
+            {'Type': 'bind', 'Source': source, 'Destination': '/source', 'RW': False}]}
+        for outcome in ('qualified', 'invalid', 'protected-volume'):
+            current = copy.deepcopy(foreign)
+            if outcome == 'protected-volume':
+                backend['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': r.CONTROL_ROOT})
+                current['Mounts'].append({'Type': 'volume', 'Name': 'control-vol', 'Destination': '/foreign-control'})
+            with self.subTest(outcome=outcome), \
+                 patch.object(r, 'docker_capture', side_effect=[
+                     SimpleNamespace(stdout=current['Id'].encode()),
+                     SimpleNamespace(stdout=json.dumps([current]).encode())]), \
+                 patch.object(r, '_retained_compose_state_root', return_value=Path('/retained/state')), \
+                 patch('docker_windows_bind_isolation.prove_windows_bind_disjoint',
+                       side_effect=WindowsExternalJunctionDetected('external junction')), \
+                 patch('docker_windows_bind_isolation.prove_windows_junction_bind_disjoint',
+                       return_value={'typed': 'junction-proof'}) as prove, \
+                 patch('docker_windows_bind_isolation.validate_windows_junction_bind_disjoint_proof',
+                       side_effect=ValueError('target proof invalid') if outcome == 'invalid' else None) as validate, \
+                 patch('docker_windows_absent_bind_isolation.prove_absent_stopped_windows_bind',
+                       side_effect=ValueError('candidate exists')) as absent:
+                if outcome == 'qualified':
+                    r._assert_no_foreign_storage_consumers(
+                        SimpleNamespace(project=compose['name']), backend, frontend, compose)
+                    absent.assert_not_called()
+                else:
+                    with self.assertRaisesRegex(r.ContainerRecoveryError,
+                            'target proof invalid' if outcome == 'invalid' else 'control/ledger'):
+                        r._assert_no_foreign_storage_consumers(
+                            SimpleNamespace(project=compose['name']), backend, frontend, compose)
+                prove.assert_called_once_with(
+                    unittest.mock.ANY, backend, current, source, Path('/retained/state'))
+                validate.assert_called_once_with(
+                    {'typed': 'junction-proof'}, source=source, container_id=current['Id'])
+
     def test_owner_host_and_identity_cannot_be_fabricated(self):
         proof,auth,_=self.fixture()
         for key in ('host','owner_token'):
@@ -491,6 +555,139 @@ class AbruptStopTests(unittest.TestCase):
             r.validate_abrupt_stop_proof(proof,auth,control=SimpleNamespace(project=compose['name']),compose=compose,transition=transition)
             transition['backend']=copy.deepcopy(transition['backend']); transition['backend']['State']['ExitCode']=1
             with self.assertRaisesRegex(r.ContainerRecoveryError,'prepared retry'): r.validate_abrupt_stop_proof(proof,auth,control=SimpleNamespace(project=compose['name']),compose=compose,transition=transition)
+
+    def prepared_reference_fixture(self):
+        proof, auth, _ = self.fixture()
+        project = 'fullmag-worktree-selected'
+        compose = {'name': project}
+        auth.update(compose_project=project, compose_config_sha256=r._sha256(r._canonical(compose)))
+        proof['authorization_pins'].update(compose_project=project, compose_config_sha256=auth['compose_config_sha256'])
+        for container in proof['containers'].values():
+            container['Config']['Labels']['com.docker.compose.project'] = project
+        proof_sha = r._sha256(r._canonical(proof))
+        auth.update(abrupt_stop_proof_sha256=proof_sha, stop_journal_sha256=proof_sha,
+                    prior_ready_owner_proof_sha256=proof_sha)
+        control = SimpleNamespace(project=project, identity={'checkout_kind': 'worktree'})
+        transition = {
+            **copy.deepcopy(proof['containers']), 'present': {}, 'absence': {'state': 'old-containers-absent'},
+            'prepared_sha': '1'*64, 'absence_sha': '2'*64, 'request_sha': '3'*64, 'manifest_sha': '4'*64,
+            'network_state': 'empty',
+        }
+        return proof, auth, compose, control, transition
+
+    def test_removed_backend_reference_rechecks_exact_pair_absence_and_transition(self):
+        from docker_bind_overlap_probe import _archive_recovery_foreign_proof, _recovery_backend_inspector
+        from docker_build_control import BuildControlError
+        from docker_prepared_backend_reference import PreparedBackendReference
+
+        proof, auth, compose, control, transition = self.prepared_reference_fixture()
+        old_backend = auth['backend_container_id']
+        old_frontend = auth['frontend_container_id']
+        wrong_id = None
+
+        def absence_command(command, *args, **kwargs):
+            identifier = args[0] if command == 'inspect' else args[-1].removeprefix('id=')
+            self.assertIn(identifier, (old_backend, old_frontend))
+            if command == 'inspect':
+                return SimpleNamespace(returncode=1, stdout=b'', stderr=f'Error: No such object: {wrong_id or identifier}\n'.encode())
+            self.assertEqual(command, 'ps')
+            return SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+
+        with patch.object(r, '_control_json', return_value=(compose, r._canonical(compose))), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64), \
+             patch.object(r, '_load_recovery_transition', return_value=transition) as load, \
+             patch('docker_volume_cancelled_recovery.docker_capture', side_effect=absence_command) as docker, \
+             patch('docker_bind_overlap_probe._archive_foreign_proof') as archive:
+            reference = PreparedBackendReference(control, auth, compose, transition, proof['containers'], 'f'*64)
+            docker.reset_mock()
+            observe = _recovery_backend_inspector(control, lambda _: self.fail('live backend is gone'), reference)
+            self.assertEqual(observe(old_backend), proof['containers']['backend'])
+            self.assertEqual([call.args[:2] for call in docker.call_args_list if call.args[0] == 'inspect'],
+                             [('inspect', old_backend), ('inspect', old_frontend)])
+            _archive_recovery_foreign_proof(control, {'decision': 'disjoint'}, reference)
+            self.assertEqual(archive.call_args.args[1], {
+                'schema': 'fullmag.foreign-bind-proof-after-recovery-removal.v1',
+                'prepared_reference': reference.evidence(), 'proof': {'decision': 'disjoint'},
+            })
+            with self.assertRaisesRegex(BuildControlError, 'requires an authenticated'):
+                _recovery_backend_inspector(SimpleNamespace(), lambda _: {}, reference)
+            wrong_id = 'a'*64
+            with self.assertRaisesRegex(BuildControlError, 'exact container ID absent'):
+                observe(old_backend)
+            wrong_id = None
+            load.return_value = {**transition, 'absence_sha': '5'*64}
+            with self.assertRaisesRegex(BuildControlError, 'transition changed'):
+                reference.revalidate()
+            load.return_value = {**transition, 'absence': None}
+            with self.assertRaisesRegex(BuildControlError, 'absent, original stopped pair'):
+                reference.revalidate()
+
+    def test_removed_worktree_retry_refreshes_both_proofs_and_requalifies_changed_consumers(self):
+        from docker_build_control import BuildControlError
+        from docker_prepared_backend_reference import PreparedBackendReference
+
+        proof, auth, compose, control, transition = self.prepared_reference_fixture()
+        records = {item['path']: item['raw_utf8'].encode() for item in proof['raw_records'].values()}
+        windows_source = r'C:\foreign\workspace'
+        wsl_source = '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/' + 'a'*64
+        def consumer(identifier, source):
+            item = copy.deepcopy(proof['containers']['backend'])
+            item.update(Id=identifier, Mounts=[{'Type': 'bind', 'Source': source, 'Destination': '/data'}])
+            item['State'].update(OOMKilled=False, Dead=False, Error='')
+            return item
+
+        windows = consumer('d'*64, windows_source)
+        wsl = consumer('e'*64, wsl_source)
+        inventory = [windows, wsl]
+        with patch.object(r, '_control_bytes', side_effect=lambda c,p: records[p]), \
+             patch.object(r, '_control_json', return_value=(compose, r._canonical(compose))), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64), \
+             patch.object(r, '_load_recovery_transition', return_value=transition) as load, \
+             patch.object(r, '_abrupt_network', return_value=proof['network']), \
+             patch('docker_volume_cancelled_recovery._absence_observation'), \
+             patch.object(r, '_read_foreign_docker_consumers', side_effect=[inventory, inventory]) as read, \
+             patch('docker_foreign_bind_identity.canonical_bind_sources', return_value=None), \
+             patch.object(r, '_prove_foreign_windows_bind') as prove_win, \
+             patch.object(r, '_prove_foreign_alias_for_abrupt', return_value=_typed_foreign_alias_proof(wsl_source,wsl['Id'])) as prove_wsl, \
+             patch.object(r, '_ledger_and_store_snapshot', return_value=proof['storage_proof']) as snapshot:
+            r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            reference = prove_win.call_args.kwargs['prepared_reference']
+            self.assertIsInstance(reference, PreparedBackendReference)
+            self.assertIs(prove_wsl.call_args.kwargs['prepared_reference'], reference)
+            self.assertEqual(prove_win.call_args.args[2:4], (windows, windows_source))
+            self.assertEqual(prove_wsl.call_args.args[2:4], (wsl, wsl_source))
+            self.assertEqual(load.call_count, 2)
+            snapshot.assert_called_once()
+            snapshot.reset_mock()
+            prove_win.reset_mock()
+            prove_wsl.reset_mock()
+            new = consumer('f'*64, r'E:\foreign\new')
+            restarted = copy.deepcopy(windows)
+            restarted['State'].update(Status='running', Running=True, Pid=123)
+            changed = [restarted, wsl, new]
+            read.side_effect = [inventory, changed, changed]
+            r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            self.assertEqual([c.args[2] for c in prove_win.call_args_list], [windows, restarted, new])
+            prove_wsl.assert_called_once()
+            snapshot.assert_called_once()
+
+            snapshot.reset_mock()
+            read.side_effect = [inventory, changed]
+            def deny_restarted(*args, **kwargs):
+                if args[2]['State']['Running']:
+                    raise BuildControlError('foreign stopped-absence proof no longer applies')
+                self.assertIsNot(args[2], new)
+            prove_win.side_effect = deny_restarted
+            with self.assertRaisesRegex(BuildControlError, 'stopped-absence proof no longer applies'):
+                r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            snapshot.assert_not_called()
+
+            prove_win.side_effect = None
+            read.side_effect = [inventory, *[[{**windows, 'RestartCount': count}, wsl]
+                                             for count in range(1, 5)]]
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'inventory did not stabilize'):
+                r.validate_abrupt_stop_proof(proof, auth, control=control, compose=compose, transition=transition)
+            snapshot.assert_not_called()
 
     def test_history_publication_is_immutable(self):
         control=SimpleNamespace(write_bytes=lambda *a: self.fail('must not overwrite'))
@@ -1027,6 +1224,13 @@ class AbruptStopTests(unittest.TestCase):
         selected = Path(__file__).resolve().parent.parent
         pins = proof['authorization_pins']
         pins['source_root'] = str(selected)
+        retained_script = 'examples/sp4_comparison_20261102/sp4_dynamic_fem_gpu_case_a.py'
+        from docker_volume_dev import INCLUDE_UNTRACKED_ENV
+        compose['services'] = {'backend': {
+            'command': ['start', '--native-contract', 'fem-cuda-activity-trace'],
+            'environment': {INCLUDE_UNTRACKED_ENV: json.dumps([retained_script], separators=(',', ':'))},
+        }}
+        pins['compose_config_sha256'] = r._sha256(r._canonical(compose))
         b,f=proof['containers'].values()
         b['Config']['Env']=['FULLMAG_DOCKER_DEVICE_ACCESS=cpu']
         terminal_pins=[{'run_id':'completed','run_intent_sha256':'1'*64,'run_catalog_sha256':'2'*64,'artifact_catalog_sha256':None}]
@@ -1035,7 +1239,10 @@ class AbruptStopTests(unittest.TestCase):
         proof['docker_engine_id_sha256']=r._sha256(b'engine')
         operator={**pins,'schema_version':r.ABRUPT_OPERATOR_SCHEMA,'abrupt_stop_proof':'verification/abrupt-proof.json','abrupt_stop_proof_sha256':r._sha256(r._canonical(proof))}
         auth=r.validate_operator_authorization(operator)
-        terminal={'phase':'development','attempt':pins['development_attempt'],'inputs':{'gpu_access_requested':'disabled'},'state_root':'/canonical/state'}
+        terminal = {'phase': 'development', 'attempt': pins['development_attempt'],
+                    'private_group_storage': 'group-volume-v1',
+                    'inputs': {'gpu_access_requested': 'disabled', 'native_contracts': ['fem-cuda-activity-trace']},
+                    'state_root': '/canonical/state'}
         documents={'operator.json':r._canonical(operator),auth['stop_journal_path']:r._canonical(proof),
                    f"development/attempts/{pins['development_attempt']}/terminal.json":r._canonical(terminal),
                    f"development/attempts/{pins['development_attempt']}/compose.json":r._canonical(compose)}
@@ -1043,7 +1250,9 @@ class AbruptStopTests(unittest.TestCase):
         @contextlib.contextmanager
         def operation(*args):
             yield {'receipt':{},'root':'operations/fake'}
-        control=SimpleNamespace(project=compose['name'],prepare=lambda:None,operation=operation,write_bytes=lambda path,raw:documents.update({path:raw}))
+        control=SimpleNamespace(project=compose['name'],prepare=lambda:None,operation=operation,
+                                write=lambda path,value:documents.update({path:r._canonical(value)}),
+                                write_bytes=lambda path,raw:documents.update({path:raw}))
         def read(control,path,*,optional=False):
             if path not in documents and not optional: self.fail('missing '+path)
             return documents.get(path)
@@ -1051,7 +1260,9 @@ class AbruptStopTests(unittest.TestCase):
             raw=read(control,path,optional=optional)
             return (json.loads(raw),raw) if raw else (None,None)
         def docker(*args,**kwargs):
-            if args[0]=='rm': return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+            if args[0]=='rm':
+                self.assertEqual(json.loads(documents['operations/fake/receipt.json'])['private_group_storage'], 'group-volume-v1')
+                return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
             if args[:2]==('network','ls'): return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
             if args[:2]==('network','inspect'): return SimpleNamespace(returncode=1,stdout=b'',stderr=('Error response from daemon: network '+str(args[2])+' not found').encode())
             if args[0]=='inspect': return SimpleNamespace(returncode=1,stdout=b'',stderr=b'No such object')
@@ -1059,7 +1270,7 @@ class AbruptStopTests(unittest.TestCase):
         device={'resource_id':'runtime-cpu','mapping_sha256':'6'*64,'mapping_detached':True}
         toolchain={'image_id':pins['old_image_id'],'inputs':{'build_args':{'FULLMAG_CUDA_BASE_IMAGE':'helper'}}}
         images={'backend':{'image_id':pins['old_image_id']}}
-        args=SimpleNamespace(repo_root=selected,source_root=str(selected),recovery_authorization='operator.json',attempt=pins['development_attempt'])
+        args=SimpleNamespace(repo_root=selected,source_root=str(selected),port=3274,recovery_authorization='operator.json',attempt=pins['development_attempt'])
         patches=[patch.object(r,'BuildControl',return_value=control),
             patch.object(r,'toolchain_configuration',return_value={'services':{'fem-gpu-toolchain':{'build':{'args':{'FULLMAG_CUDA_BASE_IMAGE':'helper'}}}}}),
             patch.object(r,'_control_bytes',side_effect=read),patch.object(r,'_control_json',side_effect=read_json),
@@ -1073,6 +1284,7 @@ class AbruptStopTests(unittest.TestCase):
             patch('docker_dev._select_source',return_value=(selected,{})),patch('docker_dev._compose_identity',return_value={'project_id':'project','worktree_id':'master','checkout_kind':'main'}),
             patch('docker_dev._resolve_gpu_access',return_value='cpu'),patch('docker_dev._verify_docker_gpu_access',return_value='cpu'),
             patch('docker_build_control.build_volume_toolchain',return_value=toolchain),patch('docker_build_control.build_volume_runtime_images',return_value=images),
+            patch('fullmag_docker_runtime.assert_loopback_port_available'),
             patch('docker_volume_dev._operator_probe_record_from_retained',return_value={})]
         with contextlib.ExitStack() as stack:
             for item in patches: stack.enter_context(item)
@@ -1085,6 +1297,8 @@ class AbruptStopTests(unittest.TestCase):
         self.assertEqual(request['expected_owner']['state'],'ready')
         self.assertEqual(documents['runtime-control/runtime-service/process-tree.json'],proof['raw_records']['process_receipt']['raw_utf8'].encode())
         self.assertIsNone(start.call_args.args[0].script)
+        self.assertEqual(start.call_args.args[0].native_contract, ['fem-cuda-activity-trace'])
+        self.assertEqual(start.call_args.args[0].include_untracked, [retained_script])
         self.assertTrue(any(path.endswith('/absence.json') for path in documents))
 
     def test_inspect_pair_checks_image_service_and_retained_config_before_no_bridge(self):

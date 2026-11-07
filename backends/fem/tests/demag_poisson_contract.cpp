@@ -19,11 +19,13 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/interactions/demag_poisson_transfer.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/transfer/component_transfer.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -33,6 +35,7 @@
 #endif
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 #include <HYPRE_utilities.h>
+#include <_hypre_utilities.h>
 #endif
 
 #include <cmath>
@@ -2719,6 +2722,18 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
         double energy = 0.0;
     };
     std::array<CpuOracle, realizations.size()> cpu_oracles;
+    {
+        fullmag::fem::Context uninitialized_context;
+        uninitialized_context.poisson_demag.gpu_demag_mode =
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        std::int32_t coarse_relax_type = 0;
+        std::string error;
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         uninitialized_context, coarse_relax_type, error),
+                     error, "uninitialized GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == -1,
+              "uninitialized/non-GPU demag AMG coarse-cycle query must return -1");
+    }
     // Finish and destroy every CPU workspace before configuring MFEM's
     // process-wide CUDA backend, as the production MFEM entry point does.
     for (size_t index = 0; index < realizations.size(); ++index) {
@@ -2845,9 +2860,9 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
                  static_cast<unsigned long long>(control_bytes),
                  static_cast<unsigned long long>(control_fences));
     // Aggregate counters include the explicitly classified scalar readbacks.
-    // Each of the two solves can read at most the RHS and residual norms.
-    check(control_fences <= 4u && control_bytes == control_fences * sizeof(double),
-          "mixed-P1 GPU validation may read only one scalar per required norm");
+    // Both solves must independently certify the RHS and residual norms.
+    check(control_fences == 4u && control_bytes == 4u * sizeof(double),
+          "mixed-P1 GPU validation must certify both solves using scalar-only readbacks");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
               after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&
               after.hot_loop_host_sync_count - before.hot_loop_host_sync_count == control_fences &&
@@ -2914,6 +2929,136 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
               gpu_workspace->fresh_zero_guess_count == 1u &&
               gpu_workspace->warm_start_count == 1u,
           "mixed-P1 GPU Poisson build/upload/setup/fresh/warm counters must each be one");
+    if (index == 0u) {
+        fullmag::fem::gpu_demag_poisson_destroy(ctx);
+        ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_AMG;
+        // This fixture bypasses initialize_demag_plan_fields; resolve the same
+        // production profile instead of using the zero-initialized policy.
+        ctx.demag.amg_policy = fullmag::fem::resolve_demag_amg_policy_from_environment();
+        error.clear();
+        check_result(fullmag::fem::gpu_demag_poisson_initialize(ctx, error), error,
+                     "mixed CUDA/Hypre AMG Poisson workspace initialization");
+        std::int32_t coarse_relax_type = -1;
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "initialized GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == 18,
+              "initialized GPU Poisson AMG must report coarse-cycle relax type 18");
+        error.clear();
+        check_result(fullmag::fem::compute_device_demag_for_device_stage_fresh(
+                         ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+                     error, "mixed CUDA/Hypre AMG Poisson device step");
+        check(cudaDeviceSynchronize() == cudaSuccess,
+              "mixed-P1 AMG device Hypre step must synchronize for test readback");
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "post-solve GPU demag AMG coarse-cycle query");
+        check(coarse_relax_type == 18,
+              "post-solve GPU Poisson AMG must report coarse-cycle relax type 18");
+        const HYPRE_Int prior_status = HYPRE_GetError();
+        check((prior_status & ~HYPRE_ERROR_CONV) == 0,
+              "AMG getter sticky-status test must start without non-convergence errors");
+        const bool inject_convergence =
+            (prior_status & HYPRE_ERROR_CONV) == 0;
+        if (inject_convergence) {
+            hypre_error(HYPRE_ERROR_CONV);
+        }
+        const HYPRE_Int convergence_status = HYPRE_GetError();
+        check((convergence_status & HYPRE_ERROR_CONV) != 0,
+              "AMG getter sticky-status test must have HYPRE_ERROR_CONV set");
+        error.clear();
+        check_result(fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                         ctx, coarse_relax_type, error),
+                     error, "GPU demag AMG query with sticky convergence status");
+        check(coarse_relax_type == 18,
+              "GPU demag AMG query must succeed with only a prior convergence bit");
+        check(HYPRE_GetError() == convergence_status,
+              "GPU demag AMG query must preserve the prior convergence bit");
+        if (inject_convergence) {
+            check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0 &&
+                      HYPRE_GetError() == prior_status,
+                  "test must clear only its injected convergence bit");
+        }
+
+        const HYPRE_Int before_argument_error = HYPRE_GetError();
+        check((before_argument_error & ~HYPRE_ERROR_CONV) == 0,
+              "AMG getter error-bit test must start without other HYPRE errors");
+        hypre_error(HYPRE_ERROR_ARG);
+        const HYPRE_Int argument_error_status = HYPRE_GetError();
+        check((argument_error_status & HYPRE_ERROR_ARG) != 0,
+              "AMG getter error-bit test must set HYPRE_ERROR_ARG");
+        error.clear();
+        check(!fullmag::fem::read_device_demag_amg_coarse_relax_type(
+                  ctx, coarse_relax_type, error),
+              "GPU demag AMG query must reject a pre-existing non-convergence error");
+        check(error.find("pre-existing HYPRE status") != std::string::npos,
+              "GPU demag AMG query must report the pre-existing HYPRE error");
+        check(HYPRE_GetError() == argument_error_status,
+              "GPU demag AMG query must preserve a pre-existing argument error");
+        check(HYPRE_ClearError(HYPRE_ERROR_ARG) == 0 &&
+                  HYPRE_GetError() == before_argument_error,
+              "test must clear only its injected argument error");
+
+        // A real successful PCG solve must still be independently certified.
+        // Corrupt only its owned potential vector after the final use of this solve;
+        // the HYPRE success bit remains the result of the solve above.
+        auto *validation_workspace = fullmag::fem::workspace_ptr(ctx);
+        check(validation_workspace != nullptr && validation_workspace->solver != nullptr &&
+                  validation_workspace->x_par != nullptr && validation_workspace->b_par != nullptr &&
+                  validation_workspace->stream_interop.ready &&
+                  validation_workspace->stream_interop.hypre_stream != nullptr,
+              "independent residual regression requires the initialized mixed-P1 Hypre workspace");
+        int successful_iterations = 0;
+        double solver_reported_residual = 0.0;
+        bool solver_reported_converged = false;
+        fullmag::fem::read_demag_poisson_hypre_solver_stats(
+            ctx, *validation_workspace, successful_iterations,
+            solver_reported_residual, solver_reported_converged);
+        const double rhs_norm_before_corruption = validation_workspace->b_par->Norml2();
+        const double potential_norm_before_corruption = validation_workspace->x_par->Norml2();
+        check(solver_reported_converged && successful_iterations > 0 &&
+                  std::isfinite(solver_reported_residual) && solver_reported_residual >= 0.0,
+              "independent residual regression must start from an actual successful GPU CG solve");
+        check(std::isfinite(rhs_norm_before_corruption) && rhs_norm_before_corruption > 0.0 &&
+                  std::isfinite(potential_norm_before_corruption) &&
+                  potential_norm_before_corruption > 0.0,
+              "independent residual regression requires a nonzero RHS and solved potential");
+
+        const auto validation_stream = validation_workspace->stream_interop.hypre_stream;
+        const int validation_rows = validation_workspace->x_par->Size();
+        check(validation_rows > 0 &&
+                  ctx.gpu_state.device.demag_poisson.poisson_solution != nullptr,
+              "independent residual regression requires the owned device potential storage");
+        check(cudaMemsetAsync(
+                  ctx.gpu_state.device.demag_poisson.poisson_solution, 0,
+                  static_cast<size_t>(validation_rows) * sizeof(double),
+                  validation_stream) == cudaSuccess,
+              "independent residual regression corrupts only the test-owned potential on the Hypre stream");
+        validation_workspace->x_par->HypreWrite();
+        check(cudaStreamSynchronize(validation_stream) == cudaSuccess,
+              "independent residual regression orders the test-only potential corruption");
+
+        int corrupted_iterations = 0;
+        double independently_checked_residual = 0.0;
+        error.clear();
+        const bool corrupted_candidate_accepted =
+            fullmag::fem::validate_demag_poisson_hypre_device_solve(
+                ctx, *validation_workspace, corrupted_iterations,
+                independently_checked_residual, error);
+        check(!corrupted_candidate_accepted &&
+                  corrupted_iterations == successful_iterations &&
+                  std::isfinite(independently_checked_residual) &&
+                  independently_checked_residual > ctx.demag.solver.relative_tolerance &&
+                  error.find("solver_reported_converged=true") != std::string::npos &&
+                  error.find("residual_independently_certified=true") != std::string::npos &&
+                  error.find("relative_tolerance=") != std::string::npos,
+              "independent Euclidean residual must reject a corrupted potential despite stale solver success");
+        std::printf(
+            "gpu_independent_residual_corruption_rejected rows=%d residual=%.17g\n",
+            validation_rows, independently_checked_residual);
+    }
     fullmag::fem::gpu_demag_poisson_destroy(ctx);
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
     fullmag::fem::context_destroy_poisson(ctx);
@@ -4377,6 +4522,132 @@ void run_contract_case(const char *name, void (*body)()) {
 #endif
 }
 
+void packed_snapshot_field_download_is_runtime_correct_and_fails_closed() {
+#if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+    int device_count = 0;
+    const cudaError_t device_rc = cudaGetDeviceCount(&device_count);
+    if (device_rc == cudaErrorNoDevice || device_rc == cudaErrorInsufficientDriver) {
+        (void)cudaGetLastError();
+        return;
+    }
+    check(
+        device_rc == cudaSuccess,
+        "CUDA device query must succeed for packed-download runtime test");
+    if (device_count == 0) {
+        return;
+    }
+
+    // Cross a 256-thread block boundary and keep every component distinct.
+    constexpr uint64_t node_count = 263;
+    const std::vector<double> initial(static_cast<size_t>(node_count * 3ull), 0.0);
+    std::vector<double> expected(static_cast<size_t>(node_count * 3ull));
+    for (uint64_t node = 0; node < node_count; ++node) {
+        expected[3ull * node] = 0.125 * static_cast<double>(node + 1ull);
+        expected[3ull * node + 1ull] = -0.5 * static_cast<double>(2ull * node + 1ull);
+        expected[3ull * node + 2ull] = 7.25 + 2.0 * static_cast<double>(node);
+    }
+    fullmag::fem::FemGpuState state;
+    fullmag::fem::TransferAudit audit;
+    std::string error;
+    check(
+        fullmag::fem::gpu_state_initialize(
+            state,
+            node_count,
+            FULLMAG_FEM_INTEGRATOR_HEUN,
+            true,
+            false,
+            initial.data(),
+            initial.size(),
+            audit,
+            error),
+        "CUDA state initialization must allocate packed field-download scratch");
+    check(
+        state.packed_field_download.aos_device != nullptr &&
+            state.packed_field_download.dof_len == node_count * 3ull &&
+            state.lifecycle.device_bytes >= node_count * 3ull * sizeof(double),
+        "packed field-download scratch must be persistent and lifecycle-accounted");
+
+    cudaStream_t stream = nullptr;
+    check(
+        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) == cudaSuccess,
+        "packed field-download runtime test must create its explicit stream");
+    check(
+        fullmag::fem::gpu_component_upload_aos(
+            state.lifecycle,
+            state.fields.h_ex,
+            expected.data(),
+            expected.size(),
+            "packed_download_test",
+            audit,
+            error),
+        "test component upload must succeed");
+    check(cudaStreamSynchronize(nullptr) == cudaSuccess,
+          "fixture uploads must finish before the nonblocking download stream");
+
+    std::vector<double> out;
+    const uint64_t d2h_before = audit.counters.d2h_bytes;
+    const uint64_t host_reads_before = audit.counters.host_read_count;
+    check(
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            state,
+            state.fields.h_ex,
+            out,
+            audit,
+            nullptr,
+            "packed_download_test",
+            error),
+        "packed field-download must reject a missing explicit stream");
+    check(
+        !error.empty() && audit.counters.d2h_bytes == d2h_before,
+        "missing-stream rejection must report an error without auditing a transfer");
+
+    error.clear();
+    double *const saved_scratch = state.packed_field_download.aos_device;
+    state.packed_field_download.aos_device = nullptr;
+    check(
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            state,
+            state.fields.h_ex,
+            out,
+            audit,
+            reinterpret_cast<void *>(stream),
+            "packed_download_test",
+            error),
+        "packed field-download must reject missing persistent scratch");
+    check(
+        !error.empty() && audit.counters.d2h_bytes == d2h_before,
+        "missing-scratch rejection must report an error without auditing a transfer");
+    state.packed_field_download.aos_device = saved_scratch;
+
+    error.clear();
+    check(
+        fullmag::fem::gpu_state_download_component_aos_packed(
+            state,
+            state.fields.h_ex,
+            out,
+            audit,
+            reinterpret_cast<void *>(stream),
+            "packed_download_test",
+            error),
+        "packed field-download must succeed on the supplied stream");
+    check(
+        out == expected,
+        "packed download must preserve exact component ordering and float64 values");
+    check(
+        audit.counters.d2h_bytes - d2h_before == node_count * 3ull * sizeof(double) &&
+            audit.counters.host_read_count - host_reads_before == 1,
+        "packed download must audit one exact 3*N*8-byte host read");
+    check(cudaStreamDestroy(stream) == cudaSuccess, "packed-download test stream must be destroyed");
+    fullmag::fem::gpu_state_destroy(state);
+    check(
+        state.packed_field_download.aos_device == nullptr &&
+            state.packed_field_download.dof_len == 0,
+        "packed field-download scratch must be released during full GPU-state teardown");
+    std::printf("packed_field_download_runtime_executed nodes=%llu\n",
+                static_cast<unsigned long long>(node_count));
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -4454,6 +4725,7 @@ int main() {
 #if FULLMAG_HAS_MFEM_STACK && FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
     // Keep the process-wide CUDA configuration after all CPU oracle tests.
     run_contract_case("mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step", mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step);
+    run_contract_case("packed_snapshot_field_download_is_runtime_correct_and_fails_closed", packed_snapshot_field_download_is_runtime_correct_and_fails_closed);
 #endif
     return 0;
 }

@@ -1,0 +1,387 @@
+{
+  "document": {
+    "path": "docs/physics/0913-fem-gpu-amg-coarse-residency.md",
+    "reviewed_revision": "70d35b84dae4e840e8cc881c35ef45014c604284"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "unchanged / not-qualified-by-this-experiment"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "runtime-diagnostic-only / full-SP4-unqualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM nie używa tej realizacji Poissona HYPRE."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM nie używa tej realizacji Poissona HYPRE."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-gpu-amg-coarse-system",
+      "symbols": [
+        "K",
+        "phi",
+        "b",
+        "r",
+        "B",
+        "z"
+      ],
+      "sources": [
+        "assembly",
+        "residual",
+        "gpu-amg"
+      ]
+    },
+    {
+      "id": "eq-gpu-amg-coarse-relaxation",
+      "symbols": [
+        "K",
+        "phi",
+        "b",
+        "D",
+        "omega",
+        "j",
+        "c"
+      ],
+      "sources": [
+        "gpu-amg"
+      ],
+      "upstream_source": {
+        "url": "https://github.com/hypre-space/hypre/blob/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/parcsr_ls/par_relax.c",
+        "symbol": "hypre_BoomerAMGRelax",
+        "role": "Pinned type18 GPU L1-Jacobi dispatch; configure_demag_amg selects this implementation."
+      }
+    }
+  ],
+  "symbols": [
+    {
+      "id": "K",
+      "latex": "K, K_c",
+      "meaning": "Macierz sztywności Poissona oraz jej najgrubszy poziom",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi, \\phi_c",
+      "meaning": "Wektory współczynników potencjału skalarnego",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "b",
+      "latex": "b, b_c",
+      "meaning": "Wektor prawej strony i jego ograniczenie do najgrubszego poziomu",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "Residual układu Poissona",
+      "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "B",
+      "latex": "B",
+      "meaning": "Operator preconditionera",
+      "si_unit": "\\mathrm{m^{-1}}"
+    },
+    {
+      "id": "z",
+      "latex": "z",
+      "meaning": "Preconditionowany residual",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "D",
+      "latex": "D_c",
+      "meaning": "Diagonalne skalowanie relaksacji HYPRE",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "omega",
+      "latex": "\\omega_c",
+      "meaning": "Waga relaksacji",
+      "si_unit": "1"
+    },
+    {
+      "id": "j",
+      "latex": "j",
+      "meaning": "Indeks relaksacji coarse cycle",
+      "si_unit": "1"
+    },
+    {
+      "id": "c",
+      "latex": "c",
+      "meaning": "Indeks najgrubszego poziomu AMG",
+      "si_unit": "1"
+    },
+    {
+      "id": "m",
+      "latex": "m",
+      "meaning": "Jednostkowa magnetyzacja nodalna",
+      "si_unit": "1"
+    },
+    {
+      "id": "E",
+      "latex": "E_1, E_2",
+      "meaning": "Porównywane wartości tego samego składnika energii",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "Stała przenikalności próżni użyta we wspólnej konwersji torque",
+      "si_unit": "\\mathrm{H/m}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "gpu-amg",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "configure_demag_amg",
+      "responsibility": "Ustawienie i kontrola coarse cycle18 wyłącznie w GPU AMG.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L93"
+    },
+    {
+      "id": "gpu-getter",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "read_device_demag_amg_coarse_relax_type",
+      "responsibility": "Odczyt skutecznej polityki z kontrolą lifecycle i flag HYPRE.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L211"
+    },
+    {
+      "id": "native-api",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1",
+      "responsibility": "Addytywny getter C ABI bez zmiany rozmiaru istniejących struktur.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/src/api.cpp#L6561"
+    },
+    {
+      "id": "policy",
+      "path": "backends/fem/core/demag_solver_policy.cpp",
+      "symbol": "resolve_demag_amg_policy_from_environment",
+      "responsibility": "Dotychczasowe parametry profilu AMG.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/core/demag_solver_policy.cpp#L63"
+    },
+    {
+      "id": "artifact",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "demag_amg_profile_metadata",
+      "responsibility": "Publikacja zaobserwowanego coarse type albo null dla braku obserwacji.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-runner/src/artifacts.rs#L1137"
+    },
+    {
+      "id": "python",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FemLinearSolverPolicy",
+      "responsibility": "Publiczne domyślne wartości, walidacja i serializacja polityki.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/packages/fullmag-py/src/fullmag/model/discretization.py#L160"
+    },
+    {
+      "id": "hints",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FemHintsIR",
+      "responsibility": "Opcjonalna polityka FEM w kanonicznym ProblemIR.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-ir/src/mesh_hints.rs#L1074"
+    },
+    {
+      "id": "plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FemPlanIR",
+      "responsibility": "Rozwiązana polityka przekazana do wykonania FEM.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-ir/src/plan.rs#L1424"
+    },
+    {
+      "id": "assembly",
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "symbol": "build_p1_demag_operators",
+      "responsibility": "Tworzy dyskretny operator i sprzężenia Poissona.",
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/operators.cpp#L1232"
+    },
+    {
+      "id": "residual",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "validate_demag_poisson_hypre_device_solve",
+      "responsibility": "Historyczny kod użyty w eksperymentach transportu liczył normę Ax-b i RHS warunkowo; późniejszą certyfikację każdego solve opisuje nota 0532.",
+      "evidence_status": "Historical source mapping for retained transport results; subsequent native RED/GREEN and 50 fs OFF residual-certificate evidence is scoped in 0532.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452"
+    },
+    {
+      "id": "packed-state",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.cpp",
+      "symbol": "gpu_state_download_component_aos_packed",
+      "responsibility": "Wymaga własnego persistent scratch i jawnego streamu; nie zmienia innych konsumentów transferu.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/state/gpu_state.cpp#L203"
+    },
+    {
+      "id": "packed-transfer",
+      "path": "backends/fem/gpu/cuda/transfer/component_transfer.cpp",
+      "symbol": "gpu_component_download_aos_packed",
+      "responsibility": "Pakuje GPU SoA do AoS, wykonuje jeden ciągły D2H i synchronizuje przed odczytem hosta.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/transfer/component_transfer.cpp#L92"
+    },
+    {
+      "id": "packed-kernel",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu",
+      "symbol": "fullmag_cuda_pack_soa_to_aos",
+      "responsibility": "Uruchamia kernel kopiujący double bez zmiany wartości lub kolejności składowych.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/transfer/transfer_kernels.cu#L123"
+    },
+    {
+      "id": "packed-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "packed_snapshot_field_download_is_runtime_correct_and_fails_closed",
+      "responsibility": "Test GPU:263 węzły, kolejność, dokładne wartości, audit, odmowy i teardown.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/tests/demag_poisson_contract.cpp#L4467"
+    },
+    {
+      "id": "capture-local-field-cache",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "NativeFemCaptureFieldCache",
+      "responsibility": "Reuse H_ex and H_ext vectors inside one source-provider batch only; all other fields bypass these cache slots.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284; does not establish runtime speedup.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2107"
+    },
+    {
+      "id": "capture-local-field-batch",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "copy_live_preview_fields_for_capture",
+      "responsibility": "Own one cache for an ordered synchronous capture batch; cache lifetime ends when the method returns.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L5974"
+    },
+    {
+      "id": "capture-energy-reuse",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "copy_energy_density_values_from_source",
+      "responsibility": "Consume the shared field provider while preserving the existing term loop, prefactors, mask-aware accumulation, and DG0 projection branch.",
+      "evidence_status": "Committed source behavior and nodal/DG0 regression at 70d35b84dae4e840e8cc881c35ef45014c604284.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2262"
+    },
+    {
+      "id": "capture-owner-order-publication",
+      "path": "crates/fullmag-runner/src/fem/relax/preview.rs",
+      "symbol": "capture_native_fem_observables",
+      "responsibility": "Select demanded quantities and clock/map, prepare and validate the ordered batch, then publish the complete capture to StepUpdate.",
+      "evidence_status": "Committed source behavior at 70d35b84dae4e840e8cc881c35ef45014c604284; provider errors return before capture publication.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/fem/relax/preview.rs#L1771"
+    },
+    {
+      "id": "capture-cache-value-regression",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "batch_matches_individual_nodal_and_dg0_outputs_and_reads_exchange_external_once",
+      "responsibility": "Bitwise compare direct H_ex/H_ext and energy outputs for nodal and DG0 paths; assert one H_ex/H_ext provider read per batch.",
+      "evidence_status": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284; not a runtime or performance qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2696"
+    },
+    {
+      "id": "capture-cache-lifetime-error-regression",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "each_capture_re_reads_at_the_same_step_and_provider_failure_aborts_the_batch",
+      "responsibility": "Assert the next capture re-reads changed source values at the same step and that a provider error aborts the batch.",
+      "evidence_status": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284; not a runtime or performance qualification.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/crates/fullmag-runner/src/native_fem.rs#L2759"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FemLinearSolverPolicy.solver",
+        "type": "str",
+        "default": "CG",
+        "si_unit": "1",
+        "validation": "CG lub GMRES",
+        "meaning": "Wybór zewnętrznej metody liniowej",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.solver"
+      },
+      {
+        "python": "FemLinearSolverPolicy.preconditioner",
+        "type": "str",
+        "default": "AMG",
+        "si_unit": "1",
+        "validation": "AMG, JACOBI lub NONE",
+        "meaning": "Wybór preconditionera",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.preconditioner"
+      },
+      {
+        "python": "FemLinearSolverPolicy.rtol",
+        "type": "float",
+        "default": "1e-8",
+        "si_unit": "1",
+        "validation": "dodatnia skończona wartość",
+        "meaning": "Względna tolerancja residualu; próba używa 1e-12",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.rtol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.atol",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{A\\,m}",
+        "validation": "None lub dodatnia skończona wartość",
+        "meaning": "Opcjonalna tolerancja bezwzględnego residualu algebraicznego",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.atol"
+      },
+      {
+        "python": "FemLinearSolverPolicy.max_iterations",
+        "type": "int",
+        "default": "500",
+        "si_unit": "1",
+        "validation": "wartość co najmniej 1",
+        "meaning": "Limit iteracji zewnętrznego solvera",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.max_iterations"
+      },
+      {
+        "python": "FemLinearSolverPolicy.print_level",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "wartość nieujemna",
+        "meaning": "Poziom diagnostyki liniowej",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "fem.demag_solver_policy.print_level"
+      }
+    ]
+  },
+  "validation": {
+    "baseline": "50fs / seven accepted steps / full Zarr preserved; recovery receipt d6fe4d9e7c67487b",
+    "candidate_native_runtime": "Managed CUDA build and CUPTI contract passed for coarse18; later packed library passed fem-demag-poisson with actual GPU marker; fullSP4 remains unqualified",
+    "candidate_physics_and_speedup": "Terminal energies/m/torque pass; old/new adaptive schedule equality failed; no attributable speedup",
+    "instrumentation_pair": "Full Zarr15columns/fourfields/twoframes and native finalm/torque/schedules exact equal ON/OFF; timingpassed514161records",
+    "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580",
+    "packed_field_download": "GPU contract passed; 50fs OFF/ON and coarse18-OFF field/table parity exact; 318→252 cudaMemcpy2D,22pack kernels, identical D2H bytes; one sample per variant/mode, repeated speedup not qualified",
+    "packed_evidence_sha256": "a6f7b5c5700b97e88b64d4d8c47dd3329c3468530c3194d92b58f70eaa79e166",
+    "residual_norm_limit": "Historical transport-experiment CG uses the preconditioned norm and conditional GPU true-residual check. Subsequent every-solve Euclidean certification passed native RED/GREEN and seven-step50fs full-Zarr OFF/ON with the capture cache. Corrected-source CUPTI515377 clock/loss gates passed; full1ns SP4 and CUDA719 root cause remain unqualified.",
+    "capture_local_field_reuse": "Source regression at 70d35b84dae4e840e8cc881c35ef45014c604284 covers bitwise nodal/DG0 equivalence, one H_ex/H_ext read per batch, same-step re-read, and provider failure. A managed full-Zarr OFF/ON pair preserved both frames, all four fields, 15 table columns, terminal m/torque and the full schedule. The trace comparison observed 346 to 262 D2H events in the 209192 B bin and cudaMemcpy2D 252 to 168; the 8 B bin increased by 90 events (+720 B). The earlier packed ON revision lacked the independent residual fix, so aggregate byte deltas are not attributed solely to this cache. No time or speedup claim is qualified.",
+    "capture_local_evidence_sha256": "6bc8299e6adb1ea569193385010ad61c60232b1d83b4b4fac0d369a838ec508b",
+    "capture_local_timing_limit": "N=1 OFF: field_copy0.441745444->0.268411438s, reported_solver4.211157581->4.379183733s. Timers have different scopes and must not be summed. Repeated attributable total speedup is not qualified."
+  }
+}

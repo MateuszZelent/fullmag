@@ -1147,6 +1147,7 @@ fn demag_amg_profile_metadata(
     serde_json::json!({
         "provider": "mfem_hypre_boomeramg",
         "relax_type": stats.demag_amg_relax_type,
+        "coarse_relax_type": stats.demag_amg_coarse_relax_type,
         "coarsening": stats.demag_amg_coarsening,
         "interpolation": stats.demag_amg_interpolation,
         "aggressive_coarsening": stats.demag_amg_aggressive_coarsening,
@@ -10049,6 +10050,7 @@ mod tests {
                 demag_solver_apply_wall_time_ns: 19,
                 demag_solver_setup_reused: true,
                 demag_amg_relax_type: 6,
+                demag_amg_coarse_relax_type: Some(18),
                 demag_amg_coarsening: 10,
                 demag_amg_interpolation: 7,
                 demag_amg_aggressive_coarsening: 2,
@@ -10081,6 +10083,7 @@ mod tests {
         assert_eq!(metadata["policy_source"], "resolved_default");
         assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
         assert_eq!(metadata["amg_profile"]["relax_type"], 6);
+        assert_eq!(metadata["amg_profile"]["coarse_relax_type"], 18);
         assert_eq!(metadata["amg_profile"]["coarsening"], 10);
         assert_eq!(metadata["amg_profile"]["interpolation"], 7);
         assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 2);
@@ -10103,6 +10106,7 @@ mod tests {
         let unset = demag_amg_profile_metadata("AMG", Some(&StepStats::default()));
         assert_eq!(unset["strength_threshold"], serde_json::Value::Null);
         assert_eq!(unset["max_levels"], serde_json::Value::Null);
+        assert_eq!(unset["coarse_relax_type"], serde_json::Value::Null);
         assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
         assert_eq!(
             metadata["requested_preconditioner"],

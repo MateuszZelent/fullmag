@@ -826,6 +826,10 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
+    /// Historical results and unconfigured/non-GPU paths have no observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_amg_coarse_relax_type: Option<i32>,
     #[serde(default)]
     pub demag_amg_coarsening: i32,
     #[serde(default)]
@@ -1169,6 +1173,7 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
             demag_amg_aggressive_coarsening: 0,

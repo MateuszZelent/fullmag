@@ -171,7 +171,7 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
     if not isinstance(parameters, dict):
         raise HistoryError("RunIntent session binding differs")
 
-    session_identity = [receipt["request_id"], receipt["source_sha256"]]
+    session_identity = receipt["request_id"] + "\0" + receipt["source_sha256"]
     profile_records = (authorization, provenance, parameters)
     profile_pins = (receipt, inputs, response)
     if (any("solver_profile" in record for record in profile_records)
@@ -186,9 +186,25 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
         if (profile_sha != provenance_sha or profile_sha != intent_sha
                 or any(record.get("solver_profile_sha256") != profile_sha for record in profile_pins)):
             raise HistoryError("Activation solver profile digest differs")
-        session_identity.append(profile_sha)
+        session_identity += "\0" + profile_sha
 
-    expected_session = "docker-startup-" + digest("\0".join(session_identity).encode())
+    trace_records = (authorization, provenance, parameters)
+    trace_pins = (receipt, inputs, response)
+    if (any("cuda_trace" in record for record in trace_records)
+            or any("cuda_trace_sha256" in record for record in trace_pins)):
+        from docker_startup_script import StartupScriptError, cuda_trace_sha256
+        try:
+            trace_sha, provenance_trace_sha, intent_trace_sha = (
+                cuda_trace_sha256(record.get("cuda_trace")) for record in trace_records
+            )
+        except StartupScriptError as error:
+            raise HistoryError("Activation cuda trace wrapper is missing or invalid") from error
+        if (trace_sha != provenance_trace_sha or trace_sha != intent_trace_sha
+                or any(record.get("cuda_trace_sha256") != trace_sha for record in trace_pins)):
+            raise HistoryError("Activation cuda trace digest differs")
+        session_identity += "\0cuda_trace\0" + trace_sha
+
+    expected_session = "docker-startup-" + digest(session_identity.encode())
     if receipt["session_id"] != expected_session:
         raise HistoryError("RunIntent does not bind the activated request")
     workspace = parameters.get("live_workspace")

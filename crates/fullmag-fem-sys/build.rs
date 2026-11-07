@@ -160,6 +160,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=../../native/include/fullmag_fem.h");
+    println!("cargo:rerun-if-changed=../../native/include/fullmag_fem_cuda_trace.h");
     println!("cargo:rerun-if-changed=../../native/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../../native/cmake/ImportFullmagFdm.cmake");
     println!("cargo:rerun-if-changed=../../native/cmake/RequireFemGpu.cmake");

@@ -55,6 +55,91 @@ class AuthoredZarrTests(unittest.TestCase):
                 history.authored_zarr(source)
 
 
+    def test_resolves_module_level_literal_string_name(self):
+        authored = (
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\n'
+            b'study.storage(output_dir=OUTPUT_STORAGE)\n'
+        )
+        self.assertEqual(str(history.authored_zarr(authored)), "/user-data/scan.zarr")
+
+    def test_resolves_actual_full_zarr_fixture_output_storage_constant(self):
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "examples/sp4_comparison_20261102/"
+            "sp4_probe_fem_gpu_strict_fullzarr_50fs_20261107.py"
+        )
+        self.assertEqual(
+            str(history.authored_zarr(fixture.read_bytes())),
+            "/user-data/sp4-comparison-20261102/diagnostic-runs/"
+            "full-zarr-fixed-coupling-20261107/"
+            "sp4_probe_fem_gpu_strict_fullzarr_50fs_20261107.zarr",
+        )
+
+    def test_rejects_aliases_expressions_and_unsafe_bindings(self):
+        cases = (
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\nALIAS = OUTPUT_STORAGE\nstudy.storage(output_dir=ALIAS)\n',
+            b'OUTPUT_STORAGE = "/user-data/" + "scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'if enabled:\n    OUTPUT_STORAGE = "/user-data/scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\nif enabled:\n    OUTPUT_STORAGE = "/user-data/other.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'def configure():\n    OUTPUT_STORAGE = "/user-data/scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\ndef configure():\n    global OUTPUT_STORAGE\n    OUTPUT_STORAGE = "/user-data/other.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/one.zarr"\nOUTPUT_STORAGE = "/user-data/two.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\ndel OUTPUT_STORAGE\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = None\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = Path("/user-data/scan.zarr")\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\nfrom unknown import *\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\nstudy.storage()\n',
+        )
+        for source in cases:
+            with self.subTest(source=source), self.assertRaises(HistoryError):
+                history.authored_zarr(source)
+
+    def test_module_level_name_keeps_canonical_path_guards(self):
+        cases = (
+            b'OUTPUT_STORAGE = "/tmp/scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/../scan.zarr"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+            b'OUTPUT_STORAGE = "/user-data/scan"\nstudy.storage(output_dir=OUTPUT_STORAGE)\n',
+        )
+        for source in cases:
+            with self.subTest(source=source), self.assertRaises(HistoryError):
+                history.authored_zarr(source)
+
+    def test_parsing_does_not_execute_source(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-authored-zarr-") as directory:
+            sentinel = Path(directory) / "side-effect"
+            source = (
+                "from pathlib import Path\n"
+                f"Path({str(sentinel)!r}).write_text('executed')\n"
+                "OUTPUT_STORAGE = '/user-data/scan.zarr'\n"
+                "study.storage(output_dir=OUTPUT_STORAGE)\n"
+            ).encode("utf-8")
+            self.assertEqual(str(history.authored_zarr(source)), "/user-data/scan.zarr")
+            self.assertFalse(sentinel.exists())
+
+
+
+class HistoricalWitnessArgumentsTests(unittest.TestCase):
+    def test_optional_witness_pin_is_explicit_and_canonical(self):
+        args = _args()
+        self.assertIsNone(history._runtime_witness_pin(args))
+        args.historical_runtime_witness = "iteration/attempts/" + "d" * 32 + "/terminal.json"
+        args.historical_runtime_witness_sha256 = "e" * 64
+        self.assertEqual(history._runtime_witness_pin(args),
+            (args.historical_runtime_witness, args.historical_runtime_witness_sha256))
+
+    def test_incomplete_or_unsafe_witness_refuses_before_host_control_admission(self):
+        valid = "resume/attempts/" + "d" * 32 + "/terminal.json"
+        for path, sha in ((valid, None), (None, "e" * 64), (valid, "bad"),
+                          ("../" + valid, "e" * 64), ("/" + valid, "e" * 64),
+                          (valid.replace("terminal.json", "receipt.json"), "e" * 64)):
+            args = _args()
+            args.historical_runtime_witness, args.historical_runtime_witness_sha256 = path, sha
+            with self.subTest(path=path, sha=sha), mock.patch.object(history, "ReadOnlyBuildControl") as control:
+                with self.assertRaises(HistoryError):
+                    history.host_context(args)
+                control.assert_not_called()
+
+
 class ActivationHistoryShellBoundaryTests(unittest.TestCase):
     def dispatch(self, recipe):
         source = (Path(__file__).resolve().parent / "just_storage_shell.sh").read_text(encoding="utf-8")

@@ -49,6 +49,7 @@ void reset_metadata(FemGpuState &state)
     state.lifecycle.stage_count = 0;
     state.lifecycle.device_bytes = 0;
     state.lifecycle.reduction_workspace_bytes = 0;
+    state.packed_field_download.dof_len = 0;
     state.reductions.temp_storage_bytes = 0;
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.residency.host_state = FemGpuSyncState::HostClean;
@@ -197,6 +198,36 @@ bool gpu_state_download_component_aos(
     std::string &error)
 {
     return gpu_component_download_aos(state.lifecycle, field, out_xyz, audit, label, error);
+}
+
+bool gpu_state_download_component_aos_packed(
+    FemGpuState &state,
+    const FemGpuComponentField &field,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    void *raw_stream,
+    const char *label,
+    std::string &error)
+{
+    if (!state.lifecycle.allocated) {
+        return true;
+    }
+    if (state.packed_field_download.aos_device == nullptr ||
+        state.packed_field_download.dof_len != state.lifecycle.dof_len) {
+        error = std::string("FemGpuState ") + label +
+            " packed download buffer is missing or has the wrong capacity";
+        return false;
+    }
+    return gpu_component_download_aos_packed(
+        state.lifecycle,
+        field,
+        state.packed_field_download.aos_device,
+        state.packed_field_download.dof_len,
+        raw_stream,
+        out_xyz,
+        audit,
+        label,
+        error);
 }
 
 bool gpu_state_upload_effective_fields_aos(
@@ -849,6 +880,28 @@ bool gpu_state_initialize(
         return false;
     }
 
+    if (state.lifecycle.dof_len > std::numeric_limits<uint64_t>::max() / sizeof(double)) {
+        error = "FemGpuState packed field-download buffer size overflows device byte accounting";
+        gpu_state_destroy(state);
+        return false;
+    }
+    const uint64_t packed_field_download_bytes =
+        state.lifecycle.dof_len * static_cast<uint64_t>(sizeof(double));
+    if (packed_field_download_bytes > std::numeric_limits<uint64_t>::max() - device_bytes) {
+        error = "FemGpuState packed field-download buffer overflows aggregate device byte accounting";
+        gpu_state_destroy(state);
+        return false;
+    }
+    if (!gpu_device_allocate_double(
+            state.packed_field_download.aos_device,
+            state.lifecycle.dof_len,
+            device_bytes,
+            error)) {
+        gpu_state_destroy(state);
+        return false;
+    }
+    state.packed_field_download.dof_len = state.lifecycle.dof_len;
+
     if (allocate_demag_workspace &&
         (!gpu_device_allocate_double(
                 state.demag_poisson.poisson_rhs,
@@ -963,6 +1016,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_device_free_double(state.mesh_geometry.nodes_xyz);
     gpu_device_free_u32(state.mesh_geometry.elements);
     gpu_device_free_u8(state.mesh_geometry.magnetic_element_mask);
+    gpu_device_free_double(state.packed_field_download.aos_device);
     gpu_device_free_double(state.demag_poisson.poisson_rhs);
     gpu_device_free_double(state.demag_poisson.poisson_solution);
     gpu_device_free_double(state.demag_poisson.poisson_solution_full);

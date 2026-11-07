@@ -935,6 +935,34 @@ nie traktuj historycznych opisów incremental output jako aktualnego kontraktu.
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
 
+### Archiwizacja metadanych zakończonej aktywacji
+
+`scripts/docker_activation_history.py` kwalifikuje jeden zamknięty rekord przez
+preview i zastosowanie dokładnego `--plan-sha256`. Przenosi metadane do historii;
+zachowuje sesję, Zarr, sąsiedni skrypt i eksport provenance. Nie zwiększa limitu
+aktywnych rekordów, nie odtwarza Solve i nie omija pinów recovery ani blokad
+współdzielonych z natywnymi writerami.
+
+Ścieżka `storage(output_dir=...)` może być literalnym stringiem albo nazwą
+jednej modułowej stałej z takim literałem. Parser nie wykonuje skryptu.
+Odrzuca wyrażenia, aliasy, wielokrotne lub warunkowe przypisania, ponowne
+wiązanie nazwy i wildcard imports. Nadal wymaga jednego wywołania `storage`
+i kanonicznej ścieżki Zarr pod `/user-data`. Źródło musi odpowiadać oryginalnemu
+hashowi aktywacji, a zachowany wynik przechodzi osobną walidację runu.
+
+Historyczny rodzic `failed-confirmed` z zachowanym dokładnym config pinem
+wymaga dodatkowo obu argumentów `--historical-runtime-witness` oraz
+`--historical-runtime-witness-sha256`. Pierwszy wskazuje dokładny rekord
+`resume/attempts/<id>/terminal.json` albo `iteration/attempts/<id>/terminal.json`,
+drugi jego surowy SHA-256. Terminal i sąsiedni `receipt.json` muszą być zgodne,
+dotyczyć tego samego rodzica, backendu, obrazu, źródeł, grupy, namespace,
+wolumenu i `state_root`. Poprawne wznowienie musi następować po nieudanym
+starcie, a kończyć się przed aktywacją; stop-only nie jest takim dowodem.
+Oba rekordy są przypięte w planie i ponownie sprawdzane przed apply.
+To kwalifikacja historycznych mountów, a nie dowód biblioteki użytej w dawnym
+runie. Brak świadka, niezgodne piny lub niekompletny wynik nadal blokują
+archiwizację. Dla rodzica `succeeded` świadek nie jest używany.
+
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.
 Kontrakt jednego prywatnego volume wymaga, by helper utrzymania widział tylko
@@ -1054,6 +1082,38 @@ niezmieniony. Nie jest to ogólne odzyskiwanie lease ani trasa dla aktywnego run
 Po sukcesie użyj zwykłego przypiętego resume-volume --restart-backend.
 Inne zmiany tożsamości, aktywny/nieznany konsument albo różne piny blokują zapis.
 
+
+## Osierocony restart z zachowanymi wynikami
+
+`reconcile-offline-volume` obsługuje zatrzymaną grupę, której osierocona iteracja
+pozostała w stanie `starting` albo `restarting-idle-backend`. Dla drugiego stanu
+porównuje również identyfikator i czas startu backendu z oryginalnym receiptem.
+Sama nazwa stanu nie upoważnia do odzyskania: wymagane są nieobecny helper,
+zatrzymana para usług, terminalny owner i procesy, zwolnione rezerwacje oraz
+niezmienione dane sesji i dokładne piny konfiguracji.
+
+Odczyt ledgeru zachowuje topologię grupy: osobny starszy wolumen albo
+`private/ledger` w kanonicznym wolumenie kontrolnym. Ten sam podkatalog jest
+montowany tylko do odczytu podczas kwalifikacji oraz ponownej kontroli pod
+`operation.lock`. Nie wolno zastępować go rootem wolumenu ani podkatalogiem
+innej roli lub przestrzeni nazw.
+
+Współdzielone wolumeny pakietów, Cargo i pnpm nie są traktowane jako prywatne
+wolumeny grupy po uwierzytelnieniu ich dokładnych nazw i etykiet. Kontrola
+pakietów nadal odrzuca obcy dostęp do katalogu `groups/<unit_key>` tej grupy,
+niezarejestrowane mounty rootu i aliasy przez bind mount. Uwzględnia działające
+oraz zatrzymane kontenery. Hash profilu cache i dowód wolumenów wchodzą do planu;
+kwalifikacja jest ponawiana pod blokadą przed zatwierdzeniem naprawy.
+
+Najpierw wykonaj podgląd `reconcile-offline-volume` z przypiętymi
+`--attempt`, `--config-sha256`, `--source-root`, `--port` i nowym
+`--operation-attempt`. Wykonanie wymaga `--apply --expected-plan-sha256`
+z dokładnym hashem otrzymanego planu. Operacja zapisuje oddzielny dowód
+odzyskania i usuwa wyłącznie zgodny, osierocony wskaźnik `active` pod blokadą.
+Zachowuje oryginalny receipt, brak jego terminala, ostatni zweryfikowany pakiet,
+sesje i wyniki. Wynik starej iteracji pozostaje `interrupted-retained`; nie jest
+to potwierdzenie kompilacji, testu CUDA ani symulacji. Dalsze odtworzenie grupy
+konsumuje ten dowód przez `--offline-reconciliation` i nie powtarza starego Solve.
 
 ## Authored input after accepted recovery
 

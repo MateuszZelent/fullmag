@@ -178,6 +178,45 @@ def test_dockerfile_reinstalls_exact_installed_cuda_package_versions() -> None:
     assert '--reinstall "${reinstall_specs[@]}"' in dockerfile
 
 
+def test_dockerfile_installs_pinned_cupti_redist_separately() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    runtime = dockerfile.split("FROM cuda-base-normalized AS fem-gpu-dev", 1)[1]
+    manifest_update = runtime.index(
+        'RUN python3 /usr/local/sbin/fullmag-write-dependency-versions.py --phase runtime'
+    )
+    install_start = runtime.index("cupti_version=12.9.79;")
+    install = runtime[install_start:]
+    cupti_root = "ENV FULLMAG_CUPTI_ROOT=/opt/fullmag-cupti/12.9.79"
+    cupti_root_index = runtime.index(cupti_root)
+
+    assert manifest_update < cupti_root_index < install_start
+    assert runtime[cupti_root_index + len(cupti_root):].lstrip().startswith("RUN set -eu;")
+    assert "cuda_cupti/linux-x86_64/cuda_cupti-linux-x86_64-12.9.79-archive.tar.xz" in install
+    assert "f779a24e8f0177b4ce45cbf118cb470139fb5107858df96689d0a0aa01f0fba1" in install
+    assert "cuda_cupti/linux-sbsa/cuda_cupti-linux-sbsa-12.9.79-archive.tar.xz" in install
+    assert "84f8657375c23a425b2d107c3cde1ce75777bff9798b744b78e146fdc02d2de0" in install
+    assert "--connect-timeout 30 --max-time 600 --retry 2 --retry-delay 2 --retry-connrefused" in install
+    assert install.index("sha256sum -c -") < install.index("tar -xJf")
+    assert "--strip-components=1" in install
+    assert '"https://developer.download.nvidia.com/compute/cuda/redist/${cupti_relative_path}"' in install
+    assert 'test -f "${FULLMAG_CUPTI_ROOT}/LICENSE"' in install
+    assert 'include/cupti_version.h' in install
+    assert 'CUPTI_API_VERSION[[:space:]]+28' in install
+    assert 'lib/libcupti.so"' in install
+    assert 'setdefault("declared", {})' in install and 'declared["cupti"]' in install
+    assert 'setdefault("actual", {})' in install and 'actual["cupti"]' in install
+    assert '"redistribution_archive_sha256"' in install
+    assert '"library_sha256"' in install and '"library_path"' in install
+    assert '"api_version"' in install and '"version"' in install
+    assert "declared[\"cuda\"]" not in install
+    assert runtime.count("ENV CUDA_HOME=") == 1
+    assert runtime.count("ENV CUDA_PATH=") == 1
+    assert runtime.count("ENV LD_LIBRARY_PATH=") == 1
+    assert "ENV CUDA_HOME=/usr/local/cuda\n" in runtime
+    assert "ENV CUDA_PATH=/usr/local/cuda\n" in runtime
+    assert "ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}\n" in runtime
+
+
 def test_dockerfile_restores_pinned_nvidia_entrypoint_sources() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     source_note = (NVIDIA_SOURCE / "SOURCE.md").read_text(encoding="utf-8")

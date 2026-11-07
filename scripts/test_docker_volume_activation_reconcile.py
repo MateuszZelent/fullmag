@@ -35,6 +35,7 @@ SOURCE = "C:/git/fullmag"
 REQUEST = "fdm:cpu-docker-20261019-2035"
 KEY = "2" * 64
 SOLVER_PROFILE = "9" * 64
+CUDA_TRACE = "8" * 64
 
 
 class Control:
@@ -217,6 +218,54 @@ class UnknownActivationTests(unittest.TestCase):
                 Control(), **expected, receipt_raw=canonical(receipt)
             )
 
+    def test_activation_receipt_normalization_preserves_optional_cuda_trace_digest(self) -> None:
+        inputs = {
+            "development_attempt": DEV_ATTEMPT,
+            "config_sha256": CONFIG,
+            "source_root": SOURCE,
+            "image_id": IMAGE,
+            "backend_container": BACKEND,
+            "source_relative": "examples/model.py",
+            "source_sha256": "3" * 64,
+            "request_id": REQUEST,
+            "provenance_sha256": "4" * 64,
+            "activation_receipt_key": KEY,
+            "activation_receipt_path": module._activation_marker_path(KEY),
+            "cuda_trace_sha256": CUDA_TRACE,
+        }
+        receipt = {
+            "schema": module.OPERATION_SCHEMA,
+            "phase": "activation",
+            "state": "outcome-unknown-resources-retained",
+            "attempt": ATTEMPT,
+            "compose_project": PROJECT,
+            "control_volume": VOLUME,
+            "helper_container": "fullmag-control-" + ATTEMPT,
+            "helper_sha256": HELPER,
+            "started_at": 1_729_000_000.0,
+            "finished_at": 1_729_000_001.0,
+            "error": "activation observation was interrupted",
+            "inputs": inputs,
+        }
+        expected = {
+            "activation_attempt": ATTEMPT,
+            "development_attempt": DEV_ATTEMPT,
+            "config_sha256": CONFIG,
+            "source_root": SOURCE,
+            "image_id": IMAGE,
+            "backend_id": BACKEND,
+        }
+        normalized = module._validate_activation_receipt(
+            Control(), **expected, receipt_raw=canonical(receipt)
+        )[2]
+        self.assertEqual(normalized["cuda_trace_sha256"], CUDA_TRACE)
+
+        inputs["cuda_trace_sha256"] = "invalid"
+        with self.assertRaisesRegex(BuildControlError, "cuda trace"):
+            module._validate_activation_receipt(
+                Control(), **expected, receipt_raw=canonical(receipt)
+            )
+
     def test_unresolved_activation_quarantine_validates_optional_solver_profile_digest(self) -> None:
         profiled = unresolved(solver_profile_sha256=SOLVER_PROFILE)
         self.assertEqual(
@@ -226,6 +275,21 @@ class UnknownActivationTests(unittest.TestCase):
         with self.assertRaisesRegex(BuildControlError, "solver profile"):
             module._validate_unresolved_activation(
                 Control(), unresolved(solver_profile_sha256="invalid")
+            )
+
+    def test_unresolved_activation_quarantine_preserves_and_compares_cuda_trace_digest(self) -> None:
+        traced = unresolved(cuda_trace_sha256=CUDA_TRACE)
+        self.assertEqual(
+            module._validate_unresolved_activation(Control(), traced)["cuda_trace_sha256"],
+            CUDA_TRACE,
+        )
+        with self.assertRaisesRegex(BuildControlError, "selected group.*cuda_trace_sha256"):
+            module._validate_unresolved_activation(
+                Control(), traced, expected={"cuda_trace_sha256": "7" * 64}
+            )
+        with self.assertRaisesRegex(BuildControlError, "cuda trace"):
+            module._validate_unresolved_activation(
+                Control(), unresolved(cuda_trace_sha256="invalid")
             )
 
     def test_control_read_authenticates_parent_chain_before_optional_absence(self) -> None:

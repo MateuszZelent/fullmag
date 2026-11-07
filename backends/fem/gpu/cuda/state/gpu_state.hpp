@@ -25,6 +25,7 @@
 #include "gpu/cuda/state/magnetization_state.hpp"
 #include "gpu/cuda/state/residency_state.hpp"
 #include "gpu/cuda/state/runtime_coefficients_state.hpp"
+#include "gpu/cuda/transfer/packed_field_download_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstdint>
@@ -45,6 +46,7 @@ struct FemGpuState {
     FemGpuDemagPoissonDeviceState demag_poisson{};
     LegacyGpuExchangeDeviceState legacy_exchange{};
     FemGpuFieldBufferDeviceState fields{};
+    FemGpuPackedFieldDownloadDeviceState packed_field_download{};
     FemGpuRkWorkspaceDeviceState rk{};
     FemGpuLocalInteractionWorkspaceDeviceState local_interactions{};
     FemGpuMagnetoelasticDeviceState magnetoelastic{};
@@ -93,6 +95,15 @@ bool gpu_state_download_component_aos(
     const FemGpuComponentField &field,
     std::vector<double> &out_xyz,
     TransferAudit &audit,
+    const char *label,
+    std::string &error);
+
+bool gpu_state_download_component_aos_packed(
+    FemGpuState &state,
+    const FemGpuComponentField &field,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    void *raw_stream,
     const char *label,
     std::string &error);
 

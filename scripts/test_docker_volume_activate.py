@@ -126,6 +126,53 @@ class DockerVolumeActivationTests(unittest.TestCase):
         retirement = source.index("retained_retirement = _retained_retirement_context(")
         self.assertLess(support_check, retirement)
 
+    def test_cuda_trace_opt_in_requires_a_pinned_helper_before_retirement(self) -> None:
+        calls = []
+
+        def old_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=old_prepare, cuda_trace_sha256=lambda _value: "b" * 64)
+        with self.assertRaisesRegex(BuildControlError, "cannot accept cuda trace"):
+            activate._require_cuda_trace_support(helper)
+        self.assertEqual(calls, [])
+
+    def test_cuda_trace_startup_prepare_is_optional_and_keeps_legacy_call_shape(self) -> None:
+        calls = []
+
+        def legacy_prepare(source, script, *, request_id, source_commit):
+            calls.append((source, script, request_id, source_commit))
+            return "legacy-authorization"
+
+        helper = SimpleNamespace(prepare=legacy_prepare)
+        result = activate._prepare_startup_authorization(
+            helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-1", source_commit="a" * 40,
+            solver_profile=False, cuda_trace=False,
+        )
+        self.assertEqual(result, "legacy-authorization")
+        self.assertEqual(calls, [(
+            Path("/checkout"), Path("examples/model.py"), "request-1", "a" * 40,
+        )])
+
+        def trace_prepare(source, script, *, request_id, source_commit, cuda_trace=False):
+            calls.append((source, script, request_id, source_commit, cuda_trace))
+            return "traced-authorization"
+
+        digest = lambda value: "c" * 64
+        traced_helper = SimpleNamespace(prepare=trace_prepare, cuda_trace_sha256=digest)
+        self.assertIs(activate._require_cuda_trace_support(traced_helper), digest)
+        traced = activate._prepare_startup_authorization(
+            traced_helper, Path("/checkout"), Path("examples/model.py"),
+            request_id="request-2", source_commit="a" * 40,
+            solver_profile=False, cuda_trace=True,
+        )
+        self.assertEqual(traced, "traced-authorization")
+        self.assertEqual(calls[-1], (
+            Path("/checkout"), Path("examples/model.py"), "request-2", "a" * 40, True,
+        ))
+
     def test_activation_contract_comes_from_selected_helper(self) -> None:
         helper = SimpleNamespace(
             STARTUP_ACTIVATION_TIMEOUT_SECONDS=17.0,
@@ -243,6 +290,54 @@ class DockerVolumeActivationTests(unittest.TestCase):
         self.assertEqual(profiled["solver_profile_sha256"], "2" * 64)
         self.assertNotEqual(legacy, profiled)
 
+    def test_activation_inputs_bind_optional_cuda_trace_digest_without_changing_disabled_shape(self) -> None:
+        base = {
+            "development_attempt": "d" * 32,
+            "config_sha256": "c" * 64,
+            "source_root": "C:/git/fullmag",
+            "image": "sha256:" + "a" * 64,
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": "request-1",
+            "provenance_sha256": "e" * 64,
+            "backend_container": "f" * 64,
+            "activation_receipt_key": "1" * 64,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-" + "1" * 64 + "/activation.json"
+            ),
+        }
+        legacy = activate._activation_operation_inputs(**base)
+        traced = activate._activation_operation_inputs(**base, cuda_trace_sha256="2" * 64)
+        self.assertNotIn("cuda_trace_sha256", legacy)
+        self.assertEqual(traced["cuda_trace_sha256"], "2" * 64)
+        self.assertNotEqual(legacy, traced)
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._activation_operation_inputs(**base, cuda_trace_sha256="invalid")
+
+    def test_retained_activation_input_bindings_keep_the_cuda_trace_request_pin(self) -> None:
+        operation_id = "a" * 32
+        request_id = "request-trace"
+        receipt_key = hashlib.sha256(request_id.encode()).hexdigest()
+        inputs = {
+            "source_relative": "examples/model.py",
+            "source_sha256": "b" * 64,
+            "request_id": request_id,
+            "provenance_sha256": "c" * 64,
+            "activation_receipt_key": receipt_key,
+            "activation_receipt_path": (
+                "/opt/fullmag/control/backend/script-activation-" + receipt_key + "/activation.json"
+            ),
+            "cuda_trace_sha256": "d" * 64,
+        }
+        bindings = activate._validate_activation_input_bindings(
+            inputs, operation_id=operation_id,
+        )
+        self.assertEqual(bindings["cuda_trace_sha256"], "d" * 64)
+
+        inputs["cuda_trace_sha256"] = "invalid"
+        with self.assertRaisesRegex(BuildControlError, "cuda trace"):
+            activate._validate_activation_input_bindings(inputs, operation_id=operation_id)
+
     def test_rejected_activation_is_terminal_failure_with_own_attempt(self) -> None:
         operation = {
             "daemon_pending": True,
@@ -306,6 +401,44 @@ class DockerVolumeActivationTests(unittest.TestCase):
             }},
         )
         self.assertFalse(operation["daemon_pending"])
+        self.assertEqual(operation["receipt"]["state"], "succeeded")
+
+    def test_cuda_traced_activation_requires_exact_response_digest_and_disabled_absence(self) -> None:
+        operation = {
+            "daemon_pending": True,
+            "receipt": {"attempt": "a" * 32, "inputs": {"cuda_trace_sha256": "2" * 64}},
+        }
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {"session_id": "s", "run_id": "r"}},
+            )
+        self.assertTrue(operation["daemon_pending"])
+        with self.assertRaisesRegex(BuildControlError, "cuda trace digest"):
+            activate._record_activation_result(
+                operation,
+                {"state": "activated", "response": {
+                    "session_id": "s", "run_id": "r", "cuda_trace_sha256": "3" * 64,
+                }},
+            )
+        self.assertTrue(operation["daemon_pending"])
+
+        disabled = {"daemon_pending": True, "receipt": {"attempt": "b" * 32, "inputs": {}}}
+        with self.assertRaisesRegex(BuildControlError, "unsolicited cuda trace digest"):
+            activate._record_activation_result(
+                disabled,
+                {"state": "activated", "response": {
+                    "session_id": "s", "run_id": "r", "cuda_trace_sha256": "2" * 64,
+                }},
+            )
+        self.assertTrue(disabled["daemon_pending"])
+
+        activate._record_activation_result(
+            operation,
+            {"state": "activated", "response": {
+                "session_id": "s", "run_id": "r", "cuda_trace_sha256": "2" * 64,
+            }},
+        )
         self.assertEqual(operation["receipt"]["state"], "succeeded")
 
     def test_profiled_rejection_is_retained_without_acceptance_digest(self) -> None:
