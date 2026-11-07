@@ -32,7 +32,7 @@ impl AuthoredInitialStatePublication {
         let retired_run_id = snapshot
             .run
             .as_ref()
-            .filter(|run| matches!(run.status.as_str(), "completed" | "failed" | "cancelled" | "stopped"))
+            .filter(|run| matches!(run.status.as_str(), "completed" | "succeeded" | "failed" | "cancelled" | "stopped"))
             .map(|run| run.run_id.clone())
             .or_else(|| {
                 snapshot

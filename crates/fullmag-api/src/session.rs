@@ -7425,7 +7425,7 @@ mod tests {
 
     #[test]
     fn authored_initial_state_retires_finished_run_but_not_another_run() {
-        for status in ["completed", "failed", "cancelled", "stopped"] {
+        for status in ["completed", "succeeded", "failed", "cancelled", "stopped"] {
             let mut current = current_with_run("run-a", status, Some("run-a"));
             install_authored_initial_state(&mut current);
             assert!(
