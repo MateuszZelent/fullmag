@@ -391,12 +391,12 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
         },
     );
 
-    artifacts.update_provenance(projected_gradient_bb_provenance(
+    artifacts.replace_provenance_synchronously(projected_gradient_bb_provenance(
         plan,
         device_info,
         stage_telemetry,
         transfer_counters,
-    )?);
+    )?)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     Ok(ExecutedRun {
         result: RunResult {

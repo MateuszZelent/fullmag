@@ -3381,6 +3381,187 @@ mod tests {
         fs::remove_dir_all(autosave_root).expect("remove autosave provenance fixture");
     }
 
+    #[test]
+    fn fdm_multilayer_terminal_provenance_is_preserved_across_zarr_metadata_updates() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-fdm-multilayer-provenance-output-{}-{unique}",
+            std::process::id()
+        ));
+        let autosave_root = std::env::temp_dir().join(format!(
+            "fullmag-fdm-multilayer-provenance-autosave-{}-{unique}",
+            std::process::id()
+        ));
+        let field_context = FieldArtifactContext {
+            problem_name: "fdm-multilayer-provenance".into(),
+            ir_version: "v0".into(),
+            source_hash: Some("source-hash".into()),
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm_multilayer", "grid": [1, 1, 1]}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let stage_autosave = StageAutosavePipelineConfig {
+            stage_id: "relax".into(),
+            policy: fullmag_ir::StageAutosaveIR {
+                kind: "stage_autosave".into(),
+                target: "state".into(),
+                layout: fullmag_ir::AutosaveLayoutIR::Separate,
+                format: fullmag_ir::AutosaveFormatIR::Zarr,
+                table: None,
+                fields: vec![fullmag_ir::FieldAutosaveIR {
+                    kind: "field_autosave".into(),
+                    quantity: "m".into(),
+                    every_seconds: None,
+                    sample_period_policy: None,
+                    every_steps: Some(1),
+                }],
+            },
+        };
+        let mut pipeline = ArtifactPipeline::start_with_stage_autosave_roots(
+            output_dir.clone(),
+            autosave_root.clone(),
+            field_context.clone(),
+            2,
+            Some(stage_autosave),
+            None,
+        )
+        .expect("start streaming FDM multilayer pipeline");
+        let mut recorder = ArtifactRecorder::streaming(
+            ExecutionProvenance {
+                execution_engine: "cuda_native_multilayer_convolution".into(),
+                precision: "double".into(),
+                ..ExecutionProvenance::default()
+            },
+            pipeline.sender(),
+        );
+        recorder
+            .record_field_snapshot(
+                FieldSnapshot::new(
+                    "m",
+                    1,
+                    1.0e-13,
+                    1.0e-13,
+                    3,
+                    "xyz",
+                    "cell",
+                    "full",
+                    1,
+                    vec![1.0, 0.0, 0.0],
+                )
+                .expect("valid FDM multilayer snapshot"),
+            )
+            .expect("enqueue FDM multilayer snapshot");
+        let initial_provenance = recorder.provenance_snapshot();
+        recorder
+            .replace_provenance_synchronously(initial_provenance)
+            .expect("drain accepted snapshot before terminal provenance");
+
+        let field_chunk = autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/0.0");
+        let field_payload_before_terminal_update =
+            fs::read(&field_chunk).expect("read accepted field payload");
+        let terminal_provenance = ExecutionProvenance {
+            execution_engine: "cuda_native_multilayer_convolution".into(),
+            precision: "double".into(),
+            demag_operator_kind: Some("native_multilayer_tensor_fft_newell".into()),
+            fft_backend: Some("cuFFT".into()),
+            requested_energy_minimizer: Some("projected_gradient_bb".into()),
+            resolved_energy_minimizer: Some("projected_gradient_bb".into()),
+            energy_minimizer_realization: Some("cuda_native_projected_gradient_bb".into()),
+            requested_demag_realization: Some("native_multilayer_tensor_fft_newell".into()),
+            resolved_demag_realization: Some("native_multilayer_tensor_fft_newell".into()),
+            ..ExecutionProvenance::default()
+        };
+        recorder
+            .replace_provenance_synchronously(terminal_provenance.clone())
+            .expect("publish terminal FDM multilayer provenance to open stores");
+        let request = || crate::types::ExecutionRequestProvenance {
+            backend: "fdm".into(),
+            device: "gpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+        };
+        let resolution = crate::types::FinalExecutionResolutionProvenance {
+            authored_request: request(),
+            effective_request: request(),
+            resolved_execution: request(),
+            resolution_mode: "exact".into(),
+            fallback_occurred: false,
+            fallback_reason: None,
+        };
+        let mut expected_provenance =
+            crate::artifacts::artifact_provenance_json(&field_context, &terminal_provenance);
+        expected_provenance["execution_resolution"] =
+            serde_json::to_value(&resolution).expect("serialize execution resolution");
+        drop(recorder);
+        pipeline.finish().expect("finish streaming pipeline");
+        crate::artifacts::finalize_stage_autosave_provenance(&autosave_root, &resolution)
+            .expect("finalize stage autosave execution resolution");
+
+        let root_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/.zattrs")).expect("read root zattrs"),
+        )
+        .expect("decode root zattrs");
+        let stage_manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/manifest.json"))
+                .expect("read stage manifest"),
+        )
+        .expect("decode stage manifest");
+        let field_zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(autosave_root.join("state.zarr/stages/stage_0000_relax/fields/m/.zattrs"))
+                .expect("read field zattrs"),
+        )
+        .expect("decode field zattrs");
+        for provenance in [
+            &root_zattrs["provenance"],
+            &stage_manifest["provenance"],
+            &field_zattrs["provenance"],
+        ] {
+            assert_eq!(provenance, &expected_provenance);
+            assert_eq!(
+                provenance["execution_engine"],
+                "cuda_native_multilayer_convolution"
+            );
+            assert_eq!(
+                provenance["demag_operator_kind"],
+                "native_multilayer_tensor_fft_newell"
+            );
+            assert_eq!(
+                provenance["requested_energy_minimizer"],
+                "projected_gradient_bb"
+            );
+            assert_eq!(
+                provenance["resolved_demag_realization"],
+                "native_multilayer_tensor_fft_newell"
+            );
+            assert_eq!(
+                provenance["execution_resolution"],
+                serde_json::to_value(&resolution).unwrap()
+            );
+            for key in [
+                "built_at_utc",
+                "git_commit",
+                "worktree_state",
+                "source_snapshot_sha256",
+            ] {
+                assert!(
+                    provenance["build_identity"].get(key).is_some(),
+                    "missing build_identity.{key}"
+                );
+            }
+        }
+        assert_eq!(
+            fs::read(&field_chunk).expect("read field payload after provenance update"),
+            field_payload_before_terminal_update,
+            "provenance updates must not rewrite field payloads"
+        );
+        fs::remove_dir_all(output_dir).expect("remove FDM multilayer artifact output");
+        fs::remove_dir_all(autosave_root).expect("remove FDM multilayer autosave output");
+    }
+
     #[cfg(feature = "fem-gpu")]
     #[test]
     fn streaming_capture_writes_fem_gpu_receipt_to_field_zattrs() {
