@@ -164,10 +164,10 @@ pub(crate) fn execute_direct_minimizer(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
-            let heavy_payload_every = live.field_every_n.max(1);
             let heavy_payload_due = current_stats.step > 0
-                && current_stats.step % heavy_payload_every == 0;
-            let full_fields_due = heavy_payload_due && live.field_every_n == 1;
+                && live.field_cadence.heavy_payload_due(current_stats.step);
+            let full_fields_due =
+                heavy_payload_due && live.field_cadence.publishes_full_catalog();
             if display_selection.is_some() || heavy_payload_due {
                 let mut observation_publication = display_selection.as_ref().and_then(|selection| {
                     live_observations.as_mut().map(|scheduler| {

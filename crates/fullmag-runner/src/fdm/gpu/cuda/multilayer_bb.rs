@@ -34,7 +34,7 @@ const LIVE_FIELD_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 type LiveStepCallback<'grid, 'layout, 'callback> = (
     &'grid [u32; 3],
-    u64,
+    crate::LiveFieldCadence,
     Option<&'layout serde_json::Value>,
     &'callback mut dyn FnMut(StepUpdate) -> StepAction,
 );
@@ -225,7 +225,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                         &mut artifacts,
                     )?;
 
-                    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+                    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
                         if live_fields_due {
                             last_live_field_update = Instant::now();
                             let update = make_multilayer_live_step_update(
@@ -235,7 +235,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                                 stats,
                                 [grid[0], grid[1], grid[2]],
                                 *layout,
-                                *field_every_n,
+                                field_cadence.every_n(),
                                 &live_quantities,
                                 true,
                                 false,
@@ -252,7 +252,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                                 stats,
                                 [grid[0], grid[1], grid[2]],
                                 *layout,
-                                *field_every_n,
+                                field_cadence.every_n(),
                                 &[],
                                 false,
                                 false,
@@ -265,7 +265,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                     Ok(StepAction::Continue)
                 }
                 MultilayerBbEvent::Poll { stats } => {
-                    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+                    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
                         let update = make_multilayer_live_step_update(
                             plan,
                             &contexts,
@@ -273,7 +273,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
                             stats,
                             [grid[0], grid[1], grid[2]],
                             *layout,
-                            *field_every_n,
+                            field_cadence.every_n(),
                             &[],
                             false,
                             false,
@@ -332,7 +332,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
     let final_magnetization = final_observables.magnetization.clone();
     let final_autosave_fields = artifacts.due_accepted_step_fields(final_stats.step, true);
 
-    if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
+    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
         emit_multilayer_terminal_step_updates(
             plan,
             &contexts,
@@ -340,7 +340,7 @@ pub(super) fn execute_cuda_fdm_multilayer_projected_bb(
             &final_stats,
             [grid[0], grid[1], grid[2]],
             *layout,
-            *field_every_n,
+            field_cadence.every_n(),
             None,
             None,
             &mut **on_step,

@@ -886,9 +886,8 @@ fn execute_reference_fem_impl(
                 Some(&current_stats),
             )?;
             if let Some(live) = live.as_mut() {
-                let heavy_payload_every = live.field_every_n.max(1);
                 let display_selection = display_selection;
-                let magnetization = if step_count % heavy_payload_every == 0 {
+                let magnetization = if live.field_cadence.heavy_payload_due(step_count) {
                     Some(flatten_vectors(state.magnetization()))
                 } else {
                     None
@@ -908,7 +907,7 @@ fn execute_reference_fem_impl(
                     None
                 };
                 let due_scalar_row = step_count <= 1
-                    || step_count % heavy_payload_every == 0
+                    || live.field_cadence.step_due(step_count)
                     || scalar_row_due(&scalar_schedules, state.time_seconds)
                     || (preview_due && preview_targets_global_scalar);
                 let mut update_stats = latest_stats.clone();
@@ -957,7 +956,6 @@ fn execute_reference_fem_impl(
             }
         } else if let Some(live) = live.as_mut() {
             // No scheduled outputs, but live mode is active: compute observables once.
-            let heavy_payload_every = live.field_every_n.max(1);
             let display_selection = live.display_selection.map(|get| get());
             let preview_due = display_selection
                 .as_ref()
@@ -966,7 +964,7 @@ fn execute_reference_fem_impl(
             let preview_targets_global_scalar = display_selection
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
-            let magnetization = if step_count % heavy_payload_every == 0 {
+            let magnetization = if live.field_cadence.heavy_payload_due(step_count) {
                 Some(flatten_vectors(state.magnetization()))
             } else {
                 None
@@ -986,7 +984,7 @@ fn execute_reference_fem_impl(
                 None
             };
             let due_scalar_row = step_count <= 1
-                || step_count % heavy_payload_every == 0
+                || live.field_cadence.step_due(step_count)
                 || scalar_row_due(&scalar_schedules, state.time_seconds)
                 || (preview_due && preview_targets_global_scalar);
             let mut update_stats = latest_stats.clone();
@@ -1035,6 +1033,21 @@ fn execute_reference_fem_impl(
         }
 
         if cancelled || paused {
+            // Republish the last accepted state when the wall-clock gate
+            // skipped its payload; stopped runs have no terminal snapshot.
+            if let Some(live) = live.as_mut() {
+                if live.field_cadence.take_deferred_step().is_some() {
+                    let _ = (live.on_step)(
+                        crate::live_field_cadence::deferred_magnetization_update(
+                            &latest_stats,
+                            live.grid,
+                            fem_mesh_generation_id.clone(),
+                            flatten_vectors(state.magnetization()),
+                            None,
+                        ),
+                    );
+                }
+            }
             break;
         }
 
@@ -3107,7 +3120,7 @@ mod tests {
             &[],
             Some(LiveStepConsumer {
                 grid: [0, 0, 0],
-                field_every_n: 2,
+                field_cadence: crate::LiveFieldCadence::every_n_steps(2),
                 initial_snapshot: false,
                 display_selection: None,
                 interrupt_requested: None,
