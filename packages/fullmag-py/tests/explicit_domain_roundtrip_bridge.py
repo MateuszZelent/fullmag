@@ -30,9 +30,10 @@ FIXTURES = ROOT / "crates/fullmag-authoring/tests/fixtures/explicit_domain_round
 
 
 def differences(a, b, path=""):
-    if type(a) in (int, float) and type(b) in (int, float):
-        equal = a == b if type(a) is int and type(b) is int else math.isclose(a, b, rel_tol=5e-12, abs_tol=0)
-        return [] if equal else [(path, a, b)]
+    if type(a) is int or type(b) is int:
+        return [] if type(a) in (int, float) and type(b) in (int, float) and a == b else [(path, a, b)]
+    if type(a) is float and type(b) is float:
+        return [] if math.isclose(a, b, rel_tol=5e-12, abs_tol=0) else [(path, a, b)]
     if type(a) is not type(b):
         return [(path, a, b)]
     if isinstance(a, dict):

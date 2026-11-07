@@ -200,6 +200,19 @@ study.stages.add_run(until=2e-12)
                 restored = build_scene_document_from_builder(export_builder_draft(after))
                 self.assertEqual(restored["study"]["shared_domain_mesh_source"], declaration)
 
+    def test_full_ir_comparator_keeps_integer_values_exact(self):
+        from explicit_domain_roundtrip_bridge import differences
+        self.assertEqual(differences(1.0, 1.0 + 1e-12), [])
+        self.assertEqual(differences(0.0, 0), [])
+        for before, after in (
+            (10**12, 10**12 + 1),
+            (1, 1.0 + 1e-13),
+            ({"marker": 1}, {"marker": 1.0 + 1e-13}),
+            ({"enabled": True}, {"enabled": 1}),
+        ):
+            with self.subTest(before=before, after=after):
+                self.assertTrue(differences(before, after))
+
     def test_source_declaration_does_not_grant_fdm_execution(self):
         scene = build_scene_document_from_builder(export_builder_draft(self.load()))
         scene["study"]["requested_backend"] = "fdm"
