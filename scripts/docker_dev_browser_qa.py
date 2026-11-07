@@ -3262,6 +3262,13 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
                 or value.get("solver_state") != "awaiting_command"
                 or value.get("execution_state") != "completed"
                 or value.get("stage_ids") != expected_ids
+                or value.get("authored_stage_ids") != ["relax-a", "relax-b", "relax-c"]
+                or value.get("stage_statuses") != [
+                    "completed" if stage_id in expected_ids else "pending"
+                    for stage_id in ("relax-a", "relax-b", "relax-c")]
+                or value.get("completed_stage_indexes") != [
+                    index for index, stage_id in enumerate(("relax-a", "relax-b", "relax-c"))
+                    if stage_id in expected_ids]
                 or value.get("scene_profile") != _expected_study_stage_scene_profile()
                 or not isinstance(value.get("profile"), Mapping)
                 or any(value["profile"].get(key) != expected for key, expected in expected_profile.items())

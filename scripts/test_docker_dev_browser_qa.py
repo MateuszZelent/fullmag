@@ -2996,6 +2996,11 @@ class StudyStageRerunContractTests(unittest.TestCase):
                 "solver_state": "awaiting_command",
                 "execution_state": "completed",
                 "stage_ids": before_ids,
+                "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["completed" if stage in before_ids else "pending"
+                                   for stage in ("relax-a", "relax-b", "relax-c")],
+                "completed_stage_indexes": [i for i, stage in enumerate(("relax-a", "relax-b", "relax-c"))
+                                            if stage in before_ids],
                 "scene_profile": qa._expected_study_stage_scene_profile(),
                 "profile": {"domain_discretization": "fdm", "domain_cell_count": 8,
                             "domain_generation_id": "fdm-domain-8",
@@ -3022,6 +3027,11 @@ class StudyStageRerunContractTests(unittest.TestCase):
                 "solver_state": "awaiting_command",
                 "execution_state": "completed",
                 "stage_ids": after_ids,
+                "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["completed" if stage in after_ids else "pending"
+                                   for stage in ("relax-a", "relax-b", "relax-c")],
+                "completed_stage_indexes": [i for i, stage in enumerate(("relax-a", "relax-b", "relax-c"))
+                                            if stage in after_ids],
                 "scene_profile": qa._expected_study_stage_scene_profile(),
                 "profile": {"domain_discretization": "fdm", "domain_cell_count": 8,
                             "domain_generation_id": "fdm-domain-8",
@@ -3067,6 +3077,30 @@ class StudyStageRerunContractTests(unittest.TestCase):
             "errors": [],
             "proxy_failures": [],
         }
+
+    def test_terminal_scope_keeps_authored_rows_but_requires_only_selected_execution(self):
+        import shutil
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = """
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+const {studyStageTerminalScope: scope} = await import(process.argv[1]);
+const ids=['relax-a','relax-b','relax-c'];
+const e={total_stages:3,stage_statuses:['pending','completed','pending'],completed_stage_indexes:[1],
+  stages:ids.map((stage_id,index)=>({stage_id,index,status:index===1?'completed':'pending'}))};
+assert.deepEqual(scope(e,ids,['relax-b']),['relax-b']);
+const extra=structuredClone(e); extra.stage_statuses[0]='completed';
+assert.throws(()=>scope(extra,ids,['relax-b']));
+const metadata=structuredClone(e); metadata.stages[0].started_at_unix_ms=42;
+assert.throws(()=>scope(metadata,ids,['relax-b']));
+const wrong=structuredClone(e); wrong.completed_stage_indexes=[0];
+assert.throws(()=>scope(wrong,ids,['relax-b']));
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source.as_uri()],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_managed_compose_pins_one_fixed_stage_or_study_runner(self):
         qa = self.qa
@@ -3136,6 +3170,9 @@ class StudyStageRerunContractTests(unittest.TestCase):
             bad_cases = (
                 ("mode", lambda item: item.update(mode="study" if mode == "stage-b" else "stage-b")),
                 ("source drift", lambda item: item.update(source_sha256_after={**sources, "runner": "b" * 64})),
+                ("collapsed authored rows", lambda item: item["after"].update(authored_stage_ids=["relax-b"])),
+                ("missing public statuses", lambda item: item["after"].pop("stage_statuses")),
+                ("wrong completed index", lambda item: item["after"].update(completed_stage_indexes=[0])),
                 ("duplicate command", lambda item: item.update(command_count=2)),
                 ("duplicate command attempt", lambda item: item.update(command_attempt_count=2)),
                 ("background command", lambda item: item.update(ui_command_proven=False)),

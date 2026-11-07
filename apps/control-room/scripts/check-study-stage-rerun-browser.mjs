@@ -398,6 +398,29 @@ function executionStageIds(execution, runId, session) {
   return execution.stages.map((stage) => stage?.stage_id);
 }
 
+export function studyStageTerminalScope(execution, authoredIds, expectedExecutedIds) {
+  assert.equal(execution.total_stages, authoredIds.length);
+  assert.deepEqual(execution.stages.map((row) => row.stage_id), authoredIds,
+    "P22 stage view must preserve the authored definitions");
+  const expectedStatuses = authoredIds.map((id) => expectedExecutedIds.includes(id) ? "completed" : "pending");
+  assert.deepEqual(execution.stage_statuses, expectedStatuses,
+    "P22 current execution includes another or unfinished stage");
+  assert.deepEqual(execution.completed_stage_indexes,
+    authoredIds.flatMap((id, index) => expectedExecutedIds.includes(id) ? [index] : []));
+  for (const [index, row] of execution.stages.entries()) {
+    assert.equal(row.index, index);
+    assert.equal(row.status, expectedStatuses[index]);
+    if (!expectedExecutedIds.includes(row.stage_id)) {
+      for (const key of ["started_at_unix_ms", "completed_at_unix_ms", "completed_step"]) {
+        assert.equal(row[key], undefined, "An unselected stage has execution metadata");
+      }
+    }
+  }
+  const executed = execution.stages.filter((row) => row.status === "completed").map((row) => row.stage_id);
+  assert.deepEqual(executed, expectedExecutedIds);
+  return executed;
+}
+
 function assertNoInflightCommands(queue) {
   assert(plainRecord(queue) && Array.isArray(queue.commands), "Simulation command queue is malformed");
   assert(queue.pending_count === 0 && queue.running_count === 0,
@@ -432,6 +455,9 @@ function stableProjection(snapshot) {
       runtime_state: snapshot.execution.runtime_state,
       total_stages: snapshot.execution.total_stages,
       stage_ids: snapshot.stageIds,
+      authored_stage_ids: snapshot.sceneStageIds,
+      stage_statuses: snapshot.execution.stage_statuses,
+      completed_stage_indexes: snapshot.execution.completed_stage_indexes,
       stage_statuses: snapshot.execution.stage_statuses,
     },
     scene_revision: snapshot.scene.revision,
@@ -575,12 +601,8 @@ export async function runStudyStageRerun() {
       "Committed scene revision differs from the P22 status");
     const observedStageIds = executionStageIds(execution, currentRun.run_id, observedSession);
     assert.equal(execution.runtime_state, "completed", "P22 baseline stage execution is not completed");
-    assert.equal(execution.total_stages, expectedStageIds.length);
-    assert.deepEqual(observedStageIds, expectedStageIds, "P22 stage view differs from the selected phase");
-    assert(execution.stage_statuses.every((value) => value === "completed"),
-      "P22 baseline contains an unfinished stage");
-    assert.deepEqual(execution.completed_stage_indexes, expectedStageIds.map((_, index) => index),
-      "P22 baseline completed-stage indexes differ");
+    assert.deepEqual(observedStageIds, sceneStageIds);
+    const completedStageIds = studyStageTerminalScope(execution, sceneStageIds, expectedStageIds);
     const results = await readResults(currentRun.run_id, observedSession, expectedStageIds);
     const expectedResultIds = expectedStageIds;
     assert.deepEqual(results.map((result) => result.authored_stage_id), expectedResultIds,
@@ -604,7 +626,7 @@ export async function runStudyStageRerun() {
       scene,
       sceneStageIds,
       sceneProfile,
-      stageIds: observedStageIds,
+      stageIds: completedStageIds,
       profile,
       resultIdentities: results,
       precondition,
@@ -618,6 +640,9 @@ export async function runStudyStageRerun() {
       solver_state: snapshot.solverStatus.runtime_state,
       execution_state: snapshot.execution.runtime_state,
       stage_ids: snapshot.stageIds,
+      authored_stage_ids: snapshot.sceneStageIds,
+      stage_statuses: snapshot.execution.stage_statuses,
+      completed_stage_indexes: snapshot.execution.completed_stage_indexes,
       scene_profile: snapshot.sceneProfile,
       profile: snapshot.profile,
       result_identities: snapshot.resultIdentities,
