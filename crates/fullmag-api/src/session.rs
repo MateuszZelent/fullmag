@@ -7300,6 +7300,9 @@ mod tests {
         terminal_generation_run_id: Option<&str>,
     ) -> SessionStateResponse {
         let mut current = test_current_snapshot();
+        current.metadata = Some(json!({
+            "artifact_layout": { "backend": "fdm", "grid_cells": [1, 1, 1] }
+        }).into());
         current.session.run_id = run_id.to_string();
         current.session.status = status.to_string();
         current.run = Some(RunManifest {
@@ -7376,6 +7379,7 @@ mod tests {
             "a terminal field generation from a still-running study must not retire that run"
         );
 
+        add_physical_observation(&mut current, 1, Some(1.0e-12));
         let accepted_source_frame = accepted_observation_frame_ref(&current, 1, Some(1.0e-12));
         let latest_fields: LatestFields = serde_json::from_value(json!({
             "m": {
