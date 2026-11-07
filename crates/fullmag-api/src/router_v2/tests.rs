@@ -17262,7 +17262,7 @@ async fn mesh_shared_domain_config_put_commits_scene_projection() {
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed")
         .clone();
-    assert_eq!(committed.study.shared_domain_mesh.algorithm_3d, 10);
+    assert_eq!(committed.study.shared_domain_mesh.algorithm_3d, Some(10));
     assert_eq!(committed.study.shared_domain_mesh.hmax, "3e-9");
     assert_eq!(
         committed.study.mesh_defaults,
@@ -18007,7 +18007,7 @@ async fn scene_execution_intent_null_merge_patch_removes_keys_before_deserializa
     }));
     scene.study.interactive_session_requested = Some(false);
     scene.study.wait_for_solve = Some(true);
-    scene.study.shared_domain_mesh_source = Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated);
+    scene.study.shared_domain_mesh_source = Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated {});
     state.current_live_state.write().await.as_mut().unwrap().scene_document = Some(scene);
     let app = build_v2_router().with_state(state.clone());
     let response = app.clone().oneshot(Request::builder().method("PATCH")

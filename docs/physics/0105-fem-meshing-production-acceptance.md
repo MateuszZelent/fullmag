@@ -1177,3 +1177,37 @@ poza zatwierdzonym odbiorem tego etapu.
 |---|---|---|---|---|---|---|---|
 | world.geometry.geometry_name | str \| None | None | $1$ | Niepusty klucz bez otaczających spacji i kolizji globalnych; legacy default przy braku. | Klucz zasobu niezależny od etykiety i object_id. | FDM CPU/GPU i FEM CPU/GPU: wspólny authoring, bez nowej kwalifikacji solverów. | geometry.entries[].name; geometry_id |
 | world.domain_mesh.marker_owners | list[dict] \| None | None (initial legacy capture) | $1$ | Pełne pokrycie obu tabel i statyczne RegionRef; exact ID przed aliasem; odmowa zmiany ownera. | Asercja bieżącego modelu, bez historii IR v0.3 i bez remapowania. | FEM CPU/GPU: wspólny authoring; FDM CPU/GPU: odmowa jawnego FEM domain. | problem_meta.runtime_metadata.mesh_workflow.domain_marker_owners (authoring assertion only) |
+
+(fem-mesh-request-presence)=
+### Brak parametru authoringu a rozstrzygnięty default wykonania
+
+Pełny test wejść GSG ujawnił dopisywanie niezadanych parametrów w eksporcie.
+Cztery istniejące pola ScriptBuilderMeshState zachowują teraz brak jako None
+i nie są wtedy serializowane. Jawne wartości, w tym false i wartości równe
+defaultom, pozostają zapisane. Jawny null nadal odmawia w typowanym DTO;
+JSON Merge Patch usuwa pole przed deserializacją. Nie zmienia się wybór
+algorytmu lub progu jakości wykonywanego przez istniejący backend.
+
+| Parametr authoringu | Typ / brak | SI | Efektywna istniejąca wartość przy braku | Python → builder/scena → metadata |
+|---|---|---|---|---|
+| algorithm_2d | optional i64, None | $1$ | 6, Frontal-Delaunay | study.objects.mesh.defaults → mesh.algorithm_2d → mesh_workflow przy jawnym żądaniu |
+| algorithm_3d | optional i64, None | $1$ | 1, Delaunay | study.objects.mesh.defaults → mesh.algorithm_3d → mesh_workflow przy jawnym żądaniu |
+| compute_quality | optional bool, None | $1$ | dotychczasowy default wykonania true | istniejący compute_quality_configured rozróżnia jawne false od braku |
+| per_element_quality | optional bool, None | $1$ | dotychczasowy default wykonania true | istniejący per_element_quality_configured rozróżnia jawne false od braku |
+
+To rozdzielenie dotyczy authoringu FDM CPU/GPU i FEM CPU/GPU; nie zmienia
+obsługiwanych ścieżek meshingu, a FEM knobs nadal nie uruchamiają FEM w FDM.
+Nowy czytnik akceptuje wcześniejsze jawne wartości, a starszy czytnik
+stosuje swoje dotychczasowe serde defaults dla brakujących pól. Odczyt
+geometry_name/shared_domain_mesh_source nadal wymaga spójnego nowego pakietu.
+
+Źródła: runtime/script_builder.py::_export_global_mesh_state,
+world.py::_configure_object_mesh_defaults i _mesh_spec_to_metadata;
+crates/fullmag-authoring/src/builder.rs::ScriptBuilderMeshState;
+adaptery i tests/explicit_domain_python_roundtrip.rs. Dokładny test nie
+ignoruje różnic tych pól i nie zmienia whitelist porównania IR.
+
+Reset wariantu przez JSON Merge Patch zachowuje zwykłą semantykę scalania:
+oprócz kind=generated należy usunąć nullami pola wcześniejszego explicit.
+Samo usunięcie całej shared_domain_mesh_source przez null oznacza legacy
+brak nadpisania i nie jest resetem generated.

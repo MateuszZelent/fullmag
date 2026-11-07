@@ -138,6 +138,21 @@ study.stages.add_run(until=2e-12)
         with self.assertRaisesRegex(ValueError, "owner"):
             self.load(text)
 
+    def test_mesh_defaults_export_preserves_requested_presence(self):
+        loaded = self.load()
+        absent = export_builder_draft(loaded)["mesh"]
+        fields = ("algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality")
+        self.assertTrue(all(key not in absent for key in fields))
+        text = SOURCE.replace(
+            "maximum_element_size=20e-9)",
+            "maximum_element_size=20e-9, algorithm_2d=6, algorithm_3d=1, compute_quality=False, per_element_quality=True)",
+        )
+        loaded = self.load(text, "explicit_defaults.py")
+        explicit = export_builder_draft(loaded)["mesh"]
+        self.assertEqual({key: explicit[key] for key in fields},
+                         {"algorithm_2d": 6, "algorithm_3d": 1,
+                          "compute_quality": False, "per_element_quality": True})
+
     def test_shared_marker_owner_fixture(self):
         import json
         from fullmag.runtime.domain_mesh_source import validate_scene_domain_marker_owners

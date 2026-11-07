@@ -10212,7 +10212,7 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
     if not use_declared_defaults and declared_order is None and isinstance(fem, FEM):
         declared_order = fem.order
 
-    return {
+    state = {
         "algorithm_2d": int(mesh_options.get("algorithm_2d", 6)),
         "algorithm_3d": int(mesh_options.get("algorithm_3d", 1)),
         "hmax": _text_mesh_size(declared_hmax),
@@ -10324,6 +10324,10 @@ def _export_global_mesh_state(problem: Problem) -> dict[str, object]:
             _number_or_none(adaptive_mesh.get("error_tolerance"))
         ),
     }
+    for key in ("algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"):
+        if key not in mesh_options:
+            state.pop(key, None)
+    return state
 
 
 def _is_pure_fdm_problem(problem: Problem) -> bool:

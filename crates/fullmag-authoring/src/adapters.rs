@@ -816,6 +816,11 @@ pub fn scene_document_to_script_builder_overrides(
         overrides["shared_domain_mesh_source"] = serde_json::to_value(source)
             .expect("shared domain source is serializable");
     }
+    for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+        if overrides["mesh"][key].is_null() {
+            overrides["mesh"].as_object_mut().expect("mesh override").remove(key);
+        }
+    }
     Ok(overrides)
 }
 
@@ -2577,10 +2582,10 @@ mod tests {
         .expect("minimal scene should receive typed defaults");
         let builder_mesh = ScriptBuilderMeshState::default();
 
-        assert!(scene.study.mesh_defaults.compute_quality);
-        assert!(scene.study.mesh_defaults.per_element_quality);
-        assert!(builder_mesh.compute_quality);
-        assert!(builder_mesh.per_element_quality);
+        assert_eq!(scene.study.mesh_defaults.compute_quality, None);
+        assert_eq!(scene.study.mesh_defaults.per_element_quality, None);
+        assert_eq!(builder_mesh.compute_quality, None);
+        assert_eq!(builder_mesh.per_element_quality, None);
     }
 
     use crate::{
@@ -2757,8 +2762,8 @@ mod tests {
                 ..ScriptBuilderSolverState::default()
             },
             mesh: ScriptBuilderMeshState {
-                algorithm_2d: 6,
-                algorithm_3d: 1,
+                algorithm_2d: Some(6),
+                algorithm_3d: Some(1),
                 size_mode: Some("predefined".to_string()),
                 hmax: "20e-9".to_string(),
                 hmin: String::new(),
@@ -2779,8 +2784,8 @@ mod tests {
                 smoothing_steps: 1,
                 optimize: "Netgen".to_string(),
                 optimize_iterations: 2,
-                compute_quality: true,
-                per_element_quality: false,
+                compute_quality: Some(true),
+                per_element_quality: Some(false),
                 interface_hmax: None,
                 interface_thickness: None,
                 transition_distance: None,
@@ -5365,7 +5370,7 @@ mod tests {
         let mut scene = scene_document_from_script_builder(&sample_builder());
         let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
         assert!(overrides.get("shared_domain_mesh_source").is_none());
-        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated);
+        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated {});
         let value = serde_json::to_value(&scene).unwrap();
         let restored: SceneDocument = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(restored.study.shared_domain_mesh_source, scene.study.shared_domain_mesh_source);
@@ -5376,6 +5381,27 @@ mod tests {
         let mut null = value;
         null["study"]["shared_domain_mesh_source"] = Value::Null;
         assert!(serde_json::from_value::<SceneDocument>(null).is_err());
+    }
+
+    #[test]
+    fn shared_domain_source_mesh_request_presence_is_not_a_resolved_default() {
+        let absent: ScriptBuilderMeshState = serde_json::from_value(serde_json::json!({})).unwrap();
+        let wire = serde_json::to_value(absent).unwrap();
+        for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+            assert!(wire.get(key).is_none(), "{key} must stay absent");
+            let mut null = serde_json::json!({});
+            null[key] = Value::Null;
+            assert!(serde_json::from_value::<ScriptBuilderMeshState>(null).is_err());
+        }
+        let explicit = serde_json::json!({
+            "algorithm_2d": 6, "algorithm_3d": 1,
+            "compute_quality": false, "per_element_quality": true
+        });
+        let mesh: ScriptBuilderMeshState = serde_json::from_value(explicit.clone()).unwrap();
+        let wire = serde_json::to_value(mesh).unwrap();
+        for key in ["algorithm_2d", "algorithm_3d", "compute_quality", "per_element_quality"] {
+            assert_eq!(wire[key], explicit[key]);
+        }
     }
 
 }

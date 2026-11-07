@@ -1398,8 +1398,8 @@ fn default_solver() -> ScriptBuilderSolverState {
 
 fn default_mesh() -> ScriptBuilderMeshState {
     ScriptBuilderMeshState {
-        algorithm_2d: 6,
-        algorithm_3d: 1,
+        algorithm_2d: None,
+        algorithm_3d: None,
         size_mode: Some("predefined".to_string()),
         hmax: String::new(),
         hmin: String::new(),
@@ -1420,8 +1420,8 @@ fn default_mesh() -> ScriptBuilderMeshState {
         smoothing_steps: 1,
         optimize: String::new(),
         optimize_iterations: 1,
-        compute_quality: true,
-        per_element_quality: true,
+        compute_quality: None,
+        per_element_quality: None,
         interface_hmax: None,
         interface_thickness: None,
         transition_distance: None,

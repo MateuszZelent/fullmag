@@ -5565,7 +5565,7 @@ mod antenna_scene_roundtrip_tests {
                 "source": null, "region_markers": null, "object_region_markers": null, "marker_owners": null}}
         })).unwrap();
         assert_eq!(reset.study.shared_domain_mesh_source,
-                   Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated));
+                   Some(fullmag_authoring::ScriptBuilderSharedDomainMeshSource::Generated {}));
         let absent = apply_scene_merge_patch(&reset, &serde_json::json!({
             "study": {"shared_domain_mesh_source": null}
         })).unwrap();

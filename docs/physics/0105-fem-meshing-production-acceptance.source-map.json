@@ -921,6 +921,25 @@
       "path": "packages/fullmag-py/src/fullmag/runtime/domain_mesh_source.py",
       "symbol": "validate_domain_marker_owners",
       "responsibility": "Odmowa przy nieaktualnym lub brakującym właścicielu; brak remapowania."
+    },
+    {
+      "id": "mesh-request-presence-contract",
+      "path": "docs/physics/0105-fem-meshing-production-acceptance.md",
+      "symbol": "DOC-ANCHOR:fem-mesh-request-presence",
+      "responsibility": "Brak parametru authoringu nie jest dopisanym defaultem wykonania; zakres zgodności.",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "mesh-request-presence-python",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_global_mesh_state",
+      "responsibility": "Eksport zachowuje brak czterech istniejących parametrów siatki."
+    },
+    {
+      "id": "mesh-request-presence-rust",
+      "path": "crates/fullmag-authoring/src/builder.rs",
+      "symbol": "ScriptBuilderMeshState",
+      "responsibility": "Typowany authoring zachowuje None i jawne wartości, odrzuca present null."
     }
   ],
   "public_api": {

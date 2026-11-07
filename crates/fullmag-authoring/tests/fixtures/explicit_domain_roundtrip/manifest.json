@@ -1,0 +1,16 @@
+{
+  "schema_version": "explicit_domain_roundtrip_fixture.v1",
+  "source_only": true,
+  "meshes_generated": 0,
+  "solves_submitted": 0,
+  "files": {
+    "50nm.py": {
+      "sha256": "6da40fc7342d7c3b78223c7ae21b14111a3172be3adcea697ccef1d37f734050",
+      "bytes": 6700
+    },
+    "corner25nm.py": {
+      "sha256": "d5616c2e9125d3cd9f24f19580ee95cd5023d5e3de31098ae31b76867c55f148",
+      "bytes": 7579
+    }
+  }
+}

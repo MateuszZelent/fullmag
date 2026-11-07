@@ -642,7 +642,7 @@ mod shared_domain_source_tests {
         let mut scene = crate::scene_document_from_script_builder(&crate::ScriptBuilderState::default());
         let legacy = discretization_payload(&scene);
         assert!(legacy.get("shared_domain_mesh_source").is_none());
-        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated);
+        scene.study.shared_domain_mesh_source = Some(crate::ScriptBuilderSharedDomainMeshSource::Generated {});
         let reset = discretization_payload(&scene);
         assert_eq!(reset["shared_domain_mesh_source"], json!({"kind": "generated"}));
         assert_ne!(legacy, reset);

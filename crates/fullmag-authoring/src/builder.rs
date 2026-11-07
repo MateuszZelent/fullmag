@@ -94,10 +94,12 @@ impl Default for ScriptBuilderSolverState {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderMeshState {
-    #[serde(default = "default_mesh_algo_2d")]
-    pub algorithm_2d: i64,
-    #[serde(default = "default_mesh_algo_3d")]
-    pub algorithm_3d: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_mesh_value")]
+    pub algorithm_2d: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_mesh_value")]
+    pub algorithm_3d: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mode: Option<String>,
     #[serde(default)]
@@ -138,10 +140,12 @@ pub struct ScriptBuilderMeshState {
     pub optimize: String,
     #[serde(default = "default_mesh_opt_iters")]
     pub optimize_iterations: i64,
-    #[serde(default)]
-    pub compute_quality: bool,
-    #[serde(default)]
-    pub per_element_quality: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_mesh_value")]
+    pub compute_quality: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_mesh_value")]
+    pub per_element_quality: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_hmax: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -179,8 +183,8 @@ pub struct ScriptBuilderMeshState {
 impl Default for ScriptBuilderMeshState {
     fn default() -> Self {
         Self {
-            algorithm_2d: default_mesh_algo_2d(),
-            algorithm_3d: default_mesh_algo_3d(),
+            algorithm_2d: None,
+            algorithm_3d: None,
             size_mode: None,
             hmax: String::new(),
             hmin: String::new(),
@@ -201,8 +205,8 @@ impl Default for ScriptBuilderMeshState {
             smoothing_steps: default_mesh_smoothing(),
             optimize: String::new(),
             optimize_iterations: default_mesh_opt_iters(),
-            compute_quality: true,
-            per_element_quality: true,
+            compute_quality: None,
+            per_element_quality: None,
             interface_hmax: None,
             interface_thickness: None,
             transition_distance: None,
@@ -1351,13 +1355,7 @@ mod tests {
 
 // --- ScriptBuilderMeshState defaults ---
 
-const fn default_mesh_algo_2d() -> i64 {
-    6 // Frontal-Delaunay
-}
 
-const fn default_mesh_algo_3d() -> i64 {
-    1 // Delaunay
-}
 
 const fn default_mesh_size_factor() -> f64 {
     1.0
@@ -1369,4 +1367,13 @@ const fn default_mesh_smoothing() -> i64 {
 
 const fn default_mesh_opt_iters() -> i64 {
     1
+}
+
+
+fn deserialize_present_mesh_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }

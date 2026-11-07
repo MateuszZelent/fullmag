@@ -7584,8 +7584,10 @@ def _configure_object_mesh_defaults(
         )
     if compute_quality is not None:
         _state._default_mesh_spec.compute_quality = compute_quality
+        _state._default_mesh_spec.compute_quality_configured = True
     if per_element_quality is not None:
         _state._default_mesh_spec.per_element_quality = per_element_quality
+        _state._default_mesh_spec.per_element_quality_configured = True
     if periodic_pair_ids is not None:
         normalized_pair_ids = [
             require_non_empty(str(pair_id), "study.objects.mesh.defaults.periodic_pair_ids")

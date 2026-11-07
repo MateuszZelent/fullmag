@@ -25,7 +25,7 @@ pub struct ScriptBuilderDomainMarkerOwner {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScriptBuilderSharedDomainMeshSource {
-    Generated,
+    Generated {},
     Explicit {
         source: String,
         #[serde(deserialize_with = "deserialize_markers")]
