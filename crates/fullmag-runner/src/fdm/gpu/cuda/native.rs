@@ -482,6 +482,67 @@ fn validate_multilayer_stage_telemetry_impl(
     })
 }
 
+/// Use the existing centered XY operator when the six expanded real tensors
+/// alone exceed the host budget. Observation requests always use it.
+#[cfg(feature = "cuda")]
+fn centered_periodic_xy_images(
+    plan: &fullmag_ir::FdmPlanIR,
+    observation: bool,
+) -> Result<Option<[u32; 2]>, RunError> {
+    use fullmag_ir::{AxisBoundary, ExecutionPrecision, FdmDemagPeriodicityIR};
+
+    let Some(periodicity) = plan.periodicity.as_ref().filter(|policy| {
+        policy.axes == [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open]
+            && policy.demag == FdmDemagPeriodicityIR::TruncatedImages
+    }) else {
+        return Ok(None);
+    };
+    if !plan.enable_demag || plan.precision != ExecutionPrecision::Double {
+        return Ok(None);
+    }
+
+    let resolved = periodicity
+        .resolve_periodic_images(plan.grid.cells, plan.precision)
+        .map_err(|message| RunError { message })?
+        .ok_or_else(|| RunError {
+            message: "centered XY kernel requires resolved periodic image counts".into(),
+        })?;
+    let [ix, iy, _] = resolved.resolved_image_counts;
+    let image_span = [2 * u64::from(ix) + 1, 2 * u64::from(iy) + 1, 1];
+    let bytes_per_cell = std::mem::size_of::<f64>() as u64;
+    let expanded_bytes = plan.grid.cells.into_iter().zip(image_span).try_fold(
+        6 * bytes_per_cell,
+        |bytes, (cells, span)| bytes.checked_mul(2 * u64::from(cells))?.checked_mul(span),
+    );
+    if !observation && expanded_bytes.is_some_and(|bytes| bytes <= fullmag_plan::FDM_GRID_MAX_BYTES) {
+        return Ok(None);
+    }
+
+    // Six full complex spectra plus at most one temporary component when
+    // converting to the native ABI.
+    let fft_cells = resolved.padded_counts.into_iter().try_fold(1_u64, u64::checked_mul);
+    if fft_cells.is_none_or(|cells| {
+        cells > i32::MAX as u64
+            || cells > fullmag_plan::FDM_GRID_MAX_BYTES / (7 * 2 * bytes_per_cell)
+    }) {
+        return Err(RunError {
+            message: "centered periodic XY full-complex FFT exceeds its host budget".into(),
+        });
+    }
+    Ok(Some([ix, iy]))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn single_grid_demag_operator_kind(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<Option<String>, RunError> {
+    Ok(if centered_periodic_xy_images(plan, false)?.is_some() {
+        Some("tensor_fft_newell_periodic_xy_centered".to_string())
+    } else {
+        plan.enable_demag.then(|| "tensor_fft_newell".to_string())
+    })
+}
+
 #[cfg(feature = "cuda")]
 fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
     plan.current_density.is_some()
@@ -1225,6 +1286,10 @@ impl NativeFdmBackend {
             .map(|layer| layer.convolution_cell_size)
             .unwrap_or([1.0, 1.0, 1.0]);
 
+        let periodic_images = plan.resolved_periodic_images.as_ref().map(|policy| {
+            let [ix, iy, _] = policy.resolved_image_counts;
+            [ix, iy]
+        });
         let mut kernel_payloads = Vec::new();
         let mut kernel_descs = Vec::new();
         if plan.enable_demag {
@@ -1232,7 +1297,19 @@ impl NativeFdmBackend {
             for (src_index, src_layer) in plan.layers.iter().enumerate() {
                 for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
                     let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
-                    let kernel = if src_index == dst_index {
+                    let kernel = if let Some(images) = periodic_images {
+                        fullmag_fdm_demag::try_compute_periodic_xy_kernel(
+                            conv_grid,
+                            conv_cell_size,
+                            z_shift,
+                            images,
+                        )
+                        .map_err(|error| RunError {
+                            message: format!(
+                                "CUDA FDM periodic kernel for layer {src_index} → {dst_index}: {error}"
+                            ),
+                        })?
+                    } else if src_index == dst_index {
                         fullmag_fdm_demag::compute_exact_self_kernel(
                             conv_grid[0],
                             conv_grid[1],
@@ -1332,6 +1409,22 @@ impl NativeFdmBackend {
             {
                 unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
                 return Err(RunError { message: msg });
+            }
+        }
+
+        if periodic_images.is_some() {
+            let status = unsafe { ffi::fullmag_fdm_backend_set_multilayer_xy_periodic_v1(handle) };
+            if status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let error = ffi::fullmag_fdm_backend_last_error(handle);
+                    if error.is_null() {
+                        "CUDA FDM multilayer failed to configure XY periodicity".to_string()
+                    } else {
+                        CStr::from_ptr(error).to_string_lossy().into_owned()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
             }
         }
 
@@ -1495,6 +1588,28 @@ impl NativeFdmBackend {
         plan: &fullmag_ir::FdmPlanIR,
         stats_policy: NativeStatsPolicy,
     ) -> Result<Self, RunError> {
+        let images = centered_periodic_xy_images(plan, false)?;
+        Self::create_single_grid(plan, stats_policy, images)
+    }
+
+    /// Use the centred multilayer XY kernel for a target-only observation.
+    pub(super) fn create_periodic_xy_observation(
+        plan: &fullmag_ir::FdmPlanIR,
+    ) -> Result<Self, RunError> {
+        let images = centered_periodic_xy_images(plan, true)?;
+        if plan.enable_exchange || images.is_none() {
+            return Err(RunError {
+                message: "periodic Airbox requires a demag-only CUDA FP64 XY target".into(),
+            });
+        }
+        Self::create_single_grid(plan, NativeStatsPolicy::full(1), images)
+    }
+
+    fn create_single_grid(
+        plan: &fullmag_ir::FdmPlanIR,
+        stats_policy: NativeStatsPolicy,
+        centered_periodic_xy_images: Option<[u32; 2]>,
+    ) -> Result<Self, RunError> {
         // This is the last typed boundary before the dense carrier is flattened
         // into nullable ABI pointers. Never let malformed or stale selection
         // evidence reach a device probe, allocation, or native repair path.
@@ -1611,7 +1726,32 @@ impl NativeFdmBackend {
             Some(plan.region_mask.clone())
         };
         let demag_kernel_spectra = if plan.enable_demag {
-            if let fullmag_engine::FdmDemagBoundary::PeriodicTruncatedImages { image_counts } =
+            if let Some(images) = centered_periodic_xy_images {
+                let kernel = fullmag_fdm_demag::try_compute_periodic_xy_kernel(
+                    plan.grid.cells.map(|count| count as usize),
+                    plan.cell_size,
+                    0.0,
+                    images,
+                )
+                .map_err(|error| RunError {
+                    message: format!("centered periodic XY Newell kernel: {error}"),
+                })?;
+                let [px, py, pz] = kernel.fft_shape;
+                let flatten = |values: Vec<num_complex::Complex<f64>>| {
+                    values.into_iter().flat_map(|value| [value.re, value.im]).collect()
+                };
+                Some(fullmag_engine::DemagKernelSpectra {
+                    px,
+                    py,
+                    pz,
+                    n_xx: flatten(kernel.k_xx),
+                    n_yy: flatten(kernel.k_yy),
+                    n_zz: flatten(kernel.k_zz),
+                    n_xy: flatten(kernel.k_xy),
+                    n_xz: flatten(kernel.k_xz),
+                    n_yz: flatten(kernel.k_yz),
+                })
+            } else if let fullmag_engine::FdmDemagBoundary::PeriodicTruncatedImages { image_counts } =
                 resolved_demag_boundary
             {
                 Some(fullmag_engine::compute_periodic_newell_kernel_spectra(
@@ -4496,6 +4636,7 @@ mod tests {
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
             rotated_dmi_only: false,
+            centered_aligned_multilayer: false,
         };
         let request = LivePreviewRequest {
             quantity: "frozen_spins".to_string(),
@@ -4723,6 +4864,39 @@ mod tests {
         let error = ensure_cuda_heterogeneous_material_supported(&plan)
         .expect_err("DMI boundary conditions need a local A");
         assert!(error.message.contains("dmi_variable_exchange"));
+    }
+
+    #[test]
+    fn cuda_fp64_rotated_dmi_uses_local_ms_without_changing_energy() {
+        if !is_cuda_available() {
+            eprintln!("skipping rotated DMI cellwise Ms parity: CUDA unavailable");
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.rotated_interfacial_dmi = Some(0.004);
+        let cells = plan.initial_magnetization.len();
+        let scalar_ms = plan.material.saturation_magnetisation;
+        let mut uniform = NativeFdmBackend::create(&plan).expect("scalar Ms rDMI plan");
+        uniform.refresh_observables().expect("refresh scalar Ms fields");
+        let scalar_field = uniform.copy_h_rotated_dmi(cells).expect("scalar Ms rDMI field");
+        let scalar_energy = uniform.snapshot_step_stats(plan.grid.cells)
+            .expect("scalar Ms energy").e_rotated_dmi;
+        assert!(scalar_field.iter().flatten().any(|h| h.abs() > 1.0));
+
+        let ms: Vec<_> = (0..cells).map(|i| scalar_ms * (1.0 + i as f64 / 8.0)).collect();
+        let expected: Vec<_> = scalar_field.iter().zip(&ms)
+            .map(|(field, local_ms)| field.map(|value| value * scalar_ms / local_ms))
+            .collect();
+        plan.material.ms_field = Some(ms);
+        let mut heterogeneous = NativeFdmBackend::create(&plan).expect("cellwise Ms rDMI plan");
+        heterogeneous.refresh_observables().expect("refresh cellwise Ms fields");
+        let actual = heterogeneous.copy_h_rotated_dmi(cells).expect("cellwise Ms rDMI field");
+        let energy = heterogeneous.snapshot_step_stats(plan.grid.cells)
+            .expect("cellwise Ms energy").e_rotated_dmi;
+
+        assert_vector_field_close("cellwise Ms H_rDMI", &actual, &expected, 1e-12, 1e-7);
+        assert_scalar_close("fixed-state rDMI energy", energy, scalar_energy, 1e-12, 1e-28);
     }
 
     #[test]
@@ -7253,6 +7427,94 @@ mod tests {
             1e-3,
             1e-21,
         );
+    }
+
+    #[test]
+    fn oversized_cuda_fp64_xy_uses_compact_centered_images() {
+        use fullmag_ir::{AxisBoundary, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
+        let mut plan = make_thin_film_demag_plan();
+        let periodicity = FdmPeriodicityIR {
+            axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([10, 10, 0]),
+        };
+        plan.periodicity = Some(periodicity.clone());
+        assert_eq!(centered_periodic_xy_images(&plan, false).unwrap(), None);
+
+        plan.grid.cells = [240, 240, 18];
+        assert_eq!(
+            centered_periodic_xy_images(&plan, false).unwrap(),
+            Some([10, 10]),
+        );
+
+        plan.grid.cells = [4_096, 4_096, 18];
+        assert!(centered_periodic_xy_images(&plan, false).is_err());
+
+        plan.grid.cells = [240, 240, 18];
+        plan.precision = ExecutionPrecision::Single;
+        assert_eq!(centered_periodic_xy_images(&plan, false).unwrap(), None);
+
+        plan.precision = ExecutionPrecision::Double;
+        plan.periodicity = Some(FdmPeriodicityIR {
+            demag: FdmDemagPeriodicityIR::Open,
+            ..periodicity
+        });
+        assert_eq!(centered_periodic_xy_images(&plan, false).unwrap(), None);
+    }
+
+    #[test]
+    fn native_periodic_airbox_observation_matches_centered_image_sum_when_cuda_is_available() {
+        use fullmag_ir::{AxisBoundary, FdmDemagPeriodicityIR, FdmPeriodicityIR};
+
+        if !is_cuda_available() {
+            eprintln!("skipping native periodic Airbox parity test: CUDA backend unavailable");
+            return;
+        }
+        let mut plan = make_thin_film_demag_plan();
+        plan.grid.cells = [4, 3, 2];
+        plan.cell_size = [1e-9; 3];
+        plan.region_mask = vec![0; 24];
+        plan.initial_magnetization = vec![[0.0; 3]; 24];
+        let source = [2e5, -4e5, 3e5];
+        plan.initial_magnetization[0] = source;
+        plan.material.saturation_magnetisation = 1.0;
+        plan.enable_exchange = false;
+        plan.external_field = None;
+        let periodicity = FdmPeriodicityIR {
+            axes: [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
+            demag: FdmDemagPeriodicityIR::TruncatedImages,
+            image_counts: Some([1, 2, 0]),
+        };
+        plan.resolved_periodic_images = periodicity
+            .resolve_periodic_images(plan.grid.cells, plan.precision)
+            .unwrap();
+        plan.periodicity = Some(periodicity);
+
+        let mut backend = NativeFdmBackend::create_periodic_xy_observation(&plan)
+            .expect("native periodic observation backend");
+        backend.refresh_observables().expect("refresh observation");
+        let actual = backend.copy_h_demag(24).expect("copy observation H_demag");
+        let mut expected = [0.0; 3];
+        // Target x=3 is the centred lag -1 on the four-cell period.
+        for iy in -2..=2 {
+            for ix in -1..=1 {
+                let displacement = [
+                    (-1 + 4 * ix) as f64 * 1e-9,
+                    (1 + 3 * iy) as f64 * 1e-9,
+                    1e-9,
+                ];
+                let n = fullmag_fdm_demag::cell_pair_tensor(
+                    plan.cell_size, plan.cell_size, displacement,
+                ).expect("exact Newell pair");
+                for (sum, row) in expected.iter_mut().zip([
+                    [n.xx, n.xy, n.xz], [n.xy, n.yy, n.yz], [n.xz, n.yz, n.zz],
+                ]) {
+                    *sum -= row.into_iter().zip(source).map(|(a, b)| a * b).sum::<f64>();
+                }
+            }
+        }
+        assert_vector_field_close("periodic Airbox H_demag", &[actual[19]], &[expected], 1e-9, 1e-6);
     }
 
     #[test]

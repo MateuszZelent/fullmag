@@ -72,10 +72,10 @@ std::uint64_t hash_mesh_topology(const Context &ctx, const mfem::Mesh &mesh)
     hash_vector(state, ctx.mesh.cell_markers);
     hash_scalar(state, mesh.GetNV());
     hash_scalar(state, mesh.GetNE());
+    mfem::Array<int> vertices;
     for (int element = 0; element < mesh.GetNE(); ++element) {
         hash_scalar(state, mesh.GetElementBaseGeometry(element));
         hash_scalar(state, mesh.GetAttribute(element));
-        mfem::Array<int> vertices;
         mesh.GetElementVertices(element, vertices);
         hash_scalar(state, vertices.Size());
         for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
@@ -118,10 +118,10 @@ std::uint64_t hash_boundary_data(const Context &ctx, const mfem::Mesh &mesh)
     hash_vector(state, ctx.mesh.magnetic_element_mask);
     hash_vector(state, ctx.mesh.magnetic_node_mask);
     hash_scalar(state, mesh.GetNBE());
+    mfem::Array<int> vertices;
     for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
         hash_scalar(state, mesh.GetBdrElementGeometry(boundary));
         hash_scalar(state, mesh.GetBdrElement(boundary)->GetAttribute());
-        mfem::Array<int> vertices;
         mesh.GetBdrElementVertices(boundary, vertices);
         hash_scalar(state, vertices.Size());
         for (int vertex = 0; vertex < vertices.Size(); ++vertex) {

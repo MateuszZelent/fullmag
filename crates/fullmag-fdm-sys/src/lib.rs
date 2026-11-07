@@ -1979,6 +1979,10 @@ extern "C" {
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
+    pub fn fullmag_fdm_backend_set_multilayer_xy_periodic_v1(
+        handle: *mut fullmag_fdm_backend,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
         handle: *mut fullmag_fdm_backend,
         descriptor: *const fullmag_fdm_rotated_interfacial_dmi_desc_v1,

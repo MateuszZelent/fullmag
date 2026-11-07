@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/0431-fem-demag-mixed-order-potential.md"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented", "reason": "The existing P1/P2 Poisson CPU route and fixed-coupling cache are implemented. Managed native oracle, reuse, invalidation, memory-guard, and failure fixtures passed; R2 production memory, A/B performance, and full SP4 remain unqualified."},
+    {"solver": "FEM", "device": "CPU", "status": "documented", "reason": "The existing P1/P2 Poisson CPU route and fixed-coupling cache are implemented. Managed native oracle, reuse, invalidation, memory-guard, and failure fixtures passed. The d34/e311 production R2 same-thread CPU1/2/6 500fs A/B qualified cache memory and bounded performance; full SP4 trajectories and full profiling remain unqualified."},
     {"solver": "FEM", "device": "GPU", "status": "documented", "reason": "Nonperiodic P2 device operators are implemented and compiled; executed-device scientific qualification is pending."},
     {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "FDM uses a Newell tensor convolution and serves only as the cross-discretization oracle."},
     {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "FDM GPU does not use the FEM mixed-order potential realization."}

@@ -13,8 +13,8 @@ namespace fullmag::fem {
 void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &plan)
 {
     const bool enabled = plan.enable_exchange != 0;
-#if FULLMAG_HAS_MFEM_STACK
     const bool use_consistent_mass = plan.use_consistent_mass != 0;
+#if FULLMAG_HAS_MFEM_STACK
     auto &lifecycle = ctx.exchange.mfem.operator_lifecycle;
     if (lifecycle.setup_complete &&
         (ctx.exchange.enabled != enabled ||
@@ -23,8 +23,10 @@ void initialize_exchange_plan_fields(Context &ctx, const fullmag_fem_plan_desc &
         lifecycle.setup_complete = false;
         ctx.exchange.mfem.ready = false;
     }
-    ctx.exchange.mfem.use_consistent_mass = use_consistent_mass;
 #endif
+    // Import policy in every ABI build. Actual assembly and stepping still
+    // require MFEM; material validation must see the authored mass policy.
+    ctx.exchange.mfem.use_consistent_mass = use_consistent_mass;
     ctx.exchange.enabled = enabled;
 }
 

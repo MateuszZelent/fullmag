@@ -551,6 +551,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     setDraftState({ draft: baseDraft, key: draftKey });
     dispatch({ type: "setMutation", key: mutationKey, feedback: null });
   };
+  const explicitNodeInteraction = interactionIdFromSelection(selection.nodeId);
+  const sceneObject = scene.data?.objects?.find((entry) => entry.id === objectId);
+  const objectMaterial = sceneObject?.material_ref
+    ? scene.data?.materials?.find((entry) => entry.id === sceneObject.material_ref)
+    : null;
+  const objectMaterialMs = typeof objectMaterial?.properties?.Ms === "number"
+    ? objectMaterial.properties.Ms
+    : null;
   return (
     <PhysicsInspectorOverview
       editSession={{
@@ -562,6 +570,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         reset: resetInteractionDraft,
         valid: editSessionValid,
       }}
+      primaryTitle={spec?.label ?? "Physics Interaction"}
       model={buildPhysicsInspectorOverviewModel({
         dependency: {
           requiredSourceIds: [],
@@ -589,7 +598,46 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
         statusReason: laneIssue?.error ?? activeLaneOperation.reason,
       })}
       primary={<div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      {laneIssue ? (
+        <FeedbackBanner kind="error" message={laneIssue.error} />
+      ) : null}
+      {!activeLaneOperation.enabled ? (
+        <FeedbackBanner
+          kind={
+            activeLaneOperation.state === "semantic_only" ||
+            activeLaneOperation.state === "deferred"
+              ? "warning"
+              : "error"
+          }
+          message={activeLaneOperation.reason}
+        />
+      ) : null}
+      <PhysicsInteractionStateSection
+        disabled={!activeLaneOperation.enabled}
+        draft={draft}
+        interactionId={interactionId}
+        onPatch={updateDraft}
+      />
+      <PhysicsInteractionParametersSection
+        draft={draft}
+        disabled={!activeLaneOperation.enabled}
+        interactionId={interactionId}
+        materialMs={objectMaterialMs}
+        spec={spec}
+        onValueChange={updateValue}
+      />
+      <PhysicsInteractionActionsSection
+        canApply={canApply}
+        feedback={mutation.feedback}
+        pending={mutation.pending}
+        onApply={() => void applyInteraction()}
+        onRevert={() => {
+          setDraftState({ draft: baseDraft, key: draftKey });
+          dispatch({ type: "setMutation", key: mutationKey, feedback: null });
+        }}
+      />
       <PhysicsInteractionSelectionSection
+        defaultOpen={explicitNodeInteraction === null}
         interactionId={interactionId}
         activeLane={activeLane}
         options={interactionOptions}
@@ -618,21 +666,12 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           })
         }
       />
-      {laneIssue ? (
-        <FeedbackBanner kind="error" message={laneIssue.error} />
-      ) : null}
-      {!activeLaneOperation.enabled ? (
-        <FeedbackBanner
-          kind={
-            activeLaneOperation.state === "semantic_only" ||
-            activeLaneOperation.state === "deferred"
-              ? "warning"
-              : "error"
-          }
-          message={activeLaneOperation.reason}
+      {spec ? (
+        <PhysicsInteractionContractSection
+          defaultOpen={explicitNodeInteraction === null}
+          spec={spec}
         />
       ) : null}
-      {spec ? <PhysicsInteractionContractSection spec={spec} /> : null}
       {isWritableObjectInteraction(interactionId, objectId) ? (
         <PhysicsInteractionBackendSection
           enabled={resource.enabled}
@@ -641,29 +680,6 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           status={objectInteraction.status}
         />
       ) : null}
-      <PhysicsInteractionStateSection
-        disabled={!activeLaneOperation.enabled}
-        draft={draft}
-        interactionId={interactionId}
-        onPatch={updateDraft}
-      />
-      <PhysicsInteractionParametersSection
-        draft={draft}
-        disabled={!activeLaneOperation.enabled}
-        interactionId={interactionId}
-        spec={spec}
-        onValueChange={updateValue}
-      />
-      <PhysicsInteractionActionsSection
-        canApply={canApply}
-        feedback={mutation.feedback}
-        pending={mutation.pending}
-        onApply={() => void applyInteraction()}
-        onRevert={() => {
-          setDraftState({ draft: baseDraft, key: draftKey });
-          dispatch({ type: "setMutation", key: mutationKey, feedback: null });
-        }}
-      />
       {spec ? (
         <PhysicsInteractionHelpDialog
           open={state.helpOpen}
@@ -706,6 +722,7 @@ function PhysicsInteractionLaneStatus({
 
 function PhysicsInteractionSelectionSection({
   activeLane,
+  defaultOpen = true,
   draft,
   interactionId,
   options,
@@ -717,6 +734,7 @@ function PhysicsInteractionSelectionSection({
   selectedRegionId,
 }: {
   activeLane: ActiveLaneCapabilitySnapshot | null;
+  defaultOpen?: boolean;
   draft: PhysicsInteractionDraft;
   interactionId: PhysicsInteractionId;
   options: readonly PhysicsInteractionSpec[];
@@ -731,7 +749,7 @@ function PhysicsInteractionSelectionSection({
     <InspectorGroup
       title="Physics Interaction"
       collapsible
-      defaultOpen
+      defaultOpen={defaultOpen}
     >
       <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
       {selectedRegionId ? (
@@ -844,12 +862,14 @@ function PhysicsInteractionChecklistRow({
 }
 
 function PhysicsInteractionContractSection({
+  defaultOpen = true,
   spec,
 }: {
+  defaultOpen?: boolean;
   spec: PhysicsInteractionSpec;
 }) {
   return (
-    <InspectorGroup title="Contract" collapsible defaultOpen>
+    <InspectorGroup title="Contract" collapsible defaultOpen={defaultOpen}>
       <FieldRow label="Scope" value={scopeLabel(spec.scope)} />
       <FieldRow label="Storage" value={storageLabel(spec.storage)} />
       <FieldRow label="Status" value={statusLabel(spec.availability)} />
@@ -905,7 +925,14 @@ function PhysicsInteractionStateSection({
           disabled || interactionId === "exchange" || interactionId === "demag"
         }
         checked={draft.present}
-        onChange={(event) => onPatch({ present: event.target.checked })}
+        onChange={(event) => {
+          const checked = event.target.checked;
+          onPatch(
+            checked && !draft.present
+              ? { present: true, enabled: true }
+              : { present: checked },
+          );
+        }}
       />
       <FormField
         label="Enabled"
@@ -922,22 +949,25 @@ function PhysicsInteractionParametersSection({
   draft,
   disabled,
   interactionId,
+  materialMs,
   onValueChange,
   spec,
 }: {
   draft: PhysicsInteractionDraft;
   disabled: boolean;
   interactionId: PhysicsInteractionId;
+  materialMs?: number | null;
   onValueChange: (fieldId: string, value: string | string[]) => void;
   spec: PhysicsInteractionSpec | undefined;
 }) {
+  const fieldsDisabled = disabled || isDeferredInteraction(interactionId);
   return (
     <InspectorGroup title="Parameters" collapsible defaultOpen>
       {spec && spec.fields.length > 0 ? (
         spec.fields.map((field) => (
           <InteractionField
             key={field.id}
-            disabled={disabled || isDeferredInteraction(interactionId)}
+            disabled={fieldsDisabled}
             field={field}
             value={draft.values[field.id]}
             onChange={(value) => onValueChange(field.id, value)}
@@ -946,6 +976,74 @@ function PhysicsInteractionParametersSection({
       ) : (
         <FieldRow label="Parameters" value="No explicit parameters" />
       )}
+      {interactionId === "uniaxial_anisotropy" ? (
+        <>
+          <div className="fm-inspector-toolbar">
+            <Button
+              disabled={fieldsDisabled}
+              size="sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onValueChange("axis", ["1", "0", "0"])}
+            >
+              +X (1,0,0)
+            </Button>
+            <Button
+              disabled={fieldsDisabled}
+              size="sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onValueChange("axis", ["0", "1", "0"])}
+            >
+              +Y (0,1,0)
+            </Button>
+            <Button
+              disabled={fieldsDisabled}
+              size="sm"
+              type="button"
+              variant="ghost"
+              onClick={() => onValueChange("axis", ["0", "0", "1"])}
+            >
+              +Z / PMA (0,0,1)
+            </Button>
+            <Button
+              disabled={fieldsDisabled}
+              size="sm"
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                const rawAxis = vectorDraftValue(draft.values["axis"], ["0", "0", "1"], 3);
+                const ax = Number(rawAxis[0]);
+                const ay = Number(rawAxis[1]);
+                const az = Number(rawAxis[2]);
+                const norm = Math.hypot(ax, ay, az);
+                if (Number.isFinite(norm) && norm > 0) {
+                  onValueChange("axis", [
+                    String(Number((ax / norm).toPrecision(6))),
+                    String(Number((ay / norm).toPrecision(6))),
+                    String(Number((az / norm).toPrecision(6))),
+                  ]);
+                }
+              }}
+            >
+              Normalize |u|=1
+            </Button>
+          </div>
+          {(() => {
+            const ku1Val = Number(textDraftValue(draft.values["ku1"]));
+            const bkText =
+              draft.present &&
+              draft.enabled &&
+              Number.isFinite(ku1Val) &&
+              typeof materialMs === "number" &&
+              Number.isFinite(materialMs) &&
+              materialMs > 0
+                ? `${((2 * ku1Val) / materialMs).toPrecision(4)} T`
+                : "n/a (requires active Ku1 and assigned Ms > 0)";
+            return <FieldRow label="Anisotropy field (Bk = 2·Ku1/Ms)" value={bkText} />;
+          })()}
+        </>
+      ) : null}
     </InspectorGroup>
   );
 }

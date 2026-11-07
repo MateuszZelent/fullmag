@@ -120,8 +120,8 @@ export function resolveVisibleFieldMapCapture(
     compositionIdentity = [state, visibleSlotId];
   }
 
-  const sourceCanvases = Array.from(renderedRoot.querySelectorAll<HTMLCanvasElement>("canvas.fm-field-map__canvas"))
-    .filter((canvas) => elementIsVisible(canvas, renderedRoot));
+  const sourceCanvases = Array.from(renderedRoot.querySelectorAll<HTMLCanvasElement>("canvas"))
+    .filter((canvas) => hasElementClass(canvas, "fm-field-map__canvas") && elementIsVisible(canvas, renderedRoot));
   if (!sourceCanvases.length) throw captureFailure("the active field map has no visible drawing canvases.");
   for (const canvas of sourceCanvases) {
     if (canvas.width <= 0 || canvas.height <= 0) {
@@ -134,11 +134,12 @@ export function resolveVisibleFieldMapCapture(
   }
 
   const overlayIdentity = resolveOverlayIdentity(sourceCanvases);
-  const axes = Array.from(renderedRoot.querySelectorAll<HTMLElement>(".fm-field-map__axes"))
-    .filter((element) => elementIsVisible(element, renderedRoot));
+  // The axes wrapper uses `display: contents`, so its own client rect is empty;
+  // its tick and label elements carry the visible DOM geometry we draw below.
+  const axes = Array.from(renderedRoot.querySelectorAll<HTMLElement>(".fm-field-map__axes"));
   const legends = Array.from(root.querySelectorAll<HTMLElement>(".fm-field-map__colorbar"))
     .filter((element) => elementIsVisible(element, root));
-  const diagnostics = Array.from(root.querySelectorAll<HTMLElement>(".fm-field-map__stage .fm-field-map__diagnostic"))
+  const diagnostics = Array.from(stage.querySelectorAll<HTMLElement>(".fm-field-map__diagnostic"))
     .filter((element) => elementIsVisible(element, stage));
   const unit = legends
     .map((legend) => legend.querySelector<HTMLElement>(".fm-field-map__colorbar-unit")?.textContent?.trim())
@@ -290,7 +291,10 @@ function composeCapture(snapshot: VisibleFieldMapCaptureSnapshot): HTMLCanvasEle
   for (const source of snapshot.sourceCanvases) drawSourceCanvas(context, source, snapshot.stageRect);
   for (const axis of snapshot.axes) drawAxes(context, axis, snapshot.stageRect);
   for (const legend of snapshot.legends) drawLegend(context, legend, snapshot.stageRect);
-  for (const diagnostic of snapshot.diagnostics) drawTextLeaves(context, diagnostic, snapshot.stageRect);
+  for (const diagnostic of snapshot.diagnostics) {
+    const text = diagnostic.textContent?.replace(/\s+/g, " ").trim();
+    if (text) drawDomText(context, diagnostic, text, snapshot.stageRect);
+  }
   return canvas;
 }
 
@@ -316,7 +320,7 @@ function drawSourceCanvas(
   context.save();
   const opacity = Number.parseFloat(style?.opacity ?? "1");
   context.globalAlpha = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1;
-  if (!source.classList.contains("fm-field-map__canvas--overlay")) {
+  if (!hasElementClass(source, "fm-field-map__canvas--overlay")) {
     const background = style?.backgroundColor;
     if (background && !isTransparent(background)) {
       context.fillStyle = background;
@@ -387,7 +391,7 @@ function drawLegend(
   }
   const borderWidth = Number.parseFloat(style?.borderTopWidth ?? "0");
   if (style && borderWidth > 0 && style.borderTopStyle !== "none") {
-    context.strokeStyle = style?.borderTopColor || "transparent";
+    context.strokeStyle = style.borderTopColor || "transparent";
     context.lineWidth = borderWidth;
     roundedRect(context, rect.left, rect.top, rect.width, rect.height, parseFloat(style.borderRadius) || 0);
     context.stroke();
@@ -461,7 +465,7 @@ function drawDomText(
   context.textBaseline = "middle";
   const alignment = style?.textAlign;
   context.textAlign = alignment === "center" || alignment === "right" || alignment === "end" ? alignment : "left";
-  const verticalAxisTitle = element.classList.contains("fm-field-map__axis-title") &&
+  const verticalAxisTitle = hasElementClass(element, "fm-field-map__axis-title") &&
     element.closest(".fm-field-map__axis--vertical") !== null;
   if (verticalAxisTitle) {
     context.translate(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -470,7 +474,7 @@ function drawDomText(
   } else if (element.tagName === "P") {
     drawWrappedText(context, text, rect);
   } else {
-    const x = context.textAlign === "right" ? rect.left + rect.width
+    const x = context.textAlign === "right" || context.textAlign === "end" ? rect.left + rect.width
       : context.textAlign === "center" ? rect.left + rect.width / 2
         : rect.left;
     context.fillText(text, x, rect.top + rect.height / 2, rect.width);
@@ -552,7 +556,10 @@ function elementIsVisible(element: Element, boundary: ParentNode): boolean {
     if (style?.display === "none" || style?.visibility === "hidden" || Number.parseFloat(style?.opacity ?? "1") === 0) {
       return false;
     }
-    current = current.parentElement;
+    const parent: HTMLElement | null = current.parentNode?.nodeType === 1
+      ? current.parentNode as HTMLElement
+      : null;
+    current = parent;
   }
   const rect = element.getBoundingClientRect();
   return positiveSize(rect.width, rect.height);
@@ -565,12 +572,28 @@ function computedStyle(element: Element): CSSStyleDeclaration | null {
 function annotationIdentity(element: HTMLElement, stageRect: DOMRect): readonly unknown[] {
   const style = computedStyle(element);
   return [
-    element.className,
+    element.getAttribute("class"),
     element.textContent?.replace(/\s+/g, " ").trim(),
     element.querySelector<HTMLElement>(".fm-field-map__colorbar-ramp")?.dataset.colormap ?? null,
     style?.color ?? null,
     style?.backgroundColor ?? null,
     relativeRect(element.getBoundingClientRect(), stageRect),
+    Array.from(element.querySelectorAll<HTMLElement>(
+      "span, p, figcaption, .fm-field-map__axis-track, .fm-field-map__axis-mark, .fm-field-map__colorbar-ramp, canvas.fm-field-map__direction-swatch",
+    )).map((child) => {
+      const childStyle = computedStyle(child);
+      return [
+        child.getAttribute("class"),
+        child.textContent?.replace(/\s+/g, " ").trim(),
+        child.dataset.colormap ?? null,
+        childStyle?.color ?? null,
+        childStyle?.backgroundColor ?? null,
+        relativeRect(child.getBoundingClientRect(), stageRect),
+        child.tagName === "CANVAS"
+          ? [(child as HTMLCanvasElement).width, (child as HTMLCanvasElement).height]
+          : null,
+      ];
+    }),
   ];
 }
 
@@ -585,6 +608,10 @@ function relativeRect(rect: DOMRect, origin: DOMRect): { left: number; top: numb
 
 function positiveSize(width: number, height: number): boolean {
   return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+}
+
+function hasElementClass(element: Element, className: string): boolean {
+  return (element.getAttribute("class") ?? "").split(/\s+/).includes(className);
 }
 
 function isRevision(value: unknown): value is string | number {

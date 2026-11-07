@@ -2,6 +2,7 @@ import { Button } from "@/shared/ui/Button";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../../primitives/InspectorMetricStrip";
 import type { MeshRegionMembershipResource, MaterialParameterFieldListResource } from "@/kernel/api/apiTypes";
 import type {
   ObjectRegionDraft,
@@ -90,34 +91,52 @@ export function ObjectRegionInlineDiagnostics({
 export function ObjectRegionMetadataSection({
   model,
   meshLane = "unknown",
+  defaultOpen = false,
 }: {
   model: ObjectRegionPanelModel;
   meshLane?: MeshInspectorLane;
+  defaultOpen?: boolean;
 }) {
   return (
-    <InspectorGroup title="Authored Subregion" collapsible defaultOpen>
-      <FieldRow label="Owner object ID" value={model.objectId} />
-      <FieldRow label="Subregion ID" value={model.regionId} />
-      <FieldRow label="Source" value={model.source} />
-      <FieldRow label="Material ref" value={model.materialRef} />
-      <FieldRow label="Magnetization ref" value={model.magnetizationRef} />
-      <FieldRow label="Material overrides" value={String(model.materialOverrideCount)} />
-      <FieldRow label="Parameter fields" value={String(model.materialFieldCount)} />
-      <FieldRow
-        label="Priority"
-        value={model.priority === null ? "default" : String(model.priority)}
+    <>
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Region", value: model.regionId },
+          { label: "Material", value: model.materialRef },
+          {
+            label: "Overrides",
+            value: String(model.materialOverrideCount + model.materialFieldCount),
+          },
+          {
+            label: "Lane",
+            value: meshLane === "unknown" ? "unresolved" : meshLane.toUpperCase(),
+          },
+        ]}
       />
-      <FieldRow
-        label="Realization"
-        value={
-          meshLane === "fem"
-            ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
-            : meshLane === "fdm"
-              ? "structured-grid membership"
-              : "Withheld until the session discretization is explicit"
-        }
-      />
-    </InspectorGroup>
+      <InspectorGroup title="Authored Subregion" collapsible defaultOpen={defaultOpen}>
+        <FieldRow label="Owner object ID" value={model.objectId} />
+        <FieldRow label="Subregion ID" value={model.regionId} />
+        <FieldRow label="Source" value={model.source} />
+        <FieldRow label="Material ref" value={model.materialRef} />
+        <FieldRow label="Magnetization ref" value={model.magnetizationRef} />
+        <FieldRow label="Material overrides" value={String(model.materialOverrideCount)} />
+        <FieldRow label="Parameter fields" value={String(model.materialFieldCount)} />
+        <FieldRow
+          label="Priority"
+          value={model.priority === null ? "default" : String(model.priority)}
+        />
+        <FieldRow
+          label="Realization"
+          value={
+            meshLane === "fem"
+              ? model.realizationStatus ?? model.realizationPolicy ?? "inherits object"
+              : meshLane === "fdm"
+                ? "structured-grid membership"
+                : "Withheld until the session discretization is explicit"
+          }
+        />
+      </InspectorGroup>
+    </>
   );
 }
 

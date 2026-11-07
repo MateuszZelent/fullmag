@@ -5,7 +5,7 @@
 //! bounded, so the solver gets back-pressure instead of unbounded RAM growth if
 //! disk I/O falls behind.
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 use crate::artifacts::field_unit;
 use crate::artifacts::{
     write_field_snapshot_artifact, write_scalar_row, write_scalars_csv_header, FieldArtifactContext,
@@ -18,7 +18,7 @@ use crate::autosave_storage::{
 use crate::fdm::gpu::cuda::native::{
     NativeFdmFieldSnapshot, NativeFieldSnapshotInfo, NativeFieldSnapshotScalarType,
 };
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 use crate::native_fem::{NativeFemFieldSnapshot, NativeFemFieldSnapshotInfo};
 use crate::table_autosave::{TableAutosaveConfig, TableStore};
 use crate::types::{ExecutionProvenance, FieldSnapshot, RunError, SolverAttemptRecord, StepStats};
@@ -27,7 +27,7 @@ use fullmag_engine::{
     MAX_ADAPTIVE_ATTEMPT_RECORDS,
 };
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -86,7 +86,7 @@ pub(crate) struct ArtifactPipelineSummary {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "fem-native")), allow(dead_code))]
 pub(crate) struct ArtifactPipelineDiagnosticsSnapshot {
     pub current_queue_depth: u64,
     pub max_queue_depth: u64,
@@ -131,7 +131,7 @@ impl ArtifactPipelineDiagnosticsState {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "fem-native")), allow(dead_code))]
 pub(crate) struct ArtifactEnqueueMetrics {
     pub block_wall_time_ns: u64,
     pub estimated_bytes: u64,
@@ -139,7 +139,7 @@ pub(crate) struct ArtifactEnqueueMetrics {
     pub diagnostics: ArtifactPipelineDiagnosticsSnapshot,
 }
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "cuda", feature = "fem-native")), allow(dead_code))]
 pub(crate) fn apply_artifact_enqueue_metrics(
     stats: &mut StepStats,
     metrics: ArtifactEnqueueMetrics,
@@ -273,7 +273,7 @@ enum ArtifactJob {
     NativeFieldSnapshotBarrier {
         acknowledgement: mpsc::Sender<Result<(), String>>,
     },
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(feature = "fem-native")]
     NativeFemFieldSnapshot {
         snapshot: NativeFemFieldSnapshot,
         provenance: ExecutionProvenance,
@@ -311,7 +311,7 @@ impl ArtifactJob {
             ArtifactJob::NativeFieldSnapshot { .. } => 0,
             #[cfg(feature = "cuda")]
             ArtifactJob::NativeFieldSnapshotBarrier { .. } => 0,
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(feature = "fem-native")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
             #[cfg(any(feature = "cuda", test))]
             ArtifactJob::FailedRunProvenance { .. } => 0,
@@ -332,7 +332,7 @@ pub(crate) struct ArtifactPipelineSender {
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
     has_physical_time_stage_autosave_table: bool,
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_table_every: Option<u64>,
@@ -341,11 +341,11 @@ pub(crate) struct ArtifactPipelineSender {
 impl ArtifactPipelineSender {
     pub(crate) fn has_accepted_step_autosave_schedules(&self) -> bool {
         let has_field_schedule = {
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             {
                 !self.accepted_step_fields.is_empty()
             }
-            #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+            #[cfg(not(any(feature = "cuda", feature = "fem-native")))]
             {
                 false
             }
@@ -663,7 +663,7 @@ pub(crate) struct ArtifactPipeline {
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
     has_physical_time_stage_autosave_table: bool,
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_table_every: Option<u64>,
@@ -779,7 +779,7 @@ impl ArtifactPipeline {
                 error
             ),
         })?;
-        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+        #[cfg(any(feature = "cuda", feature = "fem-native"))]
         let accepted_step_fields = Arc::new(
             stage_autosave
                 .as_ref()
@@ -836,7 +836,7 @@ impl ArtifactPipeline {
             diagnostics,
             physics_execution_context,
             has_physical_time_stage_autosave_table,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_fields,
             #[cfg(feature = "fem-gpu")]
             accepted_step_table_every,
@@ -854,7 +854,7 @@ impl ArtifactPipeline {
             diagnostics: Arc::clone(&self.diagnostics),
             physics_execution_context: self.physics_execution_context.clone(),
             has_physical_time_stage_autosave_table: self.has_physical_time_stage_autosave_table,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_fields: Arc::clone(&self.accepted_step_fields),
             #[cfg(feature = "fem-gpu")]
             accepted_step_table_every: self.accepted_step_table_every,
@@ -1178,9 +1178,9 @@ pub(crate) struct ArtifactRecorder {
     pipeline: Option<ArtifactPipelineSender>,
     provenance: ExecutionProvenance,
     physics_execution_context: Option<crate::physics_graph_execution::PhysicsGraphExecutionContext>,
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_fields: Arc<Vec<(String, u64)>>,
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     accepted_step_field_last_sample: std::collections::BTreeMap<String, u64>,
     #[cfg(feature = "fem-gpu")]
     accepted_step_table_every: Option<u64>,
@@ -1197,9 +1197,9 @@ impl ArtifactRecorder {
             pipeline: None,
             provenance,
             physics_execution_context: None,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_fields: Arc::new(Vec::new()),
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
             #[cfg(feature = "fem-gpu")]
             accepted_step_table_every: None,
@@ -1210,7 +1210,7 @@ impl ArtifactRecorder {
         provenance: ExecutionProvenance,
         pipeline: ArtifactPipelineSender,
     ) -> Self {
-        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+        #[cfg(any(feature = "cuda", feature = "fem-native"))]
         let accepted_step_fields = Arc::clone(&pipeline.accepted_step_fields);
         #[cfg(feature = "fem-gpu")]
         let accepted_step_table_every = pipeline.accepted_step_table_every;
@@ -1224,16 +1224,16 @@ impl ArtifactRecorder {
             pipeline: Some(pipeline),
             provenance,
             physics_execution_context,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_fields,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_field_last_sample: std::collections::BTreeMap::new(),
             #[cfg(feature = "fem-gpu")]
             accepted_step_table_every,
         }
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     pub(crate) fn due_accepted_step_fields(
         &mut self,
         accepted_step: u64,
@@ -1436,7 +1436,7 @@ impl ArtifactRecorder {
         Ok(())
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     pub(crate) fn is_streaming(&self) -> bool {
         self.pipeline.is_some()
     }
@@ -1486,7 +1486,7 @@ impl ArtifactRecorder {
         Ok(metrics)
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(feature = "fem-native")]
     pub(crate) fn record_native_fem_field_snapshot(
         &mut self,
         snapshot: NativeFemFieldSnapshot,
@@ -1514,7 +1514,7 @@ impl ArtifactRecorder {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeSnapshotScalarType {
     #[allow(dead_code)]
@@ -1522,7 +1522,7 @@ enum NativeSnapshotScalarType {
     F64,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 #[derive(Debug, Clone, Copy)]
 struct NativeVectorSnapshotInfo {
     cell_count: usize,
@@ -1546,7 +1546,7 @@ impl From<NativeFieldSnapshotInfo> for NativeVectorSnapshotInfo {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(feature = "fem-native")]
 impl From<NativeFemFieldSnapshotInfo> for NativeVectorSnapshotInfo {
     fn from(info: NativeFemFieldSnapshotInfo) -> Self {
         Self {
@@ -1558,7 +1558,7 @@ impl From<NativeFemFieldSnapshotInfo> for NativeVectorSnapshotInfo {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 struct ZarrFieldSeriesWriter {
     root_dir: PathBuf,
     zarray_path: PathBuf,
@@ -1570,7 +1570,7 @@ struct ZarrFieldSeriesWriter {
     samples_writer: BufWriter<File>,
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 impl ZarrFieldSeriesWriter {
     fn open(
         fields_dir: &Path,
@@ -1700,7 +1700,7 @@ impl ZarrFieldSeriesWriter {
         )
     }
 
-    #[cfg(feature = "fem-gpu")]
+    #[cfg(feature = "fem-native")]
     fn append_fem_snapshot(&mut self, snapshot: &mut NativeFemFieldSnapshot) -> Result<(), String> {
         let info = snapshot.info().map_err(|error| {
             format!(
@@ -1885,7 +1885,7 @@ impl ZarrFieldSeriesWriter {
     }
 }
 
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(feature = "cuda", feature = "fem-native"))]
 fn zarr_dtype(scalar_type: NativeSnapshotScalarType) -> &'static str {
     match scalar_type {
         NativeSnapshotScalarType::F32 => "<f4",
@@ -1942,7 +1942,7 @@ fn writer_loop(
     let mut stage_autosave = stage_autosave_config
         .map(|config| StageAutosaveRuntime::new(autosave_root, config))
         .transpose()?;
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     let mut zarr_writers: HashMap<String, ZarrFieldSeriesWriter> = HashMap::new();
 
     let mut terminal_history: Option<BufWriter<File>> = None;
@@ -2104,7 +2104,7 @@ fn writer_loop(
                         )?;
                     }
                     FieldArtifactStorage::Zarr => {
-                        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                        #[cfg(any(feature = "cuda", feature = "fem-native"))]
                         {
                             let info = NativeVectorSnapshotInfo {
                                 cell_count: snapshot.sample_count(),
@@ -2137,10 +2137,10 @@ fn writer_loop(
                                 None,
                             )?;
                         }
-                        #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+                        #[cfg(not(any(feature = "cuda", feature = "fem-native")))]
                         {
                             return Err(
-                                "Zarr field artifacts require a native CUDA or FEM-GPU build"
+                                "Zarr field artifacts require a native CUDA or FEM build"
                                     .into(),
                             );
                         }
@@ -2150,7 +2150,7 @@ fn writer_loop(
                     match field_storage {
                         FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
                         FieldArtifactStorage::Zarr => {
-                            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                            #[cfg(any(feature = "cuda", feature = "fem-native"))]
                             if let Some(writer) = zarr_writers.get(&snapshot.name) {
                                 let values = writer.last_chunk_values_f64()?;
                                 runtime.append_field_values(
@@ -2225,7 +2225,7 @@ fn writer_loop(
                 // completed and dropped their native handles before this ack.
                 let _ = acknowledgement.send(Ok(()));
             }
-            #[cfg(feature = "fem-gpu")]
+            #[cfg(feature = "fem-native")]
             ArtifactJob::NativeFemFieldSnapshot {
                 mut snapshot,
                 provenance,
@@ -2299,7 +2299,7 @@ fn writer_loop(
                 let artifact_provenance =
                     crate::artifacts::artifact_provenance_json(&field_context, &provenance);
                 let result = (|| -> Result<(), String> {
-                    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                    #[cfg(any(feature = "cuda", feature = "fem-native"))]
                     for writer in zarr_writers.values() {
                         writer.update_provenance(&field_context, &provenance)?;
                     }
@@ -2332,7 +2332,7 @@ fn writer_loop(
         })?;
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     for (observable, writer) in &mut zarr_writers {
         writer.samples_writer.flush().map_err(|error| {
             format!(
@@ -2473,7 +2473,7 @@ enum ArtifactWriterJobKind {
     ScalarRow,
     StageAutosaveTableRow,
     FieldSnapshot,
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     NativeFieldSnapshot,
 }
 
@@ -2512,7 +2512,7 @@ fn record_writer_job_time(
                 .field_snapshot_writer_wall_time_ns
                 .fetch_add(wall_time_ns, Ordering::Relaxed);
         }
-        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+        #[cfg(any(feature = "cuda", feature = "fem-native"))]
         ArtifactWriterJobKind::NativeFieldSnapshot => {
             summary.native_field_snapshot_writer_wall_time_ns = summary
                 .native_field_snapshot_writer_wall_time_ns
@@ -2615,7 +2615,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[cfg(any(feature = "cuda", feature = "fem-native"))]
     #[test]
     fn accepted_step_field_policy_samples_step_zero_and_forces_one_terminal_sample() {
         let mut recorder = ArtifactRecorder::in_memory(ExecutionProvenance::default());
@@ -2712,7 +2712,7 @@ mod tests {
             diagnostics: Arc::new(ArtifactPipelineDiagnosticsState::default()),
             physics_execution_context: None,
             has_physical_time_stage_autosave_table: false,
-            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            #[cfg(any(feature = "cuda", feature = "fem-native"))]
             accepted_step_fields: Arc::new(Vec::new()),
             #[cfg(feature = "fem-gpu")]
             accepted_step_table_every: None,

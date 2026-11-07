@@ -1518,9 +1518,25 @@ def main():
     parser.add_argument('--container-id',required=True)
     parser.add_argument('--image-id',required=True)
     parser.add_argument('--process-receipt-sha256',required=True)
+    parser.add_argument('--failure-variant', choices=['legacy', 'prepared-unclaimed-v1'], default='legacy')
+    parser.add_argument('--activation-attempt')
+    parser.add_argument('--prepared-target', type=Path)
+    parser.add_argument('--prepared-target-sha256')
+    parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--expected-plan-sha256')
+    parser.add_argument('--continue-intent-sha256')
     parser.add_argument('--stop-frontend', action='store_true',
                         help='After authenticated Linux OOM drain, stop this exact group frontend')
     args=parser.parse_args()
+    prepared_options = (args.activation_attempt, args.prepared_target, args.prepared_target_sha256,
+                        args.apply, args.expected_plan_sha256, args.continue_intent_sha256)
+    if args.failure_variant == 'legacy' and any(prepared_options):
+        raise BuildControlError('Prepared recovery options require explicit --failure-variant prepared-unclaimed-v1')
+    if args.failure_variant == 'prepared-unclaimed-v1':
+        if (args.stop_frontend or not args.prepared_target or not args.activation_attempt
+                or not re.fullmatch('[0-9a-f]{64}', args.prepared_target_sha256 or '')
+                or (args.apply and not re.fullmatch('[0-9a-f]{64}', args.expected_plan_sha256 or ''))):
+            raise BuildControlError('Prepared recovery requires exact original activation and target CAS; apply requires reviewed plan')
     if not re.fullmatch('[0-9a-f]{64}',args.container_id) or not re.fullmatch('sha256:[0-9a-f]{64}',args.image_id) or not re.fullmatch('[0-9a-f]{64}',args.process_receipt_sha256):
         raise BuildControlError('Stop requires complete immutable container/image/receipt identities')
     selected=args.source_root.resolve(strict=True)
@@ -1531,7 +1547,13 @@ def main():
     actual=actual[0]
     validate_source_labels(actual,identity)
     labels=actual.get('Config',{}).get('Labels',{})
-    if labels.get('com.docker.compose.project')!=identity['project_name'] or labels.get('com.docker.compose.service')!='backend' or not actual.get('State',{}).get('Running'):
+    if labels.get('com.docker.compose.project')!=identity['project_name'] or labels.get('com.docker.compose.service')!='backend':
+        raise BuildControlError('Stop requires this exact DEV backend')
+    if args.failure_variant == 'prepared-unclaimed-v1':
+        from docker_volume_linux_supervision_stop import stop_prepared
+        print(json.dumps(stop_prepared(args, selected, identity, actual), sort_keys=True))
+        return 0
+    if not actual.get('State',{}).get('Running'):
         raise BuildControlError('Stop requires this exact running DEV backend')
     if actual.get('State', {}).get('OOMKilled') is True:
         env = dict(item.split('=', 1) for item in actual.get('Config', {}).get('Env', []) if '=' in item)

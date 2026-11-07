@@ -1124,7 +1124,15 @@ def _device_requests_sha(devices: Any) -> str:
 def _finished_timestamp(value: Any) -> datetime:
     if not isinstance(value, str) or not value.strip():
         _fail("Docker teardown has no FinishedAt")
-    text = value.strip().replace("Z", "+00:00")
+    text = value.strip()
+    # Docker uses RFC3339Nano; Python 3.10 accepts only millisecond or
+    # microsecond fractions. Normalize a validation copy, keeping the exact
+    # Engine string in all pins and attestations.
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})", text)
+    if match is None:
+        _fail("Docker FinishedAt is not RFC3339")
+    base, fraction, offset = match.groups()
+    text = base + ("." + (fraction + "000000")[:6] if fraction else "") + ("+00:00" if offset == "Z" else offset)
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as error:

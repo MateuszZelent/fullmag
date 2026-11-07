@@ -446,6 +446,47 @@ mod tests {
     }
 
     #[test]
+    fn cuda_stage_handoff_preserves_reference_and_rejects_changed_state() {
+        use crate::constraints::{FrozenSpinsActivationSet, FrozenStageContextV1};
+
+        let target = plan(vec![true, false]);
+        let initial = [[1.0, -0.0, 0.0], [0.0, 1.0, 0.0]];
+        let fresh = FrozenStageContextV1::prepare_stage_entry(
+            FrozenSpinsActivationSet::default(),
+            None,
+            None,
+            "relax".into(),
+            Some(&target),
+            true,
+        )
+        .unwrap();
+        let frozen = fresh.cuda_frozen_stage_state(None, &target, None, &initial).unwrap();
+        let relaxed = [initial[0], [0.0, 0.0, 1.0]];
+        let child = FrozenSpinsCheckpointV1::from_runtime(
+            &target, &frozen, &relaxed, 12, 1e-12, 1e-13, "fdm_cuda", "cuda", "double",
+        )
+        .unwrap();
+        let continued = FrozenStageContextV1::prepare_stage_entry(
+            fresh.prepared_activation_set,
+            Some(child),
+            Some("relax".into()),
+            "hold".into(),
+            Some(&target),
+            false,
+        )
+        .unwrap();
+        let restored = continued.cuda_frozen_stage_state(Some(&target), &target, None, &relaxed).unwrap();
+        assert_eq!(restored.reference(), frozen.reference());
+        assert_eq!(restored.constraint_activation_epochs(), frozen.constraint_activation_epochs());
+        assert_eq!(restored.resolved_constraint_set_revision(), frozen.resolved_constraint_set_revision());
+        assert!(continued.cuda_frozen_stage_state(Some(&target), &target, None, &initial).is_err());
+        let mut changed_frozen = relaxed;
+        changed_frozen[0][1] = 0.0;
+        assert!(continued.cuda_frozen_stage_state(Some(&target), &target, None, &changed_frozen).is_err());
+        assert!(continued.cuda_frozen_stage_state(Some(&target), &plan(vec![false, true]), None, &relaxed).is_err());
+    }
+
+    #[test]
     fn checkpoint_round_trip_packs_mask_and_restores_engine_state() {
         let plan = plan(vec![
             true, false, true, false, false, true, false, true, true,

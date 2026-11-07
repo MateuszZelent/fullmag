@@ -121,6 +121,11 @@ def control_read_script(path, maximum=MAX_DOCUMENT_BYTES):
     if type(maximum) is not int or maximum <= 0 or maximum > MAX_DOCUMENT_BYTES:
         raise BuildControlError("Invalid control-document byte budget")
 
+    from docker_activation_history_reader import activation_history_read_script
+    historical = activation_history_read_script(path, maximum)
+    if historical is not None:
+        return historical
+
     components = parsed.parts[2:]  # omit the root slash and ``control``
     checks = [
         "check_parent() { local p=\"$1\"; test ! -L \"$p\"; "
@@ -641,8 +646,20 @@ class BuildControl:
         if len(data) > MAX_DOCUMENT_BYTES:
             raise BuildControlError("Control document exceeds its byte budget")
         path = self.path(relative)
+        if relative == "activation/history-v1" or relative.startswith("activation/history-v1/"):
+            raise BuildControlError("Archived activation records are immutable")
+        archive_guard = ""
+        activation = re.match(r"/control/activation/attempts/([0-9a-f]{32})(?:/|$)", path)
+        if activation is not None:
+            history = "/control/activation/history-v1"
+            archived = history + "/" + activation[1]
+            archive_guard = (
+                f"test ! -L {history}; if test -e {history}; then test -d {history}; "
+                f"test \"$(readlink -f {history})\" = {history}; fi; "
+                f"test ! -L {archived}; test ! -e {archived}; "
+            )
         parent = str(PurePosixPath(path).parent)
-        script = (f"umask 027; mkdir -p '{parent}'; "
+        script = (archive_guard + f"umask 027; mkdir -p '{parent}'; "
                   f"test \"$(readlink -f '{parent}')\" = '{parent}'; test ! -L '{path}'; "
                   f"if test -e '{path}'; then test -f '{path}'; test $(stat -c %h '{path}') = 1; fi; "
                   f"t=$(mktemp '{parent}/.publish.XXXXXXXX'); "

@@ -1826,7 +1826,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
 
 /// Native reducers expose aggregate DMI energy. In a rotated-only plan the
 /// aggregate is also the exact rotated component; it must not be zeroed.
-#[cfg(any(test, feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f64) -> (f64, f64) {
     (aggregate, if rotated_dmi_only { aggregate } else { 0.0 })
 }

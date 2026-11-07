@@ -193,6 +193,114 @@ describe("FDM cuboid realized membership", () => {
     expect(result?.segments.length).toBe(2 * 7);
   });
 
+  it.each([
+    { geometryScope: "full", expectedLengthNm: 3.75 },
+    { geometryScope: "surface", expectedLengthNm: 7.5 / Math.sqrt(8) },
+  ] as const)(
+    "sizes server-sampled $geometryScope glyphs from their spatial support",
+    ({ geometryScope, expectedLengthNm }) => {
+      const shape: [number, number, number] = [40, 40, 40];
+      const spacing: [number, number, number] = [2.5e-9, 2.5e-9, 2.5e-9];
+      // The server supplies eight positions spanning a 10 nm region of a
+      // much larger carrier. Geometry admission alone does not prove coverage.
+      const nodeIndices = [0, 3, 120, 123, 4_800, 4_803, 4_920, 4_923];
+      const sampledField = fieldVector(
+        nodeIndices.flatMap(() => [1, 0, 0]),
+        "sampled_node_indices",
+        nodeIndices,
+      );
+      const totalCells = 40 ** 3;
+      // FMRM makes all eight Surface anchors genuine corners of their target.
+      const realizedRegionIds = geometryScope === "surface"
+        ? Uint32Array.from({ length: totalCells }, (_, cell) =>
+            cell % 40 < 4 &&
+              Math.floor(cell / 40) % 40 < 4 &&
+              Math.floor(cell / 1_600) < 4
+              ? FMRM_INACTIVE_REGION_ID
+              : 0,
+          )
+        : null;
+      const cellSelection = realizedRegionIds ? "inactive" : "all";
+      const input = createFdmVectorOnlyBuildInput({
+        cellSelection,
+        domain: {
+          bounds: null,
+          displayCellBudget: 8,
+          displayCellCount: 8,
+          kind: "fdm-grid",
+          origin: [0, 0, 0],
+          shape,
+          spacing,
+          stride: 1,
+          totalCells,
+        },
+        fieldVector: sampledField,
+        maxSamples: 8,
+        membershipAdmission: "full-domain",
+        realizedRegionIds,
+      });
+      expect(input).not.toBeNull();
+      const result = buildFdmVectorSegmentsFromAnchors({
+        ...input!,
+        anchorMode: "tail",
+        cellSelection,
+        fieldVector: sampledField,
+        geometryScope,
+        maxVectors: 8,
+        realizedRegionIds,
+        scale: 100e-9,
+        vectorLengthScale: 4.2,
+      });
+
+      expect(result?.cellIndices).toEqual(new Uint32Array(nodeIndices));
+      const segments = result!.segments;
+      expect((segments[3]! - segments[0]!) * 1e9).toBeCloseTo(expectedLengthNm, 5);
+    },
+  );
+
+  it("sizes Full glyphs using the realized target cell count before sampling", () => {
+    const nodeIndices = [0, 3, 12, 15, 16, 19, 28, 31];
+    const sampledField = fieldVector(
+      nodeIndices.flatMap(() => [1, 0, 0]),
+      "sampled_node_indices",
+      nodeIndices,
+    );
+    const nativeActiveMask = new Uint8Array(64).fill(1, 0, 32);
+    const input = createFdmVectorOnlyBuildInput({
+      cellSelection: "active",
+      domain: {
+        bounds: null,
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [4, 4, 4],
+        spacing: [2.5e-9, 2.5e-9, 2.5e-9],
+        stride: 1,
+        totalCells: 64,
+      },
+      fieldVector: sampledField,
+      maxSamples: 8,
+      nativeActiveMask,
+      realizedRegionIds: null,
+    });
+    expect(input).not.toBeNull();
+    const result = buildFdmVectorSegmentsFromAnchors({
+      ...input!,
+      anchorMode: "tail",
+      cellSelection: "active",
+      fieldVector: sampledField,
+      geometryScope: "full",
+      maxVectors: 8,
+      scale: 100e-9,
+      vectorLengthScale: 4.2,
+    });
+
+    expect(result?.cellIndices).toEqual(new Uint32Array(nodeIndices));
+    const segments = result!.segments;
+    expect((segments[3]! - segments[0]!) * 1e9).toBeCloseTo(1.875 * Math.cbrt(32 / 8), 5);
+  });
+
   it("fails closed for vectors-only all-cell selection without membership admission", () => {
     const result = buildFdmVectorSegmentsFromAnchors({
       anchorMode: "center",

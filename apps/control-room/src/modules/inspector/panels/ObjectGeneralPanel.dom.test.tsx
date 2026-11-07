@@ -931,6 +931,60 @@ describe("ObjectGeneralPanel staged identity edits", () => {
       dom.restore();
     }
   });
+
+  it("hides ferromagnetic Material, Region, and Energies fields for antenna objects and suppresses duplicate Identity fields on Geometry child routes", async () => {
+    mocks.sceneData = {
+      objects: [{
+        geometry: { geometry_kind: "Box", geometry_params: { size: [1e-7, 1e-7, 1e-8] } },
+        id: "antenna-1",
+        name: "Stripline",
+        notes: "Excitation antenna",
+        role: "antenna",
+        transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+      }],
+      revision: 10,
+      scene_revision: 10,
+    };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <ObjectGeneralPanel selection={objectSelection("antenna-1", "Stripline")} />
+        </InspectorEditSessionProvider>,
+      ));
+      expect(container.textContent).toContain("current source");
+      expect(container.textContent).not.toContain("Energies");
+      expect(
+        findElements(container, (el) => el.tagName === "INPUT" && el.getAttribute("aria-label") === "Material"),
+      ).toHaveLength(0);
+      expect(
+        findElements(container, (el) => el.tagName === "INPUT" && el.getAttribute("aria-label") === "Region"),
+      ).toHaveLength(0);
+
+      await act(async () => root.render(
+        <InspectorEditSessionProvider>
+          <GeometryObjectPanel
+            selection={{
+              ...objectSelection("antenna-1", "Stripline Geometry"),
+              kind: "object.antenna.geometry",
+            }}
+          />
+        </InspectorEditSessionProvider>,
+      ));
+      expect(container.textContent).not.toContain("Identity and references");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function InspectorSessionProbe() {

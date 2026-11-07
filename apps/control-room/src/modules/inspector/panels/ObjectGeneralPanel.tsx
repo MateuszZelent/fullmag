@@ -59,6 +59,7 @@ import { ColorValue, ColorValueField } from "../primitives/ColorValue";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
 import {
   buildGeometryDraftPatch,
   buildTransformDraftPatch,
@@ -902,6 +903,19 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <InspectorMetricStrip
+        metrics={[
+          { label: "Role", value: sceneObject?.role ?? "magnet" },
+          { label: "Shape", value: object.shape },
+          {
+            label: antennaWithoutMagnetization ? "Conductor" : "Material",
+            value: antennaWithoutMagnetization
+              ? "current source"
+              : (draftMaterial || "unassigned"),
+          },
+          { label: "Mesh", value: object.meshStatus },
+        ]}
+      />
       <InspectorGroup title="Object" collapsible defaultOpen>
         {object.mode === "committed" ? (
           <>
@@ -925,27 +939,29 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
         <FieldRow label="Object ID" value={object.objectId} />
         <FieldRow label="Shape" value={object.shape} />
-        {object.mode === "committed" ? (
-          <>
-            <FormField
-              label="Material"
-              type="text"
-              value={draftMaterial}
-              onChange={(event) => updateDraft("material", event.target.value)}
-            />
-            <FormField
-              label="Region"
-              type="text"
-              value={draftRegion}
-              onChange={(event) => updateDraft("region", event.target.value)}
-            />
-          </>
-        ) : (
-          <>
-            <FieldRow label="Material" value={object.material} />
-            <FieldRow label="Region" value={object.region} />
-          </>
-        )}
+        {!antennaWithoutMagnetization ? (
+          object.mode === "committed" ? (
+            <>
+              <FormField
+                label="Material"
+                type="text"
+                value={draftMaterial}
+                onChange={(event) => updateDraft("material", event.target.value)}
+              />
+              <FormField
+                label="Region"
+                type="text"
+                value={draftRegion}
+                onChange={(event) => updateDraft("region", event.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <FieldRow label="Material" value={object.material} />
+              <FieldRow label="Region" value={object.region} />
+            </>
+          )
+        ) : null}
 
       </InspectorGroup>
 
@@ -1071,10 +1087,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         )}
       </InspectorGroup>
 
-      <ObjectExtensionsSection
-        objectId={object.objectId}
-        selection={selection}
-      />
+      {!antennaWithoutMagnetization ? (
+        <ObjectExtensionsSection
+          objectId={object.objectId}
+          selection={selection}
+        />
+      ) : null}
     </div>
   );
 }

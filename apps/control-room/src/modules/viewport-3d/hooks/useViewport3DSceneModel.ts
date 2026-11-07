@@ -248,6 +248,7 @@ import {
 } from "../model/viewport3DVectorBudgetAllocator";
 import {
   buildFdmMultilayerAirboxFieldRequest,
+  buildFdmMultilayerAirboxRegionIds,
   resolveFdmMultilayerAirboxFieldVector,
   shouldRequestFdmMultilayerAirboxField,
 } from "../model/viewport3DFdmMultilayerAirbox";
@@ -735,6 +736,25 @@ function resolveViewport3DFieldMetaScalarRange(
     max: stats.max,
     min: stats.min,
   };
+}
+
+export function resolveAirboxManualColorRange(
+  quantity: VisualizationStateResource["quantity"] | null | undefined,
+  quantityId: string,
+  component: string,
+): ScalarRange | null {
+  if (
+    !quantity ||
+    quantity.auto_contrast !== false ||
+    quantity.field_component !== component ||
+    !sameViewport3DQuantityId(quantity.active_quantity_id, quantityId)
+  ) return null;
+
+  const { contrast_min: min, contrast_max: max } = quantity;
+  return typeof min === "number" && typeof max === "number" &&
+    Number.isFinite(min) && Number.isFinite(max) && min < max
+    ? { min, max }
+    : null;
 }
 
 interface Viewport3DPartScalarRangeRequest {
@@ -4706,6 +4726,14 @@ export function useViewport3DSceneModel({
     viewportDataDiscretization,
     targetQuantityFieldRequests.size,
   );
+  const airboxCellGeometryRequested =
+    airboxSettings.visible && (
+      airboxSettings.shaderVisible ||
+      airboxSettings.pointsVisible ||
+      airboxSettings.wireframeVisible
+    );
+  const fdmMultilayerAirboxGeometryScope =
+    airboxCellGeometryRequested ? "full" : airboxSettings.geometryScope;
   const fdmMultilayerAirboxMaxSamples = useMemo(() => {
     if (
       !fdmMultilayerAirboxDomain ||
@@ -4731,11 +4759,17 @@ export function useViewport3DSceneModel({
             fdmMultilayerAirboxDomain,
             fdmMultilayerAirboxMaxSamples,
             airboxSettings.activeQuantityId === "H_eff" ? "H_eff" : "H_demag",
+            fdmMultilayerAirboxGeometryScope,
           )
         : null;
       return request ?? EMPTY_FDM_MULTILAYER_AIRBOX_FIELD_REQUEST;
     },
-    [fdmMultilayerAirboxDomain, fdmMultilayerAirboxMaxSamples, airboxSettings.activeQuantityId],
+    [
+      fdmMultilayerAirboxDomain,
+      fdmMultilayerAirboxGeometryScope,
+      fdmMultilayerAirboxMaxSamples,
+      airboxSettings.activeQuantityId,
+    ],
   );
   const fdmMultilayerAirboxField = useViewport3DFieldVectorRequest(
     fdmMultilayerAirboxFieldRequest,
@@ -6250,6 +6284,31 @@ export function useViewport3DSceneModel({
     () => getViewport3DVisualProfile(commandState.visualProfileId).voxelFillRatio,
     [commandState.visualProfileId],
   );
+  const fdmMultilayerAirboxRegionIds = useMemo(() => {
+    const layout = fdmMultilayerLayout.data;
+    if (!airboxCellGeometryRequested || !fdmMultilayerAirboxDomain || !layout?.available) {
+      return null;
+    }
+    if (fdmNativeLayerDomains.length !== layout.layers.length) return null;
+    return buildFdmMultilayerAirboxRegionIds(
+      fdmMultilayerAirboxDomain,
+      fdmNativeLayerDomains.map((domain) => ({
+        domain,
+        activeMask: resolveFdmNativeLayerActiveMaskForRendering(
+          domain,
+          layout.layout_revision,
+          layout.layers.find((layer) => layer.layer_id === domain.layerId),
+          fdmMultilayerLayerActiveMasks.data?.masks.get(domain.layerId) ?? null,
+        ),
+      })),
+    );
+  }, [
+    airboxCellGeometryRequested,
+    fdmMultilayerAirboxDomain,
+    fdmMultilayerLayerActiveMasks.data,
+    fdmMultilayerLayout.data,
+    fdmNativeLayerDomains,
+  ]);
   const fdmMultilayerCuboidBuildEntries = useMemo<
     readonly FdmCuboidAsyncBuildEntry[]
   >(() => {
@@ -6412,16 +6471,18 @@ export function useViewport3DSceneModel({
         maxVectors,
         airboxSettings.geometryScope,
       );
-      const airboxCellGeometryRequired =
-        airboxSettings.shaderVisible ||
-        airboxSettings.pointsVisible ||
-        airboxSettings.wireframeVisible;
+      const airboxCellGeometryReady = fdmMultilayerAirboxRegionIds !== null;
+      const airboxMembershipRevision = airboxCellGeometryReady
+        ? fdmMultilayerLayout.data.layers
+            .map((layer) => layer.active_mask_hash ?? layer.native_grid_fingerprint)
+            .join("|")
+        : "none";
       const airboxStyleRevision =
-        `visible=${airboxSettings.visible}|cells=${airboxCellGeometryRequired}|vectors=${vectorsVisible}|budget=${maxVectors}` +
+        `visible=${airboxSettings.visible}|cells=${airboxCellGeometryReady}|vectors=${vectorsVisible}|budget=${maxVectors}` +
         `|scale=${airboxSettings.vectorLengthScale}|center=${airboxSettings.vectorCenteringEnabled}` +
         `|scope=${airboxSettings.geometryScope}`;
       const airboxVectorsOnlyEnabled =
-        vectorsVisible && !airboxCellGeometryRequired;
+        vectorsVisible && !airboxCellGeometryReady;
       entries.push({
         buildKey: buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
@@ -6433,7 +6494,7 @@ export function useViewport3DSceneModel({
           quantityId: vectorsVisible && airboxFieldEnabled
             ? resolveCanonicalQuantityId(airboxSettings.activeQuantityId)
             : "geometry",
-          samplingRevision: `${fdmMultilayerAirboxDomain.geometryRevision}|display=${fdmMultilayerAirboxDomain.displayCellCount}|total=${fdmMultilayerAirboxDomain.totalCells}`,
+          samplingRevision: `${fdmMultilayerAirboxDomain.geometryRevision}|display=${fdmMultilayerAirboxDomain.displayCellCount}|total=${fdmMultilayerAirboxDomain.totalCells}|membership=${airboxMembershipRevision}`,
           scopeId: "airbox",
           scopeKind: "airbox",
           sessionId: "current",
@@ -6443,17 +6504,18 @@ export function useViewport3DSceneModel({
             ? fdmMultilayerAirboxDomain.carrierFingerprint
             : null,
         }),
-        cellSelection:
-          fdmMultilayerAirboxDomain.geometryOnly || airboxVectorsOnlyEnabled
-            ? "all"
-            : "dense",
-        domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
-        enabled: airboxCellGeometryRequired || (vectorsVisible && maxVectors > 0),
+        cellSelection: airboxCellGeometryReady ? "inactive" : "all",
+        domain: {
+          ...fdmMultilayerAirboxDomain,
+          kind: "fdm-grid" as const,
+          geometryOnly: fdmMultilayerAirboxDomain.geometryOnly && !airboxCellGeometryReady,
+        },
+        enabled: airboxCellGeometryReady || (vectorsVisible && maxVectors > 0),
         groupKey: "fdm-cuboid:session=current:multilayer-airbox",
         id: "airbox",
         maxVectorGlyphs: maxVectors,
-        topologyKey: `fdm-multilayer-airbox:${fdmMultilayerAirboxDomain.geometryRevision}|generation=${layoutGenerationId}`,
-        realizedRegionIds: null,
+        topologyKey: `fdm-multilayer-airbox:${fdmMultilayerAirboxDomain.geometryRevision}|generation=${layoutGenerationId}|membership=${airboxMembershipRevision}`,
+        realizedRegionIds: fdmMultilayerAirboxRegionIds,
         revisionSummary: `${fdmMultilayerAirboxDomain.geometryOnly ? "geometry-preview" : `carrier=${fdmMultilayerAirboxDomain.carrierFingerprint}`} target=${airboxStyleRevision} field=${airboxFieldRevision}`,
         vectorAnchorMode: airboxSettings.vectorCenteringEnabled ? "center" : "tail",
         vectorField: vectorsVisible ? fieldVector : null,
@@ -6482,6 +6544,7 @@ export function useViewport3DSceneModel({
   }, [
     airboxSettings,
     fdmMultilayerAirboxDomain,
+    fdmMultilayerAirboxRegionIds,
     fdmMultilayerAirboxField.data,
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerLayout.data,
@@ -6686,6 +6749,11 @@ export function useViewport3DSceneModel({
       model && fieldVector
         ? surfaceColorSourceToColorMode(airboxSettings.surfaceColorSource)
         : null;
+    const surfaceRange = surfaceMode
+      ? resolveAirboxManualColorRange(
+          renderingState?.quantity, airboxSettings.activeQuantityId, surfaceMode,
+        )
+      : null;
     const surfaceColorKey = [
       "multilayer-airbox",
       fieldBuffer?.bufferId ?? "none",
@@ -6696,6 +6764,8 @@ export function useViewport3DSceneModel({
       airboxSettings.surfaceColorSource,
       surfaceMode ?? "none",
       airboxSettings.scalarColorPalette,
+      surfaceRange?.min ?? "auto",
+      surfaceRange?.max ?? "auto",
     ].join("|");
     const surfaceColors = memoizeViewport3DFdmSurfaceColors({
       build: () => {
@@ -6706,6 +6776,7 @@ export function useViewport3DSceneModel({
           fdmMultilayerAirboxDomain.totalCells,
           surfaceMode,
           airboxSettings.scalarColorPalette,
+          surfaceRange,
         );
         return colors
           ? {
@@ -6735,6 +6806,11 @@ export function useViewport3DSceneModel({
             fdmMultilayerAirboxDomain.totalCells,
             airboxSettings.vectorColorMode,
             airboxSettings.scalarColorPalette,
+            resolveAirboxManualColorRange(
+              renderingState?.quantity,
+              airboxSettings.activeQuantityId,
+              airboxSettings.vectorColorMode,
+            ),
           )
         : null;
     const vectorSegments = vectorBuffers.vectorSegments;
@@ -6779,6 +6855,7 @@ export function useViewport3DSceneModel({
     fdmMultilayerAirboxField.payloadRevision,
     fdmMultilayerAirboxField.responseMetadata,
     fdmMultilayerAirboxFieldRequest,
+    renderingState?.quantity,
     sessionIdentity,
     fdmMultilayerAirboxFieldResourceKey,
   ]);

@@ -2,8 +2,9 @@
 
 - Status: the nonperiodic P1/P2 Poisson-Robin CPU/GPU realization is implemented;
   the prior CPU SP4 fixed-mesh energy gate passed. The CPU fixed-coupling cache
-  passed native fixtures; R2 performance and full SP4 qualification remain
-  pending. Small CPU/GPU contract fixtures do not qualify full trajectories.
+  passed native fixtures and short R2 CPU memory/performance A/B qualification.
+  Full SP4 trajectories and a full CUDA activity profile remain pending.
+  Small CPU/GPU contract fixtures and short runs do not qualify full trajectories.
 - Owners: Fullmag FEM demagnetization
 - Last updated: 2026-11-04
 - Related physics: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
@@ -357,7 +358,7 @@ fields without equating potential DOFs with nodes. The direct scalar energy
 and field energy are checked independently.
 
 (planned-cpu-fixed-coupling)=
-#### CPU fixed-coupling cache (native fixtures verified; R2 pending)
+#### CPU fixed-coupling cache (native fixtures and short R2 A/B verified)
 
 This is an internal representation change for the existing CPU quadrature
 operations. It introduces no new physics, Python parameter, `ProblemIR`
@@ -421,7 +422,7 @@ invalidate the whole workspace when $M_s$ changes.
 
 The experiment is bounded by 640 MiB of persistent cache and scratch and
 1.5 GiB of additional peak setup RSS on R2. These are maximum experiment
-budgets, not measured R2 usage. If optional cached setup is unsupported or exceeds
+budgets; measured R2 usage is recorded separately below. If optional cached setup is unsupported or exceeds
 the budget, record the reason and use the existing CPU quadrature realization
 for that same request. This is not a device fallback and does not permit
 relaxing any tolerance.
@@ -431,7 +432,8 @@ scalar/nodal/elementwise $M_s$, two distinct input states, masks, periodic
 finalization, invalidation, budget refusal, and release after injected partial
 setup failure. Constrained or vector spaces and nontrivial DOF transformations
 retain the existing quadrature operation until separately qualified. These
-fixtures do not establish R2 memory usage or a CPU speedup.
+fixtures alone do not establish R2 memory usage or a CPU speedup; the separate
+production R2 A/B below supplies that bounded evidence.
 
 The append-only native getter `fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1` reports
 ABI version 1 independently of the existing step-statistics ABI. Its optional
@@ -501,7 +503,7 @@ Required gates are cumulative:
    total and component energies, torque stop, table, telemetry, and saved
    fields. The FEM result is not accepted solely because the initial uniform
    energy passes.
-7. **Native fixtures verified; R2 pending — CPU fixed-coupling cache:** compare RHS and both
+7. **Native fixtures and short R2 A/B verified — CPU fixed-coupling cache:** compare RHS and both
    recovery fields against the retained quadrature oracle on the same inputs.
    Require relative L2 error at most $10^{-12}$ for nonzero fixtures; use an
    absolute near-zero field scale of $10^{-12}M_s$ in $\mathrm{A\,m^{-1}}$.
@@ -525,8 +527,59 @@ Managed native contract `a7a0f16e751c446a8fd4a85bab1e54a8` passed on source
 snapshot `55ac22f0b0ed3f887a27fab6b4543bd65373bd33c42d4c4f34edd1f194946f44`.
 It exercised 100 error-free CPU solves and teardown, the scoped expected
 nonconvergence error, and strict CPU/GPU field, energy, and torque checks for
-Robin and Dirichlet fixtures. Packaged API readiness, R2 performance, and full
-SP4 trajectories remain separate required gates.
+Robin and Dirichlet fixtures. The later native contract
+`6f911508c30443eb871e0ae9ac41a189` also passed for commit
+`d34e1624673a49b47a2d2f456cc0a4d1a2f0ca69`, source snapshot
+`e311e62542c634e681a7e994895294fca1669b1e1d1cf6738f0826ad4268c6af`.
+That managed package reached a verified Ready owner/API and successful package
+maintenance before the R2 experiments below. Full SP4 trajectories remain a
+separate required gate.
+
+### Bounded R2 CPU A/B evidence, 2026-11-04
+
+Baseline commit `e3f38144cb63e5b76d90595df7d0d128e1345277` and the d34 feature
+package above used the same R2 mesh, active initial state, solver tolerances,
+integrator and output cadence, with explicit effective thread counts 1, 2 and
+6. Each run reached 500 fs and retained its original runtime Zarr. Compare
+only pairs with the same thread count. The table uses ten callback intervals
+per run, for steps at least 3; the ratios are descriptive short-window means.
+
+| Effective CPU threads | Baseline mean callback interval (s) | Feature mean callback interval (s) | Baseline/feature |
+|---:|---:|---:|---:|
+| 1 | 22.573906 | 8.677545 | 2.6014 |
+| 2 | 19.201084 | 5.729905 | 3.3510 |
+| 6 | 19.696684 | 5.714403 | 3.4468 |
+
+The retained cache and scratch totalled 115242692 bytes (109.9 MiB). Each
+RHS/recovery cache was built once and reused 76 times. Additional observed
+setup RSS was at most 150396928 bytes (143.5 MiB), measured from the same
+initial RSS baseline for both transfers. Setup itself took about 22 seconds;
+the steady-state table does not include that one-time cost. The Poisson solve
+did not become faster and dominates the remaining CPU cost.
+
+Across these same-thread pairs, maximum active-state component difference
+was $1.92\times10^{-13}$, and the largest absolute difference among all eight
+terminal energy components was $2.52\times10^{-33}\,\mathrm J$. Terminal
+torque differences were recorded in both $\mathrm{A\,m^{-1}}$ and
+$\mathrm T$ without inventing a new acceptance threshold. These measurements
+do not establish long-time stability, GPU speedup, GPU utilization, or the
+cause of historical CUDA 719.
+
+Feature run identities:
+
+| Effective CPU threads | Feature run |
+|---:|---|
+| 1 | `run-live-6e435b7d31dac4689315ac66a57a4b2823ca6281e0d703eae5ad99c9a026f583` |
+| 2 | `run-live-801936f41f49f92dd18d0ab5e4955cad298559b0660d111b834eb83e0f07aaa3` |
+| 6 | `run-live-f2602acef0f544e2da48721fb3b134a4f6c27617284895c891edd9e437bcaa0f` |
+
+The complete same-thread report is preserved as
+`fixed-coupling-ab-d34-20261104.json`/`.md` in the SP4 experiment diagnostics;
+[PR 394](https://github.com/MateuszZelent/fullmag/pull/394) records the scoped
+implementation and qualification. The next diagnostic increment is specified
+in `docs/superpowers/specs/2026-11-04-sp4-fem-accepted-profiling-design.md`.
+Accepted phase profiling and native CUDA activity capture remain separate
+implementation/runtime gates; neither is established by this A/B result.
 
 (limitations)=
 ## 11. Limitations
@@ -540,8 +593,9 @@ SP4 trajectories remain separate required gates.
   this production sparse Poisson path.
 - The CPU fixed-coupling implementation passed the managed native oracle,
   reuse, invalidation, budget-refusal, transient-RSS, and partial-setup-failure
-  fixtures. R2 production cache usage, CPU A/B timings, and full SP4 trajectories
-  remain unqualified; this note claims no measured performance improvement.
+  fixtures and the bounded R2 CPU A/B above. Full SP4 trajectories and complete
+  CUDA activity profiling remain unqualified; this note makes no GPU
+  performance or long-time stability claim.
 
 (scientific-bibliography)=
 ## 12. Scientific bibliography
