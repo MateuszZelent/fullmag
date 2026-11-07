@@ -3126,11 +3126,14 @@ mod tests {
             "version": "study_pipeline.v2",
             "nodes": [
                 {"node_kind": "primitive", "id": "step:a", "label": "A",
-                    "source": "ui_authored", "stage_kind": "run"},
+                    "source": "ui_authored", "stage_kind": "run",
+                    "payload": {"until_seconds": "1e-12"}},
                 {"node_kind": "primitive", "id": "step:b", "label": "B",
-                    "source": "ui_authored", "stage_kind": "run"},
+                    "source": "ui_authored", "stage_kind": "run",
+                    "payload": {"until_seconds": "1e-12"}},
                 {"node_kind": "primitive", "id": "step:c", "label": "C",
-                    "source": "ui_authored", "stage_kind": "run"}
+                    "source": "ui_authored", "stage_kind": "run",
+                    "payload": {"until_seconds": "1e-12"}}
             ]
         })).unwrap());
 

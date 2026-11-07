@@ -32,12 +32,17 @@ impl AuthoredInitialStatePublication {
         let retired_run_id = snapshot
             .run
             .as_ref()
-            .filter(|run| matches!(run.status.as_str(), "completed" | "failed" | "cancelled"))
+            .filter(|run| matches!(run.status.as_str(), "completed" | "failed" | "cancelled" | "stopped"))
             .map(|run| run.run_id.clone())
             .or_else(|| {
                 snapshot
                     .accepted_terminal_field_generation
                     .as_ref()
+                    // A completed stage may already be visible while its
+                    // owning Study is still running. Preparing the next
+                    // stage must not retire that same active run.
+                    .filter(|generation| snapshot.run.as_ref()
+                        .is_none_or(|run| run.run_id != generation.run_id))
                     .map(|generation| generation.run_id.clone())
             });
         Self {

@@ -7294,6 +7294,197 @@ mod tests {
         })
     }
 
+    fn current_with_run(
+        run_id: &str,
+        status: &str,
+        terminal_generation_run_id: Option<&str>,
+    ) -> SessionStateResponse {
+        let mut current = test_current_snapshot();
+        current.session.run_id = run_id.to_string();
+        current.session.status = status.to_string();
+        current.run = Some(RunManifest {
+            run_id: run_id.to_string(),
+            session_id: current.session.session_id.clone(),
+            status: status.to_string(),
+            total_steps: 1,
+            final_time: (status != "running").then_some(1.0e-12),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: "unused-test-artifact".to_string(),
+        });
+        if let Some(generation_run_id) = terminal_generation_run_id {
+            current.accepted_terminal_field_generation = Some(CurrentLiveFieldGeneration {
+                run_id: generation_run_id.to_string(),
+                sequence: 1,
+            });
+            current
+                .terminal_field_generations
+                .insert(generation_run_id.to_string(), 1);
+        }
+        current
+    }
+
+    fn authored_initial_state_origin() -> crate::schemas::common::AuthoredInitialStateOrigin {
+        crate::schemas::common::AuthoredInitialStateOrigin {
+            preparation_id: "prepare-stage-c".to_string(),
+            plan_fingerprint: "plan-stage-c".to_string(),
+            scene_revision: 7,
+            initial_state_revision: 3,
+            values_sha256: "stage-c-values".to_string(),
+        }
+    }
+
+    fn authored_initial_state_fields() -> LatestFields {
+        serde_json::from_value(json!({
+            "m": {
+                "values": [[0.0, 0.0, 1.0]],
+                "source_step": 0,
+                "source_time_seconds": 0.0,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("prepared stage magnetization")
+    }
+
+    fn install_authored_initial_state(current: &mut SessionStateResponse) {
+        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            current,
+            authored_initial_state_origin(),
+            0.0,
+        );
+        apply_current_live_authored_initial_state(
+            current,
+            publication,
+            authored_initial_state_fields(),
+        )
+        .expect("stage preparation should publish authored initial magnetization");
+    }
+
+    #[test]
+    fn active_run_accepts_next_solver_m_after_same_run_stage_preparation() {
+        let mut current = current_with_run("run-a", "running", Some("run-a"));
+        install_authored_initial_state(&mut current);
+
+        assert!(current.authored_initial_state.is_some());
+        assert!(
+            !crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+            "a terminal field generation from a still-running study must not retire that run"
+        );
+
+        let accepted_source_frame = accepted_observation_frame_ref(&current, 1, Some(1.0e-12));
+        let latest_fields: LatestFields = serde_json::from_value(json!({
+            "m": {
+                "values": [[0.0, 1.0, 0.0]],
+                "source_step": 1,
+                "source_time_seconds": 1.0e-12,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("next physical solver magnetization");
+        apply_current_live_accepted_field_frame(
+            &mut current,
+            CurrentLiveFieldFrameRequest {
+                session_id: "test-session".to_string(),
+                latest_fields: Some(latest_fields),
+                replace_latest_fields: true,
+                field_generation: Some(CurrentLiveFieldGeneration {
+                    run_id: "run-a".to_string(),
+                    sequence: 2,
+                }),
+                preview_fields: None,
+                clear_preview_cache: true,
+            },
+            accepted_source_frame,
+        )
+        .expect("the current run's accepted solver field should replace the prepared stage input");
+
+        assert!(current.authored_initial_state.is_none());
+        assert!(current.live_state.is_none());
+        assert_eq!(
+            current.latest_fields.get("m").expect("accepted solver m")["values"],
+            json!([[0.0, 1.0, 0.0]])
+        );
+        assert_eq!(
+            current
+                .accepted_terminal_field_generation
+                .as_ref()
+                .expect("new terminal generation")
+                .sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn authored_initial_state_retires_finished_run_but_not_another_run() {
+        for status in ["completed", "failed", "cancelled", "stopped"] {
+            let mut current = current_with_run("run-a", status, Some("run-a"));
+            install_authored_initial_state(&mut current);
+            assert!(
+                crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+                "a prepared state should retire a genuinely {status} run"
+            );
+        }
+
+        let mut current = current_with_run("run-b", "running", Some("run-a"));
+        install_authored_initial_state(&mut current);
+        assert!(
+            !crate::live_authored_initial_state::supersedes_run(&current, "run-b"),
+            "a previous run's terminal field generation must not retire the current run"
+        );
+        assert!(
+            crate::live_authored_initial_state::supersedes_run(&current, "run-a"),
+            "the prior terminal generation remains retired under its own run identity"
+        );
+    }
+
+    #[test]
+    fn pending_user_magnetization_apply_still_supersedes_its_run() {
+        let mut current = current_with_run("run-a", "running", None);
+        let operation_id = "0123456789abcdef0123456789abcdef";
+        let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+            crate::schemas::authoring::MagnetizationApplyRequest {
+                operation_id: operation_id.to_string(),
+                scopes: vec![crate::schemas::authoring::MagnetizationApplyScope {
+                    object_id: "object-a".to_string(),
+                    region_id: None,
+                }],
+            },
+            7,
+            &json!({ "scene": "authored" }),
+            Some(operation_id),
+        )
+        .expect("valid pending reset intent");
+        let context = CurrentLiveRequestContext {
+            session_id: "test-session".to_string(),
+            run_id: Some("run-a".to_string()),
+            session_epoch: 1,
+            request_scope_epoch: "test-session@1".to_string(),
+        };
+        current.magnetization_applies.record(
+            &apply,
+            &context,
+            crate::schemas::authoring::MagnetizationApplyReceiptResource {
+                operation_id: operation_id.to_string(),
+                scene_revision: 8,
+                scopes: apply.request.scopes.clone(),
+                status: crate::schemas::authoring::MagnetizationApplyStatus::InitialStatePending,
+                reason: None,
+                prepared_initial_state: None,
+            },
+            "run-a".to_string(),
+            "run-a".to_string(),
+        );
+
+        assert!(crate::live_authored_initial_state::supersedes_run(
+            &current, "run-a"
+        ));
+    }
+
     fn current_with_accepted_fem_m_preview() -> (SessionStateResponse, LivePreviewField) {
         let mut current = test_current_snapshot();
         current.fem_mesh = Some(domain_fem_mesh("mesh-generation-1").into());
