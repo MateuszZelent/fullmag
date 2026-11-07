@@ -1,6 +1,7 @@
 {
   "document": {
-    "path": "docs/physics/0913-fem-gpu-amg-coarse-residency.md"
+    "path": "docs/physics/0913-fem-gpu-amg-coarse-residency.md",
+    "reviewed_revision": "3246b40c54389b98b9cd9e3ee73f6c5e83466ab7"
   },
   "backend_matrix": [
     {
@@ -150,98 +151,112 @@
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "configure_demag_amg",
       "responsibility": "Ustawienie i kontrola coarse cycle18 wyłącznie w GPU AMG.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L93"
     },
     {
       "id": "gpu-getter",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "read_device_demag_amg_coarse_relax_type",
       "responsibility": "Odczyt skutecznej polityki z kontrolą lifecycle i flag HYPRE.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L211"
     },
     {
       "id": "native-api",
       "path": "backends/fem/src/api.cpp",
       "symbol": "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1",
       "responsibility": "Addytywny getter C ABI bez zmiany rozmiaru istniejących struktur.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/src/api.cpp#L6561"
     },
     {
       "id": "policy",
       "path": "backends/fem/core/demag_solver_policy.cpp",
       "symbol": "resolve_demag_amg_policy_from_environment",
       "responsibility": "Dotychczasowe parametry profilu AMG.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/core/demag_solver_policy.cpp#L63"
     },
     {
       "id": "artifact",
       "path": "crates/fullmag-runner/src/artifacts.rs",
       "symbol": "demag_amg_profile_metadata",
       "responsibility": "Publikacja zaobserwowanego coarse type albo null dla braku obserwacji.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-runner/src/artifacts.rs#L1137"
     },
     {
       "id": "python",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FemLinearSolverPolicy",
       "responsibility": "Publiczne domyślne wartości, walidacja i serializacja polityki.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/packages/fullmag-py/src/fullmag/model/discretization.py#L160"
     },
     {
       "id": "hints",
       "path": "crates/fullmag-ir/src/mesh_hints.rs",
       "symbol": "FemHintsIR",
       "responsibility": "Opcjonalna polityka FEM w kanonicznym ProblemIR.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-ir/src/mesh_hints.rs#L1074"
     },
     {
       "id": "plan",
       "path": "crates/fullmag-ir/src/plan.rs",
       "symbol": "FemPlanIR",
       "responsibility": "Rozwiązana polityka przekazana do wykonania FEM.",
-      "evidence_status": "source-visible; new managed native build and runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/crates/fullmag-ir/src/plan.rs#L1424"
     },
     {
       "id": "assembly",
       "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
       "symbol": "build_p1_demag_operators",
       "responsibility": "Tworzy dyskretny operator i sprzężenia Poissona.",
-      "evidence_status": "source-visible; candidate runtime pending"
+      "evidence_status": "Source present in qualified50fsGPU build; this diagnostic does not qualify fullSP4 or FEMCPU",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/operators.cpp#L1232"
     },
     {
       "id": "residual",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "validate_demag_poisson_hypre_device_solve",
       "responsibility": "Warunkowo liczy normę Ax-b i RHS; przy sukcesie CG może używać raportowanej normy preconditionowanej.",
-      "evidence_status": "source-audited: independent Euclidean GPU certification remains open; stored-output parity does not close this gate"
+      "evidence_status": "source-audited: independent Euclidean GPU certification remains open; stored-output parity does not close this gate",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp#L452"
     },
     {
       "id": "packed-state",
       "path": "backends/fem/gpu/cuda/state/gpu_state.cpp",
       "symbol": "gpu_state_download_component_aos_packed",
       "responsibility": "Wymaga własnego persistent scratch i jawnego streamu; nie zmienia innych konsumentów transferu.",
-      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/state/gpu_state.cpp#L203"
     },
     {
       "id": "packed-transfer",
       "path": "backends/fem/gpu/cuda/transfer/component_transfer.cpp",
       "symbol": "gpu_component_download_aos_packed",
       "responsibility": "Pakuje GPU SoA do AoS, wykonuje jeden ciągły D2H i synchronizuje przed odczytem hosta.",
-      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/transfer/component_transfer.cpp#L92"
     },
     {
       "id": "packed-kernel",
       "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu",
       "symbol": "fullmag_cuda_pack_soa_to_aos",
       "responsibility": "Uruchamia kernel kopiujący double bez zmiany wartości lub kolejności składowych.",
-      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/gpu/cuda/transfer/transfer_kernels.cu#L123"
     },
     {
       "id": "packed-regression",
       "path": "backends/fem/tests/demag_poisson_contract.cpp",
       "symbol": "packed_snapshot_field_download_is_runtime_correct_and_fails_closed",
       "responsibility": "Test GPU:263 węzły, kolejność, dokładne wartości, audit, odmowy i teardown.",
-      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/3246b40c54389b98b9cd9e3ee73f6c5e83466ab7/backends/fem/tests/demag_poisson_contract.cpp#L4467"
     }
   ],
   "public_api": {
