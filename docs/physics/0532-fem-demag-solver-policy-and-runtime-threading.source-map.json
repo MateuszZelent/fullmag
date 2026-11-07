@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
-    "reviewed_revision": "53a5d5171e06db3c4950511d4523f872f58317f1"
+    "reviewed_revision": "51466dfe5d97738859ed8db47fe0c1293845bd30"
   },
   "backend_matrix": [
     {
@@ -270,14 +270,21 @@
       "path": "backends/fem/core/demag_linear_solve_validation.cpp",
       "symbol": "validate_demag_linear_solve_result",
       "responsibility": "Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence.",
-      "permalink": "https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/core/demag_linear_solve_validation.cpp#L9"
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/core/demag_linear_solve_validation.cpp#L9"
     },
     {
       "id": "shared-linear-validation-regression",
       "path": "backends/fem/tests/demag_poisson_contract.cpp",
       "symbol": "demag_linear_solve_validation_rejects_invalid_results",
       "responsibility": "Exercises rejection of unverified false convergence and acceptance of an independently certified result.",
-      "permalink": "https://github.com/MateuszZelent/fullmag/blob/53a5d5171e06db3c4950511d4523f872f58317f1/backends/fem/tests/demag_poisson_contract.cpp#L151"
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L151"
+    },
+    {
+      "id": "gpu-independent-residual-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step",
+      "responsibility": "Requires a real successful GPU solve, corrupts only its owned potential after final use, and verifies rejection despite a stale success flag.",
+      "permalink": "https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711"
     }
   ],
   "public_api": {
