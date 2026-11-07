@@ -2109,7 +2109,7 @@ class RelaxStep(SettleStep):
 class MinimizeStep(SettleStep):
     method: str = "projected_gradient_bb"
     torque_tolerance: float = 5e-5
-    energy_tolerance: float = 1e-20
+    energy_tolerance: float | None = 1e-20
     max_steps: int = 2000
     applies_to: object | None = None
     stop_criteria: object | None = None
@@ -2122,7 +2122,8 @@ class MinimizeStep(SettleStep):
 
     def __post_init__(self) -> None:
         require_positive(self.torque_tolerance, "torque_tolerance")
-        require_positive(self.energy_tolerance, "energy_tolerance")
+        if self.energy_tolerance is not None:
+            require_positive(self.energy_tolerance, "energy_tolerance")
         if self.max_steps <= 0:
             raise ValueError("max_steps must be positive")
         if self.timestep_s is not None:
@@ -2148,10 +2149,11 @@ class MinimizeStep(SettleStep):
             "kind": "minimize",
             "method": self.method,
             "torque_tolerance": self.torque_tolerance,
-            "energy_tolerance": self.energy_tolerance,
             "max_steps": self.max_steps,
             "on_non_convergence": self.on_non_convergence,
         }
+        if self.energy_tolerance is not None:
+            payload["energy_tolerance"] = self.energy_tolerance
         if self.applies_to is not None:
             payload["applies_to"] = self.applies_to
         if self.stop_criteria is not None:

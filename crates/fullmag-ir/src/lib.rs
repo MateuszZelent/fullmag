@@ -2307,8 +2307,10 @@ fn validate_settle_step(step: &SettleStepIR, idx: usize, errors: &mut Vec<String
             if *torque_tolerance <= 0.0 {
                 errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].torque_tolerance must be positive", idx));
             }
-            if *energy_tolerance <= 0.0 {
-                errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].energy_tolerance must be positive", idx));
+            if let Some(energy_tolerance) = energy_tolerance {
+                if *energy_tolerance <= 0.0 {
+                    errors.push(format!("study.stages[].hysteresis.settle_pipeline.steps[{}].energy_tolerance must be positive", idx));
+                }
             }
             if *max_steps == 0 {
                 errors.push(format!(

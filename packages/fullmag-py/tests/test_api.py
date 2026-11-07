@@ -7238,6 +7238,55 @@ class ProblemApiTests(unittest.TestCase):
             steps,
         )
 
+    def test_hysteresis_minimize_step_optional_energy_tolerance(self) -> None:
+        self.assertEqual(fm.MinimizeStep().to_ir()["energy_tolerance"], 1e-20)
+        step = fm.MinimizeStep(energy_tolerance=None)
+        self.assertIsNone(step.energy_tolerance)
+        self.assertNotIn("energy_tolerance", step.to_ir())
+        self.assertEqual(
+            fm.MinimizeStep(energy_tolerance=2e-21).to_ir()["energy_tolerance"],
+            2e-21,
+        )
+        for value in (0.0, -1e-20, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "energy_tolerance"):
+                    fm.MinimizeStep(energy_tolerance=value)
+
+    def test_hysteresis_minimize_step_energy_tolerance_round_trip(self) -> None:
+        for argument, expected in (
+            ("", 1e-20),
+            ("energy_tolerance=None", None),
+            ("energy_tolerance=2e-21", 2e-21),
+        ):
+            with self.subTest(argument=argument), TemporaryDirectory() as tmp_dir:
+                path = Path(tmp_dir) / "hysteresis.py"
+                path.write_text(textwrap.dedent(f"""
+                    import fullmag as fm
+
+                    study = fm.study("sweep")
+                    body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="film")
+                    body.Ms = 800e3
+                    body.Aex = 13e-12
+                    body.m = fm.texture.uniform(1, 0, 0)
+                    study.stages.add_hysteresis_sweep(
+                        field_values_mT=[0.0, 1.0],
+                        settle_pipeline=fm.SettlePipeline([
+                            fm.MinimizeStep({argument}),
+                            fm.RelaxStep(),
+                        ]),
+                    )
+                """), encoding="utf-8")
+                loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+                original_ir = loaded.stages[0].problem.study.to_ir()
+                rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
+                if expected is None:
+                    self.assertIn("energy_tolerance=None", rewritten)
+                path.write_text(rewritten, encoding="utf-8")
+                reloaded = fm.load_problem_from_script(path, lightweight_assets=True)
+                self.assertEqual(reloaded.stages[0].problem.study.to_ir(), original_ir)
+                step = reloaded.stages[0].problem.study.settle_pipeline.steps[0]
+                self.assertEqual(step.energy_tolerance, expected)
+
     def test_hysteresis_direct_minimizer_settle_step_rejects_physical_time(self) -> None:
         with self.assertRaisesRegex(ValueError, "direct minimizer.*max_physical_time_s"):
             fm.MinimizeStep(max_physical_time_s=1e-9)
