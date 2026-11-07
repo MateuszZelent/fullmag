@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { Profiler, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useThree } from "@react-three/fiber";
 import { BufferGeometry, InstancedMesh, Matrix4, ShaderMaterial, SRGBColorSpace, Vector2, Vector3, WebGLRenderTarget } from "three";
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
@@ -28,6 +28,13 @@ import { viewport3dStore } from "@/modules/viewport-3d/viewport3dStore";
 import { DiagnosticRecorderController } from "@/kernel/performance/diagnostic-recorder/DiagnosticRecorderController";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { antennaFieldPayloadEtag, antennaInspectionPayloadEtag } from "@/kernel/resources/antennaResources";
+import type { MaterializedDatasetResource } from "@/kernel/api/apiTypes";
+import { pinnedMaterializedDatasetSelectionRef } from "@/kernel/selection/selectionTypes";
+import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
+import { InspectorShell } from "@/modules/inspector/InspectorShell";
+import { InspectorEditSessionProvider } from "@/modules/inspector/InspectorEditSession";
+import { resolveInspectorDescriptor } from "@/modules/inspector/inspectorDescriptor";
+import { SavedFieldVisualizationPanel } from "@/modules/inspector/panels/SavedFieldVisualizationPanel";
 import type { KernelApi } from "@/kernel/types";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
@@ -197,6 +204,7 @@ function makeFixture() {
   const tree = buildObjectExplorerNode({ id: "antenna", label: "Antenna", objectRole: "antenna" }, { scene });
   const calls: Call[] = [], unexpected: string[] = [];
   let remote = { revision: 1, overrides: [], layers: {}, camera: DEFAULT_CAMERA_REGISTRY_STATE, clip: { enabled: false, axis: "z", position_percent: 50, flipped: false } } as unknown as VisualizationStateResource;
+  let reactCommits = 0;
   let holdClip = false;
   const pendingClip: (() => void)[] = [];
   const bus = new EventBus<KernelEventMap>(), resources = new ResourceInvalidationController(bus), diagnostics = new RequestDiagnosticsController();
@@ -319,7 +327,7 @@ function makeFixture() {
   const visualizationSync = new VisualizationRegistrySyncController({ api: api.visualization, resourceCacheScope: api.resourceCacheScope, resources });
   const cameraRegistry = new CameraRegistryController({ api: api.visualization, idleFlushMs: null, windowTarget: null, documentTarget: null });
   cameraRegistry.patchCamera({ position: [7e-7, 2e-7, 5e-7] });
-  return { kernel: { api, bus, resources, diagnostics, diagnosticRecorder, layout, visualizationDebug, analysisFieldOverlay: new AnalysisFieldOverlayController(), authoringHistory: new AuthoringHistoryController(api, resources), selection, visualization, commands, cameraRegistry, visualizationSync } as unknown as KernelApi, control: { read: () => ({ calls, tree, unexpected, camera: cameraRegistry.getSnapshot(), viewport: viewport3dStore.getSnapshot(), clip: remote.clip, clipPending: pendingClip.length }), holdClip: () => { holdClip = true; }, releaseClip: () => { holdClip = false; for (const resolve of pendingClip.splice(0)) resolve(); }, selectOther: () => selection.set({ objectId: "other", ref: null }, "inspector") } };
+  return { kernel: { api, bus, resources, diagnostics, diagnosticRecorder, layout, visualizationDebug, analysisFieldOverlay: new AnalysisFieldOverlayController(), authoringHistory: new AuthoringHistoryController(api, resources), selection, visualization, commands, cameraRegistry, visualizationSync } as unknown as KernelApi, control: { read: () => ({ calls, tree, unexpected, camera: cameraRegistry.getSnapshot(), viewport: viewport3dStore.getSnapshot(), clip: remote.clip, clipPending: pendingClip.length, reactCommits }), recordCommit: () => { reactCommits++; }, holdClip: () => { holdClip = true; }, releaseClip: () => { holdClip = false; for (const resolve of pendingClip.splice(0)) resolve(); }, selectOther: () => selection.set({ objectId: "other", ref: null }, "inspector") } };
 }
 
 function FieldCanvasProbe({ tracker }: { tracker: Viewport3DResourceTracker }) {
@@ -453,9 +461,56 @@ function TensorSampleTableFixture() {
   return <section aria-label="Synthetic tensor table fixture"><h2>Tensor sample table · controlled data</h2><VisualizationDebugSampleTable model={model} /></section>;
 }
 
+// Controlled metadata only: this fixture does not load or qualify a saved field renderer.
+const savedSelection = pinnedMaterializedDatasetSelectionRef({
+  projectId: "project", runId: "run", solutionSetId: "solution", containingRevision: "1",
+  memberId: "member", artifactId: "artifact", manifestObjectRef: "manifest", sampleId: "sample",
+  itemId: "item", fieldId: "H_ant", datasetId: "dataset", datasetRevision: "1",
+});
+const savedDataset = {
+  integrity: "verified",
+  dataset: { status: { availability: "ready" } },
+  field: {
+    plane: "values",
+    coverage: { chunk_count: "1", component_count: "3", dtype: "f64", endian: "little", total_bytes: "48", total_elements: "2" },
+    descriptor: {
+      quantity_id: "H_ant", unit: "A/m", sample_location: "node", complex_encoding: "real",
+      harmonic_convention: null, value_representation: "physical_field", carrier_id: "saved-fixture",
+      function_space: { ordering: "by_node", vector_dimension: "3" },
+    },
+  },
+} as unknown as MaterializedDatasetResource;
+const savedDescriptor = resolveInspectorDescriptor({
+  ...EMPTY_SELECTION, kind: "results.materialized_dataset", ref: savedSelection,
+  nodeId: savedSelection.nodeId, label: "Saved Oersted field",
+});
+
+function SavedSectionFixture() {
+  const presentation = useObjectVisualizationSelector(snapshot => snapshot.savedFieldPresentation);
+  if (!presentation) return null;
+  return <div style={{ height: 650, display: "flex", flexDirection: "column" }}>
+    <InspectorEditSessionProvider>
+      <InspectorShell descriptor={savedDescriptor} onFocus={() => {}} onSelectBreadcrumb={() => {}} onToggleVisibility={() => {}}>
+        <SavedFieldVisualizationPanel presentation={presentation} dataset={savedDataset} />
+      </InspectorShell>
+    </InspectorEditSessionProvider>
+  </div>;
+}
+
 function MountedFixture() {
-  const fixture = useMemo(() => makeFixture(), []);
+  const fixture = useMemo(() => {
+    const value = makeFixture();
+    if (new URL(window.location.href).searchParams.get("scenario") === "saved-section") {
+      value.kernel.visualization.setSavedFieldPresentation(savedSelection, "H_ant", "3");
+    }
+    return value;
+  }, []);
   useEffect(() => { window.__antennaVisualizationFixture = fixture.control; fixture.kernel.visualizationSync.start(); return () => { fixture.kernel.visualizationSync.stop(); delete window.__antennaVisualizationFixture; }; }, [fixture]);
+  if (new URL(window.location.href).searchParams.get("scenario") === "saved-section") {
+    return <KernelContext.Provider value={fixture.kernel}>
+      <Profiler id="saved-section" onRender={fixture.control.recordCommit}><SavedSectionFixture /></Profiler>
+    </KernelContext.Provider>;
+  }
   const legacy = new URL(window.location.href).searchParams.has("legacy");
   const kind = legacy ? "object.visualization" : "object.antenna.visualization";
   const Panel = resolveInspectorRoute(kind)!.component;

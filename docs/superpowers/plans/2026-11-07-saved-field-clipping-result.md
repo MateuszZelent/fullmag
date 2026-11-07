@@ -88,9 +88,10 @@ W istniejącym frontendzie Docker grupy zadania:
 - pełny ESLint z heap 384 MiB oraz 1536 MiB zakończył się OOM; oba receipty zachowano.
   Kontrola partiami zachowuje zakres i reguły, bez zmiany konfiguracji.
   Izolacja wskazała useViewport3DSceneModel.ts: sam ten plik kończy się OOM także
-  przy 2048 MiB. Nie edytowano go i nie wyłączono reguł. Pozostałe pliki są
-  sprawdzane oddzielnie; pełny lint pozostaje NOT VERIFIED. Manifest zakresu
-  jest w lint-batches/manifest.json; summary.json powstanie po zakończeniu procesów.
+  przy 2048 MiB. Nie edytowano go i nie wyłączono reguł. Kontrola zakończona:
+  2530/2531 plików PASS, zero zgłoszonych błędów i ostrzeżeń; jeden plik OOM.
+  Pełny lokalny lint pozostaje NOT VERIFIED. Manifest zakresu jest w
+  lint-batches/manifest.json, a wynik końcowy w lint-batches/summary.json.
   Ten checkpoint nie jest zgodą na merge ani pełnym odbiorem E7.
 
 Starszy ręczny check-saved-field-presentation.mjs zatrzymuje się przed panelem:
@@ -133,3 +134,30 @@ Nie zmieniono kontenera, konfiguracji lint ani generowanego kontraktu API.
 Źródła metody diagnostycznej: [ESLint — Ignore Files](https://eslint.org/docs/latest/use/configure/ignore),
 [typescript-eslint — Performance](https://typescript-eslint.io/troubleshooting/typed-linting/performance/).
 To wskazówki diagnostyczne; rzeczywisty wynik lintu pochodzi z receiptów naszej grupy.
+
+## CI i automatyczna stabilność zapisanego Inspectora
+
+[Bootstrap 42381001859](https://github.com/MateuszZelent/fullmag/actions/runs/42381001859)
+dla commita fc0a8c01ea96ef08c0036edeff6113951e2dca0f zakończył się SUCCESS.
+Obejmuje kontrolki frontendu i istniejące scenariusze przeglądarkowe; nie obejmował
+jeszcze nowego testu saved-section ani pełnego lokalnego WIP.
+
+Dodano scenariusz saved-section do istniejącego fixture antenowego. Montuje on
+SavedFieldVisualizationPanel w InspectorShell, używa prawdziwego
+VisualizationRegistrySyncController, typowanego klienta oraz polecenia sekcji.
+Metadane H są kontrolowane; fixture nie ładuje rendererów ani hooka metadanych
+SavedFieldVisualizationInspector. Nie zastępuje ręcznego odbioru rzeczywistego H275.
+
+Nowy odbiór w przeglądarce sprawdza: niezerowe przewinięcie rzeczywistego ScrollArea,
+tożsamość shell/panel/scroll, fokus, wszystkie niepowiązane disabled/opacity,
+brak animacji opacity, starszy ACK po nowszym geście, dwa PATCH, ograniczone GET
+i commity React oraz brak requestów w idle. Istniejący job inspector-actions
+uruchamia go przez verify_pinned_dataset_browser.py na osobnym porcie 3250.
+Pełny scenariusz antenowy także zawiera ten odbiór; CI wybiera tylko saved-section,
+zachowując dotychczasowe testy Object/Airbox bez zmian.
+
+Przed uruchomieniem browser CI: focused ESLint PASS, TypeScript PASS i 3/3 testów
+panelu PASS w istniejącym frontendzie grupy. Receipty: frontend
+verification/saved-field-clipping-20261107/stability/.
+Wynik przeglądarkowy pozostaje oczekujący; sam przygotowany test nie jest dowodem.
+Bez nowego Solve, native buildu, restartu lub zwalniania rezerwacji.

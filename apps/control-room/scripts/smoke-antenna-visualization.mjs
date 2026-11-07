@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { verifyAntennaGlyphCardinality } from "./lib/antenna-glyph-cardinality-browser-checks.mjs";
+import { verifySavedFieldClipping } from "./lib/saved-field-clipping-browser-checks.mjs";
 import { verifyAntennaClipping } from "./lib/antenna-clipping-browser-checks.mjs";
 import { verifyClosedLoopVectorDisplay } from "./lib/closed-loop-vector-browser-checks.mjs";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
@@ -50,6 +51,8 @@ try {
     assert.equal(await root.getByRole("radio", { name: "Vectors", exact: true }).isEnabled(), ready);
     assert.ok((await root.innerText()).includes("conductor primitive is never recolored"));
   };
+  checks.push(...await verifySavedFieldClipping({ page, url, shot }));
+  if (process.env.FULLMAG_ANTENNA_VISUALIZATION_SAVED_SECTION_ONLY !== "1") {
   checks.push(...await verifyAntennaGlyphCardinality({ page, root, open, shot }));
   checks.push(...await verifyAntennaClipping({ page, root, open, shot }));
   await open("camera-unavailable");
@@ -463,6 +466,7 @@ try {
   const previewShot = resolve(directory, "16-tensor-data-preview-dialog.png");
   await preview.screenshot({ path: previewShot }); screenshots.push(previewShot);
   checks.push("Actual DataPreviewDialog through production API/hooks and FMVPv5 full quantity identity: all nine tensor values/labels, local c0 with zero requests, c0->vector and x->tensor resolve full with accurate copied metadata; GET-only max17, clipboard captured in memory");
+  }
   assert.deepEqual(errors, []);
 } catch (error) { failure = error.stack ?? String(error); }
 finally { if (browser) await browser.close(); }
