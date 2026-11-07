@@ -1,6 +1,6 @@
 # GSG: lokalne 25 nm przy narożach — propozycja jednej próby przygotowania
 
-Status: **projekt do decyzji; patch niewdrożony, siatki nie wygenerowano**.
+Status: **profil wdrożony; zatwierdzona próba zakończyła się odmową bramki just przed kontrolerem; siatki nie wygenerowano. Brakująca integracja poprawiona i przetestowana; nowa próba oczekuje na decyzję**.
 Baza: `5c57d680b379b53b4f29c614f091ab92864352e2`.
 Celem jest rzeczywiste zagęszczenie źródła 3D w miejscach dominujących w
 błędzie prądu, przed dalszą kwalifikacją pola i odpowiedzi LLG.
@@ -181,3 +181,66 @@ przyjęty. Kontroler ponownie sprawdzi tę samą grupę przed przyjęciem operac
 Ponowny odczyt kandydata, patcha i walidacji potwierdził niezmienione SHA256
 z tabeli. Patch pozostaje niewdrożony, corner25 nie wykonano; wymagana jest
 decyzja o tej jednej próbie. Dotychczasowe limity i fizyka pozostają bez zmian.
+
+
+## Zatwierdzone wykonanie i odmowa przed kontrolerem — 07.11.2026
+
+Użytkownik zatwierdził patch bbc7ce18eff5512560df50c1695035cc45fcb49624b9241cdfb955f1896d22a0
+i jedną próbę prepare-only. Dostarczono oba przypięte pliki do katalogu
+runtime-free-inputs-v1 bez nadpisania starych wejść. Test nowego profilu
+odtworzył brak wyboru corner25, a po zastosowaniu patcha przeszły 22 testy
+kontrolera. Jego SHA256 jest zgodne z zapowiedzianym
+e721b84fd2be2b6fae34c35fbedbd058656164bf9fb98b94d31570fce0eac3b8.
+
+Pierwsze wywołanie nie znalazło just w PATH, przed uruchomieniem recepty.
+Odnaleziono istniejące /home/kking/.local/bin/just (wersja 1.42.4); niczego
+nie instalowano. Jedna właściwa recepta docker-dev-gsg-mesh-prepare zakończyła
+się exit 2 po 0,076 s: „invalid GSG mesh preparation recipe”.
+
+Przyczyna: scripts/just_storage_shell.sh dopuszczał wyłącznie 50/35/25.
+Pierwotny patch i trzy testy profilu nie obejmowały tej drugiej granicy.
+Nie wywołano kontrolera Python ani Gmsh. Wskaźnik gsg-mesh-preparation/current.json
+nadal wskazuje wcześniejszą udaną próbę 155483362d284e87a8113daddc76119b
+poziomu 50; nie utworzono zarządzanej próby corner25.
+
+Dodano wyłącznie corner25 do zamkniętej alternatywy profili w bramce just
+oraz rozszerzono regresję rzeczywistej recepty/shella o ten profil,
+corner35 i ../corner25. Test trasy odtworzył odmowę przed poprawką.
+Po poprawce cały dobrany zestaw kontrolera, trasy i producenta cache:
+34/34 PASS w obecnym backendzie. Testy trasy używają atrapy interpretera,
+nie uruchamiają kontrolera, Dockera ani meshera. Sprawdzają zachowanie
+wszystkich pinów, starych profili, odmowę obcych profili, dodatkowych flag
+wykonania i dopisanych poleceń. Bash -n: PASS.
+
+| Uzupełnione przypięcie | SHA256 |
+|---|---|
+| Bramka shell po integracji | e8943a6ce6c5935eb56e6fbbdd44465a39f274d8fb26672f471d3e07815064dc |
+| Test kontrolera | 0dbdd6f94872bbfd2ffa3e5beafcb09ad4c72e8ee4f488367d91d4114c101b6a |
+| Test trasy | 83701d552aa410a7f48c7dc29cfb21bbdb1b7e34990595d0d77dd89838744a93 |
+| Kompletny patch względem stanu sprzed tego etapu | 50e67ad52a00ba54a903987dfc7bd9c20b8244a7fd1d22bd8303f7e1487bcd1c |
+
+Pełne dowody są w prywatnym control volume grupy 3203:
+verification/gsg-corner-refinement-20261107/approved-execution-v1/.
+Pliki: test-red.log, test-green.log, route-red.log, integrated-green.log,
+managed-recipe.log, managed-recipe-result.json, final-source-pins.json,
+preparation-pointer-after-shell-refusal.json i complete-profile-integration.patch.
+Pierwszy wrapper odbioru RED błędnie oczekiwał innego tekstu odmowy; właściwy
+log wskazuje Invalid preparation selection i został sprawdzony przed zmianą
+produkcji. Nie podmieniano testu ani logu, aby ukryć ten błąd wrappera.
+
+## Konkretny następny odbiór po poprawce trasy
+
+Zgodnie z punktem 5 zakresu wykonania każda odmowa kończy jedną próbę;
+nie uznano tej odmowy za zgodę na retry. Potrzebna jest decyzja wyłącznie
+o jednym nowym wywołaniu tej samej recepty prepare-only z corner25.
+Kandydat, nośnik H, pięć części, source cut, fizyka i limity pozostają
+dokładnie takie jak powyżej. Wykonanie dopiero po ponownej kontroli SHA
+czterech zmienionych plików i bieżącej inkarnacji grupy przez kontroler.
+
+Nowa próba kończy się po odbiorze gotowego requestu, rzeczywistych długości
+krawędzi/objętości naroży, potwierdzeniu cache i zebraniu dzieci. Każda
+odmowa ponownie kończy tę próbę. Bez Submit/Solve, native buildu, restartu,
+podnoszenia limitów lub zmiany rezerwacji. Obecne wyniki pozostają.
+Zastosowane zmiany kodu nadal są w roboczym drzewie z wcześniejszymi
+niezacommitowanymi zależnościami kontrolera; sam commit dokumentu nie
+stanowi opublikowania samodzielnego pakietu tych źródeł.
