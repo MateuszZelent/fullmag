@@ -1268,6 +1268,7 @@ fn walk_study_pipeline_nodes(
                     current_ir,
                     antenna_inventory,
                     stage_kind,
+                    source.as_deref(),
                     payload,
                     default_until_seconds,
                 )
@@ -1358,6 +1359,7 @@ fn materialize_pipeline_primitive(
     current_ir: &mut ProblemIR,
     antenna_inventory: &ScriptAntennaAuthoringInventory,
     stage_kind: &str,
+    source: Option<&str>,
     payload: &BTreeMap<String, Value>,
     default_until_seconds: Option<f64>,
 ) -> Result<Option<ResolvedScriptStage>> {
@@ -1373,8 +1375,13 @@ fn materialize_pipeline_primitive(
             materialize_pipeline_add_solved_antenna_drive(current_ir, payload, antenna_inventory).map(Some)
         }
         "run" => {
-            validate_pipeline_run_primitive_payload(payload)?;
-            materialize_pipeline_run(current_ir, payload, default_until_seconds).map(Some)
+            let script_imported = source == Some("script_imported");
+            validate_pipeline_run_primitive_payload(payload, script_imported)?;
+            let mut stage = materialize_pipeline_run(current_ir, payload, default_until_seconds)?;
+            if script_imported {
+                apply_imported_run_capture(&mut stage.ir, payload)?;
+            }
+            Ok(Some(stage))
         }
         "relax" => materialize_pipeline_relax(current_ir, payload).map(Some),
         "eigenmodes" => materialize_pipeline_eigenmodes(current_ir, payload).map(Some),
@@ -2115,19 +2122,104 @@ fn materialize_pipeline_run(
     ))
 }
 
-fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) -> Result<()> {
+#[cfg(test)]
+#[test]
+fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration_edit() {
+    let base = ProblemIR::bootstrap_example();
+    let payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
+        "kind": "run",
+        "entrypoint_kind": "build",
+        "integrator": "rk4",
+        "fixed_timestep": "2e-15",
+        "demag_interval_s": "5e-12",
+        "until_seconds": "8e-12",
+        "relax_algorithm": "",
+        "torque_tolerance": "",
+        "energy_tolerance": "",
+        "max_steps": "",
+        "sampling": {"outputs": [{"kind": "scalar", "name": "E_total", "every_seconds": 1e-12}]},
+        "spin_wave_response": null,
+    }))
+    .unwrap();
+    let materialize = |source: &str, payload: &BTreeMap<String, Value>| {
+        materialize_pipeline_primitive(
+            &mut base.clone(),
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some(source),
+            payload,
+            None,
+        )
+    };
+    assert!(materialize("ui_authored", &payload).is_err());
+    let stage = materialize("script_imported", &payload).unwrap().unwrap();
+    assert_eq!(stage.until_seconds, 8e-12);
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &stage.ir.study else {
+        panic!("expected an imported Run");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        field_refresh,
+        ..
+    } = dynamics;
+    assert_eq!(integrator, "rk4");
+    assert_eq!(*fixed_timestep, Some(2e-15));
+    assert!(adaptive_timestep.is_none());
+    assert_eq!(
+        field_refresh
+            .as_ref()
+            .and_then(|refresh| refresh.demag_interval_s),
+        Some(5e-12)
+    );
+    assert!(matches!(sampling.outputs.as_slice(),
+        [OutputIR::Scalar { name, every_seconds, .. }] if name == "E_total" && *every_seconds == 1e-12
+    ));
+    let mut malformed = payload.clone();
+    malformed.insert("fixed_timestep".into(), Value::String("NaN".into()));
+    assert!(materialize("script_imported", &malformed).is_err());
+    malformed = payload.clone();
+    malformed.insert("unknown_solver_control".into(), Value::Bool(true));
+    assert!(materialize("script_imported", &malformed).is_err());
+    let mut unsupported = payload;
+    unsupported.insert(
+        "relax_algorithm".into(),
+        Value::String("nonlinear_cg".into()),
+    );
+    assert!(materialize("script_imported", &unsupported).is_err());
+}
+
+fn validate_pipeline_run_primitive_payload(
+    payload: &BTreeMap<String, Value>,
+    script_imported: bool,
+) -> Result<()> {
     let unsupported = payload
         .keys()
         .filter(|key| {
-            !matches!(
-                key.as_str(),
+            let key = key.as_str();
+            let run_fields = matches!(
+                key,
                 "entrypoint_kind"
                     | "kind"
                     | "stage_id"
                     | "until_seconds"
                     | "output_every_seconds"
                     | "autosave"
-            )
+            );
+            let imported_fields = script_imported
+                && (matches!(
+                    key,
+                    "integrator"
+                        | "fixed_timestep"
+                        | "demag_interval_s"
+                        | "sampling"
+                        | "spin_wave_response"
+                ) || (matches!(
+                    key,
+                    "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps"
+                ) && !payload_field_is_set(payload, key)));
+            !run_fields && !imported_fields
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -2137,6 +2229,61 @@ fn validate_pipeline_run_primitive_payload(payload: &BTreeMap<String, Value>) ->
             unsupported.join(", ")
         );
     }
+    Ok(())
+}
+
+/// Preserve the solver/output snapshot captured for each imported Python Run.
+fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Value>) -> Result<()> {
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling } = &mut ir.study else {
+        bail!("script-imported Run did not materialize a time-evolution stage");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        field_refresh,
+        ..
+    } = dynamics;
+    if let Some(value) = payload_string_value(payload.get("integrator"), "integrator")? {
+        *integrator = value;
+    }
+    if payload.contains_key("fixed_timestep") {
+        *fixed_timestep = payload_f64(payload, "fixed_timestep")?;
+        if fixed_timestep.is_some() {
+            *adaptive_timestep = None;
+        }
+    }
+    if payload.contains_key("demag_interval_s") {
+        *field_refresh = payload_f64(payload, "demag_interval_s")?.map(|interval| {
+            fullmag_ir::FieldRefreshPolicyIR {
+                demag_interval_s: Some(interval),
+            }
+        });
+    }
+    if let Some(value) = payload.get("sampling").filter(|value| !value.is_null()) {
+        let mut captured: fullmag_ir::SamplingIR = serde_json::from_value(value.clone())
+            .context("script-imported Run sampling is invalid")?;
+        captured.stage_autosave = sampling.stage_autosave.clone();
+        *sampling = time_domain_sampling_from(&captured);
+    }
+    if let Some(value) = payload.get("spin_wave_response") {
+        let metadata = &mut ir.problem_meta.runtime_metadata;
+        match value {
+            Value::Null => {
+                metadata.remove("spin_wave_response");
+            }
+            Value::Object(_) => {
+                metadata.insert("spin_wave_response".into(), value.clone());
+            }
+            _ => bail!("script-imported Run spin_wave_response must be an object"),
+        }
+    }
+    ir.validate().map_err(|errors| {
+        anyhow::anyhow!(
+            "script-imported Run IR validation failed: {}",
+            errors.join("; ")
+        )
+    })?;
     Ok(())
 }
 
