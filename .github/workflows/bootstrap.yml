@@ -674,6 +674,9 @@ jobs:
       - name: Check control-room idle performance
         run: pnpm --dir apps/control-room audit:idle-performance
 
+      - name: Verify scoped Study texture browser contracts
+        run: node --test apps/control-room/scripts/lib/study-texture-browser-qa.test.mjs
+
       - name: Typecheck, lint and test Control Room
         run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test
 
