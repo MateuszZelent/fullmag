@@ -99,4 +99,56 @@ cudaError_t fullmag_cuda_download_soa_to_aos(
     return err;
 }
 
+namespace {
+
+__global__ void pack_soa_to_aos_kernel(
+    const double *x,
+    const double *y,
+    const double *z,
+    double *aos_xyz,
+    int N)
+{
+    const unsigned long long node =
+        static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (node < static_cast<unsigned long long>(N)) {
+        const unsigned long long offset = 3ull * node;
+        aos_xyz[offset + 0ull] = x[node];
+        aos_xyz[offset + 1ull] = y[node];
+        aos_xyz[offset + 2ull] = z[node];
+    }
+}
+
+} // namespace
+
+cudaError_t fullmag_cuda_pack_soa_to_aos(
+    const double *x,
+    const double *y,
+    const double *z,
+    double *aos_xyz,
+    int N,
+    cudaStream_t stream)
+{
+    if (stream == nullptr || N < 0) {
+        return cudaErrorInvalidValue;
+    }
+    if (N == 0) {
+        return cudaSuccess;
+    }
+    if (x == nullptr || y == nullptr || z == nullptr || aos_xyz == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+
+    constexpr unsigned int threads_per_block = 256;
+    const unsigned long long block_count =
+        (static_cast<unsigned long long>(N) + threads_per_block - 1ull) /
+        threads_per_block;
+    pack_soa_to_aos_kernel<<<static_cast<unsigned int>(block_count), threads_per_block, 0, stream>>>(
+        x,
+        y,
+        z,
+        aos_xyz,
+        N);
+    return cudaGetLastError();
+}
+
 } // namespace fullmag::fem

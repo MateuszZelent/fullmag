@@ -25,6 +25,20 @@ bool gpu_component_download_aos(
     const char *label,
     std::string &error);
 
+/* Pack one component field into persistent device AoS storage, then perform a
+ * single synchronous contiguous device-to-host copy on the supplied stream.
+ */
+bool gpu_component_download_aos_packed(
+    const FemGpuLifecycleDeviceState &lifecycle,
+    const FemGpuComponentField &field,
+    double *aos_device_scratch,
+    uint64_t scratch_dof_len,
+    void *raw_stream,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    const char *label,
+    std::string &error);
+
 bool gpu_component_upload_aos(
     const FemGpuLifecycleDeviceState &lifecycle,
     FemGpuComponentField &field,

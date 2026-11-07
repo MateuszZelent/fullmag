@@ -89,6 +89,115 @@ bool gpu_component_download_aos(
 #endif
 }
 
+bool gpu_component_download_aos_packed(
+    const FemGpuLifecycleDeviceState &lifecycle,
+    const FemGpuComponentField &field,
+    double *aos_device_scratch,
+    uint64_t scratch_dof_len,
+    void *raw_stream,
+    std::vector<double> &out_xyz,
+    TransferAudit &audit,
+    const char *label,
+    std::string &error)
+{
+    if (!lifecycle.allocated) {
+        return true;
+    }
+    if (lifecycle.node_count == 0 && lifecycle.dof_len == 0) {
+        out_xyz.clear();
+        return true;
+    }
+    if (lifecycle.node_count > std::numeric_limits<uint64_t>::max() / 3ull ||
+        lifecycle.dof_len != lifecycle.node_count * 3ull) {
+        error = std::string("FemGpuState ") + label +
+            " packed download has inconsistent vector DOF metadata";
+        return false;
+    }
+    if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
+        error = std::string("FemGpuState ") + label +
+            " packed download requires allocated device component buffers";
+        return false;
+    }
+    if (aos_device_scratch == nullptr || scratch_dof_len != lifecycle.dof_len) {
+        error = std::string("FemGpuState ") + label +
+            " packed download requires a matching persistent device AoS buffer";
+        return false;
+    }
+    if (raw_stream == nullptr) {
+        error = std::string("FemGpuState ") + label +
+            " packed download requires an explicit non-default CUDA stream";
+        return false;
+    }
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (lifecycle.node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        error = std::string("FemGpuState ") + label +
+            " packed download node count exceeds CUDA kernel range";
+        return false;
+    }
+
+    size_t packed_bytes = 0;
+    if (!gpu_device_checked_node_bytes(lifecycle.dof_len, packed_bytes, error)) {
+        return false;
+    }
+    out_xyz.resize(static_cast<size_t>(lifecycle.dof_len));
+    const cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
+    const std::string pack_operation = std::string(
+        "fullmag_cuda_pack_soa_to_aos FemGpuState ") + label + " device pack";
+    if (!cuda_ok(
+            fullmag_cuda_pack_soa_to_aos(
+                field.x,
+                field.y,
+                field.z,
+                aos_device_scratch,
+                static_cast<int>(lifecycle.node_count),
+                stream),
+            pack_operation.c_str(),
+            error)) {
+        const cudaError_t sync_rc = cudaStreamSynchronize(stream);
+        if (sync_rc != cudaSuccess) {
+            error += std::string("; cudaStreamSynchronize after failed device pack failed: ") +
+                cudaGetErrorString(sync_rc);
+        }
+        return false;
+    }
+
+    const std::string copy_operation = std::string(
+        "cudaMemcpyAsync FemGpuState ") + label + " packed device->host";
+    if (!cuda_ok(
+            cudaMemcpyAsync(
+                out_xyz.data(),
+                aos_device_scratch,
+                packed_bytes,
+                cudaMemcpyDeviceToHost,
+                stream),
+            copy_operation.c_str(),
+            error)) {
+        const cudaError_t sync_rc = cudaStreamSynchronize(stream);
+        if (sync_rc != cudaSuccess) {
+            error += std::string("; cudaStreamSynchronize after failed packed copy failed: ") +
+                cudaGetErrorString(sync_rc);
+        }
+        return false;
+    }
+
+    if (!cuda_ok(
+            cudaStreamSynchronize(stream),
+            (std::string("cudaStreamSynchronize FemGpuState ") + label +
+                " packed device->host").c_str(),
+            error)) {
+        return false;
+    }
+
+    record_device_to_host(audit, static_cast<uint64_t>(packed_bytes));
+    return true;
+#else
+    (void)audit;
+    error = "FemGpuState packed download requires CUDA runtime support";
+    return false;
+#endif
+}
+
 bool gpu_component_upload_aos(
     const FemGpuLifecycleDeviceState &lifecycle,
     FemGpuComponentField &field,

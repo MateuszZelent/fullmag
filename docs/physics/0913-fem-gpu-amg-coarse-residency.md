@@ -95,7 +95,7 @@ Wynik `to_ir()` tej polityki:
 {"solver": "CG", "preconditioner": "AMG", "rtol": 1e-12, "max_iterations": 500, "print_level": 0}
 ```
 
-Dla nieskalowanego układu opisanego równaniami `atol` ma jednostkę normy residualu algebraicznego A·m. Zależy od bazy i skalowania macierzy. Historyczne określenie tej tolerancji jako bezwymiarowej w nocie 0532 zostało skorygowane; `rtol` pozostaje bezwymiarowe. W tej próbie `atol=None`, więc korekta opisu nie zmienia warunku zakończenia.
+Dla nieskalowanego układu norma euklidesowa residualu algebraicznego ma jednostkę A·m. Taki jest zamierzony bezwzględny próg niezależnej certyfikacji; zależy on od bazy i skalowania macierzy. Trzeba go odróżnić od wewnętrznego kryterium przypiętego CG: MFEM nie włącza `two_norm`, więc HYPRE używa normy preconditionowanej. CPU Fullmag oblicza niezależnie normę `Ax-b`, natomiast obecna walidacja GPU robi to warunkowo, gdy solver nie zgłosił zbieżności. Raportowanego residualu CG nie należy zatem nazywać niezależnym certyfikatem euklidesowym. Ta luka walidacji wymaga osobnej poprawki. W próbach `atol=None`; eksperyment transportu nie zmienia kryterium solvera ani tolerancji.
 
 (problem-ir)=
 ## ProblemIR
@@ -139,7 +139,7 @@ Baseline 50 fs obejmuje siedem kroków. Nie stanowi kwalifikacji pełnej dynamik
 
 ### Wykonany eksperyment 50 fs
 
-Wariant jest przypięty do snapshotu `f559662ac7601a3748a6b859937301bc87b3751cd7ac54d7fd63d9b2b135c7d9` i biblioteki `2a570d033ea478ca70bc9c80174aa723d5b93b8bd5797e3a823edf3903ccb016`. Obie próby wykonały siedem kroków do 50 fs i 43 wywołania RHS/demag w krokach 1–7, zachowując po dwie ramki tabeli i osiem klatek pól Zarr. Native build i kontrakt CUPTI przeszły; dodana regresja `fem_demag_poisson_contract` pozostaje do osobnego zarządzanego wykonania.
+Wariant jest przypięty do snapshotu `f559662ac7601a3748a6b859937301bc87b3751cd7ac54d7fd63d9b2b135c7d9` i biblioteki `2a570d033ea478ca70bc9c80174aa723d5b93b8bd5797e3a823edf3903ccb016`. Obie próby wykonały siedem kroków do 50 fs i 43 wywołania RHS/demag w krokach 1–7, zachowując po dwie ramki tabeli i osiem klatek pól Zarr. Native build i kontrakt CUPTI przeszły; w tym pakiecie dodana regresja `fem_demag_poisson_contract` nie była wykonywana. Jej późniejsze wykonanie opisuje sekcja transportu poniżej.
 
 | Pomiar | Coarse type 9 | Coarse type 18 |
 |---|---:|---:|
@@ -152,15 +152,37 @@ Końcowe osiem energii, aktywne $m$ i torque mieszczą się w zadeklarowanych pr
 
 Para type18 CUPTI ON/OFF ma identyczne wszystkie 15 kolumn obu ramek tabeli, wszystkie cztery pola w obu klatkach, natywną magnetyzację końcową, torque oraz harmonogram z raportowanymi residualami i iteracjami. Ślad ma 514161 rekordów i przeszedł bramkę `clock_monotonic`. Stary ślad type9 ma tabelaryczny Zarr, nowy zapisuje pełne pola; wszystkich różnic transferów wyjściowych i czasu nie wolno przypisywać wyłącznie zmianie coarse cycle.
 
-Usunięcie małych transferów zgadza się ze zmianą źródłową i getterem. Nadal pozostają hostowe rekurencje PCG oraz 318 wywołań `cudaMemcpy2D` w pełnym śladzie. GPU pack i pojedynczy ciągły transfer pól są osobnym przygotowanym eksperymentem, bez wykonanego buildu lub pomiaru.
+Usunięcie małych transferów zgadza się ze zmianą źródłową i getterem. W tym śladzie nadal pozostają hostowe rekurencje PCG oraz 318 wywołań `cudaMemcpy2D`. Osobny eksperyment transportu porównuje pakowanie pól z tym samym wariantem coarse18.
 
 Raport `coarse18-qualified-cupti-pair-b47ec3b6f81101ed.json` ma SHA-256 `b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580`. Raport endpointu `coarse18-off-experiment-4689e091ba360525.json` ma SHA-256 `4689e091ba3605252a79df413ef66ce9e9d37b0eae322148e5fd79a0668d2f9d`. Oba zachowują pierwotne wyniki bramki harmonogramu; analiza nie powtarzała Solve.
+
+### Osobny eksperyment pakowania pól
+
+Kolejny wariant zmienia wyłącznie układ transportu jedenastu pól bieżącego snapshotu. Osobny bufor AoS o rozmiarze `24*N` bajtów należy do `FemGpuState`, jest alokowany przy inicjalizacji, wliczany do `device_bytes` i zwalniany przy teardown. Kernel pakuje komponenty SoA bez arytmetycznej zmiany wartości double; jeden ciągły D2H na jawnym `compute_stream` zastępuje trzy transfery 2D o szerokości 8 B. Funkcja nadal kończy się dopiero po gotowości wektora hostowego. Odmowa przy brakującym streamie, buforze albo niespójnej pojemności nie publikuje udanego transferu.
+
+Ta ścieżka nie zmienia kadencji, zestawu obserwabli, solvera liniowego ani równań. Magnetyzacja, publiczny asynchroniczny snapshot pool i pozostali konsumenci zachowują dotychczasowe funkcje transferu. Test porządku składowych, dokładnych wartości, liczników i teardown należy do istniejącego `fem_demag_poisson_contract`, który ma zależność CUDA.
+
+Zarządzany build snapshotu `35192e8ad570554d0ae9313b27c2e596fbea663d6f42944dda614042f6fcbadc` i biblioteki `43347eab9656762a821ad0caa616e4286586162899352c519f3a8d2e24f8b98e` przeszedł kontrakt Poissona. Test wykonał się na GPU, potwierdzając marker `packed_field_download_runtime_executed nodes=263`. Osobne próby SP4 OFF i ON przeszły wszystkie dotychczasowe bramki. Obie klatki czterech pól i 15 kolumn tabeli są dokładnie równe między OFF/ON oraz między nowym OFF i zachowanym coarse18 OFF. Natywne końcowe `m`, torque, czasy, `dt`, residuale i iteracje są identyczne OFF/ON.
+
+| Pomiar pełnego śladu | Coarse18 | Pakowanie snapshotów |
+|---|---:|---:|
+| `cudaMemcpy2D` | 318 | 252 |
+| Operacje D2H | 4056 | 4012 |
+| Bajty D2H | 92 397 916 | 92 397 916 |
+| Kernel pakowania snapshotów | 0 | 22 |
+| Pierwszy czas solvera OFF | 4,182894412 s | 3,836000881 s |
+| Pierwszy czas solvera ON | 4,464906253 s | 4,228889554 s |
+
+Ślad ON ma 514199 rekordów, poprawny zegar `clock_monotonic` i zerowe liczniki błędów, utraty oraz obcięć. Dwadzieścia dwa pakowania zastąpiły 66 strided kopii przez 22 ciągłe D2H. Nie zmniejszyła się liczba przesłanych bajtów. Pozostałe 252 wywołania obejmują także uploady; nie należy dzielić tej liczby przez trzy i nazywać wyniku liczbą downloadów.
+
+Niższe czasy w pojedynczej parze OFF i ON są obserwacją krótkiej próby, bez serii powtórzeń ani kwalifikacji przyspieszenia pełnego SP4. Pełne wywołania zarządzane obejmują dodatkowo aktywację, inicjalizację i zachowanie wyników; nie są równe czasowi solvera. Raport `packed-fields-qualified-cupti-pair-a6f7b5c5700b97e8.json` ma SHA-256 `a6f7b5c5700b97e88b64d4d8c47dd3329c3468530c3194d92b58f70eaa79e166`. Dane pozostają pełnym Zarr z sąsiednim skryptem; analiza nie powtarza Solve.
 
 (scientific-bibliography)=
 ## Źródła
 
 - [HYPRE, przypięty kod AMG i eliminacji Gaussa](https://github.com/hypre-space/hypre/tree/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/parcsr_ls). Commit `9dc9e18aed6a945a95f966e57daacfb1c269f6ec`.
 - [HYPRE BoomerAMG: relaksacja i konfiguracja coarse cycle](https://hypre.readthedocs.io/en/latest/solvers-boomeramg.html). Interpretacja wariantu odnosi się do przypiętego kodu powyżej.
+- [Przypięty MFEM: domyślna konfiguracja HyprePCG](https://github.com/mfem/mfem/blob/d964264cdb9a13e94a201b6c236c7721e0c8765f/linalg/hypre.cpp#L3958) i [HYPRE: kryterium PCG](https://github.com/hypre-space/hypre/blob/9dc9e18aed6a945a95f966e57daacfb1c269f6ec/src/krylov/pcg.c#L390) określają normę wewnętrzną, odrębną od niezależnej certyfikacji residualu.
 - Nota 0532 i kanoniczny opis Poissona stanowią właścicieli publicznej polityki oraz wspólnej fizyki.
 
 (source-code-index)=
@@ -186,6 +208,10 @@ Raport `coarse18-qualified-cupti-pair-b47ec3b6f81101ed.json` ma SHA-256 `b47ec3b
 | `crates/fullmag-ir/src/plan.rs` | `FemPlanIR` | Rozwiązana polityka przekazana do wykonania FEM. | FEM; kod źródłowy, wariant GPU runtime niezweryfikowany |
 
 | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `build_p1_demag_operators` | Tworzy dyskretny operator i sprzężenia Poissona. | FEM GPU; dotychczasowa implementacja układu i residualu |
-| `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Liczy normę Ax-b, normę RHS i względny residual; waliduje tolerancje. | FEM GPU; dotychczasowa implementacja układu i residualu |
+| `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `validate_demag_poisson_hypre_device_solve` | Warunkowo liczy normę Ax-b i RHS; przy sukcesie CG może używać raportowanej normy preconditionowanej. | FEM GPU; niezależna certyfikacja euklidesowa pozostaje otwartą luką |
+| `backends/fem/gpu/cuda/state/gpu_state.cpp` | `gpu_state_download_component_aos_packed` | Wymaga własnego persistent scratch i jawnego streamu; nie zmienia innych konsumentów transferu. | FEM GPU; test natywny i pełny Zarr OFF/ON przeszły przy 50 fs; pełny SP4 niezakwalifikowany |
+| `backends/fem/gpu/cuda/transfer/component_transfer.cpp` | `gpu_component_download_aos_packed` | Pakuje GPU SoA do AoS, wykonuje jeden ciągły D2H i synchronizuje przed odczytem hosta. | FEM GPU; test natywny i pełny Zarr OFF/ON przeszły przy 50 fs; pełny SP4 niezakwalifikowany |
+| `backends/fem/gpu/cuda/transfer/transfer_kernels.cu` | `fullmag_cuda_pack_soa_to_aos` | Uruchamia kernel kopiujący double bez zmiany wartości lub kolejności składowych. | FEM GPU; test natywny i pełny Zarr OFF/ON przeszły przy 50 fs; pełny SP4 niezakwalifikowany |
+| `backends/fem/tests/demag_poisson_contract.cpp` | `packed_snapshot_field_download_is_runtime_correct_and_fails_closed` | Test GPU:263 węzły, kolejność, dokładne wartości, audit, odmowy i teardown. | FEM GPU; natywny test i para SP4 OFF/ON przeszły przy 50 fs |
 
 Baseline pełnego Zarr ma run `run-live-57903f099c8ab012d5d2d49b6086904a8c80204059f72b12c7df354cca9c5949`, dwie próbki tabeli, osiem klatek pól i zamknięcie energii 0 J. Oryginalny wrapper zakończył się po udanym Solve błędem nazwy helpera torque; odczytowe odzyskanie postprocessingu nie powtarzało Solve. Receipt `postprocess-recovery-d6fe4d9e7c67487b.json` ma SHA-256 `d6fe4d9e7c67487b5b15609f93501c1d916f1fe0f42f0947cf4039bd6fae118c`. To dowód bazowej wersji type9, nie pomiar przyspieszenia type18.

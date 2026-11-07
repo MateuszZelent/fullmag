@@ -212,8 +212,36 @@
       "id": "residual",
       "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
       "symbol": "validate_demag_poisson_hypre_device_solve",
-      "responsibility": "Liczy normę Ax-b, normę RHS i względny residual; waliduje tolerancje.",
-      "evidence_status": "source-visible; candidate runtime pending"
+      "responsibility": "Warunkowo liczy normę Ax-b i RHS; przy sukcesie CG może używać raportowanej normy preconditionowanej.",
+      "evidence_status": "source-audited: independent Euclidean GPU certification remains open; stored-output parity does not close this gate"
+    },
+    {
+      "id": "packed-state",
+      "path": "backends/fem/gpu/cuda/state/gpu_state.cpp",
+      "symbol": "gpu_state_download_component_aos_packed",
+      "responsibility": "Wymaga własnego persistent scratch i jawnego streamu; nie zmienia innych konsumentów transferu.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+    },
+    {
+      "id": "packed-transfer",
+      "path": "backends/fem/gpu/cuda/transfer/component_transfer.cpp",
+      "symbol": "gpu_component_download_aos_packed",
+      "responsibility": "Pakuje GPU SoA do AoS, wykonuje jeden ciągły D2H i synchronizuje przed odczytem hosta.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+    },
+    {
+      "id": "packed-kernel",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu",
+      "symbol": "fullmag_cuda_pack_soa_to_aos",
+      "responsibility": "Uruchamia kernel kopiujący double bez zmiany wartości lub kolejności składowych.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
+    },
+    {
+      "id": "packed-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "packed_snapshot_field_download_is_runtime_correct_and_fails_closed",
+      "responsibility": "Test GPU:263 węzły, kolejność, dokładne wartości, audit, odmowy i teardown.",
+      "evidence_status": "Managed GPU Poisson contract passed (actual263-node marker); 50fs full-Zarr OFF/ON exact parity, CUPTI514199 clock/loss gates passed; fullSP4 and repeated speedup unqualified"
     }
   ],
   "public_api": {
@@ -282,9 +310,12 @@
   },
   "validation": {
     "baseline": "50fs / seven accepted steps / full Zarr preserved; recovery receipt d6fe4d9e7c67487b",
-    "candidate_native_runtime": "Managed CUDA build and CUPTI contract passed; actual getter18 in two completed50fs runs; native Poisson regression pending",
+    "candidate_native_runtime": "Managed CUDA build and CUPTI contract passed for coarse18; later packed library passed fem-demag-poisson with actual GPU marker; fullSP4 remains unqualified",
     "candidate_physics_and_speedup": "Terminal energies/m/torque pass; old/new adaptive schedule equality failed; no attributable speedup",
     "instrumentation_pair": "Full Zarr15columns/fourfields/twoframes and native finalm/torque/schedules exact equal ON/OFF; timingpassed514161records",
-    "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580"
+    "evidence_sha256": "b47ec3b6f81101ed5c9a3faa94dc0a174f4afc347c6784b6312c8b3408ace580",
+    "packed_field_download": "GPU contract passed; 50fs OFF/ON and coarse18-OFF field/table parity exact; 318→252 cudaMemcpy2D,22pack kernels, identical D2H bytes; one sample per variant/mode, repeated speedup not qualified",
+    "packed_evidence_sha256": "a6f7b5c5700b97e88b64d4d8c47dd3329c3468530c3194d92b58f70eaa79e166",
+    "residual_norm_limit": "Pinned CG uses preconditioned norm. CPU true-residual check is independent; current GPU check is conditional. SP4atol=None; transport experiment does not close Euclidean certification gap."
   }
 }
