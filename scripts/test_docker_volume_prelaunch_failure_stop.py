@@ -247,6 +247,20 @@ class PrelaunchFailureStopTests(unittest.TestCase):
             paths[role] = path
         return paths
 
+    def test_controller_prelaunch_argument_copy_reaches_legacy_validator(self):
+        import docker_volume_dev as controller
+        args = types.SimpleNamespace(capture_prelaunch_failure=True, quiesce_api=True)
+        with patch.object(subject, "validate_options", return_value=(True, None)), \
+             patch("docker_volume_native_terminal_stop.validate_options",
+                   side_effect=subject.BuildControlError("reached legacy validator")) as legacy:
+            with self.assertRaisesRegex(subject.BuildControlError, "reached legacy validator"):
+                controller._retained_operation(args, recreate_services=False,
+                                               restart_idle_service=True, stop_after_drain=True)
+        copied = legacy.call_args.args[0]
+        self.assertIsNot(copied, args)
+        self.assertFalse(copied.quiesce_api)
+        self.assertTrue(args.quiesce_api)
+
     def test_source_binding_pins_launcher_controller_and_helper_and_detects_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = self.temporary_source_paths(directory)

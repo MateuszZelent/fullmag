@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import base64
-import copy
 from contextlib import nullcontext
 import hashlib
 import io
@@ -7762,7 +7761,8 @@ def _retained_operation(
     if capture_prelaunch_failure:
         # This is a separate offline-preservation capability. Do not let the
         # existing all-Succeeded native-terminal validators interpret it.
-        legacy_mode_args = copy.copy(args)
+        from copy import copy as shallow_copy
+        legacy_mode_args = shallow_copy(args)
         legacy_mode_args.quiesce_api = False
         legacy_mode_args.capture_prelaunch_failure = False
     from docker_volume_native_terminal_stop import validate_options as native_terminal_options
