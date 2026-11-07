@@ -935,6 +935,34 @@ nie traktuj historycznych opisów incremental output jako aktualnego kontraktu.
 | Warstwy zależności/helperów | Docker image store / BuildKit |
 | Sesje, wyniki, ustawienia, historia, ledger | skonfigurowany storage hosta Windows albo Linux/WSL |
 
+### Archiwizacja metadanych zakończonej aktywacji
+
+`scripts/docker_activation_history.py` kwalifikuje jeden zamknięty rekord przez
+preview i zastosowanie dokładnego `--plan-sha256`. Przenosi metadane do historii;
+zachowuje sesję, Zarr, sąsiedni skrypt i eksport provenance. Nie zwiększa limitu
+aktywnych rekordów, nie odtwarza Solve i nie omija pinów recovery ani blokad
+współdzielonych z natywnymi writerami.
+
+Ścieżka `storage(output_dir=...)` może być literalnym stringiem albo nazwą
+jednej modułowej stałej z takim literałem. Parser nie wykonuje skryptu.
+Odrzuca wyrażenia, aliasy, wielokrotne lub warunkowe przypisania, ponowne
+wiązanie nazwy i wildcard imports. Nadal wymaga jednego wywołania `storage`
+i kanonicznej ścieżki Zarr pod `/user-data`. Źródło musi odpowiadać oryginalnemu
+hashowi aktywacji, a zachowany wynik przechodzi osobną walidację runu.
+
+Historyczny rodzic `failed-confirmed` z zachowanym dokładnym config pinem
+wymaga dodatkowo obu argumentów `--historical-runtime-witness` oraz
+`--historical-runtime-witness-sha256`. Pierwszy wskazuje dokładny rekord
+`resume/attempts/<id>/terminal.json` albo `iteration/attempts/<id>/terminal.json`,
+drugi jego surowy SHA-256. Terminal i sąsiedni `receipt.json` muszą być zgodne,
+dotyczyć tego samego rodzica, backendu, obrazu, źródeł, grupy, namespace,
+wolumenu i `state_root`. Poprawne wznowienie musi następować po nieudanym
+starcie, a kończyć się przed aktywacją; stop-only nie jest takim dowodem.
+Oba rekordy są przypięte w planie i ponownie sprawdzane przed apply.
+To kwalifikacja historycznych mountów, a nie dowód biblioteki użytej w dawnym
+runie. Brak świadka, niezgodne piny lub niekompletny wynik nadal blokują
+archiwizację. Dla rodzica `succeeded` świadek nie jest używany.
+
 Źródła są readonly. Krótkie helpery utrzymania należą do tej samej grupy;
 nie budują ani nie uruchamiają aplikacji i nie mają Docker socketu.
 Kontrakt jednego prywatnego volume wymaga, by helper utrzymania widział tylko

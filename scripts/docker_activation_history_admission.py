@@ -1,5 +1,6 @@
 """Read-only control admission and writer exclusion for history publication."""
 from contextlib import contextmanager, ExitStack
+import math
 import os
 from pathlib import Path, PurePosixPath
 import stat
@@ -51,7 +52,59 @@ def validate_control_pins(root, pins):
             raise HistoryError("Historical admission record changed: " + str(path))
 
 
-def historical_mounts(control, receipt, terminal, compose, selected):
+def _historical_runtime_witness(control, receipt, original, selected, pin):
+    """Attest a failed start's declared mounts using one pinned prior recovery.
+
+    This proves historical mount admission, not the binary used by a run.
+    Run/output/source identity remains independently validated by the caller.
+    """
+    if not isinstance(pin, tuple) or len(pin) != 2:
+        raise HistoryError("Historical recovery requires an explicit witness path and digest")
+    relative, expected_sha = pin
+    if not isinstance(relative, str) or not isinstance(expected_sha, str) or not SHA.fullmatch(expected_sha):
+        raise HistoryError("Historical recovery witness pin is malformed")
+    path = PurePosixPath(relative)
+    if (str(path) != relative or len(path.parts) != 4
+            or path.parts[0] not in {"resume", "iteration"} or path.parts[1] != "attempts"
+            or not ATTEMPT.fullmatch(path.parts[2]) or path.parts[3] != "terminal.json"):
+        raise HistoryError("Historical recovery witness path is not one terminal record")
+    raw = control.read_bytes(relative, maximum=1024 * 1024, timeout=30)
+    if digest(raw) != expected_sha:
+        raise HistoryError("Historical recovery witness raw digest differs")
+    witness = document(raw, "historical recovery terminal")
+    counterpart = str(path.with_name("receipt.json"))
+    saved_raw = control.read_bytes(counterpart, maximum=1024 * 1024, timeout=30)
+    if raw != saved_raw:
+        raise HistoryError("Historical recovery terminal and receipt differ")
+    from docker_volume_activate import _validate_linked_runtime_terminal
+    try:
+        _validate_linked_runtime_terminal(witness, phase=path.parts[0],
+            original_attempt=original["attempt"], original=original,
+            source_root=str(selected), image=receipt["image_id"],
+            config_sha256=receipt["config_sha256"])
+    except BuildControlError as error:
+        raise HistoryError("Historical recovery witness identity differs: " + str(error)) from error
+    inputs = witness["inputs"]
+    activation_inputs = receipt.get("inputs", {})
+    if (witness.get("schema") != "fullmag.docker-build-operation.v1"
+            or witness.get("attempt") != path.parts[2]
+            or witness.get("control_volume") != control.volume
+            or witness.get("control_namespace", "") != control.namespace
+            or inputs.get("source_root") != str(selected)
+            or inputs.get("image_id") != receipt["image_id"]
+            or witness.get("backend_container") != receipt.get("backend_container")
+            or receipt.get("backend_container") != activation_inputs.get("backend_container")
+            or witness.get("idle_backend_stopped") is True):
+        raise HistoryError("Historical recovery witness ownership/backend differs")
+    times = [original.get("finished_at"), witness.get("started_at"),
+             witness.get("finished_at"), receipt.get("started_at")]
+    if (any(type(value) not in (int, float) or not 0 < value < 1e15
+            or not math.isfinite(value) for value in times)
+            or times != sorted(times)):
+        raise HistoryError("Historical recovery witness must follow failure and precede activation")
+
+
+def historical_mounts(control, receipt, terminal, compose, selected, *, runtime_witness=None):
     """Authenticate old paths against the activation's immutable config pin."""
     token = receipt.get("development_attempt")
     expected_config = receipt.get("config_sha256")
@@ -60,8 +113,13 @@ def historical_mounts(control, receipt, terminal, compose, selected):
             or not isinstance(expected_config, str) or not SHA.fullmatch(expected_config)
             or not isinstance(activation_inputs, dict) or not isinstance(development_inputs, dict)):
         raise HistoryError("Historical activation/development identity is incomplete")
+    development_state = terminal.get("state")
+    if (development_state not in {"succeeded", "failed-confirmed"}
+            or (development_state == "failed-confirmed" and runtime_witness is None)
+            or (development_state == "succeeded" and runtime_witness is not None)):
+        raise HistoryError("Historical failed development requires one explicit recovery witness")
     expected = {"schema": "fullmag.docker-build-operation.v1", "phase": "development",
-                "state": "succeeded", "attempt": token, "compose_project": control.project,
+                "state": development_state, "attempt": token, "compose_project": control.project,
                 "control_volume": control.volume, "config_sha256": expected_config}
     if (any(terminal.get(key) != value for key, value in expected.items())
             or terminal.get("control_namespace", "") != control.namespace
@@ -97,6 +155,8 @@ def historical_mounts(control, receipt, terminal, compose, selected):
         if (volume.get("name") != control.volume
                 or binding.get("volume", {}).get("subpath", "") != subpath):
             raise HistoryError("Historical control/ledger volume binding differs")
+    if development_state == "failed-confirmed":
+        _historical_runtime_witness(control, receipt, terminal, selected, runtime_witness)
     return Path(state["source"]), Path(user["source"])
 
 

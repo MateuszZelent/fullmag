@@ -141,6 +141,94 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaises(HistoryError):
                 validate_control_pins(root, {"../outside.json": None})
 
+    def recovered_fixture(self):
+        control, receipt, terminal, compose, source = self.fixture()
+        backend, frontend = "b" * 64, "c" * 64
+        terminal.update(state="failed-confirmed", started_at=1.0, finished_at=2.0)
+        receipt.update(started_at=5.0, backend_container=backend)
+        receipt["inputs"]["backend_container"] = backend
+        witness = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "iteration",
+            "state": "succeeded", "attempt": "d" * 32,
+            "compose_project": control.project, "control_volume": control.volume,
+            "config_sha256": receipt["config_sha256"], "state_root": terminal["state_root"],
+            "backend_container": backend, "frontend_container": frontend,
+            "source_commit": "e" * 40, "source_digest": "f" * 64,
+            "source_snapshot_sha256": "1" * 64, "backend_build_receipt_sha256": "2" * 64,
+            "started_at": 3.0, "finished_at": 4.0,
+            "inputs": {"attempt": terminal["attempt"], "config_sha256": receipt["config_sha256"],
+                       "source_root": str(source), "image_id": receipt["image_id"]},
+        }
+        path = "iteration/attempts/" + witness["attempt"] + "/terminal.json"
+        records = {path: canonical(witness), path.replace("terminal.json", "receipt.json"): canonical(witness)}
+        control.read_pins = {}
+        def read(relative, **kwargs):
+            raw = records[relative]
+            control.read_pins[relative] = digest(raw)
+            return raw
+        control.read_bytes = read
+        return control, receipt, terminal, compose, source, path, records
+
+    def test_historical_failed_start_requires_exact_pre_activation_recovery_witness(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source)
+        self.assertEqual(historical_mounts(control, receipt, terminal, compose, source,
+            runtime_witness=(path, digest(records[path]))),
+            (Path("/storage/runtime"), Path("/storage/results")))
+        self.assertEqual(control.read_pins, {p: digest(raw) for p, raw in records.items()})
+
+    def test_historical_recovery_witness_rejects_identity_timing_and_receipt_changes(self):
+        mutations = ("state", "phase", "original-attempt", "backend", "activation-backend",
+            "config", "source", "image", "volume", "namespace", "state-root", "stop-only",
+            "missing-build", "before-parent-failure", "after-activation", "backward-time",
+            "nan-time", "bool-time", "missing-time", "receipt", "receipt-format-only")
+        for mutation in mutations:
+            control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+            witness = json.loads(records[path])
+            if mutation == "state": witness["state"] = "failed-confirmed"
+            elif mutation == "phase": witness["phase"] = "resume"
+            elif mutation == "original-attempt": witness["inputs"]["attempt"] = "9" * 32
+            elif mutation == "backend": witness["backend_container"] = "9" * 64
+            elif mutation == "activation-backend": receipt["inputs"]["backend_container"] = "9" * 64
+            elif mutation == "config": witness["config_sha256"] = "9" * 64
+            elif mutation == "source": witness["inputs"]["source_root"] = "/foreign"
+            elif mutation == "image": witness["inputs"]["image_id"] = "sha256:" + "9" * 64
+            elif mutation == "volume": witness["control_volume"] = "foreign"
+            elif mutation == "namespace": witness["control_namespace"] = "namespaces/foreign"
+            elif mutation == "state-root": witness["state_root"] = "/foreign"
+            elif mutation == "stop-only": witness["idle_backend_stopped"] = True
+            elif mutation == "missing-build": del witness["backend_build_receipt_sha256"]
+            elif mutation == "before-parent-failure": witness.update(started_at=0.5, finished_at=1.0)
+            elif mutation == "after-activation": witness.update(started_at=6.0, finished_at=7.0)
+            elif mutation == "backward-time": witness.update(started_at=4.5, finished_at=4.0)
+            elif mutation == "nan-time": witness["finished_at"] = float("nan")
+            elif mutation == "bool-time": receipt["started_at"] = True
+            elif mutation == "missing-time": del terminal["finished_at"]
+            records[path] = (json.dumps(witness).encode() if mutation == "nan-time"
+                             else canonical(witness))
+            if mutation == "receipt":
+                records[path.replace("terminal.json", "receipt.json")] = b"{}"
+            elif mutation == "receipt-format-only":
+                records[path.replace("terminal.json", "receipt.json")] = json.dumps(witness, indent=2).encode()
+            else:
+                records[path.replace("terminal.json", "receipt.json")] = records[path]
+            with self.subTest(mutation=mutation), self.assertRaises((HistoryError, BuildControlError)):
+                historical_mounts(control, receipt, terminal, compose, source,
+                    runtime_witness=(path, digest(records[path])))
+
+    def test_historical_recovery_witness_requires_bounded_explicit_path_and_raw_digest(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        for pin in ((path, "0" * 64), ("../" + path, digest(records[path])),
+                    (path.replace("terminal.json", "receipt.json"), digest(records[path])),
+                    ("/" + path, digest(records[path])), (path, None), path):
+            with self.subTest(pin=pin), self.assertRaises(HistoryError):
+                historical_mounts(control, receipt, terminal, compose, source, runtime_witness=pin)
+        terminal["state"] = "succeeded"
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source,
+                runtime_witness=(path, digest(records[path])))
+
 
 @unittest.skipUnless(os.name == "posix", "managed helper runs on Linux")
 class WriterBarrierTests(unittest.TestCase):

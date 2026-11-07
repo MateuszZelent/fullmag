@@ -38,21 +38,77 @@ MAX_INPUT = 8 * 1024 * 1024
 
 
 def authored_zarr(raw):
-    """Only a single explicit /user-data Zarr target is eligible in v1."""
+    """Resolve one canonical /user-data Zarr target without executing source."""
     try:
         tree = ast.parse(raw.decode("utf-8"))
     except (ValueError, SyntaxError) as error:
         raise HistoryError("Archived script cannot be parsed") from error
-    targets = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "storage":
-            for keyword in node.keywords:
-                if keyword.arg == "output_dir":
-                    targets.append(keyword.value.value if isinstance(keyword.value, ast.Constant) else None)
-    if len(targets) != 1 or not isinstance(targets[0], str):
-        raise HistoryError("Historical script needs one literal output_dir for archival qualification")
-    target = PurePosixPath(targets[0])
-    if (str(target) != targets[0] or not str(target).startswith("/user-data/")
+
+    storage_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "storage"
+    ]
+    if len(storage_calls) != 1:
+        raise HistoryError("Historical script needs one storage call for archival qualification")
+    values = [keyword.value for keyword in storage_calls[0].keywords
+              if keyword.arg == "output_dir"]
+    if len(values) != 1:
+        raise HistoryError("Historical script needs one output_dir for archival qualification")
+
+    value = values[0]
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        output = value.value
+    elif isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load):
+        name = value.id
+        if any(isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+               for node in ast.walk(tree)):
+            raise HistoryError("Historical output name can be overwritten by a wildcard import")
+        bindings = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                if node.id == name:
+                    bindings.append(node)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == name:
+                    bindings.append(node)
+            elif isinstance(node, ast.arg) and node.arg == name:
+                bindings.append(node)
+            elif isinstance(node, ast.alias):
+                bound_name = node.asname or node.name.split(".", 1)[0]
+                if bound_name == name:
+                    bindings.append(node)
+            elif isinstance(node, ast.ExceptHandler) and node.name == name:
+                bindings.append(node)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+                bindings.append(node)
+            elif node.__class__.__name__ == "MatchAs" and getattr(node, "name", None) == name:
+                bindings.append(node)
+            elif node.__class__.__name__ == "MatchStar" and getattr(node, "name", None) == name:
+                bindings.append(node)
+            elif node.__class__.__name__ == "MatchMapping" and getattr(node, "rest", None) == name:
+                bindings.append(node)
+
+        assignment = None
+        for statement in tree.body:
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and statement.targets[0].id == name):
+                if assignment is not None:
+                    raise HistoryError("Historical output name is assigned more than once")
+                assignment = statement
+        if (assignment is None or len(bindings) != 1
+                or bindings[0] is not assignment.targets[0]
+                or not isinstance(assignment.value, ast.Constant)
+                or not isinstance(assignment.value.value, str)):
+            raise HistoryError("Historical output name is not one stable module-level string literal")
+        output = assignment.value.value
+    else:
+        raise HistoryError("Historical output_dir is not a literal string or stable module-level name")
+
+    target = PurePosixPath(output)
+    if (str(target) != output or not str(target).startswith("/user-data/")
             or ".." in target.parts or target.suffix != ".zarr"):
         raise HistoryError("Historical output is not a canonical /user-data Zarr directory")
     return target
@@ -244,7 +300,23 @@ def helper_args(control, selected, image, store_root, output_root, *, action):
     return args
 
 
+def _runtime_witness_pin(args):
+    relative = getattr(args, "historical_runtime_witness", None)
+    sha = getattr(args, "historical_runtime_witness_sha256", None)
+    if relative is None and sha is None:
+        return None
+    if not isinstance(relative, str) or not isinstance(sha, str) or not SHA.fullmatch(sha):
+        raise HistoryError("Historical runtime witness requires both exact path and SHA-256")
+    path = PurePosixPath(relative)
+    if (str(path) != relative or len(path.parts) != 4
+            or path.parts[0] not in {"resume", "iteration"} or path.parts[1] != "attempts"
+            or not ATTEMPT.fullmatch(path.parts[2]) or path.parts[3] != "terminal.json"):
+        raise HistoryError("Historical runtime witness must identify one control terminal")
+    return relative, sha
+
+
 def host_context(args):
+    witness = _runtime_witness_pin(args)
     import fullmag_storage as storage
     from docker_development_inputs import select_checkout
     from docker_compose_identity import compose_project_identity
@@ -290,7 +362,8 @@ def host_context(args):
     old_compose = control.read(old_root + "/compose.json")
     if canonical(development) != canonical(control.read(old_root + "/receipt.json")):
         raise HistoryError("Historical development receipt differs from terminal")
-    old_state, old_user = historical_mounts(control, receipt, development, old_compose, selected)
+    old_state, old_user = historical_mounts(control, receipt, development, old_compose, selected,
+                                          runtime_witness=witness)
     state_root = storage.validate_path(old_state, layout["runtime_root"], "historical state")
     store = _directory(state_root / "runs/docker-all/session-store")
     script_path = Path(receipt["source_root"]) / receipt["source_relative"]
@@ -363,6 +436,10 @@ def main():
         parser.add_argument("--activation", required=True)
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--plan-sha256")
+        parser.add_argument("--historical-runtime-witness",
+            help="Pinned resume/attempts/<id>/terminal.json or iteration equivalent for a failed historical start")
+        parser.add_argument("--historical-runtime-witness-sha256",
+            help="Raw SHA-256 of that immutable pre-activation terminal; requires its matching receipt")
         result = run(parser.parse_args())
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
