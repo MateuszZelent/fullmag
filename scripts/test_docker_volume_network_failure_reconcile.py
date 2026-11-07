@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 import subprocess
 import unittest
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -56,6 +57,90 @@ def helper_doc():
         "NetworkSettings": {"Networks": {}},
             "Mounts": [],
     }
+
+
+class WindowsBatchTests(unittest.TestCase):
+    def test_full_sources_run_in_bounded_parallel_and_preserve_deterministic_results(self):
+        sources={f'C:\\foreign\\{i}':{'id':str(i)} for i in range(8)}
+        lock=threading.Lock()
+        barrier=threading.Barrier(4,timeout=10)
+        active=maximum=0
+        seen=[]
+        context={'linux':{'root_device':1},'distro':'Ubuntu'}
+        def observe(source,native,ctx,pin):
+            nonlocal active,maximum
+            with lock:
+                active+=1
+                maximum=max(maximum,active)
+                seen.append(source)
+            try:
+                barrier.wait()
+                ctx['linux']['root_device']=2
+                return {'kind':'present','native':{'source':source},'mapping':{'path':native}}
+            finally:
+                with lock: active-=1
+        with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
+            results=reconcile._windows_source_batch(sources,context)
+        self.assertEqual(maximum,4)
+        self.assertEqual(active,0)
+        self.assertCountEqual(seen,sources)
+        self.assertEqual(list(results),list(sources))
+        self.assertEqual(context['linux']['root_device'],1)
+        self.assertEqual(set(results),set(sources))
+        for source,evidence in results.items(): self.assertEqual(evidence['native']['source'],source)
+
+    def test_failure_or_incomplete_result_discards_whole_batch_and_joins_workers(self):
+        for result in (BuildControlError('native qualification refused'),TimeoutError('timeout'),None,{}):
+            with self.subTest(result=result):
+                def observe(*args):
+                    if isinstance(result,Exception): raise result
+                    return result
+                with patch.object(reconcile,'_observe_windows_source',side_effect=observe):
+                    with self.assertRaises((BuildControlError,TimeoutError)):
+                        reconcile._windows_source_batch({'C:\\foreign':{'id':'b'}},{})
+
+    def test_prewarm_deduplicates_source_but_never_consumer_authorization(self):
+        source=r'C:\git\foreign'
+        stopped={'id':'b'*64,'running':False}
+        running={'id':'c'*64,'running':True}
+        docs=[{**stopped,'Mounts':[{'Type':'bind','Source':source}]},
+              {**running,'Mounts':[{'Type':'bind','Source':source}]}]
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        evidence={'kind':'absent-stopped','native':{},'mapping':{}}
+        def must_stay_stopped(pin):
+            if pin['running']: raise BuildControlError('running consumer')
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
+             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id'],'running':d['running']}), \
+             patch.object(reconcile,'_observe_windows_source',return_value=evidence) as measure, \
+             patch.object(reconcile.absent_windows,'_stopped',side_effect=must_stay_stopped):
+            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=docs)
+            self.assertEqual(measure.call_count,1)
+            qualify(stopped,source)
+            with self.assertRaisesRegex(BuildControlError,'running consumer'): qualify(running,source)
+
+    def test_prewarm_matches_lazy_proof_and_rechecks_context_after_full_refresh(self):
+        source=r'C:\git\foreign'
+        doc={'id':'b'*64,'Mounts':[{'Type':'bind','Source':source}]}
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        linux={'root_device':1,'engine_id':'engine','source_root':'/source','reference_root':'/reference'}
+        proof={'kind':'present','native':{'identity':'full'},'mapping':{'path':'/mapped'}}
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value=linux), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}) as engine, \
+             patch.object(reconcile.windows,'_container_pin',side_effect=lambda d:{'id':d['id']}), \
+             patch.object(reconcile.windows,'_inspect',return_value=doc), \
+             patch.object(reconcile,'_observe_windows_source',return_value=proof):
+            lazy,verify_lazy=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
+            expected=lazy(doc,source)
+            verify_lazy(refresh_windows=True)
+            parallel,verify_parallel=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine',candidates=[doc])
+            self.assertEqual(parallel(doc,source),expected)
+            verify_parallel(refresh_windows=True)
+            engine.return_value={'ID':'changed'}
+            with self.assertRaisesRegex(BuildControlError,'context changed'):
+                verify_parallel(refresh_windows=True)
 
 
 class NetworkFailureValidatorsTests(unittest.TestCase):
@@ -186,7 +271,7 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
             patch.object(reconcile.windows, "_engine", return_value={"ID": "engine"}),
             patch.object(reconcile.windows, "_container_pin", return_value=pin),
             patch.object(reconcile, "_observe_windows_source",
-                         side_effect=[{"kind": "present", "inode": 12}, {"kind": "present", "inode": 13}]),
+                         side_effect=[{"kind": "present", "inode": 12, "native": {}, "mapping": {}}, {"kind": "present", "inode": 13, "native": {}, "mapping": {}}]),
         ):
             qualify, verify = reconcile._initial_desktop_qualifier(IDENTITY, compose, "engine")
             qualify({}, source)
@@ -194,6 +279,21 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
                 verify(refresh_windows=True)
             self.assertIn(source, str(refused.exception))
             self.assertIn('observation.inode', str(refused.exception))
+
+    def test_parallel_refresh_still_rejects_ordinary_inventory_drift(self):
+        compose={'services':{'backend':{'volumes':[{'type':'bind','target':'/state','source':'/reference'}]}}}
+        source=r'C:\git\foreign'
+        before={'kind':'present','native':{'candidate':{'descendants':{'entries':1}}},'mapping':{}}
+        after={'kind':'present','native':{'candidate':{'descendants':{'entries':2}}},'mapping':{}}
+        with patch.dict(reconcile.os.environ,{'WSL_DISTRO_NAME':'Ubuntu'}), \
+             patch.object(reconcile.windows,'_linux_identity',return_value={'root_device':1,'engine_id':'engine'}), \
+             patch.object(reconcile.windows,'_engine',return_value={'ID':'engine'}), \
+             patch.object(reconcile.windows,'_container_pin',return_value={'id':'b'*64}), \
+             patch.object(reconcile,'_observe_windows_source',side_effect=[before,after]):
+            qualify,verify=reconcile._initial_desktop_qualifier(IDENTITY,compose,'engine')
+            qualify({},source)
+            with self.assertRaisesRegex(BuildControlError,'observation.native.candidate.descendants.entries'):
+                verify(refresh_windows=True)
 
     def test_vanishing_container_retries_full_inventory(self):
         error = BuildControlError("error: no such object: " + "c" * 64)
