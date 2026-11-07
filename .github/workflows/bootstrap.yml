@@ -1032,6 +1032,7 @@ jobs:
           python -B scripts/test_docker_volume_reconcile.py -v
           python -B scripts/test_docker_volume_resume_layout_refusal.py -v
           python -B scripts/test_docker_volume_network_failure_reconcile.py -v
+          python -B scripts/test_docker_volume_recreated_network_history.py -v
           python -B scripts/test_docker_dev_network.py -v
           python -B scripts/test_docker_volume_development_interrupted.py -v
           python -B scripts/test_docker_volume_resume_interrupted.py -v

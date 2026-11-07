@@ -418,7 +418,6 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
             "Original unknown receipt archive is absent or differs from its immutable pin")
     absent = dict(publications)
     absent.pop(root + "/unknown-receipt.json")
-    validate_absent_publications(absent, args.attempt)
     attempts_result = bounded_capture(control.helper_args(_attempt_inventory_script(control)), data=b"", timeout=60)
     require(attempts_result.returncode == 0, "Development attempt inventory could not be read")
     try:
@@ -427,7 +426,17 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
     except UnicodeDecodeError as error:
         raise BuildControlError("Development attempt inventory is not UTF-8") from error
     require(all(len(item) == 2 for item in attempts), "Development attempt inventory is malformed")
-    validate_initial_artifacts(attempts, args.attempt)
+    retained_history = None
+    if getattr(args, "recreation_attempt", None):
+        from docker_volume_recreated_network_history import validate_recreated_history
+        retained_history = validate_recreated_history(
+            control, recreation_attempt=args.recreation_attempt,
+            recreation_sha256=args.recreation_sha256, failed_attempt=args.attempt,
+            original=original, publications=absent, attempts=attempts,
+        )
+    else:
+        validate_absent_publications(absent, args.attempt)
+        validate_initial_artifacts(attempts, args.attempt)
 
     network_result = docker_capture("network", "inspect", network_name, allow_failure=True)
     network_error = validate_network_absence(
@@ -468,7 +477,9 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
         **absent_evidence,
         "container_inventory": inventory,
         "development_attempts": attempts,
-        "admission_scope": "initial-failure-only-group-local",
+        "admission_scope": ("recreated-failure-only-group-local" if retained_history
+                            else "initial-failure-only-group-local"),
+        **({"retained_history": retained_history} if retained_history else {}),
     }
 
 
@@ -490,6 +501,8 @@ def _proof_bytes(observation: dict[str, object], original: dict[str, object]) ->
         "container_inventory": observation["container_inventory"],
         "development_attempts": observation["development_attempts"],
         "admission_scope": observation["admission_scope"],
+        **({"retained_history": observation["retained_history"]}
+           if observation.get("retained_history") else {}),
         "original_error_sha256": digest(str(original["error"]).encode("utf-8")),
         **{key: observation[key] for key in (
             "helper_state", "helper_absence_probe_sha256", "control_volume_fingerprint",
@@ -594,11 +607,35 @@ def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
     )
 
 
+def _retained_record_checks(control, records):
+    require(isinstance(records, dict) and 2 <= len(records) <= 32,
+            "Retained history record inventory is malformed")
+    require(all(path in records and isinstance(records[path], str)
+                for path in ("development/current.json", "development/verified.json")),
+            "Retained history must pin both prior pointers")
+    script = "history_record() { local p=\"$1\" h=\"$2\" q; q=$(dirname \"$p\"); "
+    script += "while test \"$q\" != /; do test ! -L \"$q\"; test -d \"$q\"; q=$(dirname \"$q\"); done; "
+    script += "test ! -L \"$p\"; if test \"$h\" = absent; then test ! -e \"$p\"; else "
+    script += "test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
+    script += "test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = \"$h\"; fi; }; "
+    for path, value in sorted(records.items()):
+        require(isinstance(path, str) and re.fullmatch(r"[A-Za-z0-9_./-]+", path)
+                and str(PurePosixPath(path)) == path and not path.startswith("/")
+                and ".." not in PurePosixPath(path).parts,
+                "Retained history record path is not portable")
+        require(value is None or (isinstance(value, str) and SHA.fullmatch(value)),
+                "Retained history record digest is malformed")
+        script += f"history_record '{control.path(path)}' '{value if value is not None else 'absent'}'; "
+    return script
+
+
 def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_sha: str,
                 proof_sha: str, result_sha: str, prepared_sha: str, *,
                 recover_absent_helper: bool = False, operation_lock_identity: str | None = None,
                 prepared_documents: dict[str, bytes] | None = None,
-                recovery: dict[str, object] | None = None) -> str:
+                recovery: dict[str, object] | None = None,
+                retained_records: dict[str, str | None] | None = None) -> str:
+    history_checks = _retained_record_checks(control, retained_records) if retained_records is not None else ""
     root = control.path("development/attempts/" + attempt)
     current = control.path("development/current.json")
     verified = control.path("development/verified.json")
@@ -612,6 +649,11 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
     lock = root + "/network-failure-reconcile.lock"
     active = control.path("active")
     operation_lock = control.path("operation.lock")
+    publish_targets = (receipt, terminal) if retained_records is not None else (receipt, current, terminal)
+    pointer_checks = history_checks if retained_records is not None else (
+        f"test ! -L '{current}'; test ! -e '{current}'; "
+        f"test ! -L '{verified}'; test ! -e '{verified}'; "
+    )
     inputs = (active, operation_lock, receipt, compose,
               archive, proof, result, prepared, *(control.path(path) for path in previous_files))
     parents = set("/".join(path.split("/")[:-1]) for path in (*inputs, current, verified, terminal, lock))
@@ -653,7 +695,7 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         active_sha = digest((attempt + "\n").encode())
         owner_check = f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
         release = (
-            "; for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
+            "; for p in " + " ".join("'" + p + "'" for p in publish_targets) + "; do "
             "test ! -L \"$p\"; test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
             f"test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = '{result_sha}'; done; "
             f"test ! -L '{active}'; test -f '{active}'; test $(stat -c %h '{active}') = 1; "
@@ -684,11 +726,11 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
             f"test ! -L '{root}'; test -d '{root}'; test \"$(readlink -f '{root}')\" = '{root}'; "
             + " ".join(f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
                        for path in (active, receipt, compose)) + " "
-            + owner_check + previous_checks + " "
+            + owner_check + previous_checks + pointer_checks + " "
             + f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
             + f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
             + " ".join(f"test ! -L '{path}'; test ! -e '{path}';"
-                       for path in (*expected, current, verified, terminal, lock)) + " "
+                       for path in (*expected, *((current, verified) if retained_records is None else ()), terminal, lock)) + " "
         )
         reconciliation = prepared.rsplit("/", 1)[0]
         preparation += (
@@ -721,10 +763,9 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         f"test \"$(sha256sum '{proof}' | cut -d' ' -f1)\" = '{proof_sha}'; "
         f"test \"$(sha256sum '{result}' | cut -d' ' -f1)\" = '{result_sha}'; "
         f"test \"$(sha256sum '{prepared}' | cut -d' ' -f1)\" = '{prepared_sha}'; "
-        f"test ! -L '{current}'; test ! -e '{current}'; "
-        f"test ! -L '{verified}'; test ! -e '{verified}'; "
+        + pointer_checks +
         f"test ! -L '{terminal}'; test ! -e '{terminal}'; "
-        + owner_check + "for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
+        + owner_check + "for p in " + " ".join("'" + p + "'" for p in publish_targets) + "; do "
         "test ! -L \"$p\"; parent=$(dirname \"$p\"); "
         "test \"$(readlink -f \"$parent\")\" = \"$parent\"; "
         f"if test \"$p\" = '{receipt}'; then "
@@ -765,6 +806,15 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     require(isinstance(args.engine_id, str) and args.engine_id and len(args.engine_id) <= 256
             and "\x00" not in args.engine_id,
             "engine-id is not a bounded Docker engine identity")
+    recreated = getattr(args, "recreation_attempt", None)
+    recreated_sha = getattr(args, "recreation_sha256", None)
+    require(bool(recreated) == bool(recreated_sha), "Recreated recovery requires paired receipt pins")
+    if recreated:
+        require(isinstance(recreated, str) and TOKEN.fullmatch(recreated), "Invalid recreation attempt")
+        _require_sha(recreated_sha, "recreation-sha256")
+        require(not any(getattr(args, key, None) for key in (
+            "recover_absent_helper", "resume_prepared_sha256", "recovery_id")),
+            "Recreated recovery cannot combine with absent-owner or prepared recovery")
     selected, identity, control = _identity_and_control(args.source_root)
     require(identity["source_root"] == str(selected), "Selected checkout identity is not canonical")
 
@@ -829,7 +879,8 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     archive_paths = () if recovery else (root + "/unknown-receipt.json",)
     for relative in (*archive_paths, proof_relative, result_relative,
                      prepared_relative, root + "/network-failure-reconcile.lock",
-                     "development/current.json", "development/verified.json", root + "/terminal.json"):
+                     *(("development/current.json", "development/verified.json") if not recreated else ()),
+                     root + "/terminal.json"):
         require(read_raw(control, relative, optional=True) is None,
                 "An earlier or partial failure reconciliation publication exists")
     absent_helper = bool(getattr(args, "recover_absent_helper", False))
@@ -850,14 +901,21 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         operation_lock_identity=second.get("operation_lock_identity"),
         prepared_documents=prepared_documents,
         **({"recovery": recovery} if recovery else {}),
+        **({"retained_records": second["retained_history"]["retained_records"]} if recreated else {}),
     )), data=_prepared_input(prepared_documents), timeout=90)
     require(committed.returncode == 0,
             "Failure publication outcome is unknown; preserve exact attempt and inspect its receipts")
-    for relative in (root + "/receipt.json", "development/current.json", root + "/terminal.json"):
+    for relative in (root + "/receipt.json", *(("development/current.json",) if not recreated else ()), root + "/terminal.json"):
         require(read_raw(control, relative) == result_raw,
                 "Failure terminal publication differs from its exact prepared result")
-    require(read_raw(control, "development/verified.json", optional=True) is None,
-            "Failure reconciliation unexpectedly published a verified pointer")
+    if recreated:
+        for relative, expected in second["retained_history"]["retained_records"].items():
+            raw = read_raw(control, relative, optional=True)
+            require((digest(raw) if raw is not None else None) == expected,
+                    "Retained history changed during failure publication")
+    else:
+        require(read_raw(control, "development/verified.json", optional=True) is None,
+                "Failure reconciliation unexpectedly published a verified pointer")
     deadline = time.monotonic() + 30
     helper_name = "fullmag-control-" + args.attempt
     while time.monotonic() < deadline:
@@ -884,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="explicitly recover an absent original helper under the existing operation lock")
     parser.add_argument("--resume-prepared-sha256")
     parser.add_argument("--recovery-id")
+    parser.add_argument("--recreation-attempt", help="Exact successful fresh-state recreation operation")
+    parser.add_argument("--recreation-sha256", help="SHA-256 of its raw terminal receipt")
     parser.add_argument("--apply", action="store_true", help="publish failure-only terminal after full re-observation")
     args = parser.parse_args(argv)
     try:

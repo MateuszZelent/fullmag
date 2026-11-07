@@ -44,6 +44,19 @@ COMPOSE_ERROR = "\n".join((
 
 
 class RecreatedNetworkFailureTests(unittest.TestCase):
+    def test_recreated_mode_requires_paired_pins_and_refuses_other_recovery_modes(self):
+        base = dict(attempt=ATTEMPT, receipt_sha256="a" * 64, compose_sha256="b" * 64,
+                    engine_id="engine", source_root="/source", recreation_attempt="c" * 32,
+                    recreation_sha256="d" * 64, recover_absent_helper=False,
+                    resume_prepared_sha256=None, recovery_id=None)
+        for overrides in ({"recreation_sha256": None}, {"recreation_attempt": None},
+                          {"recover_absent_helper": True}, {"recovery_id": "e" * 32},
+                          {"resume_prepared_sha256": "f" * 64}):
+            with self.subTest(overrides=overrides), patch.object(reconcile, "_identity_and_control") as identify:
+                with self.assertRaises(BuildControlError):
+                    reconcile.reconcile(SimpleNamespace(**{**base, **overrides}))
+                identify.assert_not_called()
+
     def test_exact_owned_network_removal_then_pool_failure(self):
         prefix = f"Network {NETWORK} Removing\nNetwork {NETWORK} Removed\n"
         expected = reconcile.validate_pool_failure(COMPOSE_ERROR, NETWORK, PROJECT)
@@ -815,7 +828,7 @@ exit "$status"
 
 
 class PreparedGenerationShellTests(unittest.TestCase):
-    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False, atomic_prepare=False):
+    def run_publication(self, *, corrupt=False, symlink=False, recovery=False, corrupt_previous=False, atomic_prepare=False, history=False, corrupt_history=False, symlink_history=False, late_owner=False):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
             control = SimpleNamespace(path=lambda relative: str(base / relative))
@@ -850,6 +863,26 @@ class PreparedGenerationShellTests(unittest.TestCase):
                     recovery_args['prepared_documents'] = docs
                 if corrupt_previous:
                     (root/'reconciliation/prepared.json').write_bytes(b'changed')
+            if history:
+                for name in ("current.json", "verified.json"):
+                    (base / "development" / name).write_bytes(b"old-success")
+                records = {"development/" + name: reconcile.digest(b"old-success")
+                           for name in ("current.json", "verified.json")}
+                records["development/absent-owner.json"] = None
+                if late_owner:
+                    (base / "development/absent-owner.json").write_bytes(b"new-owner")
+                recovery_args["retained_records"] = records
+                if corrupt_history:
+                    (base / "development/current.json").write_bytes(b"changed-history")
+                if symlink_history:
+                    (base / "development/current.json").unlink()
+                    (base / "development/current.json").symlink_to(base / "development/verified.json")
+                if atomic_prepare:
+                    names = ("unknown-receipt.json", "reconciliation/network-failure-proof.json",
+                             "reconciliation/result.json", "reconciliation/prepared.json")
+                    recovery_args["prepared_documents"] = {str(root / name): values[name] for name in names}
+                    for name in names:
+                        (root / name).unlink()
             (base / "active").write_text(ATTEMPT + "\n")
             if corrupt:
                 (root / "compose.json").write_bytes(b"changed")
@@ -864,17 +897,37 @@ class PreparedGenerationShellTests(unittest.TestCase):
                 ], **recovery_args)
                 completed = subprocess.run(["bash", "-euc", script], input=reconcile._prepared_input(recovery_args.get("prepared_documents")), capture_output=True)
             self.assertEqual((base / "active").read_text(), ATTEMPT + "\n")
-            self.assertFalse((base / "development/verified.json").exists())
-            if corrupt or symlink or corrupt_previous:
+            if history:
+                self.assertEqual((base / "development/verified.json").read_bytes(), b"old-success")
+            else:
+                self.assertFalse((base / "development/verified.json").exists())
+            if corrupt or symlink or corrupt_previous or corrupt_history or symlink_history or late_owner:
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertEqual((root / "receipt.json").read_bytes(), b"original")
                 self.assertFalse((root / "terminal.json").exists())
-                self.assertFalse((base / "development/current.json").exists())
+                if not history:
+                    self.assertFalse((base / "development/current.json").exists())
+                if history and atomic_prepare:
+                    self.assertFalse((root / "reconciliation/prepared.json").exists())
             else:
                 self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-                for path in (root / "receipt.json", root / "terminal.json", base / "development/current.json"):
+                if history:
+                    self.assertEqual((base / "development/current.json").read_bytes(), b"old-success")
+                for path in (root / "receipt.json", root / "terminal.json", *((base / "development/current.json",) if not history else ())):
                     self.assertEqual(path.read_bytes(), b"result")
                 self.assertEqual((root / "unknown-receipt.json").read_bytes(), b"original")
+
+    def test_recreated_failure_refuses_new_owner_before_any_preparation(self):
+        self.run_publication(history=True, late_owner=True, atomic_prepare=True)
+
+    def test_recreated_failure_preserves_prior_success_and_publishes_only_target(self):
+        self.run_publication(history=True, atomic_prepare=True)
+
+    def test_recreated_failure_rejects_changed_prior_pointer_before_preparation(self):
+        self.run_publication(history=True, corrupt_history=True, atomic_prepare=True)
+
+    def test_recreated_failure_rejects_symlink_prior_pointer(self):
+        self.run_publication(history=True, symlink_history=True, atomic_prepare=True)
 
     def test_failure_publication_preserves_owner_and_original(self):
         self.run_publication()

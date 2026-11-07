@@ -1286,3 +1286,27 @@ Plików kontrolera nie zmieniaj pomiędzy stopem i odtworzeniem. Tryb nie
 przywraca starego runu, nie powtarza skryptu ani Compute i nie zmienia
 nieudanych lub oczekujących etapów na Succeeded. Nową pracę można przyjąć
 dopiero po potwierdzeniu gotowości nowego runtime.
+
+
+### Wyczerpana pula adresów po poprawnym odtworzeniu
+
+Jeśli archiwizacja zakończyła się sukcesem, a następny start nie utworzył
+sieci ani usług przez `all predefined address pools have been fully subnetted`,
+recovery wymaga dodatkowych pinów: `--recreation-attempt` i
+`--recreation-sha256` dla surowego terminalnego receiptu zakończonego odtworzenia.
+Skrypt `scripts/docker_volume_network_failure_reconcile.py` domyślnie wykonuje
+wyłącznie podgląd; `--apply` publikuje wynik błędu dopiero po stabilnych
+obserwacjach oraz transakcyjnej kontroli zachowanych rekordów.
+
+Tryb wymaga dokładnego powiązania starego development, stopu i native drainu,
+archiwum runtime oraz nowej nieudanej próby. Zachowuje poprzednie
+`development/current.json` i `development/verified.json`; zapisuje wynik tylko
+w receipcie i terminalu nieudanego startu. Nie nadaje prawa odtworzenia
+starego runu ani nie uruchamia solvera. Nie łączy się z recovery nieobecnego
+helpera ani wznowieniem częściowej publikacji.
+
+Przed następnym startem sprawdź kolizje podsieci i trasy hosta oraz podaj
+jawne `--network-subnet`. Nie usuwaj cudzych sieci. Hash receiptu pakietu w
+pozostawionej proweniencji jest referencją; recovery sprawdza zgodność commit,
+snapshot i tożsamości native ze zarchiwizowanym drainem, a nie deklaruje
+ponownego odczytania usuniętego kontenera lub kwalifikacji jego binariów.
