@@ -2261,12 +2261,14 @@ export async function runStudyStageRerun() {
       action = page.getByRole("button", { name: "Run this stage", exact: true });
     } else {
       if (mode === "texture-study") {
-        for (const parentId of ["model:study", "model:study:stages"]) {
+        const expandParent = async (parentId) => {
           const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
           await parent.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
           await parent.focus();
           if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
-        }
+        };
+        await expandParent("model:study");
+        await expandParent("model:study:stages");
         const selected = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-b"]');
         await selected.click();
         await page.getByRole("button", { name: "Run this stage", exact: true })
