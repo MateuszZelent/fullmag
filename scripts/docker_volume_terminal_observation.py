@@ -896,11 +896,107 @@ def _observation_stop(control, read_control, *, source_root, attempt, config_sha
     from docker_volume_accepted_reattach import _control_bytes
     backend_id = actual.get("backend", {}).get("Id")
     successor = None
+    preowner_records = []
+    cold_records = []
     if isinstance(backend_id, str) and re.fullmatch(r"[0-9a-f]{64}", backend_id):
         journal = "verification/preowner-drained-stop-" + backend_id
-        records = [_control_bytes(control, journal + suffix, optional=True, maximum=8 * 1024 * 1024)
-                   for suffix in (".json", ".intent.json")]
-        if any(raw is not None for raw in records):
+        preowner_records = [_control_bytes(control, journal + suffix, optional=True, maximum=8 * 1024 * 1024)
+                            for suffix in (".json", ".intent.json")]
+        import docker_volume_cold_budget_restore as cold
+        cold_records = [_control_bytes(control, relative, optional=True, maximum=8 * 1024 * 1024)
+                        for relative in cold._paths(backend_id)]
+        if any(raw is not None for raw in cold_records) and any(raw is not None for raw in preowner_records):
+            raise ValueError("terminal observation has ambiguous cold and pre-owner stop authorities")
+        if any(raw is not None for raw in cold_records):
+            parent_root = "development/attempts/" + attempt + "/"
+            previous_raw = read_control(parent_root + "terminal.json")
+            document_raw = read_control(parent_root + "compose.json")
+            previous = decode(previous_raw)
+            document = decode(document_raw)
+            context = cold.retained_context(control, previous, document, actual)
+            require(isinstance(context, cold.ColdBudgetRestoreContext),
+                    "terminal observation cold stop is not a typed retained authority")
+            cold_journal = cold.authenticate_journal(control, context.get("cold_budget_restore"))
+            observed = cold_journal.get("observation", {})
+            require(isinstance(observed, Mapping), "terminal observation cold journal has no observation")
+
+            require(previous_raw == canonical(previous) + b"\n"
+                    and document_raw == canonical(document) + b"\n"
+                    and sha(previous_raw) == observed.get("parent_terminal_sha256")
+                    and sha(document_raw) == observed.get("compose_sha256"),
+                    "terminal observation cold parent records changed")
+            inputs = previous.get("inputs", {})
+            require(document.get("name") == control.project
+                    and previous.get("attempt") == attempt == observed.get("attempt")
+                    and previous.get("config_sha256") == config_sha256 == observed.get("config_sha256")
+                    and sha(canonical(document)) == config_sha256
+                    and inputs.get("config_sha256", config_sha256) == config_sha256
+                    and previous.get("compose_project", control.project) == control.project
+                    and previous.get("control_volume", control.volume) == control.volume
+                    and inputs.get("source_root") == source_root == observed.get("source_root")
+                    and observed.get("control_namespace") == getattr(control, "namespace", ""),
+                    "terminal observation cold source, config or group differs")
+            require(isinstance(proof, Mapping)
+                    and proof.get("schema") in {PROOF_SCHEMA, COMPUTE_PROOF_SCHEMA}
+                    and proof.get("compose_project") == control.project
+                    and proof.get("control_volume") == control.volume
+                    and proof.get("source_root") == source_root
+                    and proof.get("image_id") == actual.get("backend", {}).get("Image")
+                    and proof.get("image_id") == inputs.get("image_id"),
+                    "terminal observation proof belongs to another cold group or image")
+
+            from docker_volume_preowner_drained import _terminal_observation_metadata
+            metadata = _terminal_observation_metadata(previous)
+            digest(proof_sha256)
+            digest(metadata.get("proof_sha256"))
+            require(metadata.get("proof_sha256") == proof_sha256,
+                    "terminal observation cold parent authorizes another proof")
+            private_proof = "runtime-control/terminal-observation/" + proof_sha256 + "/proof.json"
+            proof_raw = read_control(private_proof)
+            require(sha(proof_raw) == proof_sha256 and decode(proof_raw) == dict(proof),
+                    "terminal observation private proof differs from the parent authorization")
+            history = observed.get("history", {})
+            original_attempt = proof.get("original_iteration")
+            original_sha = proof.get("operation_sha256")
+            digest(original_sha)
+            require(isinstance(original_attempt, str)
+                    and re.fullmatch(r"[0-9a-f]{32}", original_attempt) is not None
+                    and isinstance(history, Mapping)
+                    and isinstance(history.get("control_hashes"), Mapping),
+                    "terminal observation cold history pins are malformed")
+            history_attempt = history.get("iteration")
+            history_sha = history.get("control_hashes", {}).get(
+                "iteration/attempts/" + original_attempt + "/terminal.json")
+            digest(history_sha)
+            digest(metadata.get("stop_sha256"))
+            digest(history.get("native_config_sha256"))
+            original_raw = read_control("iteration/attempts/" + original_attempt + "/terminal.json")
+            original_stop = decode(original_raw)
+            require(metadata.get("stop_attempt") == original_attempt == history_attempt
+                    and metadata.get("stop_sha256") == original_sha == history_sha
+                    and original_raw == canonical(original_stop) + b"\n"
+                    and sha(original_raw) == original_sha
+                    and original_stop.get("config_sha256") == proof.get("config_sha256")
+                    and original_stop.get("inputs", {}).get("config_sha256") == proof.get("config_sha256")
+                    and context.get("previous_config_sha256") == history.get("native_config_sha256")
+                    and proof.get("native_config_sha256") == history.get("native_config_sha256"),
+                    "terminal observation cold history no longer authorizes the original proof")
+
+            run_id = portable(proof.get("run_id"))
+            intent_sha = digest(proof.get("intent_sha256"))
+            catalog_sha = digest(proof.get("catalog_sha256"))
+            run_pins = observed.get("run_pins")
+            require(isinstance(run_pins, Mapping)
+                    and run_pins.get(run_id + "/run_intent.json") == intent_sha
+                    and run_pins.get(run_id + "/run_catalog.json") == catalog_sha,
+                    "terminal observation run is not pinned by the cold stop")
+            original = (original_attempt, original_sha)
+            if stop_pin is not None and original != stop_pin:
+                raise ValueError("terminal observation predecessor cold stop changed")
+            # Cold recovery keeps its own typed admission journal. This links
+            # only the parent's existing observation permission, never Start.
+            return *original, None
+        if any(raw is not None for raw in preowner_records):
             from docker_volume_preowner_drained import retained_context
             parent_root = "development/attempts/" + attempt + "/"
             previous = decode(read_control(parent_root + "terminal.json"))
