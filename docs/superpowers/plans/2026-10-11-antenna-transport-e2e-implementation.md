@@ -5076,3 +5076,21 @@ proponuje jedno przygotowanie i jeden warunkowy V/J/H, bez retry,
 z niezmienioną fizyką i limitami; wymaga decyzji, bo ostatnia zgoda
 jawnie wykluczała Prepare/Solve. Kontrola Browser/WebGL oczekuje świeżej
 karty użytkownika. Cały celE0–E12 i reprodukcja publikacji pozostają otwarte.
+
+## Checkpoint 08.11.2026 — zamknięty odbiór dziewięciu kontroli referencyjnych
+
+Odczytano końcowy receipt próbyc9a5ddf707e341da9cc9d2a2b48bea3e:
+succeeded/exit0,9/9PASS,worker zebrany i źródła stabilne.
+Stare progress8/9 jest historyczne. Właściwy snapshot żądania b7b187…
+zgadza się z result i worker-exit; root/request.json był starszym dokumentem.
+Audyt bez nowego całkowania ponownie uwierzytelnił trzy pełne źródła,
+sprawdził20GET i przeliczył normy różnic z zapisanych wektorów.
+Maksymalna różnica9kontroli wynosi4,0531741e−6A/m; wszystkie ustalone bramki PASS.
+
+Komplet32plików/419235853B wejść, kodu, danych i wyników zachowano również
+na ext4 WSL i zweryfikowano jako właściciel worktree, przy prywatnym0700.
+[Raport, piny i ograniczenia](2026-11-08-gsg-nine-point-reference-acceptance.md).
+Nie wykonano nowego Prepare/Solve/reference. EtaFAIL, kwalifikacja źródła
+oraz odtworzenie publikacji pozostają otwarte. W chwili tego odbioru eksperyment
+corner25 i kontrola w świeżej karcie UI oczekiwały odpowiedzi; późniejszą zgodę
+i wynik przygotowania opisuje następny checkpoint.
