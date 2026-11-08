@@ -1146,6 +1146,72 @@
       "path": "packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py",
       "symbol": "_reject_unlowered_scene_fields",
       "responsibility": "Admit the validated thermal study configuration through the strict shared Scene-to-ProblemIR/ExecutionConfig path without discarding it."
+    },
+    {
+      "id": "fem-compact-marker-maps",
+      "path": "backends/fem/core/fem_marker_map.hpp",
+      "symbol": "class CompactMarkerMap",
+      "responsibility": "Own deterministic O(distinct markers) forward/reverse domain and boundary maps; preserve canonical zero."
+    },
+    {
+      "id": "fem-compact-import",
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp",
+      "symbol": "build_mfem_mesh",
+      "responsibility": "Publish compact maps with a validated MFEM mesh and preserve canonical topology and buffers."
+    },
+    {
+      "id": "fem-compact-poisson-selectors",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Translate canonical Poisson and periodic selectors before boundary masks."
+    },
+    {
+      "id": "fem-u32-poisson-abi",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_create_v5",
+      "responsibility": "Versioned u32 selector override before context initialization; retain legacy layouts."
+    },
+    {
+      "id": "fem-canonical-transport-digest",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp",
+      "symbol": "compute_accepted_terminal_content_digest",
+      "responsibility": "Reverse compact attributes to canonical labels in accepted source identity."
+    },
+    {
+      "id": "fem-compact-marker-regression",
+      "path": "backends/fem/tests/regional_marker_map_contract.cpp",
+      "symbol": "run_regional_marker_cpu_contract",
+      "responsibility": "Actual MFEM imports and H/E/directional derivative and selector regressions; GPU counterpart is separately gated."
+    },
+    {
+      "id": "regional-common-convergence",
+      "path": "scripts/benchmarks/regional_fdm_fem_convergence.py",
+      "symbol": "main",
+      "responsibility": "Pinned analytic pure-damping rod with DG0 material jumps and independent energy/field/amplitude convergence gates."
+    },
+    {
+      "id": "python-canonical-u32-markers",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_canonical_marker_array",
+      "responsibility": "Validate before unsigned conversion, preserving old nonnegative int32 mesh buffers and rejecting negative, fractional and boolean values."
+    },
+    {
+      "id": "interchange-compact-marker-tags",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "_positive_export_tags",
+      "responsibility": "Assign bounded positive interchange aliases; canonical IDs including air zero are restored from hash-bound sidecars."
+    },
+    {
+      "id": "accepted-canonical-u32-decoder",
+      "path": "crates/fullmag-antenna-artifacts/src/charge.rs",
+      "symbol": "decode_accepted_terminal_charge_record",
+      "responsibility": "Validate and retain canonical u32 attributes in accepted source payloads, separately from solver iteration limits."
+    },
+    {
+      "id": "public-fem-u32-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_fem_u32_marker_roundtrip.py",
+      "symbol": "class FemU32MarkerRoundTripTests",
+      "responsibility": "Check high u32 authoring, facet incidence, old NPZ fingerprints, Gmsh/COMSOL and native artifact roundtrip."
     }
   ],
   "public_api": {

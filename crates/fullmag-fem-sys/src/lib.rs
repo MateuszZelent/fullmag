@@ -903,6 +903,7 @@ pub struct fullmag_fem_mixed_body_certificate_v2 {
 }
 
 pub const FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION: u32 = 3;
+pub const FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION: u32 = 4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -911,6 +912,16 @@ pub struct fullmag_fem_plan_desc_v3 {
     pub struct_size: u32,
     pub base: fullmag_fem_plan_desc_v2,
     pub mixed_body_certificate_v2: *const fullmag_fem_mixed_body_certificate_v2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_plan_desc_v4 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: fullmag_fem_plan_desc_v3,
+    pub poisson_boundary_marker: u32,
+    pub reserved: u32,
 }
 
 #[repr(C)]
@@ -3538,6 +3549,10 @@ extern "C" {
         plan: *const fullmag_fem_plan_desc_v3,
         adaptive_config: *const fullmag_fem_adaptive_config_v2,
     ) -> *mut fullmag_fem_backend;
+    pub fn fullmag_fem_backend_create_v5(
+        plan: *const fullmag_fem_plan_desc_v4,
+        adaptive_config: *const fullmag_fem_adaptive_config_v2,
+    ) -> *mut fullmag_fem_backend;
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
@@ -4283,6 +4298,13 @@ mod tests {
         );
         assert_eq!(FULLMAG_FEM_MIXED_BODY_CERTIFICATE_V2_ABI_VERSION, 2);
         assert_eq!(FULLMAG_FEM_PLAN_DESC_V3_ABI_VERSION, 3);
+        assert_eq!(FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION, 4);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v2>(), 1640);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v3>(), 1656);
+        assert_eq!(std::mem::size_of::<fullmag_fem_plan_desc_v4>(), 1672);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, base), 8);
+        assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v4, poisson_boundary_marker),
+                   8 + std::mem::size_of::<fullmag_fem_plan_desc_v3>());
         assert_eq!(std::mem::offset_of!(fullmag_fem_plan_desc_v3, base), 8);
         assert_eq!(
             std::mem::offset_of!(fullmag_fem_plan_desc_v3, mixed_body_certificate_v2),

@@ -131,9 +131,11 @@ void solved_current_oersted_public_boundary_exposes_append_only_rt0()
         "legacy H1 reference source kind must remain explicit");
     require(runner.find("fem_conservative_current_rt0_view.v1") != std::string::npos,
         "runner must publish the implemented RT0 source view identity");
-    require(runner.find("fullmag_fem_solve_steady_transport_rt0_oersted_v1") !=
-            std::string::npos,
-        "runner must call the append-only RT0 OE-F1 symbol");
+    require(header.find("fullmag_fem_solve_steady_transport_rt0_oersted_v1") != std::string::npos,
+        "legacy RT0 OE-F1 symbol must remain in the public ABI");
+    require(runner.find("fullmag_fem_solve_steady_transport_rt0_oersted_with_source_snapshot_v2") != std::string::npos &&
+            runner.find("fullmag_fem_solve_steady_transport_rt0_oersted_with_snapshots_v1") != std::string::npos,
+        "runner must use the current append-only RT0 OE-F1 snapshot symbols");
     require(header.find("FULLMAG_FEM_STEADY_TRANSPORT_RT0_OERSTED_ABI_VERSION 1u") !=
             std::string::npos,
         "RT0 OE-F1 ABI marker disappeared");
@@ -404,7 +406,7 @@ void cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed()
         "M2 accepted a request carrying the M1 constitutive version");
 }
 
-void cpu_double_reciprocal_m2_affine_constitutive_oracle()
+void cpu_double_reciprocal_m2_affine_constitutive_oracle(bool sparse = false)
 {
     // Six positively oriented tetrahedra partition the unit cube.  Attributes
     // 1 and 2 are the x=0/x=1 faces; all other faces are natural boundaries.
@@ -467,8 +469,10 @@ void cpu_double_reciprocal_m2_affine_constitutive_oracle()
         // z=1 (attribute 6)
         4, 5, 6, 7, 4, 6,
     };
+    const uint32_t left = sparse ? 2147483648u : 1u;
+    const uint32_t right = sparse ? std::numeric_limits<uint32_t>::max() : 2u;
     const uint32_t facet_markers[] = {
-        1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+        left, left, right, right, 3, 3, 4, 4, 5, 5, 6, 6,
     };
     const double conductivity[] = {
         3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
@@ -479,7 +483,7 @@ void cpu_double_reciprocal_m2_affine_constitutive_oracle()
         1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
         1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
     };
-    const uint32_t dirichlet_attributes[] = {1, 2};
+    const uint32_t dirichlet_attributes[] = {left, right};
     double charge_values[] = {0.0, 1.0};
     double spin_values[] = {
         0.0, 0.0, 0.0,
@@ -657,22 +661,33 @@ void cpu_double_reciprocal_m2_affine_constitutive_oracle()
 
 } // namespace
 
-int main()
+int run_steady_transport_abi_contract()
 {
-    try {
-        wrong_abi_version_fails_before_mesh_import();
-        gpu_fails_closed_before_mesh_import();
-        mixing_fails_closed_before_mesh_import();
-        rt0_extension_requires_explicit_closure_before_mesh_import();
-        solved_current_oersted_public_boundary_exposes_append_only_rt0();
-        cpu_double_transparent_request_materializes_all_transport_fields();
-        cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed();
-        const auto affine_oracle = &cpu_double_reciprocal_m2_affine_constitutive_oracle;
-        affine_oracle();
-        std::cout << "fem steady transport ABI contract: PASS\n";
-        return 0;
-    } catch (const std::exception &error) {
-        std::cerr << "fem steady transport ABI contract: FAIL: " << error.what() << '\n';
-        return 1;
+    struct Case { const char *name; void (*run)(); };
+    const Case cases[] = {
+        {"wrong_abi_version_fails_before_mesh_import", wrong_abi_version_fails_before_mesh_import},
+        {"gpu_fails_closed_before_mesh_import", gpu_fails_closed_before_mesh_import},
+        {"mixing_fails_closed_before_mesh_import", mixing_fails_closed_before_mesh_import},
+        {"rt0_extension_requires_explicit_closure_before_mesh_import", rt0_extension_requires_explicit_closure_before_mesh_import},
+        {"solved_current_oersted_public_boundary_exposes_append_only_rt0", solved_current_oersted_public_boundary_exposes_append_only_rt0},
+        {"cpu_double_transparent_request_materializes_all_transport_fields", cpu_double_transparent_request_materializes_all_transport_fields},
+        {"cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed", cpu_double_reciprocal_m2_request_is_explicit_and_fail_closed},
+        {"reciprocal_m2_affine", +[] { cpu_double_reciprocal_m2_affine_constitutive_oracle(); }},
+        {"reciprocal_m2_sparse_u32", +[] { cpu_double_reciprocal_m2_affine_constitutive_oracle(true); }},
+    };
+    unsigned failures = 0;
+    for (const auto &test : cases) {
+        try { test.run(); }
+        catch (const std::exception &error) {
+            ++failures;
+            std::cerr << "fem steady transport case FAIL: " << test.name << ": " << error.what() << '\n';
+        }
     }
+    std::cout << "fem steady transport ABI contract: " << (failures ? "FAIL" : "PASS")
+              << " failures=" << failures << '\n';
+    return failures ? 1 : 0;
 }
+
+#ifndef FULLMAG_EMBED_STEADY_TRANSPORT_CONTRACT
+int main() { return run_steady_transport_abi_contract(); }
+#endif

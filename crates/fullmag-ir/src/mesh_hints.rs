@@ -2792,7 +2792,7 @@ pub enum BoundaryRole {
 /// Topology-backed proof that a marker has one boundary role.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BoundaryRoleIR {
-    pub marker: i32,
+    pub marker: u32,
     pub role: BoundaryRole,
     pub face_count: u64,
 }
@@ -3567,12 +3567,6 @@ impl MeshIR {
                     face, role
                 ));
             }
-            if first_marker > i32::MAX as u32 {
-                errors.push(format!(
-                    "boundary face {:?} marker {} does not fit certified i32 marker range",
-                    face, first_marker
-                ));
-            }
             *marker_roles.entry((first_marker, role)).or_default() += 1;
         }
 
@@ -3617,7 +3611,7 @@ impl MeshIR {
             Ok(marker_roles
                 .into_iter()
                 .map(|((marker, role), face_count)| BoundaryRoleIR {
-                    marker: marker as i32,
+                    marker,
                     role,
                     face_count,
                 })
@@ -4558,6 +4552,23 @@ mod mesh_validation_tests {
         assert!(roles.iter().any(|entry| {
             entry.role == BoundaryRole::GammaOut && entry.marker == 7 && entry.face_count == 3
         }));
+    }
+
+    #[test]
+    fn airbox_roles_preserve_full_u32_outer_marker() {
+        let mut mesh = certified_airbox_mesh();
+        for marker in &mut mesh.boundary_markers {
+            if *marker == 7 { *marker = u32::MAX; }
+        }
+        let roles = mesh.certify_airbox_boundary_roles().unwrap();
+        assert!(roles.iter().any(|entry|
+            entry.role == BoundaryRole::GammaOut && entry.marker == u32::MAX && entry.face_count == 3));
+        let value = serde_json::to_value(&roles).unwrap();
+        let roundtrip: Vec<BoundaryRoleIR> = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, roles);
+        assert!(serde_json::from_value::<BoundaryRoleIR>(serde_json::json!({
+            "marker": -1, "role": "gamma_out", "face_count": 3
+        })).is_err());
     }
 
     #[test]

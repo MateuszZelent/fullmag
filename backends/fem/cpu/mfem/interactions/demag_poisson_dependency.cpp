@@ -177,6 +177,7 @@ std::uint64_t hash_material_membership(const Context &ctx)
 std::uint64_t hash_boundary_data(const Context &ctx, const mfem::Mesh &mesh)
 {
     std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, kFemCompactMarkerMapRevision);
     hash_scalar(state, ctx.poisson_demag.boundary_marker);
     hash_scalar(state, ctx.poisson_demag.robin_beta_mode);
     hash_scalar(state, ctx.poisson_demag.robin_beta_factor);

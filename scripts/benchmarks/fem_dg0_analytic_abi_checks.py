@@ -28,7 +28,13 @@ import fdm_cuda_analytic_abi_checks as abi
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="new self-contained evidence Zarr on WSL")
+    parser.add_argument("--cell-marker", type=int, default=1,
+                        help="canonical non-air u32 label; independent of MFEM attribute")
+    parser.add_argument("--facet-marker", type=int, default=1,
+                        help="canonical u32 exterior label (demag disabled in this oracle)")
     args = parser.parse_args()
+    if not 1 <= args.cell_marker <= 2**32 - 1 or not 0 <= args.facet_marker <= 2**32 - 1:
+        raise ValueError("cell/facet markers must fit their canonical u32 domains")
     if args.output is not None:
         if args.output.suffix != ".zarr" or args.output.exists() or args.output.with_suffix(".py").exists():
             raise ValueError("Evidence requires a new <stem>.zarr and adjacent <stem>.py")
@@ -107,13 +113,13 @@ def main() -> int:
     mesh_array("cell_offsets", list(range(0, 21, 4)))
     mesh_array("cell_nodes", [x for cell in cells for x in cell])
     mesh_array("cell_global_ordinals", list(range(5)), ct.c_uint64)
-    mesh_array("cell_markers", [1] * 5)
+    mesh_array("cell_markers", [args.cell_marker] * 5)
     mesh_array("facet_types", [constant("FULLMAG_FEM_FACET_TRI3")] * 12)
     mesh_array("facet_roles", [constant("FULLMAG_FEM_FACET_ROLE_EXTERIOR")] * 12)
     mesh_array("facet_offsets", list(range(0, 37, 3)))
     mesh_array("facet_nodes", [x for face in boundary for x in face])
     mesh_array("facet_global_ordinals", list(range(12)), ct.c_uint64)
-    mesh_array("facet_markers", [1] * 12)
+    mesh_array("facet_markers", [args.facet_marker] * 12)
     plan.material.saturation_magnetisation = 8e5
     plan.material.exchange_stiffness = 1.3e-11
     plan.material.damping = 0.1
@@ -186,6 +192,7 @@ def main() -> int:
         lib.fullmag_fem_backend_destroy(handle)
     report = {"schema": "fullmag.fem-dg0-analytic-abi.v1", "state": "passed",
         "mfem_version": mfem_version, "hypre_version": hypre_version,
+        "canonical_cell_marker": args.cell_marker, "canonical_facet_marker": args.facet_marker,
         "lane": "fem_cpu", "scope": "MFEM initialization and initial-state object averages and exchange field",
         "device": actual_device.name.decode("utf-8", "strict"),
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

@@ -541,3 +541,84 @@ kwalifikuje osobna macierz i testy analityczne.
 Pozostają zwarte mapy FEM wraz ze wszystkimi konsumentami, wspólna relaksacja
 i zbieżność FDM/FEM, synchronizacja kopii SDK przy następnym buildzie oraz
 CI/review/integracja i kwalifikowany cleanup.
+
+## Zwarte markery FEM — runtime 8 listopada
+
+Poprzedni wpis o brakujących mapach FEM jest historyczny. Mapy osobno dla
+regionów domen i faset należą teraz do importu/kontekstu. Publiczne u32,
+kanoniczne fingerprinty i liczba stopni swobody pozostają zachowane;
+wewnętrzne atrybuty MFEM mają rozmiar 1..R, a obecne zero ostatni atrybut.
+Przeniesiono BC Poisson i PBC, modalne airbox/Floquet, transport/terminale,
+accepted-source digest, selektory oraz Python/IR/NPZ/Gmsh/COMSOL. Legacy
+transport zachowuje domeny per-element dla swoich współczynników.
+Nowe create_v5/descriptor_v4 zachowuje pełny u32 selektora Poisson przed
+inicjalizacją; stare layouty 1616/1640/1656 bajtów pozostają zgodne.
+
+Oficjalna przebudowa w tej samej grupie WSL zakończyła się **PASS**:
+resume `97e662e5c6e34dfbbf7c57a9f851687d`, snapshot
+`de74c7f8f7924d6171b67b3be3f24184fb422785b7527370206446e4deec86fe`,
+native contract `263de806dcce4c11a3e789cf516e73c0`. Biblioteka FEM SHA-256
+`173dfad1a2a7ba358fc952584d00acedeedcfdf2bc3afe8d756d6adcc391d7bb`,
+plik testowy `e0b46c42a3bf0aef4f84706f87aa92e8ad63f4009a9c8b25e6147a9833a63d4c`.
+Poprzednie nieudane próby zachowano. Obejmowały brakujące ordinale fixture,
+nieaktualny stable-vertex version/source assertions i konflikt dwóch
+process-lifetime urządzeń MFEM w harnessie. Testy publicznego CPU/GPU ABI
+uruchamiają się teraz w oddzielnych procesach, z kontrolą kodów wyjścia.
+
+- Import MFEM: 255/256/257/1000, rzadkie ID do UINT32_MAX, rozróżnienie
+  domen i granic 0/1, permutacje, powtórzenia, reimport i odmowy — **PASS**.
+- CPU oraz GPU/double: niezależne H_ex/E_ex, jeden RK4 i centralna pochodna
+  energii; marker 1 vs UINT32_MAX daje identyczną trajektorię — **PASS**.
+  Maksymalny względny błąd H 2,89e-16 i E 5,21e-16. Względny błąd pochodnej
+  energii CPU 2,39e-10, GPU 8,47e-11 przy epsilon=1e-6 i progu 1e-6.
+- Robin/Dirichlet: wysoki selektor u32 vs legacy99, H i energia,
+  brak selektora, zły rozmiar/reserved i ujemny legacy — **PASS**.
+  Strict GPU: required/device=449 lub 975, accepted=1, fallback/host/unknown=0.
+- Charge ABI 14 przypadków i steady ABI 9 przypadków — **PASS**, w tym
+  per-element sigma przy powtarzanych markerach, reverse-canonical rekord,
+  wysokie terminale i pełne wektorowe warunki brzegowe M2.
+- Publiczny Python: pełny u32 i legacy NPZ/fingerprint, sidecar Gmsh/COMSOL,
+  air0+UINT32_MAX, nazwa geometry airbox, lead selectors — 7/7 **PASS** w
+  kontenerze; persistence 27/27 i script builder 64/64 **PASS**.
+- DG0 z domain/facet UINT32_MAX — **PASS**. Dokładny zbiór elementów daje
+  moment 1/2, suma węzłów 9/14, consistent-mass H: błąd 1,47e-16.
+
+Wyniki naukowe: `regional_fem_compact_marker_native_a1.zarr` oraz
+`regional_fem_dg0_high_u32_a1.zarr`, z sąsiednimi skryptami i hashami na WSL.
+Pełne techniczne logi/receipty buildu pozostają w volume grupy. To kwalifikacja
+zmierzonych przypadków, bez FEM/single ani rozszerzenia DG0 GPU.
+
+## Wspólna zbieżność FDM/FEM
+
+`regional_fdm_fem_convergence_a4.zarr` — **PASS**, również z `python -O`.
+Nowa regresja sprawdza przy optymalizacji odmowy native query, brak dowodu
+CUDA oraz NaN energii. Obowiązkowe wywołania ABI i bramki nie używają assert.
+Pręt 64×4×4 nm, dwa regiony 257/UINT32_MAX, DG0 A/Ms o stałym ilorazie,
+Neumann x, periodyczne y/z, RK4 100×1e-14 s. Kryteria z noty 0104 zachowano.
+
+| Metryka na siatce 32 | FDM CUDA/double | FEM CPU/double |
+|---|---:|---:|
+| Względny błąd energii, początek/koniec | 0,0033044 / 0,0031511 | 0,0033044 / 0,0034500 |
+| Względny L2 pola, początek/koniec | 0,0040473 / 0,0039382 | 0,0040706 / 0,0039597 |
+| Względny błąd amplitudy końcowej | 7,4870e-5 | 7,5099e-5 |
+
+Różnica amplitud między metodami dla 8/16/32 wynosi
+0,00239535 / 0,00059983 / 0,00014997; maleje około 4× na zagęszczenie.
+Norma i monotoniczność energii spełniają przypięte progi. Receipt FDM
+potwierdza CUDA, required/device=163, brak fallbacku i host operators;
+FEM potwierdza mfem_cpu_exchange_ready.
+
+Pierwszy skrypt a1 nie rozpoznawał makr typów komórek FEM. Pomiar a2
+bez periodycznego przekroju nie spełnił silnej normy pola: początkowy błąd
+1,10→0,72→0,48 mimo zbieżnej energii/dynamiki. Niezależne złożenie macierzy
+Ms-mass i A-stiffness odtwarza native H z błędem 1,47e-10
+(`regional_fem_rod_discrete_oracle_a1.zarr`). To artefakt silnego laplasjanu
+interpolantu na jednej warstwie tetraedrów, nie błąd mapy regionów. Jawne
+więzy periodyczne przekroju w a3/a4 zachowują analityczną podprzestrzeń 1D;
+nie zmieniono progów ani nie usunięto negatywnego dowodu. Wynik nie
+kwalifikuje ogólnego trójwymiarowego silnego pola FEM.
+
+Pozostaje terminalna relaksacja: publiczny PG-BB ujawnił błędną klasyfikację
+stanu poniżej progu torque jako stagnacji przy osiągniętej dokładności
+energii. Run i dane zachowano; poprawka, GREEN, CI oraz integracja/retencja
+są kolejnymi wymaganymi bramkami.

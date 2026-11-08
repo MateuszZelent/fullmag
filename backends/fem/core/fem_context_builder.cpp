@@ -48,7 +48,8 @@ namespace fullmag::fem {
 bool build_context_from_plan(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
-    std::string &error)
+    std::string &error,
+    const uint32_t *canonical_boundary_marker)
 {
     if (!initialize_base_plan_fields(ctx, plan, error)) {
         return false;
@@ -62,6 +63,9 @@ bool build_context_from_plan(
     initialize_stage_completion_state(ctx, plan.relax_stop);
     initialize_exchange_plan_fields(ctx, plan);
     initialize_demag_plan_fields(ctx, plan);
+    if (canonical_boundary_marker != nullptr) {
+        ctx.poisson_demag.boundary_marker = static_cast<int64_t>(*canonical_boundary_marker);
+    }
     initialize_zeeman_plan_fields(ctx, plan);
     if (!copy_regional_field_drive_plan(ctx, plan, error)) {
         return false;

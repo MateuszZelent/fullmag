@@ -8699,6 +8699,7 @@ def _build_explicit_mesh_assets(
                 "anisotropy_axis": list(handle.anisU or (0.0, 0.0, 1.0)),
             }
             for handle in _state._magnets
+            if handle.Ms is not None and handle.Aex is not None
         },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(

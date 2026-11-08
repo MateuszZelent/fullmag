@@ -24,12 +24,13 @@ bool initialize_backend_runtime(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
     std::string &error,
-    const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2)
+    const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2,
+    const uint32_t *canonical_boundary_marker)
 {
     if (!validate_mixed_body_certificate_v2(plan, mixed_body_certificate_v2, error)) {
         return false;
     }
-    if (!context_from_plan(ctx, plan, error)) {
+    if (!context_from_plan(ctx, plan, error, canonical_boundary_marker)) {
         return false;
     }
     configure_transfer_audit_from_env(ctx.transfer_audit.audit);

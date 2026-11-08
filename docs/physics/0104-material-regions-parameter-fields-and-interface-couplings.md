@@ -1200,6 +1200,82 @@ FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
 markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
 rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
 
+Canonical FEM domain and boundary labels remain u32. MFEM receives separate,
+import-owned compact positive attributes with forward and reverse maps
+([ADR 0079](../adr/0079-fem-compact-canonical-marker-maps.md)). Storage for each
+map scales with distinct marker count, not the largest label. Domain zero
+retains its physical air meaning and cannot alias magnetic material one;
+explicit boundary zero and one remain distinct in the representation.
+Only emitted exterior/periodic-seam facets enter the boundary map. Missing
+canonical marker buffers retain default one in the main builder. Accepted
+transport without domain markers retains its legacy ElementNo+1 attributes. Public selectors are translated
+once before assembly; missing selectors fail explicitly, subject to the
+existing BC legality. Legacy per-element transport coefficients retain their
+per-element volume attributes; accepted transport and boundary conditions use
+their own appropriate maps. This representation preserves canonical buffers,
+continuous magnetization, finite-element spaces, SI coefficients and physical
+fluxes. It does not enable a previously unsupported CPU/GPU interaction.
+The internal operator identity records the mapping policy; canonical public
+mesh/marker identities retain their established meaning. Versioned native ABI
+extension carries a full u32 Poisson selector without narrowing legacy fields.
+Python MeshData validates integer range before normalization to u32, including
+legacy nonnegative int32 buffers. Typed lead selectors and accepted-charge
+artifact readers retain canonical u32. NPZ readers verify original member
+bytes before normalization; canonical topology fingerprints encode values,
+not NumPy signedness. Working incidence arrays with -1 sentinels use int64.
+Gmsh/COMSOL export separate compact positive tags and reverse them through
+the existing hash-bound sidecar; group display names cannot override that
+explicit identity. Negative markers are rejected, not reinterpreted.
+
+#### Wyrocznia zbieżności regionalnej FDM/FEM
+
+Przed pomiarem przypinamy wspólny problem wymiany na pręcie długości 64 nm
+oraz przekroju 4 nm × 4 nm. Dwie konformalne połowy mają A=(13,26) pJ/m,
+Ms=(0,8;1,6) MA/m, alpha=0,5 i gamma=2,211e5 m/(A s). Stosunek A/Ms jest
+stały. Demag, precesja i inne oddziaływania są wyłączone. Dla k=2 pi/L,
+theta(x,t)=a(t) cos(kx), m=(cos theta,sin theta,0) dokładne rozwiązanie
+czystego tłumienia ma a(t)=0,2 exp(-D k² t), gdzie
+D=[alpha gamma/(1+alpha²)] [2 A/(mu0 Ms)]. Pochodna theta znika na końcach
+oraz na interfejsie, więc spełnione są naturalny warunek brzegowy i ciągłość
+strumienia wymiany pomimo skoku A. Energia wynosi
+E_ex=w² L (A1+A2) a² k²/4. Pole obejmuje zarówno składową styczną theta_xx,
+jak i radialną -theta_x² m; porównanie nie pomija składowej radialnej.
+
+Recepta naukowa w wybranym backendzie DEV ładuje opublikowane biblioteki,
+bez kompilowania: `scripts/benchmarks/regional_fdm_fem_convergence.py`.
+FDM CUDA/double używa centrów komórek, harmonicznych A_FACES i lokalnego Ms.
+FEM CPU/double używa P1, sześciu tetraedrów na segment, konformalne DG0 A/Ms
+oraz consistent mass. Nie promuje to DG0 na GPU. W osi x obowiązuje Neumann,
+a y/z są periodyczne w obu realizacjach. Klasy węzłów FEM na przekroju
+zachowują dokładną podprzestrzeń jednowymiarową. Bez tych więzów interpolacja
+na jednej warstwie tetraedrów ma artefakty silnego laplasjanu w węzłach
+brzegowych; zgodność słabej macierzy K/M nie gwarantuje wtedy przyjętej
+silnej normy L2 pola. Pierwszy taki pomiar pozostaje negatywnym dowodem,
+nie kwalifikacją. Zmiana warunku poprzecznego nie zmienia rozwiązania
+analitycznego niezależnego od y/z ani niżej podanych progów.
+Obie siatki mają kolejno
+8/16/32 segmenty, kanoniczne regiony 257 i UINT32_MAX, RK4, dt=1e-14 s,
+100 kroków. Każdy przebieg zapisuje nową parę skrypt/Zarr na WSL, surowe pola,
+energię w każdym kroku oraz hashe bibliotek i nagłówków.
+
+Bramki ustalone przed pomiarem: względny błąd energii maleje co najmniej 2×
+na zagęszczenie i na najdrobniejszej siatce wynosi <=0,03; ważony objętością
+błąd L2 pola maleje >=1,5× i wynosi <=0,05. Błąd amplitudy po 100 krokach
+maleje >=2× i wynosi <=0,01. Względna różnica amplitud FDM/FEM maleje >=2×
+i wynosi <=0,005. Defekt normy <=1e-10, względny przyrost energii między
+krokami <=1e-10. To kryteria kwalifikacji, a nie deklaracja uzyskanego wyniku;
+zmierzone wartości i ewentualne odmowy należą do raportu audytu.
+
+Uzupełniający test terminalnej relaksacji PG-BB używa ośmiu komórek 2 nm,
+dwóch ostrych regionów Ms=400/800 kA/m i alpha=0,1/0,4, A=13 pJ/m, bez demag,
+Bz=0,05 T oraz początkowego m=+x. Dokładne minimum to m=+z oraz
+E=-Bz sum(Ms_i V_i). Przed pomiarem ustala się: zakończenie przez torque,
+nie limit 2500 kroków; próg 1e-3 A/m dla double i 100 A/m dla single;
+maksymalny błąd składowej m odpowiednio 3e-8 i 3e-3, względny błąd energii
+1e-10 i 1e-5, defekt normy 1e-10 i 1e-5 oraz względny wzrost energii między
+krokami najwyżej 1e-12 i 1e-6. Osobne publiczne wykonania CPU/double,
+CUDA/double i CUDA/single zachowują intent, receipt i brak fallbacku.
+
 Współczynniki skalarne DMI w starszym `MaterialIR` są odrębną drogą od
 regionalnych pól: `interfacial_dmi` i `bulk_dmi` muszą trafić do planu FDM
 single-grid. Jawny term energii ma pierwszeństwo (również przy D=0), bez
