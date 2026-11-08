@@ -1,0 +1,275 @@
+{
+  "schema": "fullmag.terminal-run-energy-diagnosis.v1",
+  "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+  "development_attempt": "1dd24b9d7f154589bcfbce453fe16b66",
+  "published_artifact_types": [
+    "accepted_quantity_bundle",
+    "accepted_quantity_payload",
+    "accepted_scalar_history_index",
+    "accepted_scalar_history_page",
+    "accepted_terminal_completion",
+    "accepted_terminal_magnetization_layout",
+    "accepted_terminal_scalar_stats",
+    "observation_state_snapshot",
+    "observation_terminal_state",
+    "state",
+    "study_output_manifest"
+  ],
+  "stage_terminal_stats": [
+    {
+      "task_id": "task-fce0e940fbdb92088ea98ab18625f6f582d86c9bb2e8b4c4730162c7352635fb",
+      "step_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+      "attempt_id": "attempt-379e6ae869db4308a7e1f0b964a62f5f",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+          "accepted_step": 10,
+          "clock_digest": "sha256:83fd66341b4a5295acc63eccc7da97c5d0f534b8eb124ad03c4eecc7fd25059b",
+          "state_digest": "sha256:1baec2e9f65ae04a4ef848b3e89cc545618d8a9d8165ba49ca4aa43de2973191",
+          "domain_digest": "sha256:ae01b6c1a89d2d6f36845309394e6b98b60106faa543442c1925e7c4a815224c",
+          "plan_digest": "sha256:456a07e93a4b096a795f9f9e1b2a8809131928495cc13465406bd7d1b9f0d99e"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 10
+        }
+      },
+      "state_object_ref": "81d029cf642428f5379cd9c97ad0069db8d2d5f1890b9205d3c1f94dbc73a3ec",
+      "stats_object_ref": "09f1a6d51a72341688d023d516e84c45280ae6fa2ee26aa584db8538d3e7b87d",
+      "stats": {
+        "step": 10,
+        "time": 1e-12,
+        "dt": 1e-13,
+        "e_total": -3.8091117500317753e-23,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -3.8091117500317753e-23,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    },
+    {
+      "task_id": "task-4d0b7814b4213fe09408474ae07e991b8dfe9029d199f4f309d16c2ad40b6ed2",
+      "step_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+      "attempt_id": "attempt-94f3107b3ccd43cba83b71c5b7fcbda5",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+          "accepted_step": 1,
+          "clock_digest": "sha256:fda40a2c34f255ad8255ba2ef5c0d05b7746752d01d7ffd297a5169f87fdc656",
+          "state_digest": "sha256:a2ef45844bf74d3bfd1612e072b27baa53d9401d95e27998bdf9b64628d91c9b",
+          "domain_digest": "sha256:3758617fe9cb9e3d7545ed9916a2de156a5340ea3243375e2371c520fb76725d",
+          "plan_digest": "sha256:e665a90d260de700b9025acfc5c26a55899ae4795b024bb5a8f3f1329646ea3a"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 1
+        }
+      },
+      "state_object_ref": "c6a29da0c4acec17503e2e8916b9c51507205856c6392576261aeb8f8d2b4176",
+      "stats_object_ref": "624f106724b42f8309267af2928f001e6597b57aeb82fd0b17faa93ebb0cef6f",
+      "stats": {
+        "step": 1,
+        "time": 0.0,
+        "dt": 0.0,
+        "e_total": -4.441013650519438e-22,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -4.441013650519438e-22,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    },
+    {
+      "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+      "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+      "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+          "accepted_step": 1,
+          "clock_digest": "sha256:fda40a2c34f255ad8255ba2ef5c0d05b7746752d01d7ffd297a5169f87fdc656",
+          "state_digest": "sha256:4fd1323aa6f33e2b93e8bd2d773a65dc62f48e8195644a9ec8f31ee91cf5cc6b",
+          "domain_digest": "sha256:ae7141b09e8c0523f34537bb6cd805a49045fbc20fca28e8e2d190408dd26622",
+          "plan_digest": "sha256:9c41697bc83f99b81bd377b3518569371012ec9b66cf1cbb7a23502dd9395608"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 1
+        }
+      },
+      "state_object_ref": "025959e1bb047f9aa0d704f494d49db7954e353976c16a2782ca2855f55bba17",
+      "stats_object_ref": "63aa9d37ba948475e1ede9e85f66adad328d857b9cf079207b4ce2238b22282f",
+      "stats": {
+        "step": 1,
+        "time": 0.0,
+        "dt": 0.0,
+        "e_total": -8.45818845777564e-22,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -8.45818845777564e-22,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    }
+  ],
+  "current_run": {
+    "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+    "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "revision": 8,
+    "status": "completed",
+    "started_at": "1794161957943",
+    "total_steps": 3,
+    "solver_time_seconds": 0.0,
+    "artifact_dir": "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "requested_backend": "fdm",
+    "requested_device": "cpu",
+    "requested_precision": "double",
+    "requested_mode": "strict",
+    "resolved_backend": "fdm",
+    "resolved_device": "cpu",
+    "resolved_precision": "double",
+    "resolved_mode": "strict",
+    "resolved_engine_id": "fdm_cpu_reference",
+    "total_stages": 3
+  },
+  "stage_execution": {
+    "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+    "request_scope_epoch": "193a3ec9-97af-4e1e-8c31-8cbd731d386b:1",
+    "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+    "revision": 8,
+    "runtime_state": "completed",
+    "total_stages": 3,
+    "completed_stage_indexes": [
+      0,
+      1,
+      2
+    ],
+    "stage_statuses": [
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "stages": [
+      {
+        "stage_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+        "index": 0,
+        "label": "Stage 1",
+        "status": "completed",
+        "started_at_unix_ms": 1794162040373,
+        "completed_step": 10,
+        "completed_at_unix_ms": 1794162045984,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 10.0,
+        "threshold": 10.0
+      },
+      {
+        "stage_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+        "index": 1,
+        "label": "Stage 2",
+        "status": "completed",
+        "started_at_unix_ms": 1794162055242,
+        "completed_step": 1,
+        "completed_at_unix_ms": 1794162058937,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 1.0,
+        "threshold": 1.0
+      },
+      {
+        "stage_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+        "index": 2,
+        "label": "Stage 3",
+        "status": "completed",
+        "started_at_unix_ms": 1794162064747,
+        "completed_step": 1,
+        "completed_at_unix_ms": 1794162067236,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 1.0,
+        "threshold": 1.0
+      }
+    ]
+  },
+  "scalar_tail": {
+    "revision": 4,
+    "total_rows": 1,
+    "returned_rows": 1,
+    "columns": [
+      "step",
+      "e_total"
+    ],
+    "rows": [
+      [
+        1.0,
+        -8.45818845777564e-22
+      ]
+    ],
+    "observation_frames": [
+      {
+        "observation_frame_id": "obs:docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943:d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6:1:1:0000000000000000",
+        "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+        "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+        "topology_revision": "1",
+        "source_step": 1,
+        "source_time_seconds": 0.0
+      }
+    ],
+    "series": {
+      "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+      "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+      "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+      "case_id": "default",
+      "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+      "ownership_epoch": 1
+    },
+    "current_observation": {
+      "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+      "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+      "request_scope_epoch": "193a3ec9-97af-4e1e-8c31-8cbd731d386b:1",
+      "source_step": 1,
+      "scalar_revision": 4
+    }
+  }
+}
