@@ -790,3 +790,48 @@ w macierzy capability. Pierwszy task odmówił przed Solve; drugi anulowano
 przypiętym Stop `fm-ad469336-0dd8-4fd1-88c6-e85491376294`, bez replay.
 Nie jest to dowód numeryczny CUDA. Uzupełnienie zgodnej tożsamości z zachowaniem
 `unvalidated`, nowa próba CUDA, regresje Rust i końcowe CI pozostają otwarte.
+
+### A9 CUDA/single — tożsamość wykonania poprawiona, publikacja nadal RED
+
+Uzupełniono brakujący `explicit_adaptive_fdm_cuda_single`, pozostawiając
+`unvalidated` i puste metadane promocji. Istniejące natywne RK23/RK45 FP32
+pozostają właścicielem obliczeń. Dynamiczne źródła wyłączają conditional graph
+i używają zwykłego loopa CUDA; nie ma fallbacku fizyki na CPU. Regresja
+rejestru była RED z brakiem wpisu, po poprawce **21/21 PASS**.
+
+Nowy A9 zakończył oba Run: 8 i 22 kroki, potwierdzone przez licznik decyzji
+adaptacyjnych native (zero rozbieżności), receipt precyzji single i wykonanie
+wymaganych operatorów na urządzeniu bez host/unknown/fallback. Maksymalny
+błąd m wyniósł 1,600e-8, a względny błąd całkowitej energii 1,285e-7, przy
+tych samych progach 1e-5. Ciągłość m jest dokładna. Poprawność trajektorii
+nie kwalifikuje jednak wszystkich publikowanych danych:
+
+- Drugi Run integruje do fizycznego 5 ps, ale eksportuje lokalne 3 ps w
+  końcowym polu, tabeli i native accepted-state clock. Wymaga to spójnej
+  normalizacji zegara publikacji i jego digestów, przy lokalnym zegarze native.
+- `E_ext` zawiera natywny łączny wkład Zeemana wraz z drive, a `E_drive` jest
+  publikowane osobno. `E_total` jest poprawne, lecz suma składowych przekracza
+  je względnie o 0,2816/0,4001. Rozdział globalny i skalarów obiektu musi być
+  zgodny i idempotentny.
+- GPU publikuje próbkowane obserwacje skalarne, nie każdy zaakceptowany krok
+  CPU. Pierwotny collector założył pełny ślad i zatrzymał się; wersja v3
+  zachowuje błędy zegara i bilansu jako RED. Zapis nie dowodzi rzeczywistego
+  pierwszego dt na GPU; pełna autorska i resolved policy oraz liczniki native
+  pozostają sprawdzone. Nie obniżono progów m/E/normy/ciągłości.
+
+Run `run-live-8089a5dcbd737c816fd698d23f1c46d48cc5d749e47dc164cb2bfc943b656ac2`,
+Compute `fm-6c71258a-b5bf-4eb0-8ea3-2783f62723af`, source
+`55782dd9a33623b9a52f38bb678e8e161a19436bb4100273dc31428bdabd03b9`.
+Build `b4fa213a7ba1493094e4a274631c4ae5`, snapshot
+`6d68cfe9f85f9b2442af0b107a6b5b0419729fe5e6125e12fd303aeff476a722`;
+79 zmienionych źródeł/rejestr identyczne z build shadow. Dane i trzy wersje
+collectora zachowano w `adaptive_clock_a9_gpu/regional_adaptive_clock_a9_gpu.zarr`.
+To dowód brakujących bramek publikacji, nie pełne zaliczenie CUDA.
+
+CI commita zegara `aea074dd3b75b92b8da94bc9262a6a5c230184f7` wykonało nowy
+writer FDM/FEM, macro clock i cold-clock refusal. Jedna regresja origin miała
+niepoprawny fixture: jawny origin 2 ps przy brakującym starcie drugiego
+snapshotu (domyślne 0). Dodano jego prawidłowy start 5 ps przed walidacją;
+kontrola IR pozostaje bez zmian. Pozostałe 164 testy biblioteki application
+oraz testy integracyjne przeszły. Python jobs odmówiły wcześniej pobrania
+dependencji (HTTP 504); wynik końcowego CI jest osobną bramką.

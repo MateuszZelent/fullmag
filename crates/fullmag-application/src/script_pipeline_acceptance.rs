@@ -331,6 +331,7 @@ mod tests {
     fn physical_runs_keep_cumulative_clock_and_saved_waveform_origin() {
         let mut config = physical_config();
         config.stages[0].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(4e-12));
+        config.stages[1].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(5e-12));
         config.stages[1].ir.problem_meta.runtime_metadata.insert("stage_waveform_origin_time_s".into(), json!(2e-12));
         let compiled = compile_physical(config).unwrap();
         let entries = compiled.catalog.entries();

@@ -308,6 +308,8 @@ jobs:
           cargo test --locked -p fullmag-fem-sys --features build-native --lib versioned_stt_extension_is_append_only_after_legacy_plan_prefix
           cargo test --locked -p fullmag-api --bin fullmag-api sequential_physical_pipeline_counts_only_enabled_physical_steps
           cargo test --locked -p fullmag-runner --lib resumed_run_artifacts_preserve_stage_start_without_accepted_steps
+          cargo test --locked -p fullmag-runner --lib adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact
+          cargo test --locked -p fullmag-runner --lib timestep_qualification::tests
           cargo test --locked -p fullmag-plan --lib materialized_input_preserves_full_u32_markers
           cargo test --locked -p fullmag-antenna-artifacts --lib canonical_attributes_preserve_u32_without_accepting_invalid_ranges
 
@@ -1122,6 +1124,11 @@ jobs:
 
       - name: Verify optimized regional convergence gate
         run: python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
+
+      - name: Verify precision-specific LLG qualification identities
+        run: |
+          python -B scripts/validate_llg_qualification_registry.py benchmarks/fem-llg/qualification-registry-v1.json --repo-root .
+          python -B -m pytest -q scripts/test_validate_llg_qualification_registry.py
 
       - name: Verify canonical source snapshot identity
         run: python -m pytest -q scripts/test_capture_source_snapshot_identity.py

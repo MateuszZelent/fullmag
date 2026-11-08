@@ -3435,6 +3435,7 @@ pub enum LlgTimestepQualificationId {
     ExplicitFixedFemGpuDouble,
     ExplicitAdaptiveFdmCpuDouble,
     ExplicitAdaptiveFdmCudaDouble,
+    ExplicitAdaptiveFdmCudaSingle,
     ExplicitAdaptiveFemCpuDouble,
     ExplicitAdaptiveFemGpuDouble,
 }
