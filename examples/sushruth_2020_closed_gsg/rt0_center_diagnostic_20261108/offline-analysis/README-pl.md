@@ -1,7 +1,7 @@
 # Odczyt świadka RT0 po odmowie
 To samodzielny postprocessor, nie solver. Nie łączy się z API, nie uruchamia
-Fullmaga i nie kwalifikuje źródła. Rzeczywistego świadka z nowej próby jeszcze
-nie ma. synthetic-*.json zawierają WYŁĄCZNIE syntetyczny test arytmetyki:
+Fullmaga i nie kwalifikuje źródła. Rzeczywisty świadek z jednej próby jest zachowany jako
+fixtures/actual-first-center-refusal.json; pełny receipt i analiza leżą katalog wyżej. synthetic-*.json zawierają WYŁĄCZNIE syntetyczny test arytmetyki:
 współrzędna przesunięta o 2^52 m nie przedstawia fizycznej anteny.
 
 verify_rt0_center_witness.py odczytuje JSON świadka lub worker exit receipt
@@ -30,4 +30,18 @@ Właściciel interpretacji publikacji: docs/physics/0951-sushruth-2020-forward-v
 Siedem testów przeszło: pole stałe bez dywergencji, jednostkowe affine RT0,
 przesunięcie ujawniające błąd centroidu, rozbieżny center J, NaN/missing face,
 niepoprawne bity/ID oraz ramka receipt i zduplikowane klucze JSON.
-Nie uruchomiono native builda, Prepare, Submit ani Solve.
+Sam postprocessor i jego testy nie uruchamiają native builda, Prepare, Submit ani Solve.
+
+## Rzeczywisty odbiór08.11.2026
+
+Jedna próba run-d04ef521… wykonała H20/20 i zakończyła się Failed przy
+elemencie28881, składowej y. Siedem testów syntetycznych pozostaje PASS.
+Ten sam weryfikator odtworzył bity istniejącej bramki i wszystkie15 wartości
+native J z czterech kanonicznych strumieni. Nie wymusił akceptacji wyniku.
+
+actual_geometry_readback.py jest dodatkowym odczytem tej konkretnej komórki:
+trzy wierzchołki mają tę samą współrzędną y i J_y=0. Dokładna waga czwartego
+wierzchołka w zapisanym punkcie wynosi0,2500000000000288. Interpolacja w tym
+punkcie odtwarza J_y środka z różnicą1ULP, podczas gdy1/4 daje inną próbkę.
+Przeczytano ten sam materiał; bez nowego Solve lub zmiany metody produkcyjnej.
+Pełny raport: docs/superpowers/plans/2026-11-08-rt0-actual-center-failure-result.md.

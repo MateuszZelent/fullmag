@@ -1,6 +1,12 @@
 # Stabilna tożsamość właściciela w checkpointcie generated-authoring v2
 
-Status: gotowy projekt i izolowany patch do decyzji; kod produkcyjny v2 niezmieniony.
+Status: v2 zatwierdzone i wdrożone; native preflight, regresje oraz pełne CI przeszły.
+Jedna kontynuacja została wykonana: build succeeded, V/J/H Failed po 20/20 punktów H,
+z zachowanym świadkiem i zwolnionymi rezerwacjami. Bez retry i zmiany tolerancji.
+[Odbiór wdrożenia](2026-11-08-generated-authoring-stable-owner-v2-execution.md).
+Zatwierdzona wersja: commit 44564a22f1f18f44f29c34d6554d05960e8d2491,
+SHA256 69c3ccabc2e63138db73c77d67d7a8897fc931985e7bb57244489d9f2e661824.
+Dalszy opis problemu, kandydata i bramek zachowuje stan sprzed tej zgody.
 Odniesienie: zatwierdzony plan 2026-11-08-rt0-center-first-failure-diagnostic-proposal.md.
 Nie zmienia fizyki ani tolerancji źródła. Nie jest nowym mechanizmem recovery.
 

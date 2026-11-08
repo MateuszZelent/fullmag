@@ -5,6 +5,20 @@ Plan zatwierdzony przez użytkownika:
 2026-11-08-rt0-center-first-failure-diagnostic-proposal.md,
 SHA256 2d85f2f2f063daf5f73919a68a689a1ead05ec24352f1cf513eb029c380a9563.
 
+## Bieżący wynik po zatwierdzonej kontynuacji
+
+Checkpoint v2 wdrożono po osobnej zgodzie użytkownika. Pełne CI 42519781724
+i jeden managed build przeszły. Jedna próba V/J/H na tej samej siatce
+wykonała 20/20 punktów H, następnie zakończyła się Failed z trwałym świadkiem.
+Oba lease i rezerwacje hosta są released, bez retry i nowego meshowania.
+[Końcowa analiza rzeczywistej odmowy](2026-11-08-rt0-actual-center-failure-result.md)
+wyjaśnia błąd porównania dokładnego i zapisanego środka tej komórki.
+Nie ma zaakceptowanego wyniku tej próby ani kwalifikacji publikacyjnej.
+
+Poniższe sekcje zapisują historyczny odbiór PRZED zgodą na checkpoint v2;
+ich liczniki i oczekujące bramki odnoszą się do tamtego momentu.
+Aktualny odbiór restartu: [raport v2](2026-11-08-generated-authoring-stable-owner-v2-execution.md).
+
 ## Wykonany zakres
 
 - 4e10cc82e24061b98594c1d738798735f0279e9f: pięć nowych testów runnera (w tym dwa warianty kolejności w jednym teście),

@@ -7,9 +7,14 @@
 **Tech Stack:** Rust, serde_json, istniejący FEM CPU/double, managed just Docker/WSL.
 **Spec:** [wynik próby](2026-11-08-generated-authoring-corner25-sequence-result.md) i [nota właściciela fizyki](../../physics/0951-sushruth-2020-forward-volume-reference.md).
 
-Status: propozycja do decyzji. Patch produkcyjny nie jest wdrożony.
-Nowy build/Prepare/Submit/Solve w ramach tego planu:0.
-Poprzednia pojedyncza zgoda została wykorzystana; Failed zakończył jej sekwencję.
+Status: ograniczony plan diagnostyczny wykonany po zatwierdzeniu przez użytkownika.
+Zatwierdzona wersja: commit 6332bb9ca392ed58d9e30e9f0d04bc1e819c3d60,
+SHA256 2d85f2f2f063daf5f73919a68a689a1ead05ec24352f1cf513eb029c380a9563.
+Wykonano jeden build, jeden Submit, jedną materializację i jeden Solve; bez nowego
+meshowania. Po 20/20 punktów H: Failed z zachowanym świadkiem; rezerwacje released.
+[Rzeczywisty wynik i granica wniosku](2026-11-08-rt0-actual-center-failure-result.md).
+Poprawka predykatu i reprodukcja publikacji pozostają poza ukończoną diagnostyką.
+Opis stanu wejściowego i przegląd na końcu są historyczne, sprzed implementacji.
 
 ## Potwierdzony stan i dowód pomocniczy
 
@@ -71,25 +76,25 @@ lookup po posortowanych stable IDs, znak canonical_sorted_ids; brak lookup=null.
 Bez pełnych preimages, swobodnych stringów lub deklarowania nieobecnych współczynników MFEM.
 Lokalne XYZ już są bitowo porównane z globalnymi przed tą bramką; jedna kopia wystarcza.
 
-- [ ] Step1: Test center_current_failure_diagnostic_preserves_bits_and_bound:
+- [x] Step1: Test center_current_failure_diagnostic_preserves_bits_and_bound:
   fixture zawiera u64::MAX, signed zero i center J z NaN payload. Odczyt wszystkich bitów
   z JSON jest dokładny, rozmiar całego błędu<=2048B. RED przed nowym helperem.
-- [ ] Step2: Test center_current_failure_diagnostic_keeps_gate:
+- [x] Step2: Test center_current_failure_diagnostic_keeps_gate:
   cztery stałe wartości8A/m²; center8+128epsilon*8 jest przyjmowane,
   kolejna większa liczba binary64 jest odrzucana; dwie błędne osie dają pierwszą oś0.
   Niefinitywne vertex J nadal dają dotychczasową wcześniejszą odmowę.
   Sprawdzić rzeczywiste verify_owned_geometry: błędne J osi0 wraz z błędną
   geometrią osi1 daje odmowę J osi0; błędna geometria osi0 wraz z błędnym J osi0
   daje dotychczasową odmowę geometrii. Zachować przeplatanie XYZ/J, bez reorder.
-- [ ] Step3: Wdrożyć wyłącznie wskazany prywatny helper i warunkowe tworzenie świadka.
+- [x] Step3: Wdrożyć wyłącznie wskazany prywatny helper i warunkowe tworzenie świadka.
   Nie dodawać release-assertion lub truncation zastępujących rzeczywistą odmowę.
-- [ ] Step4: Test worker_failure_reason_keeps_rt0_center_witness:
+- [x] Step4: Test worker_failure_reason_keeps_rt0_center_witness:
   pełny wrapper anyhow/RunError, wcześniejszy szum i640B stdout; cały świadek przetrwa
   worker_failure_reason; wyodrębnić i sparsować cały JSON, porównać wszystkie bity.
   Raport od accepted worker failed:<=2816B, failure_reason<=4096B; serialize,
   deserialize i FmsWorkerProcessExitReceipt::validate_for_lease zachowują świadka.
   Bez obietnicy recovery po awarii supervisora.
-- [ ] Step5: Review dokładnego diffu, nowe regresje i istniejące affinity/moments
+- [x] Step5: Review dokładnego diffu, nowe regresje i istniejące affinity/moments
   oraz testy transportu przez dozwolone CI. Bez skip i lokalnego Cargo.
   Brak pozytywnego końcowego CI blokuje aktualizację. Commit/push brancha zadania.
 
@@ -100,12 +105,12 @@ Bez nowego meshowania nie oznacza pominięcia przygotowania/admission nowego tas
 **Interfaces:** istniejące docker-dev-restart-saved-authoring,
 docker-dev-submit-accepted oraz materialize-accepted wyłącznie dla tego samego runu.
 
-- [ ] Step1: Potwierdzić profil exec:default@1, brak aktywnych workerów/lease,
+- [x] Step1: Potwierdzić profil exec:default@1, brak aktywnych workerów/lease,
   pustą kolejkę/control i źródła. Zachować scenę/FMS/Python oraz nowy checkpoint.
-- [ ] Step2: Jedna managed aktualizacja3203 z natywnym drain; odebrać pakiet/API/CLI,
+- [x] Step2: Jedna managed aktualizacja3203 z natywnym drain; odebrać pakiet/API/CLI,
   scenę i historyczne wyniki. Bez zmiany mountów i kasowania kontenerów.
   API może być czasowo niedostępne podczas aktualizacji.
-- [ ] Step3: Zamrozić nowy request z compact80b177c9f483ae5288c9d7dc80cc121bc63d6e3ebde25a8bf28faa262bc2a8d0
+- [x] Step3: Zamrozić nowy request z compact80b177c9f483ae5288c9d7dc80cc121bc63d6e3ebde25a8bf28faa262bc2a8d0
   z Prepare9440b363eda74047ba4d768dac1baaa1. Zmienić tylko
   run_intent.specification.run_id oraz run_intent.idempotency_key.
   Wygenerować ID raz i zachować nowe bajty/SHA przed Submit.
@@ -113,14 +118,14 @@ docker-dev-submit-accepted oraz materialize-accepted wyłącznie dla tego samego
   Zachować różnicę JSON dowodzącą dokładnie dwóch zmian. API wyliczy nowy
   fingerprint, bo obejmuje on run_id; nie przypinać fingerprintu poprzednika.
   Odmowa admission kończy zakres, bez nowego Prepare.
-- [ ] Step4: Run404 i brak fence, potem jeden Submit. Niepewny transport oznacza GET,
+- [x] Step4: Run404 i brak fence, potem jeden Submit. Niepewny transport oznacza GET,
   nigdy powtórny Submit. Ten sam fingerprint w pending_materialization pozwala
   na jedną istniejącą materializację tego runu.
-- [ ] Step5: Failed: zachować exit receipt i świadek na ext4; offline odtworzyć
+- [x] Step5: Failed: zachować exit receipt i świadek na ext4; offline odtworzyć
   centroid, RT0 z kanonicznych momentów oraz obecną nierówność. Nie nazywać świadka
   zaakceptowanym source snapshotem. Succeeded: odebrać V/J/H publicznym API,
   bez kolejnej próby wymuszającej błąd. Sprawdzić zwolnienie lease/rezerwacji.
-- [ ] Step6: Raport z pinami i faktycznym wynikiem. Brak trwałego komunikatu po awarii
+- [x] Step6: Raport z pinami i faktycznym wynikiem. Brak trwałego komunikatu po awarii
   nadzorcy oznacza NOT VERIFIED, bez nowego recovery. Dane naukowe na ext4;
   techniczne dowody buildu w wolumenie grupy.
 
