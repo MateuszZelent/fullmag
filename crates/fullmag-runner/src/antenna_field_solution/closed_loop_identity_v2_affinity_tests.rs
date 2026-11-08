@@ -226,7 +226,7 @@ fn center_current_failure_diagnostic_preserves_bits_and_bound() {
         "difference_bits": hex((8.0 - cell.center_current_xyz_apm2[0]).abs()),
         "budget_bits": hex(128.0 * f64::EPSILON * 8.0),
         "face_flux_bits": [Some(hex(-0.0)), Some(hex(f64::MAX)),
-            Some(hex(f64::from_bits(1))), None],
+            Some(hex(f64::from_bits(1))), None::<String>],
     });
     assert_eq!(center_failure_witness(&error), expected);
 }
