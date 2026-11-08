@@ -725,9 +725,11 @@ Follow-up evidence: e93 bootstrap Rust job 128484637104 completed successfully; 
 
 Direct fresh-archive validation is now covered: 22 focused tests pass, including valid archival and rejection of changed current source bytes, raw stop SHA, native config, current process drain, postdrain proof and container incarnation. Removing the current-source check in an isolated scratch copy reproduces the expected regression failure; canonical code passes. This brings relevant local coverage to 243 passing tests. The root agent completed this test after the delegated scratch delivery failed. Actual stop/recreation and browser acceptance remain pending.
 
-## 11. Rozliczenie wszystkich punktów P01–P22 — 2026-11-07
+## 11. Rozliczenie wszystkich punktów P01–P22 — 2026-11-07 (aktualizacja 2026-11-08)
 
 To rozliczenie zastępuje skrót „pracujemy nad P22” jako informację o postępie. P01–P22 to identyfikatory ustaleń z §9, a T0–T8 to grupy wykonawcze. Numer aktualnej pracy nie jest licznikiem odebranych punktów.
+
+**Bieżący stan:** zarządzany DEV WSL `551fe7de9f4f4e939595b3fa060d1a4d` działa na porcie 3242. Binarka pochodzi z czystego `d67e32fb19efeb626d5e0741ec89a79550f4c291`; bieżące źródła `c9abc727940f86b743949514c7949fc06aac2a89` zawierają dodatkowo poprawkę loadera Python i potwierdzenia zapisu w Inspectorze. Nie są to tożsame dowody pochodzenia binarki. P10/P11 mają wykonane dedykowane regresje; rzeczywiste B-only, Study, materiał i zmiana siatki 8→16 przeszły opisany poniżej ograniczony odbiór. Otwarty jest reset tekstury B: zapis w UI działa, ale przygotowanie komendy zwraca 422. Otwarty jest również test końcowej energii w telemetrii. Historyczne akapity poniżej dokumentują poprzednie próby, a nie bieżącą blokadę Dockera.
 
 Baza: HEAD `6705ff928` oraz bieżące zmiany recovery sieci. Porównanie do `e93f50cb8` potwierdziło brak późniejszych zmian w omawianym kodzie Rust/Python DSL/Control Room; zmieniały się skrypty Docker, ich testy, CI i dokumentacja. Dlatego poniższe dowody CI mają nadal zastosowanie do wskazanych plików produktu. Nie kwalifikują najnowszych zmian recovery ani działającego obecnie runtime.
 
@@ -769,11 +771,11 @@ Dowody testowe użyte w tabeli:
 
 ### Kolejność pozostałych działań i aktualna blokada
 
-1. Zamknąć dokładną nieudaną próbę Docker `84bd676a618e41748c9b261fb6f95d95` po udowodnionej archiwizacji `d169f5ead9ff485997c72ae8ef12fb64`. Recovery ma zachować wcześniejsze current/verified i wszystkie dowody runów. Nie usuwać obcych sieci ani ponawiać starej aktywacji.
-2. Uruchomić tę samą grupę WSL z ponownie zweryfikowaną jawną podsiecią, potwierdzić nowy pakiet i Ready API, oraz sprawdzić poprawiony dostęp do katalogu wyjściowego.
-3. Odbiór bazowy: S29 A→B→C wraz z publicznym terminalnym lifecycle; następnie rzeczywisty PPM B i Compute Study. Każda komenda ma osobną nową tożsamość; nie ponawiać nieznanego wyniku.
-4. Edycja materiału → Stage A; FDM cell 8→16 → całe Study; reset globalny i regionalny; trwała historia, eksport/import i reload. Rozszerzyć istniejący harness o te profile, bez tworzenia duplikatu istniejącego edytora FDM.
-5. Pozostałe scenariusze S01–S46 i deklarowane realizacje FEM/FDM CPU/GPU/multilayer, potem wymagane CI/review/PR → master → kwalifikowane zakończenie worktree. Samo rozliczenie i samo uruchomienie Dockera nie kończy P22.
+1. Naprawić przekazanie zapisanego resetu tekstury B do aktualnego planu wykonania. Dokładne odrzucenie: `stage_state_source_unresolved`, „the selected stage has no authored texture reset”. Odrzucone próby nie utworzyły nowego runu ani tasku; nie ponawiać ich niekontrolowanie.
+2. Zweryfikować rzeczywisty B-only po resecie i ponowienie Study: dokładne wejście B, wyjście B jako wejście C, wszystkie próbki i trwała historia po pełnym reloadzie. Zachować dziedziczenie dla etapów bez resetu oraz poprawną semantykę resetów zakresowych.
+3. Rozstrzygnąć brak końcowej energii w summary i powtórzyć odbiór widocznej telemetrii po poprawnym zakończeniu aktualnej sceny.
+4. Uzupełnić pozostałe scenariusze S01–S46 według deklarowanych możliwości realizacji. Odbiór FDM CPU nie zamyka FEM/GPU/multilayer ani akceptacji naukowej.
+5. Po wymaganych testach i review: PR → master, kwalifikowany build i odbiór zgodnej wersji runtime oraz zakończenie worktree z zachowaniem danych i referencji. Samo CI i gotowy raport nie kończą T8.
 
 
 ### Dalszy odbiór po rozliczeniu — 2026-11-07
@@ -804,3 +806,23 @@ Rzeczywista edycja materiału w Inspectorze i ponowienie tylko A przeszły (`afa
 Zmiana `default_cell` z [2e-9,2e-9,2e-9] na [1e-9,2e-9,2e-9] otrzymała dokładny ACK rewizji 2→3 i nie zmieniła pozostałej sceny. Dla pojedynczej takiej edycji Inspector wysyła już tylko zmieniony liść, zachowując dotychczasową serializację innych edycji. Następny automatyczny FDM grid refresh ujawnił osobny błąd backendu: `accepted_live_study_run_replaced_before_publication`. Przygotowanie zapisuje nowy manual-held RunIntent przed kontrolą zastąpienia terminalnego A, a następnie odrzuca publikację nowego ID. Dwa odczytane wpisy mają wyłącznie taski Accepted bez attemptów i bez Start release; nie są wykonanymi relaksacjami. Nie uruchomiono Study na niezgodnej domenie. Błąd wymaga przeniesienia walidacji kandydata przed trwały commit i nowej kwalifikacji backendu; mesh/tekstura oraz pełne T8 nadal są otwarte.
 
 Źródła i CI nie stanowią kwalifikacji FEM/GPU/multilayer ani dowodu zbieżności. Opisane przebiegi są ograniczonym odbiorem FDM CPU double z limitem kroków i polityką Any.
+
+
+### Aktualny odbiór działającego backendu i UI — 2026-11-08
+
+Poprawka `d67e32fb…` przenosi kontrolę publikacji nowego przygotowania przed trwały commit i instaluje snapshot w tej samej sekcji chronionej. Zarządzany build `551fe7de…`, snapshot `077b94632f0de61497c004e3812bf41c3ace2872974e0f5b0fc5a42545708446`, uruchomił tę binarkę. Poprzednie wyniki i odrzucone osierocone przygotowania zachowano, bez ich aktywowania.
+
+| Rzeczywista czynność | Dowód i wynik | Granica |
+|---|---|---|
+| Trzy kolejne Relax | S29h `run-live-53aea4e2…`: A→B→C, aktualne próby, manifesty i CAS. Publiczne C.final: 8 próbek, delta 0. | FDM CPU double; bez deklaracji zbieżności. |
+| PPM B → tylko etap | Próba `38bee401…`, run `822398d8…`: tylko B, B.initial dokładnie z A.final S29h, publiczne B.final delta 0, historia i pełny reload z WebGL2. | Potwierdza dodatnią ścieżkę P10; pozostałe warianty mają osobne bramki. |
+| PPM Study → cały cykl | Próba `8178a606…`, run `576d1b79…`: A/B/C, pełny reload, historia, publiczne C.final delta 0. | Nie zastępuje resetu tekstury. |
+| Inspector materiału → ponowienie A | Próba `055ebc13…`, run `4a4816c9…`: Ms=600000, Aex=1e-11, alpha=0.5 we wszystkich 8 komórkach zaakceptowanych tablic; bez zmiany m0. | Odbiór FEM po zmianie materiału nadal osobny. |
+| Inspector siatki 8→16 → Study | ACK zmienił wyłącznie `default_cell`; grid refresh przygotował held `41d6917f…`. Jednorazowa próba `0f0c117e…` zwolniła dokładnie ten sam run: A/B/C Succeeded, poprawne współczynniki i przekazania, publiczne C.final 16 próbek delta 0. | Browser przeszedł; host pierwotnie błędnie odrzucił nazwę pola `stage_id`. Poprawiony walidator zakwalifikował zachowany raport bez ponowienia komendy i bez zmiany starego receiptu. |
+| Stara historia po zmianie siatki | Zachowane A z materiałem: nadal 8 próbek, własna geometria, CAS i dwuwierszowa seria skalarna; bieżący run ma 16 komórek. | Tożsamości wyników i domen nie są utożsamiane. |
+| Inspector tekstury B → Save | Pierwsza próba ujawniła kasowane potwierdzenie po refetch. `c9abc727…` wiąże feedback z rewizją ACK i wyborem. Próba `8844f5ea…` potwierdziła Save 5→6 i widoczne „Saved stage relax-b.”. | Następna komenda B zwróciła 422; nie zaliczono solvera ani resetu. |
+| Pole i końcowa telemetria | Próba `eee59ba0…`: WebGL2, 16 widocznych próbek, brak błędów strony/HTTP; test odrzucił brak skończonej energii w summary. | Cały test telemetrii i jego reload pozostają niezaliczone. |
+
+P10/P11: [Rust 8874](https://github.com/MateuszZelent/fullmag/actions/runs/42426053715/job/128564449505) wykonał cztery dedykowane regresje wymienione wyżej. Dodatkowy [Rust D67](https://github.com/MateuszZelent/fullmag/actions/runs/42435301915/job/128592796522) potwierdził je i regresje atomowej publikacji; cały ten job ujawnił niezależny błąd starego bytecode Python. `df2b9a80…` czyta i kompiluje aktualne bajty źródła, z regresją osobnych procesów przy identycznym rozmiarze i mtime. Regresja przeszła także w działającym backendzie. [CI df2 / Rust](https://github.com/MateuszZelent/fullmag/actions/runs/42440336488/job/128608004871) zakończyło grupę 1220 PASS, 0 FAIL, 3 ignored. [CI c9](https://github.com/MateuszZelent/fullmag/actions/runs/42446214535) jest zielone dla dokładnego HEAD c9, w tym Rust, Python i Control Room. Nie zmienia to wyniku rzeczywistej próby tekstury.
+
+Zapisana scena 6 zawiera lokalny reset B dla `film`, `region_id:null`, `initializer:null`; globalne m0 pozostaje uniform +X. Po HTTP 422 zachowano pięć zakończonych runów, brak nowego tasku/komendy i niezmienione bieżące C.final. Jedna kontrolowana próba diagnostyczna tego samego znanego odrzuconego zamiaru zachowała pełną odpowiedź 422 i identyczne hashe katalogów runów przed/po. To dowód diagnostyczny API, nie zaliczony odbiór UI. Przed ewentualnym kolejnym buildem zachowano inwentarz 777 plików wyników/CAS tej generacji. Otwarte pozostają P11 w rzeczywistym resecie, odpowiednie bramki P02/P05/P21/P22 oraz pozostałe scenariusze macierzy.

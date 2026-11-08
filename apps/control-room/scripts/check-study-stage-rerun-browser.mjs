@@ -2251,6 +2251,13 @@ export async function runStudyStageRerun() {
     const commandBody = await commandResponse.body();
     assert(commandBody.length <= 64 * 1024, "P22 command response exceeded its bound");
     const accepted = JSON.parse(commandBody.toString("utf8"));
+    if (!commandResponse.ok()) {
+      commandReceipt.failure_response = {
+        code: typeof accepted?.code === "string" ? accepted.code.slice(0, 128) : null,
+        message: typeof accepted?.message === "string" ? boundedMessage(accepted.message)
+          : typeof accepted?.error === "string" ? boundedMessage(accepted.error) : null,
+      };
+    }
     const acceptance = studyStageCommandResponseOutcome(commandResponse.status(), accepted);
     if (acceptance.outcome !== "accepted") {
       outcome = "unknown";
