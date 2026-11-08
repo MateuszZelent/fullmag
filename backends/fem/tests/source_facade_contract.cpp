@@ -135,7 +135,7 @@ void source_facades_document_module_boundaries() {
         context.find("does not own base/core import helpers, runtime lifecycle, device policy, integrator stage mechanics, or interaction physics") != std::string::npos,
         "context source file must document its non-owning module boundary");
     check(
-        context.find("return build_context_from_plan(ctx, plan, error);") !=
+        context.find("return build_context_from_plan(ctx, plan, error, canonical_boundary_marker);") !=
             std::string::npos,
         "context source file must delegate plan construction to Context builder");
     check(
@@ -268,7 +268,7 @@ void source_facades_document_module_boundaries() {
         backend_lifecycle.find("bool initialize_backend_runtime(") != std::string::npos,
         "backend lifecycle runtime source must own runtime initialization helper");
     check(
-        backend_lifecycle.find("context_from_plan(ctx, plan, error)") != std::string::npos &&
+        backend_lifecycle.find("context_from_plan(ctx, plan, error, canonical_boundary_marker)") != std::string::npos &&
             backend_lifecycle.find("configure_transfer_audit_from_env(ctx.transfer_audit.audit)") !=
                 std::string::npos,
         "backend lifecycle runtime source must own Context construction delegation and transfer-audit env import");

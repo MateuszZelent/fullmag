@@ -28,6 +28,8 @@ KNOWN_ROOTS = frozenset({
     "host-device-reattest", "container-recovery-preparation", "runtime-services",
     "stop-bootstrap", "stop-bootstrap-frontend",
     "startup-recovery-stop", "startup-recovery-stop-preview",
+    "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
+    "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
@@ -149,7 +151,7 @@ def source_inventory(root):
     return {path.name: digest(_raw(path)) for path in paths}
 
 
-def control_references(root, candidate, *, owner_marker_pin=None):
+def control_references(root, candidate, *, owner_marker_pin=None, qualified_rejection=None):
     """Conservatively preserve references from nonhistorical control documents.
 
     A succeeded terminal attempt is historical. Failed, incomplete and unknown
@@ -157,6 +159,26 @@ def control_references(root, candidate, *, owner_marker_pin=None):
     script activation markers are historical only when confirmed activated.
     """
     root = _directory(root)
+    if qualified_rejection is not None:
+        from docker_activation_history_storage import source_files
+        directory = root / "activation/attempts" / candidate
+        if not directory.exists():
+            directory = root / "activation/history-v1" / candidate
+        if source_files(directory) != qualified_rejection:
+            raise HistoryError("Qualified rejection bytes changed before reference inventory")
+        rejected_receipt = document(qualified_rejection["receipt.json"], "qualified rejection")
+        if (rejected_receipt.get("attempt") != candidate
+                or rejected_receipt.get("state") != "failed-confirmed"
+                or rejected_receipt.get("activation_state") != "rejected"
+                or rejected_receipt.get("run_id") is not None):
+            raise HistoryError("Invalid qualified rejection reference identity")
+        expected_rejected_marker = {
+            "schema": "fullmag.docker-startup-activation-receipt.v1", "state": "rejected",
+            "request_id": rejected_receipt["request_id"],
+            "source_sha256": rejected_receipt["source_sha256"],
+            "provenance_sha256": rejected_receipt["provenance_sha256"],
+            "authorization": document(qualified_rejection["authorization.json"], "authorization"),
+            "result": document(qualified_rejection["result.json"], "result")}
     references, pins = {}, {}
     known_runs = {}
     closed_activations = {}
@@ -167,7 +189,12 @@ def control_references(root, candidate, *, owner_marker_pin=None):
             terminal_raw = _raw(terminal)
             value = document(terminal_raw, str(path) + "/terminal")
             if (value.get("schema") == "fullmag.docker-build-operation.v1"
-                    and value.get("state") == "succeeded" and value.get("attempt") == path.name
+                    and (value.get("state") == "succeeded" or (
+                        qualified_rejection is not None and path.name == candidate
+                        and terminal_raw == qualified_rejection["terminal.json"]
+                        and value.get("state") == "failed-confirmed"
+                        and value.get("activation_state") == "rejected"))
+                    and value.get("attempt") == path.name
                     and _raw(receipt) == terminal_raw):
                 return value
         return None
@@ -215,7 +242,10 @@ def control_references(root, candidate, *, owner_marker_pin=None):
                         value = document(marker_raw, relative)
                         matches = [row for row in closed_activations.values()
                                    if row.get("activation_receipt_key") == entry.name.removeprefix("script-activation-")]
-                        if (value.get("state") == "activated" and len(matches) == 1
+                        if (len(matches) == 1 and (
+                                (value.get("state") == "activated" and matches[0].get("state") == "succeeded") or (
+                                qualified_rejection is not None and matches[0]["attempt"] == candidate
+                                and value == expected_rejected_marker))
                                 and all(value.get(key) == matches[0].get(key) for key in ("request_id", "source_sha256", "provenance_sha256"))):
                             historical_marker_digests[
                                 marker.relative_to(root).as_posix()

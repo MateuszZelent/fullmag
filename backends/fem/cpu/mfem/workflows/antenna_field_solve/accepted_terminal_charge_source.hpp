@@ -1,12 +1,15 @@
 #pragma once
 
 #include "cpu/mfem/transport/terminal_constrained_rt0_projection.hpp"
+#include "core/fem_marker_map.hpp"
 #include "cpu/mfem/workflows/antenna_field_solve/charge_terminal_current_constraints.hpp"
 
 namespace fullmag::fem::antenna_field_solve {
 
 struct AcceptedTerminalChargeRequest {
     mfem::Mesh *mesh = nullptr;
+    // Borrowed for this synchronous solve/digest; caller owns the import maps.
+    const FemMarkerMaps *canonical_marker_maps = nullptr;
     transport::StableMeshVertexIdentities stable_vertex_identities;
     std::vector<double> conductivity_spm_per_element;
     std::vector<ResolvedChargeTerminal> terminals;

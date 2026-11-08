@@ -22,7 +22,8 @@ bool initialize_backend_runtime(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
     std::string &error,
-    const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2 = nullptr);
+    const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2 = nullptr,
+    const uint32_t *canonical_boundary_marker = nullptr);
 
 /*
  * Destroy native FEM backend runtime resources behind the C ABI facade.

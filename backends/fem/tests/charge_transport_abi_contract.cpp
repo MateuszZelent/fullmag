@@ -334,6 +334,58 @@ void terminal_current_v2_is_balanced_and_ordered_like_the_request()
         "charge-only terminal current has the wrong magnitude");
 }
 
+void sparse_u32_transport_preserves_element_coefficients_and_terminal_order()
+{
+    const double boundary_values[] = {0.0, 1.0};
+    const uint32_t high = std::numeric_limits<uint32_t>::max();
+    const uint32_t markers[] = {1000003u,1000003u,high,high,101,101,102,102,103,103,104,104};
+    const uint32_t attributes[] = {1000003u, high};
+    const uint32_t cell_markers[] = {high,high,high,high,high,high};
+    for (const auto &sigma : {std::array<double,6>{4,4,4,4,4,4}, std::array<double,6>{2,4,6,8,10,12}}) {
+        auto baseline = base_request(sigma.data(), boundary_values);
+        SolveBuffersV2 reference, mapped;
+        require(fullmag_fem_solve_charge_transport_v2(&baseline, &reference.result) == FULLMAG_FEM_OK,
+            "reference heterogeneous transport failed");
+        auto request = baseline;
+        request.mesh.facet_markers = markers;
+        request.mesh.cell_markers = cell_markers;
+        request.mesh.cell_markers_len = std::size(cell_markers);
+        request.dirichlet_boundary_attributes = attributes;
+        require(fullmag_fem_solve_charge_transport_v2(&request, &mapped.result) == FULLMAG_FEM_OK,
+            "sparse u32 transport failed");
+        for (std::size_t i=0; i<reference.potential.size(); ++i)
+            require(std::abs(reference.potential[i]-mapped.potential[i])<1e-10, "relabeling changed per-element conductivity potential");
+        for (std::size_t i=0; i<reference.current.size(); ++i)
+            require(std::abs(reference.current[i]-mapped.current[i])<1e-10, "relabeling changed per-element conductivity current");
+        for (std::size_t i=0; i<2; ++i)
+            require(std::abs(reference.terminal_currents[i]-mapped.terminal_currents[i])<1e-10, "canonical terminal order changed");
+        const uint32_t absent[] = {2u, high}; // 2 exists only in the compact map.
+        request.dirichlet_boundary_attributes = absent;
+        require(fullmag_fem_solve_charge_transport_v2(&request, &mapped.result) == FULLMAG_FEM_ERR_INVALID &&
+            mapped.result.base.electric_potential_v_len == 0 && mapped.result.dirichlet_boundary_currents_a_len == 0,
+            "compact attribute was mistaken for an absent canonical terminal");
+    }
+    const std::array<double,6> sigma{4,4,4,4,4,4};
+    const uint64_t offsets[] = {0,1,2};
+    const double currents[] = {-4,4};
+    fullmag_fem_charge_transport_request_v3 request{};
+    request.abi_version=FULLMAG_FEM_CHARGE_TERMINAL_CURRENT_ABI_VERSION; request.struct_size=sizeof(request);
+    request.base=base_request(sigma.data(),boundary_values);
+    request.base.mesh.facet_markers=markers;
+    request.base.mesh.cell_markers=cell_markers; request.base.mesh.cell_markers_len=std::size(cell_markers);
+    request.base.dirichlet_boundary_attributes=nullptr; request.base.dirichlet_boundary_values_v=nullptr; request.base.dirichlet_boundary_count=0;
+    request.terminal_attribute_offsets=offsets; request.terminal_attribute_offsets_len=std::size(offsets);
+    request.terminal_boundary_attributes=attributes; request.terminal_boundary_attributes_len=std::size(attributes);
+    request.requested_outward_currents_a=currents; request.terminal_count=2;
+    SolveBuffersV3 result;
+    require(fullmag_fem_solve_charge_transport_v3(&request,&result.result)==FULLMAG_FEM_OK,
+        "sparse prescribed-current terminal solve failed");
+    require(result.gauges[0]==0 && std::abs(result.terminal_voltages[0])<1e-10 &&
+        std::abs(result.terminal_voltages[1]+1)<1e-10 &&
+        std::abs(result.terminal_currents[0]+4)<1e-9 && std::abs(result.terminal_currents[1]-4)<1e-9,
+        "sparse prescribed terminals lost signed currents, order or gauge");
+}
+
 void terminal_current_v2_rejects_shared_h1_nodes()
 {
     constexpr std::array<double, 6> conductivity = {4.0, 4.0, 4.0, 4.0, 4.0, 4.0};
@@ -531,7 +583,7 @@ struct AcceptedChargeFixture {
         request.mesh.facet_offsets = facet_offsets.data(); request.mesh.facet_offsets_len = facet_offsets.size();
         request.mesh.facet_nodes = facets.data(); request.mesh.facet_nodes_len = facets.size();
         request.mesh.facet_markers = markers.data(); request.mesh.facet_markers_len = markers.size();
-        request.stable_vertex_identities = {"fixture-real-ids.v1", ids.data(), ids.size()};
+        request.stable_vertex_identities = {"stable_mesh_vertex_u64.v1", ids.data(), ids.size()};
         request.conductivity_spm_per_element = sigma.data(); request.conductivity_spm_per_element_len = sigma.size();
         request.terminals = terminals.data(); request.terminal_count = terminals.size();
         request.absolute_jump_tolerance_v = 1.0e-12;
@@ -563,6 +615,8 @@ void require_accepted_charge_failure(const fullmag_fem_accepted_terminal_charge_
             buffers.result.operator_version[0] == 0 && buffers.result.layout_fingerprint[0] == 0 &&
             buffers.result.content_sha256[0] == 0,
         "accepted charge ABI error published stale length or identity");
+    if (std::strstr(buffers.result.error_message, fragment) == nullptr)
+        std::cerr << "expected diagnostic fragment: " << fragment << "; actual: " << buffers.result.error_message << '\n';
     require(std::strstr(buffers.result.error_message, fragment) != nullptr,
         "accepted charge ABI error lost its specific diagnostic");
     require(std::all_of(buffers.payload.begin(), buffers.payload.end(), [](uint8_t byte) { return byte == 0xa5; }),
@@ -673,12 +727,21 @@ void accepted_charge_truncated_result_keeps_prefix_and_canary_untouched()
         "accepted charge ABI wrote beyond its truncated result prefix or changed its canary");
 }
 
-void accepted_charge_layered_record_has_exact_sha_and_signed_payload()
+void accepted_charge_layered_record_has_exact_sha_and_signed_payload(bool sparse = false)
 {
     require(accepted_payload_sha256(Bytes{'a', 'b', 'c'}) ==
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         "accepted charge payload SHA oracle failed its known-answer abc check");
     AcceptedChargeFixture fixture;
+    std::vector<uint32_t> cell_labels;
+    if (sparse) {
+        for (std::size_t i=0; i<fixture.cell_types.size(); ++i)
+            cell_labels.push_back(i<6 ? 2147483648u : std::numeric_limits<uint32_t>::max());
+        fixture.request.mesh.cell_markers=cell_labels.data();
+        fixture.request.mesh.cell_markers_len=cell_labels.size();
+        for (auto &marker : fixture.markers)
+            marker = marker==1 ? 1000003u : marker==2 ? std::numeric_limits<uint32_t>::max() : 100u+marker;
+    }
     const auto solve = [&](double sign) {
         fixture.terminals[0].requested_outward_current_a = -sign;
         fixture.terminals[1].requested_outward_current_a = sign;
@@ -704,7 +767,7 @@ void accepted_charge_layered_record_has_exact_sha_and_signed_payload()
             for (int byte = 0; byte < 8; ++byte) value = (value << 8) | payload[cursor++];
             return value;
         };
-        std::vector<uint64_t> vertex_ids;
+        std::vector<uint64_t> vertex_ids, canonical_attributes;
         std::vector<double> potentials, sigmas, requested, h1, rt0, voltages;
         std::vector<std::string> terminal_ids;
         unsigned schema_count = 0, operator_count = 0;
@@ -729,6 +792,7 @@ void accepted_charge_layered_record_has_exact_sha_and_signed_payload()
                 const auto bits = read_u64();
                 if (type == 2) {
                     if (name == "vertex_id") vertex_ids.push_back(bits);
+                    if (name == "attribute") canonical_attributes.push_back(bits);
                 } else {
                     double value = 0;
                     std::memcpy(&value, &bits, sizeof(value));
@@ -746,6 +810,11 @@ void accepted_charge_layered_record_has_exact_sha_and_signed_payload()
                 potentials.size() == fixture.ids.size() && sigmas == fixture.sigma &&
                 vertex_ids.size() >= fixture.ids.size() && std::equal(fixture.ids.begin(), fixture.ids.end(), vertex_ids.begin()),
             "accepted payload lost owned V, element order/material or real stable vertex identities");
+        std::vector<uint64_t> expected_attributes;
+        for (std::size_t i=0; i<fixture.cell_types.size(); ++i)
+            expected_attributes.push_back(sparse ? cell_labels[i] : i+1);
+        expected_attributes.insert(expected_attributes.end(), fixture.markers.begin(), fixture.markers.end());
+        require(canonical_attributes == expected_attributes, "accepted payload hashed compact attributes instead of canonical labels");
         require(terminal_ids == std::vector<std::string>({"left", "right", "left"}) &&
                 requested.size() == 2 && h1.size() == 2 && rt0.size() == 2 && voltages.size() == 2,
             "accepted payload terminal order/reference or current lengths are incorrect");
@@ -1121,25 +1190,38 @@ void external_lead_bundle_abi_failures_are_atomic_and_prefix_safe()
 
 } // namespace
 
-int main()
+int run_charge_transport_abi_contract()
 {
-    try {
-        malformed_headers_and_gpu_fail_closed();
-        affine_bar_has_exact_sign_and_linearity();
-        invalid_material_and_capacity_fail_closed();
-        terminal_current_v2_is_balanced_and_ordered_like_the_request();
-        terminal_current_v2_rejects_shared_h1_nodes();
-        prescribed_terminal_current_v3_enforces_sign_and_gauge();
-        accepted_charge_abi_headers_policies_and_gpu_fail_atomically();
-        accepted_charge_abi_mesh_and_descriptors_fail_closed();
-        accepted_charge_truncated_result_keeps_prefix_and_canary_untouched();
-        accepted_charge_layered_record_has_exact_sha_and_signed_payload();
-        external_lead_bundle_abi_keeps_nested_records_signed_and_owned();
-        external_lead_bundle_abi_failures_are_atomic_and_prefix_safe();
-        std::cout << "fem charge transport ABI contract: PASS\n";
-        return 0;
-    } catch (const std::exception &error) {
-        std::cerr << "fem charge transport ABI contract: FAIL: " << error.what() << '\n';
-        return 1;
+    struct Case { const char *name; void (*run)(); };
+    const Case cases[] = {
+        {"malformed_headers_and_gpu_fail_closed", malformed_headers_and_gpu_fail_closed},
+        {"affine_bar_has_exact_sign_and_linearity", affine_bar_has_exact_sign_and_linearity},
+        {"invalid_material_and_capacity_fail_closed", invalid_material_and_capacity_fail_closed},
+        {"terminal_current_v2_is_balanced_and_ordered_like_the_request", terminal_current_v2_is_balanced_and_ordered_like_the_request},
+        {"sparse_u32_transport_preserves_element_coefficients_and_terminal_order", sparse_u32_transport_preserves_element_coefficients_and_terminal_order},
+        {"terminal_current_v2_rejects_shared_h1_nodes", terminal_current_v2_rejects_shared_h1_nodes},
+        {"prescribed_terminal_current_v3_enforces_sign_and_gauge", prescribed_terminal_current_v3_enforces_sign_and_gauge},
+        {"accepted_charge_abi_headers_policies_and_gpu_fail_atomically", accepted_charge_abi_headers_policies_and_gpu_fail_atomically},
+        {"accepted_charge_abi_mesh_and_descriptors_fail_closed", accepted_charge_abi_mesh_and_descriptors_fail_closed},
+        {"accepted_charge_truncated_result_keeps_prefix_and_canary_untouched", accepted_charge_truncated_result_keeps_prefix_and_canary_untouched},
+        {"accepted_charge_layered_record", +[] { accepted_charge_layered_record_has_exact_sha_and_signed_payload(); }},
+        {"accepted_charge_sparse_u32_record", +[] { accepted_charge_layered_record_has_exact_sha_and_signed_payload(true); }},
+        {"external_lead_bundle_owned_record", external_lead_bundle_abi_keeps_nested_records_signed_and_owned},
+        {"external_lead_bundle_atomic_failures", external_lead_bundle_abi_failures_are_atomic_and_prefix_safe},
+    };
+    unsigned failures = 0;
+    for (const auto &test : cases) {
+        try { test.run(); }
+        catch (const std::exception &error) {
+            ++failures;
+            std::cerr << "fem charge transport case FAIL: " << test.name << ": " << error.what() << '\n';
+        }
     }
+    std::cout << "fem charge transport ABI contract: " << (failures ? "FAIL" : "PASS")
+              << " failures=" << failures << '\n';
+    return failures ? 1 : 0;
 }
+
+#ifndef FULLMAG_EMBED_CHARGE_TRANSPORT_CONTRACT
+int main() { return run_charge_transport_abi_contract(); }
+#endif

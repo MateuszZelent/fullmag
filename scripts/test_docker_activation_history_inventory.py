@@ -35,6 +35,33 @@ class HistoryInventoryTests(unittest.TestCase):
             self.put("activation/attempts/" + token + "/" + name, value)
         return value
 
+    def test_only_qualified_rejection_can_be_historical_and_live_pins_still_block(self):
+        from test_docker_activation_history_policy import RejectedHistoryTests
+        files=RejectedHistoryTests().evidence()
+        receipt=json.loads(files["receipt.json"]);receipt["activation_receipt_key"]="c"*64
+        files["receipt.json"]=files["terminal.json"]=raw(receipt)
+        for name,content in files.items():
+            path=self.root/"activation/attempts"/TOKEN/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+        marker={"schema":"fullmag.docker-startup-activation-receipt.v1","state":"rejected",
+                **{key:receipt[key] for key in ("request_id","source_sha256","provenance_sha256")},
+                "authorization":json.loads(files["authorization.json"]),"result":json.loads(files["result.json"])}
+        path=self.put("backend/script-activation-"+"c"*64+"/activation.json",marker)
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN)
+        self.assertNotIn(TOKEN,control_references(self.root,TOKEN,qualified_rejection=files)["protected"])
+        self.put("backend/recovery.json",{"activation":TOKEN})
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+        (self.root/"backend/recovery.json").unlink()
+        marker["future_pin"]=TOKEN;path.write_bytes(raw(marker))
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+
+    def test_known_operational_roots_are_live_references_not_excluded(self):
+        for name in ["browser-qa","claimed-interruption-collect","cancel-failed-no-spawn",
+                     "no-spawn-cancellation","stop-failed-runtime","recovery-promotion","recovery-build"]:
+            self.terminal(TOKEN,RUN)
+            path=self.put(name+"/current.json",{"activation":TOKEN})
+            with self.subTest(root=name),self.assertRaises(HistoryError):control_references(self.root,TOKEN)
+            path.unlink();path.parent.rmdir()
+
     def test_current_and_direct_predecessor_protected_without_pinning_entire_history(self):
         a, b, c = "a" * 32, "b" * 32, "c" * 32
         self.terminal(a, "run-a")

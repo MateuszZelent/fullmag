@@ -6790,12 +6790,14 @@ class StudyBuilder:
         *,
         every_steps: int | None = None,
         table_id: str = "default",
+        enabled: bool = True,
     ) -> "StudyBuilder":
         tableautosave(
             every,
             quantities=quantities,
             every_steps=every_steps,
             table_id=table_id,
+            enabled=enabled,
         )
         return self
 
@@ -8753,6 +8755,7 @@ def _build_explicit_mesh_assets(
                 "anisotropy_axis": list(handle.anisU or (0.0, 0.0, 1.0)),
             }
             for handle in _state._magnets
+            if handle.Ms is not None and handle.Aex is not None
         },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(
@@ -9595,13 +9598,23 @@ def tableautosave(
     *,
     every_steps: int | None = None,
     table_id: str = "default",
+    enabled: bool = True,
 ) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.
     ``quantities`` may use compatibility names such as ``time``, ``solver_dt``,
     and ``E_total``; the public table contract stores canonical quantity ids.
+    ``enabled=False`` clears the clock for subsequent declarations without
+    inserting a configuration stage. It cannot be combined with a cadence.
     """
+    if type(enabled) is not bool:
+        raise TypeError("tableautosave enabled must be a boolean")
+    if not enabled:
+        if every is not None or every_steps is not None or quantities is not None or table_id != "default":
+            raise ValueError("disabled tableautosave cannot specify cadence, quantities or table_id")
+        _state._table_autosave = None
+        return
     _state._table_autosave = TableAutosave(
         t_sampl=every,
         every_steps=every_steps,

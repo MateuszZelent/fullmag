@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
@@ -1921,6 +1922,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         if requested_backend.strip().lower() == "fdm":
             raise ValueError("fem_domain_mesh requires the FEM backend")
         document["study"]["fem_domain_mesh"] = fem_domain_mesh
+    if "thermal_noise" in builder:
+        document["study"]["thermal_noise"] = canonical_thermal_noise(builder["thermal_noise"])
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
@@ -2280,6 +2283,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             if value is not None
         ):
             raise ValueError("fem_domain_mesh requires the FEM backend")
+    if "thermal_noise" in study:
+        builder["thermal_noise"] = canonical_thermal_noise(study["thermal_noise"])
     if "pbc" in study:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
@@ -2641,6 +2646,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "thermal_noise" in raw_study:
+        overrides["thermal_noise"] = canonical_thermal_noise(raw_study["thermal_noise"])
     if isinstance(raw_study, Mapping) and "visualization_hint" in raw_study:
         visualization_hint = raw_study.get("visualization_hint")
         if visualization_hint is not None:

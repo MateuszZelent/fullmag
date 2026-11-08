@@ -53,6 +53,22 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cerrno>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char **environ;
+#endif
+
+void run_regional_marker_cpu_contract();
+void run_regional_marker_gpu_contract();
+#if FULLMAG_HAS_MFEM_STACK
+int run_charge_transport_abi_contract();
+int run_steady_transport_abi_contract();
+void run_mixed_regional_marker_contract();
+#endif
 
 namespace {
 
@@ -1431,11 +1447,36 @@ std::vector<double> magnetic_mass_row_sums(
     return std::vector<double>(weights.GetData(), weights.GetData() + weights.Size());
 }
 
+// Fixtures author canonical labels; assembly consumes the same compact maps as imports.
+std::vector<uint32_t> compact_fixture_boundaries(fullmag::fem::Context &ctx, mfem::Mesh &mesh, bool already_compact = false) {
+    std::vector<uint32_t> labels;
+    for (int i = 0; i < mesh.GetNBE(); ++i) {
+        uint32_t canonical = static_cast<uint32_t>(mesh.GetBdrAttribute(i));
+        if (already_compact)
+            check(ctx.mfem_context.marker_maps.boundary.canonical(mesh.GetBdrAttribute(i), canonical),
+                  "reused fixture boundary has no reverse map");
+        labels.push_back(canonical);
+    }
+    std::string error;
+    check_result(ctx.mfem_context.marker_maps.boundary.assign(labels, error), error, "fixture boundary map");
+    for (int i = 0; i < mesh.GetNBE(); ++i)
+        mesh.GetBdrElement(i)->SetAttribute(ctx.mfem_context.marker_maps.boundary.attribute(labels[i]));
+    mesh.SetAttributes();
+    return labels;
+}
+
 void mixed_poisson_context(
     fullmag::fem::Context &ctx,
     mfem::Mesh &mesh,
     mfem::FiniteElementSpace &fes,
     const std::vector<uint8_t> &magnetic_elements) {
+    const bool already_compact = ctx.mfem_context.mesh == &mesh &&
+        ctx.mfem_context.marker_maps.domain.size() != 0u;
+    ctx.mesh.nodes_xyz.clear();
+    ctx.mesh.cell_types.clear();
+    ctx.mesh.cell_offsets.clear();
+    ctx.mesh.cell_nodes.clear();
+    ctx.mesh.cell_markers.clear();
     ctx.base_plan.fe_order = 1u;
     ctx.mfem_context.mesh = &mesh;
     ctx.mfem_context.fes = &fes;
@@ -1473,8 +1514,14 @@ void mixed_poisson_context(
     ctx.mesh.cell_markers.reserve(static_cast<size_t>(mesh.GetNE()));
     for (int element = 0; element < mesh.GetNE(); ++element) {
         ctx.mesh.cell_markers.push_back(
-            mesh.GetAttribute(element) == 7 ? 7u : 0u);
+            magnetic_elements[static_cast<size_t>(element)] ? 7u : 0u);
     }
+    std::string map_error;
+    check_result(ctx.mfem_context.marker_maps.domain.assign(ctx.mesh.cell_markers, map_error),
+                 map_error, "fixture domain map");
+    for (int i = 0; i < mesh.GetNE(); ++i)
+        mesh.GetElement(i)->SetAttribute(ctx.mfem_context.marker_maps.domain.attribute(ctx.mesh.cell_markers[i]));
+    (void)compact_fixture_boundaries(ctx, mesh, already_compact);
     ctx.mesh.magnetic_node_mask = node_mask_from_elements(mesh, fes, magnetic_elements);
     ctx.material_fields.material.saturation_magnetisation = 1.0;
     ctx.demag.enabled = true;
@@ -1486,7 +1533,7 @@ void mixed_poisson_context(
     ctx.poisson_demag.boundary_marker = 9;
     ctx.cpu_threads.effective_omp_threads = 1;
     ctx.integration_weights.mfem_lumped_mass =
-        magnetic_mass_row_sums(mesh, fes, 7);
+        magnetic_mass_row_sums(mesh, fes, ctx.mfem_context.marker_maps.domain.attribute(7u));
 }
 
 mfem::Mesh manufactured_airbox_slab_mesh() {
@@ -1684,7 +1731,7 @@ void cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup() {
                 ctx.material_fields.A_element_field.assign(static_cast<size_t>(mesh.GetNE()), 0.0);
                 for (int i = 0; i < mesh.GetNE(); ++i) {
                     ctx.material_fields.Ms_element_field[static_cast<size_t>(i)] =
-                        mesh.GetAttribute(i) == 7 ? 0.7 + 0.1 * i : 0.0;
+                        ctx.mesh.magnetic_element_mask[static_cast<size_t>(i)] ? 0.7 + 0.1 * i : 0.0;
                 }
                 std::string material_error;
                 check_result(fullmag::fem::initialize_material_runtime(ctx, material_error),
@@ -3356,6 +3403,7 @@ void mixed_poisson_robin_mass_uses_outer_tri_and_quad_only() {
     ctx.demag.realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     ctx.poisson_demag.boundary_marker = 9;
     ctx.mesh.periodic_boundary_marker_set = {8u};
+    const auto canonical_boundaries = compact_fixture_boundaries(ctx, mesh);
     std::string error;
     check_result(fullmag::fem::initialize_demag_poisson_boundary_operator(
                      ctx, mesh, fes, stiffness, error),
@@ -3373,7 +3421,7 @@ void mixed_poisson_robin_mass_uses_outer_tri_and_quad_only() {
     int open_quads = 0;
     int seam_faces = 0;
     for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
-        const int attribute = mesh.GetBdrAttribute(boundary);
+        const uint32_t attribute = canonical_boundaries[static_cast<size_t>(boundary)];
         if (attribute == 9) {
             expected_area += boundary_element_area(mesh, boundary);
             if (mesh.GetBdrElementGeometry(boundary) == mfem::Geometry::TRIANGLE) ++open_triangles;
@@ -3400,8 +3448,9 @@ struct MixedPoissonSolveResult {
 };
 
 MixedPoissonSolveResult solve_mixed_poisson(
-    mfem::Mesh &mesh,
+    mfem::Mesh &source_mesh,
     const std::vector<double> &magnetization) {
+    mfem::Mesh mesh(source_mesh);
     mfem::H1_FECollection fixture_fec(1, 3);
     mfem::FiniteElementSpace fixture_fes(&mesh, &fixture_fec);
     const auto magnetic_elements = element_mask_for_attribute(mesh, 7);
@@ -3802,7 +3851,7 @@ void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
         boundary_header.find("excluding periodic seam markers") != std::string::npos,
         "Poisson boundary header must document Robin periodic-seam exclusion");
     check(
-        boundary.find("bdr_marker[ctx.poisson_demag.boundary_marker - 1] = 1;") !=
+        boundary.find("bdr_marker[selected_attribute - 1] = 1;") !=
             std::string::npos,
         "Robin boundary mass must first select the configured open boundary marker");
     check(
@@ -3810,7 +3859,7 @@ void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
             std::string::npos,
         "Robin boundary mass must inspect periodic boundary seam markers");
     check(
-        boundary.find("bdr_marker[static_cast<int>(pm) - 1] = 0;") != std::string::npos,
+        boundary.find("bdr_marker[attribute - 1] = 0;") != std::string::npos,
         "Robin boundary mass must exclude periodic seam markers from the boundary marker array");
     check(
         boundary.find("new mfem::MassIntegrator(), bdr_marker") != std::string::npos,
@@ -3926,7 +3975,7 @@ void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
         "mfem::Vector *periodic_solution",
         "PeriodicPoissonReducedWorkspace *periodic_workspace",
         "bool periodic_reduced_ready",
-        "int boundary_marker",
+        "int64_t boundary_marker",
         "int robin_beta_mode",
         "double robin_beta_factor",
         "double robin_effective_beta",
@@ -4650,7 +4699,46 @@ void packed_snapshot_field_download_is_runtime_correct_and_fails_closed() {
 
 } // namespace
 
-int main() {
+// Public backend creation owns a process-lifetime MFEM Device. Run its CPU
+// and CUDA cases in fresh processes so neither configures the other lane's
+// device, or the existing direct-MFEM fixtures' device.
+int regional_contract_process(const char *program, const char *mode) {
+    std::fflush(nullptr);
+#ifdef _WIN32
+    const char *arguments[] = {program, mode, nullptr};
+    const intptr_t status = _spawnv(_P_WAIT, program, arguments);
+    return status == 0 ? 0 : 1;
+#else
+    char *arguments[] = {const_cast<char *>(program), const_cast<char *>(mode), nullptr};
+    pid_t child = -1;
+    if (posix_spawnp(&child, program, nullptr, nullptr, arguments, environ) != 0) {
+        std::fprintf(stderr, "could not spawn regional contract: %s\n", mode);
+        return 1;
+    }
+    int status = 0;
+    pid_t waited;
+    do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+    return waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 1;
+#endif
+}
+
+int main(int argc, char **argv) {
+    int regional_transport_failures = 0;
+    if (argc == 2 && std::string(argv[1]) == "--regional-cpu") {
+        run_regional_marker_cpu_contract();
+#if FULLMAG_HAS_MFEM_STACK
+        regional_transport_failures += run_charge_transport_abi_contract();
+        regional_transport_failures += run_steady_transport_abi_contract();
+        run_mixed_regional_marker_contract();
+#endif
+        return regional_transport_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--regional-gpu") {
+        run_regional_marker_gpu_contract();
+        return 0;
+    }
+    if (argc != 1) return 1;
+    regional_transport_failures += regional_contract_process(argv[0], "--regional-cpu");
     run_contract_case("demag_amg_policy_resolves_defaults_overrides_and_invalid_values", demag_amg_policy_resolves_defaults_overrides_and_invalid_values);
     run_contract_case("demag_linear_solve_validation_rejects_invalid_results", demag_linear_solve_validation_rejects_invalid_results);
     run_contract_case("poisson_runtime_wrappers_are_owned_by_separate_modules", poisson_runtime_wrappers_are_owned_by_separate_modules);
@@ -4726,6 +4814,7 @@ int main() {
     // Keep the process-wide CUDA configuration after all CPU oracle tests.
     run_contract_case("mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step", mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step);
     run_contract_case("packed_snapshot_field_download_is_runtime_correct_and_fails_closed", packed_snapshot_field_download_is_runtime_correct_and_fails_closed);
+    regional_transport_failures += regional_contract_process(argv[0], "--regional-gpu");
 #endif
-    return 0;
+    return regional_transport_failures == 0 ? 0 : 1;
 }

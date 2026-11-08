@@ -73,6 +73,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         demag_realization: None,
         fdm: None,
         external_field: None,
+        thermal_noise: None,
         rotated_interfacial_dmi: None,
             rotated_interfacial_dmi_object_ids: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
@@ -17932,7 +17933,7 @@ study.run(1e-12)
     assert!(rewritten.contains("body_ui_core_region = body.add_region(\"ui_core\""));
     assert!(rewritten.contains("region_id=\"body:ui-core\""));
     assert!(rewritten.contains(
-        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000, unit=\"A/m\"), priority=5"
+        "body_ui_core_region.set_material(\"ms\", fm.fields.constant(700000.0, unit=\"A/m\"), priority=5"
     ));
     assert!(rewritten.contains(
         "body.set_material_field(\"alpha\", fm.fields.constant(0.05, unit=\"dimensionless\"), assignment_id=\"field:ui-core-alpha\", region=body_ui_core_region"

@@ -19,6 +19,23 @@ opcjonalne tablice `ms_field`/`alpha_field` z bazowego descriptora. LUT 256×256
 **Spec:** [`docs/superpowers/specs/2026-11-01-fdm-unbounded-regions-architecture-design.md`](../specs/2026-11-01-fdm-unbounded-regions-architecture-design.md)
 oraz [dowody](../specs/2026-11-01-fdm-unbounded-regions-architecture-evidence.md).
 
+## Stan wykonania i dalsza kwalifikacja (8.11.2026)
+
+Poniższe checkboxy zachowują historyczny podział planu; nie są bieżącym
+rejestrem dowodów ani nakazem odtwarzania dawnych launcherów. Implementacja
+FDM z wcześniejszego brancha jest już w master. Raport z 1.11 rozróżnia
+mikrobenchmark kosztu reprezentacji (warianty nie liczyły identycznej fizyki)
+od parytetu. Nie rozszerzamy go do uniwersalnej kwalifikacji wydajności.
+
+Aktualny rejestr wykonania i odbioru to
+[plan kwalifikacji](2026-11-07-regional-physics-qualification-and-fem-marker-map.md)
+oraz [raport audytu](../../audits/2026-11-07-regional-physics-qualification.md).
+W zadaniu PR418 wykonano osobno jawny sharp, publiczne CPU/CUDA fp64/fp32,
+niezależne wyrocznie i odmowy, publikację/reload fp32, mapy FEM ze wszystkimi
+konsumentami (ADR0079), CPU/GPU H/E/pochodną oraz zbieżność FDM/FEM i terminalną
+relaksację. Sam ukończony build nie zamyka CI, review ani retencji. Task9 jest
+realizowany w tym kontynuowanym zadaniu, zamiast wymagać nowego wątku/PR.
+
 ## Ograniczenia globalne
 
 - Raporty i dokumenty po polsku; kod, identyfikatory, komentarze i commity po angielsku.

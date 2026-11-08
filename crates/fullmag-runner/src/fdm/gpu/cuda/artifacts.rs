@@ -204,7 +204,7 @@ pub(crate) fn capture_initial_cuda_fields(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -215,7 +215,7 @@ pub(crate) fn capture_initial_cuda_fields(
             })?;
         } else if artifacts.is_streaming() {
             let snapshot = capture_cuda_field_snapshot_after_pool_drain(
-                || backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt),
+                || backend.begin_field_snapshot(&name, stats.step, super::canonical_fdm_publication_time(plan, stats.time), stats.dt),
                 || artifacts.drain_prior_native_field_snapshots(),
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
@@ -224,7 +224,7 @@ pub(crate) fn capture_initial_cuda_fields(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -267,6 +267,7 @@ fn select_due_scalar_stats(
 /// Emit the initialized scalar state before the first CUDA FDM solver step
 /// when the default trace, a physical-time output, or an accepted-step table is due.
 pub(crate) fn record_cuda_initial_scalar(
+    plan: &FdmPlanIR,
     stats: &StepStats,
     default_scalar_trace: bool,
     scalar_schedules: &mut [OutputSchedule],
@@ -282,8 +283,9 @@ pub(crate) fn record_cuda_initial_scalar(
         return Ok(());
     }
 
-    artifacts.record_scalar(stats)?;
-    steps.push(stats.clone());
+    let published = super::canonical_fdm_publication_stats(plan, stats.clone());
+    artifacts.record_scalar(&published)?;
+    steps.push(published);
     advance_due_schedules(scalar_schedules, stats.time);
     Ok(())
 }
@@ -322,8 +324,9 @@ pub(crate) fn record_cuda_due_outputs(
         &sampled_stats,
         stage_table_stats,
     )? {
-        artifacts.record_scalar(&sampled_stats)?;
-        steps.push(sampled_stats);
+        let published = super::canonical_fdm_publication_stats(plan, sampled_stats);
+        artifacts.record_scalar(&published)?;
+        steps.push(published);
         if output_ir_due {
             advance_due_schedules(scalar_schedules, stats.time);
         }
@@ -349,7 +352,7 @@ pub(crate) fn record_cuda_due_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -360,7 +363,7 @@ pub(crate) fn record_cuda_due_outputs(
             })?;
         } else if artifacts.is_streaming() {
             let snapshot = capture_cuda_field_snapshot_after_pool_drain(
-                || backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt),
+                || backend.begin_field_snapshot(&name, stats.step, super::canonical_fdm_publication_time(plan, stats.time), stats.dt),
                 || artifacts.drain_prior_native_field_snapshots(),
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
@@ -369,7 +372,7 @@ pub(crate) fn record_cuda_due_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
-                time: stats.time,
+                time: super::canonical_fdm_publication_time(plan, stats.time),
                 solver_dt: stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -400,12 +403,14 @@ pub(crate) fn record_cuda_final_outputs(
         return Ok(());
     };
 
-    let need_scalar = !steps_end_at_same_accepted_state(steps, &latest_stats);
+    let published = super::canonical_fdm_publication_stats(plan, latest_stats.clone());
+    let need_scalar = !steps_end_at_same_accepted_state(steps, &published);
     if need_scalar {
         let mut final_stats = latest_stats.clone();
         backend.apply_average_m_to_step_stats(&mut final_stats)?;
-        artifacts.record_scalar(&final_stats)?;
-        steps.push(final_stats);
+        let published = super::canonical_fdm_publication_stats(plan, final_stats);
+        artifacts.record_scalar(&published)?;
+        steps.push(published);
     }
     let _ = scalar_schedules;
 
@@ -444,7 +449,7 @@ pub(crate) fn record_cuda_final_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: latest_stats.step,
-                time: latest_stats.time,
+                time: super::canonical_fdm_publication_time(plan, latest_stats.time),
                 solver_dt: latest_stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -459,7 +464,7 @@ pub(crate) fn record_cuda_final_outputs(
                     backend.begin_field_snapshot(
                         &name,
                         latest_stats.step,
-                        latest_stats.time,
+                        super::canonical_fdm_publication_time(plan, latest_stats.time),
                         latest_stats.dt,
                     )
                 },
@@ -471,7 +476,7 @@ pub(crate) fn record_cuda_final_outputs(
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: latest_stats.step,
-                time: latest_stats.time,
+                time: super::canonical_fdm_publication_time(plan, latest_stats.time),
                 solver_dt: latest_stats.dt,
                 component_count: 3,
                 component_order: "xyz".into(),
@@ -711,6 +716,7 @@ mod tests {
         let mut no_schedules = Vec::new();
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &stats,
             false,
             &mut no_schedules,
@@ -721,6 +727,7 @@ mod tests {
         assert!(steps.is_empty());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &stats,
             true,
             &mut no_schedules,

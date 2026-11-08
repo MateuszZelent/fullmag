@@ -198,6 +198,28 @@
       "validator_schema": null,
       "completed_gates": [],
       "reason": "Managed CUDA proves the public headless batched runner, RK23/RK45 FP64 Gilbert macrospin oracle, atomic rollback, same-time field parity, zero fallback, zero hot-loop control-scalar D2H, and at least tenfold fewer terminal synchronizations; no clean hash-bound artifact for an exact adaptive FDM CUDA integrator/interaction tuple is registered."
+    },
+    {
+      "key": {
+        "capability_id": "llg_td_policy_v1",
+        "qualification_id": "explicit_adaptive_fdm_cuda_single",
+        "backend": "fdm",
+        "device": "cuda",
+        "precision": "single",
+        "integrator": "rk45",
+        "timestep_policy": "adaptive"
+      },
+      "validation_state": "unvalidated",
+      "artifact_path": null,
+      "artifact_sha256": null,
+      "runtime_source_inputs_sha256": null,
+      "runtime_dirty": null,
+      "runtime_dirty_patch_sha256": null,
+      "validated_scope": null,
+      "validated_at": null,
+      "validator_schema": null,
+      "completed_gates": [],
+      "reason": "Existing native CUDA FP32 RK23/RK45 adaptive realization has its own executable identity; no clean source-bound public adaptive FP32 interaction-tuple qualification artifact is registered. FP64 and fixed-step qualifications are not inherited."
     }
   ]
 }

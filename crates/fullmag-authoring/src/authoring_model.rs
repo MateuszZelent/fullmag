@@ -482,6 +482,12 @@ fn energy_terms(scene: &SceneDocument) -> Vec<Value> {
     if scene.study.demag_enabled {
         terms.push(json!({ "kind": "demag", "scope": "study" }));
     }
+    if let Some(Some(thermal)) = &scene.study.thermal_noise {
+        terms.push(json!({
+            "kind": "thermal_noise", "scope": "study",
+            "temperature": thermal.temperature, "seed": thermal.seed,
+        }));
+    }
     if let Some(value) = scene.study.rotated_interfacial_dmi {
         if value != 0.0 || scene.study.rotated_interfacial_dmi_object_ids.is_some() {
             let mut term = json!({

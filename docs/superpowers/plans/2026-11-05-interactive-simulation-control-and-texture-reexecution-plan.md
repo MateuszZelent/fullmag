@@ -733,6 +733,8 @@ Runtime WSL `be231c339cf24f1fa32a4b4981e54409` działa na porcie 3242 z czystej 
 
 [Pełny raport i identyfikatory prób](../../audits/2026-11-08-interactive-study-core-acceptance.md) oraz [utrwalony indeks CAS, receiptów i porównań](../../audits/2026-11-08-interactive-study-core-acceptance.json) są bieżącym dowodem. Zachowano hashe wszystkich 2115 wcześniej zinwentaryzowanych plików wyników. Końcowa energia UI, summary, current run i skalarów wyniosła `-6.063642418651386e-22 J`, zgodnie przed i po reloadzie.
 
+Scalenie z nowym masterem PR #418 (`b8e39d7f…`) zachowuje oba zestawy kontraktów; ma osobną bramkę integracyjną CI w PR #411. Dowody runtime w tym rozliczeniu nadal dotyczą dokładnie binarki DC7.
+
 **Bilans 22 ustaleń:** oceniono 22/22; dla 19 istnieją zmiany wykonawcze, a P04/P12/P16 wymagają poprawnej diagnozy lub zachowania kontraktu. P10/P11 i podstawowy dodatni cykl FDM CPU mają teraz zarówno dedykowane testy, jak i rzeczywisty odbiór. Pełna macierz S01–S46 oraz kwalifikacje innych realizacji pozostają częściowo otwarte zgodnie z ostatnią kolumną. P01–P22 są identyfikatorami ustaleń, nie licznikiem etapów wdrożenia.
 
 Dowody bieżące: [Rust DC7](https://github.com/MateuszZelent/fullmag/actions/runs/42480881756/job/128732329535), pełne CI DC7, 109 lokalnych regresji recovery/lifecycle, 22 kontrakty harnessu i lint dokładnego pliku w zarządzanym frontendzie. Wcześniejsze PY33/LIVE27/PY-CI/UI-CI/R-CI zdefiniowane poniżej są historycznymi dowodami ich zakresów; nie zastępują brakujących prób runtime. Osiem/szesnaście komórek i limity 10/1/1 potwierdzają interakcje i przepływ stanu; osobna kwalifikacja naukowa jest nadal wymagana.

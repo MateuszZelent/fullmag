@@ -2783,6 +2783,37 @@ fn validate_accepted_worker_start_preconditions(
     Ok(())
 }
 
+/// Validate numeric execution before reserving an attempt. Field/state f64
+/// codecs do not require the CUDA integrator to use internal double storage.
+fn accepted_fdm_execution_precision(
+    request: &fullmag_application::RequestedExecution,
+    problem_precision: fullmag_ir::ExecutionPrecision,
+    single_grid: Option<&fullmag_ir::FdmPlanIR>,
+    has_frozen_terminal_context: bool,
+) -> Result<fullmag_ir::ExecutionPrecision> {
+    use fullmag_ir::ExecutionPrecision;
+    let precision = match (request.device.as_str(), request.precision.as_str()) {
+        ("cpu" | "gpu", "double") => ExecutionPrecision::Double,
+        ("gpu", "single") if single_grid.is_some() && !has_frozen_terminal_context => ExecutionPrecision::Single,
+        _ => bail!("accepted FDM execution requires CPU/GPU double or single-grid GPU single; frozen terminal single is unsupported"),
+    };
+    if request.backend != "fdm" || request.mode != "strict" {
+        bail!("accepted FDM worker supports only explicit FDM CPU/GPU strict execution");
+    }
+    if problem_precision != precision {
+        bail!("accepted FDM request precision differs from immutable ProblemIR precision");
+    }
+    if let Some(plan) = single_grid {
+        if plan.precision != precision {
+            bail!("accepted FDM request precision differs from resolved single-grid precision");
+        }
+        plan.precision_policy
+            .validate_for(precision)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(precision)
+}
+
 fn execute_accepted_worker_start_with_snapshot(
     store: &SessionStore,
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
@@ -2876,13 +2907,13 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
-    if request.backend != "fdm"
-        || !matches!(request.device.as_str(), "cpu" | "gpu")
-        || request.precision != "double"
-        || request.mode != "strict"
-    {
-        bail!("accepted worker currently supports only FDM CPU/GPU double strict");
-    }
+    let single_grid = match &accepted_step.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(plan) => Some(plan),
+        _ => None,
+    };
+    accepted_fdm_execution_precision(request,
+        accepted_step.problem.backend_policy.execution_precision,
+        single_grid, accepted_step.resolved_input.frozen_stage_context.is_some())?;
     if !specification.seeds.is_empty()
         || !accepted_step.problem.problem_meta.seeds.is_empty()
     {
@@ -2905,8 +2936,6 @@ fn execute_accepted_worker_start_with_snapshot(
         );
     }
     if accepted_step.problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.problem.backend_policy.execution_precision
-            != fullmag_ir::ExecutionPrecision::Double
         || accepted_step.problem.validation_profile.execution_mode
             != fullmag_ir::ExecutionMode::Strict
         || accepted_step.execution_plan.common.requested_backend != fullmag_ir::BackendTarget::Fdm
@@ -2918,7 +2947,7 @@ fn execute_accepted_worker_start_with_snapshot(
         )
     {
         bail!(
-            "accepted worker execution plan is outside the supported FDM/FDM multilayer CPU/GPU double strict lanes"
+            "accepted worker execution plan is outside the supported FDM CPU/GPU strict lanes"
         );
     }
     if let fullmag_ir::BackendPlanIR::FdmMultilayer(plan) =
@@ -4943,6 +4972,132 @@ pub(crate) fn read_explicit_runner_artifact(
         bail!("runner artifact `{file_name}` changed while it was being read");
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod accepted_fdm_precision_tests {
+    use super::accepted_fdm_execution_precision;
+    use fullmag_application::RequestedExecution;
+    use fullmag_ir::{ExecutionPrecision as Precision, FdmPlanIR, FdmPrecisionPolicyIR};
+
+    fn request(device: &str, precision: &str) -> RequestedExecution {
+        RequestedExecution {
+            backend: "fdm".into(),
+            device: device.into(),
+            precision: precision.into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        }
+    }
+
+    fn plan(precision: Precision) -> FdmPlanIR {
+        FdmPlanIR {
+            precision,
+            precision_policy: FdmPrecisionPolicyIR::resolve(precision),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retains_cpu_gpu_double_and_admits_matching_single_grid_cuda_single() {
+        let double = plan(Precision::Double);
+        for device in ["cpu", "gpu"] {
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    Some(&double),
+                    false
+                )
+                .unwrap(),
+                Precision::Double
+            );
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    None,
+                    false
+                )
+                .unwrap(),
+                Precision::Double
+            );
+        }
+        let single = plan(Precision::Single);
+        assert_eq!(
+            accepted_fdm_execution_precision(
+                &request("gpu", "single"),
+                Precision::Single,
+                Some(&single),
+                false
+            )
+            .unwrap(),
+            Precision::Single
+        );
+    }
+
+    #[test]
+    fn refuses_cpu_multilayer_and_frozen_terminal_single_without_fallback() {
+        let single = plan(Precision::Single);
+        for (device, grid, frozen) in [
+            ("cpu", Some(&single), false),
+            ("gpu", None, false),
+            ("gpu", Some(&single), true),
+            ("auto", Some(&single), false),
+        ] {
+            assert!(accepted_fdm_execution_precision(
+                &request(device, "single"),
+                Precision::Single,
+                grid,
+                frozen
+            )
+            .is_err());
+        }
+        let mut extended = request("gpu", "single");
+        extended.mode = "extended".into();
+        assert!(accepted_fdm_execution_precision(
+            &extended,
+            Precision::Single,
+            Some(&single),
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_request_ir_plan_and_numeric_policy_mismatches() {
+        let single = plan(Precision::Single);
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Double,
+            Some(&single),
+            false
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&plan(Precision::Double)),
+            false
+        )
+        .is_err());
+        let mut bad_policy = single.clone();
+        bad_policy.precision_policy.reduction = Precision::Single;
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&bad_policy),
+            false
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "double"),
+            Precision::Double,
+            Some(&single),
+            false
+        )
+        .is_err());
+    }
 }
 
 #[cfg(test)]

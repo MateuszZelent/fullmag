@@ -197,7 +197,7 @@ struct AcceptedContentRecord {
 };
 
 AcceptedContentRecord compute_accepted_terminal_content_digest(const AcceptedTerminalChargeSource &source,
-    const ChargeTraceSolveRequest &policy)
+    const ChargeTraceSolveRequest &policy, const FemMarkerMaps *marker_maps)
 {
     static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559,
         "accepted terminal digest requires IEEE-754 binary64");
@@ -227,9 +227,20 @@ AcceptedContentRecord compute_accepted_terminal_content_digest(const AcceptedTer
         for (int vertex : vertices) digest.integer("vertex_id", ids.local_to_stable.at(static_cast<std::size_t>(vertex)));
     };
     const auto signed_integer = [](int value) { return static_cast<std::uint64_t>(static_cast<std::int64_t>(value)); };
+    const auto canonical_attribute = [&](int attribute, bool boundary) {
+        if (marker_maps == nullptr || (!boundary && marker_maps->domain.size() == 0u)) {
+            return signed_integer(attribute); // Existing per-element/standalone contract.
+        }
+        uint32_t canonical = 0u;
+        const auto &map = boundary ? marker_maps->boundary : marker_maps->domain;
+        if (!map.canonical(attribute, canonical)) {
+            throw std::runtime_error("accepted source has an unmapped MFEM attribute");
+        }
+        return static_cast<std::uint64_t>(canonical);
+    };
     digest.integer("elements", static_cast<std::uint64_t>(mesh.GetNE()));
     for (int element = 0; element < mesh.GetNE(); ++element) {
-        digest.integer("attribute", signed_integer(mesh.GetElement(element)->GetAttribute()));
+        digest.integer("attribute", canonical_attribute(mesh.GetElement(element)->GetAttribute(), false));
         mfem::Array<int> vertices;
         mesh.GetElementVertices(element, vertices);
         add_vertices(vertices);
@@ -237,7 +248,7 @@ AcceptedContentRecord compute_accepted_terminal_content_digest(const AcceptedTer
     }
     digest.integer("boundary", static_cast<std::uint64_t>(mesh.GetNBE()));
     for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
-        digest.integer("attribute", signed_integer(mesh.GetBdrElement(boundary)->GetAttribute()));
+        digest.integer("attribute", canonical_attribute(mesh.GetBdrElement(boundary)->GetAttribute(), true));
         mfem::Array<int> vertices;
         mesh.GetBdrElementVertices(boundary, vertices);
         add_vertices(vertices);
@@ -399,7 +410,7 @@ AcceptedTerminalChargeSource::Ptr solve_accepted_terminal_charge_source(const Ac
     impl->potential = std::make_unique<mfem::GridFunction>(impl->space.get());
     import_accepted_p1(*impl->potential, *terminal.accepted_solution, impl->projection->stable_vertex_identities());
     auto result = AcceptedTerminalChargeSource::Ptr(new AcceptedTerminalChargeSource(std::move(impl)));
-    auto record = compute_accepted_terminal_content_digest(*result, charge.conductor);
+    auto record = compute_accepted_terminal_content_digest(*result, charge.conductor, request.canonical_marker_maps);
     result->impl_->digest = std::move(record.digest);
     result->impl_->canonical_bytes = std::move(record.payload);
     return result;

@@ -3341,7 +3341,7 @@ def _generate_coincident_ring_airbox_mesh(
             )
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("coincident ring realization produced no magnetic cells")
         magnetic_elements = elements[magnetic_mask]
@@ -3835,7 +3835,7 @@ def generate_swept_box_cylinder_ring_mesh(
 
         nodes = np.asarray(raw_mesh.nodes, dtype=np.float64) / SCALE
         elements = raw_mesh.elements
-        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.int32) == 1
+        magnetic_mask = np.asarray(raw_mesh.element_markers, dtype=np.uint32) == 1
         if not np.any(magnetic_mask):
             raise RuntimeError("swept ring realization produced no magnetic cells")
         magnetic_nodes = np.unique(elements[magnetic_mask].reshape(-1))
@@ -4079,7 +4079,7 @@ def generate_swept_cylinder_mesh(
             raise RuntimeError("Swept mesh produced 0 volume elements")
 
         elements = np.vstack(tet_elements).astype(np.int32)
-        element_markers = np.ones(elements.shape[0], dtype=np.int32)
+        element_markers = np.ones(elements.shape[0], dtype=np.uint32)
 
         # Extract boundary faces (triangles on the surface)
         surf_types, surf_tags_list, surf_node_tags_list = gmsh.model.mesh.getElements(2)
@@ -4102,7 +4102,7 @@ def generate_swept_cylinder_mesh(
             boundary_faces = np.vstack(boundary_faces_list)
         else:
             boundary_faces = np.zeros((0, 3), dtype=np.int32)
-        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.uint32)
 
         quality = None
         if opts.compute_quality:

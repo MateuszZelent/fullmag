@@ -3785,9 +3785,9 @@ impl NativeFemBackend {
             poisson_boundary_marker: plan
                 .air_box_config
                 .as_ref()
-                .map_or(FALLBACK_POISSON_BOUNDARY_MARKER, |c| {
-                    c.boundary_marker as i32
-                }),
+                // Compatibility prefix only: create_v5 uses the full u32 selector below.
+                .and_then(|c| i32::try_from(c.boundary_marker).ok())
+                .unwrap_or(FALLBACK_POISSON_BOUNDARY_MARKER),
             robin_beta_mode: plan.air_box_config.as_ref().map_or(0, |c| {
                 match c.bc_kind.as_deref() {
                     Some("robin") => match c.robin_beta_mode.as_deref() {
@@ -4236,10 +4236,18 @@ impl NativeFemBackend {
                 .as_ref()
                 .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
         };
+        let plan_desc_v4 = ffi::fullmag_fem_plan_desc_v4 {
+            abi_version: ffi::FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_plan_desc_v4>() as u32,
+            base: plan_desc_v3,
+            poisson_boundary_marker: plan.air_box_config.as_ref()
+                .map_or(FALLBACK_POISSON_BOUNDARY_MARKER as u32, |c| c.boundary_marker),
+            reserved: 0,
+        };
         let adaptive_ptr = adaptive_cfg
             .as_ref()
             .map_or(std::ptr::null(), |cfg| cfg as *const _);
-        let handle = unsafe { ffi::fullmag_fem_backend_create_v4(&plan_desc_v3, adaptive_ptr) };
+        let handle = unsafe { ffi::fullmag_fem_backend_create_v5(&plan_desc_v4, adaptive_ptr) };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {

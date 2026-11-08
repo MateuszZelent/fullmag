@@ -686,6 +686,7 @@ pub(crate) fn snapshot_vector_fields_from_state(
         oersted_field,
         antenna_field,
         None,
+        None,
     )
 }
 
@@ -699,6 +700,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
     oersted_field: Option<&[Vector3]>,
     antenna_field: Option<&[Vector3]>,
     additional_effective_field: Option<&[Vector3]>,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
         problem,
@@ -707,6 +709,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
         antenna_field,
         additional_effective_field,
     );
+    direct_fields.observation_workspace = observation_workspace;
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -772,6 +775,7 @@ fn capture_full_active_cpu_fields(
     accepted_thermal_context: Option<(u64, f64)>,
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = field_materialization_quantity_ids();
     let quantities = crate::live_demand::retain_demanded_live_quantities(
@@ -788,6 +792,7 @@ fn capture_full_active_cpu_fields(
         spin_transport,
         config_revision,
         &quantities,
+        observation_workspace,
     )
 }
 
@@ -846,6 +851,7 @@ fn capture_one_active_cpu_field(
         spin_transport,
         config_revision,
         &[quantity],
+        None,
     )?;
     if fields.len() != 1 {
         return Err(RunError {
@@ -869,6 +875,7 @@ fn capture_cpu_fields_for_quantities(
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
     requested_quantities: &[&str],
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = active_fdm_preview_quantities(
         crate::dispatch::FdmEngine::CpuReference,
@@ -966,6 +973,7 @@ fn capture_cpu_fields_for_quantities(
             Some(&oersted_field),
             Some(&antenna_field),
             transport_oersted_field,
+            observation_workspace,
         )
     })();
     problem.terms.per_node_field = previous_per_node_field;
@@ -2075,6 +2083,9 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
 
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
+    // Observation FFTs must not rebuild Newell spectra every accepted step or
+    // contribute their counters to the integrator's workspace telemetry.
+    let mut observation_fft_workspace: Option<FftWorkspace> = None;
     let mut integrator_bufs = problem.create_integrator_buffers();
     let mut state_soa = if use_soa_state {
         Some(state.to_soa())
@@ -2883,6 +2894,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 let full_fields_due = heavy_payload_due && live.field_every_n == 1;
                 let mut full_fields_capture_error = None;
                 let cached_preview_fields = if full_fields_due {
+                    let observation_workspace = if problem.terms.demag {
+                        Some(observation_fft_workspace
+                            .get_or_insert_with(|| problem.create_workspace()))
+                    } else {
+                        None
+                    };
                     match accepted_cpu_thermal_capture_context(
                         &problem,
                         report.dt_used,
@@ -2900,6 +2917,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                             thermal_context,
                             spin_transport.as_ref(),
                             config_revision,
+                            observation_workspace,
                         )
                     }) {
                         Ok(fields) => Some(fields),
@@ -4956,6 +4974,7 @@ fn direct_scalar_values_available(name: &str) -> bool {
 struct DirectFieldSnapshotCache<'a> {
     problem: &'a ExchangeLlgProblem,
     state: &'a ExchangeLlgState,
+    observation_workspace: Option<&'a mut FftWorkspace>,
     magnetization: Option<Vec<Vector3>>,
     exchange_field: Option<Vec<Vector3>>,
     demag_field: Option<Vec<Vector3>>,
@@ -4987,6 +5006,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         Self {
             problem,
             state,
+            observation_workspace: None,
             magnetization: None,
             exchange_field: None,
             demag_field: None,
@@ -5123,9 +5143,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_demag" => {
                 if self.demag_field.is_none() {
+                    let field = match self.observation_workspace.as_deref_mut() {
+                        Some(workspace) => self.problem
+                            .observable_demag_field_with_workspace(self.state, workspace),
+                        None => self.problem.observable_demag_field(self.state),
+                    };
                     self.demag_field = Some(
-                        self.problem
-                            .observable_demag_field(self.state)
+                        field
                             .map_err(|error| RunError {
                                 message: format!(
                                     "CPU FDM snapshot '{}': demag field: {}",
@@ -5219,9 +5243,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         if self.effective_field.is_none() {
             #[cfg(test)]
             increment_direct_h_eff_assembly_calls();
-            let mut effective_field = self
-                .problem
-                .observable_effective_field(self.state)
+            let field = match self.observation_workspace.as_deref_mut() {
+                Some(workspace) => self.problem
+                    .observable_effective_field_with_workspace(self.state, workspace),
+                None => self.problem.observable_effective_field(self.state),
+            };
+            let mut effective_field = field
                 .map_err(|error| RunError {
                     message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
                 })?;
@@ -6629,6 +6656,118 @@ mod tests {
             bulk_dmi: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn cpu_snapshot_reuses_observation_fft_workspace_across_states() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.active_mask = Some((0..16).map(|i| i != 5 && i != 6).collect());
+        plan.material.ms_field = Some((0..16).map(|i| if i < 8 { 4e5 } else { 8e5 }).collect());
+        plan.initial_magnetization = (0..16).map(|i| [1.0, (i as f64) * 0.07, 0.2]).collect();
+        let (problem, first) =
+            build_snapshot_problem_and_state(&plan).expect("demag snapshot problem");
+        let mut next_plan = plan.clone();
+        next_plan.initial_magnetization = (0..16).map(|i| [0.2, 1.0, -(i as f64) * 0.04]).collect();
+        let (_, mut second) = build_snapshot_problem_and_state(&next_plan).expect("second state");
+        second.time_seconds = 2e-14;
+        let mut workspace = problem.create_workspace();
+        let original_workspace = workspace.telemetry();
+        let solver_workspace = problem.create_workspace();
+        let solver_original = solver_workspace.telemetry();
+        let request = LivePreviewRequest {
+            quantity: "m".into(),
+            component: "3D".into(),
+            all_layers: true,
+            max_points: 0,
+            ..Default::default()
+        };
+        let quantities = [
+            "m",
+            "H_ex",
+            "H_demag",
+            "H_eff",
+            "torque",
+            "eden_ex",
+            "eden_demag",
+            "eden_total",
+        ];
+        let mut previous_forward_count = 0;
+        let mut previous_demag = None;
+        for state in [&first, &second] {
+            let fresh = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("fresh snapshot");
+            let reused = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                Some(&mut workspace),
+            )
+            .expect("reused snapshot");
+            assert_eq!(fresh.len(), quantities.len());
+            for (expected, actual) in fresh.iter().zip(&reused) {
+                assert_eq!(expected.quantity, actual.quantity);
+                assert_eq!(
+                    expected.vector_field_values, actual.vector_field_values,
+                    "workspace reuse changed {}",
+                    expected.quantity
+                );
+            }
+            let demag = reused
+                .iter()
+                .find(|field| field.quantity == "H_demag")
+                .unwrap();
+            assert!(
+                demag.vector_field_values[15..21]
+                    .iter()
+                    .any(|value| value.abs() > 0.0),
+                "inactive cells must retain their observable stray field"
+            );
+            if let Some(previous) = previous_demag {
+                assert_ne!(
+                    previous, demag.vector_field_values,
+                    "a new state must not reuse old fields"
+                );
+            }
+            previous_demag = Some(demag.vector_field_values.clone());
+            let telemetry = workspace.telemetry();
+            assert_eq!(
+                telemetry.lifecycle_revision,
+                original_workspace.lifecycle_revision
+            );
+            assert_eq!(
+                telemetry.lifecycle_key_sha256,
+                original_workspace.lifecycle_key_sha256
+            );
+            assert_eq!(
+                telemetry.plan_creation_time_ns,
+                original_workspace.plan_creation_time_ns
+            );
+            assert!(telemetry.forward_fft_count > previous_forward_count);
+            previous_forward_count = telemetry.forward_fft_count;
+        }
+        assert_eq!(
+            solver_workspace.telemetry(),
+            solver_original,
+            "observation FFT work must not enter solver workspace telemetry"
+        );
     }
 
     #[test]

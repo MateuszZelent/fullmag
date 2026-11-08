@@ -3537,7 +3537,7 @@ def rejected_startup_marker(status,identity):
                 or result.get("source_relative")!=relative):
             raise RuntimeError("startup activation rejection result differs from its receipt")
         rejection=result.get("rejection")
-        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","invalid_solver_profile","accepted_solver_profile_unsupported","invalid_cuda_trace","accepted_cuda_trace_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
+        rejection_codes={"bad_request","validation_error","unprocessable_entity","unsupported_capability","accepted_execution_command_unsupported","accepted_study_plan_invalid","accepted_execution_stage_missing","accepted_gpu_scope_unsupported","accepted_execution_plan_invalid","accepted_backend_unsupported","accepted_study_step_unsupported","accepted_study_step_ambiguous","accepted_script_capture_invalid","accepted_script_capture_required","accepted_script_compilation_failed","invalid_solver_profile","accepted_solver_profile_unsupported","invalid_cuda_trace","accepted_cuda_trace_unsupported","docker_startup_output_mapping_required","docker_startup_output_mapping_invalid"}
         if (not isinstance(rejection,dict)
                 or set(rejection)!={"http_status","code","message"}
                 or type(rejection.get("http_status")) is not int
@@ -3601,7 +3601,8 @@ def startup_failed_preacceptance(status,run,identity):
             or isinstance(preparation.get("started_at_unix_ms"),bool)
             or not isinstance(preparation.get("completed_at_unix_ms"),int)
             or isinstance(preparation.get("completed_at_unix_ms"),bool)
-            or preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"]
+            or preparation["started_at_unix_ms"]<0
+            or preparation["completed_at_unix_ms"]<0
             or not isinstance(failure,dict)
             or not failure_code_matches
             or not isinstance(failure.get("summary"),str) or not failure["summary"].strip()
@@ -3663,6 +3664,11 @@ def startup_failed_preacceptance(status,run,identity):
                if "cuda_trace_sha256" in activation else {})},
         "session_status":{"solver":status.get("solver"),"lifecycle":status.get("lifecycle"),
             "resources":status.get("resources"),"session":session},
+        # Wall-clock order is diagnostic metadata. Admission is pinned by the
+        # original rejection, two stable API views and empty queues; graceful
+        # native drain remains mandatory. Keep both original times unchanged.
+        "preparation_wall_clock_order":("reversed" if
+            preparation["completed_at_unix_ms"]<preparation["started_at_unix_ms"] else "ordered"),
         "preparation":preparation,"compute_queue":queue,"commands":commands,
         "runtime_service":runtime}
 def held_run_proofs(items):

@@ -17,7 +17,7 @@ import sys
 import uuid
 
 from docker_activation_history_policy import (
-    ATTEMPT, SHA, SCHEMA, HistoryError, canonical, digest, document, qualify_activation,
+    ATTEMPT, SHA, SCHEMA, HistoryError, canonical, digest, document, qualify_activation, qualify_rejected_activation,
 )
 from docker_activation_history_storage import (
     _directory, _raw, _locked, apply_plan, make_plan, source_files,
@@ -145,6 +145,36 @@ def preserved_output(output_root, request, files):
             "run": output}
 
 
+REJECTED_EXPORT_SCHEMA = "fullmag.activation-rejection-provenance-export.v1"
+
+
+def preserved_rejection(output_root, request, files):
+    root = _directory(output_root)
+    name = request.get("source_filename")
+    if not isinstance(name, str) or PurePosixPath(name).name != name or not name.endswith(".py"):
+        raise HistoryError("Rejected source filename is invalid")
+    receipt = document(files["receipt.json"], "receipt")
+    source_sha = digest(_raw(root / name))
+    export_path = root / (Path(name).stem + ".activation-" + request["attempt"] + ".json")
+    export_raw = _raw(export_path)
+    export = document(export_raw, "preserved rejection provenance")
+    records = {name: base64.b64encode(raw).decode("ascii") for name, raw in sorted(files.items())}
+    if (source_sha != receipt["source_sha256"] or export != {
+            "schema": REJECTED_EXPORT_SCHEMA, "attempt": request["attempt"],
+            "source_sha256": source_sha, "request_id": receipt["request_id"], "records": records}):
+        raise HistoryError("Host rejection export does not preserve exact source and control records")
+    return {"source_sha256": source_sha, "provenance_sha256": digest(export_raw), "kind": "rejected-no-run-v1"}
+
+
+def rejected_store_records(store_root):
+    from docker_volume_offline_reconcile import _metadata_file, _read_store_file
+    paths = sorted(str(path.relative_to(store_root)) for path in store_root.rglob("*"))
+    records = {path: _read_store_file(store_root, path)[0] for path in paths
+               if path.endswith(".json") and (_metadata_file(path)
+                   or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))}
+    return records, paths
+
+
 def collect_guest(root, request, *, source_root, store_root, output_root):
     from docker_volume_offline_reconcile import _inventory_store, _read_store_file
     if source_inventory(source_root) != request["source_files"]:
@@ -165,25 +195,35 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
     files = source_files(source if source.exists() else archived)
     receipt = document(files["receipt.json"], "receipt")
     store = _inventory_store(store_root)
-    run_id = receipt["run_id"]
-    run_root = store_root / "runs" / run_id
-    leases = {str(path.relative_to(store_root)): _read_store_file(store_root, str(path.relative_to(store_root)))[0]
-              for family in ("resource_leases", "preparation_resource_leases")
-              for path in (run_root / family).rglob("*.json")}
-    candidate = qualify_activation(
-        token, files, project=identity["compose_project"], volume=identity["control_volume"],
-        namespace=identity["namespace"],
-        run_catalog_raw=_read_store_file(store_root, "runs/" + run_id + "/run_catalog.json")[0],
-        run_intent_raw=_read_store_file(store_root, "runs/" + run_id + "/run_intent.json")[0],
-        lease_records=leases)
+    rejected = request.get("qualification_kind") == "rejected-no-run-v1"
+    if rejected:
+        records, paths = rejected_store_records(store_root)
+        candidate = qualify_rejected_activation(
+            token, files, project=identity["compose_project"], volume=identity["control_volume"],
+            namespace=identity["namespace"], store_records=records, inventory_paths=paths)
+        output_evidence = preserved_rejection(output_root, request, files)
+    else:
+        run_id = receipt["run_id"]
+        run_root = store_root / "runs" / run_id
+        leases = {str(path.relative_to(store_root)): _read_store_file(store_root, str(path.relative_to(store_root)))[0]
+                  for family in ("resource_leases", "preparation_resource_leases")
+                  for path in (run_root / family).rglob("*.json")}
+        candidate = qualify_activation(
+            token, files, project=identity["compose_project"], volume=identity["control_volume"],
+            namespace=identity["namespace"],
+            run_catalog_raw=_read_store_file(store_root, "runs/" + run_id + "/run_catalog.json")[0],
+            run_intent_raw=_read_store_file(store_root, "runs/" + run_id + "/run_intent.json")[0],
+            lease_records=leases)
+        output_evidence = preserved_output(output_root, request, files)
     ledger_raw = _raw(root / "private/ledger/ledger/HOST_RESOURCE_LEDGER.json")
     ledger = ledger_evidence(ledger_raw)
-    refs = control_references(root, token, owner_marker_pin=request["owner_marker_pin"])
+    refs = control_references(root, token, owner_marker_pin=request["owner_marker_pin"],
+                              qualified_rejection=files if rejected else None)
     archives = validate_existing_archives(root)
     # The selected completed archive is expected during exact-plan reentry.
     archives.pop(token, None)
     evidence = {"store": {key: value for key, value in store.items() if key != "root"},
-                "output": preserved_output(output_root, request, files),
+                "output": output_evidence,
                 "ledger": ledger,
                 "control_reference_pins": refs["pins"], "prior_archives": archives,
                 "admission_pins": request["admission_pins"],
@@ -193,7 +233,8 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
 
 def guest(request):
     if (not isinstance(request, dict) or ATTEMPT.fullmatch(str(request.get("attempt", ""))) is None
-            or request.get("action") not in {"preview", "apply"}):
+            or request.get("action") not in {"preview", "apply"}
+            or request.get("qualification_kind") not in {None, "rejected-no-run-v1"}):
         raise HistoryError("Malformed managed history request")
     root = Path("/control")
     source_root, store_root, output_root = Path("/opt/fullmag/source"), Path("/history-store"), Path("/history-output")
@@ -372,9 +413,13 @@ def host_context(args):
     script_raw = _raw(script_path)
     if digest(script_raw) != receipt["source_sha256"]:
         raise HistoryError("Historical source no longer matches its activation")
-    authored = authored_zarr(script_raw)
-    user_root = storage.validate_path(old_user, layout["storage_root"], "historical user data")
-    zarr = _directory(user_root.joinpath(*authored.parts[2:]))
+    rejected = bool(getattr(args, "rejected_no_run", False))
+    if rejected:
+        zarr = script_path
+    else:
+        authored = authored_zarr(script_raw)
+        user_root = storage.validate_path(old_user, layout["storage_root"], "historical user data")
+        zarr = _directory(user_root.joinpath(*authored.parts[2:]))
     for path in (selected, store, zarr):
         validate_host_path(path, "preserved history input")
     request = {"attempt": args.activation, "action": "preview", "output_name": zarr.name,
@@ -384,6 +429,8 @@ def host_context(args):
                             "namespace": control.namespace, "namespace_registry_sha256": control.namespace_registry_sha256,
                             "source_root": str(selected), "backend_image": image, "services": consumers,
                             "store_root": str(store), "output_zarr": str(zarr)}}
+    if rejected:
+        request.update(qualification_kind="rejected-no-run-v1", source_filename=script_path.name)
     return control, selected, image, store, zarr.parent, request
 
 
@@ -434,6 +481,8 @@ def main():
         parser.add_argument("--repo-root", type=Path, required=True)
         parser.add_argument("--source-root", type=Path, required=True)
         parser.add_argument("--activation", required=True)
+        parser.add_argument("--rejected-no-run", action="store_true",
+            help="Qualify one confirmed API rejection with no related RunIntent/admission/lease; preserve all bytes")
         parser.add_argument("--apply", action="store_true")
         parser.add_argument("--plan-sha256")
         parser.add_argument("--historical-runtime-witness",

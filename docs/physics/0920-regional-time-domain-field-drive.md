@@ -278,6 +278,20 @@ t_{\mathrm{abs}},&\texttt{absolute}.
 zwraca zapisany origin, a dla starszych planów bez niego początek segmentu
 $t_{\mathrm{stage,start}}$. Przy wznowieniu te dwie wartości mogą się różnić;
 ponowne zerowanie fazy byłoby zmianą fizycznego wymuszenia.
+
+W sekwencji zaakceptowanych etapów Run początek kolejnego Run jest sumą
+początku pierwszego Run i czasów trwania poprzednich Run. Relaksacja oraz
+inspekcje nie przesuwają tego zegara fizycznego. Wspólny kompilator etapów
+przypisuje `stage_start_time_s` przed utrwaleniem katalogu; odczyt zimnego
+katalogu sprawdza tę samą ciągłość. Zachowany jawny
+`stage_waveform_origin_time_s` pozostaje niezmieniony. Początkowy czas musi
+być skończony i nieujemny, a dodawanie dodatnich czasów trwania nie może
+przepełniać zegara ani gubić całego przyrostu. Kwalifikacja dwóch Run z
+sinusoidą `absolute` wymaga osobnego porównania z całką pola; test stałego
+pola sam nie sprawdza fazy wymuszenia.
+Artefakt początkowej magnetyzacji Run (`m_initial.json`) zapisuje fizyczny
+początek etapu, a nie lokalne zero integratora. Gdy nie zaakceptowano żadnego
+kroku, zapis końcowy również zachowuje ten początek; nie deklaruje postępu.
 The closed waveform catalogue is:
 
 | Kind | Definition |
@@ -808,6 +822,22 @@ przewodnika. Obecność funkcji device nie potwierdza publicznego support dla
 każdego profilu, integratora ani precyzji. Wymagane są rzeczywiste przebiegi
 device z porównaniem do CPU i pomiarem transferów, nie tylko kompilacja.
 
+Natywna redukcja Zeemana obejmuje zadane pole i regionalny drive. Adapter
+rozdziela tę sumę na `E_ext` i `E_drive`, zachowując `E_total`. Ponowne
+materializowanie tego samego zaakceptowanego stanu nie może drugi raz
+odejmować drive. Pojedynczy globalny alias obiektu `free` otrzymuje te same
+składowe i momentowo ważone m co wynik globalny; innych scope nie zastępuje
+się globalną energią. Publikowane czasy pól, tabel i accepted-state identity
+są fizyczne, podczas gdy native integrator i jego harmonogram pozostają
+lokalne względem początku Run. Digest zegara powstaje po tej normalizacji. Gęstości CUDA
+stosują ten sam podział: `eden_ext` obejmuje bias i statyczny profil,
+`eden_drive` regionalny drive, a `eden_total` oba wkłady dokładnie raz.
+Każdy regionalny wkład wynosi $-\mu_0 M_{s,i}\,\mathbf m_i\cdot\mathbf H_{\mathrm{drive},i}$
+i jest ważony udziałem objętości komórki. Ten sam kernel obsługuje fp64 i fp32;
+fp32 z sub-cell boundary correction pozostaje jawnie niedostępne.
+Test ABI sprawdza lokalne $M_s$, maskę, legalne udziały objętości i całkę
+zgodną z energią skalarną; historyczny wkład Oersteda zachowuje swój kontrakt.
+
 ### 14.3. FEM CPU
 
 `project_regional_field_drive_bases` buduje bazy w przestrzeni P1, następnie
@@ -905,3 +935,10 @@ Regresje authoringu: `RegionalFieldDriveTests`; zegar: osobny skrypt source.
 | Box/CSG classifier; Cylinder i fallback Boundary | `crates/fullmag-plan/src/regional_field_drive.rs` | `geometry_cell_relation` | FDM CPU/GPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
 | Gauss-Duffy smooth oraz adaptacja maski z max depth 10 | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `integrate_profile_adaptive` | FEM CPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
 | Auto-sinc guard i rzeczywista częstość próbkowania | `crates/fullmag-plan/src/sampling.rs` | `resolve_auto_sampling_for_stage` | wspólna | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/sampling.rs) |
+| Ciągłość zegara kolejnych Run | `crates/fullmag-application/src/script_pipeline_compilation.rs` | `advance_physical_clock` | wspólna | source_visible; kwalifikacja sinusoidy w toku |
+| Wznowienie origin i odmowa resetu katalogu | `crates/fullmag-application/src/script_pipeline_acceptance.rs` | `physical_runs_keep_cumulative_clock_and_saved_waveform_origin` | wspólna | source_visible; CI w toku |
+| Zegar początkowego i zerokrokowego końcowego artefaktu | `crates/fullmag-runner/src/artifacts.rs` | `resumed_run_artifacts_preserve_stage_start_without_accepted_steps` | FDM/FEM | source_visible; kwalifikacja w toku |
+| Fizyczny zegar publikacji przed digestem | `crates/fullmag-runner/src/fdm/gpu/cuda/mod.rs` | `canonical_fdm_publication_clock` | FDM GPU | A10 CUDA/single zegar i energie PASS; regresje wymagają końcowego CI |
+| Idempotentny rozdział energii regionalnej | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` | `split_native_regional_drive_energy` | FDM GPU | A9 RED zachowane; A10 energia/składowe PASS |
+
+| Podział regionalnej gęstości energii | `backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu` | `energy_density_kernel` | FDM GPU | RED A5 zachowane; GREEN A6/A7 fp64/fp32 i A10 public PASS |

@@ -37798,6 +37798,18 @@
           },
           "study": {
             "additionalProperties": true,
+            "properties": {
+              "thermal_noise": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThermalNoiseResource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
             "type": [
               "object",
               "null"
@@ -46006,6 +46018,30 @@
           "never"
         ],
         "type": "string"
+      },
+      "ThermalNoiseResource": {
+        "additionalProperties": false,
+        "description": "Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport.",
+        "properties": {
+          "seed": {
+            "description": "Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy.",
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "temperature": {
+            "description": "Positive finite temperature in kelvin.",
+            "exclusiveMinimum": 0,
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature"
+        ],
+        "type": "object"
       },
       "ThreadAutoSchema": {
         "enum": [

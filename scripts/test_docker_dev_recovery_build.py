@@ -505,6 +505,14 @@ class DiagnosticBuildOnlyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             repair.validate_terminal(process, owner)
 
+    def test_failed_owner_requires_both_children_terminal_without_reinterpretation(self):
+        process,owner=self.fixture();owner['state']='failed'
+        with self.assertRaises(ValueError):repair.validate_diagnostic_build(process,owner)
+        for child in owner['children']:child['status']='exited_failure'
+        before=json.dumps([process,owner],sort_keys=True)
+        repair.validate_diagnostic_build(process,owner)
+        self.assertEqual(json.dumps([process,owner],sort_keys=True),before)
+
     def test_changed_or_unfenced_identity_is_rejected(self):
         for field, value in [('api_diagnostic_only', False), ('api_exit_code', 0),
                              ('api_pid', True), ('state', 'drained'), ('error', 'other')]:

@@ -614,6 +614,126 @@
   ],
   "sources": [
     {
+      "id": "base-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_geometry_and_materials",
+      "responsibility": "Preserve base material coefficient values in direct canonical Python export."
+    },
+    {
+      "id": "scene-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_geometries_from_override",
+      "responsibility": "Preserve base material coefficient values supplied through SceneDocument overrides."
+    },
+    {
+      "id": "metric-material-transition-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_material_transition_kwargs",
+      "responsibility": "Preserve metric material transition width without significant-digit truncation."
+    },
+    {
+      "id": "interface-coupling-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_couplings",
+      "responsibility": "Preserve authored exchange scales and coupling energy strengths in canonical Python."
+    },
+    {
+      "id": "regional-material-numeric-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_material_parameter_field_expr",
+      "responsibility": "Preserve exact f64 field payloads with the existing round-trip parameter literal renderer instead of display rounding."
+    },
+    {
+      "id": "regional-material-numeric-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_regional_material_precision.py",
+      "symbol": "test_material_fields_and_interface_parameters_preserve_f64_values",
+      "responsibility": "Verify both Problem and Scene Python export paths preserve base materials, regional fields, metric widths and exchange strengths."
+    },
+    {
+      "id": "sharp-regional-parity-fixture",
+      "path": "scripts/benchmarks/fdm_regions_parity_case.py",
+      "symbol": "_half",
+      "responsibility": "Author explicit discontinuous material transitions for regional parity rather than inheriting smooth DSL defaults."
+    },
+    {
+      "id": "sharp-regional-parity-fixture-regression",
+      "path": "packages/fullmag-py/tests/test_regional_parity_fixture.py",
+      "symbol": "test_heterogeneous_parity_cases_author_sharp_coefficients",
+      "responsibility": "Load each heterogeneous public fixture and require explicit sharp coefficient intent before the native seeded-material oracle."
+    },
+    {
+      "id": "cpu-observation-demag-workspace",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "observable_demag_field_with_workspace",
+      "responsibility": "Evaluate full-domain stray field for the current state with a retained, geometry-matched observation FFT workspace."
+    },
+    {
+      "id": "cpu-observation-effective-workspace",
+      "path": "crates/fullmag-engine/src/fdm/shared/problem.rs",
+      "symbol": "observable_effective_field_with_workspace",
+      "responsibility": "Reuse observation FFT plans and spectra while preserving accepted time and local material fields."
+    },
+    {
+      "id": "cpu-accepted-observation-workspace-lifetime",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "capture_full_active_cpu_fields",
+      "responsibility": "Capture accepted full fields with a private observation workspace, separate from integrator telemetry."
+    },
+    {
+      "id": "cpu-observation-workspace-reuse-regression",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "cpu_snapshot_reuses_observation_fft_workspace_across_states",
+      "responsibility": "Compare fresh/reused fields and densities across states, heterogeneous Ms and inactive cells; verify retained FFT lifecycle and isolated solver counters."
+    },
+    {
+      "id": "accepted-fdm-precision-binding",
+      "path": "crates/fullmag-api/src/accepted_study_worker.rs",
+      "symbol": "accepted_fdm_execution_precision",
+      "responsibility": "Bind accepted request, ProblemIR and single-grid CUDA precision policy while preserving CPU, multilayer and frozen-terminal restrictions."
+    },
+    {
+      "id": "regional-periodic-exchange-oracle",
+      "path": "scripts/benchmarks/fdm_regions_pbc_abi_checks.py",
+      "symbol": "main",
+      "responsibility": "Check one versus two periodic exchange links, singleton axes, sparse u32 labels and local-A FACES against an analytic energy/field oracle."
+    },
+    {
+      "id": "regional-periodic-oracle-optimization-regression",
+      "path": "scripts/benchmarks/test_fdm_regions_pbc_abi_checks.py",
+      "symbol": "test_optimized_python_keeps_native_call_and_measurement_failures",
+      "responsibility": "Ensure Python optimization cannot remove native snapshot execution or suppress a failed physical measurement."
+    },
+    {
+      "id": "regional-cuda-variational-energy-llg-qualification",
+      "path": "scripts/benchmarks/fdm_regions_interaction_abi_checks.py",
+      "symbol": "main",
+      "responsibility": "Check local material weights against energy derivatives, independent polynomial energies and constant-field Gilbert solutions in bounded CUDA fp64/fp32 cases."
+    },
+    {
+      "id": "regional-qualification-measurement-controls",
+      "path": "scripts/benchmarks/test_fdm_regions_interaction_abi_checks.py",
+      "symbol": "class GradientMeasurementTests",
+      "responsibility": "Reject global-Ms substitution, a wrong field factor, nonfinite and uninformative measurements."
+    },
+    {
+      "id": "canonical-region-shape-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_region_shape_expr_from_payload",
+      "responsibility": "Preserve region center, cylinder axis and CSG support in canonical script export."
+    },
+    {
+      "id": "canonical-region-shape-roundtrip",
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_region_shape_center_and_cylinder_axis_survive_both_export_routes",
+      "responsibility": "Compare canonical shape IR after Python and SceneDocument exports."
+    },
+    {
+      "id": "canonical-region-csg-roundtrip",
+      "path": "packages/fullmag-py/tests/test_script_builder_roundtrip.py",
+      "symbol": "test_csg_region_shape_is_preserved_instead_of_becoming_a_box",
+      "responsibility": "Preserve the complete CSG expression instead of replacing it with a bounding box."
+    },
+    {
       "id": "region-api",
       "path": "packages/fullmag-py/src/fullmag/model/structure.py",
       "symbol": "class ObjectRegion",
@@ -990,6 +1110,144 @@
       "symbol": "build_plan_exchange_operator",
       "responsibility": "Rejects FDM CPU and CUDA plans that combine non-zero DMI with a zero exchange connection between two active cells (fdm_dmi_decoupled_exchange_connection); first_decoupled_connection in crates/fullmag-engine/src/fdm/shared/exchange_operator.rs locates the connection and backends/fdm/api/c_api.cpp repeats the check for a FACES tail.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "thermal-config-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/thermal_noise_authoring.py",
+      "symbol": "canonical_thermal_noise",
+      "responsibility": "Validate positive finite temperature and lossless decimal u64 seed across builder and scene transport."
+    },
+    {
+      "id": "thermal-script-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_thermal_noise",
+      "responsibility": "Preserve thermal intent and temperature precision in direct and Scene Python exports."
+    },
+    {
+      "id": "regional-thermal-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_regional_thermal_roundtrip.py",
+      "symbol": "test_seeded_and_entropy_thermal_intent_survives_both_exports",
+      "responsibility": "Reject silent stochastic-to-deterministic conversion for seeded and entropy regional inputs."
+    },
+    {
+      "id": "thermal-scene-validation",
+      "path": "crates/fullmag-authoring/src/builder.rs",
+      "symbol": "ScriptBuilderThermalNoiseState",
+      "responsibility": "Own typed authoring configuration and validate lossless seed and SI temperature."
+    },
+    {
+      "id": "thermal-scene-model-identity",
+      "path": "crates/fullmag-authoring/src/authoring_model.rs",
+      "symbol": "energy_terms",
+      "responsibility": "Include authored thermal parameters in the model definition and its physical input identity."
+    },
+    {
+      "id": "thermal-scene-execution-lowering",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py",
+      "symbol": "_reject_unlowered_scene_fields",
+      "responsibility": "Admit the validated thermal study configuration through the strict shared Scene-to-ProblemIR/ExecutionConfig path without discarding it."
+    },
+    {
+      "id": "fem-compact-marker-maps",
+      "path": "backends/fem/core/fem_marker_map.hpp",
+      "symbol": "class CompactMarkerMap",
+      "responsibility": "Own deterministic O(distinct markers) forward/reverse domain and boundary maps; preserve canonical zero."
+    },
+    {
+      "id": "fem-compact-import",
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp",
+      "symbol": "build_mfem_mesh",
+      "responsibility": "Publish compact maps with a validated MFEM mesh and preserve canonical topology and buffers."
+    },
+    {
+      "id": "fem-compact-poisson-selectors",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "symbol": "initialize_demag_poisson_boundary_operator",
+      "responsibility": "Translate canonical Poisson and periodic selectors before boundary masks."
+    },
+    {
+      "id": "fem-u32-poisson-abi",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_create_v5",
+      "responsibility": "Versioned u32 selector override before context initialization; retain legacy layouts."
+    },
+    {
+      "id": "fem-canonical-transport-digest",
+      "path": "backends/fem/cpu/mfem/workflows/antenna_field_solve/accepted_terminal_charge_source.cpp",
+      "symbol": "compute_accepted_terminal_content_digest",
+      "responsibility": "Reverse compact attributes to canonical labels in accepted source identity."
+    },
+    {
+      "id": "fem-compact-marker-regression",
+      "path": "backends/fem/tests/regional_marker_map_contract.cpp",
+      "symbol": "run_regional_marker_cpu_contract",
+      "responsibility": "Actual MFEM imports and H/E/directional derivative and selector regressions; GPU counterpart is separately gated."
+    },
+    {
+      "id": "regional-common-convergence",
+      "path": "scripts/benchmarks/regional_fdm_fem_convergence.py",
+      "symbol": "main",
+      "responsibility": "Pinned analytic pure-damping rod with DG0 material jumps and independent energy/field/amplitude convergence gates."
+    },
+    {
+      "id": "python-canonical-u32-markers",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_canonical_marker_array",
+      "responsibility": "Validate before unsigned conversion, preserving old nonnegative int32 mesh buffers and rejecting negative, fractional and boolean values."
+    },
+    {
+      "id": "interchange-compact-marker-tags",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "_positive_export_tags",
+      "responsibility": "Assign bounded positive interchange aliases; canonical IDs including air zero are restored from hash-bound sidecars."
+    },
+    {
+      "id": "accepted-canonical-u32-decoder",
+      "path": "crates/fullmag-antenna-artifacts/src/charge.rs",
+      "symbol": "decode_accepted_terminal_charge_record",
+      "responsibility": "Validate and retain canonical u32 attributes in accepted source payloads, separately from solver iteration limits."
+    },
+    {
+      "id": "public-fem-u32-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_fem_u32_marker_roundtrip.py",
+      "symbol": "class FemU32MarkerRoundTripTests",
+      "responsibility": "Check high u32 authoring, facet incidence, old NPZ fingerprints, Gmsh/COMSOL and native artifact roundtrip."
+    },
+    {
+      "id": "capture_run_adaptive_policy",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_stage_draft",
+      "responsibility": "Preserve complete stage-local adaptive policies and reject malformed or ambiguous imported Run snapshots",
+      "lane": "FDM/FEM authoring and planning",
+      "tests": "test_captured_runs_keep_distinct_adaptive_policies_after_duration_edit",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "materialize_run_adaptive_policy",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "apply_imported_run_capture",
+      "responsibility": "Preserve complete stage-local adaptive policies and reject malformed or ambiguous imported Run snapshots",
+      "lane": "FDM/FEM authoring and planning",
+      "tests": "script_imported_run_preserves_each_adaptive_snapshot_and_explicit_clear",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "accepted_physical_state_chain",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Bind required final_state to next initial_state only for compatible physical topology; refuse unsupported transitions before acceptance."
+    },
+    {
+      "id": "accepted_physical_pipeline_route",
+      "path": "crates/fullmag-api/src/live_accepted_execution.rs",
+      "symbol": "has_sequential_physical_pipeline",
+      "responsibility": "Route whole sequential Run/Relax Study through source-bound v4 execution while preserving selected-step scope."
+    },
+    {
+      "id": "revalidate_typed_state_binding",
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "symbol": "resolve_step_output_inputs",
+      "responsibility": "Preserve admitted typed bindings for repeated resolution and require exact canonical manifest/CAS revalidation before materializing initial magnetization."
     }
   ],
   "public_api": {

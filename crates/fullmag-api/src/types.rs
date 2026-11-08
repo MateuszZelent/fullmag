@@ -2276,6 +2276,7 @@ mod tests {
             demag_realization: None,
             fdm: None,
             external_field: None,
+            thermal_noise: None,
             rotated_interfacial_dmi: None,
             rotated_interfacial_dmi_object_ids: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {

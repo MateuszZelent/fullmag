@@ -14726,9 +14726,11 @@ export interface components {
             solved_antenna_drives?: components["schemas"]["SolvedAntennaDriveResource"][];
             spin_torques?: components["schemas"]["SceneSpinTorque"][];
             spin_transports?: components["schemas"]["SceneSpinTransport"][];
-            study?: {
+            study?: ({
+                thermal_noise?: components["schemas"]["ThermalNoiseResource"] | null;
+            } & {
                 [key: string]: unknown;
-            } | null;
+            }) | null;
             universe?: {
                 [key: string]: unknown;
             } | null;
@@ -16830,6 +16832,16 @@ export interface components {
         TargetFieldAvailabilityState: "supported" | "materializing" | "ready" | "stale" | "unavailable";
         /** @enum {string} */
         TempCleanupSchema: "on_success" | "always" | "never";
+        /** @description Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport. */
+        ThermalNoiseResource: {
+            /** @description Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy. */
+            seed?: string | null;
+            /**
+             * Format: double
+             * @description Positive finite temperature in kelvin.
+             */
+            temperature: number;
+        };
         /** @enum {string} */
         ThreadAutoSchema: "auto";
         TimeDependenceResource: {

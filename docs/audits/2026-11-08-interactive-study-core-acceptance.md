@@ -39,6 +39,10 @@ Próba `8216fffc919a45af8a5dde0daa72beee` przeszła po końcowym runie `run-live
 
 ![Końcowe pole m z rzeczywistego runtime FDM CPU](2026-11-08-interactive-study-terminal-canvas.png)
 
+## Integracja z nowszym masterem
+
+Podczas finalizacji master otrzymał PR #418 (`b8e39d7f0182c87566f9de59e15ff1ae668d0b2f`). Rozwiązanie konfliktów zachowuje resety i wiązanie stanu P22 oraz kontrolę topologii, adaptacyjnych snapshotów Run i zegarów z mastera. Integrację tych źródeł sprawdzają kontrole PR #411. Powyższy odbiór działającego runtime pozostaje przypisany dokładnie do binarki DC7 i harnessu E1BF; nie przenosimy go automatycznie na późniejszą binarkę.
+
 ## Testy i granice kwalifikacji
 
 [Pełne CI DC7](https://github.com/MateuszZelent/fullmag/actions/runs/42480881756) i siedem pozostałych workflow zakończyły się sukcesem. Odczytany log Rust potwierdza indywidualne wykonanie sześciu regresji P10/P11 oraz dwunastu regresji restore, historycznej siatki, energii i cienkiego statusu. Poprawka harnessu przeszła 22 testy kontraktowe, parser Node, diff check i lint w dokładnym zarządzanym frontendzie; hash pliku kontenera odpowiadał źródłom.

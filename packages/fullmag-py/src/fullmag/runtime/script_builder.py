@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
+
 from fullmag._validation import (
     AUTO_SINC_NYQUIST_GUARD_FACTOR,
     SamplingPeriod,
@@ -169,6 +171,27 @@ def _stage_adaptive_timestep_draft(
     }
 
 
+def _validate_adaptive_snapshot(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError("adaptive timestep must be an object or null")
+    unknown = set(value) - {
+        "tolerance_mode", "atol", "rtol", "dt_initial", "dt_min", "dt_max",
+        "safety", "growth_limit", "shrink_limit", "max_spin_rotation", "norm_tolerance",
+    }
+    if unknown:
+        raise ValueError("adaptive timestep has unknown fields: " + ", ".join(sorted(unknown)))
+    if "tolerance_mode" in value and value["tolerance_mode"] not in {"advanced", "max_error"}:
+        raise ValueError("adaptive timestep has unknown tolerance_mode")
+    for key, item in value.items():
+        if key == "tolerance_mode" or item is None or item == "":
+            continue
+        number = _number_or_none(item)
+        if isinstance(item, bool) or number is None or not math.isfinite(number):
+            raise ValueError(f"adaptive timestep {key} must be a finite number or null")
+
+
 def _advanced_policy_with_overrides(
     fallback: AdaptiveTimestep | None,
     overrides: dict[str, object],
@@ -298,6 +321,7 @@ def export_builder_draft(
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
+        "thermal_noise": _export_thermal_noise(base_problem),
         "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
         "rotated_interfacial_dmi_object_ids": (
             _problem_rotated_interfacial_dmi_object_ids(base_problem)
@@ -666,7 +690,7 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(demag_lines)
 
-    thermal_lines = _render_thermal_noise(base_problem, surface=surface)
+    thermal_lines = _render_thermal_noise(base_problem, surface=surface, overrides=overrides)
     if thermal_lines:
         lines.append("")
         lines.extend(thermal_lines)
@@ -945,6 +969,7 @@ def _reject_unrendered_scene_nested_fields(
 
 
 def _scene_solver_keyword_args(source: Mapping[str, object]) -> list[str]:
+    _validate_adaptive_snapshot(source.get("adaptive_timestep"))
     args: list[str] = []
     integrator = source.get("integrator")
     if isinstance(integrator, str) and integrator.strip():
@@ -1398,6 +1423,13 @@ def _render_scene_document_bootstrap(
         lines.append(f"study.demag(realization={_python_literal(realization)})")
     if demag_enabled is False:
         lines.append("study.disable_demag()")
+
+    thermal_noise = canonical_thermal_noise(builder.get("thermal_noise"))
+    if thermal_noise is not None:
+        args = [f"temperature={_py_float_roundtrip(thermal_noise['temperature'])}"]
+        if "seed" in thermal_noise:
+            args.append(f"seed={int(thermal_noise['seed'])}")
+        lines.append(f"study.thermal_noise({', '.join(args)})")
 
     external_field = builder.get("external_field")
     if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
@@ -3424,6 +3456,10 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         "entrypoint_kind": stage.entrypoint_kind,
         "integrator": dynamics.integrator,
         "fixed_timestep": _text_number(dynamics.fixed_timestep),
+        "adaptive_timestep": (
+            dynamics.adaptive_timestep.to_ir()
+            if dynamics.adaptive_timestep is not None else None
+        ),
         "demag_interval_s": _text_number(
             dynamics.field_refresh.demag_interval_s
             if dynamics.field_refresh is not None
@@ -4293,9 +4329,9 @@ def _render_geometry_and_materials(
                 lines.append(f"{var_name}.mesh(cell_size={_py_tuple3(grid.cell)})")
         if magnet.region is not None and magnet.region.name != magnet.name:
             lines.append(f"{var_name}.region_name = {_py_repr(magnet.region.name)}")
-        lines.append(f"{var_name}.Ms = {_py_number(magnet.material.Ms)}")
-        lines.append(f"{var_name}.Aex = {_py_number(magnet.material.A)}")
-        lines.append(f"{var_name}.alpha = {_py_number(magnet.material.alpha)}")
+        lines.append(f"{var_name}.Ms = {_py_float_roundtrip(magnet.material.Ms)}")
+        lines.append(f"{var_name}.Aex = {_py_float_roundtrip(magnet.material.A)}")
+        lines.append(f"{var_name}.alpha = {_py_float_roundtrip(magnet.material.alpha)}")
         lines.extend(
             _render_absorbing_boundary(
                 var_name,
@@ -4305,11 +4341,11 @@ def _render_geometry_and_materials(
             )
         )
         if magnet.material.Ku1 is not None:
-            lines.append(f"{var_name}.Ku1 = {_py_number(magnet.material.Ku1)}")
+            lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(magnet.material.Ku1)}")
         if magnet.material.anisU is not None:
             lines.append(
-                f"{var_name}.anisU = ({_py_number(magnet.material.anisU[0])}, "
-                f"{_py_number(magnet.material.anisU[1])}, {_py_number(magnet.material.anisU[2])})"
+                f"{var_name}.anisU = ({_py_float_roundtrip(magnet.material.anisU[0])}, "
+                f"{_py_float_roundtrip(magnet.material.anisU[1])}, {_py_float_roundtrip(magnet.material.anisU[2])})"
             )
         rendered_initial_override = _render_initial_state_override(
             initial_state_override,
@@ -4331,10 +4367,10 @@ def _render_geometry_and_materials(
                 lines.append(rendered_initial)
         dmi = _magnet_dmi(problem, magnet.name)
         if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+            lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
         bulk_dmi = _magnet_bulk_dmi(problem, magnet.name)
         if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+            lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         lines.append("")
     for geometry in problem.auxiliary_geometries:
         role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
@@ -4388,7 +4424,7 @@ def _render_region_owned_authoring(
             region_vars[(magnet.object_id or magnet.name, region.region_id)] = region_var
             kwargs = [
                 _py_repr(region.name),
-                _render_geometry_expr(region.shape, magnet_name=region.name, source_root=source_root),
+                _render_region_shape_expr_from_payload(region.to_ir()["shape"], region_name=region.name, source_root=source_root),
             ]
             optional_kwargs: list[str] = []
             optional_kwargs.append(f"region_id={_py_repr(region.region_id)}")
@@ -4585,9 +4621,9 @@ def _render_region_shape_expr_from_payload(
     source_root: Path,
 ) -> str:
     shape = _normalize_mapping(raw_shape)
-    kind = str(shape.get("kind") or "box")
+    kind = str(shape.get("kind") or "")
     if kind == "box":
-        params = {"size": shape.get("size")}
+        params = {"size": shape.get("size"), "translation": shape.get("center")}
         return _render_geometry_expr_from_override(
             "Box",
             params,
@@ -4599,6 +4635,7 @@ def _render_region_shape_expr_from_payload(
             "radius": shape.get("radius"),
             "height": shape.get("height"),
             "translation": shape.get("center"),
+            "axis": shape.get("axis"),
         }
         return _render_geometry_expr_from_override(
             "Cylinder",
@@ -4608,19 +4645,18 @@ def _render_region_shape_expr_from_payload(
         )
     if kind == "sphere":
         radius = shape.get("radius")
-        params = {"rx": radius, "ry": radius, "rz": radius}
+        params = {"rx": radius, "ry": radius, "rz": radius, "translation": shape.get("center")}
         return _render_geometry_expr_from_override(
             "Ellipsoid",
             params,
             name=region_name,
             source_root=source_root,
         )
-    return _render_geometry_expr_from_override(
-        "Box",
-        {},
-        name=region_name,
-        source_root=source_root,
-    )
+    if kind == "csg":
+        # The public region API accepts the canonical shape IR dictionary.
+        # Preserve its complete expression; a bounding box changes support.
+        return _py_literal(shape)
+    raise ValueError(f"unsupported object region shape kind {kind!r} in canonical export")
 
 
 def _render_initial_magnetization_expr_from_payload(
@@ -4673,7 +4709,7 @@ def _render_material_transition_kwargs(transition: dict[str, object]) -> list[st
     if transition.get("cells") is not None:
         kwargs.append(f"cells={int(transition['cells'])}")
     if transition.get("width") is not None:
-        kwargs.append(f"width={_py_literal(transition['width'])}")
+        kwargs.append(f"width={_py_parameter_literal(transition['width'])}")
     scope = transition.get("scope")
     if isinstance(scope, str) and scope != "boundary" and kind != "sharp":
         kwargs.append(f"scope={_py_repr(scope)}")
@@ -4686,15 +4722,15 @@ def _render_material_parameter_field_expr(value: object) -> str:
         raise ValueError("material parameter field must render from a dict payload")
     kind = payload.get("kind")
     if kind == "constant":
-        args = [_py_literal(payload.get("value"))]
+        args = [_py_parameter_literal(payload.get("value"))]
         unit = payload.get("unit")
         if unit is not None:
             args.append(f"unit={_py_repr(str(unit))}")
         return f"fm.fields.constant({', '.join(args)})"
     if kind == "linear":
         kwargs = [
-            f"base={_py_literal(payload.get('base'))}",
-            f"gradient={_py_literal(payload.get('gradient'))}",
+            f"base={_py_parameter_literal(payload.get('base'))}",
+            f"gradient={_py_parameter_literal(payload.get('gradient'))}",
         ]
         frame = payload.get("frame")
         if frame not in (None, "object"):
@@ -4705,10 +4741,10 @@ def _render_material_parameter_field_expr(value: object) -> str:
         return f"fm.fields.linear({', '.join(kwargs)})"
     if kind == "radial":
         kwargs = [
-            f"center={_py_literal(payload.get('center'))}",
-            f"radius={_py_literal(payload.get('radius'))}",
-            f"inside={_py_literal(payload.get('inside'))}",
-            f"outside={_py_literal(payload.get('outside'))}",
+            f"center={_py_parameter_literal(payload.get('center'))}",
+            f"radius={_py_parameter_literal(payload.get('radius'))}",
+            f"inside={_py_parameter_literal(payload.get('inside'))}",
+            f"outside={_py_parameter_literal(payload.get('outside'))}",
         ]
         frame = payload.get("frame")
         if frame not in (None, "object"):
@@ -4784,16 +4820,16 @@ def _render_couplings(
                 f"mode={_py_repr(str(params.get('mode', 'harmonic_mean')))}",
             ]
             if params.get("scale") is not None:
-                kwargs.append(f"scale={_py_literal(params.get('scale'))}")
+                kwargs.append(f"scale={_py_parameter_literal(params.get('scale'))}")
             if params.get("inter_exchange") is not None:
-                kwargs.append(f"inter_exchange={_py_literal(params.get('inter_exchange'))}")
+                kwargs.append(f"inter_exchange={_py_parameter_literal(params.get('inter_exchange'))}")
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.exchange({', '.join(kwargs)})")
         elif kind == "rkky":
             kwargs = [
                 source_expr,
                 target_expr,
-                f"J1={_py_literal(params.get('j1'))}",
+                f"J1={_py_parameter_literal(params.get('j1'))}",
                 *_render_common_coupling_kwargs(coupling),
             ]
             lines.append(f"{root}.rkky({', '.join(kwargs)})")
@@ -4801,10 +4837,10 @@ def _render_couplings(
             kwargs = [
                 source_expr,
                 target_expr,
-                f"J1={_py_literal(params.get('j1'))}",
+                f"J1={_py_parameter_literal(params.get('j1'))}",
             ]
             if params.get("j2") is not None:
-                kwargs.append(f"J2={_py_literal(params.get('j2'))}")
+                kwargs.append(f"J2={_py_parameter_literal(params.get('j2'))}")
             kwargs.extend(_render_common_coupling_kwargs(coupling))
             lines.append(f"{root}.interlayer_exchange({', '.join(kwargs)})")
         else:
@@ -4915,9 +4951,9 @@ def _render_geometries_from_override(
             lines.append(f"{var_name}.region_name = {_py_repr(region_name)}")
 
         mat = _normalize_mapping(g.get("material"))
-        lines.append(f"{var_name}.Ms = {_py_number(float(str(mat.get('Ms', 800000))))}")
-        lines.append(f"{var_name}.Aex = {_py_number(float(str(mat.get('Aex', 1.3e-11))))}")
-        lines.append(f"{var_name}.alpha = {_py_number(float(str(mat.get('alpha', 0.02))))}")
+        lines.append(f"{var_name}.Ms = {_py_float_roundtrip(float(str(mat.get('Ms', 800000))))}")
+        lines.append(f"{var_name}.Aex = {_py_float_roundtrip(float(str(mat.get('Aex', 1.3e-11))))}")
+        lines.append(f"{var_name}.alpha = {_py_float_roundtrip(float(str(mat.get('alpha', 0.02))))}")
         lines.extend(_render_absorbing_boundary(var_name, g.get("absorbing_boundary")))
         physics_stack = _ensure_geometry_physics_stack(
             g.get("physics_stack"),
@@ -4926,20 +4962,20 @@ def _render_geometries_from_override(
         )
         dmi = _physics_stack_dmi_value(physics_stack)
         if dmi is not None:
-            lines.append(f"{var_name}.Dind = {_py_number(dmi)}")
+            lines.append(f"{var_name}.Dind = {_py_float_roundtrip(dmi)}")
         bulk_dmi = _physics_stack_bulk_dmi_value(physics_stack)
         if bulk_dmi is not None:
-            lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
+            lines.append(f"{var_name}.Dbulk = {_py_float_roundtrip(bulk_dmi)}")
         uniaxial = _physics_stack_uniaxial_params(physics_stack)
         if uniaxial is not None:
             ku1_val = uniaxial["ku1"]  # type: ignore[index]
-            lines.append(f"{var_name}.Ku1 = {_py_number(ku1_val)}")  # type: ignore[arg-type]
+            lines.append(f"{var_name}.Ku1 = {_py_float_roundtrip(ku1_val)}")  # type: ignore[arg-type]
             axis = uniaxial["axis"]  # type: ignore[index]
             axis0 = axis[0]  # type: ignore[index]
             axis1 = axis[1]  # type: ignore[index]
             axis2 = axis[2]  # type: ignore[index]
             lines.append(
-                f"{var_name}.anisU = ({_py_number(axis0)}, {_py_number(axis1)}, {_py_number(axis2)})"
+                f"{var_name}.anisU = ({_py_float_roundtrip(axis0)}, {_py_float_roundtrip(axis1)}, {_py_float_roundtrip(axis2)})"
             )
 
         rendered_initial_override = _render_initial_state_override(
@@ -8173,7 +8209,29 @@ def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -
         return []
     if not isinstance(value, Mapping):
         raise ValueError("SceneDocument run sampling must be an object")
-    _reject_unrendered_scene_nested_fields(value, context="run_sampling", rendered_fields={"outputs"})
+    _reject_unrendered_scene_nested_fields(value, context="run_sampling", rendered_fields={"outputs", "table_autosave"})
+    table_lines: list[str] = ["study.tableautosave(enabled=False)"]
+    raw_table = value.get("table_autosave")
+    if raw_table is not None:
+        if not isinstance(raw_table, Mapping):
+            raise ValueError("SceneDocument run table_autosave must be an object")
+        _reject_unrendered_scene_nested_fields(raw_table, context="run_table_autosave", rendered_fields={
+            "kind", "table_id", "every_steps", "quantities", "expressions", "sample_period_s",
+            "sample_period_policy", "resolved_sample_period_s", "requested_policy",
+        })
+        if "every_steps" in raw_table and (
+            type(raw_table["every_steps"]) is not int or raw_table["every_steps"] <= 0
+        ):
+            raise ValueError("SceneDocument run table_autosave requires positive every_steps")
+        for key in ("quantities", "expressions"):
+            if key in raw_table and not isinstance(raw_table[key], list):
+                raise ValueError(f"SceneDocument run table_autosave {key} must be a list")
+        if "table_id" in raw_table and (not isinstance(raw_table["table_id"], str) or not raw_table["table_id"].strip()):
+            raise ValueError("SceneDocument run table_autosave table_id must be a nonempty string")
+        table = _table_autosave_from_override(dict(raw_table))
+        if table is None:
+            raise ValueError("SceneDocument run table_autosave requires a supported kind and cadence")
+        table_lines = _render_table_autosave_policy(table, surface="study")
     raw_outputs = value.get("outputs", [])
     if not isinstance(raw_outputs, list):
         raise ValueError("SceneDocument run sampling outputs must be a list")
@@ -8200,7 +8258,7 @@ def _render_scene_sampling_outputs(value: object, magnet_vars: dict[str, str]) -
             outputs.append(Snapshot(field=raw.get("field"), component=raw.get("component"), every=every, layer=layer))
         else:
             raise ValueError(f"SceneDocument run sampling output kind {kind!r} is unsupported")
-    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study")]
+    return ["study.clear_outputs()", *_render_output_specs(outputs, magnet_vars, surface="study"), *table_lines]
 
 
 def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: str) -> list[str]:
@@ -8419,6 +8477,10 @@ def _render_table_autosave(
     ) or _study_table_autosave(problem.study)
     if table_autosave is None:
         return []
+    return _render_table_autosave_policy(table_autosave, surface=surface)
+
+
+def _render_table_autosave_policy(table_autosave: TableAutosave, *, surface: str) -> list[str]:
 
     kwargs = (
         [f"every_steps={table_autosave.every_steps}"]
@@ -8824,7 +8886,9 @@ def _render_stages(
         dynamics_signature = (
             stage_dynamics.to_ir() if stage_dynamics is not None else None
         )
-        if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
+        if (previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature) or (
+            isinstance(study, TimeEvolution) and "adaptive_timestep" in stage_override
+        ):
             if stage_dynamics is not None:
                 stage_solver_override = dict(solver_override)
                 timestep_policy_keys = (
@@ -8867,6 +8931,9 @@ def _render_stages(
                     for key in timestep_policy_keys:
                         if key not in {"dt_initial", "dt_min", "dt_max", "max_err"}:
                             stage_solver_override.pop(key, None)
+                elif "adaptive_timestep" in stage_override and stage_override["adaptive_timestep"] is None:
+                    for key in timestep_policy_keys:
+                        stage_solver_override.pop(key, None)
                 for key in (
                     "integrator",
                     "fixed_timestep",
@@ -8877,7 +8944,7 @@ def _render_stages(
                     "dt_max",
                     "max_err",
                 ):
-                    if key in stage_override and stage_override[key] not in (None, ""):
+                    if key in stage_override:
                         stage_solver_override[key] = stage_override[key]
                 lines.append(
                     _render_solver_call(
@@ -9254,6 +9321,11 @@ def _render_stages(
             )
         # Reproduce non-action sampling changes between Runs without inserting
         # configuration stages into the authored pipeline.
+        stage_table = _study_table_autosave(study)
+        if stage_table is not None:
+            lines.extend(_render_table_autosave_policy(stage_table, surface=surface))
+        else:
+            lines.append(f"{_surface_call(surface, 'tableautosave')}(enabled=False)")
         if not is_study_surface:
             lines.append(f"{_surface_call(surface, 'clear_outputs')}()")
             lines.extend(_render_outputs(stage.problem, _magnet_variable_names(stage.problem, overrides=overrides), surface=surface))
@@ -9683,6 +9755,7 @@ def _render_solver_call(
         "fixed_timestep" in solver_override
         and _number_or_none(solver_override.get("fixed_timestep")) is not None
     )
+    _validate_adaptive_snapshot(solver_override.get("adaptive_timestep"))
     has_advanced_override = isinstance(solver_override.get("adaptive_timestep"), dict)
     has_convenience_override = any(key in solver_override for key in convenience_keys)
     has_active_convenience_override = any(
@@ -9701,10 +9774,22 @@ def _render_solver_call(
     if has_fixed_override:
         resolved_adaptive = None
     elif has_advanced_override:
+        captured_policy = solver_override["adaptive_timestep"]
         resolved_adaptive = _advanced_policy_with_overrides(
-            dynamics.adaptive_timestep,
-            solver_override["adaptive_timestep"],
+            None if "tolerance_mode" in captured_policy else dynamics.adaptive_timestep,
+            captured_policy,
         )
+        mode = captured_policy.get("tolerance_mode", "advanced")
+        if mode == "max_error":
+            candidate = AdaptiveTimestep._from_max_error(
+                max_err=resolved_adaptive.atol, dt_initial=resolved_adaptive.dt_initial,
+                dt_min=resolved_adaptive.dt_min, dt_max=resolved_adaptive.dt_max,
+            )
+            if candidate != resolved_adaptive:
+                raise ValueError("max_error adaptive snapshot contains unrenderable advanced controls")
+            resolved_adaptive = candidate
+        elif mode != "advanced":
+            raise ValueError("adaptive timestep has unknown tolerance_mode")
         resolved_fixed = None
     elif has_convenience_override:
         resolved_adaptive = _max_error_policy_with_overrides(
@@ -11681,16 +11766,30 @@ def _render_demag(
     return lines
 
 
-def _render_thermal_noise(problem: Problem, *, surface: str) -> list[str]:
-    thermal_terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
-    if not thermal_terms:
-        return []
-    if len(thermal_terms) != 1:
+def _export_thermal_noise(problem: Problem) -> dict[str, object] | None:
+    terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
+    if not terms:
+        return None
+    if len(terms) != 1:
         raise ValueError("canonical flat-script rewrite requires at most one ThermalNoise term")
-    term = thermal_terms[0]
-    args = [f"temperature={_py_number(term.temperature)}"]
+    term = terms[0]
+    config: dict[str, object] = {"temperature": term.temperature}
     if term.seed is not None:
-        args.append(f"seed={term.seed}")
+        config["seed"] = str(term.seed)
+    return canonical_thermal_noise(config)
+
+
+def _render_thermal_noise(
+    problem: Problem, *, surface: str, overrides: Mapping[str, object] | None = None
+) -> list[str]:
+    config = (canonical_thermal_noise(overrides["thermal_noise"])
+              if overrides is not None and "thermal_noise" in overrides
+              else _export_thermal_noise(problem))
+    if config is None:
+        return []
+    args = [f"temperature={_py_float_roundtrip(config['temperature'])}"]
+    if "seed" in config:
+        args.append(f"seed={int(config['seed'])}")
     return ["# Brown thermal noise", f"{_surface_call(surface, 'thermal_noise')}({', '.join(args)})"]
 
 

@@ -102,6 +102,21 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
                                           b'--prepared-archive-terminal-sha256', b'3' * 64])
             self.assertEqual(b'--apply' in argv, apply == 'true')
 
+    def test_failed_stop_explicit_terminal_mode_is_allowed_without_arbitrary_options(self):
+        repo=Path(__file__).resolve().parents[1];marker='  *"scripts/docker_volume_stop_failed.py"*)\n'
+        for enabled in ('false','true'):
+            dry=subprocess.run(['just','--justfile',str(repo/'justfile'),'--dry-run','docker-dev-stop-failed',
+                                '/selected/checkout with spaces','a'*64,'sha256:'+'b'*64,'c'*64,enabled],
+                               capture_output=True,text=True,timeout=15)
+            self.assertEqual(dry.returncode,0,dry.stderr)
+            recipe=dry.stderr.strip();result=self.dispatch(recipe,marker=marker)
+            self.assertEqual(result.returncode,0,result.stderr)
+            argv=result.stdout.split(b'\0')[:-1]
+            self.assertEqual(argv[-1].endswith(b' --terminal-only'),enabled=='true')
+            for suffix in (' --force','; printf injected',' --terminal-only --force'):
+                invalid=self.dispatch(recipe+suffix,marker=marker)
+                self.assertEqual(invalid.returncode,2,invalid.stderr)
+
     def test_prepared_stop_real_recipe_preserves_preview_apply_and_continuation_as_fixed_argv(self):
         repo = Path(__file__).resolve().parents[1]
         source = '/selected/checkout with spaces/$(printf injected);literal'
@@ -146,7 +161,7 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
         source = globals().get('WRAPPER') or (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text()
         body = source.split(marker, 1)[1].split('\n    ;;', 1)[0]
         program = ('set -euo pipefail\nrecipe="$RECIPE_LITERAL"\n'
-                   'python_cmd="/recorded/python"\nrepo_root="/registered/checkout"\nscript_dir="/registered/checkout/scripts"\n'
+                   'bash_executable="/bin/bash"\npython_cmd="/recorded/python"\nrepo_root="/registered/checkout"\nscript_dir="/registered/checkout/scripts"\n'
                    'exec() { printf \'%s\\0\' "$@"; }\n' + body)
         return subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c', program],
             env={**os.environ, 'RECIPE_LITERAL': recipe}, capture_output=True, timeout=15)

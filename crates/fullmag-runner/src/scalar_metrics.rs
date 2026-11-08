@@ -142,6 +142,7 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("e_ex".to_string(), stats.e_ex);
     scalars.insert("e_demag".to_string(), stats.e_demag);
     scalars.insert("e_ext".to_string(), stats.e_ext);
+    scalars.insert("e_drive".to_string(), stats.e_drive);
     scalars.insert("e_ani".to_string(), stats.e_ani);
     scalars.insert("e_rotated_dmi".to_string(), stats.e_rotated_dmi);
     scalars.insert("e_dmi".to_string(), stats.e_dmi);

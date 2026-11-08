@@ -455,6 +455,7 @@ impl FdmLiveObservationScheduler {
                 antenna_zeeman_masks: plan.antenna_zeeman_masks.clone(),
                 solved_antenna_drive_bases: plan.solved_antenna_drive_bases.clone(),
                 time_stage: plan.time_stage.clone(),
+                relaxation: plan.relaxation.clone(),
                 ..FdmPlanIR::default()
             }),
             original_grid,
@@ -758,7 +759,7 @@ impl FdmLiveObservationScheduler {
         let identity = ObservationJobIdentity {
             request_revision: demand.revision,
             source_step: capture_step,
-            source_time_bits: capture_time.to_bits(),
+            source_time_bits: super::canonical_fdm_publication_time(&self.antenna_basis, capture_time).to_bits(),
             quantities: demand.quantities.clone(),
         };
         timings.submit_descriptor_wall_time_ns = elapsed_ns(descriptor_started);
@@ -1112,6 +1113,25 @@ mod tests {
     use crate::types::LivePreviewField;
     use crate::DisplaySelectionState;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn legacy_relaxation_scheduler_keeps_the_publication_clock_predicate() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.time_stage.start_time_s = 2e-12;
+        plan.time_stage.study_kind = fullmag_ir::StudyKindIR::Unknown;
+        plan.relaxation = Some(fullmag_ir::RelaxationControlIR {
+            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: None, energy_tolerance_j: None,
+                max_steps: Some(1), max_relaxation_time_s: None,
+            },
+        });
+        let scheduler = super::FdmLiveObservationScheduler::new(&plan, [1,1,1]);
+        assert_eq!(scheduler.antenna_basis.relaxation, plan.relaxation);
+        assert_eq!(crate::fdm::gpu::cuda::canonical_fdm_publication_time(
+            &scheduler.antenna_basis, 3e-12),
+            crate::fdm::gpu::cuda::canonical_fdm_publication_time(&plan, 3e-12));
+    }
 
     #[test]
     fn demand_consumes_visible_union_and_keeps_active_selection() {

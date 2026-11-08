@@ -896,6 +896,7 @@ use utoipa::OpenApi;
         crate::schemas::relaxation::StageMetricKind,
         crate::schemas::relaxation::StageMetricUnit,
         crate::schemas::authoring::SceneResource,
+        crate::schemas::authoring::ThermalNoiseResource,
         crate::schemas::authoring::SceneMetadataResource,
         crate::schemas::authoring::SceneObjectResource,
         crate::schemas::authoring::SceneMaterialResource,
@@ -1226,6 +1227,18 @@ fn openapi_json_on_large_stack() -> Value {
     doc["x-fullmag-study-primitive-stage-kinds"] =
         serde_json::to_value(fullmag_authoring::StudyPrimitiveStageKind::ALL)
             .expect("study primitive stage catalog should serialize");
+    doc["components"]["schemas"]["ThermalNoiseResource"]["properties"]["temperature"]
+        ["exclusiveMinimum"] = json!(0.0);
+    doc["components"]["schemas"]["ThermalNoiseResource"]["properties"]["seed"]
+        ["pattern"] = json!("^[1-9][0-9]{0,19}$");
+    // Keep extensible study metadata while exposing the lossless thermal contract.
+    doc["components"]["schemas"]["SceneResource"]["properties"]["study"]
+        ["properties"]["thermal_noise"] = json!({
+            "anyOf": [
+                {"$ref": "#/components/schemas/ThermalNoiseResource"},
+                {"type": "null"}
+            ]
+        });
     normalize_operation_ids(&mut doc);
     doc
 }
@@ -1593,6 +1606,19 @@ mod tests {
         assert!(schemas["StageAutosaveLayoutResource"]
             .to_string()
             .contains("continuous"));
+    }
+
+    #[test]
+    fn openapi_exposes_lossless_study_thermal_noise() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let study = &schemas["SceneResource"]["properties"]["study"];
+        assert_eq!(study["additionalProperties"], true);
+        assert_eq!(study["properties"]["thermal_noise"]["anyOf"][0]["$ref"],
+                   "#/components/schemas/ThermalNoiseResource");
+        let seed = &schemas["ThermalNoiseResource"]["properties"]["seed"];
+        assert!(seed.to_string().contains("string"));
+        assert!(!seed.to_string().contains("integer"));
     }
 
     #[test]

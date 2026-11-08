@@ -827,6 +827,7 @@ def build():
                 "entrypoint_kind": "build",
                 "integrator": "rk4",
                 "fixed_timestep": "1e-15",
+                "adaptive_timestep": None,
                 "demag_interval_s": "",
                 "until_seconds": "4e-12",
                 "relax_algorithm": "",

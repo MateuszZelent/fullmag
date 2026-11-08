@@ -256,7 +256,7 @@ fn invalid_initial_state_result(initial_magnetization: &[Vector3]) -> Relaxation
     }
 }
 
-fn confirm_exact_equilibrium_aos(
+fn confirm_stationary_torque_aos(
     problem: &ExchangeLlgProblem,
     magnetization: &[Vector3],
     ws: &mut FftWorkspace,
@@ -269,6 +269,9 @@ fn confirm_exact_equilibrium_aos(
     for _ in 0..2 {
         *h_eff = problem.effective_field_from_vectors_ws(magnetization, ws);
         *field_evaluations += 1;
+        if !h_eff.iter().flatten().all(|value| value.is_finite()) {
+            return false;
+        }
         let max_torque = compute_max_torque_free(problem, magnetization, h_eff);
         if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             return true;
@@ -277,7 +280,7 @@ fn confirm_exact_equilibrium_aos(
     false
 }
 
-fn confirm_exact_equilibrium_soa(
+fn confirm_stationary_torque_soa(
     problem: &ExchangeLlgProblem,
     magnetization: &VectorFieldSoA,
     ws: &mut FftWorkspace,
@@ -290,6 +293,15 @@ fn confirm_exact_equilibrium_soa(
     for _ in 0..2 {
         problem.effective_field_into_soa_ws(magnetization, ws, h_eff);
         *field_evaluations += 1;
+        if !h_eff
+            .x
+            .iter()
+            .chain(&h_eff.y)
+            .chain(&h_eff.z)
+            .all(|value| value.is_finite())
+        {
+            return false;
+        }
         let max_torque = compute_max_torque_soa_free(problem, magnetization, h_eff);
         if torque_confirmation.observe(control, energy_plateau.range(), max_torque) {
             return true;
@@ -588,7 +600,7 @@ fn execute_projected_gradient_bb_soa_with_observer(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
-        if !active_magnetization_soa_valid(problem, &m) {
+        if !energy.is_finite() || !active_magnetization_soa_valid(problem, &m) {
             numerical_error = true;
             break;
         }
@@ -618,7 +630,7 @@ fn execute_projected_gradient_bb_soa_with_observer(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                converged = confirm_exact_equilibrium_soa(
+                converged = confirm_stationary_torque_soa(
                     problem,
                     &m,
                     ws,
@@ -672,11 +684,21 @@ fn execute_projected_gradient_bb_soa_with_observer(
             line_search_backtracks += 1;
         }
         let Some(e_trial) = accepted_energy else {
-            // Exhausting the backtracking budget is a numerical stopping
-            // condition, not a successful stage completion.  Preserve the
-            // distinction so the runner reports a deterministic gradient /
-            // stagnation reason instead of the generic backend error.
-            numerical_stagnation = true;
+            // Confirm only the accepted state at the energy precision floor;
+            // rejected line-search candidates never become accepted steps.
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                converged = confirm_stationary_torque_soa(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+            }
+            numerical_stagnation = !converged;
             break;
         };
 
@@ -864,7 +886,7 @@ fn execute_projected_gradient_bb_aos_with_observer(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
-        if !active_magnetization_valid(problem, &m) {
+        if !energy.is_finite() || !active_magnetization_valid(problem, &m) {
             numerical_error = true;
             break;
         }
@@ -896,7 +918,7 @@ fn execute_projected_gradient_bb_aos_with_observer(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                converged = confirm_exact_equilibrium_aos(
+                converged = confirm_stationary_torque_aos(
                     problem,
                     &m,
                     ws,
@@ -954,10 +976,21 @@ fn execute_projected_gradient_bb_aos_with_observer(
             line_search_backtracks += 1;
         }
         let Some((m_trial, e_trial)) = accepted_trial else {
-            // No Armijo candidate survived the complete backtracking budget.
-            // This is recoverable numerical stagnation and must be surfaced
-            // as such in the completion contract.
-            numerical_stagnation = true;
+            // Confirm only the accepted state at the energy precision floor;
+            // rejected line-search candidates never become accepted steps.
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                converged = confirm_stationary_torque_aos(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+            }
+            numerical_stagnation = !converged;
             break;
         };
 
@@ -1174,7 +1207,7 @@ fn execute_nonlinear_cg_soa_with_observer(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
-        if !active_magnetization_soa_valid(problem, &m) {
+        if !energy.is_finite() || !active_magnetization_soa_valid(problem, &m) {
             numerical_error = true;
             break;
         }
@@ -1198,7 +1231,7 @@ fn execute_nonlinear_cg_soa_with_observer(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                converged = confirm_exact_equilibrium_soa(
+                converged = confirm_stationary_torque_soa(
                     problem,
                     &m,
                     ws,
@@ -1267,7 +1300,21 @@ fn execute_nonlinear_cg_soa_with_observer(
             line_search_backtracks += 1;
         }
         let Some(e_new) = accepted_energy else {
-            numerical_stagnation = true;
+            // Confirm only the accepted state at the energy precision floor;
+            // rejected line-search candidates never become accepted steps.
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                converged = confirm_stationary_torque_soa(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+            }
+            numerical_stagnation = !converged;
             break;
         };
 
@@ -1415,7 +1462,7 @@ fn execute_nonlinear_cg_aos_with_observer(
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
-        if !active_magnetization_valid(problem, &m) {
+        if !energy.is_finite() || !active_magnetization_valid(problem, &m) {
             numerical_error = true;
             break;
         }
@@ -1440,7 +1487,7 @@ fn execute_nonlinear_cg_aos_with_observer(
         }
         if crate::relaxation::direct_minimizer::direct_minimizer_gradient_degenerate(g_norm_sq) {
             if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
-                converged = confirm_exact_equilibrium_aos(
+                converged = confirm_stationary_torque_aos(
                     problem,
                     &m,
                     ws,
@@ -1516,7 +1563,21 @@ fn execute_nonlinear_cg_aos_with_observer(
             line_search_backtracks += 1;
         }
         let Some((m_new, e_new)) = accepted_trial else {
-            numerical_stagnation = true;
+            // Confirm only the accepted state at the energy precision floor;
+            // rejected line-search candidates never become accepted steps.
+            if torque_below_threshold && control.stop.energy_tolerance_j.is_none() {
+                converged = confirm_stationary_torque_aos(
+                    problem,
+                    &m,
+                    ws,
+                    control,
+                    &energy_plateau,
+                    &mut torque_confirmation,
+                    &mut h_eff,
+                    &mut field_evaluations,
+                );
+            }
+            numerical_stagnation = !converged;
             break;
         };
 
@@ -1966,6 +2027,121 @@ mod tests {
         assert!(!result.converged);
         assert_eq!(result.steps_taken, 0);
         assert_eq!(result.final_magnetization, initial);
+    }
+
+    #[test]
+    fn direct_minimizers_confirm_torque_at_energy_roundoff_without_fake_steps() {
+        let problem = direct_minimizer_problem();
+        // A nonzero tangent gradient whose Zeeman energy rounds to the exact
+        // minimum. Strict Armijo cannot accept another representable decrease.
+        let initial = vec![[2.1e-11, 0.0, 1.0]; 4];
+        for algorithm in [
+            RelaxationAlgorithmIR::ProjectedGradientBb,
+            RelaxationAlgorithmIR::NonlinearCg,
+        ] {
+            for soa in [false, true] {
+                for (threshold, energy_stop, expect_converged) in [
+                    (1e-3, None, true),
+                    (1e-9, None, false),
+                    (1e-3, Some(1e-60), false),
+                ] {
+                    let mut control = control(Some(threshold), energy_stop);
+                    control.algorithm = algorithm;
+                    control.stop.max_steps = Some(4);
+                    let mut ws = problem.create_workspace();
+                    let expected_energy = if soa {
+                        let m = VectorFieldSoA::from_aos(&initial);
+                        let mut scratch = VectorFieldSoA::zeros(initial.len());
+                        problem.total_energy_from_soa_ws(&m, &mut ws, &mut scratch)
+                    } else {
+                        problem.total_energy_from_vectors_ws(&initial, &mut ws)
+                    };
+                    let result = match (algorithm, soa) {
+                        (RelaxationAlgorithmIR::ProjectedGradientBb, false) => {
+                            execute_projected_gradient_bb_aos(&problem, &initial, &mut ws, &control)
+                        }
+                        (RelaxationAlgorithmIR::ProjectedGradientBb, true) => {
+                            execute_projected_gradient_bb_soa(&problem, &initial, &mut ws, &control)
+                        }
+                        (RelaxationAlgorithmIR::NonlinearCg, false) => {
+                            execute_nonlinear_cg_aos(&problem, &initial, &mut ws, &control)
+                        }
+                        (RelaxationAlgorithmIR::NonlinearCg, true) => {
+                            execute_nonlinear_cg_soa(&problem, &initial, &mut ws, &control)
+                        }
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        result.converged, expect_converged,
+                        "{algorithm:?} soa={soa} torque={threshold} energy={energy_stop:?}"
+                    );
+                    assert_eq!(result.numerical_stagnation, !expect_converged);
+                    assert!(!result.numerical_error);
+                    assert_eq!(result.steps_taken, 0);
+                    assert_eq!(result.final_magnetization, initial);
+                    assert_eq!(result.final_energy, expected_energy);
+                    assert_eq!(result.last_accepted_step_m_per_a, None);
+                    assert_eq!(result.final_energy_plateau_range_j, None);
+                    assert!(result.line_search_backtracks >= 20);
+                    assert_eq!(
+                        result.field_evaluations,
+                        if expect_converged { 3 } else { 1 }
+                    );
+                    assert!(result.final_max_torque > 0.0);
+                    if expect_converged {
+                        assert!(result.final_max_torque <= threshold);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stationary_torque_confirmation_rejects_fresh_threshold_failure_and_nonfinite_field() {
+        let initial = vec![[2.1e-11, 0.0, 1.0]; 4];
+        for soa in [false, true] {
+            for nonfinite in [false, true] {
+                let mut problem = direct_minimizer_problem();
+                if nonfinite {
+                    problem.terms.external_field = Some([f64::NAN, 0.0, 7.5e4]);
+                }
+                let control = control(Some(1e-9), None);
+                let mut confirmation = RelaxationTorqueConfirmation::default();
+                // A stale low-torque sample must not certify a new bad field.
+                assert!(!confirmation.observe(&control, None, 0.0));
+                let mut ws = problem.create_workspace();
+                let mut calls = 0;
+                let plateau = RelaxationEnergyPlateauWindow::default();
+                let confirmed = if soa {
+                    let m = VectorFieldSoA::from_aos(&initial);
+                    let mut h = VectorFieldSoA::zeros(4);
+                    confirm_stationary_torque_soa(
+                        &problem,
+                        &m,
+                        &mut ws,
+                        &control,
+                        &plateau,
+                        &mut confirmation,
+                        &mut h,
+                        &mut calls,
+                    )
+                } else {
+                    let mut h = vec![[0.0; 3]; 4];
+                    confirm_stationary_torque_aos(
+                        &problem,
+                        &initial,
+                        &mut ws,
+                        &control,
+                        &plateau,
+                        &mut confirmation,
+                        &mut h,
+                        &mut calls,
+                    )
+                };
+                assert!(!confirmed);
+                assert_eq!(calls, if nonfinite { 1 } else { 2 });
+            }
+        }
     }
 
     #[test]

@@ -3310,6 +3310,15 @@ mod dependency_tests {
         .unwrap();
         assert_eq!(derived, resolved_inputs());
 
+        let mut captured=derived.clone();
+        captured.get_mut("initial_state").unwrap().study_artifact=Some(fullmag_application::ResolvedStudyArtifact {
+            artifact_id:"artifact-source".into(),object_ref:"c".repeat(64),data_kind:"state".into(),
+            codec_id:"fullmag.magnetization-state".into(),codec_version:"1".into(),
+        });
+        let replayed=resolve_step_output_inputs("run-study-dependency",&ports,&captured,&run_catalog,Some(&artifact_catalog)).unwrap();
+        assert_eq!(replayed,captured,"revalidation preserves the typed binding for canonical manifest checks");
+
+
         let mut forged = resolved_inputs();
         forged
             .get_mut("initial_state")

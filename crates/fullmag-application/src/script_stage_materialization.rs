@@ -866,6 +866,11 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
     }
 }
 
+pub(crate) fn compatible_physical_state_topology(previous: &ProblemIR, current: &ProblemIR) -> bool {
+    requested_device(previous) == requested_device(current)
+        && same_runtime_state_topology(previous, current)
+}
+
 fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> bool {
     previous.backend_policy.requested_backend == current.backend_policy.requested_backend
         && previous.backend_policy.execution_precision == current.backend_policy.execution_precision
@@ -2189,11 +2194,16 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
         "max_steps": "",
         "sampling": {"outputs": [{"kind": "scalar", "name": "E_total", "every_seconds": 1e-12}]},
         "spin_wave_response": null,
-    })).unwrap();
+    }))
+    .unwrap();
     let materialize = |source: &str, payload: &BTreeMap<String, Value>| {
         materialize_pipeline_primitive(
-            &mut base.clone(), &ScriptAntennaAuthoringInventory::default(),
-            "run", Some(source), payload, None,
+            &mut base.clone(),
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some(source),
+            payload,
+            None,
         )
     };
     assert!(materialize("ui_authored", &payload).is_err());
@@ -2203,18 +2213,144 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
         panic!("expected an imported Run");
     };
     let fullmag_ir::DynamicsIR::Llg {
-        integrator, fixed_timestep, adaptive_timestep, field_refresh, ..
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        field_refresh,
+        ..
     } = dynamics;
     assert_eq!(integrator, "rk4");
     assert_eq!(*fixed_timestep, Some(2e-15));
     assert!(adaptive_timestep.is_none());
-    assert_eq!(field_refresh.as_ref().and_then(|refresh| refresh.demag_interval_s), Some(5e-12));
+    assert_eq!(
+        field_refresh
+            .as_ref()
+            .and_then(|refresh| refresh.demag_interval_s),
+        Some(5e-12)
+    );
     assert!(matches!(sampling.outputs.as_slice(),
         [OutputIR::Scalar { name, every_seconds, .. }] if name == "E_total" && *every_seconds == 1e-12
     ));
+    let mut malformed = payload.clone();
+    malformed.insert("fixed_timestep".into(), Value::String("NaN".into()));
+    assert!(materialize("script_imported", &malformed).is_err());
+    malformed = payload.clone();
+    malformed.insert("unknown_solver_control".into(), Value::Bool(true));
+    assert!(materialize("script_imported", &malformed).is_err());
+    malformed = payload.clone();
+    malformed.insert("integrator".into(), serde_json::json!({"bad": "rk4"}));
+    assert!(materialize("script_imported", &malformed).is_err());
     let mut unsupported = payload;
-    unsupported.insert("relax_algorithm".into(), Value::String("nonlinear_cg".into()));
+    unsupported.insert(
+        "relax_algorithm".into(),
+        Value::String("nonlinear_cg".into()),
+    );
     assert!(materialize("script_imported", &unsupported).is_err());
+}
+
+#[cfg(test)]
+#[test]
+fn script_imported_run_preserves_each_adaptive_snapshot_and_explicit_clear() {
+    let mut base = ProblemIR::bootstrap_example();
+    let mut last_payload = BTreeMap::new();
+    for (atol, initial, max) in [(1e-5, 1e-14, 1e-12), (1e-7, 2e-15, 2e-13)] {
+        let policy = serde_json::json!({
+            "tolerance_mode":"max_error", "atol":atol, "rtol":0.0,
+            "dt_initial":initial,"dt_min":1e-18,"dt_max":max,
+            "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+        });
+        let payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
+            "kind":"run", "entrypoint_kind":"build", "integrator":"rk45",
+            "fixed_timestep":"", "adaptive_timestep":policy, "until_seconds":"3e-11"
+        }))
+        .unwrap();
+        let stage = materialize_pipeline_primitive(
+            &mut base,
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some("script_imported"),
+            &payload,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &stage.ir.study else {
+            panic!("Run expected");
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            adaptive_timestep,
+            fixed_timestep,
+            ..
+        } = dynamics;
+        assert_eq!(
+            *adaptive_timestep,
+            Some(serde_json::from_value(policy).unwrap())
+        );
+        assert!(fixed_timestep.is_none());
+        assert_eq!(stage.until_seconds, 3e-11);
+        base = stage.ir;
+        last_payload = payload;
+    }
+    for value in [
+        Value::String("invalid".into()),
+        serde_json::json!({"atol":-1}),
+        {
+            let mut value = last_payload["adaptive_timestep"].clone();
+            value["atol"] = serde_json::json!(-1);
+            value
+        },
+        {
+            let mut value = last_payload["adaptive_timestep"].clone();
+            value["unknown_control"] = serde_json::json!(1);
+            value
+        },
+    ] {
+        let mut payload = last_payload.clone();
+        payload.insert("adaptive_timestep".into(), value);
+        assert!(materialize_pipeline_primitive(
+            &mut base.clone(),
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some("script_imported"),
+            &payload,
+            None
+        )
+        .is_err());
+    }
+    let mut conflict = last_payload.clone();
+    conflict.insert("fixed_timestep".into(), serde_json::json!(1e-15));
+    assert!(materialize_pipeline_primitive(
+        &mut base.clone(),
+        &ScriptAntennaAuthoringInventory::default(),
+        "run",
+        Some("script_imported"),
+        &conflict,
+        None
+    )
+    .is_err());
+    let mut missing = last_payload.clone();
+    missing.remove("adaptive_timestep");
+    let error = materialize_pipeline_primitive(&mut base.clone(),
+        &ScriptAntennaAuthoringInventory::default(), "run", Some("script_imported"), &missing, None).unwrap_err();
+    assert!(error.to_string().contains("export the source script again"));
+    last_payload.insert("adaptive_timestep".into(), Value::Null);
+    let stage = materialize_pipeline_primitive(
+        &mut base,
+        &ScriptAntennaAuthoringInventory::default(),
+        "run",
+        Some("script_imported"),
+        &last_payload,
+        None,
+    )
+    .unwrap()
+    .unwrap();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = stage.ir.study else {
+        panic!("Run expected");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        adaptive_timestep, ..
+    } = dynamics;
+    assert!(adaptive_timestep.is_none());
 }
 
 fn validate_pipeline_run_primitive_payload(
@@ -2237,9 +2373,18 @@ fn validate_pipeline_run_primitive_payload(
                     | STAGE_MAGNETIZATION_ASSIGNMENTS_KEY
             );
             let imported_fields = script_imported
-                && (matches!(key, "integrator" | "fixed_timestep" | "demag_interval_s" | "sampling" | "spin_wave_response")
-                    || (matches!(key, "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps")
-                        && !payload_field_is_set(payload, key)));
+                && (matches!(
+                    key,
+                    "integrator"
+                        | "fixed_timestep"
+                        | "adaptive_timestep"
+                        | "demag_interval_s"
+                        | "sampling"
+                        | "spin_wave_response"
+                ) || (matches!(
+                    key,
+                    "relax_algorithm" | "torque_tolerance" | "energy_tolerance" | "max_steps"
+                ) && !payload_field_is_set(payload, key)));
             !run_fields && !imported_fields
         })
         .cloned()
@@ -2267,13 +2412,44 @@ fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Val
     }
     if payload.contains_key("fixed_timestep") {
         *fixed_timestep = payload_f64(payload, "fixed_timestep")?;
-        if fixed_timestep.is_some() {
+        if fixed_timestep.is_some() && !payload.contains_key("adaptive_timestep") {
             *adaptive_timestep = None;
         }
     }
+    if let Some(value) = payload.get("adaptive_timestep") {
+        if let Some(object) = value.as_object() {
+            for key in object.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "tolerance_mode"
+                        | "atol"
+                        | "rtol"
+                        | "dt_initial"
+                        | "dt_min"
+                        | "dt_max"
+                        | "safety"
+                        | "growth_limit"
+                        | "shrink_limit"
+                        | "max_spin_rotation"
+                        | "norm_tolerance"
+                ) {
+                    bail!("script-imported Run adaptive_timestep has unknown field: {key}");
+                }
+            }
+        }
+        *adaptive_timestep = serde_json::from_value(value.clone())
+            .context("script-imported Run adaptive_timestep is invalid")?;
+    } else if fixed_timestep.is_none()
+        && (adaptive_timestep.is_some()
+            || matches!(integrator.as_str(), "auto" | "rk23" | "rk45" | "coupled_imex_ark2"))
+    {
+        bail!("script-imported adaptive Run lacks its adaptive_timestep snapshot; export the source script again");
+    }
     if payload.contains_key("demag_interval_s") {
         *field_refresh = payload_f64(payload, "demag_interval_s")?.map(|interval| {
-            fullmag_ir::FieldRefreshPolicyIR { demag_interval_s: Some(interval) }
+            fullmag_ir::FieldRefreshPolicyIR {
+                demag_interval_s: Some(interval),
+            }
         });
     }
     if let Some(value) = payload.get("sampling").filter(|value| !value.is_null()) {
