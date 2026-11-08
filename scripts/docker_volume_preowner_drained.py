@@ -954,9 +954,19 @@ def _ledger_policy(control, document, backend):
     volume = expected["volume_name"]
     _require(isinstance(volume, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}", volume),
              "group ledger volume name is invalid")
+    mount = "type=volume,src=" + volume + ",dst=/ledger,readonly,volume-nocopy"
+    subpath = expected.get("ledger_subpath", "")
+    if subpath:
+        from docker_build_control import docker_text
+        try:
+            ledger._validate_expected_storage(expected)
+            ledger._attest_private_subpath(backend, mounts[0], expected, subpath, docker_text)
+        except ledger.GroupLedgerError as error:
+            raise BuildControlError("Pre-owner drained stop: " + str(error)) from error
+        mount += ",volume-subpath=" + subpath
     args = _python_helper_args(control, "python3 -I -B -c " + shlex.quote(_LEDGER_PROBE), backend["Image"])
     index = args.index("--entrypoint")
-    args[index:index] = ["--mount", "type=volume,src=" + volume + ",dst=/ledger,readonly,volume-nocopy"]
+    args[index:index] = ["--mount", mount]
     result = bounded_capture(args, data=b"", timeout=45, maximum=64 * 1024)
     if result.returncode:
         raise BuildControlError("Pre-owner drained stop: group host ledger cannot be read under its lock")

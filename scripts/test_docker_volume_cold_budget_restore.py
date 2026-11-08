@@ -349,6 +349,60 @@ class HistoryTests(unittest.TestCase):
                 with self.assertRaises(BuildControlError): self.observe()
 
 
+class GroupLedgerProbeMountTests(unittest.TestCase):
+    def exercise(self, *, private, bad_subpath=False):
+        import shlex
+        import docker_group_ledger as ledger
+        project = "fullmag-ownerless-mount-test"
+        image = "sha256:" + "c" * 64
+        volume = ledger._control_volume(project) if private else ledger.VOLUME_PREFIX + "a" * 64
+        expected = ledger.profile("a" * 64, project, volume, image,
+                                  ledger_subpath="private/ledger" if private else "")
+        options = {"Subpath": "private/other" if bad_subpath else "private/ledger"} if private else {}
+        backend = {"Image": image, "Mounts": [{"Type": "volume", "Name": volume,
+                   "Destination": ledger.MOUNT_TARGET, "RW": True}],
+                   "HostConfig": {"Mounts": [{"Type": "volume", "Source": volume,
+                                   "Target": ledger.MOUNT_TARGET, "VolumeOptions": options}]}}
+        budget = {"cpu_millis": 8000, "memory_bytes": 63 * GIB,
+                  "storage_bytes": 0, "gpu_memory_bytes": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "WRITER.lock").touch()
+            raw = json.dumps({"schema_version": "host_resource_ledger.v4",
+                              "policy": {"host_id": "host", "topology_sha256": "d" * 64,
+                                         "total_budget": budget}}).encode()
+            (root / "HOST_RESOURCE_LEDGER.json").write_bytes(raw)
+            def helper(control, script, image_id):
+                self.assertEqual(image_id, image)
+                return ["run", "--entrypoint", "sh", image, "-ceu", script]
+            def capture(args, **kwargs):
+                mount = args[args.index("--mount") + 1]
+                want = "type=volume,src=" + volume + ",dst=/ledger,readonly,volume-nocopy"
+                if private:
+                    want += ",volume-subpath=private/ledger"
+                self.assertEqual(mount, want)
+                parts = shlex.split(args[-1])
+                code = parts[parts.index("-c") + 1].replace("'/ledger/ledger'", repr(str(root)))
+                return subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True)
+            with patch.object(ledger, "retained_profile", return_value=expected), \
+                 patch.object(preowner, "_python_helper_args", side_effect=helper), \
+                 patch.object(preowner, "bounded_capture", side_effect=capture), \
+                 patch("docker_build_control.docker_text", side_effect=AssertionError("Unexpected Docker lookup")):
+                result = preowner._ledger_policy(SimpleNamespace(), {}, backend)
+            self.assertEqual(result["total_budget"], budget)
+            self.assertEqual(result["ledger_sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_private_group_ledger_probe_keeps_the_attested_subpath(self):
+        self.exercise(private=True)
+
+    def test_legacy_group_ledger_probe_keeps_the_existing_volume_mount(self):
+        self.exercise(private=False)
+
+    def test_private_group_ledger_probe_rejects_a_different_subpath_before_read(self):
+        with self.assertRaises(BuildControlError):
+            self.exercise(private=True, bad_subpath=True)
+
+
 class OwnerlessTerminalReceiptTests(unittest.TestCase):
     def startup(self):
         return {
