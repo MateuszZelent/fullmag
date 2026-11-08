@@ -3482,6 +3482,9 @@ mod tests {
                 "region_id": region_id, "owner_object": "strip", "name": "core",
                 "shape": {"kind": "box", "size": [80e-9, 20e-9, 6e-9],
                     "center": [0.0, 0.0, 0.0]},
+                "texture_override": {"initial_magnetization": {
+                    "kind": "uniform", "value": [0.0, 1.0, 0.0]
+                }},
             })).unwrap());
         }
         problem.problem_meta.runtime_metadata.insert(
