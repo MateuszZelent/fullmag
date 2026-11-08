@@ -3453,6 +3453,77 @@ mod tests {
         assert!(!transiently_missing_store_file(&not_ready));
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_keeps_rt0_center_witness() {
+        use std::os::unix::process::ExitStatusExt;
+        let hexes = (0..12).map(|i| format!("{:016x}", u64::MAX - i)).collect::<Vec<_>>();
+        let witness = serde_json::json!({
+            "schema": "fullmag.rt0_center_failure.v1",
+            "element": "ffffffffffffffff", "axis": 0,
+            "vertex_ids": ["ffffffffffffffff", "0000000000000011", "0000000000000005", "0000000000000009"],
+            "vertex_xyz_bits": hexes, "vertex_j_bits": hexes,
+            "center_xyz_bits": ["8000000000000000", "0000000000000000", "0000000000000001"],
+            "center_j_bits": ["7ff8123456789abc", "8000000000000000", "7fefffffffffffff"],
+            "mean_bits": "4020000000000000", "scale_bits": "4020000000000000",
+            "difference_bits": "7ff8123456789abc", "budget_bits": "3d50000000000000",
+            "face_flux_bits": ["8000000000000000", "7fefffffffffffff", "0000000000000001", null]
+        });
+        let message = format!("closed-loop identity refused: cell-local J interpolation mismatch fullmag.rt0_center_failure.v1={witness}");
+        assert!(message.is_ascii() && message.len() <= 2048);
+        let error = anyhow::Error::new(fullmag_runner::RunError { message })
+            .context("execute canonical full-volume inspection")
+            .context("execute accepted worker Start");
+        let report = format!("{WORKER_FAILURE_MARKER} {error:#}");
+        assert!(report.len() <= WORKER_FAILURE_REPORT_BYTES);
+        let outcome = ObservedWorkerProcess {
+            output: Output {
+                status: ExitStatus::from_raw(256),
+                stdout: "x".repeat(2 * WORKER_FAILURE_STDOUT_BYTES).into_bytes(),
+                stderr: format!("{}\n{report}\n{}", "startup noise ".repeat(300), "native tail ".repeat(300)).into_bytes(),
+            },
+            timed_out: false, stop_requested: false, process_id: 7,
+            process_start_token: None, control_failure_reason: None,
+        };
+        let reason = worker_failure_reason(&outcome);
+        assert!(reason.len() <= 4096);
+        assert!(reason.ends_with(&"x".repeat(WORKER_FAILURE_STDOUT_BYTES)));
+        let parsed = |reason: &str| {
+            let (_, json) = reason.split_once(" fullmag.rt0_center_failure.v1=").unwrap();
+            serde_json::Deserializer::from_str(json).into_iter::<serde_json::Value>()
+                .next().unwrap().unwrap()
+        };
+        assert_eq!(parsed(&reason), witness);
+        let now = chrono::Utc::now();
+        let lease = FmsResourceLease {
+            schema_version: fullmag_session::FMS_RESOURCE_LEASE_SCHEMA.into(),
+            resource_id: "resource-rt0".into(), kind: fullmag_session::FmsResourceKind::Cpu,
+            budget: fullmag_session::FmsResourceBudget {
+                cpu_millis: 1000, memory_bytes: 1, gpu_memory_bytes: 0, storage_bytes: 0,
+            },
+            run_id: "run-rt0".into(), task_id: "task-rt0".into(), attempt_id: "attempt-rt0".into(),
+            ownership_epoch: 1, lease_token: "lease-rt0".into(),
+            state: fullmag_session::FmsResourceLeaseState::Active,
+            acquired_at: now, heartbeat_at: now, heartbeat_sequence: 2,
+            released_at: None, host_launch_binding: None,
+        };
+        let receipt = FmsWorkerProcessExitReceipt {
+            schema_version: FMS_WORKER_PROCESS_EXIT_RECEIPT_SCHEMA.into(), receipt_id: "exit-rt0".into(),
+            run_id: lease.run_id.clone(), task_id: lease.task_id.clone(), attempt_id: lease.attempt_id.clone(),
+            ownership_epoch: lease.ownership_epoch, resource_id: lease.resource_id.clone(),
+            lease_token: lease.lease_token.clone(), lease_heartbeat_sequence: lease.heartbeat_sequence,
+            process_id: 7, process_start_token: None, status_success: false, exit_code: Some(1),
+            timed_out: false, stop_requested: false, failure_reason: Some(reason), observed_at: now,
+        };
+        receipt.validate_for_lease(&lease).unwrap();
+        let decoded: FmsWorkerProcessExitReceipt =
+            serde_json::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        decoded.validate_for_lease(&lease).unwrap();
+        assert_eq!(decoded, receipt);
+        assert_eq!(parsed(decoded.failure_reason.as_deref().unwrap()), witness);
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_failure_reason_keeps_the_worker_error_report() {

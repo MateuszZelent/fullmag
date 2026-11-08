@@ -111,6 +111,11 @@ jobs:
                   f"FULLMAG_PROJECT_STORAGE_ROOT={layout['storage_root']}\n"
               )
           PY
+      - name: Run RT0 center refusal diagnostic contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib antenna_field_solution::closed_loop_identity_v2::affinity_tests
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler worker_failure_reason_
+
       - name: Run execution-intent roundtrip contracts
         env:
           RUST_MIN_STACK: 8388608

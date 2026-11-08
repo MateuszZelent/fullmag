@@ -170,3 +170,158 @@ fn affine_current_and_face_moments_cannot_be_changed_independently() {
     moments.insert([1, 3, 4], -0.125);
     assert!(verify_rt0_sample_moments(&MOMENT_POINTS, &[1, 2, 3, 4], &MOMENT_J, &moments).is_err());
 }
+
+
+fn center_current_cell() -> super::super::closed_loop_v2::ClosedLoopCurrentCellV2 {
+    super::super::closed_loop_v2::ClosedLoopCurrentCellV2 {
+        source_element_index: 0,
+        vertex_ids: [1, 2, 3, 4],
+        vertex_xyz_m: std::array::from_fn(|index| UNIT_TET[index / 3][index % 3]),
+        vertex_current_xyz_apm2: [8.0; 12],
+        center_xyz_m: [0.25; 3],
+        center_current_xyz_apm2: [8.0; 3],
+    }
+}
+
+fn center_failure_witness(error: &crate::types::RunError) -> serde_json::Value {
+    let (reason, witness) = error.message.split_once(" fullmag.rt0_center_failure.v1=")
+        .expect("the original J refusal must carry the complete diagnostic");
+    assert_eq!(reason, "closed-loop identity refused: cell-local J interpolation mismatch");
+    assert!(error.message.is_ascii());
+    assert!(error.message.len() <= 2048, "the supervisor must retain the entire witness");
+    serde_json::from_str(witness).expect("the witness must be complete JSON")
+}
+
+#[test]
+fn center_current_failure_diagnostic_preserves_bits_and_bound() {
+    let mut cell = center_current_cell();
+    cell.source_element_index = u64::MAX;
+    cell.vertex_ids = [u64::MAX, 17, 5, 9];
+    cell.vertex_xyz_m[0] = -0.0;
+    cell.vertex_current_xyz_apm2[1] = -0.0;
+    cell.vertex_current_xyz_apm2[2] = f64::from_bits(1);
+    cell.center_xyz_m[1] = -0.0;
+    cell.center_current_xyz_apm2 = [f64::from_bits(0x7ff8_1234_5678_9abc), -0.0, f64::MAX];
+    let points = std::array::from_fn(|local| {
+        std::array::from_fn(|axis| cell.vertex_xyz_m[3 * local + axis])
+    });
+    let faces = BTreeMap::from([
+        ([5, 9, 17], -0.0),
+        ([5, 9, u64::MAX], f64::MAX),
+        ([9, 17, u64::MAX], f64::from_bits(1)),
+    ]);
+    let error = super::verify_center_current(&cell, &points, 0, &faces).unwrap_err();
+    let hex = |value: f64| format!("{:016x}", value.to_bits());
+    let expected = serde_json::json!({
+        "schema": "fullmag.rt0_center_failure.v1",
+        "element": "ffffffffffffffff",
+        "axis": 0,
+        "vertex_ids": cell.vertex_ids.map(|id| format!("{id:016x}")),
+        "vertex_xyz_bits": cell.vertex_xyz_m.map(hex),
+        "vertex_j_bits": cell.vertex_current_xyz_apm2.map(hex),
+        "center_xyz_bits": cell.center_xyz_m.map(hex),
+        "center_j_bits": cell.center_current_xyz_apm2.map(hex),
+        "mean_bits": hex(8.0),
+        "scale_bits": hex(8.0),
+        "difference_bits": hex((8.0 - cell.center_current_xyz_apm2[0]).abs()),
+        "budget_bits": hex(128.0 * f64::EPSILON * 8.0),
+        "face_flux_bits": [Some(hex(-0.0)), Some(hex(f64::MAX)),
+            Some(hex(f64::from_bits(1))), None],
+    });
+    assert_eq!(center_failure_witness(&error), expected);
+}
+
+#[test]
+fn center_current_failure_diagnostic_keeps_gate() {
+    let mut cell = center_current_cell();
+    let budget = 128.0 * f64::EPSILON * 8.0;
+    let boundary = 8.0 + budget;
+    cell.center_current_xyz_apm2[0] = boundary;
+    assert!(super::verify_center_current(&cell, &UNIT_TET, 0, &BTreeMap::new()).is_ok());
+    cell.center_current_xyz_apm2[0] = f64::from_bits(boundary.to_bits() + 1);
+    let error = super::verify_center_current(&cell, &UNIT_TET, 0, &BTreeMap::new()).unwrap_err();
+    let witness = center_failure_witness(&error);
+    assert_eq!(witness["axis"], 0);
+    assert_eq!(witness["budget_bits"], format!("{:016x}", budget.to_bits()));
+    assert_eq!(witness["face_flux_bits"], serde_json::json!([null, null, null, null]));
+}
+
+// These fields only let the real owned-geometry verifier reach its first cell gate.
+// No accepted-source identity, moments or balance qualification is claimed.
+fn center_geometry_source(
+    cell: super::super::closed_loop_v2::ClosedLoopCurrentCellV2,
+) -> super::super::closed_loop_v2::ClosedLoopAcceptedSourceInputV2 {
+    use super::super::closed_loop_v2::{ClosedLoopAcceptedSourceInputV2, ClosedLoopSourceMetadataV2};
+    ClosedLoopAcceptedSourceInputV2 {
+        metadata: ClosedLoopSourceMetadataV2 {
+            prepared_execution_digest: String::new(),
+            accepted_charge_field_digest: String::new(),
+            accepted_source_state_digest: String::new(),
+            view_identity_digest: String::new(),
+            current_balance_certificate_digest: String::new(),
+            digest_encoding: String::new(),
+            periodic_operator_version: String::new(),
+            closure_operator_version: String::new(),
+            conservative_current_operator_version: String::new(),
+            weak_reaction_ledger_version: String::new(),
+            sampling_policy: String::new(),
+            source_current_orientation: String::new(),
+            source_current_a: 0.0,
+            source_absolute_flux_a: 0.0,
+            potential_jump_v: 0.0,
+            measured_potential_jump_v: 0.0,
+            gauge_mean_v: 0.0,
+            charge_relative_residual: 0.0,
+            max_paired_weak_flux_mismatch_a: 0.0,
+            terminal_observation_currents: BTreeMap::new(),
+        },
+        stable_vertex_ids: cell.vertex_ids.to_vec(),
+        vertex_xyz_m: UNIT_TET.to_vec(),
+        electric_potential_v: vec![0.0; 4],
+        conductivity_spm: vec![1.0; 4],
+        cells: vec![cell],
+        canonical_face_records: Vec::new(),
+        paired_weak_reactions: Vec::new(),
+        prepared_execution_preimage: Vec::new(),
+        accepted_charge_field_preimage: Vec::new(),
+        accepted_source_state_preimage: Vec::new(),
+        canonical_balance_certificate: Vec::new(),
+        authored_input_json: Vec::new(),
+    }
+}
+
+fn owned_center_failure(
+    cell: super::super::closed_loop_v2::ClosedLoopCurrentCellV2,
+) -> crate::types::RunError {
+    let source = center_geometry_source(cell);
+    let by_id = BTreeMap::from([(1, 0), (2, 1), (3, 2), (4, 3)]);
+    super::verify_owned_geometry(&source, &by_id, &BTreeMap::new(), &BTreeMap::new(), &[])
+        .unwrap_err()
+}
+
+#[test]
+fn center_current_failure_diagnostic_reports_first_current_axis() {
+    let mut cell = center_current_cell();
+    cell.center_current_xyz_apm2[0] = 9.0;
+    cell.center_current_xyz_apm2[1] = 10.0;
+    assert_eq!(center_failure_witness(&owned_center_failure(cell))["axis"], 0);
+}
+
+#[test]
+fn center_current_failure_diagnostic_preserves_interleaved_geometry_order() {
+    let mut cell = center_current_cell();
+    cell.center_current_xyz_apm2[0] = 9.0;
+    cell.center_xyz_m[1] = 0.5;
+    assert_eq!(center_failure_witness(&owned_center_failure(cell.clone()))["axis"], 0);
+    cell.center_xyz_m[0] = 0.5;
+    assert_eq!(owned_center_failure(cell).message,
+        "closed-loop identity refused: sampled center geometry mismatch");
+}
+
+#[test]
+fn center_current_failure_diagnostic_preserves_earlier_nonfinite_vertex_refusal() {
+    let mut cell = center_current_cell();
+    cell.vertex_current_xyz_apm2[0] = f64::from_bits(0x7ff8_1234_5678_9abc);
+    cell.center_current_xyz_apm2[0] = 9.0;
+    assert_eq!(owned_center_failure(cell).message, "closed-loop identity refused: nonfinite flux");
+}
