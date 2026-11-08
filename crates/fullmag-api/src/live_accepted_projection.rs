@@ -4452,6 +4452,70 @@ mod tests {
         (directory, store, context, catalog)
     }
 
+    #[tokio::test]
+    async fn accepted_terminal_stats_populate_run_energy_summary_without_typed_total_energy() {
+        let (_directory, store, context, catalog) = succeeded_projection_fixture();
+        let mut projection = load_durable_projection_with_journal(
+            store.root(),
+            &context,
+            None,
+            &mut None,
+            &mut |store, catalog, previous| {
+                let _writer = store.write_transaction().unwrap();
+                load_stage_journal_details(store, catalog, previous)
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(projection.latest_total_energy.is_some());
+        projection.latest_total_energy = None;
+
+        let stats = fullmag_runner::StepStats {
+            step: 1,
+            time: 0.0,
+            dt: 0.0,
+            e_ex: 1.2e-22,
+            e_demag: -2.2e-22,
+            e_ext: 3.2e-23,
+            e_ani: 4.2e-23,
+            e_dmi: -5.2e-23,
+            e_rotated_dmi: 6.2e-23,
+            e_total: -8.45818845777564e-22,
+            ..Default::default()
+        };
+        let final_task_id =
+            fullmag_session::task_id_for_study_step(&context.run_id, "step:run-3").unwrap();
+        let final_task = catalog
+            .tasks
+            .iter()
+            .find(|task| task.task_id == final_task_id)
+            .unwrap();
+        projection.terminal_stats = Some((
+            stats.clone(),
+            crate::types::AcceptedLiveScalarIdentity {
+                run_id: context.run_id.clone(),
+                task_id: final_task.task_id.clone(),
+                step_id: "step:run-3".into(),
+                case_id: "default".into(),
+                attempt_id: final_task.attempt_id.clone().unwrap(),
+                ownership_epoch: final_task.ownership_epoch.unwrap(),
+            },
+        ));
+
+        let state = projection_workspace(&context).await;
+        apply_projection(&state, &context, projection).await.unwrap();
+        let current = state.current_live_state.read().await;
+        let run = current.as_ref().unwrap().run.as_ref().unwrap();
+        assert_eq!(run.final_time, Some(0.0));
+        assert_eq!(run.final_e_ex, Some(stats.e_ex));
+        assert_eq!(run.final_e_demag, Some(stats.e_demag));
+        assert_eq!(run.final_e_ext, Some(stats.e_ext));
+        assert_eq!(run.final_e_ani, Some(stats.e_ani));
+        assert_eq!(run.final_e_dmi, Some(stats.e_dmi));
+        assert_eq!(run.final_e_rotated_dmi, Some(stats.e_rotated_dmi));
+        assert_eq!(run.final_e_total, Some(stats.e_total));
+    }
+
     #[test]
     fn journal_busy_does_not_block_three_qualified_completed_stages_and_same_cursor_enrichment() {
         let (_directory, store, context, catalog) = succeeded_projection_fixture();
