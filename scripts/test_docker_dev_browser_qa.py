@@ -3672,7 +3672,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                     "receipt": {"schema_version": "preparation_receipt.v1", "preparation_id": "prep-held",
                         "run_id": new_run, "plan_fingerprint": "sha256:" + "a" * 64,
                         "payload_sha256": "b" * 64},
-                    "stages": [{"id": stage_id, "status": state}
+                    "stages": [{"stage_id": stage_id, "status": state}
                         for stage_id, state in prep_stage_statuses],
                 },
             }
@@ -4112,6 +4112,47 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
         with self.assertRaises(qa.BuildControlError):
             qa._parse_study_stage_rerun_result(
                 json.dumps(third_run).encode(), third_run["public_url"], third_run["probe_url"], sources, mode)
+
+
+    def test_renderer_prepared_grid_summary_obeys_the_host_report_schema(self):
+        qa = self.qa
+        sources = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
+        full = self.result_fixture("fdm-cell-study", sources)
+        prepared = full["prepared_grid_run"]
+        commands = prepared["commands"]
+        snapshot = {
+            "currentRun": {"run_id": prepared["run_id"], "status": prepared["run_status"]},
+            "solverStatus": {"runtime_state": prepared["solver_state"]},
+            "execution": {"runtime_state": prepared["execution_state"],
+                          "stage_statuses": prepared["stage_statuses"],
+                          "completed_stage_indexes": prepared["completed_stage_indexes"]},
+            "stageIds": prepared["stage_ids"], "sceneStageIds": prepared["authored_stage_ids"],
+            "sceneProfile": prepared["scene_profile"], "profile": prepared["profile"],
+            "scene": {"revision": prepared["scene_revision"]}, "precondition": prepared["precondition"],
+            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"]}},
+            "commands": {"revision": commands["resource_revision"], "pending_count": 0, "running_count": 0,
+                         "commands": [{"status": state, "command_id": commands["last_command_id"]}
+                                      for state in commands["terminal_statuses"]]},
+            "preparation": {**prepared["preparation"],
+                            "stages": [{"id": stage["stage_id"], "status": stage["status"]}
+                                       for stage in prepared["preparation"]["stages"]]},
+        }
+        javascript = """const r=await import(process.argv[1]);
+process.stdout.write(JSON.stringify(r.studyStagePreparedGridSummary(JSON.parse(process.argv[2]))));"""
+        result = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", javascript,
+             (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri(), json.dumps(snapshot)],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered, prepared)
+        qa._validate_study_fdm_prepared_grid_run(
+            rendered, previous_run=full["before"]["run_id"],
+            previous_domain_generation=full["before"]["profile"]["domain_generation_id"],
+            cell_receipt=full["fdm_cell_receipt"], previous_precondition=full["before"]["precondition"],
+            expected_script_sha256=sources["fixture"], expected_last_command_id=commands["last_command_id"],
+        )
 
 
     def test_fdm_resume_keeps_current_request_counts_and_checks_the_joined_cycle(self):

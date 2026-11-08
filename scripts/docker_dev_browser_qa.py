@@ -3832,9 +3832,9 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     ]
     prep_stages = preparation.get("stages")
     if (not isinstance(prep_stages, list) or len(prep_stages) != len(expected_prep_stages)
-            or any(not isinstance(stage, Mapping) or set(stage) != {"id", "status"}
+            or any(not isinstance(stage, Mapping) or set(stage) != {"stage_id", "status"}
                    for stage in prep_stages)
-            or [(stage.get("id"), stage.get("status")) for stage in prep_stages] != expected_prep_stages):
+            or [(stage.get("stage_id"), stage.get("status")) for stage in prep_stages] != expected_prep_stages):
         raise BuildControlError("FDM-cell-study preparation did not reach the exact ready frontier")
     return dict(value)
 

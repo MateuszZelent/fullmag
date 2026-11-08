@@ -1059,6 +1059,40 @@ function stableProjection(snapshot) {
   };
 }
 
+export function studyStagePreparedGridSummary(snapshot) {
+  const receipt = snapshot.preparation.receipt;
+  return {
+    run_id: snapshot.currentRun.run_id,
+    run_status: snapshot.currentRun.status,
+    solver_state: snapshot.solverStatus.runtime_state,
+    execution_state: snapshot.execution.runtime_state,
+    stage_ids: snapshot.stageIds,
+    authored_stage_ids: snapshot.sceneStageIds,
+    stage_statuses: snapshot.execution.stage_statuses,
+    completed_stage_indexes: snapshot.execution.completed_stage_indexes,
+    scene_profile: snapshot.sceneProfile,
+    profile: snapshot.profile,
+    scene_revision: snapshot.scene.revision ?? snapshot.scene.scene_revision,
+    precondition: snapshot.precondition,
+    commands: { resource_revision: snapshot.commands.revision,
+      count: snapshot.commands.commands.length,
+      last_command_id: snapshot.commands.commands.at(-1)?.command_id ?? null,
+      pending_count: snapshot.commands.pending_count, running_count: snapshot.commands.running_count,
+      terminal_statuses: snapshot.commands.commands.map((command) => command.status) },
+    preparation: {
+      preparation_id: snapshot.preparation.preparation_id,
+      revision: snapshot.preparation.revision,
+      resource_revision: snapshot.status.resources.simulation_preparation_revision,
+      status: snapshot.preparation.status,
+      active_stage_id: snapshot.preparation.active_stage_id ?? null,
+      failure: snapshot.preparation.failure ?? null,
+      receipt: { schema_version: receipt.schema_version, preparation_id: receipt.preparation_id,
+        run_id: receipt.run_id, plan_fingerprint: receipt.plan_fingerprint, payload_sha256: receipt.payload_sha256 },
+      stages: snapshot.preparation.stages.map((stage) => ({ stage_id: stage.id, status: stage.status })),
+    },
+  };
+}
+
 export async function runStudyStageRerun() {
   assert.equal(process.env.CONTROL_ROOM_BROWSER_QA_SCENARIO, scenario,
     "Managed Study stage rerun admission is required");
@@ -1360,39 +1394,6 @@ export async function runStudyStageRerun() {
       stageIds: [], resultIdentities: results, precondition };
   }
 
-  function preparedGridSummary(snapshot) {
-    const receipt = snapshot.preparation.receipt;
-    return {
-      run_id: snapshot.currentRun.run_id,
-      run_status: snapshot.currentRun.status,
-      solver_state: snapshot.solverStatus.runtime_state,
-      execution_state: snapshot.execution.runtime_state,
-      stage_ids: snapshot.stageIds,
-      authored_stage_ids: snapshot.sceneStageIds,
-      stage_statuses: snapshot.execution.stage_statuses,
-      completed_stage_indexes: snapshot.execution.completed_stage_indexes,
-      scene_profile: snapshot.sceneProfile,
-      profile: snapshot.profile,
-      scene_revision: snapshot.scene.revision ?? snapshot.scene.scene_revision,
-      precondition: snapshot.precondition,
-      commands: { resource_revision: snapshot.commands.revision,
-        count: snapshot.commands.commands.length,
-        last_command_id: snapshot.commands.commands.at(-1)?.command_id ?? null,
-        pending_count: snapshot.commands.pending_count, running_count: snapshot.commands.running_count,
-        terminal_statuses: snapshot.commands.commands.map((command) => command.status) },
-      preparation: {
-        preparation_id: snapshot.preparation.preparation_id,
-        revision: snapshot.preparation.revision,
-        resource_revision: snapshot.status.resources.simulation_preparation_revision,
-        status: snapshot.preparation.status,
-        active_stage_id: snapshot.preparation.active_stage_id ?? null,
-        failure: snapshot.preparation.failure ?? null,
-        receipt: { schema_version: receipt.schema_version, preparation_id: receipt.preparation_id,
-          run_id: receipt.run_id, plan_fingerprint: receipt.plan_fingerprint, payload_sha256: receipt.payload_sha256 },
-        stages: snapshot.preparation.stages.map((stage) => ({ stage_id: stage.id, status: stage.status })),
-      },
-    };
-  }
 
   function summary(snapshot) {
     const value = {
@@ -1854,9 +1855,9 @@ export async function runStudyStageRerun() {
     beforeSnapshot = beforeClick;
     if (!isResume) before = summary(beforeClick);
     else {
-      assert.deepEqual(preparedGridSummary(beforeClick), preparedGridSummary(initial),
+      assert.deepEqual(studyStagePreparedGridSummary(beforeClick), studyStagePreparedGridSummary(initial),
         "The prepared FDM run or its receipt changed before the UI action");
-      preparedGridRun = preparedGridSummary(beforeClick);
+      preparedGridRun = studyStagePreparedGridSummary(beforeClick);
       phase = "fdm-grid-ready";
     }
     expectedPrecondition = beforeClick.precondition;
@@ -2003,7 +2004,7 @@ export async function runStudyStageRerun() {
       expectedPrecondition = postTexture.precondition;
       textureSourceScene = structuredClone(postTexture.scene);
       await selectStageBAuthoredInitialState(page);
-      assert.equal(await page.getByLabel("Initial magnetization", { exact: true }).inputValue(), "authored_stage",
+      assert.equal(await page.getByRole("combobox", { name: "Initial magnetization", exact: true }).inputValue(), "authored_stage",
         "The Stage B Inspector did not select its saved authored reset input");
       phase = "texture-ready";
     }
@@ -2149,7 +2150,7 @@ export async function runStudyStageRerun() {
         "The FDM grid refresh changed the accepted material properties");
       assert.deepEqual(beforeClick.resultIdentities, before.result_identities,
         "The original A-only result identities changed before the grid refresh");
-      preparedGridRun = preparedGridSummary(postGrid);
+      preparedGridRun = studyStagePreparedGridSummary(postGrid);
       gridRefreshReceipt.domain_transition = {
         before_domain_cell_count: beforeClick.profile.domain_cell_count,
         before_domain_generation_id: beforeClick.profile.domain_generation_id,
@@ -2206,7 +2207,7 @@ export async function runStudyStageRerun() {
       assert.equal(await row.count(), 1, "The texture-stage-B Inspector row is absent or duplicated");
       await row.click();
       await selectStageBAuthoredInitialState(page);
-      assert.equal(await page.getByLabel("Initial magnetization", { exact: true }).inputValue(), "authored_stage",
+      assert.equal(await page.getByRole("combobox", { name: "Initial magnetization", exact: true }).inputValue(), "authored_stage",
         "The real Stage B Inspector does not show the authored-stage initial state");
       action = page.getByRole("button", { name: "Run this stage", exact: true });
     } else {
