@@ -1132,6 +1132,29 @@ export function studyStagePreparedGridSummary(snapshot) {
   };
 }
 
+// API readiness can precede the React resource snapshot used by Explorer commands.
+// Keep the page mounted and wait for both visible projections before opening its menu.
+export function studyStagePreparedGridUiIsReady(expected) {
+  if (!expected || typeof expected.run_id !== "string" || !expected.run_id
+      || !Number.isSafeInteger(expected.cell_count) || expected.cell_count <= 0) return false;
+  const mesh = document.querySelector('[role="treeitem"][data-node-id="model:mesh"]');
+  if (!mesh || mesh.getClientRects().length === 0) return false;
+  const meshText = mesh.innerText;
+  if (!/\bMesh ready\b/i.test(meshText) || !/\bFDM\b/.test(meshText)
+      || !new RegExp("\\b" + expected.cell_count + "\\s+cells\\b").test(meshText)) return false;
+  return Array.from(document.querySelectorAll(".fm-inspector-field-row")).some((row) =>
+    row.getClientRects().length > 0
+    && row.querySelector(".fm-inspector-field-row__label")?.innerText.trim() === "Run"
+    && row.querySelector(".fm-inspector-field-row__value")?.innerText.trim() === expected.run_id);
+}
+
+export async function waitForStudyStagePreparedGridUi(page, expected, timeout) {
+  assert(Number.isFinite(timeout) && timeout > 0, "Prepared-grid UI wait must have a finite bound");
+  const ready = await page.waitForFunction(studyStagePreparedGridUiIsReady, expected,
+    { polling: "raf", timeout });
+  await ready.dispose();
+}
+
 export async function runStudyStageRerun() {
   assert.equal(process.env.CONTROL_ROOM_BROWSER_QA_SCENARIO, scenario,
     "Managed Study stage rerun admission is required");
@@ -2296,6 +2319,13 @@ export async function runStudyStageRerun() {
       const row = page.locator('[role="treeitem"][data-node-id="model:study"]');
       await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
       assert.equal(await row.count(), 1, "The Study Explorer row is absent or duplicated");
+      if (isGridMode) {
+        assert(preparedGridRun, "The grid UI wait requires its exact prepared run proof");
+        await row.click();
+        await waitForStudyStagePreparedGridUi(page, {
+          run_id: preparedGridRun.run_id, cell_count: expectedDomainCellCount,
+        }, Math.min(30_000, timerBudget()));
+      }
       await row.click({ button: "right" });
       action = page.getByRole("menuitem", { name: "Compute Study", exact: true });
     }

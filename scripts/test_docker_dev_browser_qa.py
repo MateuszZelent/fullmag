@@ -4141,6 +4141,80 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                 json.dumps(third_run).encode(), third_run["public_url"], third_run["probe_url"], sources, mode)
 
 
+    def test_prepared_grid_waits_for_the_rendered_run_and_mesh_before_compute(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the prepared-grid UI regression")
+        source = (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri()
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+const expected = {run_id: 'run-live-prepared', cell_count: 16};
+let state;
+const visible = () => state.visible === false ? [] : [{}];
+globalThis.document = {
+  querySelector(selector) {
+    assert.equal(selector, '[role="treeitem"][data-node-id="model:mesh"]');
+    return {innerText: state.mesh, getClientRects: visible};
+  },
+  querySelectorAll(selector) {
+    assert.equal(selector, '.fm-inspector-field-row');
+    return [{
+      getClientRects: visible,
+      querySelector(selector) {
+        if (selector === '.fm-inspector-field-row__label') return {innerText: state.label ?? 'Run'};
+        assert.equal(selector, '.fm-inspector-field-row__value');
+        return {innerText: state.run};
+      },
+    }];
+  },
+};
+const ready = {mesh: '[Mesh ready] — FDM · 8 × 2 × 1 / 16 cells', run: expected.run_id};
+for (const candidate of [
+  {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells', run: 'run-live-old'},
+  {...ready, run: 'run-live-old'},
+  {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells'},
+  {...ready, mesh: '[Unavailable] — FDM · 8 × 2 × 1 / 16 cells'},
+  {...ready, mesh: '[Mesh ready] — FDM · 80 × 2 × 1 / 160 cells'},
+  {...ready, visible: false},
+  {...ready, label: 'Historical run'},
+]) {
+  state = candidate;
+  assert.equal(runner.studyStagePreparedGridUiIsReady(expected), false);
+}
+state = ready;
+assert.equal(runner.studyStagePreparedGridUiIsReady(expected), true);
+assert.equal(runner.studyStagePreparedGridUiIsReady({...expected, run_id: ''}), false);
+assert.equal(runner.studyStagePreparedGridUiIsReady({...expected, cell_count: 0}), false);
+let polls = 0;
+let disposed = 0;
+let completed = false;
+const page = {
+  async waitForFunction(predicate, argument, options) {
+    assert.equal(predicate, runner.studyStagePreparedGridUiIsReady);
+    assert.deepEqual(argument, expected);
+    assert.deepEqual(options, {polling: 'raf', timeout: 1234});
+    for (const candidate of [
+      {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells', run: 'run-live-old'},
+      {...ready, run: 'run-live-old'},
+      ready,
+    ]) {
+      state = candidate;
+      polls++;
+      if (predicate(argument)) return {async dispose() { disposed++; }};
+      assert.equal(completed, false);
+    }
+    throw new Error('Render readiness did not settle');
+  },
+};
+await runner.waitForStudyStagePreparedGridUi(page, expected, 1234);
+completed = true;
+assert.equal(polls, 3);
+assert.equal(disposed, 1);
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source],
+                                capture_output=True, text=True, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_renderer_prepared_grid_summary_obeys_the_host_report_schema(self):
         qa = self.qa
         sources = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
