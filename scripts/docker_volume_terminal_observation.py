@@ -981,6 +981,11 @@ def _observation_stop(control, read_control, *, source_root, attempt, config_sha
                     and context.get("previous_config_sha256") == history.get("native_config_sha256")
                     and proof.get("native_config_sha256") == history.get("native_config_sha256"),
                     "terminal observation cold history no longer authorizes the original proof")
+            preflight_raw, preflight = managed(
+                read_control, "iteration/attempts/" + original_attempt + "/terminal-session-preflight.json")
+            require(sha(preflight_raw) == proof.get("preflight_raw_sha256")
+                    and sha(canonical(preflight)) == original_stop.get("terminal_session_preflight_sha256"),
+                    "terminal observation cold source preflight changed")
 
             run_id = portable(proof.get("run_id"))
             intent_sha = digest(proof.get("intent_sha256"))

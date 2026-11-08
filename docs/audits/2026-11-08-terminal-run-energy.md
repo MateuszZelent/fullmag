@@ -1,4 +1,9 @@
-# P22 — brak końcowej energii w podsumowaniu Study
+# P22 — energia końcowa Study i odtworzenie obserwacji
+
+**Odbiór tego fragmentu: PASS.** Po zarządzanej przebudowie przywrócono dokładnie
+pierwotny ukończony run. Wszystkie siedem energii w podsumowaniu API zgadza się
+ze skalarem i oryginalnym CAS. Przeglądarka pokazuje końcową energię również po
+`page.reload`. Nie uruchomiono ponownie Solve. Pełny plan P01–P22 pozostaje otwarty.
 
 ## Potwierdzona diagnoza
 
@@ -60,9 +65,50 @@ odrzucił niezgodną politykę. Nie zmieniono ledgeru. Istniejący wariant
 `a7315ac2…`, pierwotne 8 CPU / 32 GiB, zero aktywnych rezerwacji.
 Diagnostyczny backend został poprawnie zatrzymany.
 
-Pozostała luka recovery: `prepare_captured_context` nie łączy tego zapisu
-cold-budget z oryginalnym dowodem terminalnego runu i odmawia komunikatem
-`terminal observation requires the exact managed empty idle stop`.
-Poprawka tej kompozycji, przywrócone API oraz odbiór UI po reloadzie są
-**NOT VERIFIED**. Chroniona sesja użytkownika na 3242 pozostaje dostępna;
-nie wykonywano w niej Solve, Stop ani restartu.
+Brakującą kompozycję dodano w `a9a74ad4…`: istniejący typowany journal
+cold-budget jest ponownie uwierzytelniany, a oryginalny dowód obserwacji zostaje
+powiązany z dokładnym parentem, grupą, obrazem, historycznym drainem i pinami runu.
+Historyczny config dowodu pozostaje odrębny od bieżącego configu Compose.
+Nie powstaje uprawnienie do Start ani zmiana polityki ledgeru.
+[CI tej zmiany](https://github.com/MateuszZelent/fullmag/actions/runs/42528065717)
+przeszło; logi potwierdzają testy Rust oraz 108 testów fixture recovery.
+
+Próba recreate `121c7ce7…`, z jawnym budżetem backendu 8 CPU / 32 GiB i frontendu
+2 CPU / 8 GiB, zakończyła się sukcesem. DEV `1c4f1dba…` działa na kodzie
+`a9a74ad4…` na porcie 3243. Odczyt Docker inspect potwierdził budżety kontenerów.
+Nie zmieniono oryginalnych plików run_intent/run_catalog ani sześciu blobów CAS.
+W magazynie nadal są trzy receipty wyjścia workerów, po jednym na etap.
+
+| Dowód | Wynik |
+| --- | --- |
+| API: siedem energii vs oryginalne statystyki CAS | PASS, końcowe E = -8.45818845777564e-22 J |
+| Zgodność task / attempt / epoch / stage C i zegara | PASS, krok 1, czas 0 s |
+| Bieżący run i trzy ukończone etapy po odtworzeniu | PASS, oryginalny run i sesja |
+| Przeglądarka przed i po `page.reload` | PASS, API/run/scalar/summary zgodne, footer `-8.458188e-22 J` |
+| Canvas po reloadzie | PASS, WebGL2, kontekst zachowany, drawing buffer 617 × 495 |
+| Błędy konsoli, strony, HTTP i transportu | 0 |
+| Niedozwolone mutacje podczas odbioru | Brak; sześć GET i jeden niemutujący client ACK |
+
+Odbiór przeglądarki ma receipt `d7adaac858a74c77b1dcee59b6e302a6`.
+Wcześniejszy `dbff0ae6…` zachowano jako failed-confirmed: sonda loopback wygasła
+przed uruchomieniem przeglądarki podczas zimnej kompilacji frontendu. Po rozgrzaniu
+frontendu świeża próba przeszła bez restartu i bez zmiany limitów. Szczegółowe
+odczyty przed/po reloadzie zapisano w JSON obok raportu.
+
+## Poprawka po review i granice dowodów
+
+Review wykryło, że cold revalidation nie odczytuje ponownie oryginalnego pliku
+`terminal-session-preflight.json`. Test przechodzący przez `revalidate_context`
+potwierdził RED dla zmiany i usunięcia pliku. Dodano sprawdzenie surowego hasha
+z proof i kanonicznego hasha z oryginalnego stopu. Cztery suite'y fixture mają
+teraz 109 PASS. Historyczny plik rzeczywistej grupy odczytano ponownie i oba piny
+są zgodne. Moduł cold-budget oraz jego uwierzytelniany hash pozostały bez zmian.
+Ten dodatkowy guard działa w launcherze hosta; nie wymaga zmiany binarki native.
+Powyższy odbiór runtime/przeglądarki dotyczy jawnie kodu `a9a74ad4…`.
+
+Chroniona sesja użytkownika na 3242 pozostaje dostępna; nie wykonywano w niej
+Solve, Stop ani restartu. Odbiór używa FDM CPU/double i programowego WebGL2
+SwiftShader. Etapy mają `converged=false`, kończą się limitem kroków. Nie jest to
+kwalifikacja naukowa ani dowód działania FDM GPU, FEM CPU/GPU lub multilayer.
+S46 nadal wymaga rzeczywistego resetu regionu, disable/enable i eksportu/importu
+w UI. Ten raport nie zamyka macierzy S01–S46 ani całego P22.
