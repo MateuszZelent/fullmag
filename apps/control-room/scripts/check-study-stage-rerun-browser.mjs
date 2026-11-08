@@ -369,6 +369,13 @@ export function studyStageFdmGridRefreshRequestAllowed(request, context) {
   }
 }
 
+export function studyStageObserveResponse(promise, label) {
+  return promise.then(
+    (response) => ({ response, error: null }),
+    (error) => ({ response: null, error: label + boundedMessage(error) }),
+  );
+}
+
 export function studyStageCommandResponseOutcome(status, body) {
   if (Number.isSafeInteger(status) && status >= 200 && status < 300
       && plainRecord(body) && body.accepted === true
@@ -1422,28 +1429,28 @@ export async function runStudyStageRerun() {
       const applyGrid = page.getByRole("button", { name: "Apply Grid", exact: true });
       await applyGrid.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
       assert.equal(await applyGrid.isEnabled(), true, "The exact FDM grid edit is not commandable");
-      const globalResponseWait = page.waitForResponse((response) => {
+      const globalResponseWait = studyStageObserveResponse(page.waitForResponse((response) => {
         const request = response.request();
         const url = new URL(request.url());
         return request.method() === "POST" && url.pathname === modelTransactionsPath
           && request.headers()["x-fullmag-session-scope"] === sessionScope(session);
-      }, { timeout: Math.min(20_000, timerBudget()) }).catch((error) => {
-        throw new Error("P22 FDM cell merge-patch response was not observed: " + boundedMessage(error));
-      });
-      const gridResponseWait = page.waitForResponse((response) => {
+      }, { timeout: Math.min(20_000, timerBudget()) }),
+      "P22 FDM cell merge-patch response was not observed: ");
+      const gridResponseWait = studyStageObserveResponse(page.waitForResponse((response) => {
         const request = response.request();
         const url = new URL(request.url());
         if (request.method() !== "POST" || url.pathname !== commandPath
             || request.headers()["x-fullmag-session-scope"] !== sessionScope(session)) return false;
         try { return request.postDataJSON()?.kind === "fdm_grid_refresh"; }
         catch { return false; }
-      }, { timeout: Math.min(45_000, timerBudget()) }).catch((error) => {
-        throw new Error("P22 automatic FDM grid refresh response was not observed: " + boundedMessage(error));
-      });
+      }, { timeout: Math.min(45_000, timerBudget()) }),
+      "P22 automatic FDM grid refresh response was not observed: ");
       phase = "fdm-cell-submit";
       await applyGrid.click();
-      const globalResponse = await deadline(globalResponseWait, Math.min(20_000, timerBudget()),
+      const globalObservation = await deadline(globalResponseWait, Math.min(20_000, timerBudget()),
         "P22 FDM cell merge-patch response timed out; authoring outcome is unknown");
+      assert(globalObservation.response, globalObservation.error);
+      const globalResponse = globalObservation.response;
       if (!fdmCellRequest || fdmCellCount !== 1 || fdmCellAttemptCount !== 1 || !uiFdmCellProven) {
         throw new Error("The real Study Inspector did not submit exactly one guarded FDM cell merge-patch");
       }
@@ -1458,8 +1465,10 @@ export async function runStudyStageRerun() {
       assert(["fdm-grid-submit", "fdm-grid-dispatched", "fdm-grid-observing"].includes(phase),
         "Study did not arm its one automatic grid refresh after the ACK");
 
-      const gridResponse = await deadline(gridResponseWait, Math.min(45_000, timerBudget()),
+      const gridObservation = await deadline(gridResponseWait, Math.min(45_000, timerBudget()),
         "P22 automatic FDM grid refresh response timed out; outcome is unknown");
+      assert(gridObservation.response, gridObservation.error);
+      const gridResponse = gridObservation.response;
       if (!gridRefreshRequest || gridRefreshCount !== 1 || gridRefreshAttemptCount !== 1 || !uiGridRefreshProven) {
         throw new Error("The Study Inspector did not submit exactly one guarded automatic FDM grid refresh");
       }

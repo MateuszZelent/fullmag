@@ -3019,6 +3019,13 @@ const request={method:'POST',path:'/v2/sessions/current/simulation/commands',sco
   client_intent_id:'fdm-grid-refresh-123-1',kind:'fdm_grid_refresh',precondition:{scene_revision:10},reason:'study_global_commit',
 }};
 const gridContext={phase:'fdm-grid-submit',refreshCount:0,session,sceneRevision:10,existingIntentIds:new Set(['fdm-grid-refresh-old'])};
+const wait = runner.studyStageObserveResponse(Promise.reject(new Error('page closed')), 'grid: ');
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(await wait, {response:null,error:'grid: page closed'});
+const response = {status:200};
+assert.deepEqual(await runner.studyStageObserveResponse(Promise.resolve(response),'grid: '),
+  {response,error:null});
+
 assert.equal(runner.studyStageFdmGridRefreshRequestAllowed(request,gridContext),true);
 assert.equal(runner.studyStageFdmGridRefreshRequestAllowed(request,{...gridContext,refreshCount:1}),false);
 assert.equal(runner.studyStageFdmGridRefreshRequestAllowed({...request,body:{...request.body,reason:'explicit_build_grid'}},gridContext),false);
