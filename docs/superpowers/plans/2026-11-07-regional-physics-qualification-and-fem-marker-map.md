@@ -38,40 +38,40 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
 
 ## 2. Brakujące dowody fizyki i poprawki
 
-- [ ] Zestawić istniejące dowody z bieżącymi źródłami; nie powtarzać wyników,
+- [x] Zestawić istniejące dowody z bieżącymi źródłami; nie powtarzać wyników,
   których wejścia i warunki nadal mają zastosowanie. Zapisać pozostałe luki.
 - [x] Wykonać analityczne sprawdzenie redukcji FEM DG0 na dokładnym zbiorze
   elementów w zarządzanym runtime; odróżnić je od ABI bez MFEM.
-- [ ] Wykonać brakujące przypadki FDM CPU/CUDA fp64 i fp32: lokalne Ms/A/alpha,
+- [x] Wykonać brakujące przypadki FDM CPU/CUDA fp64 i fp32: lokalne Ms/A/alpha,
   wymiana i jej energia, demag, Zeeman, anizotropia, MEL, legalne DMI,
   dynamika i obserwable. Zakres deklaracji ograniczyć do zmierzonych kombinacji.
-- [ ] Dla niewspieranych kombinacji potwierdzić odmowy z publicznego planera
+- [x] Dla niewspieranych kombinacji potwierdzić odmowy z publicznego planera
   oraz na odpowiednich granicach native/FFI, bez cichego fallbacku.
-- [ ] Domknąć niezależne wyrocznie: pole jako pochodna energii, PBC i osie
+- [x] Domknąć niezależne wyrocznie: pole jako pochodna energii, PBC i osie
   długości 1/2, rozłączni właściciele, Ms-ważony moment, relaksacja i zbieżność.
   Tolerancje przypiąć przed pomiarem, zgodnie z notą i istniejącymi skryptami.
-- [ ] Każdy wykryty błąd: wykonywalna regresja RED, poprawka przyczyny,
+- [x] Każdy wykryty błąd: wykonywalna regresja RED, poprawka przyczyny,
   GREEN w dozwolonej bramce, commit spójnego fragmentu z dowodami.
 
 ## 3. Zwarte mapowanie FEM
 
-- [ ] Udokumentować osobne mapy marker u32 → dodatni zwarty atrybut i mapy
+- [x] Udokumentować osobne mapy marker u32 → dodatni zwarty atrybut i mapy
   odwrotne dla domen i granic; marker air=0 nie może kolidować z materiałem.
-- [ ] Zachować kanoniczne markery, ciągłe pole magnetyzacji i istniejące
+- [x] Zachować kanoniczne markery, ciągłe pole magnetyzacji i istniejące
   stopnie swobody. Koszt pamięci ma zależeć od liczby markerów, nie max-ID.
-- [ ] Przenieść wszystkie konsumujące ścieżki: builder, verify_marker_map,
+- [x] Przenieść wszystkie konsumujące ścieżki: builder, verify_marker_map,
   CPU/GPU demag, Robin/Dirichlet/PBC, modalne airbox/Floquet, transport,
   selektory i fingerprinty. Bez utożsamiania atrybutu z markerem publicznym.
-- [ ] Regresje obejmują 255/256/257/1000 markerów, wysokie rzadkie u32,
+- [x] Regresje obejmują 255/256/257/1000 markerów, wysokie rzadkie u32,
   air=0, granice 0 i 1, permutację etykiet, nieznany selector i zmianę mapy.
-- [ ] Zweryfikować import/assembly, H_ex/E_ex i pochodną energii dla FEM CPU
+- [x] Zweryfikować import/assembly, H_ex/E_ex i pochodną energii dla FEM CPU
   oraz obsługiwanej realizacji GPU/double. Ograniczenia DG0 pozostają jawne.
-- [ ] Porównać wspólny prosty problem FDM/FEM przy zagęszczaniu siatki;
+- [x] Porównać wspólny prosty problem FDM/FEM przy zagęszczaniu siatki;
   kryterium stanowi zbieżność fizyczna, bez wymagania bitowej równości.
 
 ## 4. Integracja i zamknięcie
 
-- [ ] Uaktualnić notę, source-map, macierz dowodów i stare checkboxy na
+- [x] Uaktualnić notę, source-map, macierz dowodów i stare checkboxy na
   podstawie rzeczywistych wyników, bez promocji builda do walidacji fizyki.
 - [ ] Review pełnej zmiany, wymagane CI, PR do master, merge i kontrola
   integracji w zachowanym głównym checkoutcie bez resetowania cudzej pracy.
@@ -83,3 +83,7 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
 - [ ] Konfiguracja hosta nie może wskazywać usuniętego worktree. Zapisać
   końcowy stan rejestru i zachowane zasoby. Nierozstrzygnięte bramki oznaczyć
   dokładnie `NOT VERIFIED`/`blocked`; nie oznaczać całego zadania jako zakończonego.
+
+Checkpoint 8.11: sekcje 2–3 mają dowody w raporcie audytu (native263de8/c1458c,
+convergence_a4 i relaxation_campaign_a3). Sekcja 4 pozostaje otwarta do
+końcowego CI, integracji oraz rzeczywistej retencji i wycofania worktree.

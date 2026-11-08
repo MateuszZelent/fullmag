@@ -622,3 +622,56 @@ Pozostaje terminalna relaksacja: publiczny PG-BB ujawnił błędną klasyfikacj�
 stanu poniżej progu torque jako stagnacji przy osiągniętej dokładności
 energii. Run i dane zachowano; poprawka, GREEN, CI oraz integracja/retencja
 są kolejnymi wymaganymi bramkami.
+
+## Terminalna relaksacja i poprawka precyzji energii
+
+Kolejna oficjalna przebudowa **PASS**: resume
+`067a9605d391473a9cda093ae7f0936f`, snapshot
+`ed69556f015b564f3cd061b3960f3dfeb111052b0b049e966e4290f8dcde5f9b`,
+pełna bramka FEM `c1458cd171cd444cabcf9a088c43ee16` **PASS**. Nowy publiczny
+PG-BB CPU potwierdza poprawkę; nie dopisano zaakceptowanych kroków.
+
+RED: `run-live-7eee4d5ebdaec5edf991db74ac640730f1ec926087fdfbcff4473b5862d188e6`
+zakończył się gradient/numerical_stagnation po 5 krokach, mimo torque
+8,359153142e-7 A/m < żądane 1e-3 A/m i dokładnego minimum energii.
+Ściśle malejący Armijo nie mógł uzyskać kolejnego reprezentowalnego spadku.
+Nowa gałąź CPU PG-BB/NCG AoS/SoA potwierdza świeżym skończonym polem tylko
+ostatni zaakceptowany stan poniżej jawnego progu torque, bez kryterium
+energii. Nie zmienia m/E, licznika kroków ani okna plateau. Powyżej progu,
+przy energii jako kryterium albo nieskończonych danych nie nadaje sukcesu.
+Kontrakt i regresje opisuje nota 0500. Zachowany RED jest samowystarczalny
+na WSL w `regional_relaxation_cpu_roundoff_red_a1.zarr`.
+
+Publiczny test A=0 został wcześniej poprawnie odrzucony podczas walidacji
+materiału; użyto dodatniego A=13 pJ/m. Publiczne CUDA PG-BB dla pojedynczej
+siatki odrzuca capability przed Run, bez fallbacku. Nie rozszerzano tej
+obsługi. CUDA testuje legalny LLG-overdamped, jawne alpha=1, RK4 dt=5e-12 s;
+CPU PG-BB zachowuje regionalne alpha=0,1/0,4. Oba regiony mają Ms=400/800 kA/m,
+osiem komórek 2 nm, Bz=0,05 T, brak demag. To test wspólnego minimum
+m=+z, E=-B sum(Ms V), nie parytet trajektorii różnych algorytmów.
+
+`regional_relaxation_campaign_a3.zarr` — **3/3 PASS**, nowe requesty:
+
+| Realizacja | Kroki | Torque [A/m] | Błąd względny energii | Max błąd składowej m | Defekt normy |
+|---|---:|---:|---:|---:|---:|
+| CPU/double PG-BB | 5 | 8,3592e-7 | 3,9184e-16 | 2,1009e-11 | 0 |
+| CUDA/double LLG | 830 | 9,3976e-4 | 1,9592e-16 | 2,3619e-8 | 4,441e-16 |
+| CUDA/single LLG | 306 | 95,0649 | 2,8015e-6 | 0,0023893 | 1,0564e-7 |
+
+Wszystkie kończą się `completed`, `converged=true`, reason=torque. Energie
+są monotoniczne w zadanej tolerancji. Requested/resolved intent zachowano;
+CUDA receipt potwierdza wymagane operatory na urządzeniu, zero fallback,
+host i unknown operators oraz single/double storage/compute/FFT zgodnie
+z intencją, z double reduction. Trzy skrypty i sąsiednie Zarr zawierają
+surowe pola, tabele, metadata, hashe oraz collector.
+
+GREEN runy: CPU `run-live-bbd5eb51479e0aab2a4555d43892bdf3c45c5e0c24f832ed3a428f7356582b48`,
+CUDA double `run-live-63a0818d54bd503e726f812eca06fc5b81b01033b8371a43489a378ffc14a417`,
+CUDA single `run-live-814f304e7130915e9156c1bf33654518819343dac3a10a28f75300f6beb0c761`.
+
+CI starszego head c861 ujawniło osobno brak osłony FULLMAG_HAS_MFEM_STACK przy
+polu selektora Poisson oraz uruchomienie nowej regresji NumPy przed instalacją
+zależności. Poprawiono osłonę (gałąź produkcyjna z MFEM nie zmienia zachowania)
+i kolejność joba. Weryfikacja konfiguracji bez MFEM, nowe regresje Rust oraz
+końcowe review/integracja/retencja pozostają bramkami CI i cyklu zamknięcia;
+nie są zastępowane powyższymi wynikami runtime.

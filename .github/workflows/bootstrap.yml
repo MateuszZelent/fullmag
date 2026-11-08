@@ -257,6 +257,8 @@ jobs:
       - name: Run deterministic eigen worker input contracts
         run: cargo test -p fullmag-runner eigen_k_worker --no-fail-fast
 
+      - name: Run CPU direct-minimizer precision-floor and accepted-state contracts
+        run: cargo test --locked -p fullmag-runner direct_minimizer_reference::tests --lib
       - name: Run native modal cancellation completion contract
         run: cargo test -p fullmag-runner native_modal_run_result_completion_matches_status --lib
 
@@ -993,7 +995,6 @@ jobs:
           python -B scripts/test_docker_preaccepted_clock.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_interaction_abi_checks.py -v
           python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regions_pbc_abi_checks.py -v
-          python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
           python -B scripts/test_docker_volume_dev_cancelled_activation.py -v
           python -B scripts/test_docker_volume_readiness_receipt.py -v
           python -B scripts/test_docker_volume_stop_failed.py -v
@@ -1110,6 +1111,9 @@ jobs:
         run: |
           python -m pip install 'pytest>=9,<10'
           python -m pip install -e 'packages/fullmag-py[meshing,figures]'
+
+      - name: Verify optimized regional convergence gate
+        run: python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
 
       - name: Verify canonical source snapshot identity
         run: python -m pytest -q scripts/test_capture_source_snapshot_identity.py
