@@ -4453,9 +4453,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_terminal_stats_populate_run_energy_summary_without_typed_total_energy() {
+    async fn accepted_terminal_stats_override_or_fill_typed_total_energy_summary() {
         let (_directory, store, context, catalog) = succeeded_projection_fixture();
-        let mut projection = load_durable_projection_with_journal(
+        let projection = load_durable_projection_with_journal(
             store.root(),
             &context,
             None,
@@ -4468,7 +4468,6 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(projection.latest_total_energy.is_some());
-        projection.latest_total_energy = None;
 
         let stats = fullmag_runner::StepStats {
             step: 1,
@@ -4490,30 +4489,243 @@ mod tests {
             .iter()
             .find(|task| task.task_id == final_task_id)
             .unwrap();
-        projection.terminal_stats = Some((
-            stats.clone(),
-            crate::types::AcceptedLiveScalarIdentity {
-                run_id: context.run_id.clone(),
-                task_id: final_task.task_id.clone(),
-                step_id: "step:run-3".into(),
-                case_id: "default".into(),
-                attempt_id: final_task.attempt_id.clone().unwrap(),
-                ownership_epoch: final_task.ownership_epoch.unwrap(),
-            },
-        ));
+        let identity = crate::types::AcceptedLiveScalarIdentity {
+            run_id: context.run_id.clone(),
+            task_id: final_task.task_id.clone(),
+            step_id: "step:run-3".into(),
+            case_id: "default".into(),
+            attempt_id: final_task.attempt_id.clone().unwrap(),
+            ownership_epoch: final_task.ownership_epoch.unwrap(),
+        };
 
-        let state = projection_workspace(&context).await;
-        apply_projection(&state, &context, projection).await.unwrap();
-        let current = state.current_live_state.read().await;
-        let run = current.as_ref().unwrap().run.as_ref().unwrap();
-        assert_eq!(run.final_time, Some(0.0));
-        assert_eq!(run.final_e_ex, Some(stats.e_ex));
-        assert_eq!(run.final_e_demag, Some(stats.e_demag));
-        assert_eq!(run.final_e_ext, Some(stats.e_ext));
-        assert_eq!(run.final_e_ani, Some(stats.e_ani));
-        assert_eq!(run.final_e_dmi, Some(stats.e_dmi));
-        assert_eq!(run.final_e_rotated_dmi, Some(stats.e_rotated_dmi));
-        assert_eq!(run.final_e_total, Some(stats.e_total));
+        for keep_typed_energy in [false, true] {
+            let mut candidate = projection.clone();
+            if !keep_typed_energy {
+                candidate.latest_total_energy = None;
+            }
+            candidate.terminal_stats = Some((stats.clone(), identity.clone()));
+
+            let state = projection_workspace(&context).await;
+            apply_projection(&state, &context, candidate).await.unwrap();
+            let current = state.current_live_state.read().await;
+            let run = current.as_ref().unwrap().run.as_ref().unwrap();
+            assert_eq!(run.final_time, Some(0.0));
+            assert_eq!(run.final_e_ex, Some(stats.e_ex));
+            assert_eq!(run.final_e_demag, Some(stats.e_demag));
+            assert_eq!(run.final_e_ext, Some(stats.e_ext));
+            assert_eq!(run.final_e_ani, Some(stats.e_ani));
+            assert_eq!(run.final_e_dmi, Some(stats.e_dmi));
+            assert_eq!(run.final_e_rotated_dmi, Some(stats.e_rotated_dmi));
+            assert_eq!(run.final_e_total, Some(stats.e_total));
+        }
+    }
+
+    fn terminal_scalar_stats_entry(
+        store: &fullmag_session::SessionStore,
+        record: &crate::accepted_field_materialization_worker::TerminalScalarStatsRecord,
+    ) -> fullmag_session::FmsArtifactCatalogEntry {
+        let artifact_id = format!(
+            "accepted-terminal-scalar-{}",
+            fullmag_session::canonical_json_sha256(&json!({
+                "run": &record.run_id,
+                "task": &record.task_id,
+                "step": &record.step_id,
+                "attempt": &record.attempt_id,
+                "epoch": record.ownership_epoch,
+                "source": &record.source,
+                "state": &record.state_object_ref,
+            }))
+        );
+        let bytes = serde_json::to_vec(record).unwrap();
+        let object_ref = store.cas().put(&bytes).unwrap();
+        fullmag_session::FmsArtifactCatalogEntry {
+            logical_path: format!(
+                "outputs/{}/{}/accepted-terminal-scalar-stats.v1.json",
+                record.task_id, record.attempt_id
+            ),
+            artifact_id,
+            task_id: record.task_id.clone(),
+            attempt_id: record.attempt_id.clone(),
+            ownership_epoch: record.ownership_epoch,
+            artifact_type: crate::accepted_field_materialization_worker::TERMINAL_SCALAR_ARTIFACT_TYPE.into(),
+            content_sha256: object_ref.clone(),
+            object_ref: Some(object_ref),
+            status: fullmag_session::FmsArtifactStatus::Published,
+            required: false,
+            study_output: None,
+        }
+    }
+
+    fn terminal_scalar_pin_fixture() -> (
+        tempfile::TempDir,
+        fullmag_session::SessionStore,
+        fullmag_session::FmsRunCatalog,
+        fullmag_session::FmsArtifactCatalog,
+        std::collections::BTreeMap<String, usize>,
+        VerifiedOutput,
+        fullmag_application::MagnetizationStateArtifact,
+        crate::accepted_field_materialization_worker::TerminalScalarStatsRecord,
+    ) {
+        use fullmag_session::*;
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let (completion, _) =
+            crate::accepted_field_materialization_worker::completion_tests::fixture(
+                fullmag_ir::StageStopReason::Torque,
+                true,
+            );
+        let stats = fullmag_runner::StepStats {
+            step: completion.clock.accepted_step,
+            time: completion.clock.time_seconds,
+            dt: completion.solver_dt_s,
+            e_total: -1.0e-22,
+            ..Default::default()
+        };
+        let record = crate::accepted_field_materialization_worker::TerminalScalarStatsRecord {
+            schema_version: "accepted_terminal_scalar_stats.v1".into(),
+            run_id: completion.run_id.clone(),
+            task_id: completion.task_id.clone(),
+            step_id: completion.step_id.clone(),
+            attempt_id: completion.attempt_id.clone(),
+            ownership_epoch: completion.ownership_epoch,
+            source: completion.source.clone(),
+            state_object_ref: completion.state_object_ref.clone(),
+            stats,
+        };
+        let entry = terminal_scalar_stats_entry(&store, &record);
+
+        let mut producer = task(FmsTaskLifecycle::Succeeded);
+        producer.attempt_id = Some(record.attempt_id.clone());
+        producer.ownership_epoch = Some(record.ownership_epoch);
+        producer.artifact_ids = vec![entry.artifact_id.clone()];
+        let run_catalog = FmsRunCatalog {
+            schema_version: FMS_RUN_CATALOG_SCHEMA.into(),
+            run_id: record.run_id.clone(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            tasks: vec![producer],
+        };
+        let artifact_catalog = FmsArtifactCatalog {
+            schema_version: FMS_ARTIFACT_CATALOG_SCHEMA.into(),
+            run_id: record.run_id.clone(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            entries: vec![entry],
+        };
+        let task_order = std::collections::BTreeMap::from([(record.task_id.clone(), 0)]);
+        let final_state = fullmag_application::MagnetizationStateArtifact {
+            step: record.stats.step,
+            time_s: record.stats.time,
+            solver_dt_s: record.stats.dt,
+            space_fingerprint: "layout".into(),
+            layout: json!({}),
+            provenance: json!({}),
+            values: vec![[0.0, 0.0, 1.0]],
+            native_state_snapshot: None,
+            native_node_map: None,
+        };
+        let output = VerifiedOutput {
+            task_order: 0,
+            step_id: record.step_id.clone(),
+            case_id: "default".into(),
+            object_ref: record.state_object_ref.clone(),
+            data_kind: "state".into(),
+            accepted_state_ref: Some(record.source.clone()),
+            decoded: fullmag_application::DecodedStudyArtifact::MagnetizationState(
+                final_state.clone(),
+            ),
+            completion: None,
+        };
+        (
+            directory,
+            store,
+            run_catalog,
+            artifact_catalog,
+            task_order,
+            output,
+            final_state,
+            record,
+        )
+    }
+
+    #[test]
+    fn terminal_stats_pin_requires_the_exact_succeeded_attempt_and_final_state() {
+        let (
+            _directory,
+            store,
+            run_catalog,
+            artifact_catalog,
+            task_order,
+            output,
+            final_state,
+            record,
+        ) = terminal_scalar_pin_fixture();
+        let qualified = terminal_stats_from_pinned_artifact(
+            &store,
+            &run_catalog,
+            &artifact_catalog,
+            &task_order,
+            &output,
+            &final_state,
+        )
+        .expect("exact terminal stats record must be accepted");
+        assert_eq!(qualified.0.e_total, record.stats.e_total);
+        assert_eq!(qualified.1.attempt_id, record.attempt_id);
+
+        let mutations = [
+            "missing pin",
+            "duplicate pin",
+            "foreign task attempt",
+            "foreign task epoch",
+            "foreign state object",
+            "foreign source clock",
+            "wrong stats clock",
+            "nonphysical stats",
+        ];
+        for (mutation, label) in mutations.into_iter().enumerate() {
+            let mut run = run_catalog.clone();
+            let mut artifacts = artifact_catalog.clone();
+            let mut candidate_output = output.clone();
+            match mutation {
+                0 => artifacts.entries.clear(),
+                1 => {
+                    let duplicate = artifacts.entries[0].clone();
+                    artifacts.entries.push(duplicate);
+                }
+                2 => run.tasks[0].attempt_id = Some("foreign-attempt".into()),
+                3 => run.tasks[0].ownership_epoch = Some(record.ownership_epoch + 1),
+                4 => candidate_output.object_ref = "f".repeat(64),
+                5 => candidate_output
+                    .accepted_state_ref
+                    .as_mut()
+                    .unwrap()
+                    .id
+                    .clock_digest = format!("sha256:{}", "e".repeat(64)),
+                6 => {
+                    let mut malformed = record.clone();
+                    malformed.stats.step += 1;
+                    artifacts.entries[0] = terminal_scalar_stats_entry(&store, &malformed);
+                }
+                _ => {
+                    let mut malformed = record.clone();
+                    malformed.stats.kind = fullmag_quantities::StepDataKind::SolverProgress;
+                    artifacts.entries[0] = terminal_scalar_stats_entry(&store, &malformed);
+                }
+            }
+            assert!(
+                terminal_stats_from_pinned_artifact(
+                    &store,
+                    &run,
+                    &artifacts,
+                    &task_order,
+                    &candidate_output,
+                    &final_state,
+                )
+                .is_none(),
+                "{label} mutation must fail closed"
+            );
+        }
     }
 
     #[test]
