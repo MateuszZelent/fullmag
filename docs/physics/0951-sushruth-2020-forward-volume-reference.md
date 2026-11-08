@@ -1038,13 +1038,111 @@ wyłącznie z czynnika i i poprawnej normalizacji GS. Nie ustalono przyczyny
 rozbieżnych ekstremów Fig.3, nie wyjaśniono całej relacji czerwonej/czarnej
 krzywej i nie uznano publikacji za odtworzoną.
 
+
+(sushruth-table-one-consistency)=
+## Spójność pochodnych wielkości Table I — prerejestracja 08.11.2026
+
+<!-- DOC-ANCHOR:sushruth-table-one-consistency -->
+
+Osobna diagnostyka sprawdza jednoczesną interpretację prędkości, szerokości
+linii i długości tłumienia przy tym samym $k$. Tabela nie określa tego $k$,
+więc rozbieżność nie dowodzi błędu całej publikacji ani zgodności Fullmaga.
+Parametry podstawowe pozostają dokładnie takie jak powyżej: $b_e=0.25$ T,
+$b_M=0.89$ T, $t=20$ nm, $\gamma_f=30$ GHz/T i $\alpha=0.01,0.1$.
+Dane porównawcze tabeli: $v_g=105$ m/s,
+$\Delta f_k=230$ MHz lub $2.3$ GHz oraz $L_\mathrm{att}=1.2$ lub $0.12$ µm.
+Źródła: Table I oraz równania2–5 i Appendix A [1].
+Nie zmieniamy żadnego parametru w celu dopasowania Fig.3.
+
+Dla dodatniego $k$ różniczkujemy istniejącą dyspersję wzorca; w zerze
+używamy granicy prawostronnej, ponieważ dyspersja zależy od $|k|$:
+
+```{math}
+:label: eq-sushruth-table-one-consistency
+
+x=kt,\qquad n'(x)=\frac{1-(1+x)e^{-x}}{x^2},\qquad
+v_g(k)=\frac{\gamma_B b_e b_M t\,n'(x)}
+ {2\sqrt{b_e[b_e+b_M n(k)]}},\qquad
+v_g(0^+)=\frac{\gamma_B b_Mt}{4},
+\qquad \Delta f_k=\frac{\Delta\omega_k}{2\pi},\qquad
+L_\mathrm{att}(k)=\frac{2|v_g(k)|}{\Delta\omega_k}
+                =\frac{|v_g(k)|}{\pi\Delta f_k}.
+```
+
+| Symbol | Znaczenie | SI |
+|---|---|---|
+| $x$ | bezwymiarowe $kt$ dla dodatniego wektora falowego | $1$ |
+| $n'(x)$ | pochodna czynnika odmagnesowania względem $x$ | $1$ |
+| $v_g(k)$ | pochodna $\partial\omega_k/\partial k$; dla ujemnego k zmienia znak | $\mathrm{m\,s^{-1}}$ |
+| $\Delta f_k$ | szerokość linii w cyklach na sekundę | $\mathrm{Hz}$ |
+| $L_\mathrm{att}(k)$ | długość tłumienia amplitudy przy tym samym k | $\mathrm m$ |
+
+Pozostałe symbole mają definicje i SI w tabelach właściciela powyżej.
+To różniczkowanie tego samego modelu bez wymiany, nie nowy solver fal spinowych.
+Małe $x$ korzysta z szeregu $n'(x)=1/2-x/3+x^2/8-x^3/30$.
+Nie jest to pochodna w punkcie ostrym k=0; granice lewa/prawa są przeciwne.
+
+### Zakres kodu, parametrów i realizacji
+
+scripts/reference_sushruth_2020_table_one.py::audit_table_one nie ma argumentów:
+odczytuje stałe Table I jako liczby SI i zapisuje wyłącznie raport JSON.
+Prywatny _dispersion otrzymuje podpisane k w rad/m, używa tych samych czterech
+stałych co film_susceptibility i zwraca f w Hz oraz prędkość w m/s.
+Brak nowego publicznego API, pola ProblemIR, normalizacji DSL, endpointu,
+capability lub kontraktu runtime. Requested intent to literalne parametry tabeli;
+resolved execution to interpretowany Python CPU, bez Fullmag/BORIS Solve.
+Wszystkie cztery realizacje FDM/FEM CPU/GPU pozostają not-applicable
+jako dowód wykonania tej diagnostyki. Źródło anteny nadal inspection-only.
+
+### Kontrola przed wykonaniem
+
+Test sprawdzi konwersję Hz/rad/s, symetrię dyspersji i antysymetrię prędkości.
+Niezależne centralne różnice częstości, bez użycia pochodnej implementacji,
+zastosują k=1e6/1e7/3.8e7 rad/m i kroki k/1000,k/2000,k/4000:
+błąd najdrobniejszego kroku ma być <1e-7 względnie i mniejszy od pierwszego.
+To tolerancja kontroli różniczkowania, nie kwalifikacja Fullmaga lub Fig.3.
+Dodatkowo statyczna podatność istniejącego wzorca sprawdzi zgodność tej samej
+dyspersji i parametrów w czterech punktach z tolerancją arytmetyki 2e-15.
+Wyniki oraz stan testów zostaną wpisane dopiero po wykonaniu.
+
+
+### Wykonana kontrola i ograniczenie wniosku — 08.11.2026
+
+Trzy testy PASS w istniejącym backendzie3203, Python3.10.12,0.057s, exit0.
+Zachowano niezmienione parametry i zadeklarowane tolerancje. Nie uruchomiono
+Fullmaga, BORIS, transportu, Prepare, H-only lub LLG.
+
+Dla obu par szerokości linii/długości z tabeli warunkowe podstawienie tej samej
+prędkości105m/s daje odpowiednio0.145315382823µm i0.0145315382823µm.
+Wpisane długości są8.25790068944 razy większe. Odwrotne podstawienie długości
+i szerokości implikuje867.079572391m/s. Nie jest to błąd konwersji2pi w naszym
+skrypcie: osobny test w Hz i rad/s oraz niezależne różnice dyspersji przeszły.
+
+Literalne parametry modelu dają przy k=0+ prędkość838.805238508m/s,
+f=7.5GHz oraz szerokość150MHz/1.5GHz i długość1.78µm/0.178µm.
+Nie zakładamy jednak, że wszystkie wiersze tabeli miały dotyczyć k=0.
+Wniosek dotyczy braku jednoczesnej zgodności wierszy przy tym samym k,
+nie dowodzi błędu autorów ani konkretnej przyczyny ekstremów Fig.3.
+
+Sam inny wpis prędkości w tabeli nie zmienia naszych całek transmisji:
+inductive_response używa dyspersji i podatności, a nie liczby105m/s z tabeli.
+Nie zastępujemy parametrów liczbą dopasowaną do obrazu. Zgodność z publikacją
+i źródło3D pozostają NOT VERIFIED.
+
+Kod, wynik, logi i źródła są również na ext4 WSL:
+examples/sushruth_2020_closed_gsg/table_one_consistency_20261108.
+Manifest11plików/9577452B:
+f3615a496bd9011bab89101465e02870d977899cc2355c9ffa37e4879e5e6082.
+Wynik4bd240539daf848e639c94c5068d52bfbee0466273d7e4be5d7f1351a1b867b4.
+[Pełne piny i zakres dowodu](../superpowers/plans/2026-11-08-sushruth-table-one-consistency-audit.md).
+
 (scientific-bibliography)=
 ## Bibliografia
 
 1. M. Sushruth i in., Electrical spectroscopy of forward volume spin waves in
    perpendicularly magnetized materials, Physical Review Research 2, 043203
    (2020), [DOI i pełny tekst](https://journals.aps.org/prresearch/pdf/10.1103/PhysRevResearch.2.043203).
-   Równania 1–3, 6–10, Table I i Appendix A. Licencja CC BY 4.0.
+   Równania 1–5, 6–10, Table I i Appendix A. Licencja CC BY 4.0.
 
 (source-code-index)=
 ## Indeks kodu źródłowego
@@ -1076,3 +1174,6 @@ krzywej i nie uznano publikacji za odtworzoną.
 | scripts/test_sushruth_voltage_observable.py | class SushruthVoltageObservableTests | Niezależna rzeczywista pochodna strumienia, jednostki i odmowy. |
 | scripts/test_sushruth_response_normalization.py | signed_integrals | Niezależne widma z położeń pasków i podpisana całka, bez użycia integrandu implementacji. |
 | scripts/test_sushruth_response_normalization.py | class ResponseNormalizationTests | Konsekwentna normalizacja zespolonego kwadratu, wspólna faza i negatywna kontrola mieszanego mianownika. |
+| scripts/reference_sushruth_2020_table_one.py | audit_table_one | Raport literalnych parametrów i warunkowej spójności Table I; bez Solve. |
+| scripts/reference_sushruth_2020_table_one.py | _dispersion | Różniczkowanie istniejącej dyspersji; granica prawostronna k=0. |
+| scripts/test_sushruth_table_one_audit.py | class SushruthTableOneAuditTests | Niezależne różnice częstości, jednostki i zgodność z podatnością. |

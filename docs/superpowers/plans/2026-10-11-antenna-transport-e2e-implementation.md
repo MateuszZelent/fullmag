@@ -5162,3 +5162,18 @@ Nie zatrzymano usług; build0, Prepare0, Submit0. Nie ponawiano operacji.
 [Diagnoza i konkretny projekt naprawy preflightu](2026-11-08-generated-authoring-restart-preflight-proposal.md).
 Wymagane rozszerzenie chronionego checkpointu nie jest wdrożone. Stary pakiet
 nadal działa. Nie ma nowegoeta/I/H ani potwierdzonej zgodności z publikacją.
+
+
+## Checkpoint 08.11.2026 — niezależna kontrola spójności Table I
+
+W czasie oczekiwania na decyzję o preflight wykonano odrębną diagnostykę,
+bez buildu lub nowego Prepare/Solve. Trzy testy PASS: jednostki, niezależne
+różnice dyspersji i zgodność ze statyczną podatnością istniejącego wzorca.
+Trzy pochodne wiersze Table I nie zgadzają się jednocześnie przy wspólnym k:
+długości różnią się około8.26 razy. Tabela nie podaje k, więc nie deklarujemy
+błędu autorów. Nie zmieniono parametrów ani wykresów do dopasowania Fig.3.
+Sam wpis105m/s nie jest wejściem naszej całki i nie wyjaśnia jej rozbieżności.
+
+[Raport, źródła i dowody](2026-11-08-sushruth-table-one-consistency-audit.md).
+Pełne11plików/9577452B zachowano i odczytano na ext4 WSL; manifestf3615a49….
+Kwalifikacja źródła GSG i reprodukcja publikacji pozostają otwarte.

@@ -184,6 +184,28 @@
         "sushruth-phase-integral",
         "sushruth-phase-tests"
       ]
+    },
+    {
+      "id": "eq-sushruth-table-one-consistency",
+      "symbols": [
+        "k",
+        "t",
+        "n",
+        "gammaB",
+        "be",
+        "bm",
+        "dw",
+        "table-x",
+        "table-nprime",
+        "table-vg",
+        "table-df",
+        "table-length"
+      ],
+      "sources": [
+        "sushruth-table-one-audit",
+        "sushruth-table-one-dispersion",
+        "sushruth-table-one-tests"
+      ]
     }
   ],
   "symbols": [
@@ -504,6 +526,36 @@
       "latex": "a(k)",
       "meaning": "rzeczywista funkcja taka, że idealne widmo GS wynosi $i a(k)$",
       "si_unit": "1"
+    },
+    {
+      "id": "table-x",
+      "latex": "x",
+      "meaning": "bezwymiarowe $kt$ dla dodatniego wektora falowego",
+      "si_unit": "1"
+    },
+    {
+      "id": "table-nprime",
+      "latex": "n'(x)",
+      "meaning": "pochodna czynnika odmagnesowania względem $x$",
+      "si_unit": "1"
+    },
+    {
+      "id": "table-vg",
+      "latex": "v_g(k)",
+      "meaning": "pochodna $\\partial\\omega_k/\\partial k$; dla ujemnego k zmienia znak",
+      "si_unit": "\\mathrm{m\\,s^{-1}}"
+    },
+    {
+      "id": "table-df",
+      "latex": "\\Delta f_k",
+      "meaning": "szerokość linii w cyklach na sekundę",
+      "si_unit": "\\mathrm{Hz}"
+    },
+    {
+      "id": "table-length",
+      "latex": "L_\\mathrm{att}(k)",
+      "meaning": "długość tłumienia amplitudy przy tym samym k",
+      "si_unit": "\\mathrm m"
     }
   ],
   "sources": [
@@ -659,6 +711,24 @@
       "path": "scripts/test_sushruth_response_normalization.py",
       "symbol": "class ResponseNormalizationTests",
       "responsibility": "Równoważność normalizacji, wspólna faza i negatywny przykład hybrydowy."
+    },
+    {
+      "id": "sushruth-table-one-audit",
+      "path": "scripts/reference_sushruth_2020_table_one.py",
+      "symbol": "audit_table_one",
+      "responsibility": "Raport literalnych parametrów i warunkowej spójności pochodnych Table I; bez dopasowania i Solve."
+    },
+    {
+      "id": "sushruth-table-one-dispersion",
+      "path": "scripts/reference_sushruth_2020_table_one.py",
+      "symbol": "_dispersion",
+      "responsibility": "Różniczkowanie istniejącej dyspersji; jawna granica prawostronna k=0."
+    },
+    {
+      "id": "sushruth-table-one-tests",
+      "path": "scripts/test_sushruth_table_one_audit.py",
+      "symbol": "class SushruthTableOneAuditTests",
+      "responsibility": "Niezależne różnice częstości, jednostki i zgodność z istniejącą podatnością."
     }
   ],
   "public_api": {
