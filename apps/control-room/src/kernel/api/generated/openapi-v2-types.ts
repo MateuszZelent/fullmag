@@ -32648,7 +32648,14 @@ export interface operations {
                     "application/json": components["schemas"]["SolverEnergyCurrentResource"];
                 };
             };
-            /** @description No solver energy data */
+            /** @description No current solver energy sample is available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;

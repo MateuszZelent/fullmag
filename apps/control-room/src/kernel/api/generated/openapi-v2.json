@@ -71580,8 +71580,11 @@
             },
             "description": "Current solver energy sample"
           },
+          "204": {
+            "description": "No current solver energy sample is available"
+          },
           "404": {
-            "description": "No solver energy data"
+            "description": "No active workspace"
           }
         },
         "tags": [

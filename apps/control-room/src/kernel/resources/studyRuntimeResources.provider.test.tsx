@@ -385,6 +385,102 @@ describe("production runtime command resource provider", () => {
     },
   );
 
+  it("clears current energy after a readiness race returns 204, then loads a qualified zero sample", async () => {
+    updateRealtimeCommunicationPolicy({ status_refresh_ms: 60_000 });
+    const statusLoad = vi.fn()
+      .mockResolvedValueOnce(solverEnergyStatusAt({ available: true }))
+      .mockResolvedValueOnce(
+        solverEnergyStatusAt({
+          available: true,
+          scalarRevision: 8,
+          stageRevision: 2,
+        }),
+      );
+    const energyRequests: Array<{
+      sessionScopeKey?: string;
+      signal: AbortSignal;
+    }> = [];
+    const currentEnergyLoad = vi.fn(
+      ({
+        sessionScopeKey,
+        signal,
+      }: {
+        sessionScopeKey?: string;
+        signal: AbortSignal;
+      }) => {
+        energyRequests.push({ sessionScopeKey, signal });
+        return energyRequests.length === 1
+          ? Promise.resolve(null)
+          : Promise.resolve(solverEnergySample(8, 0));
+      },
+    );
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {
+        sessions: {
+          ...sessionsApi,
+          current: { status: statusLoad },
+        },
+        simulation: {
+          solver: { energies: { current: currentEnergyLoad } },
+        },
+      },
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    let refetchStatus: () => void = () => undefined;
+    let energyState: ReturnType<typeof useSolverEnergyCurrentResource> | null = null;
+
+    function Harness() {
+      refetchStatus = useSessionStatusSelector((status) => status.refetch);
+      const energy = useSolverEnergyCurrentResource();
+      energyState = energy;
+      return <div>{energy.data?.total ?? "unavailable"}</div>;
+    }
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+      });
+
+      await vi.waitFor(() => {
+        expect(statusLoad).toHaveBeenCalledTimes(1);
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(1);
+        expect(container.textContent).toBe("unavailable");
+      });
+      expect(energyState).toMatchObject({ data: null, error: null, status: "ready" });
+      expect(energyRequests[0]?.sessionScopeKey).toBe(SCRATCH_SESSION_SCOPE_KEY);
+
+      await act(async () => refetchStatus());
+      await vi.waitFor(() => {
+        expect(statusLoad).toHaveBeenCalledTimes(2);
+        expect(currentEnergyLoad).toHaveBeenCalledTimes(2);
+        expect(container.textContent).toBe("0");
+      });
+      expect(energyState?.data?.total).toBe(0);
+      expect(energyState?.error).toBeNull();
+      expect(energyRequests.map((request) => request.sessionScopeKey)).toEqual([
+        SCRATCH_SESSION_SCOPE_KEY,
+        SCRATCH_SESSION_SCOPE_KEY,
+      ]);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("coalesces stage execution loads across consumers and retries an old-run response after run change", async () => {
     const nextRunStatus = deferred<ReturnType<typeof statusAt>>();
     const runAExecution = deferred<StageExecutionResource>();
