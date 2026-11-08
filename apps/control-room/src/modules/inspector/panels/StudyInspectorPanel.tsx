@@ -1360,6 +1360,7 @@ export function useStudyInspectorPanelController(
         () => kernel.api.model.commitTransaction(
           buildStudyGlobalMergePatch(state.globalDraft, {
             baseRevision,
+            baselineDraft: state.baselineGlobalDraft,
             executionProfileBound: profileBound,
             sessionDiscretization: resolveSessionDiscretization(runtimeStatus),
           }),

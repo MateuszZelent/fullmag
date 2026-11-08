@@ -11,6 +11,8 @@ import {
   normalizeDemagRealizationForLane,
   resolveFdmGridPreview,
   validateStudyGlobalDraft,
+  type StudyExecutionDiscretizationContext,
+  type StudyGlobalDraft,
 } from "./StudyGlobalAuthoringModel";
 
 function requireJsonObject(value: JsonValue | undefined): JsonObject {
@@ -1058,6 +1060,109 @@ describe("StudyGlobalAuthoringModel", () => {
       base_revision: 17,
       merge_patch: { study: { fdm: { default_cell: [2e-9, 2e-9, 1e-9] } } },
     });
+  });
+
+  it("narrows a sole FDM default-cell edit to the exact grid-policy leaf", () => {
+    const baseline = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: { default_cell: [2e-9, 2e-9, 2e-9] },
+      },
+    });
+    if (!baseline.fdm) throw new Error("expected an FDM baseline draft");
+    const draft: StudyGlobalDraft = {
+      ...baseline,
+      fdm: { ...baseline.fdm, defaultCell: "1e-9, 2e-9, 2e-9" },
+    };
+
+    expect(buildStudyGlobalMergePatch(draft, {
+      baseRevision: 17,
+      baselineDraft: baseline,
+      sessionDiscretization: "fdm",
+    })).toEqual({
+      kind: "merge_patch",
+      base_revision: 17,
+      merge_patch: {
+        study: { fdm: { default_cell: [1e-9, 2e-9, 2e-9] } },
+      },
+    });
+  });
+
+  it("keeps the full global patch for a no-change baseline", () => {
+    const baseline = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: { default_cell: [2e-9, 2e-9, 2e-9] },
+      },
+    });
+    const context: StudyExecutionDiscretizationContext = {
+      baseRevision: 17,
+      baselineDraft: baseline,
+      sessionDiscretization: "fdm",
+    };
+    const request = buildStudyGlobalMergePatch(baseline, context);
+
+    expect(request).toEqual(buildStudyGlobalMergePatch(baseline, {
+      baseRevision: 17,
+      sessionDiscretization: "fdm",
+    }));
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toHaveProperty("exchange_enabled");
+    expect(request.merge_patch.study.fdm).toHaveProperty("demag");
+  });
+
+  it.each([
+    ["solver", (draft: StudyGlobalDraft): StudyGlobalDraft => ({
+      ...draft,
+      solver: { ...draft.solver, fixDt: "1e-13" },
+    }), {}],
+    ["external field", (draft: StudyGlobalDraft): StudyGlobalDraft => ({
+      ...draft,
+      externalField: "0, 0, 1",
+    }), {}],
+    ["FDM demag", (draft: StudyGlobalDraft): StudyGlobalDraft => ({
+      ...draft,
+      fdm: { ...draft.fdm!, demagMode: "three_d" },
+    }), {}],
+    ["FDM per-magnet grid", (draft: StudyGlobalDraft): StudyGlobalDraft => ({
+      ...draft,
+      fdm: { ...draft.fdm!, perMagnet: '{"free":{"cell":[1e-9,1e-9,1e-9]}}' },
+    }), {}],
+    ["execution-profile field", (draft: StudyGlobalDraft): StudyGlobalDraft => ({
+      ...draft,
+      requestedDevice: "gpu",
+    }), { executionProfileBound: true }],
+  ] as Array<[
+    string,
+    (draft: StudyGlobalDraft) => StudyGlobalDraft,
+    Partial<StudyExecutionDiscretizationContext>,
+  ]>)("retains full serialization when an FDM cell edit also changes %s", (
+    _label,
+    addChange,
+    contextOverride,
+  ) => {
+    const baseline = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        fdm: { default_cell: [2e-9, 2e-9, 2e-9] },
+      },
+    });
+    if (!baseline.fdm) throw new Error("expected an FDM baseline draft");
+    const cellDraft: StudyGlobalDraft = {
+      ...baseline,
+      fdm: { ...baseline.fdm, defaultCell: "1e-9, 2e-9, 2e-9" },
+    };
+    const draft = addChange(cellDraft);
+    const context = {
+      baseRevision: 17,
+      sessionDiscretization: "fdm",
+      ...contextOverride,
+    };
+
+    expect(buildStudyGlobalMergePatch(draft, {
+      ...context,
+      baselineDraft: baseline,
+    })).toEqual(buildStudyGlobalMergePatch(draft, context));
   });
 
   it("serializes blank optional global fields as null merge-patch removals", () => {
