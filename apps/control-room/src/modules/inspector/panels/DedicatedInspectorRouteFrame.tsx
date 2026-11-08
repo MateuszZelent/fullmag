@@ -24,7 +24,9 @@ export function DedicatedInspectorRouteFrame({
   owner,
   selection,
 }: DedicatedInspectorRouteFrameProps) {
-  if (owner === "object.geometry" || owner === "builder.primitive") {
+  // These panels own their resource state and use the shared Inspector identity.
+  // A mesh cell has no execution lifecycle to fill the generic result facets.
+  if (owner === "object.geometry" || owner === "builder.primitive" || owner === "fdm.cell") {
     return (
       <div
         className="fm-inspector-route fm-inspector-route--dedicated"

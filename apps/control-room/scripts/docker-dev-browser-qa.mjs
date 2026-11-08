@@ -181,6 +181,96 @@ const readHarnessSourceHashes = async () => {
 const sameHarnessSourceHashes = (left, right) =>
   Object.keys(left).every((key) => left[key] === right[key]);
 
+// Terminal FDM inspection is read-only: real pointer picking, public probes and visible values.
+async function proveFdmCellPhysics(page) {
+  const samples = [];
+  const pending = new Set();
+  const onResponse = (response) => {
+    if (!/\/data\/fields\/[^/]+\/planar-default\/probe\?/.test(response.url())) return;
+    const task = response.json().then((body) => {
+      if (response.ok() && samples.length < 64) samples.push(body);
+    }).catch(() => {}).finally(() => pending.delete(task));
+    pending.add(task);
+  };
+  page.on("response", onResponse);
+  try {
+    const canvas = page.locator(".fm-viewport-3d canvas");
+    const tabs = page.getByRole("tablist", { name: "FDM Cell details", exact: true });
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("FDM cell picking requires a visible canvas");
+    // Pick actual rendered cells, never inject selection or write model state.
+    for (const [fx, fy] of [[0.5, 0.5], [0.45, 0.5], [0.55, 0.5], [0.5, 0.45], [0.5, 0.55]]) {
+      await canvas.click({ position: { x: box.width * fx, y: box.height * fy } });
+      if (await tabs.waitFor({ state: "visible", timeout: 1000 }).then(() => true).catch(() => false)) break;
+    }
+    await tabs.getByRole("tab", { name: "Physics", exact: true }).waitFor({ timeout: 15_000 });
+    const panel = page.locator("[data-fdm-cell-physics-status]");
+    await page.waitForFunction(() => document.querySelector("[data-fdm-cell-physics-status]")?.getAttribute("data-fdm-cell-physics-status") === "ready", null, { timeout: 30_000 });
+    await Promise.all([...pending]);
+    const observation = await panel.evaluate((node) => ({
+      ordinal: Number(node.getAttribute("data-fdm-cell-ordinal")),
+      rows: [...node.querySelectorAll("[data-fdm-quantity-id]")].map((row) => ({
+        id: row.getAttribute("data-fdm-quantity-id"), status: row.getAttribute("data-fdm-sample-status"),
+        values: [...row.querySelectorAll("data[data-fdm-value]")].map((value) => ({
+          kind: value.getAttribute("data-fdm-value"), raw: Number(value.getAttribute("value")), text: value.textContent?.trim() ?? "",
+        })),
+      })),
+    }));
+    if (!Number.isSafeInteger(observation.ordinal) || observation.ordinal < 0) throw new Error("Inspector omitted selected cell ordinal");
+    for (const id of ["m", "mat_ms", "mat_aex", "mat_alpha", "eden_total"]) {
+      const row = observation.rows.find((r) => r.id === id);
+      const sample = samples.findLast((r) => r.quantity_id === id && r.cell_id === observation.ordinal);
+      if (!row || row.status !== "ready" || !sample) throw new Error(`FDM cell inspection missing ready ${id} and exact public probe`);
+      if (id === "m") {
+        for (const [i, label] of ["mx", "my", "mz"].entries()) {
+          const value = row.values.find((v) => v.kind === label);
+          const visible = value?.text ? value.raw : NaN;
+          if (!Number.isFinite(visible) || Math.abs(visible - sample.vector[i]) > 5e-6) throw new Error(`Visible ${label} disagrees with selected-cell probe`);
+        }
+      } else {
+        const numeric = row.values.filter((v) => v.kind === "scalar" && v.text.length > 0).map((v) => v.raw).filter(Number.isFinite);
+        if (!numeric.some((v) => Math.abs(v - sample.scalar) <= Math.max(Math.abs(sample.scalar) * 5e-6, 1e-30))) throw new Error(`Visible ${id} disagrees with exact public probe`);
+      }
+    }
+    const domainResponse = await page.request.get(new URL("/v2/sessions/current/data/domain/meta", page.url()).toString());
+    if (!domainResponse.ok()) throw new Error("Cell energy check requires current domain metadata");
+    const domain = await domainResponse.json();
+    const volume = domain.grid?.spacing?.reduce((a, b) => a * b, 1);
+    const total = observation.rows.find((r) => r.id === "eden_total");
+    const density = samples.findLast((r) => r.quantity_id === "eden_total" && r.cell_id === observation.ordinal)?.scalar;
+    const cellEnergy = total.values.find((v) => v.kind === "cell-energy" && v.text.length > 0)?.raw;
+    if (!(volume > 0) || !Number.isFinite(cellEnergy) || Math.abs(cellEnergy - density * volume) > Math.max(Math.abs(density * volume) * 1e-5, 1e-40)) throw new Error("Visible cell energy does not equal signed density times cell volume");
+    await tabs.getByRole("tab", { name: "Grid", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.getByText("Current Cell", { exact: true }).waitFor({ timeout: 5000 });
+    await tabs.getByRole("tab", { name: "Physics", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await panel.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector("[data-fdm-cell-physics-status]")?.getAttribute("data-fdm-cell-physics-status") === "ready", null, { timeout: 30_000 });
+    if (Number(await panel.getAttribute("data-fdm-cell-ordinal")) !== observation.ordinal) throw new Error("Cell selection changed across inspector tabs");
+    const inspector = page.getByTestId("panel-right");
+    await panel.locator(".fm-fdm-cell-physics__summary").click();
+    const topScreenshot = await inspector.screenshot({ type: "png" });
+    const totalEnergy = panel.locator('[data-fdm-quantity-id="eden_total"]');
+    await totalEnergy.scrollIntoViewIfNeeded();
+    const screenshot = await inspector.screenshot({ type: "png" });
+    const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+    await page.keyboard.press("Control+Shift+T");
+    await page.waitForFunction((previous) => document.documentElement.dataset.theme !== previous, themeBefore, { timeout: 5000 });
+    const alternateTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+    const alternateScreenshot = await inspector.screenshot({ type: "png" });
+    await page.keyboard.press("Control+Shift+T");
+    await page.waitForFunction((previous) => document.documentElement.dataset.theme === previous, themeBefore, { timeout: 5000 });
+    const layout = await panel.evaluate((node) => ({ width: node.clientWidth, scroll_width: node.scrollWidth }));
+    if (layout.scroll_width > layout.width + 1) throw new Error("Cell physics overflows its inspector width");
+    if ([screenshot, topScreenshot, alternateScreenshot].some((png) => png.length > maxCanvasScreenshotBytes)) throw new Error("Cell inspector screenshot exceeds proof budget");
+    return { state: "passed", real_pointer_pick: true, keyboard_tabs: true, observation, public_probes: samples, layout, themes: [themeBefore, alternateTheme], inspector_png_base64: screenshot.toString("base64"), inspector_top_png_base64: topScreenshot.toString("base64"), inspector_alternate_theme_png_base64: alternateScreenshot.toString("base64"), canvas: await assertCanvas(page, "after FDM cell Physics inspection") };
+  } finally {
+    page.off("response", onResponse);
+    await Promise.all([...pending]);
+  }
+}
+
 const sessionIdentity = async (page) => {
   const endpoint = new URL("/v2/sessions/current/status", page.url()).toString();
   const response = await page.request.get(endpoint, { timeout });
@@ -2410,6 +2500,11 @@ const main = async () => {
         throw error;
       }
     }
+    let fdmCellPhysics = null;
+    if (expectTerminalTelemetry && liveFieldAfter?.solver_family === "fdm") {
+      fdmCellPhysics = await proveFdmCellPhysics(page);
+      partialProof.fdm_cell_physics = fdmCellPhysics;
+    }
     if (pageErrors.length || consoleErrors.length || requestFailures.length || httpErrors.length) {
       throw new Error("Browser flow recorded page, console, transport, or HTTP failures");
     }
@@ -2441,6 +2536,7 @@ const main = async () => {
       ...(expectTerminalTelemetry ? {
         expect_terminal_telemetry: true,
         terminal_telemetry: terminalTelemetry,
+        ...(fdmCellPhysics ? { fdm_cell_physics: fdmCellPhysics } : {}),
       } : {}),
       ...(expectRunPerformance ? {
         expect_run_performance: true,
