@@ -2904,6 +2904,113 @@ class StudyStageRerunContractTests(unittest.TestCase):
     def sources(qa):
         return qa._study_stage_rerun_source_sha256(ROOT)
 
+    def fdm_grid_resume_parent_documents(self, qa, *, changed=None):
+        mode = "fdm-cell-study"
+        current_sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        prior_sources = deepcopy(current_sources)
+        prior_sources["runner"] = "f" * 64
+        report = self.result_fixture(mode, prior_sources)
+        report.update(
+            state="outcome-unknown", outcome="unknown", phase="fdm-grid-observing",
+            failure="held-grid proof failed before Compute Study submission",
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False, prepared_grid_run=None,
+            client_ack_count=0,
+        )
+        report["grid_refresh_receipt"].pop("domain_transition")
+        held_results_key = "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100"
+        report["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
+        report["request_counts"].pop(held_results_key, None)
+        report["read_counts"]["stage_results"] = 2
+        report["total_requests"] = sum(report["request_counts"].values())
+        if changed == "solve-dispatched":
+            report.update(command_count=1, command_attempt_count=1, ui_command_proven=True,
+                          command_receipt={"method": "POST"})
+        elif changed == "source-drift":
+            prior_sources["study_inspector_panel"] = "e" * 64
+            report["source_sha256_before"] = prior_sources
+            report["source_sha256_after"] = prior_sources
+        elif changed == "wrong-session":
+            report["session_before"]["session_id"] = "foreign-session"
+            report["session_after"] = deepcopy(report["session_before"])
+            report["fdm_cell_receipt"]["scope_header"] = "session=foreign"
+            report["grid_refresh_receipt"]["scope_header"] = "session=foreign"
+        elif changed == "wrong-grid-terminal":
+            report["grid_refresh_receipt"]["terminal_detail"]["status"] = "running"
+            report["grid_refresh_receipt"]["terminal_detail"]["completion_status"] = "running"
+        elif changed == "wrong-cell-ack":
+            report["fdm_cell_receipt"]["unmodified_scene_sha256_after"] = "0" * 64
+        elif changed == "duplicate-grid":
+            report["grid_refresh_attempt_count"] = 2
+        attempt = "d" * 32
+        identity = {
+            "project_name": "fullmag-worktree-fixture", "worktree_id": "fixture",
+            "source_root": str(ROOT),
+        }
+        current = {
+            "attempt": "a" * 32, "source_commit": "commit-d67",
+            "config_sha256": "b" * 64, "runtime_terminal_sha256": "c" * 64,
+            "runtime_attempt": "a" * 32, "runtime_phase": "development",
+            "development_terminal_state": "succeeded",
+        }
+        operation_inputs = {
+            "scenario": "study-stage-rerun", "study_stage_rerun": "fdm-cell-study",
+            "study_stage_rerun_source_sha256": prior_sources,
+            "source_root": str(ROOT), "source_commit": current["source_commit"],
+            "worktree_id": identity["worktree_id"], "development_attempt": current["attempt"],
+            "development_config_sha256": current["config_sha256"],
+            "runtime_terminal_sha256": current["runtime_terminal_sha256"],
+            "runtime_attempt": current["runtime_attempt"], "runtime_phase": current["runtime_phase"],
+            "development_terminal_state": current["development_terminal_state"],
+            "compose_project": identity["project_name"],
+            "frontend_container": "frontend-1", "frontend_volume": "frontend-state",
+            "public_loopback_url": "http://127.0.0.1:3242", "browser_url": "http://frontend:8080",
+        }
+        receipt = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "browser-qa",
+            "state": "failed-confirmed", "attempt": attempt,
+            "compose_project": identity["project_name"], "inputs": operation_inputs,
+            "exit_code": 1,
+        }
+        terminal = deepcopy(receipt)
+        runner_output = {
+            "schema": "fullmag.docker-dev-browser-qa-runner-output.v1",
+            "exit_code": 1, "stdout": json.dumps(report, separators=(",", ":")),
+            "stderr_tail": "bounded helper failure",
+        }
+        result = deepcopy(report)
+        result.update(
+            state="failed-confirmed", error="Browser helper exited before a passing public terminal proof",
+            study_stage_rerun_native_outcome="unknown", requires_current_run_readback=True,
+        )
+        docs = {
+            f"browser-qa/attempts/{attempt}/receipt.json": qa.canonical(receipt) + b"\n",
+            f"browser-qa/attempts/{attempt}/terminal.json": qa.canonical(terminal) + b"\n",
+            f"browser-qa/attempts/{attempt}/runner-output.json": qa.canonical(runner_output) + b"\n",
+            f"browser-qa/attempts/{attempt}/result.json": qa.canonical(result) + b"\n",
+        }
+        class FakeControl:
+            def __init__(self, documents):
+                self.documents = dict(documents)
+                self.project = identity["project_name"]
+                self.identity = identity
+
+            def read_bytes(self, path, *, optional=False, **kwargs):
+                value = self.documents.get(path)
+                if value is None and not optional:
+                    raise qa.BuildControlError("missing test control record")
+                return value
+
+            def read(self, path, *, optional=False):
+                raw = self.read_bytes(path, optional=optional)
+                return None if raw is None else json.loads(raw)
+
+            def write(self, path, value):
+                self.documents[path] = qa.canonical(value) + b"\n"
+
+        return FakeControl(docs), attempt, identity, current, current_sources
+
     def test_material_stage_a_guard_pins_one_material_patch_and_preserves_scene_state(self):
         node = shutil.which("node")
         self.assertIsNotNone(node)
@@ -2993,8 +3100,11 @@ assert.equal(runner.studyStageMaterialTransactionOutcome(200, {
 import assert from 'node:assert/strict';
 const runner = await import(process.argv[1]);
 assert.deepEqual(runner.studyStageCommandForMode('fdm-cell-study'), {kind:'solve',target:{kind:'study'}});
+assert.deepEqual(runner.studyStageCommandForMode('fdm-cell-study-resume'), {kind:'solve',target:{kind:'study'}});
 assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study','before'), ['relax-a']);
 assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study','after'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study-resume','before'), ['relax-a']);
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study-resume','after'), ['relax-a','relax-b','relax-c']);
 const session = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
 const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
 const before = {revision:9,study:{requested_backend:'fdm',fdm:{default_cell:[2e-9,1e-9,2e-9],demag:{mode:'auto'}}},objects:[]};
@@ -3273,26 +3383,38 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                           for index, stage_id in enumerate(before_ids)]
         new_results = [self.result_identity(new_run, stage_id, index + 4)
                        for index, stage_id in enumerate(after_ids)]
+        fdm_previous_revisions = {
+            "region_topology_revision": 0,
+            "region_membership_revision": 0,
+            "region_coefficients_revision": 1,
+            "region_initial_state_revision": 0,
+        }
         precondition = {
-            "scene_revision": 32 if mode == "material-stage-a" else 31,
-            "mesh_revision": 18,
+            "scene_revision": 2 if mode == "fdm-cell-study" else 32 if mode == "material-stage-a" else 31,
+            "mesh_revision": 1 if mode == "fdm-cell-study" else 18,
             "domain_generation_id": "fdm-domain-8",
-            "region_topology_revision": 3,
-            "region_membership_revision": 4,
-            "region_coefficients_revision": 5,
-            "region_initial_state_revision": 6,
+            **(fdm_previous_revisions if mode == "fdm-cell-study" else {
+                "region_topology_revision": 3,
+                "region_membership_revision": 4,
+                "region_coefficients_revision": 5,
+                "region_initial_state_revision": 6,
+            }),
             "current_run": {"kind": "run", "run_id": previous_run},
             "runtime_state": "awaiting_command",
-            "command_revision": 0,
+            "command_revision": 3 if mode == "fdm-cell-study" else 0,
         }
         command_precondition = deepcopy(precondition)
         if mode == "fdm-cell-study":
             command_precondition.update({
-                "scene_revision": 32,
-                "mesh_revision": 19,
+                "scene_revision": 3,
+                "mesh_revision": 2,
                 "domain_generation_id": "fdm-domain-16",
                 "current_run": {"kind": "run", "run_id": new_run},
-                "command_revision": 1,
+                "command_revision": 4,
+                "region_topology_revision": 1,
+                "region_membership_revision": 1,
+                "region_coefficients_revision": 2,
+                "region_initial_state_revision": 1,
             })
         if mode in {"stage-b", "material-stage-a"}:
             selected_stage = "relax-b" if mode == "stage-b" else "relax-a"
@@ -3423,7 +3545,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "GET /v2/sessions/current/simulation/solver/status": 2,
                 f"GET /v2/sessions/current/simulation/stages/results?run_id={previous_run}&limit=100": 2,
                 f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100": 1,
-                **({"GET /v2/sessions/current/simulation/commands/grid-refresh-1": 1}
+                **({"GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6": 1}
                    if mode == "fdm-cell-study" else {}),
                 "POST /v2/sessions/current/simulation/commands": 2 if mode == "fdm-cell-study" else 1,
             },
@@ -3491,10 +3613,12 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
             payload["fdm_cell_receipt"] = {
                 "method": "POST", "path": "/v2/sessions/current/model/transactions", "status": 200,
                 "scope_header": scope,
-                "payload": {"base_revision": 31, "kind": "merge_patch",
+                "payload": {"base_revision": 2 if mode == "fdm-cell-study" else 31, "kind": "merge_patch",
                     "merge_patch": {"study": {"fdm": {"default_cell": [1e-9, 2e-9, 2e-9]}}}},
-                "before_scene_revision": 31, "before_cell": before_cell, "acknowledged": True,
-                "transaction_kind": "merge_patch", "scene_revision": 32,
+                "before_scene_revision": 2 if mode == "fdm-cell-study" else 31,
+                "before_cell": [2e-9, 2e-9, 2e-9] if mode == "fdm-cell-study" else before_cell,
+                "acknowledged": True,
+                "transaction_kind": "merge_patch", "scene_revision": 3 if mode == "fdm-cell-study" else 32,
                 "after_cell": [1e-9, 2e-9, 2e-9],
                 "unmodified_scene_sha256_before": "e" * 64,
                 "unmodified_scene_sha256_after": "e" * 64,
@@ -3506,19 +3630,19 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "method": "POST", "path": "/v2/sessions/current/simulation/commands", "status": 202,
                 "scope_header": scope,
                 "payload": {"client_intent_id": "fdm-grid-refresh-1799000000000-1",
-                    "kind": "fdm_grid_refresh", "precondition": {"scene_revision": 32},
+                    "kind": "fdm_grid_refresh", "precondition": {"scene_revision": 3},
                     "reason": "study_global_commit"},
-                "accepted": True, "command_id": "grid-refresh-1", "failed_grid_response": None,
-                "terminal_detail": {"command_id": "grid-refresh-1", "kind": "fdm_grid_refresh",
+                "accepted": True, "command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6", "failed_grid_response": None,
+                "terminal_detail": {"command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6", "kind": "fdm_grid_refresh",
                     "status": "completed", "completion_status": "completed",
                     "client_intent_id": "fdm-grid-refresh-1799000000000-1",
                     "reason": "study_global_commit", "seq": 17},
                 "domain_transition": {"before_domain_cell_count": 8,
                     "before_domain_generation_id": "fdm-domain-8",
                     "ready_domain_cell_count": 16, "ready_domain_generation_id": "fdm-domain-16",
-                    "scene_revision": 32, "prior_run_id": previous_run,
+                    "scene_revision": 3, "prior_run_id": previous_run,
                     "preserved_prior_result_identities": deepcopy(before_results),
-                    "prepared_run_id": new_run, "preparation_id": "prep-held", "preparation_revision": 14},
+                    "prepared_run_id": new_run, "preparation_id": "prep-held", "preparation_revision": 17},
             }
             prep_stage_statuses = [
                 ("runtime_startup", "completed"), ("script_materialization", "completed"),
@@ -3528,7 +3652,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 ("ready", "completed"),
             ]
             payload["prepared_grid_run"] = {
-                "run_id": new_run, "run_status": "waiting_for_compute",
+                "run_id": new_run, "run_status": "waiting_for_solve",
                 "solver_state": "awaiting_command", "execution_state": "awaiting_command",
                 "stage_ids": [], "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
                 "stage_statuses": ["pending", "pending", "pending"], "completed_stage_indexes": [],
@@ -3538,23 +3662,24 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                     "requested_device": "cpu", "requested_precision": "double",
                     "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
                     "script_sha256": sources["fixture"]},
-                "scene_revision": 32, "precondition": deepcopy(command_precondition),
-                "commands": {"revision": 1, "pending_count": 0, "running_count": 0,
-                    "terminal_statuses": ["completed"]},
+                "scene_revision": 3, "precondition": deepcopy(command_precondition),
+                "commands": {"resource_revision": 8, "count": 4, "pending_count": 0, "running_count": 0,
+                    "terminal_statuses": ["completed", "completed", "completed", "completed"],
+                    "last_command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"},
                 "preparation": {
-                    "preparation_id": "prep-held", "revision": 14, "resource_revision": 14,
+                    "preparation_id": "prep-held", "revision": 17, "resource_revision": 17,
                     "status": "ready", "active_stage_id": None, "failure": None,
                     "receipt": {"schema_version": "preparation_receipt.v1", "preparation_id": "prep-held",
                         "run_id": new_run, "plan_fingerprint": "sha256:" + "a" * 64,
                         "payload_sha256": "b" * 64},
-                    "stages": [{"stage_id": stage_id, "status": state}
+                    "stages": [{"id": stage_id, "status": state}
                         for stage_id, state in prep_stage_statuses],
                 },
             }
             payload["read_counts"]["preparation"] = 1
             payload["read_counts"]["stage_results"] = 4
             payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
-            payload["request_counts"]["GET /v2/sessions/current/simulation/commands/grid-refresh-1"] = 1
+            payload["request_counts"]["GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"] = 1
             payload["request_counts"]["GET /v2/sessions/current/simulation/preparation"] = 1
             payload["request_counts"][
                 f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100"] += 1
@@ -3928,6 +4053,7 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
         self.assertEqual(qa._parse_study_stage_rerun_result(
             json.dumps(preparation_pending).encode(), preparation_pending["public_url"],
             preparation_pending["probe_url"], sources, mode), preparation_pending)
+
         ready_without_proof = deepcopy(preparation_pending)
         ready_without_proof["phase"] = "fdm-grid-ready"
         with self.assertRaises(qa.BuildControlError):
@@ -3987,6 +4113,125 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
             qa._parse_study_stage_rerun_result(
                 json.dumps(third_run).encode(), third_run["public_url"], third_run["probe_url"], sources, mode)
 
+
+    def test_fdm_resume_keeps_current_request_counts_and_checks_the_joined_cycle(self):
+        qa = self.qa
+        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(qa)
+        evidence = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources,
+        )
+        payload = self.result_fixture("fdm-cell-study", sources)
+        payload.update(mode="fdm-cell-study-resume", fdm_cell_count=0, fdm_cell_attempt_count=0,
+                       grid_refresh_count=0, grid_refresh_attempt_count=0,
+                       fdm_cell_receipt=None, grid_refresh_receipt=None,
+                       ui_fdm_cell_proven=False, ui_grid_refresh_proven=False)
+        payload["prepared_grid_run"]["commands"]["last_command_id"] = evidence["grid_command_id"]
+        payload["resume_evidence"] = {
+            "schema": evidence["schema"], "prior_attempt": evidence["prior_attempt"],
+            "record_sha256": evidence["record_sha256"], "grid_command_id": evidence["grid_command_id"],
+            "original_run_id": evidence["prior_before"]["run_id"],
+            "original_result_identities": evidence["prior_before"]["result_identities"],
+            "cell_scene_revision": evidence["prior_cell_receipt"]["scene_revision"],
+            "unmodified_scene_sha256_after": evidence["prior_cell_receipt"]["unmodified_scene_sha256_after"],
+        }
+        payload["request_counts"].pop(qa.STUDY_FDM_CELL_TRANSACTION_KEY)
+        command_key = "POST /v2/sessions/current/simulation/commands"
+        payload["request_counts"][command_key] = 1
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        original = deepcopy(payload)
+
+        def parse(value, parent=evidence):
+            return qa._parse_study_stage_rerun_result(
+                json.dumps(value).encode(), value["public_url"], value["probe_url"], sources,
+                "fdm-cell-study-resume", expected_resume_evidence=parent,
+            )
+
+        self.assertEqual(parse(payload), original)
+        self.assertEqual(payload, original, "Internal cycle validation must not alter the measured current report")
+        for name, mutate in (
+            ("replayed model edit", lambda item: item["request_counts"].update({qa.STUDY_FDM_CELL_TRANSACTION_KEY: 1})),
+            ("duplicate Solve", lambda item: item.update(command_count=2, command_attempt_count=2)),
+            ("borrowed grid claimed current", lambda item: item.update(grid_refresh_receipt=evidence["prior_grid_receipt"])),
+            ("foreign parent hash", lambda item: item["resume_evidence"]["record_sha256"].update(result="0" * 64)),
+            ("third held run", lambda item: item["prepared_grid_run"].update(run_id="foreign-run")),
+            ("old A command precondition", lambda item: item["command_receipt"]["payload"].update(precondition=item["before"]["precondition"])),
+            ("old domain after Solve", lambda item: item["after"]["profile"].update(domain_cell_count=8)),
+            ("replaced grid command", lambda item: item["prepared_grid_run"]["commands"].update(last_command_id="foreign-command")),
+            ("wrong execution binding", lambda item: item["command_receipt"]["execution_binding"].update(run_id="third-run")),
+        ):
+            with self.subTest(rejected=name):
+                changed = deepcopy(original)
+                mutate(changed)
+                with self.assertRaises(qa.BuildControlError):
+                    parse(changed)
+        with self.assertRaises(qa.BuildControlError):
+            parse(original, None)
+
+
+    def test_fdm_grid_resume_requires_one_pinned_failed_no_solve_parent_and_consumes_it_once(self):
+        qa = self.qa
+        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(qa)
+        evidence = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources,
+        )
+        self.assertEqual(evidence["prior_attempt"], attempt)
+        self.assertEqual(evidence["prior_report"]["phase"], "fdm-grid-observing")
+        self.assertEqual(evidence["prior_before"]["stage_ids"], ["relax-a"])
+        self.assertEqual(evidence["grid_command_id"], "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6")
+        self.assertEqual(set(evidence["record_sha256"]), {"receipt", "terminal", "runner_output", "result"})
+        marker = qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="b" * 32)
+        self.assertEqual(marker["parent_attempt"], attempt)
+        reloaded = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources, consumed_by="b" * 32,
+        )
+        self.assertEqual(reloaded, evidence)
+        marker_path = f"browser-qa/attempts/{attempt}/resume-consumed.json"
+        mismatched = deepcopy(marker)
+        mismatched["record_sha256"]["result"] = "0" * 64
+        control.write(marker_path, mismatched)
+        with self.assertRaises(qa.BuildControlError):
+            qa._load_fdm_grid_resume_evidence(
+                control, attempt, selected=ROOT, current=current, identity=identity,
+                frontend_id="frontend-1", frontend_volume="frontend-state",
+                public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+                expected_sources=sources, consumed_by="b" * 32,
+            )
+        control.write(marker_path, marker)
+        with self.assertRaises(qa.BuildControlError):
+            qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="c" * 32)
+
+        for changed in ("solve-dispatched", "source-drift", "wrong-session", "wrong-grid-terminal", "duplicate-grid"):
+            with self.subTest(rejected=changed):
+                invalid_control, invalid_attempt, invalid_identity, invalid_current, invalid_sources = (
+                    self.fdm_grid_resume_parent_documents(qa, changed=changed))
+                with self.assertRaises(qa.BuildControlError):
+                    qa._load_fdm_grid_resume_evidence(
+                        invalid_control, invalid_attempt, selected=ROOT, current=invalid_current,
+                        identity=invalid_identity, frontend_id="frontend-1", frontend_volume="frontend-state",
+                        public_url="http://127.0.0.1:3242",
+                        browser_url="http://frontend:8080", expected_sources=invalid_sources,
+                    )
+
+        missing_control, missing_attempt, missing_identity, missing_current, missing_sources = (
+            self.fdm_grid_resume_parent_documents(qa))
+        missing_control.documents.pop(f"browser-qa/attempts/{missing_attempt}/runner-output.json")
+        with self.assertRaises(qa.BuildControlError):
+            qa._load_fdm_grid_resume_evidence(
+                missing_control, missing_attempt, selected=ROOT, current=missing_current,
+                identity=missing_identity, frontend_id="frontend-1", frontend_volume="frontend-state",
+                public_url="http://127.0.0.1:3242",
+                browser_url="http://frontend:8080", expected_sources=missing_sources,
+            )
+
     def test_fdm_grid_409_preserves_bounded_error_without_compute_or_retry(self):
         qa = self.qa
         mode = "fdm-cell-study"
@@ -4002,7 +4247,7 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
             client_ack_count=0,
         )
         payload["request_counts"][qa.STUDY_FDM_GRID_REFRESH_KEY] = 1
-        payload["request_counts"].pop("GET /v2/sessions/current/simulation/commands/grid-refresh-1")
+        payload["request_counts"].pop("GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6")
         payload["request_counts"].pop("GET /v2/sessions/current/simulation/preparation")
         payload["request_counts"].pop(
             "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100")
@@ -4349,9 +4594,9 @@ assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'
 const heldStatus = {run:{run_id:'held'},solver:{state:'awaiting_command'},
   domain:{discretization:'fdm',cell_count:16,generation_id:'fdm-domain-16'},
   resources:{scene_revision:32,mesh_revision:19,domain_generation_id:'fdm-domain-16',
-    commands_revision:1,simulation_preparation_revision:14,region_topology_revision:3,
-    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6}};
-const heldRun = {run_id:'held',status:'waiting_for_compute',session_id:'s'};
+    commands_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
+    region_membership_revision:5,region_coefficients_revision:6,region_initial_state_revision:7}};
+const heldRun = {run_id:'held',status:'waiting_for_solve',session_id:'s'};
 const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1',
   runtime_state:'awaiting_command',total_stages:3,stage_statuses:['pending','pending','pending'],
   completed_stage_indexes:[],stages:['relax-a','relax-b','relax-c'].map((stage_id,index)=>
@@ -4359,28 +4604,58 @@ const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_
 const prepStageStatuses = [['runtime_startup','completed'],['script_materialization','completed'],
   ['validation','completed'],['planning','completed'],['domain_preparation','completed'],['meshing','completed'],
   ['mesh_postprocessing','completed'],['solver_initialization','skipped'],['ready','completed']];
-const heldPreparation = {preparation_id:'prep-held',revision:14,status:'ready',active_stage_id:null,failure:null,
+const heldPreparation = {preparation_id:'prep-held',revision:17,status:'ready',active_stage_id:null,failure:null,
   receipt:{schema_version:'preparation_receipt.v1',preparation_id:'prep-held',run_id:'held',
     plan_fingerprint:'sha256:'+'a'.repeat(64),payload_sha256:'b'.repeat(64)},
-  stages:prepStageStatuses.map(([stage_id,status])=>({stage_id,status}))};
+  stages:prepStageStatuses.map(([id,status])=>({id,status}))};
 const heldSession = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
-const heldCommands = {revision:1,commands:[{status:'completed'}],pending_count:0,running_count:0};
+const heldCommands = {revision:8,commands:[{command_id:'cmd-1',status:'completed'},
+  {command_id:'cmd-2',status:'completed'},{command_id:'cmd-3',status:'completed'},
+  {command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',kind:'fdm_grid_refresh',status:'completed'}],pending_count:0,running_count:0};
 const heldPrecondition = runner.studyStagePreparedGridPrecondition({status:heldStatus,currentRun:heldRun,
   execution:heldExecution,solverStatus:{runtime_state:'awaiting_command'},commands:heldCommands,
   preparation:heldPreparation,session:heldSession,previousRunId:'old',
   previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
     region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
-  expectedSceneRevision:32});
+  expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'});
 assert.equal(heldPrecondition.current_run.run_id,'held');
 assert.equal(heldPrecondition.scene_revision,32);
 assert.equal(heldPrecondition.domain_generation_id,'fdm-domain-16');
+assert.equal(heldPrecondition.command_revision,4);
+const resumeSession={name:'P22 three Relax stages',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const resumeBefore={run_id:'old',run_status:'completed',stage_ids:['relax-a'],completed_stage_indexes:[0],
+  profile:{domain_cell_count:8},precondition:{scene_revision:2,current_run:{kind:'run',run_id:'old'}},
+  result_identities:[{authored_stage_id:'relax-a'}],material_state:{Ms:600000}};
+const resumeEvidence={schema:'fullmag.p22-fdm-grid-resume-evidence.v1',prior_attempt:'d'.repeat(32),
+  record_sha256:{receipt:'a'.repeat(64),terminal:'b'.repeat(64),runner_output:'c'.repeat(64),result:'d'.repeat(64)},
+  prior_source_sha256:{runner:'a'.repeat(64)},prior_session:resumeSession,prior_before:resumeBefore,
+  prior_material_initial_state:{Ms:600000},
+  prior_cell_receipt:{method:'POST',status:200,acknowledged:true,transaction_kind:'merge_patch',
+    scope_header:scope,before_scene_revision:2,scene_revision:3,after_cell:[1e-9,2e-9,2e-9],
+    unmodified_scene_sha256_after:'e'.repeat(64)},
+  prior_grid_receipt:{method:'POST',status:200,accepted:true,failed_grid_response:null,scope_header:scope,
+    command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',payload:{kind:'fdm_grid_refresh',reason:'study_global_commit',
+      precondition:{scene_revision:3}},terminal_detail:{command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',kind:'fdm_grid_refresh',
+      status:'completed',completion_status:'completed'}},grid_command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',
+  prior_report:{mode:'fdm-cell-study',phase:'fdm-grid-observing',outcome:'unknown',
+    command_count:0,command_attempt_count:0}};
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed(resumeEvidence),true);
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed({...resumeEvidence,prior_report:{
+  ...resumeEvidence.prior_report,command_attempt_count:1}}),false);
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed({...resumeEvidence,prior_grid_receipt:{
+  ...resumeEvidence.prior_grid_receipt,domain_transition:{prepared_run_id:'foreign'}}}),false);
 for (const altered of [
   {preparation:{...heldPreparation,revision:13}},
   {preparation:{...heldPreparation,receipt:{...heldPreparation.receipt,run_id:'foreign'}}},
   {execution:{...heldExecution,stage_statuses:['completed','pending','pending']}},
   {commands:{...heldCommands,pending_count:1}},
   {currentRun:{...heldRun,run_id:'old'}},
-  {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:7}}},
+  {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:3}}},
+  {currentRun:{...heldRun,status:'waiting_for_compute'}},
+  {preparation:{...heldPreparation,stages:heldPreparation.stages.map(({id,status})=>({stage_id:id,status}))}},
+  {commands:{...heldCommands,revision:7}},
+  {commands:{...heldCommands,commands:[...heldCommands.commands.slice(0,-1),
+    {...heldCommands.commands.at(-1),command_id:'foreign-grid'}]}},
 ]) {
   assert.throws(()=>runner.studyStagePreparedGridPrecondition({status:altered.status ?? heldStatus,
     currentRun:altered.currentRun ?? heldRun,execution:altered.execution ?? heldExecution,
@@ -4388,8 +4663,20 @@ for (const altered of [
     preparation:altered.preparation ?? heldPreparation,session:heldSession,previousRunId:'old',
     previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
       region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
-    expectedSceneRevision:32}));
+    expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'}));
 }
+const heldSolve = {kind:'solve',target:{kind:'study'},precondition:heldPrecondition,
+  client_intent_id:'study:solve:resume',reason:'user_requested',requested_at_unix_ms:1000};
+const resumeCommandContext={mode:'fdm-cell-study-resume',session,expectedPrecondition:heldPrecondition,
+  commandCount:0,phase:'ui-submit'};
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:heldSolve},resumeCommandContext),true);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:{...heldSolve,precondition:{...heldPrecondition,scene_revision:31}}},resumeCommandContext),false);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:{...heldSolve,kind:'fdm_grid_refresh'}},resumeCommandContext),false);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:heldSolve},{...resumeCommandContext,phase:'fdm-grid-ready'}),false);
 const request = {method:'POST', path:'/v2/sessions/current/simulation/commands', scope,
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};

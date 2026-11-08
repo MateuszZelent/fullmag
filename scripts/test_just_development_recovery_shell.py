@@ -6,6 +6,29 @@ import unittest
 
 
 class DevelopmentRecoveryShellTests(unittest.TestCase):
+    def test_grid_resume_dispatches_only_the_pinned_attempt_and_rejects_extra_flags(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        attempt = 'a' * 32
+        args = ['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-browser-qa', source, '3242', '', '900', '1800', '', '', attempt]
+        dry = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        recipe = dry.stderr.strip()
+        marker = '  *"scripts/docker_dev_browser_qa.py"*)\n'
+        result = self.dispatch(recipe, marker=marker)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = result.stdout.split(b'\0')[:-1]
+        self.assertEqual(argv[-2:], [b'--resume-fdm-grid-attempt', attempt.encode()])
+        self.assertEqual(argv[argv.index(b'--source-root') + 1], source.encode())
+        for bad in (recipe + '; printf injected', recipe + ' --force',
+                    recipe.replace(attempt, 'short'), recipe + ' --study-stage-rerun study',
+                    recipe.replace(' --resume-fdm-grid-attempt', ' --study-stage-rerun study --resume-fdm-grid-attempt'),
+                    recipe.replace(' --resume-fdm-grid-attempt', " --saved-playback-item-id '12' --resume-fdm-grid-attempt")):
+            rejected = self.dispatch(bad, marker=marker)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertNotIn(b'injected', rejected.stdout)
+
     def test_stage_rerun_browser_actual_recipes_dispatch_exact_mode(self):
         repo = Path(__file__).resolve().parents[1]
         source = '/selected/worktree with spaces/$(printf injected);literal'

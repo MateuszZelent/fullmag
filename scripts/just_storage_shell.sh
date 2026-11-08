@@ -450,9 +450,13 @@ case "${recipe}" in
     # Browser proof owns its resolver, Compose project, BuildControl lease,
     # and image pull; do not create compatibility links or enter the generic
     # host runner before it can authenticate the selected volume DEV group.
-    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--saved-playback-item-id '([0-9]{1,20})')?([[:space:]]+--study-stage-rerun (stage-b|study|material-stage-a|fdm-cell-study|texture-stage-b|texture-study))?[[:space:]]*$"
+    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--saved-playback-item-id '([0-9]{1,20})')?([[:space:]]+--study-stage-rerun (stage-b|study|material-stage-a|fdm-cell-study|texture-stage-b|texture-study))?([[:space:]]+--resume-fdm-grid-attempt '([0-9a-f]{32})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${browser_qa_pattern} ]]; then
       echo "[fullmag just] invalid managed Docker DEV browser QA recipe" >&2
+      exit 2
+    fi
+    if [[ -n "${BASH_REMATCH[14]:-}" && ( -n "${BASH_REMATCH[12]:-}" || -n "${BASH_REMATCH[10]:-}" ) ]]; then
+      echo "[fullmag just] grid resume cannot be combined with another browser scenario" >&2
       exit 2
     fi
     browser_qa_args=(--repo-root "${repo_root}")
@@ -471,6 +475,9 @@ case "${recipe}" in
     fi
     if [[ -n "${BASH_REMATCH[12]:-}" ]]; then
       browser_qa_args+=(--study-stage-rerun "${BASH_REMATCH[12]}")
+    fi
+    if [[ -n "${BASH_REMATCH[14]:-}" ]]; then
+      browser_qa_args+=(--resume-fdm-grid-attempt "${BASH_REMATCH[14]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py" "${browser_qa_args[@]}"
     ;;

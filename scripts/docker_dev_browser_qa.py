@@ -462,12 +462,13 @@ def _validate_inspector_ack_hashes(value) -> None:
 
 
 def _study_stage_rerun_source_paths(mode: str) -> dict[str, str]:
-    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
+    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "fdm-cell-study-resume",
+                    "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun requires a fixed mode")
     sources = dict(STUDY_STAGE_RERUN_SOURCES)
     if mode == "material-stage-a":
         sources.update(STUDY_STAGE_MATERIAL_SOURCES)
-    if mode == "fdm-cell-study":
+    if mode in {"fdm-cell-study", "fdm-cell-study-resume"}:
         sources.update(STUDY_STAGE_FDM_CELL_SOURCES)
     if mode in {"texture-stage-b", "texture-study"}:
         sources.update(STUDY_STAGE_TEXTURE_SOURCES)
@@ -1245,6 +1246,7 @@ def _compose_document(
     inspector_ack_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     if type(inspector_ack) is not bool:
         raise BuildControlError("Inspector ACK scenario marker must be boolean")
@@ -1259,16 +1261,23 @@ def _compose_document(
     elif inspector_ack_source_sha256 is not None:
         raise BuildControlError("Inspector ACK source pins require their scenario")
     if study_stage_rerun is not None:
-        if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
+        if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
+                                     "fdm-cell-study-resume", "texture-stage-b", "texture-study"}:
             raise BuildControlError("Study stage rerun requires one of the fixed profiles")
         _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
+        if study_stage_rerun == "fdm-cell-study-resume":
+            _validate_fdm_grid_resume_evidence_shape(
+                study_stage_rerun_resume_evidence, study_stage_rerun_source_sha256,
+            )
+        elif study_stage_rerun_resume_evidence is not None:
+            raise BuildControlError("FDM grid resume evidence requires its fixed resume profile")
         if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
                 or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
                 or airbox_inspector or saved_playback_item_id is not None
                 or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
                 or expect_run_performance is True or expect_planar_airbox or inspector_ack):
             raise BuildControlError("Study stage rerun is a separate task-owned runtime command scenario")
-    elif study_stage_rerun_source_sha256 is not None:
+    elif study_stage_rerun_source_sha256 is not None or study_stage_rerun_resume_evidence is not None:
         raise BuildControlError("Study stage rerun source pins require their scenario")
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
@@ -1414,6 +1423,11 @@ def _compose_document(
         environment["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256"] = canonical(
             dict(study_stage_rerun_source_sha256)
         ).decode("utf-8")
+        if study_stage_rerun == "fdm-cell-study-resume":
+            resume_raw = canonical(dict(study_stage_rerun_resume_evidence)).decode("utf-8")
+            if len(resume_raw.encode("utf-8")) > 128 * 1024:
+                raise BuildControlError("FDM grid resume evidence exceeds its environment bound")
+            environment["CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE"] = resume_raw
     elif airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
@@ -1562,6 +1576,7 @@ def _validate_browser_helper(
     inspector_ack_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
 ) -> None:
     if type(private_group_storage) is not bool:
         raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
@@ -1615,6 +1630,8 @@ def _validate_browser_helper(
                                 if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=")]
     rerun_mode_environment = [entry for entry in raw_environment
                               if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=")]
+    rerun_resume_environment = [entry for entry in raw_environment
+                                if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE=")]
     rerun_scenario = [entry for entry in raw_environment
                       if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun")]
     if inspector_ack:
@@ -1637,7 +1654,22 @@ def _validate_browser_helper(
         except BuildControlError as error:
             raise ControlOutcomeUnknown(str(error)) from error
         expected_pin = canonical(dict(study_stage_rerun_source_sha256)).decode("utf-8")
-        if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}
+        if study_stage_rerun == "fdm-cell-study-resume":
+            try:
+                _validate_fdm_grid_resume_evidence_shape(
+                    study_stage_rerun_resume_evidence, study_stage_rerun_source_sha256,
+                )
+            except BuildControlError as error:
+                raise ControlOutcomeUnknown(str(error)) from error
+            expected_resume = "CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE=" + canonical(
+                dict(study_stage_rerun_resume_evidence)
+            ).decode("utf-8")
+            if rerun_resume_environment != [expected_resume]:
+                raise ControlOutcomeUnknown("Browser helper FDM grid resume evidence differs")
+        elif rerun_resume_environment or study_stage_rerun_resume_evidence is not None:
+            raise ControlOutcomeUnknown("Browser helper reported unrequested FDM grid resume evidence")
+        if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
+                                      "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
                 or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
                 or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
                 or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
@@ -3496,8 +3528,212 @@ def _validate_study_fdm_grid_refresh_receipt(payload, session, cell_receipt, pre
     return dict(receipt)
 
 
+def _load_fdm_grid_resume_evidence(control, attempt, *, selected, current, identity, frontend_id,
+                                   frontend_volume, public_url, browser_url, expected_sources,
+                                   consumed_by=None):
+    if not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None:
+        raise BuildControlError("FDM grid resume requires one exact browser-QA attempt id")
+    _validate_study_stage_rerun_hashes(expected_sources, "fdm-cell-study-resume")
+    root = "browser-qa/attempts/" + attempt
+    marker_path = root + "/resume-consumed.json"
+    marker = control.read(marker_path, optional=True)
+    if consumed_by is None:
+        if marker is not None:
+            raise BuildControlError("The accepted FDM grid attempt already has a resume claim")
+    elif (not isinstance(marker, Mapping)
+          or marker.get("schema") != "fullmag.p22-fdm-grid-resume-consumed.v1"
+          or marker.get("parent_attempt") != attempt or marker.get("child_attempt") != consumed_by):
+        raise BuildControlError("The FDM grid resume claim does not belong to this child attempt")
+    limits = {"receipt": 512 * 1024, "terminal": 512 * 1024,
+              "runner_output": MAX_RESULT_BYTES, "result": MAX_RESULT_BYTES}
+    relative_names = {"receipt": "receipt.json", "terminal": "terminal.json",
+                      "runner_output": "runner-output.json", "result": "result.json"}
+    raw_records = {}
+    documents = {}
+    for key, relative in relative_names.items():
+        raw = control.read_bytes(root + "/" + relative, maximum=limits[key])
+        raw_records[key] = raw
+        try:
+            documents[key] = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise BuildControlError("The pinned FDM grid parent has a malformed durable record") from error
+    if consumed_by is not None and marker.get("record_sha256") != {
+            key: hashlib.sha256(raw).hexdigest() for key, raw in raw_records.items()}:
+        raise BuildControlError("The FDM grid resume claim hashes differ from its parent records")
+    receipt = documents["receipt"]
+    terminal = documents["terminal"]
+    wrapper = documents["runner_output"]
+    result = documents["result"]
+    if (not isinstance(receipt, Mapping)
+            or receipt.get("schema") != "fullmag.docker-build-operation.v1"
+            or receipt.get("phase") != "browser-qa" or receipt.get("state") != "failed-confirmed"
+            or receipt.get("attempt") != attempt or receipt.get("exit_code") != 1
+            or not isinstance(terminal, Mapping) or canonical(terminal) != canonical(receipt)):
+        raise BuildControlError("The FDM grid parent is not one failed-confirmed terminal browser-QA attempt")
+    inputs = receipt.get("inputs")
+    current_source_commit = current.get("source_commit") or (current.get("inputs") or {}).get("source_commit")
+    current_terminal_sha = current.get("runtime_terminal_sha256")
+    if (not isinstance(inputs, Mapping)
+            or inputs.get("scenario") != "study-stage-rerun"
+            or inputs.get("study_stage_rerun") != "fdm-cell-study"
+            or inputs.get("source_root") != str(selected.resolve(strict=True))
+            or inputs.get("source_commit") != current_source_commit
+            or inputs.get("worktree_id") != identity.get("worktree_id")
+            or inputs.get("development_attempt") != current.get("attempt")
+            or inputs.get("development_config_sha256") != current.get("config_sha256")
+            or inputs.get("runtime_terminal_sha256") != current_terminal_sha
+            or inputs.get("runtime_attempt") != current.get("runtime_attempt", current.get("attempt"))
+            or inputs.get("runtime_phase") != current.get("runtime_phase", current.get("phase"))
+            or inputs.get("development_terminal_state") != current.get("development_terminal_state", current.get("state"))
+            or inputs.get("compose_project") != control.project
+            or inputs.get("frontend_container") != frontend_id
+            or inputs.get("frontend_volume") != frontend_volume
+            or inputs.get("public_loopback_url") != public_url
+            or inputs.get("browser_url") != browser_url):
+        raise BuildControlError("The FDM grid parent belongs to another source, development runtime or browser endpoint")
+    prior_sources = inputs.get("study_stage_rerun_source_sha256")
+    _validate_study_stage_rerun_hashes(prior_sources, "fdm-cell-study")
+    if any(prior_sources[key] != expected_sources[key] for key in expected_sources if key != "runner"):
+        raise BuildControlError("The FDM grid parent source dependencies differ from the selected checkout")
+    if (not isinstance(wrapper, Mapping)
+            or wrapper.get("schema") != "fullmag.docker-dev-browser-qa-runner-output.v1"
+            or wrapper.get("exit_code") != 1 or not isinstance(wrapper.get("stdout"), str)
+            or len(wrapper["stdout"].encode("utf-8")) > MAX_RESULT_BYTES
+            or not isinstance(result, Mapping) or result.get("schema") != STUDY_STAGE_RERUN_RESULT_SCHEMA
+            or result.get("state") != "failed-confirmed" or result.get("outcome") != "unknown"
+            or result.get("study_stage_rerun_native_outcome") != "unknown"
+            or result.get("requires_current_run_readback") is not True):
+        raise BuildControlError("The FDM grid parent has no pinned unknown browser-helper result")
+    prior_report = _parse_study_stage_rerun_result(
+        wrapper["stdout"].encode("utf-8"), public_url, browser_url, prior_sources, "fdm-cell-study",
+    )
+    if (prior_report.get("outcome") != "unknown" or prior_report.get("phase") != "fdm-grid-observing"
+            or prior_report.get("prepared_grid_run") is not None
+            or prior_report.get("command_receipt") is not None
+            or prior_report.get("command_count") != 0
+            or prior_report.get("command_attempt_count") != 0):
+        raise BuildControlError("The FDM grid parent did not stop before its first Study Solve")
+    expected_result = dict(prior_report)
+    expected_result.update(
+        state="failed-confirmed",
+        error="Browser helper exited before a passing public terminal proof",
+        study_stage_rerun_native_outcome="unknown",
+        requires_current_run_readback=True,
+    )
+    if canonical(result) != canonical(expected_result):
+        raise BuildControlError("The failed-confirmed parent result differs from its pinned browser output")
+    grid_receipt = prior_report["grid_refresh_receipt"]
+    evidence = {
+        "schema": "fullmag.p22-fdm-grid-resume-evidence.v1",
+        "prior_attempt": attempt,
+        "record_sha256": {key: hashlib.sha256(raw).hexdigest() for key, raw in raw_records.items()},
+        "prior_source_sha256": dict(prior_sources),
+        "prior_session": dict(prior_report["session_before"]),
+        "prior_before": dict(prior_report["before"]),
+        "prior_material_initial_state": dict(prior_report["fdm_material_initial_state"]),
+        "prior_cell_receipt": dict(prior_report["fdm_cell_receipt"]),
+        "prior_grid_receipt": dict(grid_receipt),
+        "grid_command_id": grid_receipt["terminal_detail"]["command_id"],
+        "prior_report": {
+            "mode": prior_report["mode"], "phase": prior_report["phase"],
+            "outcome": prior_report["outcome"], "command_count": prior_report["command_count"],
+            "command_attempt_count": prior_report["command_attempt_count"],
+        },
+    }
+    if len(canonical(evidence)) > 128 * 1024:
+        raise BuildControlError("FDM grid resume evidence exceeds its transport bound")
+    return _validate_fdm_grid_resume_evidence_shape(evidence, expected_sources)
+
+
+def _consume_fdm_grid_resume_evidence(control, evidence, *, child_attempt):
+    if (not isinstance(evidence, Mapping)
+            or evidence.get("schema") != "fullmag.p22-fdm-grid-resume-evidence.v1"
+            or re.fullmatch(r"[0-9a-f]{32}", str(evidence.get("prior_attempt", ""))) is None
+            or re.fullmatch(r"[0-9a-f]{32}", child_attempt or "") is None
+            or not isinstance(evidence.get("record_sha256"), Mapping)):
+        raise BuildControlError("FDM grid resume evidence or child attempt identity is malformed")
+    parent = evidence["prior_attempt"]
+    root = "browser-qa/attempts/" + parent
+    marker_path = root + "/resume-consumed.json"
+    if control.read_bytes(marker_path, optional=True) is not None:
+        raise BuildControlError("The accepted FDM grid attempt already has a resume claim")
+    names = {"receipt": "receipt.json", "terminal": "terminal.json",
+             "runner_output": "runner-output.json", "result": "result.json"}
+    pins = evidence["record_sha256"]
+    if set(pins) != set(names):
+        raise BuildControlError("FDM grid resume evidence omits a durable parent record pin")
+    for key, name in names.items():
+        raw = control.read_bytes(root + "/" + name,
+            maximum=MAX_RESULT_BYTES if key in {"runner_output", "result"} else 512 * 1024)
+        if hashlib.sha256(raw).hexdigest() != pins[key]:
+            raise BuildControlError("The FDM grid parent changed before its resume claim")
+    marker = {
+        "schema": "fullmag.p22-fdm-grid-resume-consumed.v1",
+        "parent_attempt": parent,
+        "child_attempt": child_attempt,
+        "record_sha256": dict(pins),
+    }
+    control.write(marker_path, marker)
+    return marker
+
+
+def _validate_fdm_grid_resume_evidence_shape(value, expected_sources=None):
+    fields = {"schema", "prior_attempt", "record_sha256", "prior_source_sha256", "prior_session",
+              "prior_before", "prior_material_initial_state", "prior_cell_receipt", "prior_grid_receipt",
+              "grid_command_id", "prior_report"}
+    if (not isinstance(value, Mapping) or set(value) != fields
+            or value.get("schema") != "fullmag.p22-fdm-grid-resume-evidence.v1"
+            or not isinstance(value.get("prior_attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", value["prior_attempt"]) is None):
+        raise BuildControlError("FDM grid resume evidence has an unexpected shape")
+    pins = value.get("record_sha256")
+    if (not isinstance(pins, Mapping) or set(pins) != {"receipt", "terminal", "runner_output", "result"}
+            or any(not isinstance(digest, str) or not SHA256_RE.fullmatch(digest) for digest in pins.values())):
+        raise BuildControlError("FDM grid resume durable-record hashes are malformed")
+    prior_sources = value.get("prior_source_sha256")
+    _validate_study_stage_rerun_hashes(prior_sources, "fdm-cell-study")
+    if expected_sources is not None:
+        _validate_study_stage_rerun_hashes(expected_sources, "fdm-cell-study-resume")
+        if any(prior_sources[key] != expected_sources[key] for key in expected_sources if key != "runner"):
+            raise BuildControlError("FDM grid resume dependencies differ from the selected checkout")
+    session = value.get("prior_session")
+    before = value.get("prior_before")
+    report = value.get("prior_report")
+    cell = value.get("prior_cell_receipt")
+    grid = value.get("prior_grid_receipt")
+    if (not isinstance(session, Mapping) or session.get("name") != "P22 three Relax stages"
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))
+            or not isinstance(before, Mapping)
+            or before.get("run_status") != "completed"
+            or before.get("stage_ids") != ["relax-a"]
+            or not isinstance(before.get("result_identities"), list)
+            or len(before["result_identities"]) != 1
+            or not isinstance(report, Mapping)
+            or report != {"mode": "fdm-cell-study", "phase": "fdm-grid-observing", "outcome": "unknown",
+                          "command_count": 0, "command_attempt_count": 0}
+            or not isinstance(value.get("prior_material_initial_state"), Mapping)
+            or value.get("prior_material_initial_state") != before.get("material_state")
+            or not isinstance(cell, Mapping) or cell.get("acknowledged") is not True
+            or cell.get("scene_revision") != cell.get("before_scene_revision", -1) + 1
+            or not isinstance(cell.get("unmodified_scene_sha256_after"), str)
+            or not SHA256_RE.fullmatch(cell["unmodified_scene_sha256_after"])
+            or not isinstance(grid, Mapping) or grid.get("accepted") is not True
+            or grid.get("command_id") != value.get("grid_command_id")
+            or grid.get("terminal_detail", {}).get("status") != "completed"
+            or "domain_transition" in grid):
+        raise BuildControlError("FDM grid resume evidence does not prove one acknowledged pre-Solve grid attempt")
+    if (not isinstance(value.get("grid_command_id"), str) or not 1 <= len(value["grid_command_id"]) <= 128
+            or any(ord(character) < 32 or ord(character) == 127 for character in value["grid_command_id"])):
+        raise BuildControlError("FDM grid resume evidence has no pinned grid command id")
+    if len(canonical(value)) > 128 * 1024:
+        raise BuildControlError("FDM grid resume evidence exceeds its transport bound")
+    return dict(value)
+
+
 def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domain_generation, cell_receipt,
-                                           previous_precondition, expected_script_sha256):
+                                           previous_precondition, expected_script_sha256,
+                                           expected_last_command_id=None):
     if (not isinstance(value, Mapping)
             or set(value) != {"run_id", "run_status", "solver_state", "execution_state", "stage_ids",
                 "authored_stage_ids", "stage_statuses", "completed_stage_indexes", "scene_profile", "profile",
@@ -3506,7 +3742,7 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     run_id = value.get("run_id")
     profile = value.get("profile")
     if (not isinstance(run_id, str) or not run_id or run_id == previous_run
-            or value.get("run_status") != "waiting_for_compute"
+            or value.get("run_status") != "waiting_for_solve"
             or value.get("solver_state") != "awaiting_command"
             or value.get("execution_state") != "awaiting_command"
             or value.get("stage_ids") != []
@@ -3545,16 +3781,26 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     region_revision_keys = ("region_topology_revision", "region_membership_revision",
                             "region_coefficients_revision", "region_initial_state_revision")
     if (not isinstance(previous_precondition, Mapping)
-            or any(precondition.get(key) != previous_precondition.get(key) for key in region_revision_keys)):
-        raise BuildControlError("FDM-cell-study grid refresh changed region revisions outside the cell edit")
+            or any(type(previous_precondition.get(key)) is not int
+                   or precondition.get(key) != previous_precondition[key] + 1
+                   for key in region_revision_keys)):
+        raise BuildControlError("FDM-cell-study grid refresh did not advance exactly the cell-policy region revisions")
     terminal_command_states = {"completed", "failed", "cancelled", "rejected"}
     if (not isinstance(commands, Mapping)
-            or set(commands) != {"revision", "pending_count", "running_count", "terminal_statuses"}
-            or commands.get("revision") != precondition.get("command_revision")
+            or set(commands) != {"resource_revision", "count", "pending_count", "running_count",
+                                 "terminal_statuses", "last_command_id"}
+            or type(commands.get("resource_revision")) is not int or commands["resource_revision"] < 0
+            or type(commands.get("count")) is not int or commands["count"] < 0
+            or commands.get("count") != precondition.get("command_revision")
             or type(commands.get("pending_count")) is not int or commands["pending_count"] != 0
             or type(commands.get("running_count")) is not int or commands["running_count"] != 0
             or not isinstance(commands.get("terminal_statuses"), list)
-            or len(commands["terminal_statuses"]) > 128
+            or len(commands["terminal_statuses"]) != commands["count"]
+            or commands["count"] > 128
+            or not isinstance(commands.get("last_command_id"), str)
+            or not commands["last_command_id"] or len(commands["last_command_id"]) > 128
+            or (expected_last_command_id is not None
+                and commands["last_command_id"] != expected_last_command_id)
             or any(state not in terminal_command_states for state in commands["terminal_statuses"])):
         raise BuildControlError("FDM-cell-study held run retained an active or stale command queue")
     prep_fields = {"preparation_id", "revision", "resource_revision", "status", "active_stage_id", "failure",
@@ -3586,9 +3832,9 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     ]
     prep_stages = preparation.get("stages")
     if (not isinstance(prep_stages, list) or len(prep_stages) != len(expected_prep_stages)
-            or any(not isinstance(stage, Mapping) or set(stage) != {"stage_id", "status"}
+            or any(not isinstance(stage, Mapping) or set(stage) != {"id", "status"}
                    for stage in prep_stages)
-            or [(stage.get("stage_id"), stage.get("status")) for stage in prep_stages] != expected_prep_stages):
+            or [(stage.get("id"), stage.get("status")) for stage in prep_stages] != expected_prep_stages):
         raise BuildControlError("FDM-cell-study preparation did not reach the exact ready frontier")
     return dict(value)
 
@@ -3806,6 +4052,7 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
             previous_domain_generation=before["profile"].get("domain_generation_id"),
             cell_receipt=cell_receipt, previous_precondition=baseline_precondition,
             expected_script_sha256=expected_sources["fixture"],
+            expected_last_command_id=grid_receipt["command_id"],
         )
         transition = grid_receipt.get("domain_transition")
         if (type(payload.get("grid_refresh_count")) is not int or payload.get("grid_refresh_count") != 1
@@ -4371,7 +4618,145 @@ def _validate_study_texture_unknown_payload(payload, public_url, browser_url, ex
     return dict(payload)
 
 
-def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode):
+def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sources, evidence):
+    """Validate this attempt, then join pinned parent mutations for cycle checks.
+
+    The joined payload is private validation data. The returned report retains
+    the measured current-attempt requests and zero cell/grid dispatches.
+    """
+    if (not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES
+            or not isinstance(evidence, Mapping)
+            or evidence.get("schema") != "fullmag.p22-fdm-grid-resume-evidence.v1"
+            or not isinstance(evidence.get("prior_before"), Mapping)
+            or not isinstance(evidence.get("prior_cell_receipt"), Mapping)
+            or not isinstance(evidence.get("prior_grid_receipt"), Mapping)
+            or not isinstance(evidence.get("prior_report"), Mapping)):
+        raise BuildControlError("FDM resume requires bounded output and trusted parent evidence")
+    payload = None
+    for line in reversed(output.decode("utf-8", "replace").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if (not isinstance(payload, Mapping)
+            or payload.get("schema") != STUDY_STAGE_RERUN_RESULT_SCHEMA
+            or payload.get("scenario") != "study-stage-rerun"
+            or payload.get("mode") != "fdm-cell-study-resume"):
+        raise BuildControlError("FDM resume output belongs to another browser scenario")
+    before = evidence["prior_before"]
+    cell = evidence["prior_cell_receipt"]
+    prior = evidence["prior_report"]
+    expected_proof = {
+        "schema": evidence["schema"], "prior_attempt": evidence.get("prior_attempt"),
+        "record_sha256": evidence.get("record_sha256"),
+        "grid_command_id": evidence.get("grid_command_id"),
+        "original_run_id": before.get("run_id"),
+        "original_result_identities": before.get("result_identities"),
+        "cell_scene_revision": cell.get("scene_revision"),
+        "unmodified_scene_sha256_after": cell.get("unmodified_scene_sha256_after"),
+    }
+    if (prior.get("mode") != "fdm-cell-study" or prior.get("phase") != "fdm-grid-observing"
+            or prior.get("outcome") != "unknown" or prior.get("command_count") != 0
+            or prior.get("command_attempt_count") != 0
+            or payload.get("resume_evidence") != expected_proof
+            or payload.get("before") != before
+            or payload.get("session_before") != evidence.get("prior_session")
+            or payload.get("session_after") != evidence.get("prior_session")
+            or payload.get("fdm_material_initial_state") != evidence.get("prior_material_initial_state")):
+        raise BuildControlError("FDM resume replaced its pinned parent, session or historical A result")
+    for key in ("fdm_cell_count", "fdm_cell_attempt_count", "grid_refresh_count", "grid_refresh_attempt_count"):
+        if type(payload.get(key)) is not int or payload[key] != 0:
+            raise BuildControlError("FDM resume repeated a cell transaction or grid refresh")
+    for key in ("fdm_cell_receipt", "grid_refresh_receipt"):
+        if payload.get(key) is not None:
+            raise BuildControlError("FDM resume attributed a prior mutation receipt to its current attempt")
+    if payload.get("ui_fdm_cell_proven") is not False or payload.get("ui_grid_refresh_proven") is not False:
+        raise BuildControlError("FDM resume claims a current cell or grid UI action")
+    count = payload.get("command_count")
+    attempts = payload.get("command_attempt_count")
+    if (type(count) is not int or count not in (0, 1)
+            or type(attempts) is not int or attempts != count
+            or payload.get("ui_command_proven") is not (count == 1)):
+        raise BuildControlError("FDM resume duplicated its one Study Solve")
+    requests = payload.get("request_counts")
+    command_key = "POST /v2/sessions/current/simulation/commands"
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    if (not isinstance(requests, Mapping) or not 1 <= len(requests) <= 128
+            or requests.get(command_key, 0) != count
+            or requests.get(STUDY_FDM_CELL_TRANSACTION_KEY, 0) != 0):
+        raise BuildControlError("FDM resume request inventory differs from its current dispatches")
+    for key, value in requests.items():
+        if (not isinstance(key, str) or " " not in key or len(key) > 2048
+                or type(value) is not int or not 1 <= value <= 128):
+            raise BuildControlError("FDM resume request inventory exceeds its bounds")
+        method, path = key.split(" ", 1)
+        if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == command_key and value == count:
+            continue
+        if key == STUDY_CAMERA_PATCH_KEY and value <= 4:
+            continue
+        if key == ack_key and value <= 16:
+            continue
+        raise BuildControlError("FDM resume attempted an additional API mutation")
+    if (type(payload.get("total_requests")) is not int
+            or payload["total_requests"] != sum(requests.values()) or payload["total_requests"] > 512
+            or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
+            or payload.get("per_path_read_limit") != 128):
+        raise BuildControlError("FDM resume omitted its current request budget proof")
+    prepared = payload.get("prepared_grid_run")
+    commands = prepared.get("commands") if isinstance(prepared, Mapping) else None
+    if (not isinstance(commands, Mapping)
+            or commands.get("last_command_id") != evidence.get("grid_command_id")):
+        raise BuildControlError("FDM resume is not bound to the completed parent grid command")
+    _validate_study_fdm_prepared_grid_run(
+        prepared, previous_run=before["run_id"],
+        previous_domain_generation=before["profile"]["domain_generation_id"],
+        cell_receipt=cell, previous_precondition=before["precondition"],
+        expected_script_sha256=expected_sources["fixture"],
+    )
+
+    # These two mutation receipts were validated from the parent's durable
+    # records before launch. Join them with the new held/run observations so
+    # the existing complete-cycle guards remain unchanged.
+    joined = deepcopy(payload)
+    joined.pop("resume_evidence", None)
+    joined["mode"] = "fdm-cell-study"
+    joined.update(fdm_cell_count=1, fdm_cell_attempt_count=1, ui_fdm_cell_proven=True,
+                  grid_refresh_count=1, grid_refresh_attempt_count=1, ui_grid_refresh_proven=True)
+    joined["fdm_cell_receipt"] = deepcopy(cell)
+    grid = deepcopy(evidence["prior_grid_receipt"])
+    grid["domain_transition"] = {
+        "before_domain_cell_count": before["profile"]["domain_cell_count"],
+        "before_domain_generation_id": before["profile"]["domain_generation_id"],
+        "ready_domain_cell_count": prepared["profile"]["domain_cell_count"],
+        "ready_domain_generation_id": prepared["profile"]["domain_generation_id"],
+        "scene_revision": cell["scene_revision"], "prior_run_id": before["run_id"],
+        "preserved_prior_result_identities": before["result_identities"],
+        "prepared_run_id": prepared["run_id"],
+        "preparation_id": prepared["preparation"]["preparation_id"],
+        "preparation_revision": prepared["preparation"]["revision"],
+    }
+    joined["grid_refresh_receipt"] = grid
+    joined["request_counts"][STUDY_FDM_CELL_TRANSACTION_KEY] = 1
+    joined["request_counts"][command_key] = count + 1
+    joined["total_requests"] = sum(joined["request_counts"].values())
+    _parse_study_stage_rerun_result(
+        canonical(joined), public_url, browser_url, expected_sources, "fdm-cell-study",
+    )
+    return dict(payload)
+
+
+def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode,
+                                    *, expected_resume_evidence=None):
+    if expected_mode == "fdm-cell-study-resume":
+        _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
+        return _parse_fdm_grid_resume_result(
+            output, public_url, browser_url, expected_sources, expected_resume_evidence,
+        )
     _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
     if expected_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun expected mode is invalid")
@@ -4548,6 +4933,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             previous_domain_generation=before["profile"].get("domain_generation_id"),
             cell_receipt=cell_receipt, previous_precondition=before.get("precondition"),
             expected_script_sha256=expected_sources["fixture"],
+            expected_last_command_id=grid_receipt["command_id"],
         )
         transition = grid_receipt.get("domain_transition")
         if (type(payload.get("grid_refresh_count")) is not int or payload.get("grid_refresh_count") != 1
@@ -5495,6 +5881,7 @@ def _run(
     inspector_ack_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
+    study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
 ) -> None:
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
@@ -5568,6 +5955,7 @@ def _run(
         inspector_ack_source_sha256=inspector_ack_source_sha256,
         study_stage_rerun=study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_source_sha256,
+        study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
@@ -5589,6 +5977,7 @@ def _run(
         elif study_stage_rerun is not None:
             payload = _parse_study_stage_rerun_result(
                 raw, public_url, browser_url, study_stage_rerun_source_sha256, study_stage_rerun,
+                expected_resume_evidence=study_stage_rerun_resume_evidence,
             )
             if payload.get("outcome") == "unknown" and result.returncode == 0:
                 raise BuildControlError("Study stage rerun helper returned success with an unknown command outcome")
@@ -5824,6 +6213,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     inspector_ack_sources = inputs.get("inspector_ack_source_sha256")
     study_stage_rerun_mode = inputs.get("study_stage_rerun")
     study_stage_rerun_sources = inputs.get("study_stage_rerun_source_sha256")
+    study_stage_rerun_resume_evidence = None
     if inspector_ack:
         _validate_inspector_ack_hashes(inspector_ack_sources)
         if _inspector_ack_source_sha256(selected) != inspector_ack_sources:
@@ -5837,10 +6227,33 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     elif inspector_ack_sources is not None:
         raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
     if study_stage_rerun:
-        if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}
+        if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
+                                           "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
                 or _study_stage_rerun_source_sha256(selected, study_stage_rerun_mode)
                 != study_stage_rerun_sources):
             raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
+        if study_stage_rerun_mode == "fdm-cell-study-resume":
+            parent_attempt = inputs.get("fdm_grid_resume_parent_attempt")
+            parent_record_hashes = inputs.get("fdm_grid_resume_parent_record_sha256")
+            runtime_identity = {
+                "source_commit": inputs.get("source_commit"),
+                "runtime_terminal_sha256": inputs.get("runtime_terminal_sha256"),
+                "attempt": inputs.get("development_attempt"),
+                "config_sha256": inputs.get("development_config_sha256"),
+                "runtime_attempt": inputs.get("runtime_attempt"),
+                "runtime_phase": inputs.get("runtime_phase"),
+                "development_terminal_state": inputs.get("development_terminal_state"),
+            }
+            study_stage_rerun_resume_evidence = _load_fdm_grid_resume_evidence(
+                control, parent_attempt, selected=selected, current=runtime_identity, identity=identity,
+                frontend_id=inputs.get("frontend_container"), frontend_volume=inputs.get("frontend_volume"),
+                public_url=inputs.get("public_loopback_url"), browser_url=inputs.get("browser_url"),
+                expected_sources=study_stage_rerun_sources, consumed_by=attempt,
+            )
+            if parent_record_hashes != study_stage_rerun_resume_evidence["record_sha256"]:
+                raise BuildControlError("QA reconciliation FDM grid parent record pins differ")
+        elif "fdm_grid_resume_parent_attempt" in inputs or "fdm_grid_resume_parent_record_sha256" in inputs:
+            raise BuildControlError("QA reconciliation has unrequested FDM grid resume parent pins")
         if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
                 or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
                 or inputs.get("expect_fem_airbox_vectors", False) is not False
@@ -6044,6 +6457,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         inspector_ack_source_sha256=inspector_ack_sources,
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
+        study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -6118,6 +6532,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         inspector_ack_source_sha256=inspector_ack_sources,
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
+        study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
@@ -6243,6 +6658,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Run one fixed P22 UI-only Study stage profile and verify public results",
     )
     parser.add_argument(
+        "--resume-fdm-grid-attempt",
+        help="Resume one exact failed-confirmed FDM grid browser attempt before any Study Solve",
+    )
+    parser.add_argument(
         "--airbox-inspector",
         action="store_true",
         help="Run the read-only live Airbox mesh Inspector proof in the managed browser service",
@@ -6264,6 +6683,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.reconcile_prestart and not args.reconcile_attempt:
         raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
+    if args.resume_fdm_grid_attempt is not None:
+        if (not isinstance(args.resume_fdm_grid_attempt, str)
+                or re.fullmatch(r"[0-9a-f]{32}", args.resume_fdm_grid_attempt) is None):
+            raise BuildControlError("--resume-fdm-grid-attempt requires one 32-character lowercase attempt id")
+        if args.study_stage_rerun is not None:
+            raise BuildControlError("--resume-fdm-grid-attempt cannot be combined with --study-stage-rerun")
+        args.study_stage_rerun = "fdm-cell-study-resume"
     if args.study_stage_rerun is not None and (
         args.reconcile_attempt or args.reconcile_prestart
         or args.prepare_viewport_fixture or args.canvas_only or args.expect_live_field is not None
@@ -6408,6 +6834,13 @@ def main(argv: list[str] | None = None) -> int:
         _study_stage_rerun_source_sha256(selected, args.study_stage_rerun)
         if args.study_stage_rerun is not None else None
     )
+    study_stage_rerun_resume_evidence = None
+    if args.resume_fdm_grid_attempt is not None:
+        study_stage_rerun_resume_evidence = _load_fdm_grid_resume_evidence(
+            control, args.resume_fdm_grid_attempt, selected=selected, current=current, identity=identity,
+            frontend_id=frontend_id, frontend_volume=frontend_volume, public_url=public_url,
+            browser_url=browser_url, expected_sources=study_stage_rerun_sources,
+        )
     airbox_inspector_script_sha256 = None
     source_script_sha256 = None
     if args.airbox_inspector:
@@ -6457,6 +6890,7 @@ def main(argv: list[str] | None = None) -> int:
         inspector_ack_source_sha256=inspector_ack_sources,
         study_stage_rerun=args.study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_sources,
+        study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -6508,6 +6942,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.study_stage_rerun is not None:
         inputs["study_stage_rerun"] = args.study_stage_rerun
         inputs["study_stage_rerun_source_sha256"] = study_stage_rerun_sources
+        if study_stage_rerun_resume_evidence is not None:
+            inputs["fdm_grid_resume_parent_attempt"] = study_stage_rerun_resume_evidence["prior_attempt"]
+            inputs["fdm_grid_resume_parent_record_sha256"] = study_stage_rerun_resume_evidence["record_sha256"]
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
@@ -6529,6 +6966,11 @@ def main(argv: list[str] | None = None) -> int:
         browser_image_id, _ = _ensure_browser_image(
             operation, control, document, args.browser_image, args.pull_timeout
         )
+        if study_stage_rerun_resume_evidence is not None:
+            _consume_fdm_grid_resume_evidence(
+                control, study_stage_rerun_resume_evidence,
+                child_attempt=operation["receipt"]["attempt"],
+            )
         _run(
             operation,
             control,
@@ -6562,6 +7004,7 @@ def main(argv: list[str] | None = None) -> int:
             inspector_ack_source_sha256=inspector_ack_sources,
             study_stage_rerun=args.study_stage_rerun,
             study_stage_rerun_source_sha256=study_stage_rerun_sources,
+            study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
         )
     return 0
 

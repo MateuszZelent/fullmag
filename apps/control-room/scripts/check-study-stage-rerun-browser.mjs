@@ -135,18 +135,19 @@ export function studyStageCommandForMode(mode, sceneRevision = null) {
       } },
     };
   }
-  if (["study", "fdm-cell-study", "texture-study"].includes(mode)) {
+  if (["study", "fdm-cell-study", "fdm-cell-study-resume", "texture-study"].includes(mode)) {
     return { kind: "solve", target: { kind: "study" } };
   }
   throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
 }
 
 export function studyStageExpectedStageIds(mode, phase) {
-  if (!["stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"].includes(mode)) {
+  if (!["stage-b", "study", "material-stage-a", "fdm-cell-study", "fdm-cell-study-resume",
+    "texture-stage-b", "texture-study"].includes(mode)) {
     throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
   }
   if (phase === "before") return ["study", "texture-study"].includes(mode) ? ["relax-b"]
-    : mode === "fdm-cell-study" ? ["relax-a"] : [...stageIds];
+    : ["fdm-cell-study", "fdm-cell-study-resume"].includes(mode) ? ["relax-a"] : [...stageIds];
   if (phase === "after") return mode === "stage-b" ? ["relax-b"]
     : mode === "material-stage-a" ? ["relax-a"]
       : mode === "texture-stage-b" ? ["relax-b"] : [...stageIds];
@@ -557,7 +558,7 @@ async function sourceHashes(mode) {
   const files = {
     ...sourceFiles,
     ...(mode === "material-stage-a" ? materialSourceFiles : {}),
-    ...(mode === "fdm-cell-study" ? fdmCellSourceFiles : {}),
+    ...(["fdm-cell-study", "fdm-cell-study-resume"].includes(mode) ? fdmCellSourceFiles : {}),
     ...(["texture-stage-b", "texture-study"].includes(mode) ? textureSourceFiles : {}),
   };
   const entries = await Promise.all(Object.entries(files).map(async ([key, path]) => {
@@ -819,9 +820,10 @@ export function studyStageComputePrecondition(status, currentRun, solverStatus, 
 export function studyStagePreparedGridPrecondition({
   status, currentRun, execution, solverStatus, commands, preparation, session,
   previousRunId, previousDomainGenerationId, previousPrecondition, expectedSceneRevision,
+  expectedGridCommandId = null,
 }) {
   assert(plainRecord(status?.resources), "Prepared FDM run omitted current resource revisions");
-  assert(currentRun?.status === "waiting_for_compute",
+  assert(currentRun?.status === "waiting_for_solve",
     "The accepted FDM frontier is not waiting for its one Compute Study command");
   assert(typeof currentRun.run_id === "string" && currentRun.run_id.length > 0
     && currentRun.run_id !== previousRunId,
@@ -857,6 +859,12 @@ export function studyStagePreparedGridPrecondition({
   assertNoInflightCommands(commands);
   assert.equal(commands.revision, status.resources.commands_revision,
     "Held FDM command revision differs from status");
+  if (expectedGridCommandId !== null) {
+    const lastCommand = commands.commands.at(-1);
+    assert(lastCommand?.command_id === expectedGridCommandId && lastCommand?.kind === "fdm_grid_refresh"
+      && lastCommand?.status === "completed",
+    "The held FDM frontier is not preceded by its pinned completed grid-refresh command");
+  }
   assert.equal(status.resources.scene_revision, expectedSceneRevision,
     "The held FDM run is not bound to the exact grid-edit acknowledgement revision");
   assert.equal(status.domain?.discretization, "fdm");
@@ -867,8 +875,8 @@ export function studyStagePreparedGridPrecondition({
     && status.domain.generation_id !== previousDomainGenerationId,
   "The prepared FDM run did not publish a new domain generation");
   for (const key of regionRevisionKeys) {
-    assert.equal(status.resources[key], previousPrecondition?.[key],
-      "FDM grid refresh changed a region revision outside its exact cell-policy edit");
+    assert.equal(status.resources[key], previousPrecondition?.[key] + 1,
+      "FDM grid refresh did not advance exactly the region revisions affected by its cell-policy edit");
   }
 
   const resourceRevision = status.resources.simulation_preparation_revision;
@@ -890,13 +898,72 @@ export function studyStagePreparedGridPrecondition({
   "The FDM preparation receipt is missing or belongs to another run");
   const prepStageIds = ["runtime_startup", "script_materialization", "validation", "planning",
     "domain_preparation", "meshing", "mesh_postprocessing", "solver_initialization", "ready"];
-  assert.deepEqual(preparation.stages?.map((stage) => stage?.stage_id), prepStageIds,
+  assert.deepEqual(preparation.stages?.map((stage) => stage?.id), prepStageIds,
     "The FDM preparation stages are missing, reordered or duplicated");
   assert.deepEqual(preparation.stages.map((stage) => stage.status),
     ["completed", "completed", "completed", "completed", "completed", "completed", "completed", "skipped", "completed"],
     "The FDM preparation did not reach its ready frontier");
 
   return studyStageComputePrecondition(status, currentRun, solverStatus, commands);
+}
+
+export function studyStageFdmResumeEvidenceAllowed(value) {
+  try {
+    const keys = ["schema", "prior_attempt", "record_sha256", "prior_source_sha256", "prior_session",
+      "prior_before", "prior_material_initial_state", "prior_cell_receipt", "prior_grid_receipt",
+      "grid_command_id", "prior_report"];
+    if (!plainRecord(value) || canonical(Object.keys(value).sort()) !== canonical([...keys].sort())
+        || value.schema !== "fullmag.p22-fdm-grid-resume-evidence.v1"
+        || !/^[0-9a-f]{32}$/.test(value.prior_attempt)
+        || !plainRecord(value.record_sha256)
+        || canonical(Object.keys(value.record_sha256).sort())
+          !== canonical(["receipt", "result", "runner_output", "terminal"])
+        || Object.values(value.record_sha256).some((digest) => !/^[0-9a-f]{64}$/.test(digest))
+        || !plainRecord(value.prior_source_sha256)
+        || Object.values(value.prior_source_sha256).some((digest) => !/^[0-9a-f]{64}$/.test(digest))) return false;
+    const prior = value.prior_report;
+    const before = value.prior_before;
+    const session = value.prior_session;
+    const cell = value.prior_cell_receipt;
+    const grid = value.prior_grid_receipt;
+    if (!plainRecord(prior) || prior.mode !== "fdm-cell-study" || prior.phase !== "fdm-grid-observing"
+        || prior.outcome !== "unknown" || prior.command_count !== 0 || prior.command_attempt_count !== 0
+        || !plainRecord(session) || session.name !== sessionName
+        || identityKeys.some((key) => typeof session[key] !== "string" || !session[key] || session[key].length > 512)
+        || !plainRecord(before) || before.run_status !== "completed"
+        || before.stage_ids?.length !== 1 || before.stage_ids[0] !== "relax-a"
+        || before.completed_stage_indexes?.length !== 1 || before.completed_stage_indexes[0] !== 0
+        || !plainRecord(before.profile) || before.profile.domain_cell_count !== 8
+        || !plainRecord(before.precondition)
+        || before.precondition.current_run?.run_id !== before.run_id
+        || !Array.isArray(before.result_identities) || before.result_identities.length !== 1
+        || before.result_identities[0].authored_stage_id !== "relax-a"
+        || !plainRecord(value.prior_material_initial_state)
+        || canonical(value.prior_material_initial_state) !== canonical(before.material_state)
+        || !plainRecord(cell) || cell.method !== "POST" || cell.status < 200 || cell.status >= 300
+        || cell.acknowledged !== true || cell.transaction_kind !== "merge_patch"
+        || cell.before_scene_revision !== before.precondition.scene_revision
+        || cell.scene_revision !== before.precondition.scene_revision + 1
+        || canonical(cell.after_cell) !== canonical(targetFdmCell)
+        || !/^[0-9a-f]{64}$/.test(cell.unmodified_scene_sha256_after)
+        || !plainRecord(grid) || grid.method !== "POST" || grid.accepted !== true
+        || grid.failed_grid_response !== null || typeof value.grid_command_id !== "string"
+        || value.grid_command_id.length === 0 || value.grid_command_id.length > 128
+        || grid.command_id !== value.grid_command_id
+        || grid.terminal_detail?.command_id !== value.grid_command_id
+        || grid.terminal_detail?.kind !== "fdm_grid_refresh"
+        || grid.terminal_detail?.status !== "completed"
+        || grid.terminal_detail?.completion_status !== "completed"
+        || grid.domain_transition !== undefined) return false;
+    const expectedScope = sessionScope(session);
+    if (cell.scope_header !== expectedScope || grid.scope_header !== expectedScope
+        || grid.payload?.kind !== "fdm_grid_refresh"
+        || grid.payload?.reason !== "study_global_commit"
+        || grid.payload?.precondition?.scene_revision !== cell.scene_revision) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resultIdentities(resource, runId, expectedIds) {
@@ -996,6 +1063,8 @@ export async function runStudyStageRerun() {
   assert.equal(process.env.CONTROL_ROOM_BROWSER_QA_SCENARIO, scenario,
     "Managed Study stage rerun admission is required");
   const mode = process.argv[2];
+  const isResume = mode === "fdm-cell-study-resume";
+  const isGridMode = mode === "fdm-cell-study" || isResume;
   studyStageCommandForMode(mode);
   assert.equal(process.argv.length, 3, "The fixed Study stage runner accepts exactly one mode");
   assert.equal(process.env.CONTROL_ROOM_STUDY_STAGE_RERUN_MODE, mode);
@@ -1016,7 +1085,7 @@ export async function runStudyStageRerun() {
   const timerBudget = () => Math.max(1, timeout - cleanupReserveMs - (Date.now() - startedAt));
   const readCounts = { status: 0, current_session: 0, scene: 0, commands: 0,
     current_run: 0, stage_execution: 0, solver_status: 0, stage_results: 0, command_details: 0 };
-  if (mode === "fdm-cell-study") readCounts.preparation = 0;
+  if (isGridMode) readCounts.preparation = 0;
   const requestCounts = {};
   const errors = [];
   const violations = [];
@@ -1029,7 +1098,7 @@ export async function runStudyStageRerun() {
   let after = null;
   let reloadProof = null;
   let expectedDomainCellCount = 8;
-  if (["texture-stage-b", "texture-study"].includes(mode)) expectedDomainCellCount = 16;
+  if (isResume || ["texture-stage-b", "texture-study"].includes(mode)) expectedDomainCellCount = 16;
   let materialBeforeState = null;
   let materialSourceScene = null;
   let materialReceipt = null;
@@ -1052,6 +1121,8 @@ export async function runStudyStageRerun() {
   let uiGridRefreshProven = false;
   let gridRefreshTerminalDetail = null;
   let preparedGridRun = null;
+  let resumeInput = null;
+  let resumeEvidence = null;
   let textureSourceProof = null;
   let textureBaselineState = null;
   let textureSourceScene = null;
@@ -1211,7 +1282,7 @@ export async function runStudyStageRerun() {
     };
   }
 
-  async function readPreparedGridRun(expectedSession, previousSnapshot, cellReceipt) {
+  async function readPreparedGridRun(expectedSession, previousSnapshot, cellReceipt, expectedGridCommandId = null) {
     const status = await apiGet(statusPath, expectedSession, false);
     readCounts.status++;
     assertSameSession(expectedSession, readStudyStageSessionIdentity(status, { requireCommandable: false }));
@@ -1238,8 +1309,8 @@ export async function runStudyStageRerun() {
         "Prepared FDM public revisions changed while resources were read");
     }
     for (const key of regionRevisionKeys) {
-      assert.equal(statusAfter.resources?.[key], previousSnapshot.precondition[key],
-        "FDM grid refresh changed a region revision outside its exact cell-policy edit");
+      assert.equal(statusAfter.resources?.[key], previousSnapshot.precondition[key] + 1,
+        "FDM grid refresh did not advance exactly the region revisions affected by its cell-policy edit");
     }
     assert.equal(statusAfter.run?.run_id, currentRun.run_id,
       "Prepared FDM status and current run disagree");
@@ -1248,8 +1319,16 @@ export async function runStudyStageRerun() {
     const sceneRevision = scene.revision ?? scene.scene_revision;
     assert.equal(sceneRevision, cellReceipt.scene_revision,
       "Prepared FDM scene differs from the acknowledged default-cell revision");
-    assert(studyStageFdmCellSceneMatches(fdmCellSourceScene, scene),
-      "Prepared FDM scene changed data outside the acknowledged default-cell edit");
+    if (mode === "fdm-cell-study-resume") {
+      assert.deepEqual(readFdmDefaultCell(scene), targetFdmCell,
+        "The held FDM scene no longer uses the prior acknowledged cell policy");
+      assert.equal(createHash("sha256").update(canonical(sceneWithoutFdmDefaultCell(scene))).digest("hex"),
+        cellReceipt.unmodified_scene_sha256_after,
+        "The held FDM scene changed data outside the prior acknowledged cell-policy edit");
+    } else {
+      assert(studyStageFdmCellSceneMatches(fdmCellSourceScene, scene),
+        "Prepared FDM scene changed data outside the acknowledged default-cell edit");
+    }
     const profile = currentProfile(statusAfter, currentRun, currentSession, expectedSources, 16);
     assert.equal(profile.domain_generation_id, statusAfter.domain.generation_id);
     assert.equal(scene.revision, statusAfter.resources.scene_revision);
@@ -1264,6 +1343,7 @@ export async function runStudyStageRerun() {
       previousDomainGenerationId: previousSnapshot.profile.domain_generation_id,
       previousPrecondition: previousSnapshot.precondition,
       expectedSceneRevision: cellReceipt.scene_revision,
+      expectedGridCommandId,
     });
     const results = await readResults(currentRun.run_id, expectedSession, []);
     assert.deepEqual(results, [], "The held FDM run unexpectedly contains stage results before Solve");
@@ -1295,7 +1375,9 @@ export async function runStudyStageRerun() {
       profile: snapshot.profile,
       scene_revision: snapshot.scene.revision ?? snapshot.scene.scene_revision,
       precondition: snapshot.precondition,
-      commands: { revision: snapshot.commands.revision,
+      commands: { resource_revision: snapshot.commands.revision,
+        count: snapshot.commands.commands.length,
+        last_command_id: snapshot.commands.commands.at(-1)?.command_id ?? null,
         pending_count: snapshot.commands.pending_count, running_count: snapshot.commands.running_count,
         terminal_statuses: snapshot.commands.commands.map((command) => command.status) },
       preparation: {
@@ -1307,7 +1389,7 @@ export async function runStudyStageRerun() {
         failure: snapshot.preparation.failure ?? null,
         receipt: { schema_version: receipt.schema_version, preparation_id: receipt.preparation_id,
           run_id: receipt.run_id, plan_fingerprint: receipt.plan_fingerprint, payload_sha256: receipt.payload_sha256 },
-        stages: snapshot.preparation.stages.map((stage) => ({ stage_id: stage.stage_id, status: stage.status })),
+        stages: snapshot.preparation.stages.map((stage) => ({ stage_id: stage.id, status: stage.status })),
       },
     };
   }
@@ -1327,7 +1409,7 @@ export async function runStudyStageRerun() {
       result_identities: snapshot.resultIdentities,
       precondition: snapshot.precondition,
     };
-    if (mode === "fdm-cell-study") value.material_state = studyStageMaterialState(snapshot.scene);
+    if (isGridMode) value.material_state = studyStageMaterialState(snapshot.scene);
     if (["texture-stage-b", "texture-study"].includes(mode)) {
       value.texture_state = studyStageTextureSceneProfile(snapshot.scene, {
         allowUnedited: mode === "texture-stage-b" && textureTransactionCount === 0,
@@ -1343,7 +1425,7 @@ export async function runStudyStageRerun() {
     assert.deepEqual(snapshot.sceneStageIds, stageIds, "Authored P22 scene changed during the run");
     assert.equal(snapshot.scene.revision, beforeSnapshot?.precondition.scene_revision,
       "P22 scene changed during stage execution");
-    const expectedDomainGeneration = mode === "fdm-cell-study"
+    const expectedDomainGeneration = isGridMode
       ? preparedGridRun?.profile?.domain_generation_id : before?.profile.domain_generation_id;
     assert.equal(snapshot.profile.domain_generation_id, expectedDomainGeneration,
       "P22 domain generation changed during stage execution");
@@ -1366,7 +1448,7 @@ export async function runStudyStageRerun() {
       assert.equal(material.magnetization_ref, materialBeforeState.magnetization_ref);
       assert.equal(material.magnetization_asset_sha256, materialBeforeState.magnetization_asset_sha256);
     }
-    if (mode === "fdm-cell-study") {
+    if (isGridMode) {
       const material = studyStageMaterialState(snapshot.scene);
       assert.equal(material.object_id, fdmMaterialBeforeState.object_id);
       assert.equal(material.material_id, fdmMaterialBeforeState.material_id);
@@ -1414,6 +1496,10 @@ export async function runStudyStageRerun() {
       "The P22 command execution binding has the wrong target or selected step");
     if (executionBinding && canonical(executionBinding) !== canonical(candidate)) {
       throw new Error("The P22 accepted command execution binding changed across public readbacks");
+    }
+    if (isGridMode) {
+      assert.equal(candidate.run_id, preparedGridRun?.run_id,
+        "Compute Study did not bind the exact prepared held FDM run");
     }
     executionBinding = candidate;
     commandReceipt.execution_binding = candidate;
@@ -1467,7 +1553,47 @@ export async function runStudyStageRerun() {
       if (message.type() === "error" && errors.length < 16) errors.push(boundedMessage(message.text()));
     });
 
-    const initial = await readSnapshot(null, { requireIdle: true });
+    if (isResume) {
+      const encoded = process.env.CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE;
+      assert(typeof encoded === "string" && Buffer.byteLength(encoded, "utf8") <= 128 * 1024,
+        "The managed FDM grid resume evidence is absent or oversized");
+      resumeInput = JSON.parse(encoded);
+      assert(studyStageFdmResumeEvidenceAllowed(resumeInput), "The pinned FDM grid resume evidence is malformed");
+      for (const [key, digest] of Object.entries(expectedSources)) {
+        if (key !== "runner") assert.equal(resumeInput.prior_source_sha256[key], digest,
+          "An FDM grid source dependency changed before resume");
+      }
+      session = structuredClone(resumeInput.prior_session);
+      before = structuredClone(resumeInput.prior_before);
+      fdmMaterialBeforeState = structuredClone(resumeInput.prior_material_initial_state);
+      resumeEvidence = {
+        schema: resumeInput.schema,
+        prior_attempt: resumeInput.prior_attempt,
+        record_sha256: structuredClone(resumeInput.record_sha256),
+        grid_command_id: resumeInput.grid_command_id,
+        original_run_id: before.run_id,
+        original_result_identities: structuredClone(before.result_identities),
+        cell_scene_revision: resumeInput.prior_cell_receipt.scene_revision,
+        unmodified_scene_sha256_after: resumeInput.prior_cell_receipt.unmodified_scene_sha256_after,
+      };
+    }
+    const readBeforeAction = async () => {
+      if (!isResume) return readSnapshot(session, { requireIdle: true });
+      const prior = resumeInput.prior_before;
+      const priorSnapshot = {
+        currentRun: { run_id: prior.run_id }, profile: prior.profile,
+        precondition: prior.precondition, sceneProfile: prior.scene_profile,
+      };
+      const prepared = await readPreparedGridRun(session, priorSnapshot,
+        resumeInput.prior_cell_receipt, resumeInput.grid_command_id);
+      assert.deepEqual(studyStageMaterialState(prepared.scene), fdmMaterialBeforeState,
+        "The FDM resume changed the accepted material or global magnetization asset");
+      const history = await readResults(prior.run_id, session, ["relax-a"]);
+      assert.deepEqual(history, prior.result_identities,
+        "The original eight-cell A result changed before FDM resume");
+      return prepared;
+    };
+    const initial = await readBeforeAction();
     if (mode === "material-stage-a") {
       materialBeforeState = studyStageMaterialState(initial.scene);
       assert.equal(materialBeforeState.properties.Ms, 800000, "P22 fixture Ms baseline differs");
@@ -1504,10 +1630,10 @@ export async function runStudyStageRerun() {
       textureSourceProof = await readTextureSourceProof(initial);
     }
     session = initial.session;
-    assert.deepEqual(stableProjection(initial), stableProjection(await readSnapshot(session, { requireIdle: true })),
+    assert.deepEqual(stableProjection(initial), stableProjection(await readBeforeAction()),
       "P22 public resources changed between initial bounded snapshots");
     beforeSnapshot = initial;
-    before = summary(initial);
+    if (!isResume) before = summary(initial);
     expectedPrecondition = initial.precondition;
 
     await page.route("**/v2/**", async (route) => {
@@ -1722,11 +1848,17 @@ export async function runStudyStageRerun() {
     await page.goto(new URL("/workspace", proxy.origin).href, {
       waitUntil: "domcontentloaded", timeout: Math.min(90_000, timerBudget()),
     });
-    const beforeClick = await readSnapshot(session, { requireIdle: true });
+    const beforeClick = await readBeforeAction();
     assert.deepEqual(stableProjection(beforeClick), stableProjection(initial),
       "P22 current run, stage view or history changed before the UI action");
     beforeSnapshot = beforeClick;
-    before = summary(beforeClick);
+    if (!isResume) before = summary(beforeClick);
+    else {
+      assert.deepEqual(preparedGridSummary(beforeClick), preparedGridSummary(initial),
+        "The prepared FDM run or its receipt changed before the UI action");
+      preparedGridRun = preparedGridSummary(beforeClick);
+      phase = "fdm-grid-ready";
+    }
     expectedPrecondition = beforeClick.precondition;
 
     if (mode === "material-stage-a") {
@@ -2008,7 +2140,8 @@ export async function runStudyStageRerun() {
         && readyScene && studyStageFdmCellSceneMatches(fdmCellSourceScene, readyScene),
       "The new sixteen-cell FDM domain did not become ready from the exact acknowledged grid policy");
       expectedDomainCellCount = 16;
-      const postGrid = await readPreparedGridRun(session, beforeClick, fdmCellReceipt);
+      const postGrid = await readPreparedGridRun(session, beforeClick, fdmCellReceipt,
+        gridRefreshReceipt.command_id);
       const materialAfterGrid = studyStageMaterialState(postGrid.scene);
       assert.equal(materialAfterGrid.magnetization_asset_sha256, fdmMaterialBeforeState.magnetization_asset_sha256,
         "The FDM grid refresh changed the authored m0 asset");
@@ -2085,7 +2218,7 @@ export async function runStudyStageRerun() {
     }
     await action.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
     assert.equal(await action.isEnabled(), true, "The pinned P22 command is disabled in the real UI");
-    const responseWait = page.waitForResponse(
+    const responseWait = studyStageObserveResponse(page.waitForResponse(
       (response) => {
         const request = response.request();
         const url = new URL(request.url());
@@ -2093,12 +2226,14 @@ export async function runStudyStageRerun() {
           && request.headers()["x-fullmag-session-scope"] === sessionScope(session);
       },
       { timeout: Math.min(20_000, timerBudget()) },
-    ).catch((error) => { throw new Error("P22 command response was not observed: " + boundedMessage(error)); });
+    ), "P22 command response was not observed: ");
     phase = "ui-submit";
     if (mode === "texture-stage-b") await clickRunStageBOnce(page);
     else await action.click();
-    const commandResponse = await deadline(responseWait, Math.min(20_000, timerBudget()),
+    const commandObservation = await deadline(responseWait, Math.min(20_000, timerBudget()),
       "P22 command response timed out; native outcome is unknown");
+    assert(commandObservation.response, commandObservation.error);
+    const commandResponse = commandObservation.response;
     if (!commandRequest || commandCount !== 1 || !uiCommandProven) {
       throw new Error("The real UI did not submit exactly one guarded command");
     }
@@ -2115,10 +2250,7 @@ export async function runStudyStageRerun() {
     }
     commandReceipt.command_id = acceptance.command_id;
     if (accepted.execution_binding != null) {
-      executionBinding = accepted.execution_binding;
-      assert(studyStageExecutionBindingMatches(executionBinding, mode, executionBinding.run_id),
-        "The accepted P22 command response has a mismatched execution binding");
-      commandReceipt.execution_binding = executionBinding;
+      retainExecutionBinding(accepted.execution_binding);
     }
     phase = "await-terminal";
 
@@ -2142,7 +2274,7 @@ export async function runStudyStageRerun() {
       const commandState = current.commands?.commands?.find((entry) => entry.command_id === accepted.command_id);
       if (commandState?.execution_binding) retainExecutionBinding(commandState.execution_binding);
       if (currentRunId === executionBinding.run_id && currentRunId !== before.run_id
-          && (mode !== "fdm-cell-study" || currentRunId === preparedGridRun?.run_id)
+          && (!isGridMode || currentRunId === preparedGridRun?.run_id)
           && current.status.run?.run_id === currentRunId
           && current.currentRun.status === "completed"
           && current.execution.run_id === currentRunId
@@ -2161,7 +2293,7 @@ export async function runStudyStageRerun() {
     }
 
     assert.notEqual(terminal.currentRun.run_id, before.run_id, "P22 command reused the previous run ID");
-    if (mode === "fdm-cell-study") {
+    if (isGridMode) {
       assert.equal(terminal.currentRun.run_id, preparedGridRun?.run_id,
         "Compute Study did not release the exact held run prepared after grid refresh");
     }
@@ -2334,7 +2466,8 @@ export async function runStudyStageRerun() {
       errors,
       proxy_failures: proxy?.failures.slice(0, 16).map(boundedMessage) ?? [],
     };
-    if (mode === "fdm-cell-study") result.prepared_grid_run = preparedGridRun;
+    if (isGridMode) result.prepared_grid_run = preparedGridRun;
+    if (isResume) result.resume_evidence = resumeEvidence;
     if (phase === "preflight" && !session) result.session_after = null;
     await writeResult(result).catch((error) => {
       process.stdout.write(JSON.stringify({ schema, scenario, state: "failed", outcome,
