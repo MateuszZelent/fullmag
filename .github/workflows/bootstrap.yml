@@ -171,6 +171,8 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api session_status_reports_current_energy --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact

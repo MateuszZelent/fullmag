@@ -585,6 +585,89 @@ export function shouldLoadRuntimeScalars(
   return hasPositiveRevision(status?.resources.scalars_revision);
 }
 
+type SolverEnergyReadinessStatus = Pick<
+  LiveStatusResource,
+  "resources" | "session" | "run"
+> & {
+  /** Optional locally until the generated OpenAPI contract is refreshed. */
+  solver_energy_current_available?: boolean;
+};
+
+type SolverEnergyStatusRevision = {
+  available: boolean;
+  revision: string;
+  sourceIdentity: string;
+};
+
+type SourceScopedSolverEnergyCurrentResource = SolverEnergyCurrentResource & {
+  source_identity: string;
+};
+
+export function shouldLoadSolverEnergyCurrent(
+  enabled: boolean,
+  status: SolverEnergyReadinessStatus | null | undefined,
+): boolean {
+  return enabled && status?.solver_energy_current_available === true;
+}
+
+export function solverEnergyCurrentStatusForResource(
+  status: SolverEnergyReadinessStatus,
+): string {
+  return JSON.stringify([
+    status.session.session_id,
+    status.session.session_epoch,
+    status.session.request_scope_epoch,
+    status.run?.run_id ?? null,
+    status.resources.stages_revision,
+  ]);
+}
+
+export function solverEnergyCurrentStatusRevision(
+  status: SolverEnergyReadinessStatus,
+): string {
+  return JSON.stringify([
+    solverEnergyCurrentStatusForResource(status),
+    status.resources.scalars_revision,
+    status.resources.fields_revision,
+    status.resources.stages_revision,
+    status.solver_energy_current_available === true,
+  ]);
+}
+
+export function solverEnergyCurrentDataForStatus<
+  TData extends { source_identity: string },
+>(
+  data: TData | null | undefined,
+  status:
+    | SolverEnergyReadinessStatus
+    | SolverEnergyStatusRevision
+    | null
+    | undefined,
+): TData | null {
+  if (!data || !status) return null;
+  if ("available" in status
+    ? !status.available
+    : status.solver_energy_current_available !== true) {
+    return null;
+  }
+  const sourceIdentity =
+    "sourceIdentity" in status
+      ? status.sourceIdentity
+      : solverEnergyCurrentStatusForResource(status);
+  return data.source_identity === sourceIdentity ? data : null;
+}
+
+function solverEnergyStatusRevisionsEqual(
+  previous: SolverEnergyStatusRevision | null,
+  next: SolverEnergyStatusRevision | null,
+): boolean {
+  return (
+    previous?.available === next?.available &&
+    previous?.revision === next?.revision &&
+    previous?.sourceIdentity === next?.sourceIdentity
+  );
+}
+
 export function shouldLoadFrequencyDomainManifest(
   enabled: boolean,
   status:
@@ -1443,40 +1526,60 @@ export function useSolverEnergyCurrentResource({
     (status) => {
       const current = status.data;
       if (!current) return null;
-      return [
-        current.session.session_id,
-        current.session.session_epoch,
-        current.resources.scalars_revision,
-        current.resources.fields_revision,
-      ].join(":");
+      const readinessStatus = current as SolverEnergyReadinessStatus;
+      return {
+        available: shouldLoadSolverEnergyCurrent(true, readinessStatus),
+        revision: solverEnergyCurrentStatusRevision(readinessStatus),
+        sourceIdentity: solverEnergyCurrentStatusForResource(readinessStatus),
+      } satisfies SolverEnergyStatusRevision;
     },
-    { enabled },
+    { enabled, isEqual: solverEnergyStatusRevisionsEqual },
   );
+  const currentEnergyAvailable = statusRevision?.available === true;
   const load = useCallback(
-    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.simulation.solver.energies
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+      const data = await api.simulation.solver.energies
         .current({ sessionScopeKey, signal })
-        .catch(ignoreMissingResource<SolverEnergyCurrentResource>),
-    [api],
+        .catch(ignoreMissingResource<SolverEnergyCurrentResource>);
+      return data
+        ? { ...data, source_identity: statusRevision?.sourceIdentity ?? "" }
+        : null;
+    },
+    [api, statusRevision?.sourceIdentity],
   );
 
-  const resource = useSessionScopedResource<SolverEnergyCurrentResource | null>({
-    enabled,
+  const resource = useSessionScopedResource<
+    SourceScopedSolverEnergyCurrentResource | null
+  >({
+    enabled: enabled && currentEnergyAvailable,
     load,
-    resolveRevision: (data) => data?.revision ?? null,
+    resolveRevision: (data) =>
+      data ? `${data.source_identity}:${data.revision}` : null,
     resourceKey: SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   });
   const { refetch } = resource;
-  const lastStatusRevision = useRef<string | null>(null);
+  const lastStatusRevision = useRef<SolverEnergyStatusRevision | null>(null);
   useEffect(() => {
     if (!enabled || statusRevision === null) return;
     const previous = lastStatusRevision.current;
     lastStatusRevision.current = statusRevision;
-    if (previous !== null && previous !== statusRevision) {
+    if (
+      statusRevision.available &&
+      (previous === null ||
+        !previous.available ||
+        previous.sourceIdentity !== statusRevision.sourceIdentity ||
+        previous.revision !== statusRevision.revision)
+    ) {
+      // Force through the shared resource cache on first readiness and after
+      // source transitions; an unchanged endpoint invalidation revision alone
+      // could otherwise reuse a prior run's settled entry.
       refetch();
     }
   }, [enabled, refetch, statusRevision]);
-  return resource;
+  return {
+    ...resource,
+    data: solverEnergyCurrentDataForStatus(resource.data, statusRevision),
+  };
 }
 
 export function useSolverEnergyHistoryResource(

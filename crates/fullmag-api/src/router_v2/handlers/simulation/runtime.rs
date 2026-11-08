@@ -1893,9 +1893,25 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+    let selected = current_solver_energy_resource_for_snapshot(
         snapshot,
         &request_context.request_scope_epoch,
+    )
+    .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
+
+    Ok(Json(selected))
+}
+
+/// Resolve readiness and value from the same source-qualified selection used
+/// by the current-energy endpoint. Status surfaces use this to avoid probing a
+/// resource before the current active run has published its accepted scalar pin.
+pub(crate) fn current_solver_energy_resource_for_snapshot(
+    snapshot: &SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Option<SolverEnergyCurrentResource> {
+    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        request_scope_epoch,
     );
     let active_docker_run = active_docker_accepted_run(snapshot);
     // Accepted field materialization validates the durable accepted state and
@@ -1915,16 +1931,13 @@ pub async fn get_solver_energies_current(
     let revision = snapshot.scalar_revision.saturating_add(
         crate::router_v2::handlers::sessions::status::field_revision(snapshot),
     );
-    let selected = select_current_energy_resource(
+    select_current_energy_resource(
         accepted_live_row,
         materialized,
         historical_row,
         active_docker_run,
         revision,
     )
-    .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
-
-    Ok(Json(selected))
 }
 
 #[utoipa::path(
@@ -2772,6 +2785,15 @@ mod accepted_live_energy_clock_tests {
         assert_eq!(response.anisotropy, 7.5);
         assert_eq!(response.dmi, 22.5);
         assert_eq!(response.total, 75.0);
+    }
+
+    #[test]
+    fn zero_total_is_still_a_ready_current_energy_sample() {
+        let current = scalar_row(0, 0.0, 0.0);
+        let selected = select_current_energy_resource(Some(&current), None, None, true, 1)
+            .expect("a qualified zero-energy row is a real sample");
+
+        assert_eq!(selected.total, 0.0);
     }
 
     #[test]

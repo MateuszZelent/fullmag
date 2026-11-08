@@ -29072,6 +29072,45 @@ async fn solver_energies_current_endpoint_returns_latest_energy_sample() {
 }
 
 #[tokio::test]
+async fn session_status_reports_current_energy_readiness_when_endpoint_has_a_sample() {
+    let app = test_router_with_runtime_read_models().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["solver_energy_current_available"], true);
+}
+
+#[tokio::test]
+async fn session_status_reports_current_energy_unavailable_before_any_sample() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["solver_energy_current_available"], false);
+}
+
+#[tokio::test]
 async fn solver_energies_history_endpoint_honors_limit() {
     let app = test_router_with_runtime_read_models().await;
     let response = app

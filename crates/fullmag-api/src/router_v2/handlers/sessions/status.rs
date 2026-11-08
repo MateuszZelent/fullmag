@@ -424,6 +424,11 @@ pub(crate) fn build_live_status(
         total_steps,
         steps_per_second,
     };
+    let solver_energy_current_available = crate::router_v2::handlers::simulation::runtime::current_solver_energy_resource_for_snapshot(
+        snapshot,
+        request_scope_epoch,
+    )
+    .is_some();
 
     LiveStatus {
         api_contract_version: "1.0.0".into(),
@@ -437,6 +442,7 @@ pub(crate) fn build_live_status(
         resources,
         capabilities,
         energies,
+        solver_energy_current_available,
         metrics,
     }
 }
