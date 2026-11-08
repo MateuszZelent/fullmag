@@ -22627,6 +22627,12 @@ fm.run(1e-10)
     };
     let before = authored("0, 0, 1");
     let after = authored("0, 1, 0");
+    assert_eq!(
+        serde_json::to_value(after.objects[0].regions[0].texture_override.as_ref().unwrap())
+            .unwrap()["initial_magnetization"]["preset_params"]["direction"],
+        serde_json::json!([0.0, 1.0, 0.0]),
+        "the generated after fixture must contain the requested Y texture",
+    );
     assert_eq!(crate::scene_mesh_signature(&before), crate::scene_mesh_signature(&after));
     let requested = fullmag_application::RequestedExecution {
         backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
@@ -22707,8 +22713,8 @@ fm.run(1e-10)
     let expected: Vec<_> = mask.into_iter().map(|reset| {
         if reset { [0.0, 1.0, 0.0] } else { [0.0, 0.0, 1.0] }
     }).collect();
-    for (sample, expected) in values.iter().zip(&expected) {
-        assert_eq!(sample, &serde_json::json!(expected));
+    for (index, (sample, expected)) in values.iter().zip(&expected).enumerate() {
+        assert_eq!(sample, &serde_json::json!(expected), "published native sample {index}");
     }
     let frame = &snapshot.field_publication_bundles["m"].observation_frame;
     assert_ne!(frame.observation_frame_id, previous_frame);
