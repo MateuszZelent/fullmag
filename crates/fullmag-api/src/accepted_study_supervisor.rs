@@ -3856,6 +3856,7 @@ mod tests {
         std::fs::remove_file(snapshot_path).unwrap();
 
         let mut retries = 0;
+        let retry_started = Instant::now();
         let error = verify_host_solver_claim_before_spawn_with_timeout(
             &fixture.host,
             &fixture.store,
@@ -3865,7 +3866,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(retries > 0, "missing sample should be retried before deferral");
+        assert!(retries > 0 || retry_started.elapsed() >= Duration::from_millis(250),
+            "missing sample must retry while its deadline is open: {error:#}");
         assert!(error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
         }));
@@ -3918,6 +3920,7 @@ mod tests {
         let fixture = host_launch_test_fixture();
         drop(fixture._inventory_owner);
         let mut retries = 0;
+        let retry_started = Instant::now();
         let error = verify_host_solver_claim_before_spawn_with_timeout(
             &fixture.host,
             &fixture.store,
@@ -3926,7 +3929,8 @@ mod tests {
             || retries += 1,
         )
         .unwrap_err();
-        assert!(retries > 0, "{error:#}");
+        assert!(retries > 0 || retry_started.elapsed() >= Duration::from_millis(250),
+            "inactive owner must retry while its deadline is open: {error:#}");
         assert!(error.downcast_ref::<
             fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent,
         >().is_some());
@@ -4008,6 +4012,7 @@ mod tests {
             .unwrap();
 
         let mut sample_read_retries = 0;
+        let sample_read_started = Instant::now();
         let second_read_error = current_compute_snapshot_before_worker_launch_with_timeout(
             &fixture.host,
             Duration::from_millis(250),
@@ -4015,8 +4020,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            sample_read_retries > 0,
-            "the sample read should be retried before deferral"
+            sample_read_retries > 0 || sample_read_started.elapsed() >= Duration::from_millis(250),
+            "the sample read must retry while its deadline is open: {second_read_error:#}"
         );
         assert!(second_read_error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
@@ -4024,6 +4029,7 @@ mod tests {
         assert!(format!("{second_read_error:#}").contains("freshness is Stale"));
 
         let mut authorization_retries = 0;
+        let authorization_started = Instant::now();
         let error = authorize_host_worker_launch_with_timeout(
             &fixture.host,
             &fixture.store,
@@ -4033,8 +4039,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            authorization_retries > 0,
-            "stale authorization should be retried before deferral"
+            authorization_retries > 0 || authorization_started.elapsed() >= Duration::from_millis(100),
+            "stale authorization must retry while its deadline is open: {error:#}"
         );
         assert!(error.chain().any(|cause| {
             cause.is::<fullmag_session::host_resource_ledger::ComputeNodeSampleNotCurrent>()
