@@ -289,6 +289,25 @@ export function studyStageShouldReadTerminalResources(status, runId) {
     && status?.run?.run_id === runId && status?.solver?.state === "awaiting_command";
 }
 
+export function studyStageFailedTerminalOutcome(current, binding, previousRunId, commandId) {
+  const runId = binding?.run_id;
+  if (typeof runId !== "string" || !runId
+      || typeof previousRunId !== "string" || !previousRunId || runId === previousRunId
+      || typeof commandId !== "string" || !commandId
+      || current?.status?.run?.run_id !== runId
+      || current?.currentRun?.run_id !== runId
+      || current?.execution?.run_id !== runId) return null;
+
+  const runStatus = current.currentRun.status;
+  if (!["failed", "cancelled"].includes(runStatus)
+      || current.execution.runtime_state !== runStatus) return null;
+
+  if (!Array.isArray(current.commands?.commands)) return null;
+  const commandState = current.commands.commands.find((entry) => entry?.command_id === commandId);
+  if (!commandState || !TERMINAL_COMMAND_STATES.has(commandState.status)) return null;
+  return { run_id: runId, run_status: runStatus, command_status: commandState.status };
+}
+
 function stripSceneRevision(scene) {
   const projection = structuredClone(scene);
   delete projection.revision;
@@ -2346,6 +2365,16 @@ export async function runStudyStageRerun() {
       const currentRunId = current.currentRun?.run_id;
       const commandState = current.commands?.commands?.find((entry) => entry.command_id === accepted.command_id);
       if (commandState?.execution_binding) retainExecutionBinding(commandState.execution_binding);
+      const failedTerminal = studyStageFailedTerminalOutcome(
+        current, executionBinding, before.run_id, accepted.command_id,
+      );
+      if (failedTerminal) {
+        outcome = "unknown";
+        throw new Error(
+          `The exact P22 command reached public ${failedTerminal.run_status} terminal state `
+          + `for run ${failedTerminal.run_id}; the Study proof is not successful`,
+        );
+      }
       if (currentRunId === executionBinding.run_id && currentRunId !== before.run_id
           && (!isGridMode || currentRunId === preparedGridRun?.run_id)
           && current.status.run?.run_id === currentRunId

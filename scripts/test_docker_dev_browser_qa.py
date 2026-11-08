@@ -4679,6 +4679,36 @@ assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'s
 assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new'}, 'study', 'new'), true);
 assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new',step_id:'relax-b'},
   'study', 'new'), false);
+const failedTerminal = {
+  status:{run:{run_id:'run-new'}},
+  currentRun:{run_id:'run-new',status:'failed'},
+  execution:{run_id:'run-new',runtime_state:'failed'},
+  commands:{commands:[{command_id:'cmd-exact',status:'failed'}]},
+};
+const failedBinding = {run_id:'run-new'};
+assert.deepEqual(runner.studyStageFailedTerminalOutcome(failedTerminal,failedBinding,'run-old','cmd-exact'),
+  {run_id:'run-new',run_status:'failed',command_status:'failed'});
+const cancelledTerminal = {...failedTerminal,
+  currentRun:{run_id:'run-new',status:'cancelled'},
+  execution:{run_id:'run-new',runtime_state:'cancelled'},
+  commands:{commands:[{command_id:'cmd-exact',status:'cancelled'}]},
+};
+assert.deepEqual(runner.studyStageFailedTerminalOutcome(cancelledTerminal,failedBinding,'run-old','cmd-exact'),
+  {run_id:'run-new',run_status:'cancelled',command_status:'cancelled'});
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,failedBinding,'run-new','cmd-exact'),null,
+  'the pre-command run cannot be treated as a new terminal result');
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,{run_id:'run-foreign'},'run-old','cmd-exact'),null,
+  'a foreign binding cannot terminate this accepted command');
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,null,'run-old','cmd-exact'),null,
+  'missing execution binding remains outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,execution:{...failedTerminal.execution,run_id:'run-foreign'}},
+  failedBinding,'run-old','cmd-exact'),null,'inconsistent execution identity remains outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,execution:{...failedTerminal.execution,runtime_state:'cancelled'}},
+  failedBinding,'run-old','cmd-exact'),null,'inconsistent terminal states remain outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,commands:{commands:[{command_id:'cmd-exact',status:'running'}]}},
+  failedBinding,'run-old','cmd-exact'),null,'a nonterminal matching command must keep polling');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,commands:{commands:[{command_id:'cmd-foreign',status:'failed'}]}},
+  failedBinding,'run-old','cmd-exact'),null,'a foreign command cannot confirm terminal failure');
 const node = (id, label, algorithm, maxSteps, first=false) => ({
   enabled:true,id,label,node_kind:'primitive',source:'script_imported',stage_kind:'relax',
   payload:{...(first ? {adaptive_timestep:null,demag_interval_s:'',fixed_timestep:'1e-13',integrator:'rk23',
