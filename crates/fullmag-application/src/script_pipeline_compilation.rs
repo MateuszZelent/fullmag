@@ -80,6 +80,14 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
                 ancestor_group_ids:binding.ancestor_group_ids.clone(),label:label.clone(),notes:notes.clone(),source:source.clone()});
         }
     }
+    let mut physical_clock = None;
+    for stage in &mut stages {
+        if stage.action.is_none() && matches!(stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. }) {
+            let start = physical_clock.unwrap_or(read_physical_stage_start(&stage.ir)?);
+            physical_clock = Some(advance_physical_clock(start, stage.until_seconds)?);
+            stage.ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), serde_json::json!(start));
+        }
+    }
     let by_id: BTreeMap<_, _> = nodes
         .iter()
         .enumerate()
@@ -127,6 +135,23 @@ pub fn materialize_script_pipeline_with_output_policy_bounded(
         nodes,
         executions,
     })
+}
+
+pub(crate) fn read_physical_stage_start(problem: &fullmag_ir::ProblemIR) -> Result<f64> {
+    let start = match problem.problem_meta.runtime_metadata.get("stage_start_time_s") {
+        None => 0.0,
+        Some(value) => value.as_f64().context("physical stage start must be numeric")?,
+    };
+    if !start.is_finite() || start < 0.0 { bail!("physical stage start must be finite and nonnegative"); }
+    Ok(start)
+}
+
+pub(crate) fn advance_physical_clock(start: f64, duration: f64) -> Result<f64> {
+    let end = start + duration;
+    if !duration.is_finite() || duration <= 0.0 || !end.is_finite() || end <= start {
+        bail!("physical Run duration must advance a finite clock");
+    }
+    Ok(end)
 }
 
 pub(crate) fn authored_node<'a>(nodes:&'a [StudyPipelineNode], id:&str) -> Option<&'a StudyPipelineNode> {

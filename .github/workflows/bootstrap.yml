@@ -306,7 +306,8 @@ jobs:
       - name: Run canonical FEM marker and artifact contracts
         run: |
           cargo test --locked -p fullmag-fem-sys --features build-native --lib versioned_stt_extension_is_append_only_after_legacy_plan_prefix
-          cargo test --locked -p fullmag-api --lib sequential_physical_pipeline_counts_only_enabled_physical_steps
+          cargo test --locked -p fullmag-api --bin fullmag-api sequential_physical_pipeline_counts_only_enabled_physical_steps
+          cargo test --locked -p fullmag-runner --lib resumed_run_artifacts_preserve_stage_start_without_accepted_steps
           cargo test --locked -p fullmag-plan --lib materialized_input_preserves_full_u32_markers
           cargo test --locked -p fullmag-antenna-artifacts --lib canonical_attributes_preserve_u32_without_accepting_invalid_ranges
 

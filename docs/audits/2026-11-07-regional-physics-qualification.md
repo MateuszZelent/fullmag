@@ -740,3 +740,53 @@ Regresje Rust dla admission/genesis, typed input replay oraz adaptive capture
 są obowiązkowymi krokami bootstrap CI; ich wynik jest niezależny od tego
 dowodu runtime. Końcowy stan CI i integracji pozostaje w PR #418 oraz
 w rejestrze worktree; ta sekcja nie zastępuje tych bramek.
+
+### Dodatkowa bramka zegara i wymuszenia absolute — A8 CPU PASS
+
+A5 kwalifikuje stałe pole i przenoszenie magnetyzacji. Nie sprawdza fazy
+wymuszenia zależnego od czasu. Dalsza kontrola wykazała zerowanie początku
+kolejnego Run w ekspansji pipeline. Kompilator przypisuje teraz skumulowany
+czas fizyczny kolejnych Run; Relax i inspekcje go nie przesuwają. Zachowany
+jawny origin przebiegu pozostaje niezmieniony, a cold validator sprawdza
+ciągłość i skończony, reprezentowalny przyrost. Osobno poprawiono początek
+`m_initial.json` i zerokrokowy zapis końcowy TimeEvolution FDM/FEM.
+
+Próba A6 potwierdziła fazę i m/E po naprawie planu, ale ujawniła jeszcze
+początkowy artefakt z czasem 0 zamiast 2 ps. A7 po przebudowie zakończyła
+pierwszy etap; drugi został odrzucony przed Solve przez `FutureTimestamp`
+próbki hosta (collected 09:40:59.602332615, evaluated 09:40:01.141003832 UTC).
+Przyczyny tej chwilowej rozbieżności zegarów nie ustalono. Zachowano zdarzenia,
+exit receipt i pierwszy wynik; nie osłabiono admission ani nie odtwarzano Solve.
+Trzy kolejne obserwacje wykazały bieżące próbki i stabilnego ownera.
+
+Nowa A8 CPU/double zakończyła oba Run: 9 i 21 kroków, przedziały [0,2] ps
+oraz [2,5] ps w planie i artefaktach. Dwa ostre regiony Ms=400/800 kA/m,
+A=13 pJ/m, alpha=0,1, komórki 2 nm, początkowe m=+x i brak demag;
+oba regiony mają identyczne Bz(t)=0,03 T + 0,02 T sin(2 pi 50 GHz t).
+Jednorodne m zeruje exchange i daje analitykę Gilberta z całką B(t),
+zgodnie z konwencją gamma i SI z noty 0920.
+
+| Miara | A8 CPU/double | Próg ustalony przed próbą |
+|---|---:|---:|
+| Max błąd składowej m | 2,6941e-12 | 5e-8 |
+| Max względny błąd energii | 2,1207e-10 | 1e-6 |
+| Defekt normy | 1,1103e-16 | 1e-10 |
+| Ciągłość m między etapami | 0 | 1e-14 |
+
+Obie pełne polityki adaptacyjne są zachowane dokładnie, bez fallbacku.
+Hipotetyczny reset zegara dawałby błąd m=0,0043978, więc test odróżnia tę
+usterkę od poprawnego wyniku. Run:
+`run-live-a8a6b5bcf6bda5d2dac2dcbf98a6a935acf3d243741d880def51159eab366abb`,
+Compute `fm-66f803ab-fe19-4956-b21f-5597cdb5b4c3`, źródło
+`70389b8958dddf2086b76fca06177ac9ae2aa7e9417564c1bf088a32688c73c0`.
+Samowystarczalne dane: `adaptive_clock_a8_cpu/regional_adaptive_clock_a8_cpu.zarr`.
+Build `b4e419c36af3443bb27d527d6a3f8b00`, snapshot
+`3db33c9dd35f85fcfad1c6b40b162fb423c490acad7daccee29599078f03a7ec`;
+75 zmienionych plików kompilowanych jest identycznych z build shadow.
+
+A8 CUDA/single ujawniła oddzielny brak wpisu tożsamości adaptacyjnego
+wykonania w runnerze, mimo istniejącego kodu CUDA i deklaracji executable
+w macierzy capability. Pierwszy task odmówił przed Solve; drugi anulowano
+przypiętym Stop `fm-ad469336-0dd8-4fd1-88c6-e85491376294`, bez replay.
+Nie jest to dowód numeryczny CUDA. Uzupełnienie zgodnej tożsamości z zachowaniem
+`unvalidated`, nowa próba CUDA, regresje Rust i końcowe CI pozostają otwarte.

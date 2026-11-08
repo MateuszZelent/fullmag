@@ -278,6 +278,20 @@ t_{\mathrm{abs}},&\texttt{absolute}.
 zwraca zapisany origin, a dla starszych planów bez niego początek segmentu
 $t_{\mathrm{stage,start}}$. Przy wznowieniu te dwie wartości mogą się różnić;
 ponowne zerowanie fazy byłoby zmianą fizycznego wymuszenia.
+
+W sekwencji zaakceptowanych etapów Run początek kolejnego Run jest sumą
+początku pierwszego Run i czasów trwania poprzednich Run. Relaksacja oraz
+inspekcje nie przesuwają tego zegara fizycznego. Wspólny kompilator etapów
+przypisuje `stage_start_time_s` przed utrwaleniem katalogu; odczyt zimnego
+katalogu sprawdza tę samą ciągłość. Zachowany jawny
+`stage_waveform_origin_time_s` pozostaje niezmieniony. Początkowy czas musi
+być skończony i nieujemny, a dodawanie dodatnich czasów trwania nie może
+przepełniać zegara ani gubić całego przyrostu. Kwalifikacja dwóch Run z
+sinusoidą `absolute` wymaga osobnego porównania z całką pola; test stałego
+pola sam nie sprawdza fazy wymuszenia.
+Artefakt początkowej magnetyzacji Run (`m_initial.json`) zapisuje fizyczny
+początek etapu, a nie lokalne zero integratora. Gdy nie zaakceptowano żadnego
+kroku, zapis końcowy również zachowuje ten początek; nie deklaruje postępu.
 The closed waveform catalogue is:
 
 | Kind | Definition |
@@ -905,3 +919,6 @@ Regresje authoringu: `RegionalFieldDriveTests`; zegar: osobny skrypt source.
 | Box/CSG classifier; Cylinder i fallback Boundary | `crates/fullmag-plan/src/regional_field_drive.rs` | `geometry_cell_relation` | FDM CPU/GPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/regional_field_drive.rs) |
 | Gauss-Duffy smooth oraz adaptacja maski z max depth 10 | `backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp` | `integrate_profile_adaptive` | FEM CPU | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp) |
 | Auto-sinc guard i rzeczywista częstość próbkowania | `crates/fullmag-plan/src/sampling.rs` | `resolve_auto_sampling_for_stage` | wspólna | source_visible; runtime niekwalifikowane | [źródło](https://github.com/MateuszZelent/fullmag/blob/a9e094f5ab67d54167cbd464c58c4f7eb3250b06/crates/fullmag-plan/src/sampling.rs) |
+| Ciągłość zegara kolejnych Run | `crates/fullmag-application/src/script_pipeline_compilation.rs` | `advance_physical_clock` | wspólna | source_visible; kwalifikacja sinusoidy w toku |
+| Wznowienie origin i odmowa resetu katalogu | `crates/fullmag-application/src/script_pipeline_acceptance.rs` | `physical_runs_keep_cumulative_clock_and_saved_waveform_origin` | wspólna | source_visible; CI w toku |
+| Zegar początkowego i zerokrokowego końcowego artefaktu | `crates/fullmag-runner/src/artifacts.rs` | `resumed_run_artifacts_preserve_stage_start_without_accepted_steps` | FDM/FEM | source_visible; kwalifikacja w toku |

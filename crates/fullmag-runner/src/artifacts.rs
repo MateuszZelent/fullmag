@@ -2530,20 +2530,29 @@ pub(crate) fn write_artifacts(
         )?;
     }
 
+    let initial_time = if matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }) {
+        match &plan.backend_plan {
+            BackendPlanIR::Fdm(plan) => plan.time_stage.start_time_s,
+            BackendPlanIR::Fem(plan) => plan.time_stage.start_time_s,
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
     write_field_file(
         &output_dir.join("m_initial.json"),
         &field_context,
         &execution_provenance,
         "m",
         0,
-        0.0,
+        initial_time,
         0.0,
         &executed.initial_magnetization,
     )?;
 
     let mut final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
-        time: 0.0,
+        time: initial_time,
         dt: 0.0,
         e_ex: 0.0,
         e_demag: 0.0,
@@ -5904,6 +5913,40 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resumed_run_artifacts_preserve_stage_start_without_accepted_steps() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        for mut plan in [test_execution_plan(None), test_fem_execution_plan()] {
+            let (count, engine) = match &mut plan.backend_plan {
+                BackendPlanIR::Fdm(fdm) => {
+                    fdm.time_stage.start_time_s = 2e-12;
+                    (fdm.initial_magnetization.len(), "cpu_reference")
+                }
+                BackendPlanIR::Fem(fem) => {
+                    fem.time_stage.start_time_s = 2e-12;
+                    (fem.mesh.nodes.len(), "fem_cpu_native")
+                }
+                _ => unreachable!(),
+            };
+            let output_dir = std::env::temp_dir().join(format!("fullmag-stage-clock-{engine}-{}-{}",
+                std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+            let executed = ExecutedRun {
+                result: RunResult {status: RunStatus::Completed, steps: Vec::new(),
+                    final_magnetization: vec![[1.0,0.0,0.0]; count], completion: None},
+                initial_magnetization: vec![[1.0,0.0,0.0]; count], field_snapshots: Vec::new(),
+                field_snapshot_count: 0, auxiliary_artifacts: Vec::new(),
+                provenance: ExecutionProvenance {execution_engine: engine.into(), precision: "double".into(), ..Default::default()},
+            };
+            write_artifacts(&output_dir, &problem, &plan, &executed, None).unwrap();
+            for name in ["m_initial.json", "m_final.json"] {
+                let payload: serde_json::Value = serde_json::from_slice(&fs::read(output_dir.join(name)).unwrap()).unwrap();
+                assert_eq!(payload["time"], serde_json::json!(2e-12));
+                assert_eq!(payload["step"], 0);
+            }
+            fs::remove_dir_all(output_dir).unwrap();
+        }
+    }
 
     #[test]
     fn scalar_csv_publishes_drive_energy_between_external_and_anisotropy() {

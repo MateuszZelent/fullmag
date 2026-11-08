@@ -235,6 +235,7 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
     let mut previous:Option<String>=None;
     let mut previous_state:Option<String>=None;
     let mut previous_physical = None;
+    let mut physical_clock = None;
     for (step,execution) in study.steps.iter().zip(executions) {
         strict_keys(execution,&["execution_id","authored_step_id","expansion_index","ancestor_group_ids","label","notes","source","problem_sha256"])?;
         let node=nodes.iter().find(|n| n["authored_step_id"]==execution["authored_step_id"]).context("source execution owner missing")?;
@@ -258,6 +259,13 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
                 validate_physical_state_predecessor(previous_physical, entry.problem())?;
                 let node=crate::script_pipeline_compilation::authored_node(&authored.nodes,execution["authored_step_id"].as_str().context("physical source ID missing")?).context("physical source node missing")?;
                 let (kind,horizon,inputs,outputs)=physical_step_contract(node,entry.problem(),step.until_seconds.unwrap_or(0.0),previous_state.as_deref())?;
+                if let Some(duration) = horizon {
+                    let start = crate::script_pipeline_compilation::read_physical_stage_start(entry.problem())?;
+                    if physical_clock.is_some_and(|expected| expected != start) {
+                        bail!("physical Run clock differs from its sequential predecessor");
+                    }
+                    physical_clock = Some(crate::script_pipeline_compilation::advance_physical_clock(start, duration)?);
+                }
                 if step.kind!=kind || step.until_seconds!=horizon || step.inputs!=inputs || step.outputs!=outputs
                     || !step.enabled || step.acceptance!=StudyAcceptancePolicy::Any || step.acquisition!=StudyAcquisitionPolicy::Exclusive || step.legacy_payload.is_some() {
                     bail!("physical source operation, horizon or exact predecessor state chain differs");
@@ -318,6 +326,46 @@ mod tests {
         compile_accepted_closed_loop_pipeline(config,"physical-study".into(),0,
             StudyExecutionProfileReference {profile_id:profile.profile_id.clone(),version:profile.version.clone()},vec![],capture(),
             |_,_|Ok(profile.clone()),fullmag_ir::configure_project_autosave_policy)
+    }
+    #[test]
+    fn physical_runs_keep_cumulative_clock_and_saved_waveform_origin() {
+        let mut config = physical_config();
+        config.stages[0].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(4e-12));
+        config.stages[1].ir.problem_meta.runtime_metadata.insert("stage_waveform_origin_time_s".into(), json!(2e-12));
+        let compiled = compile_physical(config).unwrap();
+        let entries = compiled.catalog.entries();
+        assert_eq!(entries[0].problem().problem_meta.runtime_metadata["stage_start_time_s"], json!(4e-12));
+        assert_eq!(entries[1].problem().problem_meta.runtime_metadata["stage_start_time_s"], json!(4e-12 + 1e-12));
+        assert_eq!(entries[1].problem().problem_meta.runtime_metadata["stage_waveform_origin_time_s"], json!(2e-12));
+        validate_accepted_script_pipeline_source(&compiled.study, &compiled.catalog, &compiled.source_bytes).unwrap();
+    }
+    #[test]
+    fn physical_clock_rejects_invalid_seed_overflow_and_lost_increment() {
+        for seed in [json!(-1.0), json!("bad"), json!(1e300)] {
+            let mut config = physical_config();
+            config.stages[0].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), seed);
+            assert!(compile_physical(config).is_err());
+        }
+        assert!(crate::script_pipeline_compilation::advance_physical_clock(1e308, 1e308).is_err());
+    }
+    #[test]
+    fn cold_source_refuses_reset_clock_even_with_valid_capture_hashes() {
+        let compiled=compile_physical(physical_config()).unwrap();
+        let mut study=compiled.study.clone();
+        let old=&compiled.catalog.entries()[1];
+        let mut problem=old.problem().clone();
+        problem.problem_meta.runtime_metadata.insert("stage_start_time_s".into(),json!(0.0));
+        let refs=capture_study_input_references(&study.steps[1].step_id,&problem).unwrap();
+        study.steps[1].model=refs.model;
+        study.steps[1].solver_config=refs.solver_config;
+        study.steps[1].discretization=refs.discretization;
+        let entry=StudyProblemCatalogEntry::from_captured_materialized_step(&study.steps[1],problem,
+            old.execution_materialization().unwrap().clone(),refs.identity.clone()).unwrap();
+        let catalog=StudyProblemCatalog::from_entries(&study,vec![compiled.catalog.entries()[0].clone(),entry]).unwrap();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        source["executions"][1]["problem_sha256"]=json!(refs.identity.problem_sha256);
+        let error=validate_accepted_script_pipeline_source(&study,&catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("physical Run clock"),"{error:#}");
     }
     #[test]
     fn physical_snapshots_bind_once_pinned_profile_and_exact_state_chain() {

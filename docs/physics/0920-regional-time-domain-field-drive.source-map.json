@@ -1004,6 +1004,33 @@
       "responsibility": "Auto-sinc guard i rzeczywista częstość próbkowania",
       "solver_backend": "wspólna",
       "evidence_status": "source_visible"
+    },
+    {
+      "id": "pipeline-clock",
+      "path": "crates/fullmag-application/src/script_pipeline_compilation.rs",
+      "symbol": "advance_physical_clock",
+      "responsibility": "Sequential Run clock before immutable capture; relaxation and inspection do not advance physical time",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double two Run absolute sinusoid PASS; macro/cold/writer Rust regressions pending CI. CUDA adaptive identity gap remains separate; no FEM dynamic qualification claimed."
+    },
+    {
+      "id": "pipeline-clock-tests",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "physical_runs_keep_cumulative_clock_and_saved_waveform_origin",
+      "responsibility": "Clock continuity, saved waveform origin, overflow and rehashed cold-catalog reset refusals",
+      "solver_backend": "wspólna",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double two Run absolute sinusoid PASS; macro/cold/writer Rust regressions pending CI. CUDA adaptive identity gap remains separate; no FEM dynamic qualification claimed."
+    },
+    {
+      "id": "initial-artifact-clock",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "resumed_run_artifacts_preserve_stage_start_without_accepted_steps",
+      "responsibility": "Physical stage time in initial and zero-step final magnetization artifacts",
+      "solver_backend": "FDM/FEM",
+      "evidence_status": "source_visible",
+      "evidence": "A8 CPU/double two Run absolute sinusoid PASS; macro/cold/writer Rust regressions pending CI. CUDA adaptive identity gap remains separate; no FEM dynamic qualification claimed."
     }
   ],
   "public_api": {
