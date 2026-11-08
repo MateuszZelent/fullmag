@@ -3939,7 +3939,7 @@ mod tests {
         command.precondition = Some(serde_json::from_value(serde_json::json!({
             "current_run": { "kind": "none" },
         })).unwrap());
-        validate_runtime_command_preconditions(&snapshot, &ledger, &command).unwrap();
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
 
         snapshot.run = Some(serde_json::from_value(serde_json::json!({
             "run_id": "relax-a",
@@ -3948,16 +3948,16 @@ mod tests {
             "total_steps": 1,
             "artifact_dir": "",
         })).unwrap());
-        let error = validate_runtime_command_preconditions(&snapshot, &ledger, &command)
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
             .expect_err("a previously absent current run cannot be replaced silently");
         assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
 
         command.precondition = Some(serde_json::from_value(serde_json::json!({
             "current_run": { "kind": "run", "run_id": "relax-a" },
         })).unwrap());
-        validate_runtime_command_preconditions(&snapshot, &ledger, &command).unwrap();
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
         snapshot.run.as_mut().unwrap().run_id = "another-run".into();
-        let error = validate_runtime_command_preconditions(&snapshot, &ledger, &command)
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
             .expect_err("a different continuation run cannot be adopted silently");
         assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
     }
@@ -3984,15 +3984,15 @@ mod tests {
             ..RuntimeCommandPrecondition::default()
         });
         let ledger = std::collections::VecDeque::new();
-        validate_runtime_command_preconditions(&snapshot, &ledger, &command).unwrap();
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
 
         snapshot.metadata = Some(metadata("grid-b").into());
-        let error = validate_runtime_command_preconditions(&snapshot, &ledger, &command)
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
             .expect_err("a different grid cannot satisfy the original domain pin");
         assert_eq!(error.code.as_deref(), Some("command_domain_generation_changed"));
 
         command.precondition.as_mut().unwrap().domain_generation_id = None;
-        validate_runtime_command_preconditions(&snapshot, &ledger, &command).unwrap();
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
     }
 
     #[test]
