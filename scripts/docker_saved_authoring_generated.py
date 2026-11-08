@@ -10,6 +10,7 @@ import stat
 from docker_build_control import BuildControlError
 
 SCHEMA = "fullmag.saved-generated-authoring-restart.v1"
+SCHEMA_V2 = "fullmag.saved-generated-authoring-restart.v2"
 GENERATED_SOURCE_MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -18,8 +19,22 @@ def require(value, message):
         raise BuildControlError("Generated authoring restart: " + message)
 
 
+def service_owner_field(request):
+    return ("service_owner_identity_sha256" if request.get("schema") == SCHEMA_V2
+            else "service_owner_sha256")
+
+
+def service_owner_digest(request, owner, canonical):
+    if request.get("schema") == SCHEMA_V2:
+        require(isinstance(owner, dict) and
+                isinstance(owner.get("heartbeat_at"), str) and owner["heartbeat_at"],
+                "stable owner requires the native heartbeat observation")
+        owner = {key: value for key, value in owner.items() if key != "heartbeat_at"}
+    return hashlib.sha256(canonical(owner)).hexdigest()
+
+
 def validate_checkpoint(request):
-    enabled = request.get("schema") == SCHEMA
+    enabled = request.get("schema") in (SCHEMA, SCHEMA_V2)
     require(("generated_source" in request) == enabled, "schema/source pins differ")
     if not enabled:
         return None

@@ -116,6 +116,9 @@ jobs:
           cargo test --locked -p fullmag-runner --lib antenna_field_solution::closed_loop_identity_v2::affinity_tests
           cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler worker_failure_reason_
 
+      - name: Run saved generated authoring restart contracts
+        run: python -B -m unittest discover -s scripts -p 'test_docker_saved_authoring*.py'
+
       - name: Run execution-intent roundtrip contracts
         env:
           RUST_MIN_STACK: 8388608

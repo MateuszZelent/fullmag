@@ -4790,6 +4790,7 @@ def _saved_authoring_document(raw):
 def _saved_authoring_validate_request(request, *, project, attempt, config_sha256, selected,
                                       allow_generated=False):
     generated = generated_authoring.validate_checkpoint(request)
+    owner_field = generated_authoring.service_owner_field(request)
     _saved_authoring_require(generated is None or allow_generated,
         "generated source checkpoint is not enabled for recovery")
     empty_authoring = isinstance(request, dict) and request.get('schema') == _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA
@@ -4802,12 +4803,12 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     retained = retained_history.validate_retained_catalogs(request)
     _saved_authoring_require(set(request) == ({'schema', 'compose_project', 'attempt', 'config_sha256',
         'source_root', 'exclusive_operator_window', 'archive', 'session', 'containers',
-        'package', 'service_owner_sha256'} | ({'cancelled_preclaim'} if cancelled else set())
+        'package', owner_field} | ({'cancelled_preclaim'} if cancelled else set())
         | ({'historical_preclaim'} if historical else set())
         | ({'retained_run_catalogs'} if retained is not None else set())
         | ({'generated_source'} if generated is not None else set())), 'checkpoint fields differ')
     _saved_authoring_require(request['schema'] in {'fullmag.saved-authoring-restart.v1', preclaim_restart.SCHEMA,
-                                                    _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA, generated_authoring.SCHEMA}
+                                                    _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA, generated_authoring.SCHEMA, generated_authoring.SCHEMA_V2}
         and request['compose_project'] == project and request['attempt'] == attempt
         and request['config_sha256'] == config_sha256
         and request['source_root'] == str(selected)
@@ -4850,7 +4851,7 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     hashes = [archive[k] for k in ('sha256', 'scene_sha256')]
     if not empty_authoring:
         hashes.append(archive['source_sha256'])
-    hashes += [request['service_owner_sha256'], *request['package'].values()]
+    hashes += [request[owner_field], *request['package'].values()]
     _saved_authoring_require(all(isinstance(v, str) and re.fullmatch('[0-9a-f]{64}', v) for v in hashes), 'invalid digest pin')
     _saved_authoring_require(isinstance(request['containers'], dict) and set(request['containers']) ==
         {'backend', 'frontend'}, 'exact two service pins required')
@@ -4980,7 +4981,7 @@ def _saved_authoring_read_archive(request, state):
 
 def _saved_authoring_validate_probe(probe, request, scene):
     generated_authoring.validate_probe(probe, request)
-    generated = request.get("schema") == generated_authoring.SCHEMA
+    generated = request.get("schema") in (generated_authoring.SCHEMA, generated_authoring.SCHEMA_V2)
     cancelled = preclaim_restart.validate_checkpoint(request)
     terminal_cancelled = cancelled is not None and 'stop_command_id' in cancelled
     _saved_authoring_require(probe.get('schema') == 'fullmag.saved-authoring-restart-probe.v1', 'probe schema differs')
@@ -5067,7 +5068,8 @@ def _saved_authoring_validate_probe(probe, request, scene):
     receipt = probe.get('process_receipt', {})
     _saved_authoring_require(receipt.get('schema') == 'fullmag.docker-process-tree.v1' and receipt.get('state') == 'ready'
         and 'startup_activation' not in receipt
-        and _saved_authoring_sha(canonical(receipt.get('service_owner'))) == request['service_owner_sha256'], 'native ready owner differs')
+        and generated_authoring.service_owner_digest(request, receipt.get('service_owner'), canonical)
+            == request[generated_authoring.service_owner_field(request)], 'native ready owner differs')
     _saved_authoring_require(probe.get('provenance_sha256') == request['package']['provenance_sha256']
         and probe.get('source_snapshot_sha256') == request['package']['source_snapshot_sha256'], 'captured package source differs')
     preclaim_restart.validate_binding(probe, request)
