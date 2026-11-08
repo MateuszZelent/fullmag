@@ -256,6 +256,21 @@ describe("ResourceRuntimeStore", () => {
     expect(subscriberError.stack).toContain(`resourceKey=${resourceKey}`);
   });
 
+  it("keeps the resource name in bounded diagnostics for a long session scope", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const resourceKey = `session=${"scope".repeat(80)}|simulation/preparation`;
+    const subscriberError = new Error("subscriber failed");
+    store.subscribe(resourceKey, () => {
+      throw subscriberError;
+    });
+
+    expect(() => store.updateData(resourceKey, "ready", 1)).toThrow(subscriberError);
+    const detail = subscriberError.stack?.split("ResourceRuntimeStore resourceKey=")[1];
+    expect(detail).toContain("session=");
+    expect(detail).toContain("|simulation/preparation");
+    expect(detail?.length).toBeLessThanOrEqual(160);
+  });
+
   it("keeps warm quantity resources without refetching when switching back", async () => {
     const store = new ResourceRuntimeStore<string>();
     const loadM = vi.fn(async () => "m-data");

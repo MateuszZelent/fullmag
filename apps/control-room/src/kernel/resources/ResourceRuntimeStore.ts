@@ -812,7 +812,10 @@ export class ResourceRuntimeStore<TData = unknown> {
             ?? entry.pendingRequest?.resourceKey
             ?? entry.snapshot.settledResourceKey;
           if (error instanceof Error && typeof resourceKey === "string" && resourceKey) {
-            const suffix = `\nResourceRuntimeStore resourceKey=${resourceKey.slice(0, 160)}`;
+            const boundedKey = resourceKey.length > 160
+              ? `${resourceKey.slice(0, 48)}…${resourceKey.slice(-111)}`
+              : resourceKey;
+            const suffix = `\nResourceRuntimeStore resourceKey=${boundedKey}`;
             if (typeof error.stack === "string" && !error.stack.includes(suffix)) {
               error.stack += suffix;
             }
