@@ -2286,3 +2286,12 @@ scenę, hash albo przypisanie projektu/runu. Obie odpowiedzi wyraźnie
 sygnalizują projekcję tylko do odczytu; nie deklarują zgodności z dawnym
 stanem authoring ani kwalifikacji naukowej. Dane wynikowe pozostają związane
 z niezmiennymi wejściami przyjętego obliczenia.
+
+### Rewizja optymistyczna poleceń po zakończeniu Solve
+
+`precondition.command_revision` porównuje tę samą rewizję, którą publikują
+`status.resources.commands_revision` i zasób `simulation/commands`. Dla trwałego
+journalu jest to jego monotoniczna rewizja, także po zmianach lifecycle; liczba
+wpisów ograniczonej historii nie zastępuje tej rewizji. Legacy bez trwałego
+journalu zachowuje dotychczasowy licznik. Niezgodność odmawia przed przyjęciem
+polecenia i nie uruchamia Solve ani materializacji.

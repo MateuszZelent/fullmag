@@ -80,14 +80,7 @@ def file_manifest(files):
     return manifest
 
 
-def qualify_activation(attempt, files, *, project, volume, namespace,
-                       run_catalog_raw, run_intent_raw, lease_records):
-    """Validate bytes; the caller must prove inventory completeness and quiescence.
-
-    lease_records is the complete relative-path -> bytes inventory for BOTH
-    resource lease families of this run, collected without following links.
-    Returned evidence is not itself an apply authorization.
-    """
+def _qualify_identity(attempt, files, *, project, volume, namespace, state, activation_state):
     if not isinstance(attempt, str) or ATTEMPT.fullmatch(attempt) is None:
         raise HistoryError("Invalid activation identity")
     manifest = file_manifest(files)
@@ -96,13 +89,13 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
     if files["receipt.json"] != files["terminal.json"]:
         raise HistoryError("Receipt and terminal bytes differ")
     expected = {"schema": "fullmag.docker-build-operation.v1", "phase": "activation",
-                "state": "succeeded", "activation_state": "activated", "attempt": attempt,
+                "state": state, "activation_state": activation_state, "attempt": attempt,
                 "compose_project": project, "control_volume": volume}
     if any(receipt.get(key) != value for key, value in expected.items()):
         raise HistoryError("Activation is not a succeeded terminal of this group")
     if receipt.get("control_namespace", "") != namespace:
         raise HistoryError("Activation control namespace differs")
-    if receipt.get("error") or receipt.get("reconciliation"):
+    if receipt.get("reconciliation"):
         raise HistoryError("Recovered or uncertain activation requires separate qualification")
     for key in ("started_at", "finished_at"):
         if type(receipt.get(key)) not in {int, float} or receipt[key] <= 0:
@@ -132,6 +125,22 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
             or receipt.get("provenance_path") != (
                 "/opt/fullmag/control/activation/attempts/" + attempt + "/startup-provenance.json")):
         raise HistoryError("Startup provenance byte/path pin differs")
+    return receipt, terminal, inputs, provenance, authorization, manifest
+
+
+def qualify_activation(attempt, files, *, project, volume, namespace,
+                       run_catalog_raw, run_intent_raw, lease_records):
+    """Validate bytes; the caller must prove inventory completeness and quiescence.
+
+    lease_records is the complete relative-path -> bytes inventory for BOTH
+    resource lease families of this run, collected without following links.
+    Returned evidence is not itself an apply authorization.
+    """
+    receipt, terminal, inputs, provenance, authorization, manifest = _qualify_identity(
+        attempt, files, project=project, volume=volume, namespace=namespace,
+        state="succeeded", activation_state="activated")
+    if receipt.get("error"):
+        raise HistoryError("Recovered or uncertain activation requires separate qualification")
     result = document(files["result.json"], "result")
     response = result.get("response")
     if (result.get("schema") != "fullmag.startup-script-activation.v1"
@@ -215,6 +224,67 @@ def qualify_activation(attempt, files, *, project, volume, namespace,
             "finished_at": terminal["finished_at"], "files": manifest,
             "run_catalog_sha256": digest(run_catalog_raw), "run_intent_sha256": digest(run_intent_raw),
             "leases": {path: digest(raw) for path, raw in sorted(lease_records.items())}}
+
+
+def qualify_rejected_activation(attempt, files, *, project, volume, namespace,
+                                store_records, inventory_paths):
+    """Require a confirmed pre-admission rejection, never infer it from no run_id.
+
+    The managed caller supplies the complete, locked store path inventory and
+    all RunIntent/admission/lease/control metadata, not a selected set of runs.
+    """
+    receipt, terminal, inputs, provenance, authorization, manifest = _qualify_identity(
+        attempt, files, project=project, volume=volume, namespace=namespace,
+        state="failed-confirmed", activation_state="rejected")
+    if "reconciliation" in receipt:
+        raise HistoryError("Recovered rejection requires separate qualification")
+    if receipt.get("error") != "Backend activation was rejected; terminal activation receipt retained and retry is forbidden":
+        raise HistoryError("Activation has no confirmed API rejection")
+    result = document(files["result.json"], "rejected result")
+    rejection = result.get("rejection")
+    if (result.get("schema") != "fullmag.startup-script-activation.v1"
+            or result.get("state") != "rejected" or not isinstance(rejection, dict)
+            or type(rejection.get("http_status")) is not int
+            or rejection["http_status"] not in {400, 422}
+            or not isinstance(rejection.get("code"), str) or not rejection["code"]
+            or not isinstance(rejection.get("message"), str) or not rejection["message"]):
+        raise HistoryError("Result is not a confirmed pre-admission API rejection")
+    for key in ("request_id", "source_sha256", "source_relative"):
+        if result.get(key) != receipt[key]:
+            raise HistoryError("Rejected result identity differs: " + key)
+    if any(record.get(key) is not None for record in (receipt, result, rejection)
+           for key in ("run_id", "session_id", "response")):
+        raise HistoryError("Rejected activation has an accepted identity or response")
+    if not isinstance(store_records, dict) or not isinstance(inventory_paths, list):
+        raise HistoryError("Complete rejected activation store evidence is missing")
+    from docker_volume_offline_reconcile import _metadata_file
+    required = {path for path in inventory_paths if path.endswith(".json") and (
+        _metadata_file(path) or any(word in path.casefold() for word in ("admission", "idempotency", "intake", "intent")))}
+    if set(store_records) != required:
+        raise HistoryError("Rejected activation metadata inventory is incomplete")
+    request_hash = digest(receipt["request_id"].encode())
+    needles = {attempt, receipt["request_id"], request_hash,
+               "live-http-" + request_hash, receipt["source_sha256"]}
+    def referenced(value):
+        if isinstance(value, dict):
+            return any(referenced(key) or referenced(item) for key, item in value.items())
+        if isinstance(value, list):
+            return any(referenced(item) for item in value)
+        return isinstance(value, str) and any(needle in value for needle in needles)
+    retirement_result = receipt.get("retirement_result")
+    if (receipt.get("retirement") is not None or not isinstance(retirement_result, dict)
+            or retirement_result != {"state": "retirement-only", "retirement": None}):
+        raise HistoryError("Rejected history v1 requires no predecessor workspace retirement")
+    if referenced(inventory_paths):
+        raise HistoryError("Rejected activation has a related SessionStore path")
+    for path, raw in store_records.items():
+        if path not in inventory_paths or referenced(document(raw, "store admission metadata")):
+            raise HistoryError("Rejected activation has related RunIntent/admission/lease evidence")
+    return {"attempt": attempt, "qualification_kind": "rejected-no-run-v1",
+            "run_id": None, "session_id": None, "request_id": receipt["request_id"],
+            "source_sha256": receipt["source_sha256"], "finished_at": terminal["finished_at"],
+            "files": manifest, "rejection": rejection,
+            "store_record_hashes": {path: digest(raw) for path, raw in sorted(store_records.items())}}
 
 
 def referenced_attempts(records, known_runs):

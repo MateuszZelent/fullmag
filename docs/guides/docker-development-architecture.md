@@ -870,3 +870,27 @@ obserwacje i warunki CAS pozostają obowiązkowe. Ciągły churn nadal powoduje 
 Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
 historycznego proof jako świeżego dowodu. Testy źródłowe nie zastępują
 potwierdzenia konkretnej operacji na silniku Docker.
+
+### Archiwizacja odrzuconej aktywacji bez Run
+
+`docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
+
+```text
+just docker-dev-archive-activation "<source-root>" "<activation-id>" false "" true
+just docker-dev-archive-activation "<source-root>" "<activation-id>" true "<preview-plan-sha256>" true
+```
+
+Profil wymaga potwierdzonego API400/422, identycznych receipt/terminal,
+niezmienionego źródła i pełnego eksportu oryginalnych rekordów obok pliku `.py`
+na ext4 WSL (`fullmag.activation-rejection-provenance-export.v1`, kontrakt
+`scripts/docker_activation_history.py::preserved_rejection`). Nie wolno
+odtwarzać eksportu z oszacowanych danych. Brak Run/session/reconciliation,
+brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
+Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
+kwalifikację. Nie pomija się poddrzew wyników ani historii.
+
+Preview i apply zachowują istniejące blokady, source/consumer pins oraz
+niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`
+z zachowaniem wszystkich bajtów i odczytu pod dawnymi ścieżkami. Nie usuwa
+rekordów, nie zwiększa limitu 64 i nie ponawia aktywacji ani Solve. Dla innych
+stanów nadal obowiązują ich osobne kwalifikowane recepty.

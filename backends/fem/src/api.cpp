@@ -4936,9 +4936,10 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
     return handle;
 }
 
-fullmag_fem_backend *fullmag_fem_backend_create_v4(
+static fullmag_fem_backend *create_versioned_plan_backend(
     const fullmag_fem_plan_desc_v3 *plan,
-    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+    const fullmag_fem_adaptive_config_v2 *adaptive_config,
+    const uint32_t *canonical_boundary_marker)
 {
     if (plan == nullptr) {
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 received null plan");
@@ -5018,7 +5019,8 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
             handle->context,
             native_plan,
             error,
-            plan->mixed_body_certificate_v2)) {
+            plan->mixed_body_certificate_v2,
+            canonical_boundary_marker)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;
@@ -5028,6 +5030,29 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
     return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v4(
+    const fullmag_fem_plan_desc_v3 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    return create_versioned_plan_backend(plan, adaptive_config, nullptr);
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 received null plan");
+        return nullptr;
+    }
+    if (plan->abi_version != FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION ||
+        plan->struct_size != sizeof(fullmag_fem_plan_desc_v4) || plan->reserved != 0u) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 plan ABI version/size/reserved mismatch");
+        return nullptr;
+    }
+    return create_versioned_plan_backend(&plan->base, adaptive_config, &plan->poisson_boundary_marker);
 }
 
 int fullmag_fem_get_regional_field_drive_abi_layout(

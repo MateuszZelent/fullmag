@@ -114,6 +114,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             demag_realization: builder.demag_realization.clone(),
             fdm: scene_fdm,
             external_field: builder.external_field,
+            thermal_noise: Some(builder.thermal_noise.clone()),
             rotated_interfacial_dmi: builder.rotated_interfacial_dmi,
             rotated_interfacial_dmi_object_ids: builder.rotated_interfacial_dmi_object_ids.clone(),
             solver: builder.solver.clone(),
@@ -263,6 +264,7 @@ pub fn scene_document_to_script_builder(
             &normalized_scene.objects,
         ),
         external_field: normalized_scene.study.external_field,
+        thermal_noise: normalized_scene.study.thermal_noise.clone().flatten(),
         rotated_interfacial_dmi: normalized_scene.study.rotated_interfacial_dmi,
         rotated_interfacial_dmi_object_ids: normalized_scene.study.rotated_interfacial_dmi_object_ids.clone(),
         solver: normalized_scene.study.solver.clone(),
@@ -536,6 +538,7 @@ pub fn scene_document_to_script_builder_overrides(
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
+        "thermal_noise": builder.thermal_noise,
         "rotated_interfacial_dmi_object_ids": builder.rotated_interfacial_dmi_object_ids,
         "rotated_interfacial_dmi": builder.rotated_interfacial_dmi
             .map(Value::from)
@@ -776,6 +779,10 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     });
+    if scene.study.thermal_noise.is_none() {
+        overrides.as_object_mut().expect("script builder overrides are an object")
+            .remove("thermal_noise");
+    }
     if scene.study.pbc.is_none() {
         overrides
             .as_object_mut()
@@ -2639,6 +2646,7 @@ mod tests {
             demag_realization: Some("airbox_robin".to_string()),
             fdm: None,
             external_field: Some([0.0, 0.0, 0.015]),
+            thermal_noise: None,
             rotated_interfacial_dmi: None,
             rotated_interfacial_dmi_object_ids: None,
             solver: ScriptBuilderSolverState {
@@ -3762,6 +3770,55 @@ mod tests {
             serde_json::to_value(&expected).unwrap()
         );
         assert_eq!(round_trip.study.table_autosave, Some(expected));
+    }
+
+    #[test]
+    fn scene_thermal_noise_retains_seed_presence_and_model_identity() {
+        let mut builder = sample_builder();
+        let expected = crate::ScriptBuilderThermalNoiseState {
+            temperature: 300.1234567890123,
+            seed: Some(u64::MAX.to_string()),
+        };
+        builder.thermal_noise = Some(expected.clone());
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.study.thermal_noise, Some(Some(expected.clone())));
+        let wire = serde_json::to_value(&scene).unwrap();
+        assert_eq!(wire["study"]["thermal_noise"]["seed"], u64::MAX.to_string());
+        let mut scene: SceneDocument = serde_json::from_value(wire).unwrap();
+        let restored = scene_document_to_script_builder(&scene).unwrap();
+        assert_eq!(restored.thermal_noise, Some(expected.clone()));
+        let overrides = scene_document_to_script_builder_overrides(&scene).unwrap();
+        assert_eq!(overrides["thermal_noise"]["seed"], u64::MAX.to_string());
+        let digest = |scene: &SceneDocument| crate::model_definition_from_scene_document(scene)
+            .unwrap().canonical_sha256().unwrap();
+        let original = digest(&scene);
+        scene.study.thermal_noise.as_mut().unwrap().as_mut().unwrap().temperature = 301.0;
+        assert_ne!(digest(&scene), original);
+        scene.study.thermal_noise = Some(Some(crate::ScriptBuilderThermalNoiseState {
+            seed: Some("17".into()), ..expected.clone()
+        }));
+        assert_ne!(digest(&scene), original);
+        scene.study.thermal_noise = None;
+        assert!(scene_document_to_script_builder_overrides(&scene).unwrap().get("thermal_noise").is_none());
+        scene.study.thermal_noise = Some(None);
+        assert!(scene_document_to_script_builder_overrides(&scene).unwrap()["thermal_noise"].is_null());
+        for seed in ["0", "017", "-1", "+1", " 1", "18446744073709551616", ""] {
+            scene.study.thermal_noise = Some(Some(crate::ScriptBuilderThermalNoiseState {
+                seed: Some(seed.into()), ..expected.clone()
+            }));
+            assert!(crate::validate_scene_document_for_authoring(&scene).is_err(), "{seed}");
+            assert!(validate_scene_document(&scene).is_err(), "{seed}");
+        }
+        for temperature in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            scene.study.thermal_noise = Some(Some(crate::ScriptBuilderThermalNoiseState {
+                temperature, ..expected.clone()
+            }));
+            assert!(crate::validate_scene_document_for_authoring(&scene).is_err());
+            assert!(validate_scene_document(&scene).is_err());
+        }
+        assert!(serde_json::from_value::<crate::SceneStudyState>(serde_json::json!({
+            "thermal_noise": {"temperature": 300, "seed": 17}
+        })).is_err());
     }
 
     #[test]

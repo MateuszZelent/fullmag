@@ -1525,6 +1525,7 @@ def main():
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--expected-plan-sha256')
     parser.add_argument('--continue-intent-sha256')
+    parser.add_argument('--terminal-only', action='store_true', help='Require all accepted tasks terminal; pin control/lease records without reading result payloads')
     parser.add_argument('--stop-frontend', action='store_true',
                         help='After authenticated Linux OOM drain, stop this exact group frontend')
     args=parser.parse_args()
@@ -1533,7 +1534,7 @@ def main():
     if args.failure_variant == 'legacy' and any(prepared_options):
         raise BuildControlError('Prepared recovery options require explicit --failure-variant prepared-unclaimed-v1')
     if args.failure_variant == 'prepared-unclaimed-v1':
-        if (args.stop_frontend or not args.prepared_target or not args.activation_attempt
+        if (args.terminal_only or args.stop_frontend or not args.prepared_target or not args.activation_attempt
                 or not re.fullmatch('[0-9a-f]{64}', args.prepared_target_sha256 or '')
                 or (args.apply and not re.fullmatch('[0-9a-f]{64}', args.expected_plan_sha256 or ''))):
             raise BuildControlError('Prepared recovery requires exact original activation and target CAS; apply requires reviewed plan')
@@ -1556,6 +1557,8 @@ def main():
     if not actual.get('State',{}).get('Running'):
         raise BuildControlError('Stop requires this exact running DEV backend')
     if actual.get('State', {}).get('OOMKilled') is True:
+        if args.terminal_only:
+            raise BuildControlError('Terminal-only stop requires the pinned Linux supervision failure')
         env = dict(item.split('=', 1) for item in actual.get('Config', {}).get('Env', []) if '=' in item)
         if env.get('FULLMAG_SESSION_STORAGE_PROFILE') != 'linux-native-v1':
             raise BuildControlError('OOM stop is supported only for the pinned Linux DEV session profile')
@@ -1590,6 +1593,8 @@ print(json.dumps({'sha256':hashlib.sha256(raw).hexdigest(),'receipt':document,'a
         print(json.dumps({'state': result['state'], 'failure_kind': result['failure_kind'],
                           'container_id': args.container_id}))
         return
+    if args.terminal_only:
+        raise BuildControlError('Terminal-only stop requires the pinned Linux supervision failure')
     if (receipt.get('state') == 'failed_outcome_retained' and 'service_owner' in receipt
             and receipt.get('error') == SUPERVISION_FAILURE_ERROR
             and 'FULLMAG_SESSION_STORAGE_PROFILE=windows-folder-v1' in actual.get('Config', {}).get('Env', [])):

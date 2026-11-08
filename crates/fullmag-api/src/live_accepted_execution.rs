@@ -1695,11 +1695,12 @@ fn prepare_live_accepted(
         )
     })?;
 
-    let closed_loop = has_closed_loop_inspection_pipeline(scene);
+    let source_bound_pipeline = has_closed_loop_inspection_pipeline(scene)
+        || (selected_step_id.is_none() && has_sequential_physical_pipeline(scene));
     // Keep this guard in the preparation scope until the final
     // capture.verify_unchanged() and immutable source-asset copy below.
     // The authored scene remains the original full-content transition fence.
-    let generated_scene_source = if closed_loop && !matches!(
+    let generated_scene_source = if source_bound_pipeline && !matches!(
         &submission, LiveAcceptedSubmission::Startup { source_path: Some(_), .. }
     ) {
         Some(crate::script::render_accepted_scene_source_bounded(
@@ -1708,7 +1709,7 @@ fn prepare_live_accepted(
     } else {
         None
     };
-    let mut closed_capture = if closed_loop {
+    let mut closed_capture = if source_bound_pipeline {
         let source_path = match (&submission, &generated_scene_source) {
             (LiveAcceptedSubmission::Startup { source_path: Some(path), .. }, None) => path,
             (_, Some(generated)) => &generated.path,
@@ -3730,6 +3731,37 @@ mod script_projection_comparison_tests {
         }
         let small: Value = serde_json::from_str("1e-300").unwrap();
         assert!(!script_projection_values_equal(&json!(0), &small));
+    }
+}
+
+fn has_sequential_physical_pipeline(scene: &fullmag_authoring::SceneDocument) -> bool {
+    fn physical_count(nodes: &[fullmag_authoring::StudyPipelineNode]) -> usize {
+        nodes.iter().map(|node| match node {
+            fullmag_authoring::StudyPipelineNode::Primitive(node) if node.enabled
+                && matches!(node.stage_kind, fullmag_authoring::StudyPrimitiveStageKind::Run
+                    | fullmag_authoring::StudyPrimitiveStageKind::Relax) => 1,
+            fullmag_authoring::StudyPipelineNode::Group(node) if node.enabled => physical_count(&node.children),
+            _ => 0,
+        }).fold(0, |count, next| (count + next).min(2))
+    }
+    scene.study.study_pipeline.as_ref().is_some_and(|pipeline| physical_count(&pipeline.nodes) >= 2)
+}
+
+#[cfg(test)]
+#[test]
+fn sequential_physical_pipeline_counts_only_enabled_physical_steps() {
+    let mut scene = fullmag_authoring::SceneDocument::default();
+    let run = serde_json::json!({"node_kind":"primitive","id":"first","label":"First","stage_kind":"run","payload":{"until_seconds":1e-12}});
+    let mut second = run.clone(); second["id"] = serde_json::json!("second");
+    for (nodes, expected) in [
+        (vec![run.clone()], false),
+        (vec![run.clone(), second.clone()], true),
+        (vec![run.clone(), {let mut disabled=second.clone();disabled["enabled"]=serde_json::json!(false);disabled}], false),
+        (vec![run.clone(), serde_json::json!({"node_kind":"group","id":"group","label":"Group","enabled":false,"children":[second.clone()]})], false),
+        (vec![run, serde_json::json!({"node_kind":"group","id":"group","label":"Group","children":[second]})], true),
+    ] {
+        scene.study.study_pipeline = Some(serde_json::from_value(serde_json::json!({"version":"study_pipeline.v1","nodes":nodes})).unwrap());
+        assert_eq!(has_sequential_physical_pipeline(&scene), expected);
     }
 }
 

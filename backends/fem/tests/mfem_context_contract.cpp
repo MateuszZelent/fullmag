@@ -463,7 +463,7 @@ void mixed_mesh_builder_owns_topology_translation_with_selective_physics_gate() 
     const std::string context_builder = read_text_file(root / "core" / "fem_context_builder.cpp");
 
     check(
-        runtime.find("build_mfem_mesh(ctx.mesh, mesh_owner, error)") != std::string::npos,
+        runtime.find("build_mfem_mesh(ctx.mesh, mesh_owner, error, &marker_maps)") != std::string::npos,
         "MFEM context must delegate canonical topology translation to the mixed mesh builder");
     check(
             runtime.find("AddTet") == std::string::npos &&

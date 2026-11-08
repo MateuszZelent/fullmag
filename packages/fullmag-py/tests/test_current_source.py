@@ -187,14 +187,14 @@ class CurrentSourceTests(unittest.TestCase):
 
     def test_native_marker_and_aggregate_bounds_without_large_buffers(self):
         for field in ("element_markers", "boundary_markers"):
-            for value in (0, 1 << 31, True):
+            for value in (0, -1, 1 << 32, True):
                 values = source_input()
                 values["lead_mesh"][field][0] = value
-                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "int32 marker"):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "u32 marker"):
                     fm.ExternalLeadCurrentSource(**values)
         values = source_input()
         for field in ("element_markers", "boundary_markers"):
-            values["lead_mesh"][field][0] = (1 << 31) - 1
+            values["lead_mesh"][field][0] = (1 << 32) - 1
         fm.ExternalLeadCurrentSource(**values)
         with patch("fullmag.model.current_transport._CURRENT_SOURCE_MAX_ITEMS", 32):
             values = source_input()

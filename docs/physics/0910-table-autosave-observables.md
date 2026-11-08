@@ -225,6 +225,15 @@ only `every_steps`. The default column set is:
 step, t, mx, my, mz, e_total, max_torque
 ```
 
+`study.tableautosave(enabled=False)` (or `fm.tableautosave(enabled=False)`)
+clears the persistent table for subsequent declarations without inserting an
+authored stage. Disabling cannot be combined with a cadence, quantities or a
+custom table ID. Canonical SceneDocument export preserves each Run's table
+cadence, columns, expressions and ID, including a missing/null table after an
+enabled one. This changes neither field output nor the numerical trajectory.
+The IR and OpenAPI representations remain unchanged: no table is represented
+by the absence of `sampling.table_autosave`.
+
 Persistent `study.stages.tableautosave(...)` actions remain readable for
 compatibility. New relaxation scripts attach accepted-step sampling directly
 to the owning relaxation stage so the cadence cannot leak into later stages.
@@ -442,6 +451,8 @@ completed samples and record an incomplete marker and stop reason.
 
 | Repository path | Symbol | Responsibility |
 |---|---|---|
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Configure and explicitly clear the table for subsequent declarations without an authored stage. |
+| `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_scene_sampling_outputs` | Preserve per-Run table sampling and missing/null table state during canonical capture. |
 | `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | Validate public cadence and lower it into table-autosave IR. |
 | `packages/fullmag-py/tests/test_table_autosave.py` | `test_time_evolution_table_autosave_lowers_default_columns_to_sampling_ir` | Verify physical-time table cadence lowers to `SamplingIR`. |
 | `packages/fullmag-py/tests/test_table_autosave.py` | `test_relaxation_table_autosave_lowers_accepted_step_cadence` | Verify accepted-step cadence lowers to `SamplingIR`. |

@@ -475,7 +475,7 @@ async fn configure_accepted_solver_profile_under_transition(
     let sequence = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
     command.seq = sequence;
     crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
-        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        validate_runtime_command_contract(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire), &snapshot, ledger, &command)?;
         reserve_command_ledger_entry(ledger)?;
         ledger.push_back(TrackedCommandRecord { command, request_id: request_id.clone(),
             status: CommandLifecycleState::Completed, dispatched_at_unix_ms: None,
@@ -544,7 +544,7 @@ async fn publish_materialized_fields_under_transition(
     let seq = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
     command.seq = seq;
     crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
-        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        validate_runtime_command_contract(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire), &snapshot, ledger, &command)?;
         if ledger.iter().any(is_active_mesh_or_compute_command) {
             return Err(ApiError::conflict("A runtime or mesh command is already active."));
         }
@@ -638,7 +638,7 @@ async fn publish_geometry_mesh_build_under_transition(
     let seq = next_sequence.checked_add(1).ok_or_else(|| ApiError::internal("command sequence exhausted"))?;
     command.seq = seq;
     crate::live_command_journal::mutate(&state, &snapshot, |ledger| {
-        validate_runtime_command_contract(&snapshot, ledger, &command)?;
+        validate_runtime_command_contract(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire), &snapshot, ledger, &command)?;
         if ledger.iter().any(is_active_mesh_or_compute_command) {
             return Err(ApiError::conflict("A runtime or mesh command is already active."));
         }
@@ -1016,6 +1016,7 @@ fn physically_equal(left: f64, right: f64) -> bool {
 }
 
 fn validate_runtime_command_contract(
+    durable_journal_revision: u64,
     snapshot: &SessionStateResponse,
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     command: &SessionCommand,
@@ -1031,7 +1032,7 @@ fn validate_runtime_command_contract(
             "Compute commands are unavailable while startup activation is preparing the study",
         ));
     }
-    validate_runtime_command_preconditions(snapshot, ledger, command)?;
+    validate_runtime_command_preconditions(durable_journal_revision, snapshot, ledger, command)?;
 
     if is_stage_control_command(command.kind.as_str()) {
         validate_stage_control_state(&snapshot, command)?;
@@ -1054,6 +1055,7 @@ fn validate_runtime_command_contract(
 /// bind a command to a RunIntent; the capacity probe is deliberately made on
 /// a clone so a rejected command cannot leave a journal reservation behind.
 fn validate_accepted_command_admission_against_snapshot(
+    durable_journal_revision: u64,
     snapshot: &SessionStateResponse,
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     command: &SessionCommand,
@@ -1062,7 +1064,7 @@ fn validate_accepted_command_admission_against_snapshot(
         // Accepted Stop is a durable task cancellation. Its run may still be
         // waiting for the explicit Compute gate or for FEM preparation, so the
         // stage-control validator is intentionally narrower than this lane.
-        validate_runtime_command_preconditions(snapshot, ledger, command)?;
+        validate_runtime_command_preconditions(durable_journal_revision, snapshot, ledger, command)?;
         let run_status = snapshot
             .run
             .as_ref()
@@ -1083,7 +1085,7 @@ fn validate_accepted_command_admission_against_snapshot(
             ));
         }
     } else {
-        validate_runtime_command_contract(snapshot, ledger, command)?;
+        validate_runtime_command_contract(durable_journal_revision, snapshot, ledger, command)?;
     }
     let mut capacity_probe = ledger.clone();
     reserve_command_ledger_entry(&mut capacity_probe)?;
@@ -1091,6 +1093,7 @@ fn validate_accepted_command_admission_against_snapshot(
 }
 
 fn validate_runtime_command_preconditions(
+    durable_journal_revision: u64,
     snapshot: &SessionStateResponse,
     ledger: &std::collections::VecDeque<TrackedCommandRecord>,
     command: &SessionCommand,
@@ -1178,7 +1181,7 @@ fn validate_runtime_command_preconditions(
         }
 
         if let Some(expected) = precondition.command_revision {
-            let actual = ledger.len() as u64;
+            let actual = crate::session::command_ledger_revisions(ledger, durable_journal_revision).commands_revision;
             if actual != expected {
                 return Err(ApiError::conflict(format!(
                     "command_revision precondition failed: expected {}, got {}",
@@ -1225,7 +1228,7 @@ pub(crate) async fn accepted_command_admission_snapshot(
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
     let ledger = state.current_command_ledger.lock().await;
-    validate_accepted_command_admission_against_snapshot(snapshot, &ledger, command)?;
+    validate_accepted_command_admission_against_snapshot(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire), snapshot, &ledger, command)?;
     Ok(snapshot.clone())
 }
 
@@ -2221,7 +2224,7 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
         .checked_add(1)
         .ok_or_else(|| ApiError::internal("current command sequence exhausted"))?;
     let enqueued = crate::live_command_journal::mutate(&state, snapshot, |ledger| {
-        validate_runtime_command_contract(snapshot, ledger, &command)?;
+        validate_runtime_command_contract(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire), snapshot, ledger, &command)?;
         reserve_command_ledger_entry(ledger)?;
         let mut enqueued = command;
         enqueued.seq = seq;
@@ -2379,7 +2382,7 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
         // the stage-target validator here would reject the durable Run target
         // even though the transition fence has not changed.
         if !accepted_is_stop {
-            validate_runtime_command_contract(
+            validate_runtime_command_contract(state.current_command_journal_revision.load(std::sync::atomic::Ordering::Acquire),
                 admission_snapshot.unwrap_or(snapshot),
                 ledger,
                 &command,
@@ -3380,6 +3383,35 @@ mod tests {
     }
 
     #[test]
+    fn runtime_command_precondition_uses_published_durable_revision() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(
+            serde_json::json!({"session_id": "durable-command-revision"}),
+        ).expect("minimal request");
+        let snapshot = default_current_live_state(&request);
+        let ledger = std::collections::VecDeque::from([
+            accepted_preparation_record("prior-solve", "solve"),
+        ]);
+        let mut command = journal_command("fields-after-solve", "compute_fields");
+        let published = crate::session::command_ledger_revisions(&ledger, 7).commands_revision;
+        assert_eq!(published, 7);
+        command.precondition = Some(RuntimeCommandPrecondition {
+            command_revision: Some(published),
+            ..RuntimeCommandPrecondition::default()
+        });
+        validate_runtime_command_preconditions(7, &snapshot, &ledger, &command)
+            .expect("published durable revision remains valid after lifecycle updates");
+        for stale in [0, 1, 6, 8] {
+            command.precondition.as_mut().unwrap().command_revision = Some(stale);
+            assert!(validate_runtime_command_preconditions(7, &snapshot, &ledger, &command)
+                .expect_err("stale revision, including ledger count, must fail")
+                .message.contains("command_revision precondition failed"));
+        }
+        command.precondition.as_mut().unwrap().command_revision = Some(1);
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
+            .expect("non-durable legacy ledger retains published count semantics");
+    }
+
+    #[test]
     fn accepted_preparation_completion_keeps_reserved_record_after_mesh_revision_moves() {
         let mut command = journal_command("accepted-remesh", "remesh");
         command.precondition = Some(RuntimeCommandPrecondition {
@@ -3398,7 +3430,7 @@ mod tests {
         .expect("minimal live snapshot request should deserialize");
         let mut post_preparation = default_current_live_state(&request);
         post_preparation.mesh_revision = 42;
-        assert!(validate_runtime_command_preconditions(&post_preparation, &ledger, &command)
+        assert!(validate_runtime_command_preconditions(0, &post_preparation, &ledger, &command)
             .expect_err("the old optimistic mesh revision is stale after preparation")
             .message
             .contains("mesh_revision precondition failed"));
@@ -3513,7 +3545,7 @@ mod tests {
 
         for kind in ["run", "relax", "solve", "compute_fields", "compute_energies"] {
             let command = journal_command(kind, kind);
-            let error = validate_accepted_command_admission_against_snapshot(
+            let error = validate_accepted_command_admission_against_snapshot(0,
                 &snapshot,
                 &ledger,
                 &command,
@@ -3581,7 +3613,7 @@ mod tests {
         });
         let mut ledger = std::collections::VecDeque::new();
 
-        let error = validate_accepted_command_admission_against_snapshot(
+        let error = validate_accepted_command_admission_against_snapshot(0,
             &snapshot,
             &ledger,
             &command,

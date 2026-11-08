@@ -36,6 +36,21 @@ llg_compare = load_module(
 SOURCE_HASH = "a" * 64
 
 
+def test_embedded_adaptive_cuda_single_has_distinct_unvalidated_identity() -> None:
+    document = json.loads((ROOT / "benchmarks/fem-llg/qualification-registry-v1.json").read_text())
+    entries = [entry for entry in document["entries"]
+               if entry["key"]["qualification_id"] == "explicit_adaptive_fdm_cuda_single"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["key"] == qualification_identity(
+        qualification_id="explicit_adaptive_fdm_cuda_single", backend="fdm", device="cuda",
+        precision="single", integrator="rk45", timestep_policy="adaptive")
+    assert entry["validation_state"] == "unvalidated"
+    assert entry["artifact_sha256"] is None
+    assert entry["runtime_source_inputs_sha256"] is None
+    registry_validator.validate_registry(document, ROOT)
+
+
 def qualification_identity(**overrides: str) -> dict[str, str]:
     identity = {
         "capability_id": "llg_td_policy_v1",

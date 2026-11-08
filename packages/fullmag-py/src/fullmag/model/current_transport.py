@@ -1174,8 +1174,8 @@ def _source_mesh(mesh: object) -> dict[str, object]:
         raise ValueError("lead_mesh facet connectivity is invalid")
     for field, expected in (("element_markers", len(cells["types"])), ("boundary_markers", count)):
         markers = value[field]
-        if not isinstance(markers, list) or len(markers) != expected or any(isinstance(i, bool) or not isinstance(i, int) or not 0 < i <= (1 << 31) - 1 for i in markers):
-            raise ValueError(f"lead_mesh.{field} requires one positive native int32 marker per entity")
+        if not isinstance(markers, list) or len(markers) != expected or any(isinstance(i, bool) or not isinstance(i, int) or not 0 < i <= (1 << 32) - 1 for i in markers):
+            raise ValueError(f"lead_mesh.{field} requires one positive canonical u32 marker per entity")
     for block, fields in ((cells, ("global_ordinals", "mesh_parts")), (facets, ("global_ordinals",))):
         for field in fields:
             if field in block and (not isinstance(block[field], list) or len(block[field]) not in (0, len(block["types"]))):
@@ -1228,9 +1228,9 @@ class TerminalLeadExtension:
             object.__setattr__(self, name, _source_text(getattr(self, name), name))
         markers = tuple(self.boundary_markers)
         if not markers or len(markers) > _CURRENT_SOURCE_MAX_ITEMS or any(
-            type(value) is not int or not 0 < value < 1 << 31 for value in markers
+            type(value) is not int or not 0 < value < 1 << 32 for value in markers
         ) or len(set(markers)) != len(markers):
-            raise ValueError("boundary_markers must be unique positive native int32 markers")
+            raise ValueError("boundary_markers must be unique positive canonical u32 markers")
         object.__setattr__(self, "boundary_markers", markers)
         for name in ("length_m", "conductivity_spm"):
             value = getattr(self, name)

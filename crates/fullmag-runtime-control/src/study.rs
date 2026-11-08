@@ -2687,6 +2687,9 @@ fn bind_step_output_manifests(
                     input.port_id
                 )
             })?;
+        if resolved.study_artifact.as_ref().is_some_and(|existing| existing != &study_artifact) {
+            bail!("resolved StepOutput typed binding differs from its canonical manifest entry");
+        }
         resolved.study_artifact = Some(study_artifact);
     }
     Ok(())
@@ -2788,18 +2791,23 @@ fn resolve_step_output_inputs(
                 port.port_id
             );
         }
-        let from_catalog = ResolvedInput {
+        let mut from_catalog = ResolvedInput {
             source: artifact.artifact_id.clone(),
             content_sha256: artifact.content_sha256.clone(),
             study_artifact: None,
         };
         if let Some(supplied) = supplied_inputs.get(&port.port_id) {
-            if supplied != &from_catalog {
+            if supplied.source != from_catalog.source || supplied.content_sha256 != from_catalog.content_sha256 {
                 bail!(
                     "study input `{}` does not match its pinned artifact identity and digest",
                     port.port_id
                 );
             }
+        }
+        // Admission already captured the typed binding. Preserve it until the
+        // canonical output manifest revalidates all codec and CAS fields.
+        if let Some(supplied) = supplied_inputs.get(&port.port_id) {
+            from_catalog.study_artifact = supplied.study_artifact.clone();
         }
         resolved.insert(port.port_id.clone(), from_catalog);
     }
@@ -3253,6 +3261,15 @@ mod dependency_tests {
         )
         .unwrap();
         assert_eq!(derived, resolved_inputs());
+
+        let mut captured=derived.clone();
+        captured.get_mut("initial_state").unwrap().study_artifact=Some(fullmag_application::ResolvedStudyArtifact {
+            artifact_id:"artifact-source".into(),object_ref:"c".repeat(64),data_kind:"state".into(),
+            codec_id:"fullmag.magnetization-state".into(),codec_version:"1".into(),
+        });
+        let replayed=resolve_step_output_inputs("run-study-dependency",&ports,&captured,&run_catalog,Some(&artifact_catalog)).unwrap();
+        assert_eq!(replayed,captured,"revalidation preserves the typed binding for canonical manifest checks");
+
 
         let mut forged = resolved_inputs();
         forged

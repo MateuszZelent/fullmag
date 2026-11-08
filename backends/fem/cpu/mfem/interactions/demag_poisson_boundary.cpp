@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <limits>
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -82,6 +83,11 @@ bool initialize_demag_poisson_boundary_operator(
     mfem::BilinearForm &poisson_bilinear,
     std::string &error)
 {
+    const auto canonical_selector = ctx.poisson_demag.boundary_marker;
+    const int selected_attribute = canonical_selector > 0 &&
+        static_cast<uint64_t>(canonical_selector) <= std::numeric_limits<uint32_t>::max()
+        ? ctx.mfem_context.marker_maps.boundary.attribute(static_cast<uint32_t>(canonical_selector))
+        : 0;
     if (ctx.demag.realization == 2 /* AIRBOX_ROBIN */) {
         double c = ctx.poisson_demag.robin_beta_factor;
         if (ctx.poisson_demag.robin_beta_mode == 1) {
@@ -93,23 +99,22 @@ bool initialize_demag_poisson_boundary_operator(
         const double R_star = robin_reference_radius_for_mesh(ctx, mesh);
         ctx.poisson_demag.robin_effective_beta = c / R_star;
 
-        if (ctx.poisson_demag.boundary_marker < 1 ||
-            ctx.poisson_demag.boundary_marker > mesh.bdr_attributes.Max()) {
+        if (selected_attribute == 0) {
             error = "Robin BC: poisson_boundary_marker=" +
                     std::to_string(ctx.poisson_demag.boundary_marker) +
-                    " not found in mesh bdr_attributes (max=" +
-                    std::to_string(mesh.bdr_attributes.Max()) +
-                    "). Check air_box_config boundary markers.";
+                    " not found among canonical exterior/seam boundary markers. "
+                    "Check air_box_config boundary markers.";
             return false;
         }
 
         auto bdr_mass = std::make_unique<mfem::BilinearForm>(&potential_fes);
         mfem::Array<int> bdr_marker(mesh.bdr_attributes.Max());
         bdr_marker = 0;
-        bdr_marker[ctx.poisson_demag.boundary_marker - 1] = 1;
+        bdr_marker[selected_attribute - 1] = 1;
         for (uint32_t pm : ctx.mesh.periodic_boundary_marker_set) {
-            if (pm >= 1 && static_cast<int>(pm) <= mesh.bdr_attributes.Max()) {
-                bdr_marker[static_cast<int>(pm) - 1] = 0;
+            const int attribute = ctx.mfem_context.marker_maps.boundary.attribute(pm);
+            if (attribute > 0) {
+                bdr_marker[attribute - 1] = 0;
             }
         }
         bdr_mass->AddBoundaryIntegrator(
@@ -130,17 +135,16 @@ bool initialize_demag_poisson_boundary_operator(
 
     ctx.poisson_demag.ess_tdof_list.clear();
     if (ctx.poisson_demag.boundary_marker > 0) {
-        if (ctx.poisson_demag.boundary_marker > mesh.bdr_attributes.Max()) {
+        if (selected_attribute == 0) {
             error = "Dirichlet BC: poisson_boundary_marker=" +
                     std::to_string(ctx.poisson_demag.boundary_marker) +
-                    " exceeds mesh bdr_attributes.Max()=" +
-                    std::to_string(mesh.bdr_attributes.Max()) +
-                    ". Check air_box_config boundary markers.";
+                    " not found among canonical exterior/seam boundary markers. "
+                    "Check air_box_config boundary markers.";
             return false;
         }
         mfem::Array<int> bdr_attr_is_ess(mesh.bdr_attributes.Max());
         bdr_attr_is_ess = 0;
-        bdr_attr_is_ess[ctx.poisson_demag.boundary_marker - 1] = 1;
+        bdr_attr_is_ess[selected_attribute - 1] = 1;
         mfem::Array<int> ess_tdof;
         potential_fes.GetEssentialTrueDofs(bdr_attr_is_ess, ess_tdof);
         ctx.poisson_demag.ess_tdof_list.assign(

@@ -112,7 +112,7 @@ def make_plan(root, candidates, *, identity, external_evidence_sha256, protected
     guards = {name: _optional_digest(root, name) for name in GUARDS}
     guard_records = {name: _raw(root / name) for name, pin in guards.items() if pin is not None}
     live_protected = set(protected) | referenced_attempts(
-        guard_records, {value["run_id"]: value["attempt"] for value in candidates})
+        guard_records, {value["run_id"]: value["attempt"] for value in candidates if value.get("run_id") is not None})
     live = _entries(root / "activation/attempts")
     archived = _entries(root / "activation/history-v1")
     if len(live) > 64 or set(live) & set(archived):
@@ -224,7 +224,7 @@ def apply_plan(root, plan, *, expected_plan_sha256, fresh_external_evidence, che
             raise HistoryError("History pool changed since preview")
         current_roots = {name: _raw(root / name) for name, pin in plan["guard_files"].items() if pin is not None}
         current_protected = referenced_attempts(current_roots, {
-            value["run_id"]: token for token, value in candidates.items()})
+            value["run_id"]: token for token, value in candidates.items() if value.get("run_id") is not None})
         if set(candidates) & (set(plan["protected"]) | current_protected):
             raise HistoryError("History plan includes protected activation")
         if len(archived | set(candidates)) > MAX_HISTORY_ATTEMPTS:

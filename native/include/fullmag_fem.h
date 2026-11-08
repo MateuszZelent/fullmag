@@ -813,6 +813,17 @@ typedef struct {
     const fullmag_fem_mixed_body_certificate_v2 *mixed_body_certificate_v2;
 } fullmag_fem_plan_desc_v3;
 
+/* Full-width canonical Poisson selector. Legacy signed fields/layouts retain
+   their meaning; this explicit extension always takes precedence over base. */
+#define FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION 4u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_plan_desc_v3 base;
+    uint32_t poisson_boundary_marker;
+    uint32_t reserved; /* Must be zero. */
+} fullmag_fem_plan_desc_v4;
+
 /*
  * Standalone M1 steady charge/spin transport ABI.
  *
@@ -3916,6 +3927,11 @@ FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v3(
 
 FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v4(
     const fullmag_fem_plan_desc_v3 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
+);
+
+FULLMAG_FEM_API fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
     const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 

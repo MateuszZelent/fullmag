@@ -252,7 +252,7 @@ fn capture_cuda_fields_for_quantities(
     for field in &mut fields {
         field.config_revision = config_revision;
         field.source_step = source_step;
-        field.source_time_seconds = Some(source_time_seconds);
+        field.source_time_seconds = Some(super::canonical_fdm_publication_time(plan, source_time_seconds));
         field.source_revision = config_revision;
         field.materialized_at_unix_ms = materialized_at_unix_ms;
         field.materialization_wall_time_ns = materialization_wall_time_ns;
@@ -347,7 +347,7 @@ fn frozen_spins_checkpoint(
         frozen_state,
         magnetization,
         step,
-        time_s,
+        super::canonical_fdm_publication_time(plan, time_s),
         dt,
         "fdm_cuda",
         "cuda",
@@ -390,7 +390,7 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
 }
 
 #[cfg(feature = "cuda")]
-fn apply_regional_drive_energy(
+pub(crate) fn apply_regional_drive_energy(
     plan: &FdmPlanIR,
     stats: &mut StepStats,
     magnetization: &[[f64; 3]],
@@ -450,7 +450,49 @@ fn apply_regional_drive_energy(
                 * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
         }
     }
-    stats.e_drive = -crate::MU0 * cell_volume * magnetization_dot_field;
+    split_native_regional_drive_energy(stats, -crate::MU0 * cell_volume * magnetization_dot_field);
+}
+
+/// Native Zeeman is combined. Preserve it across repeated projections, while
+/// exposing the external and prescribed-drive contributions separately.
+#[cfg(any(feature = "cuda", test))]
+fn split_native_regional_drive_energy(stats: &mut crate::types::StepStats, drive_energy: f64) {
+    stats.e_ext += stats.e_drive - drive_energy;
+    stats.e_drive = drive_energy;
+    if stats.per_object_scalars.len() == 1 && stats.per_object_scalars.contains_key("free") {
+        let snapshot = crate::scalar_metrics::scalar_snapshot_from_step(stats);
+        if let Some(free) = stats.per_object_scalars.get_mut("free") {
+            free.extend(snapshot);
+        }
+    }
+}
+
+#[cfg(test)]
+mod regional_drive_energy_tests {
+    #[test]
+    fn cuda_regional_drive_energy_split_preserves_total_and_single_object_scalars() {
+        let mut stats = crate::types::StepStats {
+            e_ex: 1.0, e_ext: -5.0, e_total: -4.0, mx: 0.4, ..Default::default()
+        };
+        stats.per_object_scalars = crate::scalar_metrics::single_object_scalars("free", &stats);
+        stats.per_object_scalars.get_mut("free").unwrap().insert("custom".into(), 7.0);
+        super::split_native_regional_drive_energy(&mut stats, -2.0);
+        assert_eq!((stats.e_ext, stats.e_drive, stats.e_total), (-3.0, -2.0, -4.0));
+        assert_eq!(stats.e_total, stats.e_ex + stats.e_ext + stats.e_drive);
+        assert_eq!(stats.per_object_scalars["free"]["e_ext"], stats.e_ext);
+        assert_eq!(stats.per_object_scalars["free"]["e_drive"], stats.e_drive);
+        assert_eq!(stats.per_object_scalars["free"]["mx"], stats.mx);
+        assert_eq!(stats.per_object_scalars["free"]["custom"], 7.0);
+        let before = stats.per_object_scalars.clone();
+        super::split_native_regional_drive_energy(&mut stats, -2.0);
+        assert_eq!((stats.e_ext, stats.e_drive, stats.e_total), (-3.0, -2.0, -4.0));
+        assert_eq!(stats.per_object_scalars, before);
+        stats.per_object_scalars = crate::scalar_metrics::single_object_scalars("another-scope", &stats);
+        let unrelated = stats.per_object_scalars.clone();
+        super::split_native_regional_drive_energy(&mut stats, -1.0);
+        assert_eq!(stats.e_total, stats.e_ex + stats.e_ext + stats.e_drive);
+        assert_eq!(stats.per_object_scalars, unrelated);
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -977,6 +1019,7 @@ pub(crate) fn execute_cuda_fdm(
     );
     apply_regional_drive_energy(plan, &mut initial_scalar_stats, &initial_magnetization);
     record_cuda_initial_scalar(
+        plan,
         &initial_scalar_stats,
         default_scalar_trace,
         &mut scalar_schedules,
@@ -1115,7 +1158,7 @@ pub(crate) fn execute_cuda_fdm(
                         };
                     let action = (live.on_step)(StepUpdate {
                         coupled_checkpoint: final_frozen_checkpoint.clone(),
-                        stats: current_stats.clone(),
+                        stats: super::canonical_fdm_publication_stats(plan, current_stats.clone()),
                         grid: live.grid,
                         fem_mesh_generation_id: None,
                         magnetization: None,
@@ -1396,7 +1439,7 @@ pub(crate) fn execute_cuda_fdm(
                 };
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint.clone(),
-                    stats: sampled_stats.clone(),
+                    stats: super::canonical_fdm_publication_stats(plan, sampled_stats.clone()),
                     grid: live.grid,
                     fem_mesh_generation_id: None,
                     magnetization,
@@ -1529,11 +1572,7 @@ pub(crate) fn execute_cuda_fdm(
         })?;
         Some(
             FdmGpuAcceptedStateSnapshotV1::from_final_magnetization(
-                ObservationClock {
-                    accepted_step: stats.step,
-                    time_seconds: stats.time,
-                    dt_seconds: (stats.dt > 0.0).then_some(stats.dt),
-                },
+                super::canonical_fdm_publication_clock(plan, stats),
                 &final_magnetization,
             )
             .map_err(|error| RunError {
@@ -1675,7 +1714,7 @@ pub(crate) fn execute_cuda_fdm(
 
             let action = (live.on_step)(StepUpdate {
                 coupled_checkpoint: final_frozen_checkpoint.clone(),
-                stats: terminal_stats.clone(),
+                stats: super::canonical_fdm_publication_stats(plan, terminal_stats.clone()),
                 grid: live.grid,
                 fem_mesh_generation_id: None,
                 magnetization: Some(terminal_magnetization.clone()),
@@ -2116,6 +2155,7 @@ mod adaptive_batch_tests {
         let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &initial,
             false,
             &mut scalar,
@@ -2150,6 +2190,7 @@ mod adaptive_batch_tests {
         let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
 
         record_cuda_initial_scalar(
+            &FdmPlanIR::default(),
             &initial,
             true,
             &mut scalar,

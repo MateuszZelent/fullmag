@@ -551,6 +551,17 @@ pub struct AntennaSpectrumRequestResource {
     pub output_id: String,
 }
 
+/// Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ThermalNoiseResource {
+    /// Positive finite temperature in kelvin.
+    pub temperature: f64,
+    /// Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]

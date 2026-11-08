@@ -553,6 +553,25 @@ class SupervisionStopOperationTests(unittest.TestCase):
 
 
 class LinuxOOMReadyStopTests(unittest.TestCase):
+    def test_terminal_only_flag_refuses_oom_before_stop_dispatch(self):
+        import json, tempfile, subprocess
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            args=['stop','--source-root',temporary,'--container-id','a'*64,
+                  '--image-id','sha256:'+'b'*64,'--process-receipt-sha256','c'*64,'--terminal-only']
+            actual={'Id':'a'*64,'Image':'sha256:'+'b'*64,
+                    'Config':{'Labels':{'com.docker.compose.project':'own','com.docker.compose.service':'backend'},
+                              'Env':['FULLMAG_SESSION_STORAGE_PROFILE=linux-native-v1']},
+                    'State':{'Running':True,'OOMKilled':True}}
+            with patch.object(sys,'argv',args), patch.object(stop.storage,'resolve_layout'), \
+                 patch.object(stop,'compose_project_identity',return_value={'project_name':'own'}), \
+                 patch.object(stop,'validate_source_labels'), \
+                 patch.object(stop,'docker_capture',return_value=subprocess.CompletedProcess([],0,json.dumps([actual]).encode(),b'')), \
+                 patch.object(stop,'_stop_linux_oom_ready') as dispatch:
+                with self.assertRaisesRegex(stop.BuildControlError,'Terminal-only'):
+                    stop.main()
+                dispatch.assert_not_called()
+
     store = '/state/runs/docker-all/session-store'
     group_host_id = 'c' * 64
     api_error = ('runtime observation stayed degraded for 30s: '

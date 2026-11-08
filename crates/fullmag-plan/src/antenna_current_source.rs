@@ -185,8 +185,8 @@ fn topology(mesh: &MeshIR, ids: &[u64]) -> Result<Topology, PlanError> {
         mesh.element_markers
             .iter()
             .chain(&mesh.boundary_markers)
-            .all(|m| *m > 0 && *m <= i32::MAX as u32),
-        "current source markers must be positive signed-32-bit values",
+            .all(|m| *m > 0),
+        "current source markers must be positive u32 values",
     )?;
     let tets = mesh.require_tet4_elements().map_err(fail)?;
     let mut faces = BTreeMap::<[u64; 3], Vec<(usize, u32)>>::new();
@@ -1865,6 +1865,22 @@ mod tests {
             });
         reject_public_inspection(&spectrum, "source_not_qualified");
     }
+    #[test]
+    fn materialized_input_preserves_full_u32_markers() {
+        let mut f = fixture();
+        f.device.element_markers.fill(u32::MAX);
+        f.device.boundary_markers.fill(i32::MAX as u32 + 1);
+        let ConservativeCurrentSourceIR::ExternalLeadCurrent { lead_mesh, .. } = f.source()
+            else { unreachable!("external lead fixture") };
+        lead_mesh.element_markers.fill(i32::MAX as u32 + 1);
+        lead_mesh.boundary_markers.fill(u32::MAX);
+        let input = f.resolve().unwrap();
+        assert_eq!(input.original_device_mesh, f.device);
+        assert!(input.combined_mesh.element_markers[..96].iter().all(|m| *m == u32::MAX));
+        assert!(input.combined_mesh.element_markers[96..].iter().all(|m| *m == i32::MAX as u32 + 1));
+        assert!(input.combined_mesh.boundary_markers.iter().all(|m| *m == u32::MAX || *m == i32::MAX as u32 + 1));
+    }
+
     #[test]
     fn materialized_input_preserves_real_ids_markers_and_signed_observations() {
         let f = fixture();

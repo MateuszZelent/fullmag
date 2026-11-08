@@ -16,6 +16,7 @@ from ._gmsh_types import (
     SUPPORTED_BOUNDARY_ELEMENTS,
     SUPPORTED_VOLUME_ELEMENTS,
     MeshData,
+    _canonical_marker_array,
     MeshOptions,
     MeshQualityReport,
 )
@@ -268,18 +269,17 @@ def _meshio_physical_name_map(mesh: Any, *, dim: int | None = None) -> dict[int,
     return result
 
 
-def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDArray[np.int32]:
+def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1, preserve_physical_tags: bool = False) -> NDArray[np.uint32]:
     cell_blocks = list(getattr(mesh, "cells", []))
     matching_indices = [
         index for index, cell_block in enumerate(cell_blocks)
         if getattr(cell_block, "type", None) == cell_type
     ]
     if not matching_indices:
-        width = 3 if cell_type == "triangle" else 4
-        return np.ones((0,), dtype=np.int32) if width else np.ones((0,), dtype=np.int32)
+        return np.ones((0,), dtype=np.uint32)
 
     total = sum(int(np.asarray(cell_blocks[index].data).shape[0]) for index in matching_indices)
-    markers = np.full(total, int(fallback), dtype=np.int32)
+    markers = np.full(total, int(_canonical_marker_array([fallback], "fallback marker")[0]), dtype=np.uint32)
 
     def apply_block_values(values_by_block: list[Any], name_map: dict[int, str]) -> bool:
         offset = 0
@@ -287,11 +287,11 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
         for block_index in matching_indices:
             count = int(np.asarray(cell_blocks[block_index].data).shape[0])
             if block_index < len(values_by_block):
-                values = np.asarray(values_by_block[block_index], dtype=np.int32).reshape(-1)
+                values = _canonical_marker_array(np.asarray(values_by_block[block_index]).reshape(-1), "meshio physical markers")
                 if values.shape[0] == count:
                     for local_index, marker in enumerate(values):
                         markers[offset + local_index] = _semantic_marker_from_name(
-                            name_map.get(int(marker)),
+                            None if preserve_physical_tags else name_map.get(int(marker)),
                             int(marker),
                         )
                     applied = True
@@ -316,7 +316,7 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
         next_marker = 1
         applied = False
         for set_name in sorted(cell_sets):
-            semantic_marker = _semantic_marker_from_name(str(set_name), next_marker)
+            semantic_marker = _semantic_marker_from_name(None if preserve_physical_tags else str(set_name), next_marker)
             if semantic_marker != 0:
                 next_marker += 1
             for block_index, indices in enumerate(cell_sets[set_name]):
@@ -333,18 +333,18 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
     return markers
 
 
-def _read_mesh_file(path: Path) -> MeshData:
+def _read_mesh_file(path: Path, *, preserve_physical_tags: bool = False) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
     _reject_unsupported_meshio_elements(mesh)
     nodes = np.asarray(mesh.points[:, :3], dtype=np.float64)
     cell_types, cell_offsets, cell_nodes, element_markers = _meshio_typed_topology(
         mesh,
-        _MESHIO_VOLUME_TYPES,
+        _MESHIO_VOLUME_TYPES, preserve_physical_tags=preserve_physical_tags,
     )
     facet_types, facet_offsets, facet_nodes, boundary_markers = _meshio_typed_topology(
         mesh,
-        _MESHIO_FACET_TYPES,
+        _MESHIO_FACET_TYPES, preserve_physical_tags=preserve_physical_tags,
     )
     facet_roles = _derive_facet_roles(
         cell_types,
@@ -488,9 +488,9 @@ def _drop_unattached_provisional_facets(
     facet_types: list[str],
     facet_offsets: NDArray[np.int64],
     facet_nodes: NDArray[np.int32],
-    boundary_markers: NDArray[np.int32],
+    boundary_markers: NDArray[np.uint32],
     provisional_interface_markers: set[int],
-) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.int32]]:
+) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.uint32]]:
     """Drop only declared provisional facets absent from volume topology.
 
     Gmsh can retain triangles from the embedded STL constraint which are not
@@ -527,7 +527,7 @@ def _drop_unattached_provisional_facets(
         kept_types,
         np.asarray(kept_offsets, dtype=np.int64),
         np.asarray(kept_nodes, dtype=np.int32),
-        np.asarray(kept_markers, dtype=np.int32),
+        np.asarray(kept_markers, dtype=np.uint32),
     )
 
 
@@ -553,7 +553,7 @@ def _derive_facet_roles_reference(
     types = np.asarray(cell_types, dtype=np.str_)
     offsets = np.asarray(cell_offsets, dtype=np.int64)
     nodes = np.asarray(cell_nodes, dtype=np.int32)
-    markers = np.asarray(element_markers, dtype=np.int32)
+    markers = np.asarray(element_markers, dtype=np.uint32)
     adjacency: dict[tuple[int, ...], list[int]] = {}
     for ordinal, cell_type in enumerate(types.tolist()):
         item = nodes[offsets[ordinal] : offsets[ordinal + 1]]
@@ -563,7 +563,7 @@ def _derive_facet_roles_reference(
 
     face_offsets = np.asarray(facet_offsets, dtype=np.int64)
     face_nodes = np.asarray(facet_nodes, dtype=np.int32)
-    face_markers = np.asarray(boundary_markers, dtype=np.int32)
+    face_markers = np.asarray(boundary_markers, dtype=np.uint32)
     seams = periodic_markers or set()
     provisional_interfaces = provisional_interface_markers or set()
     provisional_interface_allowed = _is_tet4_provisional_interface_topology(types)
@@ -611,11 +611,11 @@ def _build_face_adjacency(
     cell_types: NDArray[np.str_],
     cell_offsets: NDArray[np.int64],
     cell_nodes: NDArray[np.int32],
-    element_markers: NDArray[np.int32],
-) -> dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.int32], NDArray[np.int32]]]:
+    element_markers: NDArray[np.uint32],
+) -> dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.uint32], NDArray[np.int64]]]:
     """Build fixed-arity volume-face adjacency tables in vectorized blocks."""
     face_blocks: dict[int, list[NDArray[np.int32]]] = {}
-    marker_blocks: dict[int, list[NDArray[np.int32]]] = {}
+    marker_blocks: dict[int, list[NDArray[np.uint32]]] = {}
     for cell_type, local_facets in _CELL_LOCAL_FACETS.items():
         ordinals = np.flatnonzero(cell_types == cell_type)
         if ordinals.size == 0:
@@ -635,10 +635,10 @@ def _build_face_adjacency(
             face_blocks.setdefault(arity, []).append(faces)
             marker_blocks.setdefault(arity, []).append(markers)
 
-    adjacency: dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.int32], NDArray[np.int32]]] = {}
+    adjacency: dict[int, tuple[np.ndarray, NDArray[np.int32], NDArray[np.uint32], NDArray[np.int64]]] = {}
     for arity, blocks in face_blocks.items():
         faces = np.concatenate(blocks, axis=0)
-        markers = np.concatenate(marker_blocks[arity]).astype(np.int32, copy=False)
+        markers = np.concatenate(marker_blocks[arity]).astype(np.uint32, copy=False)
         order = np.lexsort(faces[:, ::-1].T)
         sorted_faces = faces[order]
         sorted_markers = markers[order]
@@ -651,7 +651,7 @@ def _build_face_adjacency(
             np.int32, copy=False
         )
         group_first_markers = sorted_markers[group_starts]
-        group_second_markers = np.full(len(group_starts), -1, dtype=np.int32)
+        group_second_markers = np.full(len(group_starts), -1, dtype=np.int64)
         row_positions = np.arange(len(sorted_faces), dtype=np.int64) - np.maximum.accumulate(
             np.where(first, np.arange(len(sorted_faces), dtype=np.int64), 0)
         )
@@ -683,10 +683,10 @@ def _derive_facet_roles(
     types = np.asarray(cell_types, dtype=np.str_)
     offsets = np.asarray(cell_offsets, dtype=np.int64)
     nodes = np.asarray(cell_nodes, dtype=np.int32)
-    markers = np.asarray(element_markers, dtype=np.int32)
+    markers = np.asarray(element_markers, dtype=np.uint32)
     face_offsets = np.asarray(facet_offsets, dtype=np.int64)
     face_nodes = np.asarray(facet_nodes, dtype=np.int32)
-    face_markers = np.asarray(boundary_markers, dtype=np.int32)
+    face_markers = np.asarray(boundary_markers, dtype=np.uint32)
     if len(face_offsets) <= 1:
         return []
     seams = periodic_markers or set()
@@ -737,8 +737,8 @@ def _derive_facet_roles(
         boundary_tables[int(arity)] = (keys[order], ordinal_indices[order])
 
     owner_count = np.zeros(n_facets, dtype=np.int8)
-    owner_first = np.full(n_facets, -1, dtype=np.int32)
-    owner_second = np.full(n_facets, -1, dtype=np.int32)
+    owner_first = np.full(n_facets, -1, dtype=np.int64)
+    owner_second = np.full(n_facets, -1, dtype=np.int64)
     owner_overflow = np.zeros(n_facets, dtype=bool)
 
     for cell_type, local_facets in _CELL_LOCAL_FACETS.items():
@@ -791,7 +791,7 @@ def _derive_facet_roles(
             ).astype(np.int8, copy=False)
             unique_ordinals = sorted_ordinals[group_starts]
             group_first_markers = sorted_markers[group_starts]
-            group_second_markers = np.full(len(group_starts), -1, dtype=np.int32)
+            group_second_markers = np.full(len(group_starts), -1, dtype=np.int64)
             row_positions = np.arange(len(sorted_ordinals), dtype=np.int64) - np.maximum.accumulate(
                 np.where(first, np.arange(len(sorted_ordinals), dtype=np.int64), 0)
             )
@@ -811,7 +811,7 @@ def _derive_facet_roles(
             owner_second[unique_ordinals[one_existing]] = group_first_markers[one_existing]
             owner_count[unique_ordinals] = np.minimum(2, previous_counts + group_counts)
 
-    provisional_values = np.asarray(tuple(provisional_interfaces), dtype=np.int32)
+    provisional_values = np.asarray(tuple(provisional_interfaces), dtype=np.uint32)
     for arity in np.unique(face_arities):
         ordinal_indices = np.flatnonzero(face_arities == int(arity))
         seam_mask = np.isin(face_markers[ordinal_indices], tuple(seams))
@@ -882,9 +882,10 @@ def _reject_unsupported_meshio_elements(mesh: Any) -> None:
 def _meshio_typed_topology(
     mesh: Any,
     type_map: dict[str, str],
-) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.int32]]:
+    *, preserve_physical_tags: bool = False,
+) -> tuple[list[str], NDArray[np.int64], NDArray[np.int32], NDArray[np.uint32]]:
     markers_by_type = {
-        source_type: _meshio_cell_markers(mesh, cell_type=source_type)
+        source_type: _meshio_cell_markers(mesh, cell_type=source_type, preserve_physical_tags=preserve_physical_tags)
         for source_type in type_map
     }
     marker_offsets = {source_type: 0 for source_type in type_map}
@@ -910,7 +911,7 @@ def _meshio_typed_topology(
         types,
         np.asarray(offsets, dtype=np.int64),
         np.asarray(nodes, dtype=np.int32),
-        np.asarray(markers, dtype=np.int32),
+        np.asarray(markers, dtype=np.uint32),
     )
 
 
@@ -1029,7 +1030,7 @@ def _extract_mesh_data(
                         )
                     )
                     marker_blocks.append(
-                        np.full(block_count, semantic_marker, dtype=np.int32)
+                        np.full(block_count, semantic_marker, dtype=np.uint32)
                     )
                     extracted_tag_blocks.append(
                         np.asarray(tags, dtype=np.int64).reshape(-1)
@@ -1075,7 +1076,7 @@ def _extract_mesh_data(
                         )
                     )
                     facet_marker_blocks.append(
-                        np.full(block_count, semantic_marker, dtype=np.int32)
+                        np.full(block_count, semantic_marker, dtype=np.uint32)
                     )
                     facet_node_offset += block_count * num_nodes
 
@@ -1095,9 +1096,9 @@ def _extract_mesh_data(
             else np.zeros(0, dtype=np.int32)
         )
         element_markers = (
-            np.concatenate(marker_blocks).astype(np.int32, copy=False)
+            np.concatenate(marker_blocks).astype(np.uint32, copy=False)
             if marker_blocks
-            else np.zeros(0, dtype=np.int32)
+            else np.zeros(0, dtype=np.uint32)
         )
         facet_offsets_array = (
             np.concatenate([np.array([0], dtype=np.int64), *facet_offset_blocks])
@@ -1110,9 +1111,9 @@ def _extract_mesh_data(
             else np.zeros(0, dtype=np.int32)
         )
         boundary_markers = (
-            np.concatenate(facet_marker_blocks).astype(np.int32, copy=False)
+            np.concatenate(facet_marker_blocks).astype(np.uint32, copy=False)
             if facet_marker_blocks
-            else np.zeros(0, dtype=np.int32)
+            else np.zeros(0, dtype=np.uint32)
         )
     else:
         # ── Legacy single-region path ──
@@ -1128,8 +1129,8 @@ def _extract_mesh_data(
             gmsh, boundary_blocks, node_index, dimension=2
         )
 
-        element_markers = np.ones(len(cell_types), dtype=np.int32)
-        boundary_markers = np.ones(len(facet_types), dtype=np.int32)
+        element_markers = np.ones(len(cell_types), dtype=np.uint32)
+        boundary_markers = np.ones(len(facet_types), dtype=np.uint32)
         if periodic_pair_specs:
             if any(kind != "tet4" for kind in cell_types) or any(
                 kind != "tri3" for kind in facet_types
@@ -1301,7 +1302,7 @@ def _orient_periodic_boundary_faces(
 def certify_extracted_periodic_mesh(
     nodes: NDArray[np.float64],
     boundary_faces: NDArray[np.int32],
-    boundary_markers: NDArray[np.int32],
+    boundary_markers: NDArray[np.uint32],
     periodic_boundary_pairs: list[dict[str, object]],
     periodic_node_pairs: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -1314,7 +1315,7 @@ def certify_extracted_periodic_mesh(
     """
     coordinates = np.asarray(nodes, dtype=np.float64)
     faces = np.asarray(boundary_faces, dtype=np.int32)
-    markers = np.asarray(boundary_markers, dtype=np.int32)
+    markers = np.asarray(boundary_markers, dtype=np.uint32)
     if faces.ndim != 2 or faces.shape[1] != 3 or markers.shape != (faces.shape[0],):
         raise ValueError("periodic certificate requires triangular boundary faces and markers")
     if not periodic_boundary_pairs:
@@ -1465,7 +1466,7 @@ def _extract_periodic_surface_markers(
                     raise ValueError(f"periodic face {face} belongs to conflicting surfaces")
                 marker_by_face[face] = marker
 
-    markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+    markers = np.ones(boundary_faces.shape[0], dtype=np.uint32)
     for index, face in enumerate(boundary_faces):
         markers[index] = marker_by_face.get(tuple(sorted(int(node) for node in face)), 1)
     return markers
@@ -1673,7 +1674,7 @@ def _tetra_abs_volumes(
 def build_per_domain_quality_from_mesh_arrays(
     nodes: NDArray[np.float64],
     elements: NDArray[np.int32],
-    element_markers: NDArray[np.int32],
+    element_markers: NDArray[np.uint32],
     quality: MeshQualityReport | None,
 ) -> dict[int, MeshQualityReport] | None:
     """Build per-domain quality from final mesh markers and aligned element arrays."""
@@ -1681,7 +1682,7 @@ def build_per_domain_quality_from_mesh_arrays(
         return None
     sicn = np.asarray(quality.element_sicn, dtype=np.float64)
     gamma = np.asarray(quality.element_gamma, dtype=np.float64)
-    markers = np.asarray(element_markers, dtype=np.int32)
+    markers = np.asarray(element_markers, dtype=np.uint32)
     if sicn.size != elements.shape[0] or gamma.size != elements.shape[0] or markers.size != elements.shape[0]:
         return None
     volumes = (
@@ -1693,7 +1694,7 @@ def build_per_domain_quality_from_mesh_arrays(
 
 
 def extract_per_domain_quality(
-    element_markers: NDArray[np.int32],
+    element_markers: NDArray[np.uint32],
     sicn_values: NDArray[np.float64],
     gamma_values: NDArray[np.float64],
     volume_values: NDArray[np.float64],
@@ -1862,7 +1863,7 @@ def _validated_gmsh_quality_channel(
 def _extract_quality_metrics(
     gmsh: Any,
     opts: MeshOptions,
-    element_markers: NDArray[np.int32] | None = None,
+    element_markers: NDArray[np.uint32] | None = None,
 ) -> tuple[MeshQualityReport, dict[int, MeshQualityReport] | None]:
     """Extract per-element quality metrics from the current Gmsh mesh."""
     emit_progress("Gmsh: extracting quality metrics")
@@ -1942,7 +1943,7 @@ def _extract_quality_metrics(
             nonfinite_indices=(0,),
         )
     resolved_markers = (
-        np.asarray(element_markers, dtype=np.int32)
+        np.asarray(element_markers, dtype=np.uint32)
         if element_markers is not None and len(element_markers) == len(all_tags)
         else _extract_element_markers_for_tags(gmsh, all_tags)
     )
@@ -2069,7 +2070,7 @@ def _extract_element_markers_for_tags(
         )
     # No default marker is allowed here.  Marker ``1`` is meaningful only when
     # a physical group explicitly owns the element.
-    return np.asarray([tag_to_marker[int(tag)] for tag in all_tags], dtype=np.int32)
+    return np.asarray([tag_to_marker[int(tag)] for tag in all_tags], dtype=np.uint32)
 
 
 def _extract_gmsh_typed_connectivity(

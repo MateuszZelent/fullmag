@@ -1815,7 +1815,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('study = fm.study("region_owned")', exported)
         self.assertIn("film_core_region = film.add_region", exported)
         self.assertIn('region_id="film:core_region"', exported)
-        self.assertIn('fm.fields.constant(760000, unit="A/m")', exported)
+        self.assertIn('fm.fields.constant(760000.0, unit="A/m")', exported)
         self.assertIn("film_core_region.texture = fm.texture.neel_skyrmion", exported)
         self.assertIn("film.set_material_field", exported)
         self.assertIn("study.couplings.rkky", exported)
@@ -6117,7 +6117,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn('body_ui_core_region = body.add_region("ui_core"', rewritten)
         self.assertIn('body_ui_core_region.mesh(maximum_element_size=1e-09', rewritten)
         self.assertIn(
-            'body_ui_core_region.set_material("ms", fm.fields.constant(700000, unit="A/m"), priority=5',
+            'body_ui_core_region.set_material("ms", fm.fields.constant(700000.0, unit="A/m"), priority=5',
             rewritten,
         )
         self.assertIn(

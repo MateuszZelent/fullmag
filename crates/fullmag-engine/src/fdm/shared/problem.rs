@@ -395,6 +395,22 @@ impl ExchangeLlgProblem {
         })
     }
 
+    /// Full-domain stray field using a workspace created for this problem.
+    /// Observation callers may retain it across accepted states; it must not
+    /// be shared concurrently with an integrator evaluation.
+    pub fn observable_demag_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(if self.terms.demag {
+            self.observable_demag_field_from_vectors_ws(state.magnetization(), ws)
+        } else {
+            zero_vectors(self.grid.cell_count())
+        })
+    }
+
     pub fn external_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.external_field_vectors())
@@ -413,9 +429,20 @@ impl ExchangeLlgProblem {
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
+        self.observable_effective_field_with_workspace(state, &mut ws)
+    }
+
+    /// Evaluate the current observable field without rebuilding FFT plans or
+    /// Newell spectra. The workspace must have this problem's geometry/policy.
+    pub fn observable_effective_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
         Ok(self.observable_effective_field_from_vectors_ws_at_time(
             state.magnetization(),
-            &mut ws,
+            ws,
             state.time_seconds,
         ))
     }
