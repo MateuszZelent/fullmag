@@ -7,7 +7,7 @@ SHA256 2d85f2f2f063daf5f73919a68a689a1ead05ec24352f1cf513eb029c380a9563.
 
 ## Wykonany zakres
 
-- 4e10cc82e24061b98594c1d738798735f0279e9f: sześć runner regresji,
+- 4e10cc82e24061b98594c1d738798735f0279e9f: pięć nowych testów runnera (w tym dwa warianty kolejności w jednym teście),
   regresja pełnego worker_failure_reason/receipt oraz jawne filtry CI.
 - 0d45fc7b6ab50b00a3a9b24dc3a25216f4a4bd2b: prywatny helper
   verify_center_current, wywołany w dotychczasowym miejscu XYZ/J.
@@ -30,7 +30,17 @@ uruchamiać dalszych niezwiązanych always-steps. Nie anulowano runtime lub Solv
 Na c686a4ce2fb4f2d0f220df836910c967edac2d21 ukierunkowany krok
 Run RT0 center refusal diagnostic contracts zakończył się success:
 https://github.com/MateuszZelent/fullmag/actions/runs/42514370671.
-Końcowy status całego CI jest oddzielną bramką i w momencie zapisu trwa.
+Ukierunkowany krok wykonał 16 testów runnera (w tym pięć nowych) i trzy
+testy przekazywania raportu workera (w tym jeden nowy): wszystkie PASS.
+Cały workflow w pierwszym wykonaniu zakończył się failure w istniejącym
+exhausted_stale_sample_retry_defers_second_read_and_authorization_without_consuming_claim_start_lease
+na asercji authorization_retries>0. Test i pętla ponowień są identyczne
+przed i po tej diagnostyce. Pętla sprawdza deadline po pierwszej operacji,
+a test daje jej100ms; opóźnienie pierwszego odczytu może zużyć to okno.
+To hipoteza, nie potwierdzona przyczyna: log nie zawiera zwróconego błędu.
+Uruchomiono jedno ponowienie failed job na niezmienionym commicie,
+bez zmiany testu lub runtime. Jego końcowy wynik pozostaje osobną bramką.
+Nie dopuszczono buildu na podstawie samego zielonego kroku diagnostyki.
 Nie kompilowano lokalnie testów Rust. Niezależny review czterech plików
 nie znalazł Blocker/Required; przegląd rozdzielał istniejące dirty
 optymalizacje affinity/moments, których nie dołączono do tych commitów.
@@ -77,3 +87,14 @@ Skrypt i zamrożony request naukowy są również na ext4:
 examples/sushruth_2020_closed_gsg/rt0_center_diagnostic_20261108/.
 To wejścia diagnostyczne, nie wynik accepted ani kwalifikowany Zarr.
 Odtworzenie Fig.3 i dopuszczenie napędu LLG pozostają NOT VERIFIED.
+
+## Przygotowana analiza offline
+
+Samodzielny verify_rt0_center_witness.py i siedem regresji są na ext4
+w examples/sushruth_2020_closed_gsg/rt0_center_diagnostic_20261108/offline-analysis/.
+Testy przeszły bez wywołania Fullmaga. Weryfikator odtwarza predykat,
+dokładny centroid i próbki RT0 z kanonicznych momentów ścian.
+Jawnie odróżnia model zaokrąglania Python binary64 nearest-even od
+niewykonanego cpp_rational::convert_to w C++. Wynik testu syntetycznego
+nie jest obserwacją rzeczywistej anteny ani potwierdzeniem przyczyny runu.
+Nie uzyskano jeszcze świadka z rzeczywistej odrzuconej komórki.

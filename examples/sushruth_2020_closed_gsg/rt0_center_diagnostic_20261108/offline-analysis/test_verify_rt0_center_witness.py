@@ -1,0 +1,67 @@
+import struct,unittest
+from verify_rt0_center_witness import analyze
+def bits(x):return struct.pack(">d",x).hex()
+def fixture(translation=0.0,wrong_center=False):
+ points=[[translation,0.,0.],[translation+1.,0.,0.],[translation,1.,0.],[translation,0.,1.]]
+ vertex_j=[0.,0.,0.,1.,0.,0.,0.,1.,0.,0.,0.,1.]
+ center=[float(translation+.25),.25,.25]
+ center_j=[center[0]-translation,.25,.25]
+ if wrong_center:center_j[0]=9.
+ mean=.25;difference=abs(mean-center_j[0]);budget=128*2.**-52
+ return {"schema":"fullmag.rt0_center_failure.v1","element":"0000000000000007","axis":0,
+ "vertex_ids":["0000000000000001","0000000000000002","0000000000000003","0000000000000004"],
+ "vertex_xyz_bits":[bits(x) for p in points for x in p],"vertex_j_bits":[bits(x) for x in vertex_j],
+ "center_xyz_bits":[bits(x) for x in center],"center_j_bits":[bits(x) for x in center_j],
+ "mean_bits":bits(mean),"scale_bits":bits(1.),"difference_bits":bits(difference),"budget_bits":bits(budget),
+ "face_flux_bits":[bits(.5),bits(0.),bits(0.),bits(0.)]}
+class WitnessTests(unittest.TestCase):
+ def test_exact_unit_affine_field(self):
+  r=analyze(fixture())
+  self.assertTrue(r["gate_replay"]["passes"])
+  self.assertTrue(r["gate_replay"]["derived_bits_match"])
+  self.assertTrue(r["moment_reconstruction"]["all_vertex_samples_match"])
+  self.assertTrue(r["moment_reconstruction"]["all_center_samples_match"])
+  self.assertEqual(r["centroid_error_m"],[0.,0.,0.])
+  self.assertFalse(r["physics_qualified"])
+ def test_translation_rounding_explains_refusal(self):
+  r=analyze(fixture(float(2**52)))
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertTrue(r["gate_replay"]["derived_bits_match"])
+  self.assertTrue(r["moment_reconstruction"]["all_vertex_samples_match"])
+  self.assertTrue(r["moment_reconstruction"]["all_center_samples_match"])
+  self.assertEqual(r["centroid_error_m"],[-.25,0.,0.])
+  self.assertEqual(r["moment_reconstruction"]["centroid_shift_delta_j_apm2"],[-.25,0.,0.])
+ def test_wrong_center_is_not_blended_into_a_match(self):
+  r=analyze(fixture(wrong_center=True))
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertFalse(r["moment_reconstruction"]["all_center_samples_match"])
+ def test_nan_payload_and_missing_face_are_reported_without_false_reconstruction(self):
+  w=fixture();w["center_j_bits"][0]="7ff8123456789abc";w["face_flux_bits"][1]=None
+  r=analyze(w);self.assertEqual(r["witness"]["center_j_bits"][0],"7ff8123456789abc")
+  self.assertFalse(r["gate_replay"]["passes"]);self.assertFalse(r["moment_reconstruction"]["available"])
+ def test_malformed_bits_and_duplicate_ids_are_rejected(self):
+  for mutate in [lambda w:w["vertex_xyz_bits"].__setitem__(0,"xyz"),lambda w:w["vertex_ids"].__setitem__(0,w["vertex_ids"][1])]:
+   w=fixture();mutate(w)
+   with self.assertRaises(ValueError):analyze(w)
+
+ def test_constant_divergence_free_field(self):
+  w=fixture();w["vertex_j_bits"]=[bits(8.)]*12;w["center_j_bits"]=[bits(8.)]*3
+  w.update(mean_bits=bits(8.),scale_bits=bits(8.),difference_bits=bits(0.),budget_bits=bits(128*2.**-52*8))
+  w["face_flux_bits"]=[bits(x) for x in [12.,4.,-4.,4.]]
+  r=analyze(w)
+  self.assertTrue(r["moment_reconstruction"]["all_vertex_samples_match"])
+  self.assertTrue(r["moment_reconstruction"]["all_center_samples_match"])
+  self.assertEqual(r["moment_reconstruction"]["centroid_shift_delta_j_apm2"],[0.,0.,0.])
+ def test_receipt_framing_and_duplicate_json_rejection(self):
+  import json
+  from unittest import mock
+  from verify_rt0_center_witness import read_witness,MARKER
+  w=fixture()
+  raw=json.dumps({"failure_reason":"wrapper"+MARKER+json.dumps(w)+" | stdout: tail"}).encode()
+  with mock.patch("verify_rt0_center_witness.Path.read_bytes",return_value=raw):
+   parsed,_=read_witness("unused");self.assertEqual(parsed,w)
+  duplicate=json.dumps(w).replace('{"schema":','{"schema":"ignored","schema":',1).encode()
+  with mock.patch("verify_rt0_center_witness.Path.read_bytes",return_value=duplicate):
+   with self.assertRaises(ValueError):read_witness("unused")
+
+if __name__=="__main__":unittest.main()
