@@ -271,5 +271,53 @@
       "source_step": 1,
       "scalar_revision": 4
     }
+  },
+  "verification": {
+    "red": {
+      "head": "e289f23477bd0527889f095f00d0fcc712660901",
+      "workflow": 42521774859,
+      "rust_job": 128856617404,
+      "projector_passed": 49,
+      "projector_failed": 1,
+      "failure": "accepted_terminal_stats_populate_run_energy_summary_without_typed_total_energy: final_time None instead of Some(0.0)"
+    },
+    "green": {
+      "head": "72cdcff730415d59bcdfd4fb5f06826e32450b81",
+      "workflows": {
+        "bootstrap": 42523229951,
+        "contract_guard": 42523230005,
+        "documentation": 42523229928
+      },
+      "all_workflows": "success",
+      "rust_job": 128861081999,
+      "verified_test_names": [
+        "accepted_terminal_stats_override_or_fill_typed_total_energy_summary",
+        "terminal_stats_pin_requires_the_exact_succeeded_attempt_and_final_state",
+        "relax_region_reset_round_trip_keeps_local_and_independent_owners_distinct",
+        "selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b",
+        "required_authored_initial_state_reaches_prepare_without_a_cas_input"
+      ]
+    }
+  },
+  "managed_restore": {
+    "original_development": "1dd24b9d7f154589bcfbce453fe16b66",
+    "terminal_stop": "081b3bfe4d374c24ac07a3c03a7c933f",
+    "terminal_stop_sha256": "ba58fa19b2f86f81e33888c7f6356582c98da874ee09c21af05288eee09231ac",
+    "recreate": "e00dd429be8e44efbe18fdf97af45321",
+    "development": "f1cdcd2cc70144c18e860ce8a44eddb8",
+    "development_state": "failed-confirmed",
+    "compile": "completed; runtime refused group ledger policy after memory budget changed from 32 to 64 GiB",
+    "diagnostic_backend": "a402e9107065ec2be4273e77df2fbd6f9d041e56506082e20a872c3dd2481609",
+    "cold_stop": "a7315ac2d59b443697879b5c601ae0bb",
+    "cold_stop_state": "stopped-confirmed",
+    "cold_journal_relative": "verification/cold-stored-budget-stop-a402e9107065ec2be4273e77df2fbd6f9d041e56506082e20a872c3dd2481609.json",
+    "cold_journal_sha256": "4d689224414637cc372156589af63a66b2c46579a02e1edd5e05fad4bf04a6fb",
+    "restore_budget": {
+      "cpus": 8,
+      "memory_bytes": 34359738368
+    },
+    "ledger_sha256": "576a0219f388d72d7ba6a4e0299a7cf7c7bf7ca3be5b3abd13853a9fce8f641b",
+    "active_reservations": 0,
+    "remaining": "compose authenticated cold-budget stop with original terminal observation; restored runtime/API/browser NOT VERIFIED"
   }
 }
