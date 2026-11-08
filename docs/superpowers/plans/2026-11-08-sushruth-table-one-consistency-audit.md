@@ -41,8 +41,16 @@ nie kwalifikacją naukową Fullmaga.
 Walidator noty i source-map zakończył się exit0. Pierwsze wykonanie wykryło
 niedokładnie powtórzone opisy pięciu symboli w mapie; ujednolicono je z tabelą
 bez zmiany równań, kodu lub wyników. Testy kontraktu dokumentacji:41PASS,
-1.323s. Odbiór zmienionych stron względem bazowego commita zostanie zapisany
-po utworzeniu commita. Nie publikowano public_docs i nie uruchamiano Sphinx.
+1.323s. Odbiór zmienionych stron PASS/exit0 dla zakresu
+983638cc1b125885f158033f7b58754e57f25cae → 14e5a1505db63642f7593407d2482ef0191d2c08.
+Uruchomiony w Python3.10.12 istniejącego backendu z read-only mapowaniem Git.
+Pierwsza diagnostyka hostowym Python3.8 zakończyła się błędem braku
+str.removesuffix; nie zmieniano walidatora i nie uznano jej za PASS.
+Nie publikowano public_docs i nie uruchamiano Sphinx.
+
+Logi walidacji, w tym pierwsze odmowy, zachowano również na WSL w podkatalogu
+documentation-validation:12plików, manifestSHA256
+799f8c79ee2d1b87429fd1c8bba03ac7cc3d459c3a9f3df5339e8f52514dfaaa. To osobny zestaw od11plików naukowych poniżej.
 
 ## Kod i dowody wykonania
 
