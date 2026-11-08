@@ -41,6 +41,46 @@ pub(crate) struct AcceptedLiveStudyExecution {
     pub preparation_error: Option<AcceptedLiveStudyPreparationError>,
 }
 
+/// Validate and build the live read-model replacement before invoking the
+/// synchronous durable commit. The caller holds the current-live write guard
+/// and transition fence, so a failed commit leaves the old snapshot intact.
+fn commit_prepared_live_study_with_snapshot<F>(
+    snapshot: Option<&mut SessionStateResponse>,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+    run_id: &str,
+    step_ids: &[String],
+    commit: F,
+) -> Result<AcceptedLiveStudyExecution, ApiError>
+where
+    F: FnOnce() -> Result<AcceptedLiveStudyExecution, ApiError>,
+{
+    let snapshot = snapshot
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let mut next =
+        crate::router_v2::handlers::simulation::commands::prepare_accepted_live_study_snapshot(
+            snapshot,
+            context,
+            session_epoch,
+            run_id,
+            step_ids,
+            "waiting_for_compute",
+            None,
+        )?;
+    let accepted = commit()?;
+    if let Some(preparation_error) = accepted.preparation_error.as_ref() {
+        let metadata = accepted_preparation_failure_metadata(
+            &next,
+            &accepted.run_id,
+            &accepted.step_ids,
+            preparation_error,
+        );
+        next.metadata = Some(metadata.into());
+    }
+    *snapshot = next;
+    Ok(accepted)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AcceptedLiveStudyPreparationError {
     pub code: String,
@@ -949,9 +989,36 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
     .await?;
     // The existing command path already owns the transition fence. The
     // preparation above writes no accepted durable state; its bounded mesh/cache
-    // artifacts are not a RunIntent. Revalidate before the synchronous commit.
+    // artifacts are not a RunIntent. Revalidate and prepare the replacement view
+    // before the synchronous commit so publication cannot orphan a RunIntent.
     validate_live_scene_for_context(state, context, &prepared.scene).await?;
-    commit_prepared_live_accepted(&prepared)
+    let mut current = state.current_live_state.write().await;
+    let session_epoch = state
+        .current_live_session_epoch
+        .load(std::sync::atomic::Ordering::Acquire);
+    let accepted = commit_prepared_live_study_with_snapshot(
+        current.as_mut(),
+        context,
+        session_epoch,
+        &prepared.run_id,
+        &prepared.step_ids,
+        || commit_prepared_live_accepted(&prepared),
+    )?;
+    let realtime_snapshot = current
+        .as_ref()
+        .expect("successful accepted Study commit keeps the current snapshot bound")
+        .clone();
+    drop(current);
+
+    let display_revision = state.current_display_selection.read().await.revision;
+    let realtime_state = crate::current_live_realtime_state_from_snapshot(
+        state,
+        &realtime_snapshot,
+        display_revision,
+    )
+    .await;
+    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
+    Ok(accepted)
 }
 
 /// Prepare a startup or live Study without publishing a durable RunIntent.
@@ -1250,15 +1317,6 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     )
     .await?;
     if let Some(preparation_error) = accepted.preparation_error.as_ref() {
-        publish_accepted_live_study_with_preparation_failure_under_transition(
-            state,
-            context,
-            &accepted.run_id,
-            &accepted.step_ids,
-            "waiting_for_compute",
-            preparation_error,
-        )
-        .await?;
         return Err(ApiError::unprocessable_with_code(
             "accepted_run_recovery_required",
             format!(
@@ -1267,14 +1325,6 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
             ),
         ));
     }
-    crate::router_v2::handlers::simulation::commands::publish_accepted_live_study_under_transition(
-        state,
-        context,
-        &accepted.run_id,
-        &accepted.step_ids,
-        "waiting_for_compute",
-    )
-    .await?;
     let accepted_context = CurrentLiveRequestContext {
         session_id: context.session_id.clone(),
         run_id: Some(accepted.run_id),
@@ -1283,42 +1333,6 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     };
     crate::validate_current_live_request_context(state, &accepted_context).await?;
     Ok(accepted_context)
-}
-
-async fn publish_accepted_live_study_with_preparation_failure_under_transition(
-    state: &Arc<AppState>,
-    context: &CurrentLiveRequestContext,
-    run_id: &str,
-    step_ids: &[String],
-    status: &str,
-    preparation_error: &AcceptedLiveStudyPreparationError,
-) -> Result<(), ApiError> {
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current
-        .as_mut()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    crate::ensure_current_live_request_context(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-    )?;
-    let metadata = accepted_preparation_failure_metadata(snapshot, run_id, step_ids, preparation_error);
-    crate::router_v2::handlers::simulation::commands::apply_accepted_live_study_snapshot(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-        run_id,
-        step_ids,
-        status,
-        Some(metadata),
-    )?;
-    let realtime_snapshot = snapshot.clone();
-    drop(current);
-    publish_preparation_failure_realtime(state, &realtime_snapshot).await
 }
 
 fn accepted_preparation_failure_metadata(
@@ -3078,7 +3092,10 @@ fn profile_catalog_error(message: String) -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::path::Path;
+
+    use crate::types::CurrentLiveRequestContext;
 
     use super::{
         accepted_frontier_preparation_is_ready, apply_docker_output_storage_binding,
@@ -3088,6 +3105,245 @@ mod tests {
         request_accepted_stop_for_catalog, validate_scene_revision_and_content,
         AcceptedLiveStudyExecution, AcceptedLiveStudyPreparationError, MAX_RECOVERY_ERROR_CHARS,
     };
+
+    fn grid_refresh_predecessor_snapshot(
+        run_status: &str,
+    ) -> (
+        crate::types::SessionStateResponse,
+        CurrentLiveRequestContext,
+    ) {
+        let request: crate::types::CurrentLiveSnapshotRequest =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "grid-refresh-predecessor",
+                "run": {
+                    "run_id": "terminal-run-a",
+                    "session_id": "grid-refresh-predecessor",
+                    "status": run_status,
+                    "total_steps": 1,
+                    "artifact_dir": ""
+                }
+            }))
+            .unwrap();
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        snapshot.run = request.run;
+        snapshot.session.run_id = "terminal-run-a".into();
+        snapshot.session.status = "awaiting_command".into();
+        let context = CurrentLiveRequestContext {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: Some("terminal-run-a".into()),
+            session_epoch: 17,
+            request_scope_epoch: "scope:17".into(),
+        };
+        (snapshot, context)
+    }
+
+    fn record_accepted_commit(
+        calls: &Cell<usize>,
+        run_id: &str,
+        step_ids: &[&str],
+        preparation_error: Option<AcceptedLiveStudyPreparationError>,
+    ) -> Result<AcceptedLiveStudyExecution, crate::error::ApiError> {
+        calls.set(calls.get() + 1);
+        Ok(AcceptedLiveStudyExecution {
+            run_id: run_id.into(),
+            step_ids: step_ids.iter().map(|step_id| (*step_id).into()).collect(),
+            preparation_error,
+        })
+    }
+
+    #[test]
+    fn accepted_study_grid_refresh_commits_once_then_binds_held_replacement() {
+        let (mut snapshot, context) = grid_refresh_predecessor_snapshot("completed");
+        let commit_calls = Cell::new(0);
+        let accepted = super::commit_prepared_live_study_with_snapshot(
+            Some(&mut snapshot),
+            &context,
+            17,
+            "new-grid-study-b",
+            &["step-000".into(), "step-001".into()],
+            || record_accepted_commit(
+                &commit_calls,
+                "new-grid-study-b",
+                &["step-000", "step-001"],
+                Some(AcceptedLiveStudyPreparationError {
+                    code: "catalog_pending".into(),
+                    message: "held preparation needs recovery".into(),
+                }),
+            ),
+        )
+        .expect("a held whole Study may replace its exact terminal predecessor");
+
+        assert_eq!(commit_calls.get(), 1);
+        assert_eq!(accepted.run_id, "new-grid-study-b");
+        assert_eq!(snapshot.session.run_id, "new-grid-study-b");
+        assert_eq!(snapshot.session.status, "waiting_for_compute");
+        assert_eq!(snapshot.runtime_status.code, "waiting_for_compute");
+        let run = snapshot.run.as_ref().expect("new held Study run");
+        assert_eq!(run.run_id, "new-grid-study-b");
+        assert_eq!(run.total_steps, 2);
+        assert_eq!(snapshot.stage_execution.as_ref().unwrap().stages.len(), 2);
+        assert_eq!(
+            snapshot
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("accepted_preparation"))
+                .and_then(|preparation| preparation.get("run_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("new-grid-study-b")
+        );
+
+        let reactivation_context = CurrentLiveRequestContext {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: Some("new-grid-study-b".into()),
+            session_epoch: 17,
+            request_scope_epoch: "scope:17".into(),
+        };
+        let reactivated =
+            crate::router_v2::handlers::simulation::commands::prepare_accepted_live_study_snapshot(
+                &snapshot,
+                &reactivation_context,
+                17,
+                "new-grid-study-b",
+                &["step-000".into(), "step-001".into()],
+                "waiting_for_compute",
+                None,
+            )
+            .expect("the exact nonterminal run may rebind its own held context");
+        assert_eq!(reactivated.session.run_id, "new-grid-study-b");
+    }
+
+    #[test]
+    fn accepted_study_preflight_rejects_active_predecessor_before_commit() {
+        let (mut snapshot, context) = grid_refresh_predecessor_snapshot("running");
+        let commit_calls = Cell::new(0);
+
+        let error = super::commit_prepared_live_study_with_snapshot(
+            Some(&mut snapshot),
+            &context,
+            17,
+            "new-grid-study-b",
+            &["step-b".into()],
+            || record_accepted_commit(
+                &commit_calls,
+                "new-grid-study-b",
+                &["step-b"],
+                None,
+            ),
+        )
+        .expect_err("an active predecessor cannot be replaced by a held Study");
+
+        assert_eq!(commit_calls.get(), 0);
+        assert_eq!(
+            error.message,
+            "accepted_live_study_run_replaced_before_publication"
+        );
+        assert_eq!(snapshot.session.run_id, "terminal-run-a");
+        assert_eq!(snapshot.run.as_ref().unwrap().run_id, "terminal-run-a");
+    }
+
+    #[test]
+    fn accepted_study_preflight_rejects_foreign_or_stale_context_before_commit() {
+        let mut missing_snapshot: Option<crate::types::SessionStateResponse> = None;
+        let missing_commit_calls = Cell::new(0);
+        let error = super::commit_prepared_live_study_with_snapshot(
+            missing_snapshot.as_mut(),
+            &CurrentLiveRequestContext {
+                session_id: "missing-grid-refresh".into(),
+                run_id: None,
+                session_epoch: 17,
+                request_scope_epoch: "scope:17".into(),
+            },
+            17,
+            "new-grid-study-b",
+            &["step-b".into()],
+            || {
+                record_accepted_commit(
+                    &missing_commit_calls,
+                    "new-grid-study-b",
+                    &["step-b"],
+                    None,
+                )
+            },
+        )
+        .expect_err("a missing current snapshot cannot reach durable commit");
+        assert_eq!(missing_commit_calls.get(), 0);
+        assert_eq!(error.message, "no active local live workspace");
+
+        let (mut snapshot, mut context) = grid_refresh_predecessor_snapshot("completed");
+        context.run_id = Some("foreign-run".into());
+        let commit_calls = Cell::new(0);
+
+        let error = super::commit_prepared_live_study_with_snapshot(
+            Some(&mut snapshot),
+            &context,
+            17,
+            "new-grid-study-b",
+            &["step-b".into()],
+            || record_accepted_commit(
+                &commit_calls,
+                "new-grid-study-b",
+                &["step-b"],
+                None,
+            ),
+        )
+        .expect_err("a request context for another run must not commit a replacement");
+
+        assert_eq!(commit_calls.get(), 0);
+        assert_eq!(error.message, "request_context_stale");
+        assert_eq!(snapshot.session.run_id, "terminal-run-a");
+        assert_eq!(snapshot.run.as_ref().unwrap().run_id, "terminal-run-a");
+
+        let (mut stale_snapshot, stale_context) =
+            grid_refresh_predecessor_snapshot("completed");
+        let stale_commit_calls = Cell::new(0);
+        let error = super::commit_prepared_live_study_with_snapshot(
+            Some(&mut stale_snapshot),
+            &stale_context,
+            18,
+            "new-grid-study-b",
+            &["step-b".into()],
+            || {
+                record_accepted_commit(
+                    &stale_commit_calls,
+                    "new-grid-study-b",
+                    &["step-b"],
+                    None,
+                )
+            },
+        )
+        .expect_err("a stale session epoch must not reach durable commit");
+
+        assert_eq!(stale_commit_calls.get(), 0);
+        assert_eq!(error.message, "request_context_stale");
+        assert_eq!(stale_snapshot.session.run_id, "terminal-run-a");
+        assert_eq!(stale_snapshot.run.as_ref().unwrap().run_id, "terminal-run-a");
+    }
+
+    #[test]
+    fn accepted_study_commit_failure_keeps_terminal_predecessor_snapshot() {
+        let (mut snapshot, context) = grid_refresh_predecessor_snapshot("completed");
+        let commit_calls = Cell::new(0);
+
+        let error = super::commit_prepared_live_study_with_snapshot(
+            Some(&mut snapshot),
+            &context,
+            17,
+            "new-grid-study-b",
+            &["step-b".into()],
+            || {
+                commit_calls.set(commit_calls.get() + 1);
+                Err(crate::error::ApiError::conflict("test durable commit failure"))
+            },
+        )
+        .expect_err("a failed durable commit must not install its candidate snapshot");
+
+        assert_eq!(commit_calls.get(), 1);
+        assert_eq!(error.message, "test durable commit failure");
+        assert_eq!(snapshot.session.run_id, "terminal-run-a");
+        assert_eq!(snapshot.session.status, "awaiting_command");
+        assert_eq!(snapshot.run.as_ref().unwrap().run_id, "terminal-run-a");
+        assert_eq!(snapshot.run.as_ref().unwrap().status, "completed");
+    }
 
     fn ui_source_scene() -> fullmag_authoring::SceneDocument {
         serde_json::from_value(serde_json::json!({

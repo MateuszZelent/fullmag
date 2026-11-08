@@ -2699,6 +2699,48 @@ pub(crate) fn apply_accepted_live_study_snapshot(
     apply_accepted_live_run_snapshot(snapshot, &context.session_id, run_id, step_ids, status, metadata)
 }
 
+/// Prepare a whole-Study replacement before its durable RunIntent commit.
+/// Replacing a different current run is allowed only when the request context
+/// pins that exact terminal predecessor; active or foreign runs stay fenced.
+pub(crate) fn prepare_accepted_live_study_snapshot(
+    snapshot: &SessionStateResponse,
+    context: &crate::types::CurrentLiveRequestContext,
+    session_epoch: u64,
+    run_id: &str,
+    step_ids: &[String],
+    status: &str,
+    metadata: Option<serde_json::Value>,
+) -> Result<SessionStateResponse, ApiError> {
+    crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+    if let Some(existing) = snapshot
+        .run
+        .as_ref()
+        .filter(|existing| existing.run_id != run_id)
+    {
+        if context.run_id.as_deref() != Some(existing.run_id.as_str()) {
+            return Err(ApiError::conflict("request_context_stale"));
+        }
+        if !matches!(
+            existing.status.as_str(),
+            "completed" | "succeeded" | "failed" | "cancelled" | "stopped" | "closed"
+        ) {
+            return Err(ApiError::conflict(
+                "accepted_live_study_run_replaced_before_publication",
+            ));
+        }
+    }
+    let mut next = snapshot.clone();
+    apply_accepted_live_run_snapshot(
+        &mut next,
+        &context.session_id,
+        run_id,
+        step_ids,
+        status,
+        metadata,
+    )?;
+    Ok(next)
+}
+
 /// Build the replacement for an explicitly admitted Compute before its durable
 /// commit. The captured context pins the predecessor even if it is terminal.
 pub(crate) fn prepare_accepted_live_compute_snapshot(
@@ -2789,48 +2831,6 @@ fn apply_accepted_live_run_snapshot(
         );
         crate::session::refresh_runtime_status(snapshot);
     }
-    Ok(())
-}
-
-/// Publish a whole-study accepted run created by the Docker startup adapter.
-/// The verifier has already captured the source, loaded the canonical scene,
-/// and materialized preparation; this function only binds that immutable run
-/// to the fenced current-live read model. No command queue or second viewport
-/// is created.
-pub(crate) async fn publish_accepted_live_study_under_transition(
-    state: &Arc<AppState>,
-    context: &crate::types::CurrentLiveRequestContext,
-    run_id: &str,
-    step_ids: &[String],
-    status: &str,
-) -> Result<(), ApiError> {
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current
-        .as_mut()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    apply_accepted_live_study_snapshot(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-        run_id,
-        step_ids,
-        status,
-        None,
-    )?;
-    let realtime_snapshot = snapshot.clone();
-    drop(current);
-    // The accepted run becomes the new current run as part of this
-    // publication. The caller's pre-activation context is intentionally stale
-    // after the write; its transition fence remains responsible for the
-    // subsequent context rebind.
-    let display_revision = state.current_display_selection.read().await.revision;
-    let realtime_state =
-        crate::current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
-            .await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-        .await?;
     Ok(())
 }
 
