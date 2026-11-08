@@ -5051,3 +5051,28 @@ lowering-tests.log, reference-tests.log, documentation-errors.json.
 Nowa dokumentacja docker-isolated-session-recovery wprost rozdziela
 strukturalną walidację od kwalifikacji kopiowania/startu; sam wybór nowej
 przestrzeni nie zastępuje odzyskania runtime.
+
+## Checkpoint 08.11.2026 — runtime odzyskany, publiczny eksport odtworzonej sceny
+
+Historyczny zapis o quarantined run40c699 nie opisuje już bieżącego stanu:
+istniejący opublikowany nadzorca rozliczył jego autentyczny exit, obie rezerwacje
+są Released, a zadanie pozostaje Succeeded. Aktualizacja
+8857232e70bc47aca8dea77ad9da0f86 zakończyła się sukcesem; API/CLI/Python
+mają spójny nowy pakiet ze snapshotu08b4e431e3fefee766ff997dc73ca65de7ed9f1dbd945bf2b7524dcd6bab810c.
+[Odbiór operacyjny](2026-11-07-succeeded-supervisor-reconciliation-execution.md).
+
+Przywróconą scenę wyeksportowano przez publiczne model/syncs i ponownie
+odczytano przez persistence/projects/from-script. Import HTTP201 zgłasza
+round_trip=verified; aktywna scena, sesja i lista runów nie zmieniły się.
+Sprawdzone deklaracje zasilania/portu/pola są dokładnie zgodne; surowe JSON
+różnią się normalizacją i pustymi domyślnymi polami. Skrypt oraz FMS mają
+odczytane, zgodne kopie na ext4 WSL.
+[Zakres dowodu i ograniczenia](2026-11-08-restored-gsg-authoring-runtime-readback.md).
+
+Nie wykonano nowego prepare corner25 ani Solve. Wartość eta ostatniego
+local50 pozostaje0,03464604656814306 i nie kwalifikuje źródła.
+[Konkretny następny eksperyment](2026-11-08-corner25-post-update-experiment-proposal.md)
+proponuje jedno przygotowanie i jeden warunkowy V/J/H, bez retry,
+z niezmienioną fizyką i limitami; wymaga decyzji, bo ostatnia zgoda
+jawnie wykluczała Prepare/Solve. Kontrola Browser/WebGL oczekuje świeżej
+karty użytkownika. Cały celE0–E12 i reprodukcja publikacji pozostają otwarte.
