@@ -5190,3 +5190,18 @@ Publiczny authoring save zachował nowy FMS revision6 na ext4 WSL.
 [Wdrożenie i dokładne dowody](2026-11-08-generated-authoring-restart-execution.md).
 Pozostała jedna zatwierdzona aktualizacja3203, jedno Prepare corner25
 i warunkowo jedno V/J/H. W chwili checkpointu żaden z tych kroków nie ruszył.
+
+
+## Etap2/5 — generated authoring i jedna próba corner25,08.11.2026
+
+Zatwierdzona naprawa preflightu wdrożona w c15f3072f7378b0693580b5c219aeb4e5b442d6e:
+6nowych+65regresji PASS, pełny rzeczywisty preflight PASS.
+Jedna managed aktualizacja99705446a054490e996e10338f84bca1 succeeded.
+Scena/Python identyczne;63odczyty archiwum PASS.
+Jedno Prepare9440b363eda74047ba4d768dac1baaa1 succeeded:40728Tet4,
+14194węzły,ten sam nośnik20H. Jeden Submit i jedna materializacja tego runu.
+Run0b9ca0be… failed po20/20H na bramce cell-local J interpolation mismatch;
+brak nowego solution_set lub eta. Oba lease i obie rezerwacje hosta released.
+Bez retry,nowego recovery,zmiany tolerancji lub dalszego Solve.
+[Pełny audyt i następny brakujący dowód](2026-11-08-generated-authoring-corner25-sequence-result.md).
+Nadal NOT VERIFIED: kwalifikacja źródła, Fig.3, napęd LLG i odbiór browsera.

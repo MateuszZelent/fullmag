@@ -68,3 +68,11 @@ Następnie odbiór pakietu i danych, jedno Prepare corner25 oraz jedno V/J/H
 tylko po pełnym odbiorze Prepare. Bez retry, H-only, LLG, nowego recovery,
 kasowania kontenerów/danych lub podnoszenia limitów. Odmowa kończy zakres.
 Nie deklarujemy nowej wartości eta/I/H ani reprodukcji publikacji.
+
+## Końcowy odbiór zatwierdzonej sekwencji
+
+Po powyższym checkpointcie wykonano dokładnie jedną aktualizację i Prepare,
+oba succeeded. Jedno V/J/H zakończyło się Failed przy walidacji J,
+po zgłoszeniu20/20punktów H; brak nowego przyjętego wyniku.
+Scena i wcześniejsze wyniki zachowane, oba lease oraz host reservations released.
+[Końcowy raport, piny i ograniczenia](2026-11-08-generated-authoring-corner25-sequence-result.md).
