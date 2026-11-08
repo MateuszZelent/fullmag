@@ -12,6 +12,47 @@ RUN = "fixture-failed-run"
 BASE = f"iteration/attempts/{ITERATION}/"
 
 
+class TerminalCaptureCpuAbiTests(unittest.TestCase):
+    def test_native_probes_initialize_image_device_policy_before_resolving_cli_paths(self):
+        import ast
+        import inspect
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+
+        # Keep the embedded probe's standard-library import outside the temporary module map.
+        __import__("urllib.request")
+
+        for probe in (producer.capture_terminal_observation, producer.diagnostic_terminal_stop_probe):
+            with self.subTest(probe=probe.__name__):
+                tree = ast.parse(inspect.getsource(probe))
+                script = next(node.value.value for node in ast.walk(tree)
+                              if isinstance(node, ast.Assign)
+                              and any(isinstance(target, ast.Name) and target.id == "script"
+                                      for target in node.targets))
+                prefix = []
+                for node in ast.parse(script).body:
+                    prefix.append(node)
+                    if isinstance(node, ast.Assign) and any(
+                        isinstance(target, ast.Name) and target.id == "paths" for target in node.targets
+                    ):
+                        break
+                compiled = compile(ast.Module(body=prefix, type_ignores=[]), "<terminal-probe-prefix>", "exec")
+                calls = []
+                entrypoint = SimpleNamespace(_configure_device_access=lambda: calls.append("device-policy"))
+                service = SimpleNamespace(canonical_paths=lambda: calls.append("cli-paths"))
+                with patch.dict(sys.modules, {"entrypoint": entrypoint, "runtime_service": service}), \
+                     patch.object(sys, "path", sys.path.copy()):
+                    exec(compiled, {})
+                self.assertEqual(calls, ["device-policy", "cli-paths"])
+                calls.clear()
+                entrypoint._configure_device_access = Mock(side_effect=RuntimeError("invalid device policy"))
+                with patch.dict(sys.modules, {"entrypoint": entrypoint, "runtime_service": service}), \
+                     patch.object(sys, "path", sys.path.copy()), self.assertRaisesRegex(RuntimeError, "invalid device policy"):
+                    exec(compiled, {})
+                self.assertEqual(calls, [])
+
+
 class ProducerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

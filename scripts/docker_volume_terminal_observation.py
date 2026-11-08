@@ -36,6 +36,8 @@ def diagnostic_terminal_stop_probe(control, previous, backend):
     script = r'''import hashlib,json,os,pathlib,sys,urllib.request
 sys.path.insert(0,'/opt/fullmag')
 import runtime_service as service
+import entrypoint
+entrypoint._configure_device_access()
 paths=service.canonical_paths()
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 def read(path,label,maximum=1048576): return service._bounded_regular(path,label,maximum)
@@ -358,6 +360,8 @@ def capture_terminal_observation(backend_id: str, store_root, preflight: Mapping
     script = r'''import hashlib,json,sys
 sys.path.insert(0, "/opt/fullmag")
 import runtime_service as service
+import entrypoint
+entrypoint._configure_device_access()
 paths = service.canonical_paths()
 def config_digest():
     return hashlib.sha256(service._bounded_regular(paths.config, "terminal capture native config", 65536)).hexdigest()
