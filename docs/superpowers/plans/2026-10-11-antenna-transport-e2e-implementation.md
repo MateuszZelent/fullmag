@@ -5113,3 +5113,15 @@ zgodnością ścieżki Prepare.
 20plików/3360660B próby i cache zachowano na WSL, manifest oraz hashe PASS.
 [Pełny wynik, przyczyna i piny](2026-11-08-corner25-post-update-experiment-result.md).
 Nie ma nowego pomiarueta/I/H; kwalifikacja źródła i reprodukcja publikacji otwarte.
+
+### CI selektora anteny — 08.11.2026
+
+Poprawka e78009f7c46c5f65da2c795e9650c371c490e071 jest wypchnięta.
+CI42492318729 potwierdza ten HEAD: job przeglądarkowy success,
+etap execution-intent Rust success; końcowy job Rust nadal w toku.
+Nie deklarujemy pełnego CI ani wdrożenia nowego parsera w grupie3203.
+Wynik Prepare e3103f24 pozostaje failed-confirmed, bez nowego V/J/H.
+
+[Gotowy następny zakres aktualizacji i eksperymentu](2026-11-08-antenna-selector-update-and-corner25-proposal.md)
+czeka na pełny odbiór CI i nową decyzję: ostatnia zgoda wykluczała build/restart,
+a pojedyncza próba została wykorzystana. Nie wykonano nowej sekwencji.

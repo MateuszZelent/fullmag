@@ -137,3 +137,18 @@ wynikiem. Dziewięć zaliczonych kontroli referencyjnych dotyczy wcześniejszych
 globalnych 100/75/50 nm, nie tej próby. Źródło nadal inspection-only,
 reprodukcja Fig.3 i cały E0–E12 nie są ukończone. Ta odmowa zamyka
 zatwierdzoną serię bez automatycznego retry i warunkowego Solve.
+
+## Checkpoint CI poprawki źródłowej
+
+Commit e78009f7c46c5f65da2c795e9650c371c490e071 jest wypchnięty na branch zadania.
+[CI42492318729](https://github.com/MateuszZelent/fullmag/actions/runs/42492318729)
+testuje dokładnie ten commit. Job inspector-actions-browser-smoke zakończył
+się sukcesem. Etap Run execution-intent roundtrip contracts joba rust-contracts
+zakończył się sukcesem; jego istniejący filtr primitive_execution_intent_
+obejmuje dwie nowe regresje. Pełny job Rust pozostaje w toku.
+Nie przypisujemy jeszcze liczby wykonanych nowych testów bez końcowego logu.
+
+[Konkretny następny zakres do decyzji](2026-11-08-antenna-selector-update-and-corner25-proposal.md)
+obejmuje jedną zarządzaną aktualizację, jedno Prepare i jeden warunkowy Solve,
+dopiero po pełnym pozytywnym CI. Nie uruchomiono tej sekwencji:
+ostatnia zgoda jawnie wykluczała build/restart i automatyczne retry.
