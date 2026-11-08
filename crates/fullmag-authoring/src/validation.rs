@@ -3555,7 +3555,7 @@ fn validate_scene_v1_has_no_region_owned_payloads(
 fn validate_study_pipeline_document(
     document: &StudyPipelineDocument,
 ) -> Result<(), SceneDocumentValidationError> {
-    if document.version != "study_pipeline.v1" {
+    if !matches!(document.version.as_str(), "study_pipeline.v1" | "study_pipeline.v2") {
         return Err(SceneDocumentValidationError::new(format!(
             "unsupported study pipeline version '{}'",
             document.version

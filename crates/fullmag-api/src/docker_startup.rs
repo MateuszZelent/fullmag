@@ -494,6 +494,7 @@ async fn finish_startup_acceptance(
             &state,
             &accepted_context,
             "startup",
+            None,
         )
         .await;
 
@@ -768,6 +769,7 @@ async fn load_startup_scene(
 
     let (scene, runtime) = loaded;
     let output_storage_binding = bind_docker_output_storage_for_source(&scene, &source.path)?;
+    preflight_script_output_write(&output_storage_binding)?;
 
     Ok(LoadedStartupScene {
         source,
@@ -1037,6 +1039,285 @@ fn bind_docker_output_storage_with_alias(
         "temp_dir": temp_dir,
         "data_format": storage.data_format,
     }))
+}
+
+/// Prove that the backend UID can write to the resolved opted-in result and
+/// scratch parents before startup publishes its temporary activating state.
+/// The host-side output binder remains pure and never creates result paths.
+fn preflight_script_output_write(binding: &Value) -> Result<(), ApiError> {
+    if binding.get("binding").and_then(Value::as_str) != Some("docker_script_output_alias") {
+        return Ok(());
+    }
+    let alias_root = PathBuf::from(required_binding_path(binding, "alias_root")?);
+    let source_dir = PathBuf::from(required_binding_path(binding, "source_dir")?);
+    let default_output = PathBuf::from(required_binding_path(binding, "output_dir")?);
+    let storage_value = binding.get("output_storage").cloned().ok_or_else(|| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            "Docker startup output binding has no resolved storage policy",
+        )
+    })?;
+    let settings: fullmag_ir::OutputStorageIR =
+        serde_json::from_value(storage_value).map_err(|error| {
+            ApiError::unprocessable_with_code(
+                "docker_startup_output_mapping_invalid",
+                format!("Docker startup output policy is invalid: {error}"),
+            )
+        })?;
+    let (output, scratch) = fullmag_runner::project_storage::preflight_project_storage(
+        &settings,
+        &default_output,
+        &source_dir,
+    )
+    .map_err(|error| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            format!("Docker startup output paths cannot be preflighted: {error}"),
+        )
+    })?;
+
+    let alias_metadata = fs::symlink_metadata(&alias_root)
+        .map_err(|error| output_permission_preflight_error(&alias_root, &error.to_string()))?;
+    if alias_metadata.file_type().is_symlink() || !alias_metadata.is_dir() {
+        return Err(output_permission_preflight_error(
+            &alias_root,
+            "selected output alias is not a real directory",
+        ));
+    }
+    let canonical_alias = fs::canonicalize(&alias_root)
+        .map_err(|error| output_permission_preflight_error(&alias_root, &error.to_string()))?;
+    let mut probe_directories = Vec::new();
+    let mut included = false;
+    for target in [&output, &scratch] {
+        if !target.starts_with(&canonical_alias) {
+            // Absolute paths outside the opted-in alias retain their existing
+            // policy; this helper must not write a canary outside that child.
+            continue;
+        }
+        included = true;
+        let directory = nearest_existing_output_ancestor(target, &canonical_alias)
+            .map_err(|error| output_permission_preflight_error(target, &error))?;
+        if !probe_directories.contains(&directory) {
+            probe_directories.push(directory);
+        }
+    }
+    if !included {
+        return Err(output_permission_preflight_error(
+            &canonical_alias,
+            "resolved output and scratch paths do not use the opted-in alias",
+        ));
+    }
+
+    let nonce = crate::uuid_v4_hex();
+    for directory in probe_directories {
+        probe_output_directory_with_nonce(&directory, &nonce)
+            .map_err(|error| output_permission_preflight_error(&directory, &error))?;
+    }
+    Ok(())
+}
+
+fn required_binding_path<'a>(binding: &'a Value, field: &str) -> Result<&'a str, ApiError> {
+    binding.get(field).and_then(Value::as_str).ok_or_else(|| {
+        ApiError::unprocessable_with_code(
+            "docker_startup_output_mapping_invalid",
+            format!("Docker startup output binding is missing `{field}`"),
+        )
+    })
+}
+
+fn output_permission_preflight_error(path: &Path, detail: &str) -> ApiError {
+    ApiError::unprocessable_with_code(
+        "docker_startup_output_mapping_invalid",
+        format!(
+            "Docker startup output permission preflight failed at `{}`: {detail}",
+            path.display()
+        ),
+    )
+}
+
+fn nearest_existing_output_ancestor(target: &Path, alias_root: &Path) -> Result<PathBuf, String> {
+    if !target.is_absolute() || !target.starts_with(alias_root) {
+        return Err("resolved output path is outside the selected alias".into());
+    }
+    let mut candidate = target.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "output path traverses a symlink at `{}`",
+                        candidate.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "existing output path is not a directory: `{}`",
+                        candidate.display()
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if candidate == alias_root {
+                    return Err("selected output alias disappeared during preflight".into());
+                }
+                candidate = candidate
+                    .parent()
+                    .ok_or_else(|| "output path has no existing parent".to_string())?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
+    let mut current = alias_root.to_path_buf();
+    for component in candidate
+        .strip_prefix(alias_root)
+        .map_err(|error| error.to_string())?
+        .components()
+    {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "output path traverses a symlink at `{}`",
+                current.display()
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "output ancestor is not a directory: `{}`",
+                current.display()
+            ));
+        }
+    }
+    let canonical = fs::canonicalize(&candidate).map_err(|error| error.to_string())?;
+    if !canonical.starts_with(alias_root) {
+        return Err("existing output ancestor resolves outside the selected alias".into());
+    }
+    Ok(canonical)
+}
+
+fn probe_output_directory_with_nonce(directory: &Path, nonce: &str) -> Result<(), String> {
+    if nonce.is_empty()
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("output probe nonce is invalid".into());
+    }
+    let path = directory.join(format!(".fullmag-output-preflight-{nonce}"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| format!("cannot create a private output probe: {error}"))?;
+    let write_error = file
+        .write_all(b"fullmag output preflight\n")
+        .and_then(|_| file.sync_all())
+        .err();
+
+    let cleanup = match open_output_probe_without_following(&path) {
+        Ok(candidate) => {
+            let metadata = candidate.metadata();
+            let same_regular_file = metadata.as_ref().is_ok_and(|metadata| {
+                metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && !is_windows_reparse(metadata)
+                    && same_file_identity(&file, &candidate)
+            });
+            let metadata_error = metadata.err();
+            drop(candidate);
+            drop(file);
+            if same_regular_file {
+                fs::remove_file(&path)
+                    .map_err(|error| format!("cannot remove the private output probe: {error}"))
+            } else if let Some(error) = metadata_error {
+                Err(format!("cannot inspect private output probe for cleanup: {error}"))
+            } else {
+                Err("output probe path changed; it was retained to avoid deleting another file".into())
+            }
+        }
+        Err(error) => {
+            drop(file);
+            Err(error)
+        }
+    };
+    match (write_error, cleanup) {
+        (Some(write_error), Ok(())) => Err(format!(
+            "cannot write the private output probe: {write_error}"
+        )),
+        (Some(write_error), Err(cleanup_error)) => Err(format!(
+            "cannot write the private output probe: {write_error}; cleanup also failed: {cleanup_error}"
+        )),
+        (None, cleanup) => cleanup,
+    }
+}
+
+#[cfg(unix)]
+fn open_output_probe_without_following(path: &Path) -> Result<fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("cannot open the private output probe without following links: {error}"))
+}
+
+#[cfg(windows)]
+fn open_output_probe_without_following(path: &Path) -> Result<fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| format!("cannot open the private output probe without following links: {error}"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_output_probe_without_following(_path: &Path) -> Result<fs::File, String> {
+    Err("safe output-probe identity checks are unsupported on this platform".into())
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::File, right: &fs::File) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (left.metadata(), right.metadata()) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn same_file_identity(left: &fs::File, right: &fs::File) -> bool {
+    fn identity(file: &fs::File) -> Option<(u32, u32, u32)> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut information = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+        let succeeded = unsafe {
+            GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr())
+        };
+        if succeeded == 0 {
+            return None;
+        }
+        let information = unsafe { information.assume_init() };
+        Some((
+            information.dwVolumeSerialNumber,
+            information.nFileIndexHigh,
+            information.nFileIndexLow,
+        ))
+    }
+
+    matches!((identity(left), identity(right)), (Some(left), Some(right)) if left == right)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(_left: &fs::File, _right: &fs::File) -> bool {
+    false
 }
 
 fn validate_script_output_alias(alias_root: &Path) -> Result<(), ApiError> {
@@ -1662,6 +1943,7 @@ async fn publish_startup_result(
         None => serde_json::Map::new(),
     };
     let artifact_dir = snapshot.session.artifact_dir.clone();
+    crate::session::select_current_accepted_scalar_series(snapshot, &run_id, None);
     snapshot.session.run_id = run_id.clone();
     // The accepted run keeps the durable wait gate, while the current live
     // read model remains command-capable. `waiting_for_solve` is a run-level
@@ -2625,6 +2907,93 @@ mod tests {
             storage.temp_dir.as_deref(),
             Some("scratch")
         );
+    }
+
+    fn startup_output_binding(
+        alias_root: &Path,
+        source_dir: &Path,
+        output_dir: &Path,
+        temp_dir: Option<&Path>,
+    ) -> Value {
+        let mut settings = fullmag_ir::OutputStorageIR::default();
+        settings.output_dir = Some(output_dir.to_string_lossy().into_owned());
+        settings.temp_dir = temp_dir.map(|path| path.to_string_lossy().into_owned());
+        json!({
+            "schema": "fullmag.docker_script_output_binding.v1",
+            "binding": "docker_script_output_alias",
+            "alias_root": alias_root.to_string_lossy().into_owned(),
+            "source_dir": source_dir.to_string_lossy().into_owned(),
+            "output_dir": output_dir.to_string_lossy().into_owned(),
+            "temp_dir": temp_dir.map(|path| path.to_string_lossy().into_owned()),
+            "output_storage": settings,
+        })
+    }
+
+    #[test]
+    fn startup_output_probe_cleans_its_file_before_activation() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let source_dir = alias_root.join("interactive_study");
+        fs::create_dir_all(&source_dir).expect("create opted output directory");
+        let output_dir = source_dir.join("fdm_cpu_three_relax_continue.zarr");
+        let binding = startup_output_binding(&alias_root, &source_dir, &output_dir, None);
+
+        preflight_script_output_write(&binding).expect("output and default scratch parents are writable");
+
+        assert_eq!(fs::read_dir(&source_dir).expect("read output parent").count(), 0);
+    }
+
+    #[test]
+    fn startup_output_probe_collision_never_overwrites_or_removes_foreign_file() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let probe = temporary.path().join(".fullmag-output-preflight-fixed");
+        fs::write(&probe, b"retained owner file").expect("create collision fixture");
+
+        let error = probe_output_directory_with_nonce(temporary.path(), "fixed")
+            .expect_err("create_new must refuse an existing probe name");
+
+        assert!(error.contains("cannot create"));
+        assert_eq!(fs::read(&probe).expect("read collision fixture"), b"retained owner file");
+    }
+
+    #[test]
+    fn startup_output_probe_checks_distinct_temp_parent_before_writing_any_probe() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let source_dir = alias_root.join("interactive_study");
+        fs::create_dir_all(&source_dir).expect("create opted output directory");
+        let output_dir = source_dir.join("run.zarr");
+        let temp_file = alias_root.join("not-a-temp-directory");
+        fs::write(&temp_file, b"preserve me").expect("create temp-path fixture");
+        let binding = startup_output_binding(&alias_root, &source_dir, &output_dir, Some(&temp_file));
+
+        let error = preflight_script_output_write(&binding)
+            .expect_err("non-directory temp target must reject startup");
+
+        assert_eq!(error.code.as_deref(), Some("docker_startup_output_mapping_invalid"));
+        assert_eq!(fs::read(&temp_file).expect("preserve temp-path fixture"), b"preserve me");
+        assert_eq!(fs::read_dir(&source_dir).expect("read output parent").count(), 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn startup_output_probe_rejects_symlink_ancestors_without_following_them() {
+        let temporary = tempfile::tempdir().expect("temporary output root");
+        let alias_root = temporary.path().join("script-output");
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(&alias_root).expect("create opted output root");
+        fs::create_dir_all(&outside).expect("create outside directory");
+        std::os::unix::fs::symlink(&outside, alias_root.join("escape"))
+            .expect("create symlink fixture");
+
+        let error = nearest_existing_output_ancestor(
+            &alias_root.join("escape/run.zarr"),
+            &alias_root,
+        )
+        .expect_err("symlink ancestor must be refused");
+
+        assert!(error.contains("symlink"));
+        assert_eq!(fs::read_dir(&outside).expect("read outside directory").count(), 0);
     }
 
     #[test]

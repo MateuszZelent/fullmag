@@ -6,6 +6,8 @@ use crate::schemas::diagnostics::SolverProfileCommandConfig;
 use crate::schemas::relaxation::RelaxationAlgorithm;
 use crate::types::MeshCommandTarget;
 
+pub use crate::study_execution_contract::{RuntimeAuthoredInitialStateSource, RuntimeInitialStateRequest};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct RuntimeCommandIntent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18,9 +20,11 @@ pub struct RuntimeCommandIntent {
     pub client_intent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<RuntimeInitialStateRequest>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RuntimeCommandTarget {
     Study,
@@ -43,8 +47,18 @@ pub enum RuntimeCommandTarget {
     },
 }
 
+/// Pin the current run seen when Compute was requested, including its absence.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeCommandRunPrecondition {
+    None,
+    Run { run_id: String },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct RuntimeCommandPrecondition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_run: Option<RuntimeCommandRunPrecondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage_execution_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +67,8 @@ pub struct RuntimeCommandPrecondition {
     pub scene_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_generation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_topology_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,7 +144,9 @@ pub enum StructuredCommandRequest {
     Run {
         #[serde(default, flatten)]
         intent: RuntimeCommandIntent,
-        until_seconds: f64,
+        /// Omit for an exact authored StageId in the accepted Study lane.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_seconds: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         max_steps: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,19 +248,35 @@ pub enum StructuredCommandRequest {
     },
 }
 
+/// Immutable binding of an accepted command to its own execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct CommandExecutionBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_target: Option<RuntimeCommandTarget>,
+    pub run_id: String,
+    /// The selected authored step for a single-stage execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CommandResponse {
     pub accepted: bool,
     pub command_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_binding: Option<CommandExecutionBinding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SolverPolicyRequest;
+    use super::{
+        RuntimeInitialStateRequest, SolverPolicyRequest, StructuredCommandRequest,
+    };
+    use serde_json::json;
 
     #[test]
     fn solver_policy_matches_shared_api_cli_serde_fixture() {
@@ -255,6 +289,89 @@ mod tests {
         assert_eq!(
             serde_json::to_value(policies).expect("API policy must encode fixture"),
             fixture
+        );
+    }
+
+    #[test]
+    fn runtime_initial_state_request_round_trips_tagged_variants_and_default_flag() {
+        let requests = [
+            json!({"kind": "default_for_target"}),
+            json!({
+                "kind": "authored_initial_state",
+                "source": {"kind": "study", "scene_revision": 3}
+            }),
+            json!({
+                "kind": "authored_initial_state",
+                "source": {"kind": "stage", "stage_id": "relax-a", "scene_revision": 4}
+            }),
+            json!({
+                "kind": "authored_initial_state",
+                "source": {
+                    "kind": "prepared",
+                    "scene_revision": 5,
+                    "initial_state_revision": 6,
+                    "publication_id": "prepared-state-6"
+                }
+            }),
+            json!({
+                "kind": "stage_result",
+                "run_id": "run-source",
+                "step_id": "relax-source",
+                "case_id": "default",
+                "artifact_id": "artifact-state",
+                "content_sha256": "a".repeat(64),
+                "allow_stale_model": false
+            }),
+            json!({"kind": "latest_compatible_state"}),
+        ];
+        for expected in requests {
+            let request: RuntimeInitialStateRequest =
+                serde_json::from_value(expected.clone()).expect("decode initial-state request");
+            assert_eq!(serde_json::to_value(request).unwrap(), expected);
+        }
+
+        let stage_result: RuntimeInitialStateRequest = serde_json::from_value(json!({
+            "kind": "stage_result",
+            "run_id": "run-source",
+            "step_id": "relax-source",
+            "case_id": "default",
+            "artifact_id": "artifact-state",
+            "content_sha256": "a".repeat(64)
+        }))
+        .expect("missing allow_stale_model defaults to false");
+        assert!(matches!(
+            stage_result,
+            RuntimeInitialStateRequest::StageResult {
+                allow_stale_model: false,
+                ..
+            }
+        ));
+        assert!(serde_json::from_value::<RuntimeInitialStateRequest>(json!({
+            "kind": "latest_compatible_state",
+            "unexpected": true
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<RuntimeInitialStateRequest>(json!({
+            "kind": "authored_initial_state",
+            "source": {"kind": "study", "scene_revision": 3, "unexpected": true}
+        }))
+        .is_err());
+
+        let command: StructuredCommandRequest = serde_json::from_value(json!({
+            "kind": "run",
+            "until_seconds": 1.0,
+            "initial_state": {
+                "kind": "authored_initial_state",
+                "source": {"kind": "study", "scene_revision": 3}
+            }
+        }))
+        .expect("flattened command intent should carry initial_state");
+        assert_eq!(
+            serde_json::to_value(command).unwrap()["initial_state"],
+            json!({
+                "kind": "authored_initial_state",
+                "source": {"kind": "study", "scene_revision": 3}
+            })
         );
     }
 }

@@ -25,6 +25,17 @@ describe("artifactAssessment", () => {
     expect(assessment.runAllowed).toBe(true);
   });
 
+  it("honors current scene validation independently of immutable build provenance", () => {
+    const manifest = { source_scene_revision: 8, validated_for_scene_revision: 10 };
+
+    expect(resolveArtifactAssessment({ manifest, sceneRevision: 10, statusMeshRevision: 4 }))
+      .toMatchObject({ state: "current", runAllowed: true });
+    expect(resolveArtifactAssessment({ manifest, sceneRevision: 11, statusMeshRevision: 4 }))
+      .toMatchObject({ state: "stale", runAllowed: false });
+    expect(resolveArtifactAssessment({ manifest, sceneRevision: 9, statusMeshRevision: 4 }))
+      .toMatchObject({ state: "inconsistent", runAllowed: false });
+  });
+
   it("resolves stale when manifest source scene revision is older than scene", () => {
     const assessment = resolveArtifactAssessment({
       manifest: { source_scene_revision: 9 },

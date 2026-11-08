@@ -2569,8 +2569,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             {
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
-                "integrator": stage.get("integrator") or None,
-                "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                "integrator": stage.get("integrator") or stage.get("solver") or None,
+                "fixed_timestep": _number_or_none(stage.get("fixed_timestep", stage.get("dt"))),
                 **(
                     {
                         "adaptive_timestep": _stage_adaptive_timestep_override(
@@ -2583,8 +2583,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
-                "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
+                "torque_tolerance": _number_or_none(
+                    stage.get("torque_tolerance_apm", stage.get("torque_tolerance", stage.get("tol")))
+                ),
+                "energy_tolerance": _number_or_none(stage.get("energy_tolerance_j", stage.get("energy_tolerance"))),
+                "relax_alpha": _number_or_none(stage.get("relax_alpha")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
                 "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,

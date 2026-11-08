@@ -142,6 +142,7 @@ jobs:
           cargo test --locked -p fullmag-runtime-control --lib step_output_inputs_are_derived_from_the_current_successful_attempt
           cargo test --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
+          cargo test --locked -p fullmag-runtime-control --lib claim::scoped_store_io_classification_tests::raw_enodata_is_not_a_global_transient_store_error -- --exact
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
 
       - name: Run terminal Docker recovery contracts
@@ -174,8 +175,17 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_solver_profile:: --no-fail-fast
           cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_projection::operation_profile_projection_tests:: --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api live_retirement --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api session_status_reports_current_energy --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api accepted_live_energy_clock_tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::platform::development_restart::tests --no-fail-fast
+          cargo test --locked -p fullmag-api --bin fullmag-api development_accepted_restore::terminal_observation::tests --no-fail-fast
           cargo test -p fullmag-api --bin fullmag-api session_output_target_tests --no-fail-fast
+          cargo test -p fullmag-api --bin fullmag-api session::tests::active_run_accepts_next_solver_m_after_same_run_stage_preparation -- --exact
+          cargo test -p fullmag-api --bin fullmag-api session::tests::authored_initial_state_retires_finished_run_but_not_another_run -- --exact
+          cargo test -p fullmag-api --bin fullmag-api session::tests::pending_user_magnetization_apply_still_supersedes_its_run -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_accepted_execution::tests
+          FULLMAG_FDM_EXECUTION=cpu cargo test --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
+          cargo test --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
           cargo test -p fullmag-api --bin fullmag-api live_execution_binding::tests
           cargo test -p fullmag-api --bin fullmag-api isolated_snapshot_restore::tests
           cargo test -p fullmag-api --bin fullmag-api development_accepted_restore::tests
@@ -691,6 +701,9 @@ jobs:
       - name: Check control-room idle performance
         run: pnpm --dir apps/control-room audit:idle-performance
 
+      - name: Verify scoped Study texture browser contracts
+        run: node --test apps/control-room/scripts/lib/study-texture-browser-qa.node-test.mjs
+
       - name: Typecheck, lint and test Control Room
         run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test
 
@@ -1019,6 +1032,7 @@ jobs:
           python -B scripts/test_docker_volume_linux_supervision_stop.py -v
           python -B scripts/test_docker_volume_cancelled_recovery_archive.py -v
           python -B scripts/test_docker_volume_cold_budget_restore.py -v
+          python -B scripts/test_docker_volume_ownerless_terminal_receipts.py -v
           python -B scripts/test_docker_volume_resumed_budget_proof.py -v
           python -B scripts/test_docker_volume_resumed_budget_projection.py -v
           python -B scripts/test_docker_volume_activation_reconcile.py -v
@@ -1032,8 +1046,12 @@ jobs:
           python -B scripts/test_docker_dev_owned_control.py -v
           python -B scripts/test_docker_dev_up.py -v
           python -B scripts/test_docker_script_output_mounts.py -v
+          python -B scripts/test_docker_script_output_permissions.py -v
           python -B scripts/test_docker_script_output_source.py -v
           python -B scripts/test_docker_volume_idle_stop.py -v
+          python -B scripts/test_docker_volume_native_terminal_stop.py -v
+          python -B scripts/test_docker_volume_prelaunch_failure_stop.py -v
+          python -B scripts/test_docker_volume_empty_api_abort.py -v
           python -B scripts/test_docker_dev_defaults.py -v
           python -B scripts/test_docker_dev_run_script.py -v
           python -B scripts/test_docker_dev_run_observer.py -v
@@ -1055,6 +1073,8 @@ jobs:
           python -B scripts/test_docker_volume_reconcile.py -v
           python -B scripts/test_docker_volume_resume_layout_refusal.py -v
           python -B scripts/test_docker_volume_network_failure_reconcile.py -v
+          python -B scripts/test_docker_volume_recreated_network_history.py -v
+          python -B scripts/test_docker_dev_network.py -v
           python -B scripts/test_docker_volume_development_interrupted.py -v
           python -B scripts/test_docker_volume_resume_interrupted.py -v
           python -B scripts/test_linux_native_readmission.py -v

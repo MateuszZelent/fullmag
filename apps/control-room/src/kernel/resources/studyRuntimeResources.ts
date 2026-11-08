@@ -272,6 +272,10 @@ const RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS = [
   "domain_generation_id",
   "mesh_build_revision",
   "mesh_revision",
+  "region_coefficients_revision",
+  "region_initial_state_revision",
+  "region_membership_revision",
+  "region_topology_revision",
   "scene_revision",
   "stages_revision",
 ] as const satisfies ReadonlyArray<keyof LiveStatusResource["resources"]>;
@@ -286,13 +290,7 @@ type StudyRuntimeCommandSessionStatus = {
     LiveStatusResource["resources"],
     | "artifact_revision"
     | "artifacts_revision"
-    | "command_completion_revision"
-    | "commands_revision"
-    | "domain_generation_id"
-    | "mesh_build_revision"
-    | "mesh_revision"
-    | "scene_revision"
-    | "stages_revision"
+    | (typeof RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS)[number]
   >;
   run: Pick<NonNullable<LiveStatusResource["run"]>, "run_id"> | null;
   session: Pick<LiveStatusResource["session"], "session_epoch" | "session_id">;
@@ -331,6 +329,10 @@ export function selectStudyRuntimeCommandSessionStatus(status: {
       domain_generation_id: status.data.resources.domain_generation_id,
       mesh_build_revision: status.data.resources.mesh_build_revision,
       mesh_revision: status.data.resources.mesh_revision,
+      region_coefficients_revision: status.data.resources.region_coefficients_revision,
+      region_initial_state_revision: status.data.resources.region_initial_state_revision,
+      region_membership_revision: status.data.resources.region_membership_revision,
+      region_topology_revision: status.data.resources.region_topology_revision,
       scene_revision: status.data.resources.scene_revision,
       stages_revision: status.data.resources.stages_revision,
     },
@@ -370,16 +372,9 @@ export function studyRuntimeCommandSessionStatusEquals(
     previous.domain.discretization === next.domain.discretization &&
     previous.resources.artifact_revision === next.resources.artifact_revision &&
     previous.resources.artifacts_revision === next.resources.artifacts_revision &&
-    previous.resources.command_completion_revision ===
-      next.resources.command_completion_revision &&
-    previous.resources.commands_revision === next.resources.commands_revision &&
-    previous.resources.domain_generation_id ===
-      next.resources.domain_generation_id &&
-    previous.resources.mesh_build_revision ===
-      next.resources.mesh_build_revision &&
-    previous.resources.mesh_revision === next.resources.mesh_revision &&
-    previous.resources.scene_revision === next.resources.scene_revision &&
-    previous.resources.stages_revision === next.resources.stages_revision &&
+    RUNTIME_COMMAND_CONTROL_STATUS_RESOURCE_KEYS.every(
+      (key) => previous.resources[key] === next.resources[key],
+    ) &&
     previous.run?.run_id === next.run?.run_id &&
     previous.session.session_id === next.session.session_id &&
     previous.session.session_epoch === next.session.session_epoch
@@ -588,6 +583,86 @@ export function shouldLoadRuntimeScalars(
 ): boolean {
   if (!enabled) return false;
   return hasPositiveRevision(status?.resources.scalars_revision);
+}
+
+type SolverEnergyReadinessStatus = Pick<
+  LiveStatusResource,
+  "resources" | "session" | "run" | "solver_energy_current_available"
+>;
+
+type SolverEnergyStatusRevision = {
+  available: boolean;
+  revision: string;
+  sourceIdentity: string;
+};
+
+type SourceScopedSolverEnergyCurrentResource = SolverEnergyCurrentResource & {
+  source_identity: string;
+};
+
+export function shouldLoadSolverEnergyCurrent(
+  enabled: boolean,
+  status: SolverEnergyReadinessStatus | null | undefined,
+): boolean {
+  return enabled && status?.solver_energy_current_available === true;
+}
+
+export function solverEnergyCurrentStatusForResource(
+  status: SolverEnergyReadinessStatus,
+): string {
+  return JSON.stringify([
+    status.session.session_id,
+    status.session.session_epoch,
+    status.session.request_scope_epoch,
+    status.run?.run_id ?? null,
+    status.resources.stages_revision,
+  ]);
+}
+
+export function solverEnergyCurrentStatusRevision(
+  status: SolverEnergyReadinessStatus,
+): string {
+  return JSON.stringify([
+    solverEnergyCurrentStatusForResource(status),
+    status.resources.scalars_revision,
+    status.resources.fields_revision,
+    status.resources.stages_revision,
+    status.solver_energy_current_available === true,
+  ]);
+}
+
+export function solverEnergyCurrentDataForStatus<
+  TData extends { source_identity: string },
+>(
+  data: TData | null | undefined,
+  status:
+    | SolverEnergyReadinessStatus
+    | SolverEnergyStatusRevision
+    | null
+    | undefined,
+): TData | null {
+  if (!data || !status) return null;
+  if ("available" in status
+    ? !status.available
+    : status.solver_energy_current_available !== true) {
+    return null;
+  }
+  const sourceIdentity =
+    "sourceIdentity" in status
+      ? status.sourceIdentity
+      : solverEnergyCurrentStatusForResource(status);
+  return data.source_identity === sourceIdentity ? data : null;
+}
+
+function solverEnergyStatusRevisionsEqual(
+  previous: SolverEnergyStatusRevision | null,
+  next: SolverEnergyStatusRevision | null,
+): boolean {
+  return (
+    previous?.available === next?.available &&
+    previous?.revision === next?.revision &&
+    previous?.sourceIdentity === next?.sourceIdentity
+  );
 }
 
 export function shouldLoadFrequencyDomainManifest(
@@ -1127,7 +1202,8 @@ export function useArtifactsResource({
 
 export function useMeshPeriodicPairsResource({
   enabled = true,
-}: RuntimeResourceOptions = {}) {
+  pauseLoad = false,
+}: RuntimeResourceOptions & { pauseLoad?: boolean } = {}) {
   const { api } = useKernel();
   const { resourceKey, sessionIdentity } = useSessionScopedResourceKey(
     MESHING_PERIODIC_PAIRS_PATH,
@@ -1148,6 +1224,7 @@ export function useMeshPeriodicPairsResource({
     // viewport-wide resource failure notification. Other failures remain
     // visible to the global error surface.
     notifyOnError: shouldNotifyMeshPeriodicPairsFailure,
+    pauseLoad,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey,
   });
@@ -1446,40 +1523,61 @@ export function useSolverEnergyCurrentResource({
     (status) => {
       const current = status.data;
       if (!current) return null;
-      return [
-        current.session.session_id,
-        current.session.session_epoch,
-        current.resources.scalars_revision,
-        current.resources.fields_revision,
-      ].join(":");
+      const readinessStatus = current;
+      return {
+        available: shouldLoadSolverEnergyCurrent(true, readinessStatus),
+        revision: solverEnergyCurrentStatusRevision(readinessStatus),
+        sourceIdentity: solverEnergyCurrentStatusForResource(readinessStatus),
+      } satisfies SolverEnergyStatusRevision;
     },
-    { enabled },
+    { enabled, isEqual: solverEnergyStatusRevisionsEqual },
   );
+  const currentEnergyAvailable = statusRevision?.available === true;
   const load = useCallback(
-    ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) =>
-      api.simulation.solver.energies
+    async ({ sessionScopeKey, signal }: { sessionScopeKey?: string; signal: AbortSignal }) => {
+      const data = await api.simulation.solver.energies
         .current({ sessionScopeKey, signal })
-        .catch(ignoreMissingResource<SolverEnergyCurrentResource>),
-    [api],
+        .catch(ignoreMissingResource<SolverEnergyCurrentResource>);
+      return data
+        ? { ...data, source_identity: statusRevision?.sourceIdentity ?? "" }
+        : null;
+    },
+    [api, statusRevision?.sourceIdentity],
   );
 
-  const resource = useSessionScopedResource<SolverEnergyCurrentResource | null>({
-    enabled,
+  const resource = useSessionScopedResource<
+    SourceScopedSolverEnergyCurrentResource | null
+  >({
+    abortStaleInflight: true,
+    enabled: enabled && currentEnergyAvailable,
     load,
-    resolveRevision: (data) => data?.revision ?? null,
+    resolveRevision: (data) =>
+      data ? `${data.source_identity}:${data.revision}` : null,
     resourceKey: SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
   });
   const { refetch } = resource;
-  const lastStatusRevision = useRef<string | null>(null);
+  const lastStatusRevision = useRef<SolverEnergyStatusRevision | null>(null);
   useEffect(() => {
     if (!enabled || statusRevision === null) return;
     const previous = lastStatusRevision.current;
     lastStatusRevision.current = statusRevision;
-    if (previous !== null && previous !== statusRevision) {
+    if (
+      statusRevision.available &&
+      resource.status === "ready" &&
+      (previous === null ||
+        !previous.available ||
+        previous.sourceIdentity !== statusRevision.sourceIdentity ||
+        previous.revision !== statusRevision.revision)
+    ) {
+      // Empty and in-flight entries are handled by the ordinary gated load.
+      // Force only a settled entry when readiness/source identity advances.
       refetch();
     }
-  }, [enabled, refetch, statusRevision]);
-  return resource;
+  }, [enabled, refetch, resource.status, statusRevision]);
+  return {
+    ...resource,
+    data: solverEnergyCurrentDataForStatus(resource.data, statusRevision),
+  };
 }
 
 export function useSolverEnergyHistoryResource(
@@ -2945,12 +3043,36 @@ export function useModelReadinessResource({
     [api],
   );
 
-  return useSessionScopedResource<ModelReadinessResource>({
+  const preparedFieldRevision = useSessionStatusSelector(({ data }) => {
+    const solver = data?.lifecycle?.solver;
+    if (!data || (solver !== "ready" && solver !== "idle" && solver !== "awaiting_command")) {
+      return null;
+    }
+    return JSON.stringify([
+      data.session.session_id,
+      data.session.session_epoch,
+      data.resources.domain_generation_id,
+      data.resources.region_initial_state_revision,
+      data.resources.fields_revision,
+    ]);
+  }, { enabled });
+  const resource = useSessionScopedResource<ModelReadinessResource>({
     enabled,
     load,
     resolveRevision: (data) => data.scene_revision,
     resourceKey: MODEL_READINESS_PATH,
   });
+  const { refetch } = resource;
+  const lastPreparedFieldRevision = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled) return;
+    const previous = lastPreparedFieldRevision.current;
+    lastPreparedFieldRevision.current = preparedFieldRevision;
+    if (previous !== undefined && preparedFieldRevision !== null && previous !== preparedFieldRevision) {
+      refetch();
+    }
+  }, [enabled, preparedFieldRevision, refetch]);
+  return resource;
 }
 
 export function readyCommandResourceData<T>(

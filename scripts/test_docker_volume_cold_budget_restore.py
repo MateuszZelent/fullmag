@@ -15,6 +15,7 @@ import fcntl
 
 from docker_build_control import BuildControlError
 import docker_volume_cold_budget_restore as restore
+import docker_volume_preowner_drained as preowner
 
 GIB = 1024 ** 3
 
@@ -346,6 +347,306 @@ class HistoryTests(unittest.TestCase):
                 elif mutation == 'config': self.write('runtime-control/runtime-service/docker-all.json', {})
                 else: self.write(self.fence['failure_fence_relative'], {})
                 with self.assertRaises(BuildControlError): self.observe()
+
+
+class GroupLedgerProbeMountTests(unittest.TestCase):
+    def exercise(self, *, private, bad_subpath=False):
+        import shlex
+        import docker_group_ledger as ledger
+        project = "fullmag-ownerless-mount-test"
+        image = "sha256:" + "c" * 64
+        volume = ledger._control_volume(project) if private else ledger.VOLUME_PREFIX + "a" * 64
+        expected = ledger.profile("a" * 64, project, volume, image,
+                                  ledger_subpath="private/ledger" if private else "")
+        options = {"Subpath": "private/other" if bad_subpath else "private/ledger"} if private else {}
+        backend = {"Image": image, "Mounts": [{"Type": "volume", "Name": volume,
+                   "Destination": ledger.MOUNT_TARGET, "RW": True}],
+                   "HostConfig": {"Mounts": [{"Type": "volume", "Source": volume,
+                                   "Target": ledger.MOUNT_TARGET, "VolumeOptions": options}]}}
+        budget = {"cpu_millis": 8000, "memory_bytes": 63 * GIB,
+                  "storage_bytes": 0, "gpu_memory_bytes": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "WRITER.lock").touch()
+            raw = json.dumps({"schema_version": "host_resource_ledger.v4",
+                              "policy": {"host_id": "host", "topology_sha256": "d" * 64,
+                                         "total_budget": budget}}).encode()
+            (root / "HOST_RESOURCE_LEDGER.json").write_bytes(raw)
+            def helper(control, script, image_id):
+                self.assertEqual(image_id, image)
+                return ["run", "--entrypoint", "sh", image, "-ceu", script]
+            def capture(args, **kwargs):
+                mount = args[args.index("--mount") + 1]
+                want = "type=volume,src=" + volume + ",dst=/ledger,readonly,volume-nocopy"
+                if private:
+                    want += ",volume-subpath=private/ledger"
+                self.assertEqual(mount, want)
+                parts = shlex.split(args[-1])
+                code = parts[parts.index("-c") + 1].replace("'/ledger/ledger'", repr(str(root)))
+                return subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True)
+            with patch.object(ledger, "retained_profile", return_value=expected), \
+                 patch.object(preowner, "_python_helper_args", side_effect=helper), \
+                 patch.object(preowner, "bounded_capture", side_effect=capture), \
+                 patch("docker_build_control.docker_text", side_effect=AssertionError("Unexpected Docker lookup")):
+                result = preowner._ledger_policy(SimpleNamespace(), {}, backend)
+            self.assertEqual(result["total_budget"], budget)
+            self.assertEqual(result["ledger_sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_private_group_ledger_probe_keeps_the_attested_subpath(self):
+        self.exercise(private=True)
+
+    def test_legacy_group_ledger_probe_keeps_the_existing_volume_mount(self):
+        self.exercise(private=False)
+
+    def test_private_group_ledger_probe_rejects_a_different_subpath_before_read(self):
+        with self.assertRaises(BuildControlError):
+            self.exercise(private=True, bad_subpath=True)
+
+
+class OwnerlessTerminalReceiptTests(unittest.TestCase):
+    def startup(self):
+        return {
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "failed_outcome_retained",
+            "accepted_store": "/state/runs/docker-all/session-store",
+            "api_pid": 21385,
+            "bootstrap": {"state": "ready"},
+            "qualification": "NOT VERIFIED",
+            "error": preowner.OWNERLESS_STARTUP_ERROR,
+            "api_diagnostic_only": True,
+            "api_failure_fence": (
+                "/opt/fullmag/runtime-control/runtime-service/api-failure-"
+                + "6" * 32 + ".json"
+            ),
+        }
+
+    def test_actual_ownerless_startup_shape_and_exact_api_only_stop_transition(self):
+        before = self.startup()
+        self.assertEqual(set(before), preowner.OWNERLESS_PROCESS_KEYS)
+        self.assertEqual(preowner._validate_ownerless_process_receipt(before), before)
+        after = dict(before)
+        after.update(
+            state="shutdown_unknown",
+            api_exit_code=-15,
+            shutdown_error=preowner.OWNERLESS_SHUTDOWN_ERROR,
+        )
+        self.assertEqual(preowner._validate_ownerless_shutdown_receipt(before, after), after)
+
+    def test_unknown_startup_and_shutdown_shapes_are_rejected(self):
+        before = self.startup()
+        mutations = {
+            "missing_pin": lambda value: value.pop("api_failure_fence"),
+            "extra_runtime_owner": lambda value: value.update(runtime_pid=21400),
+            "wrong_error": lambda value: value.update(error="another startup failure"),
+            "not_diagnostic_only": lambda value: value.update(api_diagnostic_only=False),
+            "invalid_pid": lambda value: value.update(api_pid=True),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                bad = copy.deepcopy(before)
+                mutate(bad)
+                with self.assertRaises(BuildControlError):
+                    preowner._validate_ownerless_process_receipt(bad)
+
+        expected = dict(before, state="shutdown_unknown", api_exit_code=-15,
+                        shutdown_error=preowner.OWNERLESS_SHUTDOWN_ERROR)
+        for name, mutate in (
+            ("missing_wait", lambda value: value.pop("api_exit_code")),
+            ("timeout_unknown", lambda value: value.pop("api_exit_code")),
+            ("different_error", lambda value: value.update(shutdown_error="shutdown timed out")),
+            ("changed_startup", lambda value: value.update(api_pid=99999)),
+            ("unexpected_owner", lambda value: value.update(service_owner={"state": "unknown"})),
+            ("boolean_exit", lambda value: value.update(api_exit_code=True)),
+        ):
+            with self.subTest(name=name):
+                bad = copy.deepcopy(expected)
+                mutate(bad)
+                with self.assertRaises(BuildControlError):
+                    preowner._validate_ownerless_shutdown_receipt(before, bad)
+
+    def test_only_exact_failed_parent_selects_ownerless_branch(self):
+        exact = {"error": preowner.OWNERLESS_PARENT_ERROR}
+        self.assertTrue(preowner._ownerless_parent(exact))
+        for error in (
+            preowner.OWNERLESS_PARENT_ERROR + " ",
+            "Runtime admission failed: API startup failed",
+            "Runtime startup failed; diagnostic API retained: unrelated",
+        ):
+            with self.subTest(error=error):
+                self.assertFalse(preowner._ownerless_parent({"error": error}))
+
+    def test_v1_startup_and_v2_compute_source_bindings_remain_distinct(self):
+        start = {
+            "schema": preowner.PROOF_SCHEMA,
+            "source_request_id": "start-request-17",
+            "source_sha256": "a" * 64,
+        }
+        compute = {
+            "schema": preowner.COMPUTE_PROOF_SCHEMA,
+            "compute": {"command_id": "command-17", "receipt_sha256": "b" * 64},
+        }
+        self.assertEqual(
+            preowner._qualified_source_binding(start),
+            {"request_id": "start-request-17", "source_sha256": "a" * 64},
+        )
+        self.assertEqual(preowner._qualified_source_binding(compute), {"compute": compute["compute"]})
+        self.assertNotIn("request_id", preowner._qualified_source_binding(compute))
+        for bad in (
+            {"schema": preowner.COMPUTE_PROOF_SCHEMA, "compute": {"command_id": "x", "receipt_sha256": "b" * 64,
+                                                                    "startup_source_sha256": "c" * 64}},
+            {"schema": "fullmag.development-terminal-observation-proof.v3"},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(BuildControlError):
+                preowner._qualified_source_binding(bad)
+
+    def test_omitted_root_namespace_is_allowed_only_for_exact_ownerless_parent(self):
+        attempt = "a" * 32
+        backend = "c" * 64
+        image = "sha256:" + "d" * 64
+        document = {"name": "project"}
+        config_sha = hashlib.sha256(preowner.canonical(document)).hexdigest()
+        parent = {
+            "schema": "fullmag.docker-build-operation.v1",
+            "phase": "development",
+            "ledger_profile": "group-ledger-v1",
+            "state": "failed-confirmed",
+            "attempt": attempt,
+            "compose_project": "project",
+            "control_volume": "volume",
+            "config_sha256": config_sha,
+            "inputs": {"source_root": "/source", "image_id": image},
+            "backend_container": backend,
+            "error": preowner.OWNERLESS_PARENT_ERROR,
+            "worker_cgroup": {"state": "ready", "container_id": backend,
+                              "image_id": image, "compose_project": "project"},
+        }
+        raw = preowner.canonical(parent) + b"\n"
+        compose_raw = preowner.canonical(document) + b"\n"
+        records = {
+            f"development/attempts/{attempt}/terminal.json": raw,
+            f"development/attempts/{attempt}/receipt.json": raw,
+            "development/current.json": raw,
+            f"development/attempts/{attempt}/compose.json": compose_raw,
+        }
+        control = SimpleNamespace(
+            project="project", volume="volume", namespace="",
+            read_bytes=lambda path, **kwargs: records[path],
+        )
+        self.assertEqual(
+            preowner._load_parent(
+                control, parent, document, selected=Path("/source"), attempt=attempt,
+                config_sha256=config_sha, image_id=image, backend_container_id=backend,
+                allow_legacy_root_namespace=True,
+            )[3],
+            parent,
+        )
+        for profile in (None, "global-ledger", "unknown"):
+            with self.subTest(ledger_profile=profile):
+                wrong = dict(parent, ledger_profile=profile)
+                wrong_raw = preowner.canonical(wrong) + b"\n"
+                changed = dict(records)
+                for path in (
+                    f"development/attempts/{attempt}/terminal.json",
+                    f"development/attempts/{attempt}/receipt.json",
+                    "development/current.json",
+                ):
+                    changed[path] = wrong_raw
+                changed_control = SimpleNamespace(
+                    project="project", volume="volume", namespace="",
+                    read_bytes=lambda path, **kwargs: changed[path],
+                )
+                with self.assertRaises(BuildControlError):
+                    preowner._load_parent(
+                        changed_control, wrong, document, selected=Path("/source"),
+                        attempt=attempt, config_sha256=config_sha,
+                        image_id=image, backend_container_id=backend,
+                        allow_legacy_root_namespace=True,
+                    )
+        foreign = copy.copy(control)
+        foreign.namespace = "another-namespace"
+        with self.assertRaises(BuildControlError):
+            preowner._load_parent(
+                foreign, parent, document, selected=Path("/source"), attempt=attempt,
+                config_sha256=config_sha, image_id=image, backend_container_id=backend,
+                allow_legacy_root_namespace=True,
+            )
+        wrong_parent = dict(parent, error=preowner.OWNERLESS_PARENT_ERROR + " ")
+        wrong_raw = preowner.canonical(wrong_parent) + b"\n"
+        bad_records = dict(records)
+        bad_records[f"development/attempts/{attempt}/terminal.json"] = wrong_raw
+        bad_records[f"development/attempts/{attempt}/receipt.json"] = wrong_raw
+        bad_records["development/current.json"] = wrong_raw
+        bad = SimpleNamespace(project="project", volume="volume", namespace="",
+                              read_bytes=lambda path, **kwargs: bad_records[path])
+        with self.assertRaises(BuildControlError):
+            preowner._load_parent(
+                bad, wrong_parent, document, selected=Path("/source"), attempt=attempt,
+                config_sha256=config_sha, image_id=image, backend_container_id=backend,
+                allow_legacy_root_namespace=True,
+            )
+
+    def test_retained_context_requires_the_pinned_post_stop_receipt(self):
+        before = self.startup()
+        cold_api = {
+            "schema": "fullmag.preowner-ownerless-api-probe.v1",
+            "process_receipt": before,
+            "process_tree_sha256": hashlib.sha256(preowner.canonical(before) + b"\n").hexdigest(),
+        }
+        after = dict(before)
+        after.update(state="shutdown_unknown", api_exit_code=-15,
+                     shutdown_error=preowner.OWNERLESS_SHUTDOWN_ERROR)
+        raw = preowner.canonical(after) + b"\n"
+        stop_record = {
+            "schema": "fullmag.preowner-ownerless-api-stop.v1",
+            "process_receipt": after,
+            "process_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+        self.assertEqual(preowner._validate_ownerless_api_stop_record(cold_api, stop_record, raw), after)
+
+        for name, record, observed in (
+            ("journal_digest", dict(stop_record, process_receipt_sha256="0" * 64), raw),
+            ("unknown_journal_field", dict(stop_record, runtime_pid=10), raw),
+            ("receipt_changed_after_stop", stop_record, preowner.canonical({**after, "api_pid": 7}) + b"\n"),
+        ):
+            with self.subTest(name=name), self.assertRaises(BuildControlError):
+                preowner._validate_ownerless_api_stop_record(cold_api, record, observed)
+
+    def test_ownerless_probe_requires_exact_persisted_process_receipt(self):
+        before = self.startup()
+        rows = [[1, 0, 1, "tini"], [2, 1, 2, "python3"], [3, 2, 3, "fullmag-api"]]
+        instance = "11111111-1111-4111-8111-111111111111"
+        guest = {
+            "schema": "fullmag.preowner-ownerless-api-probe.v1",
+            "processes": rows,
+            "processes_sha256": hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest(),
+            "probe_present": True,
+            "api_instance_sha256": hashlib.sha256(instance.encode()).hexdigest(),
+            "health_status": 200,
+            "health_state": "degraded",
+            "active_session": False,
+            "current_status": 503,
+            "failure_reason": preowner.OWNERLESS_STARTUP_ERROR,
+            "failure_fence_relative": before["api_failure_fence"].removeprefix("/opt/fullmag/"),
+            "failure_fence_sha256": "a" * 64,
+            "owner_sha256": "b" * 64,
+            "process_tree_sha256": hashlib.sha256(preowner.canonical(before) + b"\n").hexdigest(),
+            "native_config_sha256": "c" * 64,
+            "process_receipt": before,
+        }
+        stdout = preowner.canonical(guest) + b"\n"
+        with patch.object(preowner, "docker_capture", return_value=SimpleNamespace(stdout=stdout)):
+            self.assertEqual(preowner._ownerless_api_probe("c" * 64), guest)
+        for mutation in (
+            lambda value: value.update(extra=True),
+            lambda value: value.update(process_tree_sha256="0" * 64),
+            lambda value: value["process_receipt"].update(runtime_pid=9),
+        ):
+            bad = copy.deepcopy(guest)
+            mutation(bad)
+            with patch.object(preowner, "docker_capture",
+                              return_value=SimpleNamespace(stdout=preowner.canonical(bad) + b"\n")):
+                with self.assertRaises(BuildControlError):
+                    preowner._ownerless_api_probe("c" * 64)
 
 
 class MemoryControl:

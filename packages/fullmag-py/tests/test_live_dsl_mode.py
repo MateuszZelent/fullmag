@@ -9,7 +9,7 @@ from live_session_fake import FakeLiveSession
 
 import fullmag as fm
 from fullmag import world
-from fullmag.client import CommandFailedError, InputLockedError, StaleRevisionError
+from fullmag.client import ApiError, CommandFailedError, FullmagConnectionError, InputLockedError, StaleRevisionError
 from fullmag.live import LiveModeError
 from fullmag.live._scene import build_world_scene, merge_patch_diff, plan_transactions
 
@@ -133,6 +133,178 @@ def test_relax_and_run_become_commands_bound_to_scene_revision(server) -> None:
     assert [stage["kind"] for stage in server.scene["study"]["stages"]] == ["relax", "run"]
     fm.minimize(method="ncg", tolA=1.0)
     assert server.command_bodies("relax")[-1]["relax_algorithm"] == "nonlinear_cg"
+
+
+def test_equal_texture_apply_replays_the_same_request_after_losing_the_ack(server) -> None:
+    session = fm.connect(server.url, events=False)
+    layer = _layer()
+    core = layer.add_region("core", fm.Box(20e-9, 20e-9, 10e-9))
+    core.texture = fm.texture.uniform(0, 0, 1)
+    fm.relax(dt=1e-13, max_steps=2)
+
+    revision = session.revision
+    commits = server.magnetization_apply_commits
+    before = len(server.transactions)
+    server.drop_magnetization_apply_responses = 2
+    with pytest.raises(FullmagConnectionError):
+        core.set_texture(fm.texture.uniform(0, 0, 1))
+    assert session.revision == revision
+    assert session.pending
+    assert server.scene["revision"] == revision + 1
+
+    assert fm.sync() == 1
+    attempts = server.transactions[before:]
+    assert len(attempts) >= 2
+    assert all(attempt == attempts[0] for attempt in attempts)
+    assert attempts[0]["base_revision"] == revision
+    assert attempts[0]["magnetization_apply"]["scopes"] == [
+        {"object_id": "layer", "region_id": core.region_id},
+    ]
+    assert server.magnetization_apply_commits == commits + 1
+    assert session.revision == revision + 1
+    assert fm.sync() == 0
+
+    # A new deliberate assignment gets its own operation, while the
+    # nested proxy/setter contributes one scope to that operation.
+    layer.m.set(fm.texture.uniform(1, 0, 0))
+    assert server.magnetization_apply_commits == commits + 2
+    assert server.transactions[-1]["magnetization_apply"]["scopes"] == [
+        {"object_id": "layer", "region_id": None},
+    ]
+    assert (server.transactions[-1]["magnetization_apply"]["operation_id"]
+            != attempts[0]["magnetization_apply"]["operation_id"])
+
+
+
+def test_apply_ack_lost_then_scene_advanced_preserves_other_client_edits(server) -> None:
+    session = fm.connect(server.url, events=False)
+    layer = _layer()
+    fm.relax(dt=1e-13, max_steps=2)
+
+    revision = session.revision
+    commits = server.magnetization_apply_commits
+    before = len(server.transactions)
+    server.drop_magnetization_apply_responses = 2
+    with pytest.raises(FullmagConnectionError):
+        layer.m = fm.texture.uniform(0, 1, 0)
+
+    server.scene["materials"][0]["properties"]["alpha"] = 0.25
+    server.scene["study"]["study_pipeline"]["nodes"][0]["label"] = "Relax A from UI"
+    server.scene["revision"] += 1
+    with pytest.raises(ApiError, match=r"magnetization_apply_scene_advanced.*reconcile"):
+        fm.sync()
+
+    assert server.transactions[before:] == [server.transactions[before]] * 3
+    with pytest.raises(ApiError, match="magnetization_apply_scene_advanced"):
+        fm.relax(dt=1e-13, max_steps=2)
+    assert len(server.transactions) == before + 3
+    assert len(server.command_bodies("relax")) == 1
+    assert server.scene["revision"] == revision + 2
+
+    assert fm.sync(reconcile=True) == 0
+    assert session.revision == revision + 2
+    assert server.magnetization_apply_commits == commits + 1
+
+    layer.Ms = 650e3
+    properties = server.scene["materials"][0]["properties"]
+    assert properties["alpha"] == 0.25
+    assert properties["Ms"] == 650e3
+    layer.m = fm.texture.uniform(0, 0, 1)
+    assert server.magnetization_apply_commits == commits + 2
+    assert server.scene["materials"][0]["properties"]["alpha"] == 0.25
+    assert fm.relax(dt=1e-13, max_steps=2).completion_status == "succeeded"
+    assert server.command_bodies("relax")[-1]["target"] == {"kind": "stage_index", "stage_index": 1}
+    assert server.scene["materials"][0]["properties"]["alpha"] == 0.25
+    assert server.scene["study"]["study_pipeline"]["nodes"][0]["label"] == "Relax A from UI"
+
+
+def test_apply_reconciliation_preserves_conflicting_local_draft(server) -> None:
+    session = fm.connect(server.url, events=False)
+    layer = _layer()
+    fm.relax(dt=1e-13, max_steps=2)
+    server.drop_magnetization_apply_responses = 2
+    with pytest.raises(FullmagConnectionError):
+        layer.m = fm.texture.uniform(0, 1, 0)
+    server.scene["materials"][0]["properties"]["alpha"] = 0.25
+    server.scene["revision"] += 1
+    with pytest.raises(ApiError, match="magnetization_apply_scene_advanced"):
+        fm.sync()
+
+    layer.alpha = 0.75
+    before = len(server.transactions)
+    with pytest.raises(ValueError, match=r"materials.*changed"):
+        fm.sync(reconcile=True)
+    assert session.pending
+    assert layer.alpha == 0.75
+    assert len(server.transactions) == before
+    assert server.scene["materials"][0]["properties"]["alpha"] == 0.25
+
+    layer.alpha = 0.25
+    assert fm.sync(reconcile=True) == 0
+    assert not session.pending
+    assert session.revision == server.scene["revision"]
+
+
+def test_apply_reconciliation_checks_pending_stage_texture_scope(server) -> None:
+    session = fm.connect(server.url, events=False)
+    layer = _layer()
+    fm.relax(dt=1e-13, max_steps=2)
+    server.drop_magnetization_apply_responses = 2
+    with pytest.raises(FullmagConnectionError):
+        layer.m = fm.texture.uniform(0, 1, 0)
+    server.scene["magnetization_assets"][0]["preset_params"]["direction"] = [0, 0, 1]
+    server.scene["revision"] += 1
+    with pytest.raises(ApiError, match="magnetization_apply_scene_advanced"):
+        fm.sync()
+
+    commits = server.magnetization_apply_commits
+    with pytest.raises(ValueError, match="texture changed in the current scene"):
+        fm.sync(reconcile=True)
+    assert session.pending
+    assert len(server.command_bodies("relax")) == 1
+    assert server.magnetization_apply_commits == commits
+
+    layer.m = fm.texture.uniform(0, 0, 1)
+    assert fm.sync(reconcile=True) == 1
+    fm.relax(dt=1e-13, max_steps=2)
+    nodes = server.scene["study"]["study_pipeline"]["nodes"]
+    assignments = nodes[1]["payload"]["magnetization_assignments"]["assignments"]
+    assert assignments[-1]["initializer"]["preset_params"]["direction"] == [0, 0, 1]
+    assert server.magnetization_apply_commits == commits + 1
+
+
+def test_live_magnetization_assignments_belong_to_the_next_stage(server) -> None:
+    fm.connect(server.url, events=False)
+    layer = _layer()
+    core = layer.add_region("core", fm.Box(20e-9, 20e-9, 10e-9))
+    core.texture = fm.texture.uniform(0, 0, 1)
+    fm.relax(dt=1e-13, max_steps=2)
+    first = server.scene["study"]["study_pipeline"]["nodes"][0]
+
+    layer.m.set(fm.texture.uniform(1, 0, 0))
+    fm.run(1e-10)
+    before = len(server.transactions)
+    core.texture = fm.texture.uniform(0, 1, 0)
+    assert len(server.transactions) == before + 1
+    fm.relax(dt=1e-13, max_steps=2)
+    fm.run(1e-10)
+
+    pipeline = server.scene["study"]["study_pipeline"]
+    assert pipeline["version"] == "study_pipeline.v2"
+    a, b, c, d = pipeline["nodes"]
+    assert a == first, "the saved first stage keeps its captured texture"
+    first_scopes = a["payload"]["magnetization_assignments"]["assignments"]
+    assert [(event["object_id"], event["region_id"]) for event in first_scopes] == [
+        ("layer", None), ("layer", core.region_id),
+    ]
+    for node, region_id, direction in (
+        (b, None, [1, 0, 0]), (c, core.region_id, [0, 1, 0]),
+    ):
+        event, = node["payload"]["magnetization_assignments"]["assignments"]
+        assert event["object_id"] == "layer"
+        assert event["region_id"] == region_id
+        assert event["initializer"]["preset_params"]["direction"] == direction
+    assert "magnetization_assignments" not in d["payload"]
 
 
 def test_paused_block_pauses_applies_and_resumes(server) -> None:
@@ -281,6 +453,8 @@ def test_live_run_stage_sends_only_the_run_primitive_keys(server) -> None:
     fm.run(1e-10)
     nodes = server.scene["study"]["study_pipeline"]["nodes"]
     run_payload = next(node["payload"] for node in nodes if node["stage_kind"] == "run")
-    # The server's run primitive accepts only its duration (fullmag-application).
-    assert set(run_payload) <= {"kind", "entrypoint_kind", "stage_id", "until_seconds", "output_every_seconds", "autosave"}
+    assert set(run_payload) <= {
+        "kind", "entrypoint_kind", "stage_id", "until_seconds",
+        "output_every_seconds", "autosave", "magnetization_assignments",
+    }
     assert float(run_payload["until_seconds"]) == pytest.approx(1e-10)

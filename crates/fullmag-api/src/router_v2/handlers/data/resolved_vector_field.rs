@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::{
     field_values_match_current_domain, flatten_current_field_values, is_fdm_snapshot,
-    json_field_grid, live_magnetization_values,
+    json_field_grid,
 };
 use crate::router_v2::handlers::data::fields::{
     persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
@@ -18,6 +18,7 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
     resolve_fem_node_mapping, EntityMapping,
 };
 use crate::router_v2::handlers::sessions::status::field_quantity_revision;
+use crate::session::{latest_field_source_is_qualified, qualified_live_magnetization};
 use crate::types::{AppState, SessionStateResponse};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +61,11 @@ pub(crate) async fn resolve_topological_charge_magnetization(
         validate_hysteresis_snapshot_stage_scope(state, stage_id, snapshot_id).await?;
         let (values, grid) = persisted_hysteresis_magnetization_values(snapshot, snapshot_id)?;
         (values, grid, ResolvedFieldSourceKind::PersistedSnapshot)
-    } else if let Some((values, grid)) = live_magnetization_values(snapshot) {
-        (values, grid, ResolvedFieldSourceKind::CurrentLive)
-    } else if let Some(raw) = snapshot.latest_fields.get("m") {
+    } else if let Some((values, grid, _)) = qualified_live_magnetization(snapshot) {
+        (values.to_vec(), grid, ResolvedFieldSourceKind::CurrentLive)
+    } else if let Some(raw) = snapshot.latest_fields.get("m")
+        .filter(|raw| latest_field_source_is_qualified(snapshot, "m", raw))
+    {
         let values = flatten_current_field_values(snapshot, "m", raw)?;
         if !field_values_match_current_domain(snapshot, "m", 3, &values)
             || values.iter().any(|value| !value.is_finite())

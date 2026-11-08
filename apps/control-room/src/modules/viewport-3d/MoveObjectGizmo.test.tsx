@@ -7,7 +7,16 @@ import {
   moveAxisPointerHandlers,
 } from "./MoveObjectGizmo";
 import { isMoveCommitPending } from "./moveCommitLock";
-import { MODEL_GEOMETRY_REALIZATION_CURRENT_PATH, SIMULATION_PREPARATION_PATH } from "@/kernel/api/apiPaths";
+import {
+  DATA_FIELDS_PATH,
+  DATA_OBSERVATION_FRAMES_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_GEOMETRY_REALIZATION_CURRENT_PATH,
+  SIMULATION_PREPARATION_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+  SIMULATION_STAGES_RESULTS_PATH,
+} from "@/kernel/api/apiPaths";
+import { AUTHORING_MUTATION_DEPENDENTS } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   commitObjectTranslation,
   PROBLEM_IR_03_RIGID_TRANSFORM_REASON,
@@ -440,16 +449,24 @@ describe("MoveObjectGizmo", () => {
       object_id: "magnet-z",
       transform: { translation: [4e-9, 5e-9, 6e-9] },
     });
-    expect(invalidate).toHaveBeenCalledTimes(9);
-    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)).size).toBe(9);
+    const expectedKeys = [
+      ...AUTHORING_MUTATION_DEPENDENTS.geometry,
+      MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+    ];
+    expect(invalidate).toHaveBeenCalledTimes(expectedKeys.length);
+    expect(new Set(invalidate.mock.calls.map(([resourceKey]) => resourceKey)))
+      .toEqual(new Set(expectedKeys));
     expect(invalidate).toHaveBeenCalledWith(MODEL_GEOMETRY_REALIZATION_CURRENT_PATH, 22);
-    // Simulation preparation is keyed by a scene-scoped revision token; every
-    // other dependent receives the numeric scene revision.
-    expect(
-      invalidate.mock.calls.every(([resourceKey, revision]) =>
-        revision === (resourceKey === SIMULATION_PREPARATION_PATH ? "scene:22" : 22),
-      ),
-    ).toBe(true);
+    for (const key of [
+      DATA_FIELDS_PATH,
+      DATA_OBSERVATION_FRAMES_PATH,
+      MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+      SIMULATION_PREPARATION_PATH,
+      SIMULATION_STAGES_EXECUTION_PATH,
+      SIMULATION_STAGES_RESULTS_PATH,
+    ]) {
+      expect(invalidate).toHaveBeenCalledWith(key, "scene:22");
+    }
   });
 
   it("pins the translation request and drops stale-session ACK invalidations", async () => {

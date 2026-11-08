@@ -6,6 +6,84 @@ import unittest
 
 
 class DevelopmentRecoveryShellTests(unittest.TestCase):
+    def test_grid_resume_dispatches_only_the_pinned_attempt_and_rejects_extra_flags(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        attempt = 'a' * 32
+        args = ['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-browser-qa', source, '3242', '', '900', '1800', '', '', attempt]
+        dry = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        recipe = dry.stderr.strip()
+        marker = '  *"scripts/docker_dev_browser_qa.py"*)\n'
+        result = self.dispatch(recipe, marker=marker)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = result.stdout.split(b'\0')[:-1]
+        self.assertEqual(argv[-2:], [b'--resume-fdm-grid-attempt', attempt.encode()])
+        self.assertEqual(argv[argv.index(b'--source-root') + 1], source.encode())
+        for bad in (recipe + '; printf injected', recipe + ' --force',
+                    recipe.replace(attempt, 'short'), recipe + ' --study-stage-rerun study',
+                    recipe.replace(' --resume-fdm-grid-attempt', ' --study-stage-rerun study --resume-fdm-grid-attempt'),
+                    recipe.replace(' --resume-fdm-grid-attempt', " --saved-playback-item-id '12' --resume-fdm-grid-attempt")):
+            rejected = self.dispatch(bad, marker=marker)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertNotIn(b'injected', rejected.stdout)
+
+    def test_stage_rerun_browser_actual_recipes_dispatch_exact_mode(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        for mode in ('stage-b', 'study', 'material-stage-a', 'fdm-cell-study', 'texture-stage-b', 'texture-study'):
+            dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
+                'docker-dev-browser-qa', source, '3242', '', '900', '1800', '', mode],
+                capture_output=True, text=True, timeout=15)
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            recipe = dry.stderr.strip()
+            marker = '  *"scripts/docker_dev_browser_qa.py"*)\n'
+            result = self.dispatch(recipe, marker=marker)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv = result.stdout.split(b'\0')[:-1]
+            self.assertEqual(argv[-2:], [b'--study-stage-rerun', mode.encode()])
+            self.assertEqual(argv[argv.index(b'--source-root') + 1], source.encode())
+            for bad in (recipe + '; printf injected', recipe + ' --force',
+                        recipe.replace('--study-stage-rerun ' + mode, '--study-stage-rerun other')):
+                refused = self.dispatch(bad, marker=marker)
+                self.assertEqual(refused.returncode, 2)
+                self.assertNotIn(b'injected', refused.stdout)
+
+    def test_prelaunch_actual_recipes_dispatch_exact_flags_and_reject_extra_commands(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        base = ['a' * 32, 'b' * 64, source]
+        recipes = [('docker-dev-capture-terminal', base + ['3242'],
+                    [b'--stop-only', b'--allow-prepared-session', b'--capture-terminal-observation']),
+                   ('docker-dev-restore-terminal', base + ['c' * 32, '3242'],
+                    [b'--terminal-observation-stop', b'c' * 32]),
+                   ('docker-dev-stop-prelaunch-failure', base + ['3242'],
+                    [b'--stop-only', b'--quiesce-api', b'--capture-prelaunch-failure']),
+                   ('docker-dev-recreate-prelaunch-failure', base + ['c' * 32, 'd' * 64, '3242'],
+                    [b'--fresh-state', b'--prelaunch-failure-stop', b'c' * 32,
+                     b'--prelaunch-failure-stop-sha256', b'd' * 64]),
+                   ('docker-dev-stop-native-terminal', base + ['3242'],
+                    [b'--stop-only', b'--quiesce-api', b'--capture-native-terminal']),
+                   ('docker-dev-recreate-native-terminal', base + ['c' * 32, 'd' * 64, '3242'],
+                    [b'--fresh-state', b'--native-terminal-stop', b'c' * 32,
+                     b'--native-terminal-stop-sha256', b'd' * 64])]
+        for name, args, suffix in recipes:
+            with self.subTest(recipe=name):
+                dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run', name, *args],
+                                     capture_output=True, text=True, timeout=15)
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                recipe = dry.stderr.strip()
+                result = self.dispatch(recipe, marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                argv = result.stdout.split(b'\0')[:-1]
+                self.assertEqual(argv[-len(suffix):], suffix)
+                self.assertEqual(argv[argv.index(b'--source-root') + 1], source.encode())
+                for tail in ('; printf injected', ' --force'):
+                    refused = self.dispatch(recipe + tail, marker='  *"scripts/docker_dev.py"*)\n')
+                    self.assertEqual(refused.returncode, 2)
+                    self.assertNotIn(b'injected', refused.stdout)
+
     def test_prepared_completed_archive_actual_recipe_dispatches_only_both_pins(self):
         repo = Path(__file__).resolve().parents[1]
         base = ['a' * 32, 'b' * 64, '/selected/checkout', 'c' * 32, 'd' * 64, 'e' * 64,
@@ -373,6 +451,61 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
         source = globals().get('WRAPPER') or (Path(__file__).resolve().parent / 'just_storage_shell.sh').read_text()
         dispatch = source.index('  *"scripts/docker_volume_frontend_refresh_reconcile.py"*)')
         self.assertLess(dispatch, source.rindex('"${resolver}" run'))
+
+
+    def test_docker_dev_up_real_just_dry_run_dispatches_bounded_network_subnet(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        script = 'examples/study script.py'
+        dry = subprocess.run(
+            ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+             source, '3342', script, 'auto', 'fem-demag-poisson', '172.16.1.0/24'],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'up', b'--port', b'3342',
+            b'--gpu-access', b'auto', b'--source-root', source.encode(), b'--script', script.encode(),
+            b'--native-contract', b'fem-demag-poisson', b'--network-subnet', b'172.16.1.0/24',
+        ])
+
+    def test_docker_dev_up_without_network_subnet_keeps_existing_argv(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        script = 'examples/study script.py'
+        dry = subprocess.run(
+            ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+             source, '3342', script, 'auto', 'fem-demag-poisson'],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(b'\0')[:-1], [
+            b'/recorded/python', b'/registered/checkout/scripts/docker_dev.py',
+            b'--repo-root', b'/registered/checkout', b'up', b'--port', b'3342',
+            b'--gpu-access', b'auto', b'--source-root', source.encode(), b'--script', script.encode(),
+            b'--native-contract', b'fem-demag-poisson',
+        ])
+
+    def test_docker_dev_up_rejects_malformed_or_injected_network_subnet(self):
+        repo = Path(__file__).resolve().parents[1]
+        source = '/selected/worktree with spaces/$(printf injected);literal'
+        for subnet in ('172.16.bad.0/24', '172.16.1.0/24; printf injected',
+                       "172.16.1.0/24' --apply"):
+            with self.subTest(subnet=subnet):
+                dry = subprocess.run(
+                    ['just', '--justfile', str(repo / 'justfile'), '--dry-run', 'docker-dev',
+                     source, '3342', '', 'auto', 'fem-demag-poisson', subnet],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(dry.returncode, 0, dry.stderr)
+                result = self.dispatch(dry.stderr.strip(), marker='  *"scripts/docker_dev.py"*)\n')
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(result.stdout)
 
 
 if __name__ == '__main__':

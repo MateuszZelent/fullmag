@@ -240,6 +240,31 @@ describe("runAuthoringMutationWithHistory", () => {
     }));
   });
 
+  it.each([10, 9])("reuses a scoped scene only when its revision %i matches the write precondition", async (cachedRevision) => {
+    const before = scene(10);
+    const cached = cachedRevision === 10 ? before : scene(cachedRevision);
+    const readScene = vi.fn(async () => before);
+    const record = vi.fn();
+    const after = scene(11);
+    const write = vi.fn(async () => after);
+    await runAuthoringMutationWithHistory(
+      {
+        api: { model: { scene: readScene } } as never,
+        authoringHistory: { record } as never,
+        resourceData: { [MODEL_SCENE_PATH]: cached },
+        sessionScopeKey: "session=A&epoch=1",
+        isCurrentSessionScope: () => true,
+      },
+      "Apply magnetic texture",
+      write,
+      undefined,
+      { expectedSceneRevision: 10 },
+    );
+    expect(readScene).toHaveBeenCalledTimes(cachedRevision === 10 ? 0 : 1);
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ baseRevision: 10 }));
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ before, after }));
+  });
+
   it("uses the cached scene when the authoritative read is unavailable", async () => {
     const before = scene(10);
     const after = scene(11);

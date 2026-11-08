@@ -8,11 +8,13 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::live_compute_request::LiveComputeRequest;
 use crate::router_v2::handlers::data::field_resolution::is_fdm_backend_kind;
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandIntent, RuntimeCommandPrecondition, RuntimeCommandTarget,
-    SolverPolicyRequest, StructuredCommandRequest,
+    CommandExecutionBinding, CommandResponse, RuntimeCommandIntent, RuntimeCommandPrecondition,
+    RuntimeCommandRunPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+    StructuredCommandRequest,
 };
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::session::effective_runtime_status_code;
@@ -68,17 +70,76 @@ pub async fn submit_command(
 async fn submit_structured_command_impl_with_context(
     state: Arc<AppState>,
     headers: &HeaderMap,
-    mut req: StructuredCommandRequest,
+    req: StructuredCommandRequest,
     context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<CommandResponse, ApiError> {
-    validate_optional_request_context(&state, context).await?;
     reject_imported_read_only_command(&state).await?;
+    let request_key = command_request_key(headers);
+    let durable_request = if let Some(context) = context.filter(|_| crate::live_accepted_execution::docker_api_only_runtime()) {
+        let request = LiveComputeRequest::capture(
+            context, &req, request_key.as_deref(), command_request_id(headers),
+        )?;
+        if let Some(request) = &request {
+            let _transition = state.current_live_session_transition.lock().await;
+            if let Some(response) = request.replay_under_transition(&state, context).await? {
+                return Ok(response);
+            }
+        }
+        request
+    } else {
+        None
+    };
+
+    // Durable Compute is bound to its RunIntent or release grant. The legacy
+    // header-only RAM cache cannot prove that it belongs to this request.
+    let mut uncached_headers;
+    let command_headers = if durable_request.is_some() {
+        uncached_headers = headers.clone();
+        uncached_headers.remove("idempotency-key");
+        &uncached_headers
+    } else {
+        headers
+    };
+    let result = submit_new_structured_command(
+        Arc::clone(&state), command_headers, req, context, request_key, durable_request.as_ref(),
+    ).await;
+    if let (Err(error), Some(request), Some(context)) = (&result, &durable_request, context) {
+        // The durable commit or release can succeed before the journal or
+        // realtime publication fails. Read the exact receipt under the same
+        // owner fence before reporting a submission failure to the caller.
+        if error.status == axum::http::StatusCode::CONFLICT || error.status.is_server_error() {
+            let _transition = state.current_live_session_transition.lock().await;
+            if let Some(response) = request.replay_under_transition(&state, context).await? {
+                if error.status.is_server_error() {
+                    tracing::warn!(
+                        command_id = %response.command_id,
+                        error = %error.message,
+                        "returning durable Compute acceptance after a publication error"
+                    );
+                }
+                return Ok(response);
+            }
+        }
+    }
+    result
+}
+
+async fn submit_new_structured_command(
+    state: Arc<AppState>,
+    headers: &HeaderMap,
+    mut req: StructuredCommandRequest,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+    request_key: Option<String>,
+    durable_request: Option<&LiveComputeRequest>,
+) -> Result<CommandResponse, ApiError> {
+    validate_initial_state_command(&req)?;
     validate_optional_request_context(&state, context).await?;
     let accepted_observations = crate::live_accepted_execution::docker_api_only_runtime()
         && matches!(&req, StructuredCommandRequest::ComputeFields { .. }
             | StructuredCommandRequest::ComputeEnergies { .. });
     enforce_session_command_admission(&state, accepted_observations).await?;
     validate_optional_request_context(&state, context).await?;
+    validate_authored_run_target(&req)?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     match &mut req {
@@ -159,6 +220,11 @@ async fn submit_structured_command_impl_with_context(
             crate::get_or_load_current_live_scene_document_for_context(&state, context).await?;
         }
         let transition_guard = state.current_live_session_transition.lock().await;
+        if let Some(request) = durable_request {
+            if let Some(response) = request.replay_under_transition(&state, context).await? {
+                return Ok(response);
+            }
+        }
         // ADR 0074: a FEM mesh build meshes the authored geometry without
         // creating an accepted RunIntent, so the scene stays editable.
         if crate::live_accepted_execution::docker_api_only_runtime() && command.kind == "remesh" {
@@ -211,6 +277,7 @@ async fn submit_structured_command_impl_with_context(
                     &state,
                     &accepted_context,
                     &command_kind,
+                    Some(&command.command_id),
                 )
                 .await;
             if let Err(error) = preparation_result {
@@ -277,7 +344,7 @@ async fn submit_structured_command_impl_with_context(
             // API-only runtime has none, so these must not be queued.
             let reason = match command.kind.as_str() {
                 "pause" => "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.",
-                "skip" => "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published.",
+                "skip" => super::runtime::ACCEPTED_SKIP_UNSUPPORTED_REASON,
                 _ => super::runtime::DOCKER_CLOSE_UNSUPPORTED_REASON,
             };
             return reject_session_command_impl_with_context(
@@ -303,27 +370,52 @@ async fn submit_structured_command_impl_with_context(
             ).await;
         }
         if matches!(command.kind.as_str(), "run" | "relax" | "solve" | "resume") {
-            if let Some(accepted) =
+            let receipt = durable_request.map(|request| request.receipt(command.command_id.clone()));
+            let request_key = receipt.as_ref().map(|receipt| receipt.key_sha256.clone()).or(request_key);
+            if let Some((accepted, admission_snapshot)) =
                 crate::live_accepted_execution::submit_live_command_with_transition(
                     &state,
                     &command,
                     context,
-                    command_request_key(headers),
+                    request_key,
+                    receipt,
                 )
                 .await?
             {
+                command.execution_binding = Some(CommandExecutionBinding {
+                    requested_target: command.target.take(),
+                    run_id: accepted.run_id.clone(),
+                    step_id: accepted.selected_step_id,
+                });
+                let accepted_context = crate::types::CurrentLiveRequestContext {
+                    run_id: Some(accepted.run_id.clone()),
+                    ..context.clone()
+                };
                 command.target = Some(RuntimeCommandTarget::Run {
                     run_id: Some(accepted.run_id),
                 });
-                return publish_accepted_session_command_impl_with_context_under_transition(
+                return publish_accepted_session_command_impl_with_context_under_transition_validated(
                     Arc::clone(&state),
                     headers,
                     command,
-                    context,
+                    &accepted_context,
+                    Some(&admission_snapshot),
                 )
                 .await;
             }
         }
+    }
+    if command.kind == "run" && command.until_seconds.is_none() {
+        return Err(ApiError::unprocessable_with_code(
+            "authored_stage_execution_lane_unsupported",
+            "an authored Run without a horizon override requires an accepted Study",
+        ));
+    }
+    if command.initial_state.is_some() {
+        return Err(ApiError::unprocessable_with_code(
+            "initial_state_execution_lane_unsupported",
+            "explicit initial state requires the durable accepted Study execution lane",
+        ));
     }
     enqueue_session_command_impl_with_context(state, headers, command, context).await
 }
@@ -497,7 +589,7 @@ async fn configure_accepted_solver_profile_under_transition(
         if !config.enabled { current.solver_profile.operation_samples.clear(); }
         current.solver_profile.revision = current.solver_profile.revision.wrapping_add(1);
     }
-    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    let response = CommandResponse { accepted: true, command_id, request_id, execution_binding: None, error: None };
     if let Some(key) = command_request_key(headers) {
         let mut responses = state.current_command_responses.lock().await;
         responses.push_back((key, response.clone()));
@@ -573,7 +665,7 @@ async fn publish_materialized_fields_under_transition(
                 "accepted quantity adoption could not publish its terminal outcome");
         }
     });
-    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    let response = CommandResponse { accepted: true, command_id, request_id, execution_binding: None, error: None };
     if let Some(key) = key {
         let mut responses = state.current_command_responses.lock().await;
         responses.push_back((key, response.clone()));
@@ -632,6 +724,8 @@ async fn publish_geometry_mesh_build_under_transition(
         .ok_or_else(|| ApiError::not_found("no current workspace"))?;
     crate::ensure_current_live_request_context(&snapshot, context,
         state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))?;
+    let task_scene = snapshot.scene_document.clone()
+        .ok_or_else(|| ApiError::not_found("no scene document available for meshing"))?;
     let command_id = command.command_id.clone();
     let request_id = command_request_id(headers);
     let mut next_sequence = state.current_control_next_seq.lock().await;
@@ -657,14 +751,14 @@ async fn publish_geometry_mesh_build_under_transition(
     // publish, so scene edits and Stop are not blocked while Gmsh runs.
     tokio::spawn(async move {
         let result = complete_geometry_mesh_build(
-            &task_state, &task_context, &task_command_id,
+            &task_state, &task_context, &task_command_id, task_scene,
         ).await;
         if let Err(error) = result {
             tracing::warn!(command_id = %task_command_id, error = %error,
                 "geometry-only mesh build could not publish its terminal outcome");
         }
     });
-    let response = CommandResponse { accepted: true, command_id, request_id, error: None };
+    let response = CommandResponse { accepted: true, command_id, request_id, execution_binding: None, error: None };
     if let Some(key) = key {
         let mut responses = state.current_command_responses.lock().await;
         responses.push_back((key, response.clone()));
@@ -677,9 +771,10 @@ async fn complete_geometry_mesh_build(
     state: &Arc<AppState>,
     context: &crate::types::CurrentLiveRequestContext,
     command_id: &str,
+    scene: SceneDocument,
 ) -> Result<(), ApiError> {
     let outcome =
-        crate::live_geometry_mesh_build::build_and_publish_geometry_mesh(state, context, command_id)
+        crate::live_geometry_mesh_build::build_and_publish_geometry_mesh(state, context, command_id, scene)
             .await;
     let error = outcome.err().map(|error| error.message);
     let completed = error.is_none();
@@ -691,6 +786,9 @@ async fn complete_geometry_mesh_build(
     crate::live_command_journal::mutate(state, &snapshot, |ledger| {
         let record = ledger.iter_mut().find(|record| record.command.command_id == command_id)
             .ok_or_else(|| ApiError::conflict("mesh build command record missing"))?;
+        if record.status != CommandLifecycleState::Accepted {
+            return Ok(((), false));
+        }
         record.status = if completed { CommandLifecycleState::Completed } else { CommandLifecycleState::Failed };
         record.completed_at_unix_ms = Some(crate::session::unix_time_millis_now());
         record.completion_status = Some(if completed { crate::types::CommandCompletionState::Completed }
@@ -775,6 +873,22 @@ fn validate_solver_policy_lane(
         ));
     }
     Ok(())
+}
+
+fn validate_authored_run_target(
+    request: &StructuredCommandRequest,
+) -> Result<(), ApiError> {
+    let StructuredCommandRequest::Run { intent, until_seconds: None, .. } = request else {
+        return Ok(());
+    };
+    if matches!(intent.target.as_ref(),
+        Some(RuntimeCommandTarget::StageId { stage_id }) if !stage_id.trim().is_empty())
+    {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "Run requires until_seconds unless it targets an exact authored stage in an accepted Study",
+    ))
 }
 
 fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(), ApiError> {
@@ -1092,6 +1206,19 @@ fn validate_accepted_command_admission_against_snapshot(
     Ok(())
 }
 
+pub(crate) fn validate_command_domain_precondition(
+    snapshot: &SessionStateResponse,
+    expected: Option<&str>,
+) -> Result<(), ApiError> {
+    if expected.is_some_and(|expected| expected != domain_generation_id(snapshot)) {
+        return Err(ApiError::conflict_with_code(
+            "command_domain_generation_changed",
+            "The domain changed after the command was requested. Review the current mesh or grid and run again.",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_runtime_command_preconditions(
     durable_journal_revision: u64,
     snapshot: &SessionStateResponse,
@@ -1099,6 +1226,20 @@ fn validate_runtime_command_preconditions(
     command: &SessionCommand,
 ) -> Result<(), ApiError> {
     if let Some(precondition) = command.precondition.as_ref() {
+        if let Some(expected) = precondition.current_run.as_ref() {
+            let expected = match expected {
+                RuntimeCommandRunPrecondition::None => None,
+                RuntimeCommandRunPrecondition::Run { run_id } => Some(run_id.as_str()),
+            };
+            let actual = snapshot.run.as_ref().map(|run| run.run_id.as_str());
+            if actual != expected {
+                return Err(ApiError::conflict_with_code(
+                    "command_current_run_changed",
+                    "The current run changed after the command was requested. Review the current source and run again.",
+                ));
+            }
+        }
+
         let runtime_state = runtime_state_for_command_validation(&snapshot);
         if precondition
             .runtime_state
@@ -1134,6 +1275,8 @@ fn validate_runtime_command_preconditions(
                 )));
             }
         }
+
+        validate_command_domain_precondition(snapshot, precondition.domain_generation_id.as_deref())?;
 
         let region_revisions = snapshot.region_realization_revisions;
         for (name, expected, actual) in [
@@ -1426,13 +1569,13 @@ fn validate_stage_control_target(
 
     match target {
         RuntimeCommandTarget::CurrentStage { stage_id } => {
-            validate_current_stage_target(active_index, stage_id.as_deref())
+            validate_current_stage_target(snapshot, active_index, stage_id.as_deref())
         }
         RuntimeCommandTarget::StageIndex { stage_index } => {
             validate_stage_index_target(active_index, *stage_index)
         }
         RuntimeCommandTarget::StageId { stage_id } => {
-            validate_current_stage_target(active_index, Some(stage_id.as_str()))
+            validate_current_stage_target(snapshot, active_index, Some(stage_id.as_str()))
         }
         RuntimeCommandTarget::Study
         | RuntimeCommandTarget::Run { .. }
@@ -1444,6 +1587,7 @@ fn validate_stage_control_target(
 }
 
 fn validate_current_stage_target(
+    snapshot: &SessionStateResponse,
     active_index: Option<usize>,
     stage_id: Option<&str>,
 ) -> Result<(), ApiError> {
@@ -1453,7 +1597,10 @@ fn validate_current_stage_target(
         ));
     };
     if let Some(stage_id) = stage_id {
-        let expected = stage_id_for_command_validation(active_index);
+        let expected = snapshot.stage_execution.as_ref()
+            .and_then(|execution| execution.stages.get(active_index))
+            .and_then(|stage| stage.stage_id.clone())
+            .unwrap_or_else(|| stage_id_for_command_validation(active_index));
         if stage_id != expected {
             return Err(ApiError::conflict(format!(
                 "stage target mismatch: expected {}, got {}",
@@ -2250,6 +2397,7 @@ pub(crate) async fn enqueue_session_command_impl_with_context(
         accepted: true,
         command_id,
         request_id,
+        execution_binding: None,
         error: None,
     };
 
@@ -2376,6 +2524,10 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
         }
     };
     let accepted_is_stop = command.kind == "stop";
+    let execution_binding = command.execution_binding.clone();
+    let compute_already_published = execution_binding.is_some()
+        && admission_snapshot.is_some_and(|admission| admission.session.run_id != accepted_run_id)
+        && snapshot.session.run_id == accepted_run_id;
     crate::live_command_journal::mutate(&state, snapshot, |ledger| {
         // Docker Stop was admitted against its stage target before the
         // accepted run identity was attached to the journal command. Reusing
@@ -2424,7 +2576,7 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
     // publication merely moves the current view behind the same scheduler
     // gate and never makes the legacy scratch queue observable to a worker.
     drop(current);
-    {
+    if !compute_already_published {
         let mut current = state.current_live_state.write().await;
         let snapshot = current
             .as_mut()
@@ -2497,6 +2649,7 @@ async fn publish_accepted_session_command_impl_with_context_under_transition_val
         accepted: true,
         command_id,
         request_id,
+        execution_binding,
         error: None,
     };
     if let Some(key) = idempotency_key {
@@ -2536,16 +2689,6 @@ pub(crate) fn apply_accepted_live_study_snapshot(
     status: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<(), ApiError> {
-    if step_ids.is_empty() {
-        return Err(ApiError::internal(
-            "accepted startup study publication has no planned steps",
-        ));
-    }
-    if !matches!(status, "waiting_for_solve" | "waiting_for_compute" | "running") {
-        return Err(ApiError::internal(
-            "accepted startup study publication has an invalid live status",
-        ));
-    }
     crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
     if snapshot
         .run
@@ -2555,6 +2698,82 @@ pub(crate) fn apply_accepted_live_study_snapshot(
         return Err(ApiError::conflict(
             "accepted_live_study_run_replaced_before_publication",
         ));
+    }
+    apply_accepted_live_run_snapshot(snapshot, &context.session_id, run_id, step_ids, status, metadata)
+}
+
+/// Prepare a whole-Study replacement before its durable RunIntent commit.
+/// Replacing a different current run is allowed only when the request context
+/// pins that exact terminal predecessor; active or foreign runs stay fenced.
+pub(crate) fn prepare_accepted_live_study_snapshot(
+    snapshot: &SessionStateResponse,
+    context: &crate::types::CurrentLiveRequestContext,
+    session_epoch: u64,
+    run_id: &str,
+    step_ids: &[String],
+    status: &str,
+    metadata: Option<serde_json::Value>,
+) -> Result<SessionStateResponse, ApiError> {
+    crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+    if let Some(existing) = snapshot
+        .run
+        .as_ref()
+        .filter(|existing| existing.run_id != run_id)
+    {
+        if context.run_id.as_deref() != Some(existing.run_id.as_str()) {
+            return Err(ApiError::conflict("request_context_stale"));
+        }
+        if !matches!(
+            existing.status.as_str(),
+            "completed" | "succeeded" | "failed" | "cancelled" | "stopped" | "closed"
+        ) {
+            return Err(ApiError::conflict(
+                "accepted_live_study_run_replaced_before_publication",
+            ));
+        }
+    }
+    let mut next = snapshot.clone();
+    apply_accepted_live_run_snapshot(
+        &mut next,
+        &context.session_id,
+        run_id,
+        step_ids,
+        status,
+        metadata,
+    )?;
+    Ok(next)
+}
+
+/// Build the replacement for an explicitly admitted Compute before its durable
+/// commit. The captured context pins the predecessor even if it is terminal.
+pub(crate) fn prepare_accepted_live_compute_snapshot(
+    snapshot: &SessionStateResponse,
+    context: &crate::types::CurrentLiveRequestContext,
+    session_epoch: u64,
+    run_id: &str,
+    step_ids: &[String],
+) -> Result<SessionStateResponse, ApiError> {
+    crate::ensure_current_live_request_context(snapshot, context, session_epoch)?;
+    let mut next = snapshot.clone();
+    apply_accepted_live_run_snapshot(
+        &mut next, &context.session_id, run_id, step_ids, "waiting_for_compute", None,
+    )?;
+    Ok(next)
+}
+
+fn apply_accepted_live_run_snapshot(
+    snapshot: &mut SessionStateResponse,
+    session_id: &str,
+    run_id: &str,
+    step_ids: &[String],
+    status: &str,
+    metadata: Option<serde_json::Value>,
+) -> Result<(), ApiError> {
+    if step_ids.is_empty() {
+        return Err(ApiError::internal("accepted run publication has no planned steps"));
+    }
+    if !matches!(status, "waiting_for_solve" | "waiting_for_compute" | "running") {
+        return Err(ApiError::internal("accepted run publication has an invalid live status"));
     }
     let artifact_dir = snapshot.session.artifact_dir.clone();
     // A newly bound accepted run publishes its planned stage list at once so
@@ -2572,7 +2791,7 @@ pub(crate) fn apply_accepted_live_study_snapshot(
     crate::session::apply_current_live_snapshot(
         snapshot,
         CurrentLiveSnapshotRequest {
-            session_id: context.session_id.clone(),
+            session_id: session_id.to_string(),
             session: None,
             session_status: Some(status.to_string()),
             metadata,
@@ -2581,7 +2800,7 @@ pub(crate) fn apply_accepted_live_study_snapshot(
             simulation_preparation: None,
             run: Some(RunManifest {
                 run_id: run_id.to_string(),
-                session_id: context.session_id.clone(),
+                session_id: session_id.to_string(),
                 status: status.to_string(),
                 total_steps: step_ids.len(),
                 final_time: None,
@@ -2615,48 +2834,6 @@ pub(crate) fn apply_accepted_live_study_snapshot(
         );
         crate::session::refresh_runtime_status(snapshot);
     }
-    Ok(())
-}
-
-/// Publish a whole-study accepted run created by the Docker startup adapter.
-/// The verifier has already captured the source, loaded the canonical scene,
-/// and materialized preparation; this function only binds that immutable run
-/// to the fenced current-live read model. No command queue or second viewport
-/// is created.
-pub(crate) async fn publish_accepted_live_study_under_transition(
-    state: &Arc<AppState>,
-    context: &crate::types::CurrentLiveRequestContext,
-    run_id: &str,
-    step_ids: &[String],
-    status: &str,
-) -> Result<(), ApiError> {
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current
-        .as_mut()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    apply_accepted_live_study_snapshot(
-        snapshot,
-        context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
-        run_id,
-        step_ids,
-        status,
-        None,
-    )?;
-    let realtime_snapshot = snapshot.clone();
-    drop(current);
-    // The accepted run becomes the new current run as part of this
-    // publication. The caller's pre-activation context is intentionally stale
-    // after the write; its transition fence remains responsible for the
-    // subsequent context rebind.
-    let display_revision = state.current_display_selection.read().await.revision;
-    let realtime_state =
-        crate::current_live_realtime_state_from_snapshot(state, &realtime_snapshot, display_revision)
-            .await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0)
-        .await?;
     Ok(())
 }
 
@@ -2748,6 +2925,7 @@ async fn publish_completed_preparation_command_impl_with_context_under_transitio
         accepted: true,
         command_id,
         request_id,
+        execution_binding: None,
         error: None,
     });
     if !had_cached_response {
@@ -2843,7 +3021,7 @@ async fn mark_reserved_preparation_command_terminal_if_current(
     .await
 }
 
-fn reserve_command_ledger_entry(
+pub(crate) fn reserve_command_ledger_entry(
     ledger: &mut std::collections::VecDeque<TrackedCommandRecord>,
 ) -> Result<(), ApiError> {
     while ledger.len() >= 256 {
@@ -2927,6 +3105,7 @@ async fn reject_session_command_impl_with_context(
         accepted: false,
         command_id,
         request_id,
+        execution_binding: None,
         error: Some(error),
     };
     if let Some(idempotency_key) = command_request_key(headers) {
@@ -2958,6 +3137,38 @@ async fn reject_session_command_impl_with_context(
     Ok(response)
 }
 
+fn validate_initial_state_command(req: &StructuredCommandRequest) -> Result<(), ApiError> {
+    let (kind, intent, accepts_initial_state) = match req {
+        StructuredCommandRequest::Run { intent, .. } => ("run", intent, true),
+        StructuredCommandRequest::Relax { intent, .. } => ("relax", intent, true),
+        StructuredCommandRequest::Solve { intent } => ("solve", intent, true),
+        StructuredCommandRequest::Pause { intent } => ("pause", intent, false),
+        StructuredCommandRequest::Resume { intent } => ("resume", intent, false),
+        StructuredCommandRequest::Stop { intent } => ("stop", intent, false),
+        StructuredCommandRequest::Skip { intent } => ("skip", intent, false),
+        StructuredCommandRequest::SaveVtk { intent } => ("save_vtk", intent, false),
+        StructuredCommandRequest::ComputeFields { intent } => ("compute_fields", intent, false),
+        StructuredCommandRequest::ComputeEnergies { intent } => {
+            ("compute_energies", intent, false)
+        }
+        StructuredCommandRequest::Close { intent } => ("close", intent, false),
+        StructuredCommandRequest::MeshBuild { intent, .. } => ("mesh_build", intent, false),
+        StructuredCommandRequest::FdmGridRefresh { intent, .. } => {
+            ("fdm_grid_refresh", intent, false)
+        }
+        StructuredCommandRequest::SetSolverProfile { intent, .. } => {
+            ("set_solver_profile", intent, false)
+        }
+    };
+    if !accepts_initial_state && intent.initial_state.is_some() {
+        return Err(ApiError::unprocessable_with_code(
+            "initial_state_command_unsupported",
+            format!("initial_state is supported only for run, relax, and solve commands; got `{kind}`"),
+        ));
+    }
+    Ok(())
+}
+
 fn command_request_key(headers: &HeaderMap) -> Option<String> {
     headers
         .get("idempotency-key")
@@ -2976,17 +3187,19 @@ fn command_request_id(headers: &HeaderMap) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128) -> SessionCommand {
+pub(crate) fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128) -> SessionCommand {
     SessionCommand {
         seq: 0,
         command_id,
         kind: kind.to_string(),
         created_at_unix_ms,
         target: None,
+        execution_binding: None,
         reason: None,
         precondition: None,
         client_intent_id: None,
         requested_at_unix_ms: None,
+        initial_state: None,
         until_seconds: None,
         max_steps: None,
         torque_tolerance: None,
@@ -3152,7 +3365,7 @@ fn command_from_structured(
                 intent,
                 RuntimeCommandTarget::Run { run_id: None },
             );
-            command.until_seconds = Some(until_seconds);
+            command.until_seconds = until_seconds;
             command.max_steps = max_steps;
             command.integrator = integrator;
             command.fixed_timestep = fixed_timestep;
@@ -3308,6 +3521,7 @@ fn apply_command_intent(
     command.precondition = intent.precondition;
     command.client_intent_id = intent.client_intent_id;
     command.requested_at_unix_ms = intent.requested_at_unix_ms;
+    command.initial_state = intent.initial_state;
 }
 
 #[cfg(test)]
@@ -3368,6 +3582,75 @@ mod tests {
             "created_at_unix_ms": 1_700_000_000_000u128
         }))
         .expect("minimal journal command fixture should deserialize")
+    }
+
+    #[test]
+    fn exact_authored_run_uses_the_pinned_stage_horizon() {
+        let request: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
+            "kind": "run", "target": {"kind": "stage_id", "stage_id": "run-b"}
+        })).unwrap();
+        validate_authored_run_target(&request).unwrap();
+        let command = command_from_structured(request, "cmd-run-b".into(), 1);
+        assert!(command.until_seconds.is_none());
+        assert!(matches!(command.target,
+            Some(RuntimeCommandTarget::StageId { stage_id }) if stage_id == "run-b"));
+
+        let missing_target: StructuredCommandRequest = serde_json::from_value(
+            serde_json::json!({"kind": "run"}),
+        ).unwrap();
+        assert!(validate_authored_run_target(&missing_target).is_err());
+    }
+
+    #[test]
+    fn stage_control_uses_the_published_active_stage_identity() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(
+            serde_json::json!({"session_id": "skip-stage-session"}),
+        ).unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.stage_execution = Some(serde_json::from_value(serde_json::json!({
+            "total_stages": 2,
+            "active_stage_index": 1,
+            "runtime_state": "running",
+            "stages": [
+                {"stage_id": "relax-a", "status": "completed"},
+                {"stage_id": "relax-b", "status": "running"}
+            ]
+        })).unwrap());
+        let mut command = journal_command("skip-active", "skip");
+        command.target = Some(RuntimeCommandTarget::StageId { stage_id: "relax-b".into() });
+        validate_stage_control_target(&snapshot, &command).unwrap();
+        command.target = Some(RuntimeCommandTarget::StageId { stage_id: "relax-a".into() });
+        assert!(validate_stage_control_target(&snapshot, &command).is_err());
+    }
+
+    #[test]
+    fn initial_state_is_rejected_for_stop_before_legacy_command_routing() {
+        let request = StructuredCommandRequest::Stop {
+            intent: RuntimeCommandIntent {
+                initial_state: Some(crate::schemas::commands::RuntimeInitialStateRequest::DefaultForTarget),
+                ..RuntimeCommandIntent::default()
+            },
+        };
+
+        let error = validate_initial_state_command(&request)
+            .expect_err("Stop must reject an initial-state request before command routing");
+        assert_eq!(error.code.as_deref(), Some("initial_state_command_unsupported"));
+    }
+
+    #[test]
+    fn structured_run_transports_initial_state_into_session_command() {
+        let request = serde_json::from_value(serde_json::json!({
+            "kind": "run",
+            "until_seconds": 1.0,
+            "initial_state": {"kind": "latest_compatible_state"}
+        }))
+        .expect("structured request should decode");
+        let command = command_from_structured(request, "command-initial-state".into(), 1);
+
+        assert_eq!(
+            serde_json::to_value(command.initial_state).unwrap(),
+            serde_json::json!({"kind": "latest_compatible_state"})
+        );
     }
 
     fn accepted_preparation_record(command_id: &str, kind: &str) -> TrackedCommandRecord {
@@ -3597,6 +3880,119 @@ mod tests {
         assert_eq!(run.run_id, "accepted-run");
         assert_eq!(run.total_steps, 2);
         assert_eq!(snapshot.metadata.as_deref(), Some(&metadata));
+    }
+
+    #[test]
+    fn compute_prepares_replacement_view_for_the_exact_admitted_run() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compute-binding",
+            "run": {
+                "run_id": "relax-a",
+                "session_id": "compute-binding",
+                "status": "completed",
+                "total_steps": 1,
+                "artifact_dir": ""
+            }
+        })).unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        // The default constructor derives session metadata but does not apply the run.
+        snapshot.run = request.run;
+        snapshot.session.run_id = "relax-a".into();
+        snapshot.stage_execution = Some(crate::session::accepted_initial_stage_execution(
+            &["stage-a".into()], "waiting_for_compute",
+        ));
+        let context = crate::types::CurrentLiveRequestContext {
+            session_id: snapshot.session.session_id.clone(),
+            run_id: Some("relax-a".into()),
+            session_epoch: 17,
+            request_scope_epoch: "scope:17".into(),
+        };
+        let next = prepare_accepted_live_compute_snapshot(
+            &snapshot, &context, 17, "relax-b", &["stage-b".into()],
+        ).unwrap();
+
+        assert_eq!(snapshot.session.run_id, "relax-a");
+        assert_eq!(snapshot.stage_execution.as_ref().unwrap().stages[0].stage_id.as_deref(), Some("stage-a"));
+        assert_eq!(next.session.run_id, "relax-b");
+        assert_eq!(next.run.as_ref().unwrap().run_id, "relax-b");
+        assert_eq!(next.runtime_status.code, "waiting_for_compute");
+        assert_eq!(next.stage_execution.as_ref().unwrap().stages[0].stage_id.as_deref(), Some("stage-b"));
+
+        let error = prepare_accepted_live_compute_snapshot(
+            &next, &context, 17, "relax-c", &["stage-c".into()],
+        ).unwrap_err();
+        assert_eq!(error.message, "request_context_stale");
+        assert!(prepare_accepted_live_compute_snapshot(&snapshot, &context, 18, "relax-c", &["stage-c".into()]).is_err());
+        assert!(apply_accepted_live_study_snapshot(
+            &mut snapshot, &context, 17, "other-startup-run", &["step-0".into()], "waiting_for_compute", None,
+        ).is_err());
+    }
+
+    #[test]
+    fn start_rejects_a_different_current_run_before_durable_admission() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "current-run-precondition",
+        })).unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        let mut command = journal_command("run-relax-b", "relax");
+        let ledger = std::collections::VecDeque::new();
+        command.precondition = Some(serde_json::from_value(serde_json::json!({
+            "current_run": { "kind": "none" },
+        })).unwrap());
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
+
+        snapshot.run = Some(serde_json::from_value(serde_json::json!({
+            "run_id": "relax-a",
+            "session_id": "current-run-precondition",
+            "status": "completed",
+            "total_steps": 1,
+            "artifact_dir": "",
+        })).unwrap());
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
+            .expect_err("a previously absent current run cannot be replaced silently");
+        assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
+
+        command.precondition = Some(serde_json::from_value(serde_json::json!({
+            "current_run": { "kind": "run", "run_id": "relax-a" },
+        })).unwrap());
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
+        snapshot.run.as_mut().unwrap().run_id = "another-run".into();
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
+            .expect_err("a different continuation run cannot be adopted silently");
+        assert_eq!(error.code.as_deref(), Some("command_current_run_changed"));
+    }
+
+    #[test]
+    fn command_domain_pin_detects_replacement_at_the_same_mesh_revision() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "pinned-domain"
+        })).unwrap();
+        let mut snapshot = default_current_live_state(&request);
+        let metadata = |fingerprint: &str| serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid_certificate": { "grid_fingerprint": fingerprint }
+                }
+            }
+        });
+        snapshot.metadata = Some(metadata("grid-a").into());
+        let mut command = journal_command("pinned-domain", "relax");
+        command.precondition = Some(RuntimeCommandPrecondition {
+            mesh_revision: Some(snapshot.mesh_revision),
+            domain_generation_id: Some("grid-a".into()),
+            ..RuntimeCommandPrecondition::default()
+        });
+        let ledger = std::collections::VecDeque::new();
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
+
+        snapshot.metadata = Some(metadata("grid-b").into());
+        let error = validate_runtime_command_preconditions(0, &snapshot, &ledger, &command)
+            .expect_err("a different grid cannot satisfy the original domain pin");
+        assert_eq!(error.code.as_deref(), Some("command_domain_generation_changed"));
+
+        command.precondition.as_mut().unwrap().domain_generation_id = None;
+        validate_runtime_command_preconditions(0, &snapshot, &ledger, &command).unwrap();
     }
 
     #[test]

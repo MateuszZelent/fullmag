@@ -60,7 +60,7 @@ export function StudyStageDraftEditor({
         </ul>
       ) : null}
       <FormField
-        disabled={draft.kind === "unsupported" || draft.kind === "antenna_field_solve"}
+        disabled={Boolean(draft.pipelineNodeId) || draft.kind === "unsupported" || draft.kind === "antenna_field_solve"}
         label="Kind"
         type="select"
         value={draft.kind}
@@ -87,7 +87,7 @@ export function StudyStageDraftEditor({
         ) : null}
       </FormField>
       <FormField
-        disabled={draft.kind === "unsupported" || draft.kind === "antenna_field_solve"}
+        disabled={Boolean(draft.pipelineNodeId) || draft.kind === "unsupported" || draft.kind === "antenna_field_solve"}
         label="Stage ID"
         value={draft.stageId}
         onChange={(event) => onUpdate({ stageId: event.target.value })}
@@ -437,12 +437,14 @@ function RelaxStageDraftFields({
             value={draft.demagInterval}
             onChange={(event) => onUpdate({ demagInterval: event.target.value })}
           />
-          <FormField
-            label="Field every"
-            hint="Push field samples every N solver steps."
-            value={draft.fieldEvery}
-            onChange={(event) => onUpdate({ fieldEvery: event.target.value })}
-          />
+          {!draft.pipelineNodeId ? (
+            <FormField
+              label="Field every"
+              hint="Push field samples every N solver steps."
+              value={draft.fieldEvery}
+              onChange={(event) => onUpdate({ fieldEvery: event.target.value })}
+            />
+          ) : null}
         </>
       ) : null}
       <StageAutosaveSection

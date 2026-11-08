@@ -40,6 +40,44 @@ def _session_host():
     return host
 
 
+def _prepare_script_output_permissions(document):
+    """Grant UID 65532 access only to the explicitly opted-in Linux output tree."""
+    from docker_script_output_mounts import OUTPUT_ROOT
+
+    backend = document["services"]["backend"]
+    outputs = [mount for mount in backend.get("volumes", [])
+               if mount.get("target") == OUTPUT_ROOT]
+    if not outputs:
+        return 0
+    if len(outputs) != 1 or outputs[0].get("type") != "bind" or outputs[0].get("read_only") is not False:
+        raise BuildControlError("Script output permission setup requires one explicit writable alias")
+    if os.name == "nt":
+        return 0
+    if not sys.platform.startswith("linux"):
+        raise BuildControlError("Script output permission setup supports only Linux or Windows hosts")
+
+    output_directory = Path(outputs[0].get("source", ""))
+    if not output_directory.is_absolute() or ".." in output_directory.parts:
+        raise BuildControlError("Script output permission setup requires an absolute child directory")
+    try:
+        filesystem = storage.filesystem_type(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError("Cannot inspect opted-in script-output filesystem: " + str(error)) from error
+    if filesystem not in {"ext4", "xfs", "btrfs"}:
+        raise BuildControlError(
+            "Script output permission setup requires local ext4, xfs or btrfs storage; observed "
+            + repr(filesystem)
+        )
+    try:
+        import docker_script_output_permissions as permissions
+        return permissions.prepare_output_tree(output_directory)
+    except (OSError, ValueError) as error:
+        raise BuildControlError(
+            "Cannot safely admit the opted-in script-output directory to backend UID 65532: "
+            + str(error)
+        ) from error
+
+
 def _capture_helper_source_binding(args, selected_source):
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
     import docker_helper_source as helper_source
@@ -2276,6 +2314,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     validate_host_path(selected, "source checkout")
     local_volume(Path(layout["storage_root"]))
     identity = _compose_identity(layout)
+    from docker_dev_network import parse_requested_subnet, check_requested_subnet_available
+    requested_network_subnet = parse_requested_subnet(getattr(args, "network_subnet", None))
+    if requested_network_subnet is not None:
+        check_requested_subnet_available(requested_network_subnet, identity["network_name"])
     if validated_post_build_generation is not None:
         if (validated_post_build_generation["compose_project"] != identity["project_name"]
                 or validated_post_build_generation["source_root"] != str(selected)):
@@ -2689,6 +2731,8 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if configured.returncode or len(configured.stdout) > 1024 * 1024:
             raise BuildControlError("DEV Compose render failed: " + configured.stderr.decode("utf-8", "replace"))
         document = json.loads(configured.stdout)
+        from docker_dev_network import apply_requested_subnet
+        apply_requested_subnet(document, requested_network_subnet)
         from docker_dev_defaults import configured_group_budget
         from docker_volume_resources import apply_development_budget
         if prepared_budget_render is None:
@@ -2861,6 +2905,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         from docker_script_output_mounts import configure as configure_script_output, validate as validate_script_output
         configure_script_output(document, selected)
         validate_script_output(document)
+        _prepare_script_output_permissions(document)
         # All writable bind destinations are runtime/user stores, never build data.
         for service in (backend, frontend):
             for mount in service["volumes"]:
@@ -3727,7 +3772,7 @@ else:
             or run.get("session_id")!=identity[0]
             or status.get("run",{}).get("run_id")!=run_id
             or status.get("solver",{}).get("state") not in
-                (terminal|{"idle"}|({"awaiting_command"} if prepared else set()))):
+                (terminal|{"idle","awaiting_command"})):
         raise RuntimeError("terminal run differs from the current session")
     queue=get("/v2/platform/compute/queue")
     runtime=get("/v2/platform/runtime-service")
@@ -3765,7 +3810,8 @@ else:
             or after_run.get("run_id")!=run_id
             or after_run.get("session_id")!=identity[0]
             or after_run.get("status")!=run.get("status")
-            or after_run.get("revision")!=run.get("revision")):
+            or after_run.get("revision")!=run.get("revision")
+            or (after.get("resources") or {}).get("scene_revision")!=(status.get("resources") or {}).get("scene_revision")):
         raise RuntimeError("terminal session changed before drain")
     if prepared and any((after.get("resources") or {}).get(key)!=(status.get("resources") or {}).get(key)
             for key in ("scene_revision","mesh_revision","stages_revision","commands_revision",
@@ -3778,6 +3824,9 @@ else:
         "api_instance_id":instance,"session_id":identity[0],"session_epoch":identity[1],
         "request_scope_epoch":identity[2],"run":run,"compute_queue":queue,
         "runtime_service":runtime}
+    scene_revision=(status.get("resources") or {}).get("scene_revision")
+    if type(scene_revision) is int and scene_revision>=0:
+        result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
     print(json.dumps(result,sort_keys=True))
 '''
@@ -7706,6 +7755,38 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    capture_terminal = getattr(args, "capture_terminal_observation", False)
+    quiesce_api = getattr(args, "quiesce_api", False)
+    from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
+    capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
+        args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    legacy_mode_args = args
+    if capture_prelaunch_failure:
+        # This is a separate offline-preservation capability. Do not let the
+        # existing all-Succeeded native-terminal validators interpret it.
+        from copy import copy as shallow_copy
+        legacy_mode_args = shallow_copy(args)
+        legacy_mode_args.quiesce_api = False
+        legacy_mode_args.capture_prelaunch_failure = False
+    from docker_volume_native_terminal_stop import validate_options as native_terminal_options
+    capture_native, native_terminal_pin = native_terminal_options(
+        legacy_mode_args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    from docker_volume_empty_api_abort import fresh_pin as empty_api_abort_fresh_pin
+    empty_api_abort_pin = empty_api_abort_fresh_pin(
+        legacy_mode_args, recreate_services=recreate_services, restart_idle_service=restart_idle_service,
+        stop_after_drain=stop_after_drain, resume_recreation_id=resume_recreation_id,
+        refresh_frontend_service=refresh_frontend_service, retire_only=retire_only,
+    )
+    if capture_terminal and (not restart_idle_service or not stop_after_drain
+            or getattr(args, "saved_authoring_checkpoint", None)
+            or getattr(args, "saved_authoring_checkpoint_sha256", None)):
+        raise BuildControlError("Terminal observation capture requires a plain managed stop-only operation")
     if retire_only and (not recreate_services or restart_idle_service or stop_after_drain
             or resume_recreation_id is not None or refresh_frontend_service
             or getattr(args, "fresh_state", False) is not True
@@ -7742,6 +7823,18 @@ def _retained_operation(
     selected, layout = _select_source(Path(args.repo_root).resolve(strict=True), args.source_root)
     if selected_before_runtime is not None and selected_before_runtime != selected:
         raise BuildControlError("Selected app checkout changed during helper-source validation")
+    prelaunch_source_binding = None
+    if capture_prelaunch_failure:
+        import docker_volume_prelaunch_failure_stop as prelaunch_stop
+        launcher_module = sys.modules.get("docker_dev")
+        launcher_path = getattr(launcher_module, "__file__", None)
+        if not isinstance(launcher_path, str):
+            raise BuildControlError("Prelaunch-failure controller source cannot be located")
+        prelaunch_source_binding = prelaunch_stop.capture_source_binding({
+            "launcher": launcher_path,
+            "controller": __file__,
+            "recovery_helper": prelaunch_stop.__file__,
+        })
     identity = _compose_identity(layout)
     from docker_build_control import toolchain_configuration
     configured = toolchain_configuration(selected, identity)
@@ -7761,6 +7854,10 @@ def _retained_operation(
     document = control.read(previous_root + "/compose.json")
     if hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256 or document.get("name") != control.project:
         raise BuildControlError("Resume Compose identity/CAS differs")
+    from docker_dev_network import retained_requested_subnet
+    retained_subnet = retained_requested_subnet(document, getattr(args, "network_subnet", None))
+    if retained_subnet is not None:
+        args.network_subnet = retained_subnet
     from docker_volume_cancelled_activation_guard import require_fresh_recreation
     require_fresh_recreation(control, args, previous, recreate_services=recreate_services)
     from docker_volume_preparation_abort import require_fresh_archive
@@ -7800,7 +7897,8 @@ def _retained_operation(
         and not refresh_frontend_service and resume_recreation_id is None
     )
     if (retained_terminal_observation
-            and not getattr(args, "terminal_observation_proof", None)
+            and not (getattr(args, "terminal_observation_proof", None)
+                     or getattr(args, "terminal_observation_stop", None))
             and not terminal_observation_exit
             and not terminal_observation_failed_resume):
         raise BuildControlError(
@@ -7841,7 +7939,11 @@ def _retained_operation(
     observation_sha = getattr(args, "terminal_observation_proof_sha256", None)
     if bool(observation_path) != bool(observation_sha):
         raise BuildControlError("Terminal observation requires paired proof pins")
-    if observation_path and (not recreate_services or getattr(args, "fresh_state", False)
+    observation_stop = getattr(args, "terminal_observation_stop", None)
+    if observation_stop and (not isinstance(observation_stop, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", observation_stop) or observation_path):
+        raise BuildControlError("Terminal observation requires one exact stop attempt or one proof")
+    if (observation_path or observation_stop) and (not recreate_services or getattr(args, "fresh_state", False)
             or args.script is not None or successor_path or resume_recreation_id is not None
             or getattr(args, "completed_recreation_attempt", None)
             or getattr(args, "recovery_authorization", None)):
@@ -7935,7 +8037,9 @@ def _retained_operation(
         certificate = _retained_certificate(state, document)
         environment = document["services"]["backend"]["environment"]
         startup_enabled = _retained_startup_enabled(actual["backend"])
-        if startup_enabled:
+        if startup_enabled and capture_prelaunch_failure:
+            raise BuildControlError("Prelaunch-failure preservation cannot resume startup activation")
+        if startup_enabled and not (capture_terminal or capture_native):
             raise BuildControlError("Startup activation requires dedicated recovery; idle restart will not repeat Solve")
         if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
             raise BuildControlError("Original accepted activation helper still holds the control lease")
@@ -7952,6 +8056,11 @@ def _retained_operation(
         with control.operation("iteration", {"source_root": str(selected), "image_id": image,
                                             "attempt": args.attempt, "config_sha256": args.config_sha256,
                                             "ui_mode": ui_mode,
+                                            **({"capture_native_terminal": True} if capture_native else {}),
+                                            **({"capture_prelaunch_failure": True} if capture_prelaunch_failure else {}),
+                                            **({"quiesce_api": True} if quiesce_api else {}),
+                                            **({"prelaunch_failure_source_binding": prelaunch_source_binding}
+                                               if prelaunch_source_binding is not None else {}),
                                             **({"saved_authoring_checkpoint_sha256": checkpoint_sha} if saved_authoring else {}),
                                             **operator_probe_record}) as operation:
             operation["receipt"].update(operator_probe_record)
@@ -7962,6 +8071,9 @@ def _retained_operation(
             if actual["frontend"]["State"].get("Running"):
                 docker_capture("stop", "--time", "60", ids["frontend"], timeout=90)
             operation["daemon_pending"] = False
+            api_quiescence_started = False
+            native_terminal_capture = None
+            prelaunch_failure_capture = None
             try:
                 fresh = {service: json.loads(docker_text("inspect", identifier))[0]
                          for service, identifier in ids.items()}
@@ -8012,27 +8124,127 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                         raise BuildControlError("Diagnostic process changed before stop archival")
                     control.write_bytes(operation["root"] + "/diagnostic-terminal-process-before.json", diagnostic_process)
                 elif active_session is True:
-                    if startup_enabled:
-                        raise BuildControlError("Backend has an active session; idle restart refused")
-                    terminal_session = _terminal_session_restart_probe(
-                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
-                    )
-                    if terminal_session is not None:
-                        control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
-                        operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
-                            canonical(terminal_session)
-                        ).hexdigest()
+                    if capture_native or capture_prelaunch_failure:
+                        pass  # The separate native capture below authenticates this stale Running case.
                     else:
-                        cancelled_activation = _validate_cancelled_activation_preflight(
-                            control, previous_root, previous, document, selected, args.config_sha256,
-                            ids["backend"], environment, require_quiesced_activation=False,
+                        if startup_enabled and not capture_terminal:
+                            raise BuildControlError("Backend has an active session; idle restart refused")
+                        terminal_session = _terminal_session_restart_probe(
+                            ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
                         )
-                        health = cancelled_activation["probe"]["health"]
-                        operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
-                            cancelled_activation["proof_sha256"]
-                        )
+                        if terminal_session is not None:
+                            control.write(operation["root"] + "/terminal-session-preflight.json", terminal_session)
+                            operation["receipt"]["terminal_session_preflight_sha256"] = hashlib.sha256(
+                                canonical(terminal_session)
+                            ).hexdigest()
+                        elif capture_terminal:
+                            raise BuildControlError("There is no terminal run to capture")
+                        else:
+                            cancelled_activation = _validate_cancelled_activation_preflight(
+                                control, previous_root, previous, document, selected, args.config_sha256,
+                                ids["backend"], environment, require_quiesced_activation=False,
+                            )
+                            health = cancelled_activation["probe"]["health"]
+                            operation["receipt"]["accepted_then_cancelled_proof_sha256"] = (
+                                cancelled_activation["proof_sha256"]
+                            )
                 elif active_session is not False:
                     raise BuildControlError("Backend has an active or unknown session; idle restart refused")
+                if capture_terminal:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Terminal observation capture requires a healthy current terminal run")
+                    from docker_volume_terminal_observation import capture_terminal_observation
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
+                    )
+                    native_capture = capture_terminal_observation(ids["backend"], store_root, terminal_session)
+                    if _terminal_session_restart_probe(
+                        ids["backend"], allow_prepared=getattr(args, "allow_prepared_session", False),
+                    ) != terminal_session:
+                        raise BuildControlError("Terminal session changed during native capture")
+                    capture_raw = canonical(native_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/terminal-native-observation.json", capture_raw)
+                    operation["receipt"]["terminal_native_observation_sha256"] = hashlib.sha256(capture_raw).hexdigest()
+                if capture_prelaunch_failure:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Prelaunch-failure capture requires the exact active waiting Study")
+                    import docker_volume_prelaunch_failure_stop as prelaunch_stop
+                    prepared = prelaunch_stop.prepare(ids["backend"])
+                    quiescence_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                           for service, identifier in ids.items()}
+                    for service, observed in quiescence_services.items():
+                        before = fresh[service]
+                        if (any(observed.get(key) != before.get(key)
+                                for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                or observed.get("State", {}).get("Running") is not (service == "backend")):
+                            raise BuildControlError("Prelaunch API quiescence service incarnation changed before intent")
+                    _assert_private_restart_network(quiescence_services, ids, control.project)
+                    prelaunch_stop.assert_source_binding_current(prelaunch_source_binding)
+                    intent = {"schema": prelaunch_stop.QUIESCE_INTENT_SCHEMA,
+                              "prepared": prepared, "services": quiescence_services,
+                              "source_binding": prelaunch_source_binding}
+                    intent_raw = canonical(intent) + b"\n"
+                    control.write_bytes(operation["root"] + "/prelaunch-failure-quiescence-intent.json", intent_raw)
+                    operation["receipt"]["api_quiescence_intent_sha256"] = hashlib.sha256(intent_raw).hexdigest()
+                    api_quiescence_started = True
+                    operation["daemon_pending"] = True
+                    operation["receipt"]["api_quiescence_outcome"] = "intent-published-outcome-unknown"
+                    prelaunch_failure_capture = prelaunch_stop.quiesce_api_and_capture(ids["backend"], intent)
+                    prelaunch_stop.assert_source_binding_current(prelaunch_source_binding)
+                    operation["daemon_pending"] = False
+                    operation["receipt"]["api_quiescence_outcome"] = "api-closed-prelaunch-failure-captured"
+                    capture_raw = canonical(prelaunch_failure_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/prelaunch-failure-stop.json", capture_raw)
+                    operation["receipt"]["prelaunch_failure_capture_sha256"] = hashlib.sha256(capture_raw).hexdigest()
+                if capture_native:
+                    if diagnostic_terminal is not None or active_session is not True:
+                        raise BuildControlError("Native terminal capture requires a healthy active stale Running session")
+                    from docker_volume_native_terminal_stop import capture as capture_native_terminal
+                    store_root = storage.validate_path(
+                        state / "runs" / "docker-all" / "session-store", state, "native terminal accepted store",
+                    )
+                    if quiesce_api:
+                        from docker_volume_native_terminal_stop import (
+                            QUIESCE_INTENT_SCHEMA, prepare_api_quiescence, quiesce_api_and_capture,
+                        )
+                        prepared = prepare_api_quiescence(ids["backend"], store_root)
+                        quiescence_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                               for service, identifier in ids.items()}
+                        for service, observed in quiescence_services.items():
+                            before = fresh[service]
+                            if (any(observed.get(key) != before.get(key)
+                                    for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                    or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                    or observed.get("State", {}).get("Running") is not (service == "backend")):
+                                raise BuildControlError("API quiescence service incarnation changed before intent")
+                        _assert_private_restart_network(quiescence_services, ids, control.project)
+                        intent = {"schema": QUIESCE_INTENT_SCHEMA, "prepared": prepared, "services": quiescence_services}
+                        intent_raw = canonical(intent) + b"\n"
+                        control.write_bytes(operation["root"] + "/api-quiescence-intent.json", intent_raw)
+                        operation["receipt"]["api_quiescence_intent_sha256"] = hashlib.sha256(intent_raw).hexdigest()
+                        # A failed/unknown call can have closed the API. Never roll it back or signal again.
+                        api_quiescence_started = True
+                        operation["daemon_pending"] = True
+                        operation["receipt"]["api_quiescence_outcome"] = "intent-published-outcome-unknown"
+                        native_terminal_capture = quiesce_api_and_capture(ids["backend"], store_root, intent)
+                        operation["daemon_pending"] = False
+                        operation["receipt"]["api_quiescence_outcome"] = "api-closed-native-terminal-confirmed"
+                    else:
+                        native_terminal_capture = capture_native_terminal(ids["backend"], store_root)
+                    captured_services = {service: json.loads(docker_text("inspect", identifier))[0]
+                                         for service, identifier in ids.items()}
+                    for service, observed in captured_services.items():
+                        before = fresh[service]
+                        if (any(observed.get(key) != before.get(key)
+                                for key in ("Id", "Image", "Config", "HostConfig", "Mounts"))
+                                or observed.get("State", {}).get("StartedAt") != before.get("State", {}).get("StartedAt")
+                                or observed.get("State", {}).get("Running") is not (service == "backend")):
+                            raise BuildControlError("Native terminal capture service incarnation changed")
+                    _assert_private_restart_network(captured_services, ids, control.project)
+                    capture_raw = canonical(native_terminal_capture) + b"\n"
+                    control.write_bytes(operation["root"] + "/native-terminal-stop.json", capture_raw)
+                    operation["receipt"]["native_terminal_capture_sha256"] = hashlib.sha256(capture_raw).hexdigest()
                 if saved_authoring:
                     # The operator window is explicit; repeat archive, API, ledger and
                     # service pins immediately before crossing the backend stop boundary.
@@ -8045,6 +8257,17 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     _saved_authoring_read_archive(saved_authoring, state)
                     control.write(operation["root"] + "/saved-authoring-final-preflight.json", authoring_probe)
             except Exception as error:
+                if api_quiescence_started:
+                    operation["daemon_pending"] = True
+                    capture_preserved = native_terminal_capture is not None or prelaunch_failure_capture is not None
+                    operation["receipt"].update(
+                        api_quiescence_outcome=("api-closed-retained" if capture_preserved else "outcome-unknown-retained"),
+                        frontend_restore="retained-stopped", api_respawned=False, backend_stop_issued=False,
+                    )
+                    raise BuildControlError(
+                        "API quiescence failed after durable intent; backend/native owner retained, "
+                        "API closed or outcome unknown, frontend retained stopped; no signal replay or API respawn: " + str(error)
+                    ) from error
                 _idle_preflight_failed(
                     error, saved_authoring, operation, ids["frontend"],
                     restore_frontend=actual["frontend"]["State"].get("Running") is True,
@@ -8055,6 +8278,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
             operation["receipt"].update(state="restarting-idle-backend", state_root=str(state),
                 backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
             operation["daemon_pending"] = True
+            if quiesce_api:
+                operation["receipt"]["backend_stop_issued"] = True
             docker_capture("stop", "--time", "60", ids["backend"], timeout=90)
             stopped = json.loads(docker_text("inspect", ids["backend"]))[0]
             if (stopped.get("Id") != actual["backend"].get("Id")
@@ -8062,10 +8287,16 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     != actual["backend"].get("State", {}).get("StartedAt")
                     or stopped["State"].get("Running") is not False
                     or stopped["State"].get("OOMKilled") is not False
-                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal else 0)):
+                    or stopped["State"].get("ExitCode") != (1 if diagnostic_terminal or quiesce_api else 0)):
                 raise BuildControlError("Backend termination is not confirmed graceful; restart withheld")
             from docker_volume_stop_unadmitted import _read_terminal_process_receipt
             drained_raw, drained = _read_terminal_process_receipt(stopped, control)
+            if capture_native:
+                from docker_volume_native_terminal_stop import validate_drain as validate_native_terminal_drain
+                validate_native_terminal_drain(native_terminal_capture, drained)
+            if capture_prelaunch_failure:
+                from docker_volume_prelaunch_failure_stop import validate_drain as validate_prelaunch_failure_drain
+                validate_prelaunch_failure_drain(prelaunch_failure_capture, drained)
             if saved_authoring:
                 _saved_authoring_validate_drain(authoring_probe, drained)
                 _saved_authoring_verify_retained_history(saved_authoring, state)
@@ -8076,6 +8307,18 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "process_receipt_sha256": hashlib.sha256(drained_raw).hexdigest(),
                 "process_receipt": drained,
             })
+            if capture_prelaunch_failure:
+                from docker_volume_prelaunch_failure_stop import verify_stopped_locked
+                postdrain = verify_stopped_locked(
+                    ids["backend"], stopped.get("Image"),
+                    prelaunch_failure_capture["store_binding"]["run_id"],
+                    prelaunch_failure_capture["store_binding"]["store_id"],
+                    prelaunch_failure_capture["store_binding"],
+                )
+                postdrain_raw = canonical(postdrain) + b"\n"
+                control.write_bytes(operation["root"] + "/prelaunch-failure-postdrain-lock.json", postdrain_raw)
+                operation["receipt"]["prelaunch_failure_postdrain_sha256"] = hashlib.sha256(postdrain_raw).hexdigest()
+                operation["receipt"]["offline_prelaunch_preservation_only"] = True
             _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
             if stop_after_drain:
                 stopped_services = {service: json.loads(docker_text("inspect", identifier))[0]
@@ -8115,9 +8358,49 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
+        prelaunch_failure_archive = None
+        prelaunch_failure_store = None
+        if prelaunch_failure_pin is not None:
+            from docker_volume_prelaunch_failure_stop import validate_fresh as validate_prelaunch_failure_fresh
+            prelaunch_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "prelaunch-failure retained sessions",
+            )
+            prelaunch_failure_store = storage.validate_path(
+                prelaunch_state / "runs" / "docker-all" / "session-store", prelaunch_state,
+                "prelaunch-failure retained accepted store",
+            )
+            if _read_cancelled_activation_bytes(control, "active", optional=True) is not None:
+                raise BuildControlError("Fresh-state prelaunch archival refuses an active activation owner")
+            prelaunch_failure_archive = validate_prelaunch_failure_fresh(
+                control, stop_attempt=prelaunch_failure_pin[0], stop_sha256=prelaunch_failure_pin[1],
+                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                actual=actual, store_root=prelaunch_failure_store,
+            )
+        empty_api_abort_archive = None
+        if empty_api_abort_pin is not None:
+            from docker_volume_empty_api_abort import validate_fresh as validate_empty_api_abort_fresh
+            empty_api_abort_archive = validate_empty_api_abort_fresh(
+                control, args, selected, actual, empty_api_abort_pin,
+            )
+        native_terminal_archive = None
+        if native_terminal_pin is not None:
+            from docker_volume_native_terminal_stop import validate_fresh as validate_native_terminal_fresh
+            native_terminal_state = storage.validate_path(
+                Path(previous["state_root"]), layout["runtime_root"], "native terminal retained sessions",
+            )
+            native_terminal_store = storage.validate_path(
+                native_terminal_state / "runs" / "docker-all" / "session-store", native_terminal_state,
+                "native terminal retained accepted store",
+            )
+            native_terminal_archive = validate_native_terminal_fresh(
+                control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                actual=actual, store_root=native_terminal_store,
+            )
         pre_activation_stop = None
         if (document["services"]["backend"]["environment"].get("FULLMAG_STARTUP_ENABLED") == "1"
-                and preparation_abort is None):
+                and preparation_abort is None and native_terminal_pin is None
+                and prelaunch_failure_pin is None):
             stop_path = "verification/stop-failed-" + ids["backend"] + ".json"
             stop = control.read(stop_path)
             failure = stop.get("failure_receipt", {}).get("receipt", {})
@@ -8198,7 +8481,11 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         # marker and only lets that helper release its own technical lease.
         from docker_volume_activation_reconcile import reconcile_unknown_activation
         offline_attempt = getattr(args, "offline_reconciliation", None)
-        if offline_attempt is not None:
+        if prelaunch_failure_pin is not None:
+            if offline_attempt is not None or getattr(args, "script", None) is not None:
+                raise BuildControlError("Prelaunch failure archival cannot reconcile or replay an old operation")
+            reconciliation = None
+        elif offline_attempt is not None:
             if fresh_state or getattr(args, "script", None) is not None:
                 raise BuildControlError("Offline reconciliation must preserve the session and cannot replay a script")
             from docker_volume_offline_reconcile import validate_for_recreate
@@ -8250,16 +8537,26 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 "accepted_reattach_metadata": accepted_pins,
             }
         terminal_observation = None
-        if observation_path:
+        if observation_path or observation_stop:
             if accepted_reattach_context or reconciliation is not None:
                 raise BuildControlError("Terminal observation cannot combine with accepted run reattach")
-            from docker_volume_terminal_observation import prepare_context
-            terminal_observation = prepare_context(
-                control, proof_relative=observation_path, proof_sha256=observation_sha,
-                store_root=state / "runs" / "docker-all" / "session-store",
-                source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
-                actual=actual,
+            from docker_volume_terminal_observation import prepare_captured_context, prepare_context
+            store_root = storage.validate_path(
+                state / "runs" / "docker-all" / "session-store", state, "retained accepted session store",
             )
+            observation_context = {
+                "store_root": store_root, "source_root": str(selected), "attempt": args.attempt,
+                "config_sha256": args.config_sha256, "actual": actual,
+            }
+            if observation_stop:
+                terminal_observation = prepare_captured_context(
+                    control, stop_attempt=observation_stop, **observation_context,
+                )
+            else:
+                terminal_observation = prepare_context(
+                    control, proof_relative=observation_path, proof_sha256=observation_sha,
+                    **observation_context,
+                )
         native_recovery_context = dict(recovery_context)
         post_build_generation = None
         # A validated pre-API cancellation pins byte-identical native config;
@@ -8436,6 +8733,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 helper_ids.append(helper_document["Id"])
         recreate_inputs = {"attempt": args.attempt, "config_sha256": args.config_sha256,
                            **operator_probe_record}
+        if prelaunch_failure_pin is not None:
+            recreate_inputs["prelaunch_failure_stop"] = {
+                "attempt": prelaunch_failure_pin[0], "terminal_sha256": prelaunch_failure_pin[1],
+            }
         if helper_source_binding is not None:
             recreate_inputs["helper_source"] = helper_source_binding
         if offline_attempt is not None:
@@ -8512,6 +8813,29 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                     if service == "backend" and observed.get("State", {}).get("Running"):
                         raise BuildControlError("Fresh session requires the backend stopped")
                     actual[service] = observed
+            if prelaunch_failure_pin is not None:
+                leased_prelaunch_archive = validate_prelaunch_failure_fresh(
+                    control, stop_attempt=prelaunch_failure_pin[0], stop_sha256=prelaunch_failure_pin[1],
+                    source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                    actual=actual, store_root=prelaunch_failure_store,
+                )
+                if leased_prelaunch_archive != prelaunch_failure_archive:
+                    raise BuildControlError("Prelaunch failure offline-preservation proof changed under recreation lease")
+                operation["receipt"]["prelaunch_failure_fresh_archive"] = leased_prelaunch_archive
+            if empty_api_abort_pin is not None:
+                leased_empty_api_abort = validate_empty_api_abort_fresh(control, args, selected, actual, empty_api_abort_pin)
+                if leased_empty_api_abort != empty_api_abort_archive:
+                    raise BuildControlError("Empty API-abort fresh-state proof changed under recreation lease")
+                operation["receipt"]["empty_api_abort_fresh_archive"] = leased_empty_api_abort
+            if native_terminal_pin is not None:
+                leased_native_terminal = validate_native_terminal_fresh(
+                    control, stop_attempt=native_terminal_pin[0], stop_sha256=native_terminal_pin[1],
+                    source_root=str(selected), attempt=args.attempt, config_sha256=args.config_sha256,
+                    actual=actual, store_root=native_terminal_store,
+                )
+                if leased_native_terminal != native_terminal_archive:
+                    raise BuildControlError("Native terminal fresh-state proof changed under recreation lease")
+                operation["receipt"]["native_terminal_fresh_archive"] = leased_native_terminal
             if reconciliation is not None:
                 operation["receipt"]["activation_reconciliation"] = {
                     key: reconciliation[key]
@@ -8577,8 +8901,9 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 if terminal_observation is not None:
                     from docker_volume_terminal_observation import revalidate_context
                     preowner_successor = revalidate_context(
-                        control, terminal_observation, source_root=str(selected),
-                        attempt=args.attempt, config_sha256=args.config_sha256, actual=leased_actual,
+                        control, terminal_observation, store_root=observation_context["store_root"],
+                        source_root=str(selected), attempt=args.attempt,
+                        config_sha256=args.config_sha256, actual=leased_actual,
                     )
                     if preowner_successor is not None:
                         context_key = ("terminal_diagnostic_successor"

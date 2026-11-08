@@ -27,6 +27,7 @@ import re
 from docker_build_control import (
     BuildControl,
     BuildControlError,
+    MAX_DOCUMENT_BYTES,
     bounded_capture,
     canonical,
     control_read_script,
@@ -182,6 +183,11 @@ def _control_bytes(
     reads the control volume through a host filesystem path.
     """
 
+    if type(maximum) is not int or maximum <= 0:
+        raise _fail("control record byte budget must be a positive integer")
+    # Callers may describe a larger aggregate proof budget; each control read
+    # remains capped by the existing image-owned transport limit, in fixtures too.
+    maximum = min(maximum, MAX_DOCUMENT_BYTES)
     relative = _relative_path(relative, "control record")
     read_raw = getattr(control, "read_raw", None)
     if callable(read_raw):

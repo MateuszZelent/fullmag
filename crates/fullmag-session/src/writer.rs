@@ -421,7 +421,7 @@ fn nearest_existing_ancestor(root: &Path) -> Result<PathBuf> {
     }
 }
 
-fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
+pub(crate) fn classify_local_filesystem(root: &Path) -> Result<LocalFilesystemKind> {
     let existing = nearest_existing_ancestor(root)?;
     #[cfg(target_os = "linux")]
     {

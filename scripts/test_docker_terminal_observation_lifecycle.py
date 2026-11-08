@@ -29,24 +29,18 @@ class Transport(unittest.TestCase):
         import test_docker_terminal_observation_producer as original
         original.ProducerTests.setUpClass()
         self.proof = copy.deepcopy(original.ProducerTests.expected)
-        raw = producer.canonical(self.proof) + b"\n"
-        digest = producer.sha(raw)
-        self.parent = self.directory / "terminal-observation" / digest
-        self.parent.mkdir(parents=True)
-        (self.parent / "proof.json").write_bytes(raw)
-        request = {"schema": "fullmag.terminal-observation-request.v1",
-                   "proof_path": f"terminal-observation/{digest}/proof.json", "proof_sha256": digest}
-        request_raw = producer.canonical(request) + b"\n"
-        (self.parent / "request.json").write_bytes(request_raw)
-        self.env = {service.TERMINAL_OBSERVATION_REQUEST_ENV: f"terminal-observation/{digest}/request.json",
-                    service.TERMINAL_OBSERVATION_DIGEST_ENV: producer.sha(request_raw),
-                    "FULLMAG_STARTUP_ENABLED": "0",
-                    "FULLMAG_RUNTIME_PROVENANCE": str(service.ACCEPTED_REATTACH_PROVENANCE),
-                    "FULLMAG_RUNTIME_IMAGE_ID": "sha256:" + "d" * 64}
+        control = self.directory / "control"
+        source_preflight = control / original.BASE / "terminal-session-preflight.json"
+        source_preflight.parent.mkdir(parents=True)
+        source_preflight.write_bytes(original.ProducerTests.controls[original.BASE + "terminal-session-preflight.json"])
+        self.replace("BUILD_CONTROL_ROOT", control)
+        self.write_proof(self.proof)
+        self.env.update(FULLMAG_STARTUP_ENABLED="0",
+                        FULLMAG_RUNTIME_PROVENANCE=str(service.ACCEPTED_REATTACH_PROVENANCE),
+                        FULLMAG_RUNTIME_IMAGE_ID="sha256:" + "d" * 64)
         config = self.directory / "native.json"
         config.write_bytes(b'{"fixture":"target-native-config"}\n')
         self.paths = types.SimpleNamespace(state_root=self.directory, config=config)
-        self.patches = []
         self.replace("process_environment", mock.Mock(side_effect=lambda *a, **k: dict(self.env)))
         self.replace("_read_json", mock.Mock(return_value={
             "schema": "fullmag.docker-all-image.v1", "state": "succeeded", "commit": "c" * 40,
@@ -57,6 +51,21 @@ class Transport(unittest.TestCase):
             "mutations_applied": False, "solve_replayed": False}))
         self.replace("_http_json", mock.Mock(side_effect=AssertionError("HTTP forbidden in fixture unless explicitly stubbed")))
 
+    def write_proof(self, proof):
+        raw = producer.canonical(proof) + b"\n"
+        digest = producer.sha(raw)
+        self.parent = self.directory / "terminal-observation" / digest
+        self.parent.mkdir(parents=True)
+        (self.parent / "proof.json").write_bytes(raw)
+        request = {"schema": "fullmag.terminal-observation-request.v1",
+                   "proof_path": f"terminal-observation/{digest}/proof.json", "proof_sha256": digest}
+        request_raw = producer.canonical(request) + b"\n"
+        (self.parent / "request.json").write_bytes(request_raw)
+        if not hasattr(self, "env"):
+            self.env = {}
+        self.env.update({service.TERMINAL_OBSERVATION_REQUEST_ENV: f"terminal-observation/{digest}/request.json",
+                         service.TERMINAL_OBSERVATION_DIGEST_ENV: producer.sha(request_raw)})
+
     def replace(self, name, value):
         patch = mock.patch.object(service, name, value)
         result = patch.start()
@@ -65,6 +74,21 @@ class Transport(unittest.TestCase):
 
     def preflight(self):
         return service.terminal_observation_preflight(self.paths)
+
+    def test_compute_proof_uses_the_same_native_launch_fence(self):
+        import test_docker_terminal_observation_producer as original
+        compute = original.ProducerTests()
+        compute.setUp()
+        compute.use_compute_intent()
+        proof = compute.build()
+        self.write_proof(proof)
+
+        preflight = self.preflight()
+        self.assertEqual(preflight["proof"], proof)
+        with service.terminal_observation_api_input(self.paths, terminal_preflight=preflight) as (_, stream, launch):
+            self.assertEqual(json.load(stream)["proof_sha256"], preflight["proof_sha256"])
+            self.assertEqual(launch["binding"]["terminal_evidence_sha256"], proof["terminal_evidence_sha256"])
+        self.native.assert_called_once()
 
     def test_target_launch_preserves_historical_proof_and_uses_fresh_config(self):
         before = (self.parent / "proof.json").read_bytes()
@@ -285,11 +309,76 @@ class HostWrapper(unittest.TestCase):
         self.assertNotIn("native_restart_metadata", context)
 
 
+    def test_captured_stop_produces_exact_private_recreate_input(self):
+        import test_docker_terminal_observation_producer as original
+        import docker_volume_accepted_reattach as existing
+        original.ProducerTests.setUpClass()
+        case = original.ProducerTests()
+        case.setUp()
+        case.use_compute_intent()
+        scope, base = case.scope, original.BASE
+        preflight = producer.decode(case.control[base + "terminal-session-preflight.json"])
+        drain = producer.decode(case.control[base + "backend-drain.json"])
+        capture = producer.capture_binding(case.store.__getitem__, preflight, {
+            "schema_version": "runtime_service_terminal_run_evidence.v1",
+            "run_id": original.RUN, "terminal_evidence_sha256": "b" * 64,
+            "mutations_applied": False, "solve_replayed": False,
+        }, "a" * 64, drain["process_receipt"]["service_owner"])
+        native = producer.canonical(capture) + b"\n"
+        actual = copy.deepcopy(self.actual)
+        actual["backend"]["Id"] = drain["backend_container_id"]
+        stopped = producer.canonical(actual) + b"\n"
+        for name in ("terminal.json", "receipt.json"):
+            def update(value):
+                value.update(idle_backend_stopped=True, idle_stop_containers_sha256=producer.sha(stopped),
+                             terminal_native_observation_sha256=producer.sha(native))
+                value["inputs"]["attempt"] = self.old
+            case.mutate(base + name, update)
+        case.control[base + "idle-stop-containers.json"] = stopped
+        case.control[base + "idle-preflight.json"] = producer.canonical({
+            "status": "ok", "active_session": True,
+        }) + b"\n"
+        case.control[base + "terminal-native-observation.json"] = native
+        control = types.SimpleNamespace(project=scope["compose_project"], volume=scope["control_volume"])
+
+        def read(_, relative, optional=False, **kwargs):
+            return case.control.get(relative) if optional else case.control[relative]
+
+        with mock.patch.object(existing, "_control_bytes", side_effect=read), \
+             mock.patch.object(existing, "_read_store_regular", side_effect=lambda root, relative, *a, **k: case.store[relative]), \
+             mock.patch.object(producer, "_publish_private_records") as publish:
+            context = producer.prepare_captured_context(
+                control, stop_attempt=original.ITERATION, store_root=Path("/fixture"),
+                source_root=scope["source_root"], attempt=self.old, config_sha256="a" * 64, actual=actual,
+            )
+
+        self.assertEqual(context["metadata"]["stop_attempt"], original.ITERATION)
+        publish.assert_called_once()
+        proof_raw = publish.call_args.args[1][0][1]
+        self.assertEqual(producer.decode(proof_raw)["schema"], producer.COMPUTE_PROOF_SCHEMA)
+        self.assertEqual(context["metadata"]["proof_sha256"], producer.sha(proof_raw))
+
+
 class LeasedRevalidation(unittest.TestCase):
     setUp = EmptyStop.setUp
 
-    def context(self):
-        proof_raw = producer.canonical({"fixture": "immutable source proof"}) + b"\n"
+    def context(self, schema=producer.PROOF_SCHEMA):
+        run_id = "run-fixture"
+        self.store_records = {
+            f"runs/{run_id}/run_intent.json": b"immutable intent",
+            f"runs/{run_id}/run_catalog.json": b"terminal catalog",
+        }
+        proof = {
+            "schema": schema,
+            "run_id": run_id,
+            "intent_sha256": producer.sha(self.store_records[f"runs/{run_id}/run_intent.json"]),
+            "catalog_sha256": producer.sha(self.store_records[f"runs/{run_id}/run_catalog.json"]),
+        }
+        if schema == producer.PROOF_SCHEMA:
+            release = b"manual release grant"
+            self.store_records[f"runs/{run_id}/start_release.json"] = release
+            proof["start_release_sha256"] = producer.sha(release)
+        proof_raw = producer.canonical(proof) + b"\n"
         proof_sha = producer.sha(proof_raw)
         relative = "terminal-observation/" + proof_sha
         request_raw = producer.canonical({"schema": "fullmag.terminal-observation-request.v1",
@@ -311,10 +400,13 @@ class LeasedRevalidation(unittest.TestCase):
         before = copy.deepcopy(self.records)
         control = types.SimpleNamespace(project="fixture", volume="fixture-volume")
         with mock.patch.object(existing, "_control_bytes", side_effect=read), \
+             mock.patch.object(existing, "_read_store_regular",
+                               side_effect=lambda root, relative, *a, **k: self.store_records[relative]), \
              mock.patch.object(producer, "_publish_private_records") as publish:
             try:
-                producer.revalidate_context(control, context, source_root="/fixture/source",
-                    attempt=self.old, config_sha256="d" * 64, actual=self.actual)
+                producer.revalidate_context(control, context, store_root=Path("/fixture"),
+                    source_root="/fixture/source", attempt=self.old,
+                    config_sha256="d" * 64, actual=self.actual)
             finally:
                 self.assertEqual(self.records, before)
                 publish.assert_not_called()
@@ -324,6 +416,17 @@ class LeasedRevalidation(unittest.TestCase):
         context = self.context()
         self.records["iteration/current.json"] = b'{"fixture":"new operation pointer"}\n'
         self.execute(context)
+
+    def test_changed_run_records_are_rejected_before_mutation(self):
+        for schema in (producer.PROOF_SCHEMA, producer.COMPUTE_PROOF_SCHEMA):
+            context = self.context(schema)
+            self.execute(context)
+            for relative, original in list(self.store_records.items()):
+                with self.subTest(schema=schema, relative=relative):
+                    self.store_records[relative] = b"changed after preparing the proof"
+                    with self.assertRaisesRegex(ValueError, "changed under recreate lease"):
+                        self.execute(context)
+                    self.store_records[relative] = original
 
     def test_restart_then_stop_with_same_ids_is_rejected_before_mutation(self):
         context = self.context()

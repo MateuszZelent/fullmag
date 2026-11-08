@@ -579,12 +579,21 @@ export class ResourceRuntimeStore<TData = unknown> {
         resolveRevision,
         resourceKey,
       };
-      entry.snapshot = {
-        ...markResourceLoading(entry.snapshot, externalRevision),
-        settledExternalRevision: entry.snapshot.settledExternalRevision,
-        settledResourceKey: entry.snapshot.settledResourceKey,
-      };
-      this.notify(entry);
+      const loadingSnapshot = markResourceLoading(entry.snapshot, externalRevision);
+      if (
+        entry.snapshot.data !== loadingSnapshot.data ||
+        entry.snapshot.error !== loadingSnapshot.error ||
+        entry.snapshot.refreshError !== loadingSnapshot.refreshError ||
+        entry.snapshot.revision !== loadingSnapshot.revision ||
+        entry.snapshot.status !== loadingSnapshot.status
+      ) {
+        entry.snapshot = {
+          ...loadingSnapshot,
+          settledExternalRevision: entry.snapshot.settledExternalRevision,
+          settledResourceKey: entry.snapshot.settledResourceKey,
+        };
+        this.notify(entry);
+      }
       return entry.inflight;
     }
 
@@ -795,7 +804,27 @@ export class ResourceRuntimeStore<TData = unknown> {
 
   private notify<TEntryData>(entry: ResourceRuntimeEntry<TEntryData>): void {
     for (const listener of entry.listeners) {
-      listener();
+      try {
+        listener();
+      } catch (error) {
+        try {
+          const resourceKey = entry.inflightRequest?.resourceKey
+            ?? entry.pendingRequest?.resourceKey
+            ?? entry.snapshot.settledResourceKey;
+          if (error instanceof Error && typeof resourceKey === "string" && resourceKey) {
+            const boundedKey = resourceKey.length > 160
+              ? `${resourceKey.slice(0, 48)}…${resourceKey.slice(-111)}`
+              : resourceKey;
+            const suffix = `\nResourceRuntimeStore resourceKey=${boundedKey}`;
+            if (typeof error.stack === "string" && !error.stack.includes(suffix)) {
+              error.stack += suffix;
+            }
+          }
+        } catch {
+          // Diagnostic enrichment must not replace the original subscriber error.
+        }
+        throw error;
+      }
     }
   }
 

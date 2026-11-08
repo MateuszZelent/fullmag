@@ -12,6 +12,8 @@ import re
 from typing import Callable, Mapping
 
 PROOF_SCHEMA = "fullmag.development-terminal-observation-proof.v1"
+COMPUTE_PROOF_SCHEMA = "fullmag.development-terminal-observation-proof.v2"
+NATIVE_CAPTURE_SCHEMA = "fullmag.terminal-native-capture.v1"
 Read = Callable[[str], bytes]
 
 
@@ -34,6 +36,8 @@ def diagnostic_terminal_stop_probe(control, previous, backend):
     script = r'''import hashlib,json,os,pathlib,sys,urllib.request
 sys.path.insert(0,'/opt/fullmag')
 import runtime_service as service
+import entrypoint
+entrypoint._configure_device_access()
 paths=service.canonical_paths()
 sha=lambda raw:hashlib.sha256(raw).hexdigest()
 def read(path,label,maximum=1048576): return service._bounded_regular(path,label,maximum)
@@ -225,9 +229,322 @@ def owner_identity(owner: Mapping) -> dict:
             "children": sorted((child["role"], child["pid"]) for child in children)}
 
 
+def _validate_terminal_observation_annotation(read_control: Read, annotation: object,
+                                             scope: Mapping[str, str],
+                                             ready_owner: Mapping) -> None:
+    """Validate the producer's archival runtime receipt against its own CAS files.
+
+    The receipt describes an earlier terminal observation restore, so its run
+    and session identities intentionally need not equal the run being captured
+    now. The current process owner and native terminal evidence remain the
+    authority for this capture.
+    """
+    annotation_fields = {
+        "schema", "api_instance_id", "run_id", "session_id", "proof_sha256",
+        "launch_sha256", "installed_relative", "installed_sha256",
+        "target_build_id", "target_source_sha256", "target_image_id",
+    }
+    require(isinstance(annotation, dict) and set(annotation) == annotation_fields
+            and annotation.get("schema") == "fullmag.terminal-observation-runtime.v1",
+            "historical terminal observation annotation shape differs")
+
+    api_id = annotation.get("api_instance_id")
+    require(isinstance(api_id, str) and re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        api_id) is not None, "historical terminal observation API identity is invalid")
+    run_id = portable(annotation.get("run_id"))
+    session_id = portable(annotation.get("session_id"))
+    proof_sha = digest(annotation.get("proof_sha256"))
+    launch_sha = digest(annotation.get("launch_sha256"))
+    installed_sha = digest(annotation.get("installed_sha256"))
+    target_build_id = annotation.get("target_build_id")
+    target_source_sha = digest(annotation.get("target_source_sha256"))
+    target_image_id = annotation.get("target_image_id")
+    require(isinstance(target_build_id, str)
+            and re.fullmatch(r"[0-9a-f]{40}", target_build_id) is not None
+            and isinstance(target_image_id, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", target_image_id) is not None
+            and target_build_id == ready_owner.get("build_commit")
+            and target_source_sha == ready_owner.get("build_snapshot")
+            and target_image_id == scope.get("image_id"),
+            "historical terminal observation target differs from the drained owner/image")
+
+    relative = f"terminal-observation/{proof_sha}/installed-{api_id}.json"
+    require(annotation.get("installed_relative") == relative,
+            "historical terminal observation installed path differs")
+    archive = "runtime-control/terminal-observation/" + proof_sha + "/"
+    proof_raw, prior_proof = managed(read_control, archive + "proof.json")
+    require(sha(proof_raw) == proof_sha
+            and prior_proof.get("schema") in (PROOF_SCHEMA, COMPUTE_PROOF_SCHEMA),
+            "historical terminal observation proof CAS/schema differs")
+    prior_run = portable(prior_proof.get("run_id"))
+    prior_session = portable(prior_proof.get("session_id"))
+    epoch = prior_proof.get("session_epoch")
+    scene_revision = prior_proof.get("scene_revision")
+    require(prior_run == run_id and prior_session == session_id
+            and type(epoch) is int and epoch > 0
+            and type(scene_revision) is int and scene_revision >= 0
+            and prior_proof.get("compose_project") == scope.get("compose_project")
+            and prior_proof.get("control_volume") == scope.get("control_volume")
+            and prior_proof.get("source_root") == scope.get("source_root"),
+            "historical terminal observation proof identity/scope differs")
+    source_image = prior_proof.get("image_id")
+    source_config = digest(prior_proof.get("config_sha256"))
+    source_native_config = digest(prior_proof.get("native_config_sha256"))
+    terminal_evidence = digest(prior_proof.get("terminal_evidence_sha256"))
+    require(isinstance(source_image, str)
+            and re.fullmatch(r"sha256:[0-9a-f]{64}", source_image) is not None,
+            "historical terminal observation source image is invalid")
+
+    launch_relative = archive + "launch-" + launch_sha + ".json"
+    launch_raw, launch = managed(read_control, launch_relative)
+    launch_fields = {
+        "schema", "source_proof_sha256", "source_native_config_sha256", "target_build_id",
+        "target_source_sha256", "target_image_id", "native_config_sha256",
+        "terminal_evidence_sha256",
+    }
+    require(set(launch) == launch_fields,
+            "historical terminal observation launch fields differ")
+    launch_native_config = digest(launch.get("native_config_sha256"))
+    expected_launch = {
+        "schema": "fullmag.terminal-observation-launch.v1",
+        "source_proof_sha256": proof_sha,
+        "source_native_config_sha256": source_native_config,
+        "target_build_id": target_build_id,
+        "target_source_sha256": target_source_sha,
+        "target_image_id": target_image_id,
+        "native_config_sha256": launch_native_config,
+        "terminal_evidence_sha256": terminal_evidence,
+    }
+    require(sha(launch_raw) == launch_sha and launch == expected_launch,
+            "historical terminal observation launch binding differs")
+
+    installed_raw, installed = managed(read_control, "runtime-control/" + relative)
+    installed_fields = {
+        "schema", "api_instance_id", "run_id", "session_id", "session_epoch",
+        "scene_revision", "terminal_outcome", "proof_sha256", "launch_sha256",
+        "source_image_id", "source_config_sha256", "target_build_id",
+        "target_source_sha256", "target_image_id", "native_config_sha256",
+        "terminal_evidence_sha256",
+    }
+    require(set(installed) == installed_fields
+            and installed.get("terminal_outcome") in {"failed", "completed"},
+            "historical terminal observation installed fields/outcome differ")
+    expected_installed = {
+        "schema": "fullmag.terminal-observation-restored.v1",
+        "api_instance_id": api_id,
+        "run_id": prior_run,
+        "session_id": prior_session,
+        "session_epoch": epoch,
+        "scene_revision": scene_revision,
+        "terminal_outcome": installed["terminal_outcome"],
+        "proof_sha256": proof_sha,
+        "launch_sha256": launch_sha,
+        "source_image_id": source_image,
+        "source_config_sha256": source_config,
+        "target_build_id": target_build_id,
+        "target_source_sha256": target_source_sha,
+        "target_image_id": target_image_id,
+        "native_config_sha256": launch_native_config,
+        "terminal_evidence_sha256": terminal_evidence,
+    }
+    require(sha(installed_raw) == installed_sha and installed == expected_installed,
+            "historical terminal observation installed receipt differs")
+
+
+def _compute_proof_binding(intent: Mapping, live: Mapping, command: Mapping) -> dict:
+    """Pin an automatically scheduled HTTP Compute to its immutable receipt."""
+    policy = intent["specification"]["parameters"].get("fullmag.accepted_run_start")
+    require(policy is None or policy == {
+        "schema_version": "accepted_run_start_policy.v1", "mode": "automatic",
+    }, "direct Compute does not have an automatic Start policy")
+    receipt = live.get("request_receipt")
+    require(isinstance(receipt, dict), "direct Compute has no immutable request receipt")
+    kind = command.get("kind")
+    command_id = portable(receipt.get("command_id"))
+    key_sha = digest(receipt.get("key_sha256"))
+    digest(receipt.get("request_sha256"))
+    require(kind in ("solve", "run", "relax") and receipt.get("command_kind") == kind
+            and live.get("startup_source_sha256") is None
+            and live.get("command_id") == command_id == command.get("command_id")
+            and live.get("request_idempotency_key") == key_sha
+            and intent.get("idempotency_key") == "live-http-v2-" + key_sha
+            and receipt.get("client_intent_id") == command.get("client_intent_id")
+            and isinstance(receipt.get("requested_target"), dict)
+            and receipt["requested_target"] == command.get("target"),
+            "direct Compute receipt differs from its immutable command")
+    return {"command_id": command_id, "receipt_sha256": sha(canonical(receipt))}
+
+
+def _terminal_run_binding(read_store: Read, preflight: Mapping, run_id: str) -> dict:
+    require(preflight.get("schema") == "fullmag.docker-terminal-session-drain-preflight.v1",
+            "capture requires a terminal session drain preflight")
+    run_id = portable(run_id)
+    public_run = preflight.get("run", {})
+    public_status = public_run.get("status")
+    session_id = portable(preflight.get("session_id"))
+    require(public_run.get("run_id") == run_id and public_status in ("failed", "completed")
+            and public_run.get("session_id") == session_id, "preflight does not identify a completed or failed run")
+    relative = f"runs/{run_id}/"
+    intent_raw = read_store(relative + "run_intent.json")
+    intent = decode(intent_raw)
+    require(intent.get("schema_version") == "run_intent.v1" and intent.get("run_id") == run_id,
+            "accepted intent identity differs")
+    spec = intent.get("specification", {})
+    require(spec.get("run_id") == run_id, "specification run differs")
+    snapshot, live = spec.get("snapshot", {}), spec.get("parameters", {}).get("live_workspace", {})
+    epoch = live.get("session_epoch")
+    require(type(epoch) is int and epoch > 0
+            and live.get("session_id") == session_id
+            and live.get("api_instance_id") == preflight.get("api_instance_id")
+            and preflight.get("request_scope_epoch") == f"{live['api_instance_id']}:{epoch}",
+            "accepted live identity differs")
+    scene_revision = live.get("scene_revision")
+    require(type(scene_revision) is int and scene_revision >= 0
+            and snapshot.get("definition_revision") == scene_revision,
+            "accepted scene revision differs")
+    command = live.get("command")
+    require(isinstance(command, dict), "immutable live command is missing")
+    catalog_raw = read_store(relative + "run_catalog.json")
+    catalog = decode(catalog_raw)
+    tasks = catalog.get("tasks")
+    require(catalog.get("schema_version") == "run_catalog.v1" and catalog.get("run_id") == run_id
+            and type(catalog.get("revision")) is int and catalog["revision"] > 0
+            and isinstance(tasks, list) and tasks, "native catalog is incomplete")
+    require(all(isinstance(task, dict) and task.get("lifecycle") in {
+                    "succeeded", "failed", "cancelled", "interrupted"}
+                for task in tasks), "native catalog is not terminal")
+    all_succeeded = all(task.get("lifecycle") == "succeeded" for task in tasks)
+    any_failed = any(task.get("lifecycle") == "failed" for task in tasks)
+    catalog_outcome = "completed" if all_succeeded else "failed" if any_failed else None
+    require(catalog_outcome == public_status,
+            "public run status differs from the terminal catalog outcome")
+    if command.get("kind") == "startup_script":
+        source_id = portable(live.get("request_idempotency_key"))
+        source_sha = digest(live.get("startup_source_sha256"))
+        require(live.get("command_id") == source_id and command == {
+            "kind": "startup_script", "request_id": source_id, "source_sha256": source_sha},
+            "immutable startup command binding differs")
+        release_raw = read_store(relative + "start_release.json")
+        release = decode(release_raw)
+        schema = release.get("schema_version")
+        require((schema == "accepted_run_start_release.v1" and "live_request" not in release
+                 or schema == "accepted_run_start_release.v2" and isinstance(release.get("live_request"), dict))
+                and release.get("run_id") == run_id
+                and release.get("specification_sha256") == intent.get("payload_sha256"),
+                "native Start release differs")
+        source = {"schema": PROOF_SCHEMA, "start_release_sha256": sha(release_raw),
+                  "source_request_id": source_id, "source_sha256": source_sha}
+    else:
+        require(type(preflight.get("scene_revision")) is int
+                and preflight["scene_revision"] == scene_revision,
+                "the editable scene changed after Compute; its newer revision needs a separate restore proof")
+        source = {"schema": COMPUTE_PROOF_SCHEMA, "compute": _compute_proof_binding(intent, live, command)}
+    return {
+        **source,
+        "run_id": run_id, "project_id": portable(snapshot.get("project_id")),
+        "session_id": session_id, "session_epoch": epoch, "scene_revision": scene_revision,
+        "definition_sha256": digest(snapshot.get("definition_sha256")),
+        "intent_sha256": sha(intent_raw), "specification_sha256": digest(intent.get("payload_sha256")),
+        "catalog_sha256": sha(catalog_raw), "catalog_revision": catalog["revision"],
+    }
+
+
+def capture_binding(read_store: Read, preflight: Mapping, evidence: Mapping, native_config_sha256: str,
+                    ready_owner: Mapping) -> dict:
+    run_id = portable(preflight.get("run", {}).get("run_id"))
+    evidence_sha256 = digest(evidence.get("terminal_evidence_sha256"))
+    require(evidence == {
+        "schema_version": "runtime_service_terminal_run_evidence.v1",
+        "run_id": run_id, "terminal_evidence_sha256": evidence_sha256,
+        "mutations_applied": False, "solve_replayed": False,
+    } and evidence["mutations_applied"] is False and evidence["solve_replayed"] is False,
+        "native terminal capture differs from the requested run or replayed a mutation")
+    binding = _terminal_run_binding(read_store, preflight, run_id)
+    require(type(preflight.get("scene_revision")) is int
+            and preflight["scene_revision"] == binding["scene_revision"],
+            "the editable scene changed after the run")
+    return {
+        "schema": NATIVE_CAPTURE_SCHEMA, "run_id": run_id,
+        "preflight_sha256": sha(canonical(preflight)),
+        "run_binding_sha256": sha(canonical(binding)),
+        "ready_owner_sha256": sha(canonical(owner_identity(ready_owner))),
+        "native_config_sha256": digest(native_config_sha256),
+        "terminal_evidence_sha256": evidence_sha256,
+    }
+
+
+def capture_terminal_observation(backend_id: str, store_root, preflight: Mapping) -> dict:
+    """Inspect the exact terminal run in the already admitted backend."""
+    from docker_build_control import docker_capture
+    run_id = portable(preflight.get("run", {}).get("run_id"))
+    read_store = _store_reader(store_root)
+    before = _terminal_run_binding(read_store, preflight, run_id)
+    script = r'''import hashlib,json,sys
+sys.path.insert(0, "/opt/fullmag")
+import runtime_service as service
+import entrypoint
+entrypoint._configure_device_access()
+paths = service.canonical_paths()
+def config_digest():
+    return hashlib.sha256(service._bounded_regular(paths.config, "terminal capture native config", 65536)).hexdigest()
+owner = service._service_status(paths)
+service._validate_terminal_owner(owner, state="ready", name="terminal capture owner")
+config = config_digest()
+evidence = service._run_cli(paths, ["runtime", "service-inspect-terminal-run", "--config",
+    str(paths.config), "--config-sha256", config, "--run-id", sys.argv[1]], timeout=30)
+if config != config_digest() or service._owner_fingerprint(owner) != service._owner_fingerprint(service._service_status(paths)):
+    raise RuntimeError("Native terminal capture owner or config changed")
+print(json.dumps({"native_config_sha256": config, "evidence": evidence, "ready_owner": owner}, sort_keys=True))
+'''
+    result = docker_capture("exec", backend_id, "python3", "-I", "-B", "-c", script, run_id, timeout=90)
+    require(len(result.stdout) <= 64 * 1024, "native terminal capture exceeds its bound")
+    observed = decode(result.stdout)
+    require(set(observed) == {"native_config_sha256", "evidence", "ready_owner"}
+            and isinstance(observed["evidence"], dict) and isinstance(observed["ready_owner"], dict)
+            and observed["ready_owner"].get("state") == "ready", "native terminal capture result shape differs")
+    capture = capture_binding(read_store, preflight, observed["evidence"],
+                              observed["native_config_sha256"], observed["ready_owner"])
+    require(capture["run_binding_sha256"] == sha(canonical(before)),
+            "terminal run changed during native capture")
+    return capture
+
+
+def _store_reader(store_root):
+    from docker_volume_accepted_reattach import _read_store_regular
+    return lambda relative: _read_store_regular(
+        store_root, relative, "terminal observation retained record", maximum=8 * 1024 * 1024,
+    )
+
+
+def build_captured_proof(read_control: Read, read_store: Read, *, iteration: str, scope: Mapping[str, str]) -> dict:
+    require(isinstance(iteration, str) and re.fullmatch("[0-9a-f]{32}", iteration),
+            "invalid terminal stop attempt")
+    root = f"iteration/attempts/{iteration}/"
+    _, stop = managed(read_control, root + "terminal.json")
+    require(stop.get("idle_backend_stopped") is True, "terminal native capture requires a completed stop-only drain")
+    raw, capture = managed(read_control, root + "terminal-native-observation.json")
+    require(sha(raw) == stop.get("terminal_native_observation_sha256")
+            and set(capture) == {"schema", "run_id", "preflight_sha256", "run_binding_sha256",
+                                 "native_config_sha256", "terminal_evidence_sha256", "ready_owner_sha256"}
+            and capture.get("schema") == NATIVE_CAPTURE_SCHEMA
+            and capture.get("preflight_sha256") == stop.get("terminal_session_preflight_sha256"),
+            "native capture is not pinned by the exact stopped receipt")
+    _, drain = managed(read_control, root + "backend-drain.json")
+    owner = drain.get("process_receipt", {}).get("service_owner", {})
+    require(sha(canonical(owner_identity(owner))) == digest(capture["ready_owner_sha256"]),
+            "native capture owner differs from the authenticated drain")
+    return build_proof(
+        read_control, read_store, iteration=iteration, run_id=capture["run_id"], scope=scope,
+        native_config_sha256=capture["native_config_sha256"],
+        terminal_evidence_sha256=capture["terminal_evidence_sha256"],
+        captured_binding_sha256=capture["run_binding_sha256"],
+    )
+
+
 def build_proof(read_control: Read, read_store: Read, *, iteration: str,
                 run_id: str, scope: Mapping[str, str], native_config_sha256: str,
-                terminal_evidence_sha256: str) -> dict:
+                terminal_evidence_sha256: str, captured_binding_sha256: str | None = None) -> dict:
     """Pure assembly only; readers must provide bounded, no-symlink bytes.
 
     Both native pins must come from the canonical native terminal inspection,
@@ -296,10 +613,17 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
     process = drain.get("process_receipt", {})
     process_fields = {"schema", "state", "api_pid", "api_exit_code", "accepted_store",
                       "bootstrap", "qualification", "service_owner", "terminal_service_owner"}
-    annotations = {"container_recovery", "container_recovery_authorization"}
-    require(set(process) in (process_fields, process_fields | annotations),
+    recovery_annotations = {"container_recovery", "container_recovery_authorization"}
+    terminal_annotation = {"terminal_observation"}
+    supported_process_shapes = (
+        process_fields,
+        process_fields | recovery_annotations,
+        process_fields | terminal_annotation,
+        process_fields | recovery_annotations | terminal_annotation,
+    )
+    require(set(process) in supported_process_shapes,
             "native process receipt is partial or unsupported")
-    if annotations <= set(process):
+    if recovery_annotations <= set(process):
         # Historical annotations are not new recovery authority. The current
         # native owner and terminal evidence remain independently fenced below.
         recovered, authorized = process["container_recovery"], process["container_recovery_authorization"]
@@ -334,65 +658,21 @@ def build_proof(read_control: Read, read_store: Read, *, iteration: str,
     archived = decode(ready_raw)
     require(archived.get("state") == "ready" and owner_identity(archived) == owner_identity(ready),
             "immutable Ready owner differs")
+    if "terminal_observation" in process:
+        _validate_terminal_observation_annotation(
+            read_control, process["terminal_observation"], scope, ready)
 
-    relative = f"runs/{run_id}/"
-    intent_raw = read_store(relative + "run_intent.json")
-    intent = decode(intent_raw)
-    require(intent.get("schema_version") == "run_intent.v1" and intent.get("run_id") == run_id,
-            "accepted intent identity differs")
-    spec = intent.get("specification", {})
-    require(spec.get("run_id") == run_id, "specification run differs")
-    snapshot, live = spec.get("snapshot", {}), spec.get("parameters", {}).get("live_workspace", {})
-    epoch = live.get("session_epoch")
-    require(type(epoch) is int and epoch > 0
-            and live.get("session_id") == session_id
-            and live.get("api_instance_id") == preflight.get("api_instance_id")
-            and preflight.get("request_scope_epoch") == f"{live['api_instance_id']}:{epoch}",
-            "accepted live identity differs")
-    scene_revision = live.get("scene_revision")
-    require(type(scene_revision) is int and scene_revision >= 0
-            and snapshot.get("definition_revision") == scene_revision,
-            "accepted scene revision differs")
-    source_id = portable(live.get("request_idempotency_key"))
-    source_sha = digest(live.get("startup_source_sha256"))
-    command = live.get("command", {})
-    require(live.get("command_id") == source_id and command == {
-        "kind": "startup_script", "request_id": source_id, "source_sha256": source_sha},
-        "immutable startup command binding differs")
-    catalog_raw = read_store(relative + "run_catalog.json")
-    catalog = decode(catalog_raw)
-    tasks = catalog.get("tasks")
-    require(catalog.get("schema_version") == "run_catalog.v1" and catalog.get("run_id") == run_id
-            and type(catalog.get("revision")) is int and catalog["revision"] > 0
-            and isinstance(tasks, list) and tasks, "native catalog is incomplete")
-    require(all(isinstance(task, dict) and task.get("lifecycle") in {
-                    "succeeded", "failed", "cancelled", "interrupted"}
-                for task in tasks), "native catalog is not terminal")
-    all_succeeded = all(task.get("lifecycle") == "succeeded" for task in tasks)
-    any_failed = any(task.get("lifecycle") == "failed" for task in tasks)
-    catalog_outcome = "completed" if all_succeeded else "failed" if any_failed else None
-    require(catalog_outcome == public_status,
-            "public run status differs from the terminal catalog outcome")
-    release_raw = read_store(relative + "start_release.json")
-    release = decode(release_raw)
-    require(release.get("schema_version") == "accepted_run_start_release.v1"
-            and release.get("run_id") == run_id
-            and release.get("specification_sha256") == intent.get("payload_sha256"),
-            "native Start release differs")
+    run_binding = _terminal_run_binding(read_store, preflight, run_id)
+    if captured_binding_sha256 is not None:
+        require(sha(canonical(run_binding)) == digest(captured_binding_sha256),
+                "terminal RunIntent or catalog changed after native capture")
     return {
-        "schema": PROOF_SCHEMA, "original_iteration": iteration,
+        **run_binding, "original_iteration": iteration,
         "operation_sha256": sha(operation_raw), "preflight_raw_sha256": sha(preflight_raw),
         "drain_sha256": sha(drain_raw), "ready_owner_sha256": sha(ready_raw),
         **scope, "config_sha256": config_sha,
-        "run_id": run_id, "project_id": portable(snapshot.get("project_id")),
-        "session_id": session_id, "session_epoch": epoch, "scene_revision": scene_revision,
-        "definition_sha256": digest(snapshot.get("definition_sha256")),
-        "intent_sha256": sha(intent_raw), "specification_sha256": digest(intent.get("payload_sha256")),
-        "catalog_sha256": sha(catalog_raw), "catalog_revision": catalog["revision"],
         "native_config_sha256": native_config_sha256,
         "terminal_evidence_sha256": terminal_evidence_sha256,
-        "start_release_sha256": sha(release_raw),
-        "source_request_id": source_id, "source_sha256": source_sha,
     }
 
 
@@ -654,7 +934,7 @@ def _observation_stop(control, read_control, *, source_root, attempt, config_sha
     return *original, None
 
 
-def revalidate_context(control, context, *, source_root, attempt, config_sha256, actual):
+def revalidate_context(control, context, *, store_root, source_root, attempt, config_sha256, actual):
     """Read-only revalidation under the caller's existing recreate lease."""
     from docker_volume_accepted_reattach import _control_bytes
     context = validate_context(context)
@@ -669,7 +949,7 @@ def revalidate_context(control, context, *, source_root, attempt, config_sha256,
             or hashlib.sha256(request_raw).hexdigest() != meta["request_sha256"]):
         raise ValueError("terminal observation private input CAS changed under recreate lease")
     proof = decode(proof_raw)
-    if proof.get("schema") != PROOF_SCHEMA:
+    if proof.get("schema") not in (PROOF_SCHEMA, COMPUTE_PROOF_SCHEMA):
         raise ValueError("terminal observation private proof schema differs")
     expected = {"schema": "fullmag.terminal-observation-request.v1",
                 "proof_path": "terminal-observation/" + meta["proof_sha256"] + "/proof.json",
@@ -681,6 +961,17 @@ def revalidate_context(control, context, *, source_root, attempt, config_sha256,
         attempt=attempt, config_sha256=config_sha256, actual=actual,
         stop_pin=(meta["stop_attempt"], meta["stop_sha256"]),
         proof=proof, proof_sha256=meta["proof_sha256"])
+    relative = f"runs/{portable(proof.get('run_id'))}/"
+    record_pins = {
+        "run_intent.json": "intent_sha256",
+        "run_catalog.json": "catalog_sha256",
+    }
+    if proof["schema"] == PROOF_SCHEMA:
+        record_pins["start_release.json"] = "start_release_sha256"
+    read_store = _store_reader(store_root)
+    for name, pin in record_pins.items():
+        require(sha(read_store(relative + name)) == proof.get(pin),
+                f"terminal observation {name} changed under recreate lease")
     return successor
 
 
@@ -709,9 +1000,38 @@ def prepare_context(control, *, proof_relative, proof_sha256, store_root, source
         terminal_evidence_sha256=proof["terminal_evidence_sha256"])
     if proof != rebuilt:
         raise ValueError("terminal observation proof differs from authoritative original records")
+    return _prepare_proof_context(
+        control, read_control, proof, raw, source_root=source_root,
+        attempt=attempt, config_sha256=config_sha256, actual=actual,
+    )
+
+
+def prepare_captured_context(control, *, stop_attempt, store_root, source_root,
+                             attempt, config_sha256, actual):
+    """Use the exact managed stop as the producer, without external proof files."""
+    from docker_volume_accepted_reattach import _control_bytes
+    read_control = lambda relative: _control_bytes(control, relative, maximum=8 * 1024 * 1024)
+    proof = build_captured_proof(
+        read_control, _store_reader(store_root), iteration=stop_attempt,
+        scope={"compose_project": control.project, "control_volume": control.volume,
+               "source_root": source_root, "image_id": actual["backend"].get("Image")},
+    )
+    raw = canonical(proof) + b"\n"
+    return _prepare_proof_context(
+        control, read_control, proof, raw, source_root=source_root, attempt=attempt,
+        config_sha256=config_sha256, actual=actual,
+        stop_pin=(stop_attempt, proof["operation_sha256"]),
+    )
+
+
+def _prepare_proof_context(control, read_control, proof, raw, *, source_root,
+                           attempt, config_sha256, actual, stop_pin=None):
+    proof_sha256 = sha(raw)
     stop_attempt, stop_sha256, _ = _observation_stop(
         control, read_control, source_root=source_root, attempt=attempt,
-        config_sha256=config_sha256, actual=actual, proof=proof, proof_sha256=proof_sha256)
+        config_sha256=config_sha256, actual=actual, proof=proof,
+        proof_sha256=proof_sha256, stop_pin=stop_pin,
+    )
     private = "terminal-observation/" + proof_sha256
     request = {"schema": "fullmag.terminal-observation-request.v1",
                "proof_path": private + "/proof.json", "proof_sha256": proof_sha256}

@@ -409,6 +409,17 @@ impl StudyPrimitiveStageKind {
         Self::LoadState,
         Self::Export,
     ];
+
+    /// These canonical pipeline nodes configure later physical inputs in the
+    /// sequential materializer. They require no independent worker task.
+    pub fn is_pipeline_input_configuration(self) -> bool {
+        matches!(
+            self,
+            Self::SetField | Self::SetCurrent
+                | Self::AddFieldDrive | Self::RemoveFieldDrive
+                | Self::TableAutosave | Self::Autosave
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]

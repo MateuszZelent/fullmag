@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from fullmag.model import Problem, Relaxation, StageAutosave, TableAutosave, TimeEvolution
 from fullmag.model.antenna_inventory import AntennaAuthoringInventory
+from fullmag.model.structure import MagnetizationAssignment
 from fullmag.runtime.output_storage_lowering import configure_problem_ir_autosave
 
 
@@ -22,6 +23,7 @@ class LoadedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
     def to_ir(
         self,
@@ -186,7 +188,12 @@ class LoadedProblem:
             for problem in problems
         )
 
-    def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
+    def pipeline_base_problem(
+        self,
+        problem: Problem | None = None,
+        *,
+        replay_initial_magnetization: bool = True,
+    ) -> Problem:
         """Return persistent problem state before ordered action stages run."""
         candidate = self.antenna_inventory.execution_base(problem or self.problem)
         introduced_ids: set[str] = set()
@@ -236,6 +243,39 @@ class LoadedProblem:
                 )
             else:
                 runtime_metadata.pop("spin_wave_response", None)
+        if replay_initial_magnetization and any(
+            stage.magnetization_assignments for stage in self.stages
+        ):
+            # The workspace reflects the last edit. Replaying the pipeline starts
+            # with the first physical stage's texture, before later assignments.
+            first_physical_problem = next(
+                stage.problem for stage in self.stages
+                if stage.entrypoint_kind in {"flat_run", "flat_relax"} and stage.action is None
+            )
+            initial_magnets = {
+                magnet.object_id or magnet.name: magnet
+                for magnet in first_physical_problem.magnets
+            }
+            magnets = []
+            for magnet in candidate.magnets:
+                initial = initial_magnets.get(magnet.object_id or magnet.name)
+                if initial is None:
+                    magnets.append(magnet)
+                    continue
+                initial_textures = {
+                    region.region_id: region.texture_override for region in initial.object_regions
+                }
+                magnets.append(
+                    replace(
+                        magnet,
+                        m0=initial.m0,
+                        object_regions=tuple(
+                            replace(region, texture_override=initial_textures.get(region.region_id))
+                            for region in magnet.object_regions
+                        ),
+                    )
+                )
+            candidate = replace(candidate, magnets=magnets)
         return replace(
             candidate,
             field_drives=tuple(
@@ -347,6 +387,7 @@ def load_problem_from_script(
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Could not load script from {source_path}")
         module = importlib.util.module_from_spec(spec)
+        dont_inherit = True
     else:
         try:
             source_text = source_bytes.decode("utf-8")
@@ -355,16 +396,25 @@ def load_problem_from_script(
         module = ModuleType(f"fullmag_user_script_{uuid4().hex}")
         module.__file__ = str(source_path)
         module.__package__ = ""
+        script_source = source_text
+        dont_inherit = False
 
     world.begin_script_capture(source_path.parent)
     world.set_script_capture_lightweight_assets(lightweight_assets)
     try:
         if source_bytes is None:
-            spec.loader.exec_module(module)
-            script_source = source_path.read_text(encoding="utf-8")
-        else:
-            exec(compile(source_text, str(source_path), "exec"), module.__dict__)
-            script_source = source_text
+            # SourceFileLoader.exec_module may accept timestamp-and-size-valid
+            # bytecode after this file is rewritten within one second. Capture
+            # and execute the source once, then retain that same content.
+            source_content = source_path.read_bytes()
+            source_text = importlib.util.decode_source(source_content)
+            script_source = (
+                source_content.decode("utf-8")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+            )
+        code = compile(source_text, str(source_path), "exec", dont_inherit=dont_inherit)
+        exec(code, module.__dict__)
         workspace_problem = world.capture_workspace_problem()
         extracted_entrypoint_kind = None
         if workspace_problem is None and not world.capture_executed_stages():
@@ -388,6 +438,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in captured_stages
             )
@@ -415,6 +466,7 @@ def load_problem_from_script(
                     output_every_seconds=stage.output_every_seconds,
                     table_autosave=stage.table_autosave,
                     autosave=stage.autosave,
+                    magnetization_assignments=stage.magnetization_assignments,
                 )
                 for stage in declared_stages
             )

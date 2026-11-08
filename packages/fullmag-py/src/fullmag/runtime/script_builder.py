@@ -274,8 +274,15 @@ def _builder_base_problem(loaded: LoadedProblem) -> Problem:
     return loaded.pipeline_base_problem(loaded.workspace_problem or loaded.problem)
 
 
-def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
-    base_problem = _builder_base_problem(loaded)
+def export_builder_draft(
+    loaded: LoadedProblem,
+    *,
+    replay_initial_magnetization: bool = True,
+) -> dict[str, object]:
+    base_problem = loaded.pipeline_base_problem(
+        loaded.workspace_problem or loaded.problem,
+        replay_initial_magnetization=replay_initial_magnetization,
+    )
     authored_problem = loaded.workspace_problem or loaded.problem
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
@@ -731,6 +738,9 @@ def render_loaded_problem_as_script(
         surface=surface,
         magnet_vars=magnet_vars,
         initial_outputs=_study_outputs(base_problem.study),
+        magnet_names={magnet.object_id or magnet.name: magnet.name for magnet in base_problem.magnets},
+        region_vars=region_vars,
+        source_root=source_root,
     )
     if stage_lines:
         lines.append("")
@@ -785,6 +795,12 @@ def render_scene_document_as_script(
     )
 
     scene = dict(scene_document)
+    if include_authored_stages:
+        study = scene.get("study")
+        if isinstance(study, Mapping) and study.get("study_pipeline") is None:
+            pipeline = _flat_pipeline_for_stage_magnetization(study)
+            if pipeline is not None:
+                scene["study"] = {**study, "study_pipeline": pipeline}
     builder = build_builder_from_scene_document(scene)
     if include_authored_stages and _scene_pipeline_contains_macro(
         builder.get("study_pipeline")
@@ -839,6 +855,37 @@ def render_scene_document_as_script(
             loaded,
             overrides=overrides,
         )
+
+
+def _flat_pipeline_for_stage_magnetization(study: Mapping[str, object]) -> dict[str, object] | None:
+    stages = study.get("stages")
+    if not isinstance(stages, list) or not any(
+        isinstance(stage, Mapping) and any(
+            key in stage for key in ("magnetization_assignments", "stage_magnetization_assignments")
+        )
+        for stage in stages
+    ):
+        return None
+    nodes = []
+    for index, stage in enumerate(stages):
+        if not isinstance(stage, Mapping) or stage.get("kind") not in {"run", "relax"}:
+            raise ValueError("stage magnetization assignments require an ordered physical Study")
+        payload = dict(stage)
+        identifier = payload.get("stage_id")
+        if not isinstance(identifier, str) or not identifier.strip():
+            identifier = f"scene-stage-{index}"
+        payload["stage_id"] = identifier
+        nodes.append({
+            "id": identifier,
+            "label": payload.pop("label", None) or stage["kind"],
+            "source": payload.pop("source", None) or "script_imported",
+            "notes": payload.pop("notes", None),
+            "enabled": payload.pop("enabled", True),
+            "node_kind": "primitive",
+            "stage_kind": stage["kind"],
+            "payload": payload,
+        })
+    return {"version": "study_pipeline.v2", "nodes": nodes}
 
 
 def _scene_pipeline_contains_macro(pipeline: object) -> bool:
@@ -1262,6 +1309,7 @@ def _render_scene_document_bootstrap(
 
     handles: list[str] = []
     snapshot_handles: dict[str, str] = {}
+    snapshot_handles_by_id: dict[str, str] = {}
     for index, raw_object in enumerate(objects):
         if not isinstance(raw_object, Mapping):
             raise ValueError(f"SceneDocument geometry {index} must be an object.")
@@ -1296,6 +1344,7 @@ def _render_scene_document_bootstrap(
         )
         handles.append(handle)
         snapshot_handles[name] = handle
+        snapshot_handles_by_id[object_id] = handle
         material = raw_object.get("material")
         physics_stack = raw_object.get("physics_stack")
         explicit_dmi_kinds = (
@@ -1420,10 +1469,29 @@ def _render_scene_document_bootstrap(
         if not isinstance(raw_stages, list):
             raise ValueError("SceneDocument stages must be a list")
         authored_stages = _scene_antenna_stage_sequence(builder)
+        region_vars: dict[tuple[str, str], str] = {}
+        if any("magnetization_assignments" in stage for stage in authored_stages):
+            region_lines, region_vars = _render_region_owned_authoring_from_override(
+                objects, magnet_vars=snapshot_handles, source_root=Path.cwd()
+            )
+            lines.extend(region_lines)
         for index, stage in enumerate(_enabled_scene_stages(authored_stages)):
             if not isinstance(stage, Mapping):
                 raise ValueError(f"SceneDocument stages[{index}] must be an object")
-            lines.extend(_render_scene_stage_bootstrap(stage, index=index, solver=solver, magnet_vars=snapshot_handles))
+            payload = dict(stage)
+            batch = payload.pop("magnetization_assignments", None)
+            # The canonical pipeline metadata owns these stage-local resets.
+            # Rendering a setter would also change all later Python captures.
+            payload.pop("stage_magnetization_assignments", None)
+            if batch is not None:
+                for assignment in batch["assignments"]:
+                    lines.append(_render_study_magnetization_assignment(
+                        assignment["object_id"], assignment["region_id"], assignment["initializer"],
+                        magnet_vars=snapshot_handles_by_id, region_vars=region_vars,
+                    ))
+            lines.extend(_render_scene_stage_bootstrap(
+                payload, index=index, solver=solver, magnet_vars=snapshot_handles
+            ))
     elif include_legacy_relax_stages:
         for stage in raw_stages:
             if not isinstance(stage, Mapping) or str(stage.get("kind") or "relax") != "relax":
@@ -1440,6 +1508,75 @@ _ANTENNA_SCENE_COLLECTIONS = (
     "antenna_port_modes", "antenna_field_solve_stages", "antenna_target_projections",
     "solved_antenna_drives", "antenna_spectrum_requests",
 )
+
+
+def _study_magnetization_assignments(value: object) -> list[dict[str, object]]:
+    batch = _normalize_mapping(value)
+    assignments = batch.get("assignments")
+    if (
+        set(batch) != {"schema_version", "assignments"}
+        or batch["schema_version"] != "fullmag.magnetization-assignments.v1"
+        or not isinstance(assignments, list)
+        or not assignments
+    ):
+        raise ValueError("invalid study magnetization assignment batch")
+    for assignment in assignments:
+        if (
+            not isinstance(assignment, dict)
+            or set(assignment) != {"object_id", "region_id", "initializer"}
+            or not isinstance(assignment["object_id"], str)
+            or not assignment["object_id"].strip()
+            or (assignment["region_id"] is not None
+                and (not isinstance(assignment["region_id"], str) or not assignment["region_id"].strip()))
+            or (assignment["initializer"] is not None and not isinstance(assignment["initializer"], dict))
+        ):
+            raise ValueError("invalid study magnetization assignment")
+    return assignments
+
+
+def _render_study_magnetization_assignment(
+    object_id: str,
+    region_id: str | None,
+    initializer: dict[str, object] | None,
+    *,
+    magnet_vars: Mapping[str, str],
+    region_vars: Mapping[tuple[str, str], str],
+) -> str:
+    magnet_var = magnet_vars.get(object_id)
+    if magnet_var is None:
+        raise ValueError(f"unknown magnetization assignment object {object_id!r}")
+    if region_id is None and initializer is None:
+        return f"{magnet_var}.m.clear()"
+    target = f"{magnet_var}.m"
+    if region_id is not None:
+        region_var = region_vars.get((object_id, region_id))
+        if region_var is None:
+            raise ValueError(f"unknown magnetization assignment region {object_id!r}/{region_id!r}")
+        target = f"{region_var}.texture"
+    expression = "None" if initializer is None else _render_study_magnetization_initializer(initializer)
+    return f"{target} = {expression}"
+
+
+def _render_study_magnetization_initializer(initializer: dict[str, object]) -> str:
+    kind = initializer.get("kind")
+    if kind == "uniform":
+        expression = f"fm.init.UniformMagnetization({_py_literal(initializer['value'])})"
+    elif kind in {"random", "random_seeded"}:
+        expression = f"fm.init.RandomMagnetization({_py_literal(initializer['seed'])})"
+    elif kind == "sampled_field":
+        expression = f"fm.init.SampledMagnetization({_py_literal(initializer['values'])})"
+    elif kind == "preset_texture":
+        expression = _render_preset_texture_expr(
+            str(initializer["preset_kind"]), _normalize_mapping(initializer.get("preset_params")),
+            mapping=_normalize_mapping(initializer.get("mapping")),
+            transform=_normalize_mapping(initializer.get("texture_transform")),
+            preset_version=int(initializer["preset_version"]),
+            ui_label=initializer.get("ui_label"),
+            preview_proxy=initializer.get("preview_proxy"),
+        )
+    else:
+        raise ValueError(f"unsupported study magnetization initializer {kind!r}")
+    return expression
 
 
 def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[str, object]]:
@@ -1461,6 +1598,8 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
     pipeline = builder.get("study_pipeline")
     if isinstance(pipeline, Mapping):
         stages = []
+        pending_assignments: list[dict[str, object]] = []
+
         def visit(nodes: object) -> None:
             if not isinstance(nodes, list):
                 raise ValueError("study_pipeline.nodes/children must be a list")
@@ -1470,19 +1609,39 @@ def _scene_antenna_stage_sequence(builder: Mapping[str, object]) -> list[dict[st
                 enabled = node.get("enabled", True)
                 if not isinstance(enabled, bool):
                     raise ValueError("study_pipeline node enabled must be a boolean")
-                if not enabled:
-                    continue
-                if node.get("node_kind") == "group":
-                    visit(node.get("children", []))
-                elif node.get("node_kind") == "primitive":
+                node_kind = node.get("node_kind")
+                if node_kind == "group":
+                    if enabled:
+                        visit(node.get("children", []))
+                elif node_kind == "primitive":
                     payload = node.get("payload")
                     if not isinstance(payload, Mapping):
+                        if not enabled:
+                            continue
                         raise ValueError("primitive pipeline node requires payload")
                     stage = dict(payload)
+                    physical = node.get("stage_kind") in {"run", "relax"}
+                    for key in ("magnetization_assignments", "stage_magnetization_assignments"):
+                        if key not in stage:
+                            continue
+                        if pipeline.get("version") != "study_pipeline.v2" or not physical:
+                            raise ValueError("magnetization assignments require a v2 Run or Relax node")
+                        assignments = _study_magnetization_assignments(stage[key])
+                        if key == "magnetization_assignments":
+                            pending_assignments.extend(assignments)
+                            del stage[key]
+                    if not enabled:
+                        continue
+                    if physical and pending_assignments:
+                        stage["magnetization_assignments"] = {
+                            "schema_version": "fullmag.magnetization-assignments.v1",
+                            "assignments": pending_assignments.copy(),
+                        }
+                        pending_assignments.clear()
                     stage["kind"] = node["stage_kind"]
                     stage.setdefault("stage_id", node["id"])
                     stages.append(stage)
-                else:
+                elif enabled:
                     raise ValueError("scene pipeline requires the shared study pipeline materializer")
         visit(pipeline.get("nodes"))
     consumed = {collection: set() for collection in _ANTENNA_SCENE_COLLECTIONS}
@@ -1574,7 +1733,7 @@ def _relax_stage_timestep_kwargs(
     """
     solver_map = solver if isinstance(solver, Mapping) else {}
     result: dict[str, object] = {}
-    integrator = stage.get("integrator")
+    integrator = stage.get("integrator") or stage.get("solver")
     if (
         isinstance(integrator, str)
         and integrator.strip()
@@ -1584,6 +1743,8 @@ def _relax_stage_timestep_kwargs(
         result["solver"] = integrator
     for source in (stage, solver_map):
         fixed = _finite_number(source.get("fixed_timestep"))
+        if fixed is None:
+            fixed = _finite_number(source.get("dt"))
         if fixed is not None:
             result["dt"] = fixed
             return result
@@ -1617,6 +1778,8 @@ def _relax_stage_timestep_kwargs(
                 continue
             return result
         max_err = _finite_number(source.get("max_err"))
+        if max_err is None:
+            max_err = _finite_number(source.get("max_error"))
         if max_err is not None:
             result["max_err"] = max_err
             for key in ("dt_initial", "dt_min", "dt_max"):
@@ -1679,17 +1842,27 @@ def _render_scene_stage_bootstrap(
                 "algorithm",
                 "relax_algorithm",
                 "torque_tolerance",
+                "torque_tolerance_apm",
+                "tol",
                 "energy_tolerance",
+                "energy_tolerance_j",
                 "max_steps",
                 "max_relaxation_time_s",
+                "max_pseudotime_s",
+                "max_physical_time_s",
+                "relax_alpha",
                 "integrator",
+                "solver",
                 "fixed_timestep",
+                "dt",
                 "adaptive_timestep",
                 "dt_initial",
                 "dt_min",
                 "dt_max",
                 "max_err",
+                "max_error",
                 "demag_interval_s",
+                "field_refresh",
                 "gamma",
                 "g",
                 "autosave",
@@ -2436,18 +2609,46 @@ def _scene_relax_stage_kwargs(
     algorithm = stage.get("algorithm") or stage.get("relax_algorithm")
     if isinstance(algorithm, str) and algorithm.strip():
         kwargs["algorithm"] = algorithm
-    tolerance = _finite_number(stage.get("torque_tolerance"))
+    tolerance = _finite_number(stage.get("torque_tolerance_apm"))
+    if tolerance is None:
+        tolerance = _finite_number(stage.get("torque_tolerance"))
+    if tolerance is None:
+        tolerance = _finite_number(stage.get("tol"))
     if tolerance is not None:
         kwargs["tolA"] = tolerance
-    energy_tolerance = _finite_number(stage.get("energy_tolerance"))
+    energy_tolerance = _finite_number(stage.get("energy_tolerance_j"))
+    if energy_tolerance is None:
+        energy_tolerance = _finite_number(stage.get("energy_tolerance"))
     if energy_tolerance is not None:
         kwargs["energy_tolerance"] = energy_tolerance
     max_steps = _positive_int(stage.get("max_steps"))
     if max_steps is not None:
         kwargs["max_steps"] = max_steps
     max_relaxation_time_s = _finite_number(stage.get("max_relaxation_time_s"))
+    if max_relaxation_time_s is None:
+        max_relaxation_time_s = _finite_number(stage.get("max_physical_time_s"))
+    if max_relaxation_time_s is None:
+        max_relaxation_time_s = _finite_number(stage.get("max_pseudotime_s"))
     if max_relaxation_time_s is not None:
         kwargs["max_relaxation_time_s"] = max_relaxation_time_s
+    relax_alpha = _finite_number(stage.get("relax_alpha"))
+    if relax_alpha is not None:
+        kwargs["relax_alpha"] = relax_alpha
+    refresh = stage.get("field_refresh")
+    if refresh is not None and (
+        not isinstance(refresh, Mapping) or set(refresh) - {"demag_interval_s"}
+    ):
+        raise ValueError("Relax field_refresh supports only demag_interval_s")
+    nested_interval = _finite_number(refresh.get("demag_interval_s")) if isinstance(refresh, Mapping) else None
+    demag_interval = _finite_number(stage.get("demag_interval_s"))
+    if nested_interval is not None and demag_interval is not None and nested_interval != demag_interval:
+        raise ValueError("Relax demag_interval_s conflicts with field_refresh")
+    if demag_interval is None:
+        demag_interval = nested_interval
+    if demag_interval is not None:
+        kwargs["field_refresh"] = _RawExpression(
+            f"fm.FieldRefreshPolicy(demag_interval_s={_py_number(demag_interval)})"
+        )
     # Global integration settings apply to LLG, not to direct minimization.
     # Explicit stage controls still reach the public DSL's strict validator.
     kwargs.update(_relax_stage_timestep_kwargs(stage, solver if _scene_relax_uses_llg(stage) else {}))
@@ -2847,7 +3048,11 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     if not stages:
         return None
     return {
-        "version": "study_pipeline.v1",
+        "version": (
+            "study_pipeline.v2"
+            if any(stage.magnetization_assignments for stage in stages)
+            else "study_pipeline.v1"
+        ),
         "nodes": [
             _export_study_pipeline_node(stage, index=index)
             for index, stage in enumerate(stages)
@@ -2863,6 +3068,21 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
         payload["output_every_seconds"] = stage.output_every_seconds
     if stage.table_autosave is not None:
         payload["table_autosave"] = stage.table_autosave.to_ir()
+    if stage.magnetization_assignments:
+        payload["magnetization_assignments"] = {
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [
+                {
+                    "object_id": assignment.object_id,
+                    "region_id": assignment.region_id,
+                    "initializer": (
+                        assignment.initializer.to_ir()
+                        if assignment.initializer is not None else None
+                    ),
+                }
+                for assignment in stage.magnetization_assignments
+            ],
+        }
     return payload
 
 
@@ -3110,7 +3330,7 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
             "relax_algorithm": study.algorithm,
             "torque_tolerance": _text_number(study.torque_tolerance),
             "energy_tolerance": _text_number(study.energy_tolerance),
-            "max_steps": str(study.max_steps),
+            "max_steps": str(study.max_steps) if study.max_steps is not None else "",
         }
         if stage.table_autosave is not None:
             payload["table_autosave"] = stage.table_autosave.to_ir()
@@ -4178,7 +4398,7 @@ def _render_region_owned_authoring(
     *,
     source_root: Path,
     overrides: dict[str, object],
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[tuple[str, str], str]]:
     geometries_override = overrides.get("geometries")
     if isinstance(geometries_override, list):
         return _render_region_owned_authoring_from_override(
@@ -4188,7 +4408,7 @@ def _render_region_owned_authoring(
         )
 
     lines: list[str] = []
-    region_vars: dict[str, str] = {}
+    region_vars: dict[tuple[str, str], str] = {}
     for magnet in problem.magnets:
         magnet_var = magnet_vars[magnet.name]
         live_region_ids = {
@@ -4201,7 +4421,7 @@ def _render_region_owned_authoring(
             region_var = _safe_identifier(f"{magnet.name}_{region.name}_region")
             if region_var in region_vars.values():
                 region_var = f"{region_var}_{index}"
-            region_vars[region.region_id] = region_var
+            region_vars[(magnet.object_id or magnet.name, region.region_id)] = region_var
             kwargs = [
                 _py_repr(region.name),
                 _render_region_shape_expr_from_payload(region.to_ir()["shape"], region_name=region.name, source_root=source_root),
@@ -4254,7 +4474,7 @@ def _render_region_owned_authoring(
                 f"assignment_id={_py_repr(assignment.assignment_id)}",
             ]
             if assignment.region_id is not None:
-                region_ref = region_vars.get(assignment.region_id)
+                region_ref = region_vars.get((magnet.object_id or magnet.name, assignment.region_id))
                 if region_ref is not None:
                     kwargs.append(f"region={region_ref}")
                 else:
@@ -4274,9 +4494,9 @@ def _render_region_owned_authoring_from_override(
     *,
     magnet_vars: dict[str, str],
     source_root: Path,
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[tuple[str, str], str]]:
     lines: list[str] = []
-    region_vars: dict[str, str] = {}
+    region_vars: dict[tuple[str, str], str] = {}
     for geo_obj in geometries:
         g = _normalize_mapping(geo_obj)
         magnet_name = str(g.get("name", ""))
@@ -4303,7 +4523,8 @@ def _render_region_owned_authoring_from_override(
             region_var = _safe_identifier(f"{magnet_name}_{region_name}_region")
             if region_var in region_vars.values():
                 region_var = f"{region_var}_{index}"
-            region_vars[region_id] = region_var
+            object_id = str(g.get("object_id") or g.get("id") or magnet_name)
+            region_vars[(object_id, region_id)] = region_var
             kwargs = [
                 _py_repr(region_name),
                 _render_region_shape_expr_from_payload(
@@ -4363,6 +4584,7 @@ def _render_region_owned_authoring_from_override(
         g = _normalize_mapping(geo_obj)
         magnet_name = str(g.get("name", ""))
         magnet_var = magnet_vars.get(magnet_name, "body")
+        object_id = str(g.get("object_id") or g.get("id") or magnet_name)
         raw_assignments = g.get("material_parameter_fields")
         assignments = raw_assignments if isinstance(raw_assignments, list) else []
         for raw_assignment in assignments:
@@ -4375,7 +4597,7 @@ def _render_region_owned_authoring_from_override(
             ]
             region_id = assignment.get("region_id")
             if isinstance(region_id, str) and region_id:
-                region_ref = region_vars.get(region_id)
+                region_ref = region_vars.get((object_id, region_id))
                 if region_ref is not None:
                     kwargs.append(f"region={region_ref}")
                 else:
@@ -4443,6 +4665,8 @@ def _render_initial_magnetization_expr_from_payload(
     source_root: Path,
 ) -> str | None:
     kind = str(payload.get("kind") or "")
+    if kind in {"preset_texture", "sampled_field"}:
+        return _render_study_magnetization_initializer(payload)
     if kind == "uniform":
         value = payload.get("value")
         if isinstance(value, list) and len(value) == 3:
@@ -4545,7 +4769,7 @@ def _render_couplings(
     problem: Problem,
     magnet_vars: dict[str, str],
     *,
-    region_vars: dict[str, str] | None = None,
+    region_vars: Mapping[tuple[str, str], str] | None = None,
     overrides: dict[str, object],
     surface: str,
 ) -> list[str]:
@@ -4560,6 +4784,15 @@ def _render_couplings(
         coupling_payloads = [coupling.to_ir() for coupling in problem.couplings]
     if not coupling_payloads:
         return []
+    geometries = overrides.get("geometries")
+    if isinstance(geometries, list):
+        object_ids = {}
+        for geometry in geometries:
+            payload = _normalize_mapping(geometry)
+            name = str(payload.get("name", ""))
+            object_ids[name] = str(payload.get("object_id") or payload.get("id") or name)
+    else:
+        object_ids = {magnet.name: magnet.object_id or magnet.name for magnet in problem.magnets}
     root = "study.couplings" if surface == "study" else "fm.couplings.registry()"
     lines = ["# Couplings"]
     if surface != "study":
@@ -4569,11 +4802,13 @@ def _render_couplings(
         source_expr = _render_coupling_endpoint_expr(
             coupling.get("source"),
             magnet_vars,
+            object_ids=object_ids,
             region_vars=region_vars,
         )
         target_expr = _render_coupling_endpoint_expr(
             coupling.get("target"),
             magnet_vars,
+            object_ids=object_ids,
             region_vars=region_vars,
         )
         params = _normalize_mapping(coupling.get("parameters"))
@@ -4628,7 +4863,8 @@ def _render_coupling_endpoint_expr(
     endpoint: object,
     magnet_vars: dict[str, str],
     *,
-    region_vars: dict[str, str] | None = None,
+    object_ids: Mapping[str, str],
+    region_vars: Mapping[tuple[str, str], str] | None = None,
 ) -> str:
     payload = endpoint.to_ir() if hasattr(endpoint, "to_ir") else endpoint
     if not isinstance(payload, dict):
@@ -4645,7 +4881,8 @@ def _render_coupling_endpoint_expr(
         return f"fm.couplings.surface({_py_repr(object_name)}, {_py_repr(selector)})"
     if kind == "region":
         region_id = str(payload.get("region_id"))
-        region_expr = (region_vars or {}).get(region_id)
+        object_id = object_ids.get(object_name, object_name)
+        region_expr = (region_vars or {}).get((object_id, region_id))
         if region_expr is not None:
             return region_expr
         return f"fm.couplings.region({_py_repr(object_name)}, {_py_repr(region_id)})"
@@ -8334,6 +8571,9 @@ def _render_stages(
     surface: str,
     magnet_vars: dict[str, str],
     initial_outputs: Sequence[object],
+    magnet_names: dict[str, str],
+    region_vars: dict[tuple[str, str], str],
+    source_root: Path,
 ) -> list[str]:
     if not stages:
         return []
@@ -8342,8 +8582,27 @@ def _render_stages(
     is_study_surface = surface == "study"
     active_outputs = list(initial_outputs)
     lines = ["# Stages" if is_study_surface else "# Run"]
+    magnet_vars_by_id = {
+        object_id: magnet_vars[name]
+        for object_id, name in magnet_names.items()
+        if name in magnet_vars
+    }
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
+        for assignment in stage.magnetization_assignments:
+            initializer = assignment.initializer
+            if isinstance(initializer, SampledMagnetization) and initializer.source_path and assignment.region_id is None:
+                magnet_var = magnet_vars[magnet_names[assignment.object_id]]
+                rendered = _render_initial_magnetization(
+                    initializer, magnet_var=magnet_var, source_root=source_root
+                )
+                lines.extend(rendered if isinstance(rendered, list) else [rendered])
+                continue
+            lines.append(_render_study_magnetization_assignment(
+                assignment.object_id, assignment.region_id,
+                initializer.to_ir() if initializer is not None else None,
+                magnet_vars=magnet_vars_by_id, region_vars=region_vars,
+            ))
         if is_study_surface and stage.problem.study is not None:
             output_lines, active_outputs = _sync_stage_output_snapshot(
                 active_outputs,
@@ -9002,6 +9261,14 @@ def _render_stages(
                         f"energy_tolerance={_py_number(energy_tolerance)}"
                     )
             if algorithm == "llg_overdamped":
+                relax_alpha = _finite_number(stage_override.get("relax_alpha"))
+                if relax_alpha is not None:
+                    call_parts.append(f"relax_alpha={_py_number(relax_alpha)}")
+                refresh = study.dynamics.field_refresh if study.dynamics is not None else None
+                if refresh is not None and refresh.demag_interval_s is not None:
+                    call_parts.append(
+                        f"field_refresh=fm.FieldRefreshPolicy(demag_interval_s={_py_number(refresh.demag_interval_s)})"
+                    )
                 if relax_solver and relax_solver not in {"auto", "rk23"}:
                     call_parts.append(f"solver={_py_repr(relax_solver)}")
                 if relax_fixed_timestep is not None:
@@ -12225,6 +12492,25 @@ def _validate_stage_compatibility(stages: Sequence[LoadedStage]) -> None:
     baseline = _stage_signature(solver_stages[0].problem)
     for stage in solver_stages[1:]:
         signature = _stage_signature(stage.problem)
+        if stage.magnetization_assignments:
+            names = {
+                magnet.object_id or magnet.name: magnet.name for magnet in stage.problem.magnets
+            }
+            magnetization_by_name = {
+                names[assignment.object_id]: (
+                    assignment.initializer or UniformMagnetization((1, 0, 0))
+                ).to_ir()
+                for assignment in stage.magnetization_assignments
+                if assignment.region_id is None
+            }
+            baseline = {
+                **baseline,
+                "magnets": [
+                    {**magnet, "initial_magnetization": magnetization_by_name[magnet["name"]]}
+                    if magnet["name"] in magnetization_by_name else magnet
+                    for magnet in cast(list[dict[str, object]], baseline["magnets"])
+                ],
+            }
         if signature != baseline:
             raise ValueError(
                 "canonical rewrite does not yet support stage-local geometry or material mutations"

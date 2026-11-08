@@ -508,7 +508,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration and optional stage-owned mesh generation, topology fingerprint, and mesh revision identity; missing legacy identity remains unknown and is never synthesized from mesh names or element counts |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
-| `simulation/solver/energies/*` | current and historical energy samples |
+| `simulation/solver/energies/*` | current and historical energy samples; `current` returns 204 without a body when a valid workspace has no qualified current sample, 200 for an available sample (including exact zero), and 404 when no workspace exists |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
@@ -523,6 +523,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+`LiveStatus.solver_energy_current_available` is a thin availability hint computed by the same qualified-source selector as the current-energy resource. It may change between the status read and the resource request. Clients must accept an empty 204 response as no current sample, retain request-scope and API-instance checks, and hide data from an earlier run or stage. The hint does not authorize a historical fallback during active Docker execution or synthesize a zero-energy sample.
 
 Analytic mesh-region projection is fail-closed. Singular or non-finite affine
 transforms, imported solids without a qualified analytic occupancy evaluator,

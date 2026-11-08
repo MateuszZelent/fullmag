@@ -2661,6 +2661,16 @@ def _parser() -> argparse.ArgumentParser:
     idle_restart.add_argument("--saved-authoring-checkpoint-sha256")
     idle_restart.add_argument("--stop-only", action="store_true", help="Drain and stop the pinned backend without restarting it")
     idle_restart.add_argument(
+        "--capture-terminal-observation", action="store_true",
+        help="capture native evidence for a completed or failed run during a managed stop-only drain",
+    )
+    idle_restart.add_argument("--quiesce-api", action="store_true",
+                              help="with native capture stop-only: close only the exact pinned API before native inspection")
+    idle_restart.add_argument("--capture-native-terminal", action="store_true",
+                              help="stop-only: preserve stale public Running after exact native all-Succeeded inspection")
+    idle_restart.add_argument("--capture-prelaunch-failure", action="store_true",
+                              help="stop-only with --quiesce-api: preserve one exact released prelaunch-failed Study run for offline archival")
+    idle_restart.add_argument(
         "--allow-prepared-session", action="store_true",
         help="allow graceful drain with never-started manual Studies, including held queue entries after a terminal task; retain accepted inputs and never release Solve",
     )
@@ -2709,6 +2719,17 @@ def _parser() -> argparse.ArgumentParser:
     stop_unadmitted.add_argument("--source-sha256", required=True)
     stop_unadmitted.add_argument("--request-id", required=True)
     stop_unadmitted.add_argument("--session-id", required=True)
+    empty_abort = subparsers.add_parser(
+        "stop-empty-api-abort-volume", help="preview or stop one empty ownerless API abort; never claim a native drain",
+    )
+    empty_abort.add_argument("--attempt", required=True)
+    empty_abort.add_argument("--config-sha256", required=True)
+    empty_abort.add_argument("--source-root", type=Path, required=True)
+    empty_abort.add_argument("--port", type=int, required=True)
+    empty_abort_mode = empty_abort.add_mutually_exclusive_group(required=True)
+    empty_abort_mode.add_argument("--preview", action="store_true")
+    empty_abort_mode.add_argument("--apply", action="store_true")
+    empty_abort.add_argument("--expected-plan-sha256")
     stop_diagnostic = subparsers.add_parser(
         "stop-diagnostic-volume",
         help="stop one pinned backend that retains only its failed-owner diagnostic API",
@@ -2875,6 +2896,13 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument("--drained-successor-proof-sha256", help="SHA-256 of the exact drained-successor proof")
     recreate_volume.add_argument("--terminal-observation-proof", help="Exact private control-volume proof of one terminal observation")
     recreate_volume.add_argument("--terminal-observation-proof-sha256", help="SHA-256 of the exact terminal observation proof")
+    recreate_volume.add_argument("--empty-api-abort-stop", help="Fresh-state only: exact successful ownerless API-abort stop attempt")
+    recreate_volume.add_argument("--empty-api-abort-stop-sha256", help="SHA-256 of that exact raw stop terminal receipt")
+    recreate_volume.add_argument("--native-terminal-stop", help="Fresh-state only: exact native-terminal stop attempt")
+    recreate_volume.add_argument("--native-terminal-stop-sha256", help="SHA-256 of the exact native-terminal stop terminal receipt")
+    recreate_volume.add_argument("--prelaunch-failure-stop", help="Fresh-state only: exact prelaunch-failure stop attempt")
+    recreate_volume.add_argument("--prelaunch-failure-stop-sha256", help="SHA-256 of the exact prelaunch-failure stop terminal receipt")
+    recreate_volume.add_argument("--terminal-observation-stop", help="Exact stop-only attempt containing the terminal observation capture")
     recreate_volume.add_argument(
         "--offline-reconciliation", metavar="OPERATION_TOKEN",
         help="consume the exact completed offline control repair without replaying its old operation",
@@ -3020,6 +3048,8 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--port", type=int, default=None,
                              help="loopback frontend port (up only)")
+        command.add_argument("--network-subnet",
+                             help="explicit unused RFC1918 IPv4 subnet for this DEV bridge; verify host routes first")
         command.add_argument("--script", "--startup-script", dest="script", type=Path,
                              help="optional simulation script, relative to the selected checkout or absolute inside it (up only)")
         if name == "up":
@@ -3145,6 +3175,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.action == "stop-unadmitted":
             from docker_volume_stop_unadmitted import stop
             stop(args)
+        elif args.action == "stop-empty-api-abort-volume":
+            from docker_volume_empty_api_abort import stop
+            result = stop(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         elif args.action == "stop-diagnostic-volume":
             from docker_volume_stop_diagnostic import stop_diagnostic
             result = stop_diagnostic(args)
@@ -3218,7 +3252,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _fail("Lost state requires plain fresh recreation with one diagnostic stop pin")
             if bool(args.terminal_observation_proof) != bool(args.terminal_observation_proof_sha256):
                 raise _fail("Terminal observation requires paired proof and SHA-256")
-            if args.terminal_observation_proof and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
+            if args.terminal_observation_stop and args.terminal_observation_proof:
+                raise _fail("Choose one terminal observation source")
+            if (args.terminal_observation_proof or args.terminal_observation_stop) and any((args.fresh_state, args.recovery_authorization, args.resume_recreation, args.completed_recreation_attempt, args.drained_successor_proof)):
                 raise _fail("Terminal observation requires plain retained recreation without another restore or recovery request")
             if bool(args.completed_recreation_attempt) != bool(args.completed_recreation_sha256):
                 raise _fail("completed recreation requires both attempt and terminal SHA-256")

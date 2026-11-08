@@ -8,14 +8,15 @@ import {
 } from "@/kernel/authoring/authoringMutationInvalidation";
 import {
   captureAuthoringMutationFence,
-  runAuthoringMutationWithHistory,
 } from "@/kernel/authoring/authoringHistoryMutation";
+import type { MagnetizationApplyReceipt } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
+import { sessionRequestScopeKey, sessionResourceIdentityKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSessionResourceIdentity } from "@/kernel/resources/useSessionStatus";
 import {
   publishCommittedSceneResource,
+  SCENE_RESOURCE_KEY,
   useModelRegionsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
@@ -25,6 +26,8 @@ import {
   type ActiveLaneOperationResolution,
 } from "@/kernel/resources/useActiveLaneCapabilities";
 import { magnetizationTexturePresetOptions } from "@/shared/domain/magnetization-texture/texturePresets";
+import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
+import { returnToCurrentFieldView } from "@/kernel/visualization/savedFieldPresentation";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -43,7 +46,7 @@ import {
 } from "./inspectorDraftState";
 import {
   buildObjectMagneticTextureAssetDraft,
-  buildMagnetizationTransactionRequest,
+  buildMagnetizationApplyTarget,
   magneticTextureProjectionOptions,
   objectMagneticTextureDraftFromModel,
   objectMagneticTextureDraftDirty,
@@ -54,6 +57,8 @@ import {
   type ObjectMagneticTextureDraft,
 } from "./ObjectMagneticTexturePanelModel";
 import {
+  commitMagneticTextureApply,
+  magneticTextureApplyMessage,
   magneticTextureInspectorView,
   syncAuthoringScriptBestEffort,
   type MagneticTexturePanelModel,
@@ -61,8 +66,13 @@ import {
 
 export type MagneticTextureFeedback =
   | {
-      kind: "error" | "success";
+      kind: "error";
       message: string;
+    }
+  | {
+      kind: "success";
+      message: string;
+      preview?: { receipt: MagnetizationApplyReceipt; sessionScopeKey: string };
     }
   | null;
 
@@ -704,6 +714,68 @@ export function MagneticTextureLoadFileSection({
   );
 }
 
+function MagneticTexturePreviewAction({
+  receipt,
+  sessionScopeKey,
+}: { receipt: MagnetizationApplyReceipt; sessionScopeKey: string }) {
+  const kernel = useKernel();
+  const identity = useSessionResourceIdentity();
+  const operation = useRef<AbortController | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useLayoutEffect(() => () => operation.current?.abort(), []);
+  const source = receipt.prepared_initial_state;
+  if (!identity || sessionRequestScopeKey(identity) !== sessionScopeKey || !source ||
+      source.scene_revision !== receipt.scene_revision || receipt.status !== "initial_state_ready") return null;
+  const scope = receipt.scopes[0];
+  const sessionIdentityKey = sessionResourceIdentityKey(identity);
+
+  async function show() {
+    if (operation.current || !source || !scope) return;
+    const abort = new AbortController();
+    const displayedObservation = observationSourceWorkspaceStore.getSnapshot();
+    const displayedResult = kernel.savedResultsPlayback?.getSnapshot();
+    const selectedTarget = kernel.selection.get();
+    operation.current = abort;
+    setLoading(true);
+    setError(null);
+    try {
+      await kernel.api.data.fields.preparedMagnetization(
+        source, { max_samples: 1 }, { sessionScopeKey, signal: abort.signal },
+      );
+      if (abort.signal.aborted || kernel.commands.getSessionScopeKey() !== sessionScopeKey ||
+          observationSourceWorkspaceStore.getSnapshot() !== displayedObservation ||
+          kernel.savedResultsPlayback?.getSnapshot() !== displayedResult ||
+          kernel.selection.get() !== selectedTarget) return;
+      if (!returnToCurrentFieldView(kernel.visualization, kernel.selection, "inspector")) {
+        throw new Error("Apply or discard the current Inspector draft before opening the preview.");
+      }
+      kernel.analysisFieldOverlay.clear();
+      kernel.visualization.setArtifactFieldSelection(null);
+      observationSourceWorkspaceStore.showPrepared({
+        source,
+        sessionIdentityKey,
+        objectId: scope.object_id,
+        regionId: scope.region_id ?? null,
+      });
+      kernel.savedResultsPlayback?.close();
+      kernel.layout.setActiveViewportMainModule("viewport-3d");
+    } catch (failure) {
+      if (!abort.signal.aborted) setError(errorMessage(failure));
+    } finally {
+      if (operation.current === abort) operation.current = null;
+      if (!abort.signal.aborted) setLoading(false);
+    }
+  }
+
+  return <>
+    <Button size="sm" type="button" variant="secondary" disabled={loading} onClick={() => void show()}>
+      {loading ? "Checking initial magnetization…" : "Show initial magnetization"}
+    </Button>
+    {error && <FeedbackBanner kind="error" message={error} />}
+  </>;
+}
+
 export function MagneticTextureActionsSection({
   capability = null,
   dirty,
@@ -727,14 +799,19 @@ export function MagneticTextureActionsSection({
   pending: boolean;
   stagedDraft?: boolean;
 }) {
+  const preview = feedback?.kind === "success" ? feedback.preview : undefined;
+  const previewScope = preview?.receipt.scopes[0];
+  const showPreview = !pending && preview && previewScope?.object_id === model.objectId &&
+    (previewScope.region_id ?? null) === (model.regionId ?? null);
   return (
     <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
-        {!stagedDraft ? (
+        {!stagedDraft || !dirty ? (
           <Button
             disabled={
               pending ||
               model.mode !== "committed" ||
+              (model.targetKind === "region" && !model.authoredRegion) ||
               (capability !== null && !capability.enabled)
             }
             size="sm"
@@ -742,7 +819,7 @@ export function MagneticTextureActionsSection({
             variant="primary"
             onClick={onSave}
           >
-            Save Texture
+            {stagedDraft ? "Reapply Texture" : "Apply Texture"}
           </Button>
         ) : null}
         <Button
@@ -766,7 +843,8 @@ export function MagneticTextureActionsSection({
           </Button>
         ) : null}
         <Button
-          disabled={pending || model.mode !== "committed"}
+          disabled={pending || model.mode !== "committed" ||
+            (model.targetKind === "region" && !model.authoredRegion)}
           size="sm"
           type="button"
           variant="ghost"
@@ -783,6 +861,13 @@ export function MagneticTextureActionsSection({
         />
       ) : null}
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
+      {showPreview && (
+        <MagneticTexturePreviewAction
+          key={preview.receipt.operation_id}
+          receipt={preview.receipt}
+          sessionScopeKey={preview.sessionScopeKey}
+        />
+      )}
     </InspectorGroup>
   );
 }
@@ -884,19 +969,19 @@ export function ObjectMagneticTexturePanel({
     invalidateAuthoringMutationDependents(resources, "magnetization", revision);
   }
 
-  async function saveTexture(): Promise<boolean> {
+  async function saveTexture(draftToApply: ObjectMagneticTextureDraft | null = draft): Promise<boolean> {
     const acknowledgeDraft = acknowledgeTextureDraftRef.current;
     if (mutationInFlight.current) return false;
     if (model.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
       return false;
     }
-    if (textureCapability && !textureCapability.enabled) {
+    if (draftToApply && textureCapability && !textureCapability.enabled) {
       setFeedback({ kind: "error", message: textureCapability.reason });
       return false;
     }
-    if (model.targetKind === "region" && !model.regionId) {
-      setFeedback({ kind: "error", message: "No selected texture target." });
+    if (model.targetKind === "region" && !model.authoredRegion) {
+      setFeedback({ kind: "error", message: "Select an authored magnetic region to apply its texture." });
       return false;
     }
     if (!sessionScopeKey) {
@@ -906,31 +991,17 @@ export function ObjectMagneticTexturePanel({
 
     const submittedDraft = draft;
     const mutationContext = captureAuthoringMutationFence(
-      createCommandContext("inspector", kernel, { sessionScopeKey }),
+      createCommandContext("inspector", kernel, {
+        resourceData: { [SCENE_RESOURCE_KEY]: scene.data },
+        sessionScopeKey,
+      }),
     );
     const isCurrentSession = () => mutationContext.isCurrentSessionScope?.() === true;
     mutationInFlight.current = true;
     setPending(true);
     try {
-      const asset = buildObjectMagneticTextureAssetDraft(model, submittedDraft);
-      const response = await runAuthoringMutationWithHistory(
-        mutationContext,
-        `Save magnetic texture ${model.objectId}`,
-        async ({ baseRevision }) => {
-          const request = buildMagnetizationTransactionRequest(
-            model,
-            asset,
-            asset.id,
-          );
-          return api.model.commitTransaction(
-            {
-              ...request,
-              base_revision: baseRevision ?? request.base_revision,
-            },
-            sessionScopeKey ? { sessionScopeKey } : undefined,
-          );
-        },
-      );
+      const target = buildMagnetizationApplyTarget(model, draftToApply);
+      const response = await commitMagneticTextureApply(api, mutationContext, target, model.baseRevision);
       if (!isCurrentSession()) return false;
       const revision = acknowledgedAuthoringSceneRevision(response);
       publishCommittedSceneResource(resources, response.committed_scene, revision,
@@ -938,7 +1009,9 @@ export function ObjectMagneticTexturePanel({
       invalidateTextureResources(revision);
       const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
       if (!isCurrentSession()) return false;
-      const acknowledgedDraft = { ...submittedDraft, magnetizationRef: asset.id };
+      const acknowledgedDraft = objectMagneticTextureDraftFromModel(
+        resolveObjectMagneticTexturePanelModel(selection, response.committed_scene, regions.data),
+      );
       setBaselineState({
         draft: acknowledgedDraft,
         identityKey: draftIdentityKey,
@@ -958,96 +1031,14 @@ export function ObjectMagneticTexturePanel({
       }
       setFeedback({
         kind: "success",
-        message: syncWarning
-          ? `Magnetic texture saved. Authoring script sync skipped: ${syncWarning}`
-          : "Magnetic texture saved.",
+        message: magneticTextureApplyMessage(response.magnetization_apply, syncWarning),
+        preview: { receipt: response.magnetization_apply, sessionScopeKey },
       });
       return true;
     } catch (error) {
       if (!isCurrentSession()) return false;
       setFeedback({ kind: "error", message: errorMessage(error) });
       return false;
-    } finally {
-      mutationInFlight.current = false;
-      setPending(false);
-    }
-  }
-
-  async function clearTexture(): Promise<void> {
-    const acknowledgeDraft = acknowledgeTextureDraftRef.current;
-    if (mutationInFlight.current) return;
-    if (model.mode !== "committed") {
-      setFeedback({ kind: "error", message: "No committed scene object." });
-      return;
-    }
-    if (model.targetKind === "region" && !model.regionId) {
-      setFeedback({ kind: "error", message: "No selected texture target." });
-      return;
-    }
-
-    if (!sessionScopeKey) {
-      setFeedback({ kind: "error", message: "Session identity is not ready. Try again after it loads." });
-      return;
-    }
-    const submittedDraft = draft;
-    const mutationContext = captureAuthoringMutationFence(
-      createCommandContext("inspector", kernel, { sessionScopeKey }),
-    );
-    const isCurrentSession = () => mutationContext.isCurrentSessionScope?.() === true;
-    mutationInFlight.current = true;
-    setPending(true);
-    try {
-      const response = await runAuthoringMutationWithHistory(
-        mutationContext,
-        `Clear magnetic texture ${model.objectId}`,
-        async ({ baseRevision }) => {
-          const request = buildMagnetizationTransactionRequest(
-            model,
-            null,
-            null,
-          );
-          return api.model.commitTransaction(
-            {
-              ...request,
-              base_revision: baseRevision ?? request.base_revision,
-            },
-            sessionScopeKey ? { sessionScopeKey } : undefined,
-          );
-        },
-      );
-      if (!isCurrentSession()) return;
-      const revision = acknowledgedAuthoringSceneRevision(response);
-      publishCommittedSceneResource(resources, response.committed_scene, revision,
-        undefined, false, sessionScopeKey, api.resourceCacheScope);
-      invalidateTextureResources(revision);
-      const syncWarning = await syncAuthoringScriptBestEffort(api, sessionScopeKey);
-      if (!isCurrentSession()) return;
-      const clearedDraft = { ...baseDraft, magnetizationRef: "" };
-      setBaselineState({
-        draft: clearedDraft,
-        identityKey: draftIdentityKey,
-        revision,
-      });
-      if (
-        draftStateRef.current.identityKey === draftIdentityKey &&
-        draftStateRef.current.draft === submittedDraft
-      ) {
-        acknowledgeDraft?.();
-        replaceDraftState({
-          baseKey: draftKey,
-          dirty: false,
-          draft: clearedDraft,
-          identityKey: draftIdentityKey,
-        });
-      }
-      setFeedback({
-        kind: "success",
-        message: syncWarning
-          ? `Magnetic texture cleared. Authoring script sync skipped: ${syncWarning}`
-          : "Magnetic texture cleared.",
-      });
-    } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
       mutationInFlight.current = false;
       setPending(false);
@@ -1132,7 +1123,7 @@ export function ObjectMagneticTexturePanel({
   const valid = model.mode === "committed" &&
     validationError === null &&
     (!textureCapability || textureCapability.enabled) &&
-    !(model.targetKind === "region" && !model.regionId);
+    !(model.targetKind === "region" && !model.authoredRegion);
   const applyBlockReason = !sessionScopeKey
     ? "Session identity is not ready."
     : textureCapability && !textureCapability.enabled
@@ -1217,7 +1208,7 @@ export function ObjectMagneticTexturePanel({
           dirty={dirty}
           feedback={feedback}
           model={model}
-          onClear={() => void clearTexture()}
+          onClear={() => void saveTexture(null)}
           onActivateLoad={() => void activateLoadTextureNode()}
           onRevert={resetDraft}
           onSave={() => void saveTexture()}

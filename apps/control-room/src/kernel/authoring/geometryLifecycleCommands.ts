@@ -85,6 +85,7 @@ export const primitiveDraftOverlayStore = new PrimitiveDraftOverlayStore();
 
 export interface MeshCommandTerminalOptions {
   baseMeshRevision?: number | null;
+  allowSameMeshRevision?: boolean;
   pollDelaysMs?: readonly number[];
   requestOptions?: RequestOptions;
 }
@@ -217,7 +218,8 @@ export async function awaitMeshCommandTerminal(
     const baseMeshRevision = options.baseMeshRevision ?? null;
     if (
       meshRevision == null ||
-      (baseMeshRevision != null && meshRevision <= baseMeshRevision)
+      (baseMeshRevision != null && (meshRevision < baseMeshRevision ||
+        (meshRevision === baseMeshRevision && !options.allowSameMeshRevision)))
     ) {
       return {
         commandId,

@@ -77,7 +77,7 @@ pub use fms::{
     unpack_fms_for_visualization, unpack_fms_staged, unpack_fms_staged_readonly,
 };
 pub use store::{
-    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, CheckpointStillReferenced, GcPlan,
+    ACCEPTED_RUN_START_POLICY_KEY, AcceptedRunStartRelease, LiveComputeRequestReceipt, CheckpointStillReferenced, GcPlan,
     RunBacklogFull, SessionStore, accepted_run_start_policy_is_manual,
 };
 pub use task_cancellation::{

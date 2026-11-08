@@ -5,6 +5,7 @@ use super::*;
 pub(super) const ENV: &str = "FULLMAG_DEVELOPMENT_TERMINAL_OBSERVATION_STDIN";
 const SCHEMA: &str = "fullmag.development-terminal-observation-input.v1";
 const PROOF_SCHEMA: &str = "fullmag.development-terminal-observation-proof.v1";
+const COMPUTE_PROOF_SCHEMA: &str = "fullmag.development-terminal-observation-proof.v2";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,14 +59,46 @@ struct Proof {
     catalog_revision: u64,
     native_config_sha256: String,
     terminal_evidence_sha256: String,
-    start_release_sha256: String,
-    source_request_id: String,
-    source_sha256: String,
+    start_release_sha256: Option<String>,
+    source_request_id: Option<String>,
+    source_sha256: Option<String>,
+    compute: Option<ComputeProof>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComputeProof {
+    command_id: String,
+    receipt_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalRuntimeAnnotation {
+    schema: String,
+    api_instance_id: String,
+    run_id: String,
+    session_id: String,
+    proof_sha256: String,
+    launch_sha256: String,
+    installed_relative: String,
+    installed_sha256: String,
+    target_build_id: String,
+    target_source_sha256: String,
+    target_image_id: String,
 }
 
 struct Loaded {
     hydration: SnapshotHydration,
     identity: AcceptedRunReattachIdentity,
+}
+
+struct TerminalInstallation {
+    proof_root: std::path::PathBuf,
+    proof_sha256: String,
+    receipt: Value,
+    outcome: String,
+    command: Option<crate::types::TrackedCommandRecord>,
 }
 
 fn raw(root: &Path, relative: &str, expected: &str) -> Result<Vec<u8>> {
@@ -105,13 +138,234 @@ fn equal(value: &Value, field: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_source(
+    proof: &Proof,
+    intent: &fullmag_session::FmsRunIntent,
+    specification: &RunSpecification,
+    live: &Value,
+) -> Result<(String, String)> {
+    let command = live.get("command").context("terminal observation has no immutable command")?;
+    match (
+        proof.schema.as_str(), proof.start_release_sha256.as_deref(),
+        proof.source_request_id.as_deref(), proof.source_sha256.as_deref(), proof.compute.as_ref(),
+    ) {
+        (PROOF_SCHEMA, Some(release_sha), Some(source_id), Some(source_sha), None) => {
+            validate_digest(release_sha, "terminal observation Start release")?;
+            fullmag_session::repository_path::validate_store_id(source_id)?;
+            validate_digest(source_sha, "terminal observation startup source")?;
+            for (field, expected) in [
+                ("command_id", source_id), ("request_idempotency_key", source_id),
+                ("startup_source_sha256", source_sha),
+            ] {
+                equal(live, field, expected)?;
+            }
+            equal(command, "kind", "startup_script")?;
+            equal(command, "request_id", source_id)?;
+            equal(command, "source_sha256", source_sha)?;
+            Ok((source_id.into(), source_sha.into()))
+        }
+        (COMPUTE_PROOF_SCHEMA, None, None, None, Some(compute)) => {
+            validate_digest(&compute.receipt_sha256, "terminal observation Compute receipt")?;
+            fullmag_session::repository_path::validate_store_id(&compute.command_id)?;
+            let manual = specification.parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY)
+                .map(fullmag_session::accepted_run_start_policy_is_manual).transpose()?.unwrap_or(false);
+            if manual || live.get("startup_source_sha256").is_some_and(|value| !value.is_null()) {
+                bail!("terminal observation Compute must have its automatic Start binding");
+            }
+            let receipt = crate::live_compute_request::receipt_from_intent(intent)
+                .map_err(|error| anyhow::anyhow!("{error}"))?
+                .context("terminal observation Compute has no durable request receipt")?;
+            let kind = string(command, "kind")?;
+            let value = live.get("request_receipt").context("terminal observation Compute receipt is absent")?;
+            if !matches!(kind, "solve" | "run" | "relax")
+                || receipt.command_kind.as_deref() != Some(kind)
+                || receipt.command_id != compute.command_id
+                || receipt.client_intent_id.as_deref() != command.get("client_intent_id").and_then(Value::as_str)
+                || receipt.requested_target.is_none()
+                || fullmag_session::canonical_json_sha256(value) != compute.receipt_sha256
+            {
+                bail!("terminal observation Compute receipt differs from its command or proof");
+            }
+            equal(live, "request_idempotency_key", &receipt.key_sha256)?;
+            equal(command, "command_id", &compute.command_id)?;
+            Ok((receipt.request_id.unwrap_or(receipt.command_id), receipt.request_sha256))
+        }
+        _ => bail!("terminal observation source proof schema or fields differ"),
+    }
+}
+
+fn validate_historical_terminal_observation_annotation(
+    control_root: &Path,
+    annotation: &Value,
+    compose_project: &str,
+    control_volume: &str,
+    source_root: &str,
+    operation_image_id: &str,
+    ready_owner: &Value,
+) -> Result<()> {
+    let annotation: HistoricalRuntimeAnnotation = serde_json::from_value(annotation.clone())
+        .context("historical terminal observation annotation shape differs")?;
+    if annotation.schema != "fullmag.terminal-observation-runtime.v1" {
+        bail!("historical terminal observation annotation schema differs");
+    }
+    validate_api_instance_id(&annotation.api_instance_id, "historical terminal observation API")?;
+    for (id, label) in [
+        (&annotation.run_id, "historical terminal observation run"),
+        (&annotation.session_id, "historical terminal observation session"),
+    ] {
+        fullmag_session::repository_path::validate_store_id(id)
+            .with_context(|| format!("{label} identity is invalid"))?;
+    }
+    for (digest, label) in [
+        (&annotation.proof_sha256, "historical terminal observation proof"),
+        (&annotation.launch_sha256, "historical terminal observation launch"),
+        (&annotation.installed_sha256, "historical terminal observation installed receipt"),
+        (&annotation.target_source_sha256, "historical terminal observation target source"),
+    ] {
+        validate_digest(digest, label)?;
+    }
+    validate_commit(
+        &annotation.target_build_id,
+        "historical terminal observation target build",
+    )?;
+    validate_image_id(&annotation.target_image_id, "historical terminal observation target image")?;
+    if annotation.target_build_id != string(ready_owner, "build_commit")?
+        || annotation.target_source_sha256 != string(ready_owner, "build_snapshot")?
+        || annotation.target_image_id != operation_image_id
+    {
+        bail!("historical terminal observation target differs from the drained owner or operation image");
+    }
+    validate_image_id(operation_image_id, "terminal observation operation image")?;
+
+    let archive = format!("runtime-control/terminal-observation/{}/", annotation.proof_sha256);
+    let installed_relative = format!(
+        "terminal-observation/{}/installed-{}.json",
+        annotation.proof_sha256, annotation.api_instance_id
+    );
+    if annotation.installed_relative != installed_relative {
+        bail!("historical terminal observation installed path differs");
+    }
+
+    let prior_proof_value = control_json(
+        control_root,
+        &format!("{archive}proof.json"),
+        &annotation.proof_sha256,
+    )?;
+    let prior_proof: Proof = serde_json::from_value(prior_proof_value)
+        .context("historical terminal observation proof shape differs")?;
+    if !matches!(prior_proof.schema.as_str(), PROOF_SCHEMA | COMPUTE_PROOF_SCHEMA)
+        || prior_proof.run_id != annotation.run_id
+        || prior_proof.session_id != annotation.session_id
+        || prior_proof.session_epoch == 0
+        || prior_proof.compose_project != compose_project
+        || prior_proof.control_volume != control_volume
+        || prior_proof.source_root != source_root
+    {
+        bail!("historical terminal observation proof identity or scope differs");
+    }
+    fullmag_session::repository_path::validate_store_id(&prior_proof.run_id)?;
+    fullmag_session::repository_path::validate_store_id(&prior_proof.session_id)?;
+    validate_image_id(&prior_proof.image_id, "historical terminal observation source image")?;
+    for (digest, label) in [
+        (&prior_proof.config_sha256, "historical terminal observation source config"),
+        (&prior_proof.native_config_sha256, "historical terminal observation source native config"),
+        (&prior_proof.terminal_evidence_sha256, "historical terminal observation terminal evidence"),
+    ] {
+        validate_digest(digest, label)?;
+    }
+
+    let launch_relative = format!("{archive}launch-{}.json", annotation.launch_sha256);
+    let launch_value = control_json(control_root, &launch_relative, &annotation.launch_sha256)?;
+    let launch: LaunchBinding = serde_json::from_value(launch_value)
+        .context("historical terminal observation launch shape differs")?;
+    validate_digest(&launch.native_config_sha256, "historical terminal observation target native config")?;
+    if launch.schema != "fullmag.terminal-observation-launch.v1"
+        || launch.source_proof_sha256 != annotation.proof_sha256
+        || launch.source_native_config_sha256 != prior_proof.native_config_sha256
+        || launch.target_build_id != annotation.target_build_id
+        || launch.target_source_sha256 != annotation.target_source_sha256
+        || launch.target_image_id != annotation.target_image_id
+        || launch.terminal_evidence_sha256 != prior_proof.terminal_evidence_sha256
+    {
+        bail!("historical terminal observation launch binding differs");
+    }
+
+    let installed_value = control_json(
+        control_root,
+        &format!("runtime-control/{installed_relative}"),
+        &annotation.installed_sha256,
+    )?;
+    let terminal_outcome = string(&installed_value, "terminal_outcome")?;
+    if !matches!(terminal_outcome, "failed" | "completed") {
+        bail!("historical terminal observation installed outcome differs");
+    }
+    let expected_installed = json!({
+        "schema": "fullmag.terminal-observation-restored.v1",
+        "api_instance_id": &annotation.api_instance_id,
+        "run_id": &prior_proof.run_id,
+        "session_id": &prior_proof.session_id,
+        "session_epoch": prior_proof.session_epoch,
+        "scene_revision": prior_proof.scene_revision,
+        "terminal_outcome": terminal_outcome,
+        "proof_sha256": &annotation.proof_sha256,
+        "launch_sha256": &annotation.launch_sha256,
+        "source_image_id": &prior_proof.image_id,
+        "source_config_sha256": &prior_proof.config_sha256,
+        "target_build_id": &annotation.target_build_id,
+        "target_source_sha256": &annotation.target_source_sha256,
+        "target_image_id": &annotation.target_image_id,
+        "native_config_sha256": &launch.native_config_sha256,
+        "terminal_evidence_sha256": &prior_proof.terminal_evidence_sha256,
+    });
+    if installed_value != expected_installed {
+        bail!("historical terminal observation installed receipt differs");
+    }
+    Ok(())
+}
+
+fn validate_native_process_receipt_fields(process: &Value) -> Result<()> {
+    let mut expected = [
+        "schema", "state", "api_pid", "api_exit_code", "accepted_store",
+        "bootstrap", "qualification", "service_owner", "terminal_service_owner",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<std::collections::BTreeSet<_>>();
+    match (
+        process.get("container_recovery"),
+        process.get("container_recovery_authorization"),
+    ) {
+        (None, None) => {}
+        (Some(_), Some(_)) => {
+            expected.extend([
+                "container_recovery".to_string(),
+                "container_recovery_authorization".to_string(),
+            ]);
+        }
+        _ => bail!("historical recovery annotations are incomplete"),
+    }
+    if process.get("terminal_observation").is_some() {
+        expected.insert("terminal_observation".to_string());
+    }
+    let actual = process
+        .as_object()
+        .context("native process receipt is not an object")?
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if actual != expected {
+        bail!("terminal observation native drain has partial or unsupported fields");
+    }
+    Ok(())
+}
+
 /// No run, admission, Start or lease transitions. Canonical writer fences may
 /// update their own lock-owner metadata. Both the original
 /// native drain and exact durable accepted run are independently checked.
 fn restore(
     state: &AppState,
     input: Input,
-) -> Result<()> {
+) -> Result<TerminalInstallation> {
     if input.schema != SCHEMA {
         bail!("terminal observation input schema differs");
     }
@@ -131,7 +385,7 @@ fn restore(
     // Do not resolve original authority documents through the private input root.
     let control_root = Path::new(RUNTIME_PROVENANCE_ROOT);
     let proof: Proof = serde_json::from_slice(&raw(&proof_root, &input.proof_path, &input.proof_sha256)?)?;
-    if proof.schema != PROOF_SCHEMA {
+    if !matches!(proof.schema.as_str(), PROOF_SCHEMA | COMPUTE_PROOF_SCHEMA) {
         bail!("terminal observation proof schema differs");
     }
     validate_digest(&input.launch_sha256, "terminal observation launch binding")?;
@@ -158,13 +412,13 @@ fn restore(
     if proof.session_epoch == 0 || proof.catalog_revision == 0 {
         bail!("terminal observation has a zero epoch or catalog revision");
     }
-    for id in [&proof.run_id, &proof.project_id, &proof.session_id, &proof.source_request_id] {
+    for id in [&proof.run_id, &proof.project_id, &proof.session_id] {
         fullmag_session::repository_path::validate_store_id(id)?;
     }
     validate_image_id(&proof.image_id, "terminal observation image")?;
     for (value, name) in [
         (&proof.config_sha256, "config"), (&proof.definition_sha256, "definition"),
-        (&proof.specification_sha256, "specification"), (&proof.source_sha256, "source"),
+        (&proof.specification_sha256, "specification"),
         (&proof.native_config_sha256, "native runtime config"),
         (&proof.terminal_evidence_sha256, "canonical terminal evidence"),
     ] {
@@ -251,10 +505,6 @@ fn restore(
     equal(&drain, "backend_container_id", string(&operation, "backend_container")?)?;
     validate_container_id(string(&drain, "backend_container_id")?, "historical backend")?;
     let process = drain.get("process_receipt").context("terminal drain has no native process receipt")?;
-    let mut expected_process_fields = [
-        "schema", "state", "api_pid", "api_exit_code", "accepted_store",
-        "bootstrap", "qualification", "service_owner", "terminal_service_owner",
-    ].into_iter().collect::<std::collections::BTreeSet<_>>();
     let historical_recovery = process.get("container_recovery");
     let historical_authorization = process.get("container_recovery_authorization");
     match (historical_recovery, historical_authorization) {
@@ -279,16 +529,11 @@ fn restore(
                 equal(authorized, key, value)?;
                 if key != "request_id" { validate_digest(value, "historical recovery binding")?; }
             }
-            expected_process_fields.extend(["container_recovery", "container_recovery_authorization"]);
         }
         _ => bail!("historical recovery annotations are incomplete"),
     }
-    if process.as_object().context("native process receipt is not an object")?
-        .keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>()
-        != expected_process_fields
-    {
-        bail!("terminal observation native drain has partial or unsupported fields");
-    }
+    let historical_terminal_observation = process.get("terminal_observation");
+    validate_native_process_receipt_fields(process)?;
     equal(process, "schema", "fullmag.docker-process-tree.v1")?;
     equal(process, "state", "drained")?;
     equal(process, "accepted_store", "/state/runs/docker-all/session-store")?;
@@ -317,6 +562,17 @@ fn restore(
     if owner_identity_key(&ready) != owner_identity_key(&archived_ready) {
         bail!("historical drain differs from its immutable Ready owner");
     }
+    if let Some(annotation) = historical_terminal_observation {
+        validate_historical_terminal_observation_annotation(
+            control_root,
+            annotation,
+            &proof.compose_project,
+            &proof.control_volume,
+            &proof.source_root,
+            &proof.image_id,
+            &ready,
+        )?;
+    }
 
     let store_root = state.submit_store_root.as_deref().context("terminal observation has no accepted store")?;
     if store_root != Path::new(string(process, "accepted_store")?) {
@@ -335,23 +591,19 @@ fn restore(
         bail!("terminal observation immutable accepted identity differs");
     }
     let live = specification.parameters.get("live_workspace").context("accepted observation has no live binding")?;
-    for (field, expected) in [
-        ("api_instance_id", old_api), ("session_id", proof.session_id.as_str()),
-        ("command_id", proof.source_request_id.as_str()),
-        ("request_idempotency_key", proof.source_request_id.as_str()),
-        ("startup_source_sha256", proof.source_sha256.as_str()),
-    ] {
-        equal(live, field, expected)?;
-    }
+    equal(live, "api_instance_id", old_api)?;
+    equal(live, "session_id", &proof.session_id)?;
     if live.get("session_epoch").and_then(Value::as_u64) != Some(proof.session_epoch)
         || live.get("scene_revision").and_then(Value::as_u64) != Some(proof.scene_revision)
     {
         bail!("terminal observation live epoch or scene differs");
     }
-    let command = live.get("command").context("terminal observation has no immutable command")?;
-    equal(command, "kind", "startup_script")?;
-    equal(command, "request_id", &proof.source_request_id)?;
-    equal(command, "source_sha256", &proof.source_sha256)?;
+    let (source_request_id, source_sha256) = validate_source(&proof, &accepted.run.intent, specification, live)?;
+    if proof.schema == COMPUTE_PROOF_SCHEMA
+        && preflight.get("scene_revision").and_then(Value::as_u64) != Some(proof.scene_revision)
+    {
+        bail!("terminal observation would replace a newer editable scene");
+    }
     let scene = scene_from_definition(&accepted.run.definition_bytes, specification)?;
     if scene.revision != proof.scene_revision {
         bail!("terminal observation scene revision differs");
@@ -393,7 +645,7 @@ fn restore(
         bail!("terminal observation requires a fresh API workspace");
     }
     let fence_run_id = proof.run_id.clone();
-    let installed = ledger.with_terminal_run_evidence_fence(&store, &fence_run_id, |host_snapshot, evidence_sha256| {
+    let (receipt, command, outcome) = ledger.with_terminal_run_evidence_fence(&store, &fence_run_id, |host_snapshot, evidence_sha256| {
     if evidence_sha256 != proof.terminal_evidence_sha256 {
         bail!("terminal observation canonical terminal evidence changed");
     }
@@ -420,9 +672,14 @@ fn restore(
     if catalog.revision != proof.catalog_revision || terminal_outcome != expected_outcome {
         bail!("terminal observation catalog differs from the hash-bound public run outcome");
     }
-    raw(store.root(), &format!("{relative}/start_release.json"), &proof.start_release_sha256)?;
-    if !store.accepted_run_start_permitted(&proof.run_id)? {
-        bail!("terminal observation has no canonical Start release");
+    if let Some(release_sha256) = proof.start_release_sha256.as_deref() {
+        raw(store.root(), &format!("{relative}/start_release.json"), release_sha256)?;
+    }
+    let release_present = store.read_accepted_run_start_release(&proof.run_id)?.is_some();
+    if release_present != proof.start_release_sha256.is_some()
+        || !store.accepted_run_start_permitted(&proof.run_id)?
+    {
+        bail!("terminal observation Start evidence differs from its immutable policy");
     }
     let mut planned_inputs = std::collections::BTreeMap::new();
     for step in accepted.lowered.steps.iter().filter(|step| step.enabled
@@ -459,6 +716,8 @@ fn restore(
         }
         ensure_terminal_run_has_no_active_leases(&store, held_id)?;
     }
+    let command = crate::live_compute_request::accepted_command_readback(&store, &accepted.run.intent, terminal_outcome)
+        .map_err(|error| anyhow::anyhow!("terminal Compute journal readback: {error}"))?;
     let installed = json!({
         "schema": "fullmag.terminal-observation-restored.v1",
         "api_instance_id": state.request_scope_instance_id,
@@ -482,7 +741,7 @@ fn restore(
         hydration: SnapshotHydration {
             run_id, project_id, specification: specification.clone(), scene,
             logical_session_id: proof.session_id, session_epoch: proof.session_epoch,
-            source_request_id: proof.source_request_id, source_sha256: proof.source_sha256,
+            source_request_id, source_sha256,
             startup_provenance_sha256: None, config_sha256: proof.config_sha256,
             proof_sha256: input.proof_sha256.clone(), total_steps: catalog.tasks.len(),
             terminal_outcome: Some(terminal_outcome.into()), preparation_failure: None,
@@ -490,21 +749,17 @@ fn restore(
             metadata_schema: SCHEMA, started_at_unix_ms: Some(session_started_at),
         },
     };
-    let snapshot = build_snapshot_from_hydration(&state.current_workspace_root, &loaded.hydration)?;
+    let mut snapshot = build_snapshot_from_hydration(&state.current_workspace_root, &loaded.hydration)?;
+    if proof.schema == COMPUTE_PROOF_SCHEMA {
+        snapshot.session.status = "awaiting_command".into();
+        crate::session::refresh_runtime_status(&mut snapshot);
+    }
     state.current_live_session_epoch.store(loaded.identity.session_epoch, Ordering::Release);
     *rebind = Some(loaded.identity);
     *current = Some(snapshot);
-    Ok(installed)
+    Ok((installed, command, terminal_outcome.to_owned()))
     })?;
-    // Only publish after the real in-process installation. Never create an
-    // activation/predecessor ACK or a numerical/native-exit receipt.
-    validate_api_instance_id(&state.request_scope_instance_id, "restored API instance")?;
-    let relative = format!("terminal-observation/{}/installed-{}.json",
-        input.proof_sha256, state.request_scope_instance_id);
-    let mut bytes = fullmag_session::canonical_json_bytes(&installed);
-    bytes.push(b'\n');
-    publish_immutable_restore_bytes(&proof_root, &relative, &bytes)?;
-    Ok(())
+    Ok(TerminalInstallation { proof_root, proof_sha256: input.proof_sha256, receipt, outcome, command })
 }
 
 pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), String> {
@@ -525,14 +780,191 @@ pub(super) async fn restore_before_listen(state: &Arc<AppState>) -> Result<(), S
     let input: Input = serde_json::from_slice(&bytes)
         .map_err(|error| format!("terminal observation input is invalid: {error}"))?;
     let state_for_load = Arc::clone(state);
-    tokio::task::spawn_blocking(move || restore(&state_for_load, input))
+    let restored = tokio::task::spawn_blocking(move || restore(&state_for_load, input))
         .await.map_err(|error| format!("terminal observation task failed: {error}"))?
-        .map_err(|error| format!("terminal observation validation failed: {error:#}"))
+        .map_err(|error| format!("terminal observation validation failed: {error:#}"))?;
+
+    let _transition = state.current_live_session_transition.lock().await;
+    let snapshot = state.current_live_state.read().await.as_ref().cloned()
+        .ok_or_else(|| "terminal observation lost its installed workspace".to_owned())?;
+    crate::live_command_journal::recover(state, &snapshot)
+        .await.map_err(|error| format!("terminal observation command journal recovery failed: {error}"))?;
+    if let Some(command) = restored.command {
+        crate::live_command_journal::project_terminal_compute(state, &snapshot, command, &restored.outcome)
+            .await.map_err(|error| format!("terminal observation command projection failed: {error}"))?;
+    }
+    drop(_transition);
+
+    // Publish only after both read models are installed. No Start, native
+    // lease, or numerical receipt is written by this path.
+    validate_api_instance_id(&state.request_scope_instance_id, "restored API instance")
+        .map_err(|error| error.to_string())?;
+    let relative = format!("terminal-observation/{}/installed-{}.json",
+        restored.proof_sha256, state.request_scope_instance_id);
+    let mut bytes = fullmag_session::canonical_json_bytes(&restored.receipt);
+    bytes.push(b'\n');
+    tokio::task::spawn_blocking(move || publish_immutable_restore_bytes(&restored.proof_root, &relative, &bytes))
+        .await.map_err(|error| format!("terminal observation receipt task failed: {error}"))?
+        .map(|_| ())
+        .map_err(|error| format!("terminal observation receipt publication failed: {error:#}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HISTORICAL_COMPOSE: &str = "fullmag-p22";
+    const HISTORICAL_CONTROL_VOLUME: &str = "fullmag-p22-control";
+    const HISTORICAL_SOURCE_ROOT: &str = "/workspace/fullmag";
+    const HISTORICAL_API_ID: &str = "12345678-1234-4234-8234-123456789abc";
+
+    fn canonical_record(value: &Value) -> Vec<u8> {
+        let mut bytes = fullmag_session::canonical_json_bytes(value);
+        bytes.push(b'\n');
+        bytes
+    }
+
+    fn write_record(root: &Path, relative: &str, bytes: &[u8]) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("record parent")).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn historical_annotation_fixture(
+        proof_schema: &str,
+    ) -> (tempfile::TempDir, Value, Value, String) {
+        let root = tempfile::tempdir().unwrap();
+        let source_image = format!("sha256:{}", "c".repeat(64));
+        let operation_image = format!("sha256:{}", "d".repeat(64));
+        let target_build_id = "a".repeat(40);
+        let target_source_sha256 = "b".repeat(64);
+        let source_config_sha256 = "3".repeat(64);
+        let source_native_config_sha256 = "4".repeat(64);
+        let terminal_evidence_sha256 = "5".repeat(64);
+        let target_native_config_sha256 = "6".repeat(64);
+        let mut proof = json!({
+            "schema": proof_schema,
+            "original_iteration": "0123456789abcdef0123456789abcdef",
+            "operation_sha256": "7".repeat(64),
+            "preflight_raw_sha256": "8".repeat(64),
+            "drain_sha256": "9".repeat(64),
+            "ready_owner_sha256": "a".repeat(64),
+            "compose_project": HISTORICAL_COMPOSE,
+            "control_volume": HISTORICAL_CONTROL_VOLUME,
+            "source_root": HISTORICAL_SOURCE_ROOT,
+            "image_id": source_image,
+            "config_sha256": source_config_sha256,
+            "run_id": "historical-run-6c24",
+            "project_id": "historical-project",
+            "session_id": "historical-session-275",
+            "session_epoch": 275,
+            "scene_revision": 6,
+            "definition_sha256": "1".repeat(64),
+            "intent_sha256": "2".repeat(64),
+            "specification_sha256": "3".repeat(64),
+            "catalog_sha256": "4".repeat(64),
+            "catalog_revision": 3,
+            "native_config_sha256": source_native_config_sha256,
+            "terminal_evidence_sha256": terminal_evidence_sha256,
+        });
+        if proof_schema == PROOF_SCHEMA {
+            proof["start_release_sha256"] = json!("5".repeat(64));
+            proof["source_request_id"] = json!("historical-source-request");
+            proof["source_sha256"] = json!("6".repeat(64));
+        } else {
+            proof["compute"] = json!({
+                "command_id": "historical-compute-command",
+                "receipt_sha256": "7".repeat(64),
+            });
+        }
+        let proof_bytes = canonical_record(&proof);
+        let proof_sha256 = fullmag_session::hex_sha256(&proof_bytes);
+        let archive = format!("runtime-control/terminal-observation/{proof_sha256}");
+        write_record(root.path(), &format!("{archive}/proof.json"), &proof_bytes);
+
+        let launch = json!({
+            "schema": "fullmag.terminal-observation-launch.v1",
+            "source_proof_sha256": proof_sha256,
+            "source_native_config_sha256": source_native_config_sha256,
+            "target_build_id": target_build_id,
+            "target_source_sha256": target_source_sha256,
+            "target_image_id": operation_image,
+            "native_config_sha256": target_native_config_sha256,
+            "terminal_evidence_sha256": terminal_evidence_sha256,
+        });
+        let launch_bytes = canonical_record(&launch);
+        let launch_sha256 = fullmag_session::hex_sha256(&launch_bytes);
+        write_record(
+            root.path(),
+            &format!("{archive}/launch-{launch_sha256}.json"),
+            &launch_bytes,
+        );
+
+        let installed_relative = format!(
+            "terminal-observation/{proof_sha256}/installed-{HISTORICAL_API_ID}.json"
+        );
+        let installed = json!({
+            "schema": "fullmag.terminal-observation-restored.v1",
+            "api_instance_id": HISTORICAL_API_ID,
+            "run_id": "historical-run-6c24",
+            "session_id": "historical-session-275",
+            "session_epoch": 275,
+            "scene_revision": 6,
+            "terminal_outcome": "completed",
+            "proof_sha256": proof_sha256,
+            "launch_sha256": launch_sha256,
+            "source_image_id": source_image,
+            "source_config_sha256": source_config_sha256,
+            "target_build_id": target_build_id,
+            "target_source_sha256": target_source_sha256,
+            "target_image_id": operation_image,
+            "native_config_sha256": target_native_config_sha256,
+            "terminal_evidence_sha256": terminal_evidence_sha256,
+        });
+        let installed_bytes = canonical_record(&installed);
+        let installed_sha256 = fullmag_session::hex_sha256(&installed_bytes);
+        write_record(
+            root.path(),
+            &format!("runtime-control/{installed_relative}"),
+            &installed_bytes,
+        );
+
+        let annotation = json!({
+            "schema": "fullmag.terminal-observation-runtime.v1",
+            "api_instance_id": HISTORICAL_API_ID,
+            "run_id": "historical-run-6c24",
+            "session_id": "historical-session-275",
+            "proof_sha256": proof_sha256,
+            "launch_sha256": launch_sha256,
+            "installed_relative": installed_relative,
+            "installed_sha256": installed_sha256,
+            "target_build_id": target_build_id,
+            "target_source_sha256": target_source_sha256,
+            "target_image_id": operation_image,
+        });
+        let ready_owner = json!({
+            "build_commit": target_build_id,
+            "build_snapshot": target_source_sha256,
+        });
+        (root, annotation, ready_owner, operation_image)
+    }
+
+    fn validate_fixture(
+        root: &Path,
+        annotation: &Value,
+        ready_owner: &Value,
+        operation_image: &str,
+    ) -> Result<()> {
+        validate_historical_terminal_observation_annotation(
+            root,
+            annotation,
+            HISTORICAL_COMPOSE,
+            HISTORICAL_CONTROL_VOLUME,
+            HISTORICAL_SOURCE_ROOT,
+            operation_image,
+            ready_owner,
+        )
+    }
 
     #[test]
     fn private_input_rejects_unknown_and_incomplete_controls() {
@@ -546,5 +978,114 @@ mod tests {
             "proof_path":"terminal-observation/proof.json", "proof_sha256":"c".repeat(64),
             "force":true,
         })).is_err());
+    }
+
+    #[test]
+    fn process_receipt_allows_only_supported_optional_annotation_shapes() {
+        let base = json!({
+            "schema": "fullmag.docker-process-tree.v1",
+            "state": "drained",
+            "api_pid": 123,
+            "api_exit_code": 0,
+            "accepted_store": "/state/runs/docker-all/session-store",
+            "bootstrap": null,
+            "qualification": null,
+            "service_owner": {},
+            "terminal_service_owner": {},
+        });
+        assert!(validate_native_process_receipt_fields(&base).is_ok());
+
+        let mut annotation_only = base.clone();
+        annotation_only["terminal_observation"] = json!({});
+        assert!(validate_native_process_receipt_fields(&annotation_only).is_ok());
+
+        let mut with_recovery = base.clone();
+        with_recovery["container_recovery"] = json!({});
+        with_recovery["container_recovery_authorization"] = json!({});
+        assert!(validate_native_process_receipt_fields(&with_recovery).is_ok());
+
+        with_recovery["terminal_observation"] = json!({});
+        assert!(validate_native_process_receipt_fields(&with_recovery).is_ok());
+
+        let mut partial_recovery = base.clone();
+        partial_recovery["container_recovery"] = json!({});
+        assert!(validate_native_process_receipt_fields(&partial_recovery).is_err());
+
+        let mut unknown = base;
+        unknown["unrecognized"] = json!(true);
+        assert!(validate_native_process_receipt_fields(&unknown).is_err());
+    }
+
+    #[test]
+    fn historical_terminal_observation_annotation_accepts_producer_cas_bindings() {
+        let (root, annotation, ready_owner, operation_image) =
+            historical_annotation_fixture(PROOF_SCHEMA);
+        validate_fixture(root.path(), &annotation, &ready_owner, &operation_image)
+            .expect("known historical terminal observation receipt");
+        let proof_path = root.path().join(format!(
+            "runtime-control/terminal-observation/{}/proof.json",
+            annotation["proof_sha256"].as_str().unwrap(),
+        ));
+        let prior_proof: Value = serde_json::from_slice(&std::fs::read(proof_path).unwrap()).unwrap();
+        assert_ne!(
+            prior_proof["image_id"].as_str(),
+            annotation["target_image_id"].as_str(),
+            "target image is pinned to the operation while source proof image may be older"
+        );
+        assert_eq!(annotation["target_image_id"].as_str(), Some(operation_image.as_str()));
+    }
+
+    #[test]
+    fn historical_compute_terminal_observation_annotation_accepts_producer_cas_bindings() {
+        let (root, annotation, ready_owner, operation_image) =
+            historical_annotation_fixture(COMPUTE_PROOF_SCHEMA);
+        validate_fixture(root.path(), &annotation, &ready_owner, &operation_image)
+            .expect("known historical Compute terminal observation receipt");
+        let proof_path = root.path().join(format!(
+            "runtime-control/terminal-observation/{}/proof.json",
+            annotation["proof_sha256"].as_str().unwrap(),
+        ));
+        let prior_proof: Value = serde_json::from_slice(&std::fs::read(proof_path).unwrap()).unwrap();
+        assert_eq!(prior_proof["schema"], COMPUTE_PROOF_SCHEMA);
+        assert_eq!(prior_proof["compute"]["command_id"], "historical-compute-command");
+        assert!(prior_proof.get("start_release_sha256").is_none());
+        assert!(prior_proof.get("source_request_id").is_none());
+        assert!(prior_proof.get("source_sha256").is_none());
+    }
+
+    #[test]
+    fn historical_terminal_observation_annotation_rejects_partial_tampered_and_foreign_pins() {
+        let (root, annotation, ready_owner, operation_image) =
+            historical_annotation_fixture(COMPUTE_PROOF_SCHEMA);
+
+        let mut unknown = annotation.clone();
+        unknown["unexpected"] = json!(true);
+        assert!(validate_fixture(root.path(), &unknown, &ready_owner, &operation_image).is_err());
+
+        let mut partial = annotation.clone();
+        partial.as_object_mut().unwrap().remove("installed_relative");
+        assert!(validate_fixture(root.path(), &partial, &ready_owner, &operation_image).is_err());
+
+        let mut foreign_session = annotation.clone();
+        foreign_session["session_id"] = json!("a-different-session");
+        assert!(validate_fixture(root.path(), &foreign_session, &ready_owner, &operation_image).is_err());
+
+        for (field, value) in [
+            ("target_build_id", json!("f".repeat(40))),
+            ("target_source_sha256", json!("e".repeat(64))),
+            ("target_image_id", json!(format!("sha256:{}", "e".repeat(64)))),
+        ] {
+            let mut foreign_pin = annotation.clone();
+            foreign_pin[field] = value;
+            assert!(validate_fixture(root.path(), &foreign_pin, &ready_owner, &operation_image).is_err());
+        }
+
+        let installed_relative = annotation["installed_relative"].as_str().unwrap();
+        std::fs::write(
+            root.path().join("runtime-control").join(installed_relative),
+            b"tampered\n",
+        )
+        .unwrap();
+        assert!(validate_fixture(root.path(), &annotation, &ready_owner, &operation_image).is_err());
     }
 }

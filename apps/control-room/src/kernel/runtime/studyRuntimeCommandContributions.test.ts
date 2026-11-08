@@ -30,7 +30,10 @@ import {
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
-import type { ControlRoomApi } from "../api/ControlRoomApi";
+import { ControlRoomApiError, type ControlRoomApi } from "../api/ControlRoomApi";
+import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
+import { ObjectEditSessionController } from "../authoring/object-edit/ObjectEditSessionController";
+import type { GeometryObjectDraft } from "../authoring/object-edit/objectEditTypes";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -49,6 +52,8 @@ import {
 import {
   resolveViewport3DFieldVectorResourceKey,
 } from "@/modules/viewport-3d/viewport3dResources";
+
+import { setStageInitialStateChoice } from "./studyStageInitialState";
 
 import {
   requiresExplicitMesh,
@@ -366,6 +371,493 @@ function runtimeResourceData({
 }
 
 describe("study runtime command contributions", () => {
+  it.each(["run", "relax"] as const)("executes only the clicked authored %s stage", async (kind) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async (_command: unknown) => ({
+      accepted: true,
+      command_id: "cmd-stage",
+    }));
+    const selection = selectionController();
+    selection.set(studyStageSelection(0, "another-stage").get() as never, "explorer");
+    const resources = runtimeResourceData({ sceneRevision: 9, meshRevision: 4 });
+    const status = resources[SESSION_STATUS_RESOURCE_KEY] as { resources: object };
+    const context = {
+      api: { commands: { submit } } as never,
+      input: { stageId: "clicked-stage" },
+      resourceData: {
+        ...resources,
+        [SESSION_STATUS_RESOURCE_KEY]: {
+          ...status,
+          resources: { ...status.resources, domain_generation_id: "grid-a" },
+        },
+        [MODEL_SCENE_PATH]: {
+          scene_revision: 9,
+          study: {
+            study_pipeline: { version: "study_pipeline.v2", nodes: [
+              { node_kind: "group", id: "batch", children: [
+                { node_kind: "primitive", id: "clicked-stage", stage_kind: kind },
+              ] },
+            ] },
+          },
+        },
+      },
+      selection,
+      source: "explorer" as const,
+    };
+
+    expect(registry.isEnabled("study.execute-stage", context)).toBe(true);
+    expectPendingAcceptedRuntimeCommand(
+      await registry.execute("study.execute-stage", context),
+      "Stage compute command accepted.",
+      "cmd-stage",
+    );
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0][0]).toMatchObject({
+      kind,
+      initial_state: { kind: "default_for_target" },
+      precondition: { scene_revision: 9, mesh_revision: 4, domain_generation_id: "grid-a" },
+      target: { kind: "stage_id", stage_id: "clicked-stage" },
+    });
+    expect(submit.mock.calls[0][0]).not.toHaveProperty("until_seconds");
+    expect(selection.get()?.ref).toMatchObject({ stageId: "another-stage" });
+  });
+
+  it("uses the exact prepared publication and rejects its replacement before submission", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-stage" }));
+    const api = { commands: { submit } } as unknown as ControlRoomApi;
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const choice = { kind: "prepared", scene_revision: 9, initial_state_revision: 7, publication_id: "preview-a" } as const;
+    const base = runtimeResourceData({ sceneRevision: 9, meshRevision: 4 });
+    const resources = (publicationId: string) => ({
+      ...base,
+      [MODEL_SCENE_PATH]: {
+        revision: 9,
+        study: { stages: [{ kind: "relax", stage_id: "clicked-stage" }] },
+      },
+      [MODEL_READINESS_PATH]: {
+        ...(base[MODEL_READINESS_PATH] as object),
+        prepared_initial_state: {
+          ...choice, publication_id: publicationId, observation_frame_id: "frame-a",
+          domain_generation_id: "domain-a", values_sha256: "a".repeat(64),
+        },
+      },
+    });
+    const context = {
+      api, input: { stageId: "clicked-stage" }, sessionScopeKey, source: "explorer" as const,
+      resourceData: resources("preview-a"),
+    };
+    setStageInitialStateChoice(api, sessionScopeKey, "clicked-stage", 9, choice);
+
+    await expect(registry.execute("study.execute-stage", context)).resolves.toMatchObject({ status: "pending" });
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      initial_state: { kind: "authored_initial_state", source: choice },
+      target: { kind: "stage_id", stage_id: "clicked-stage" },
+    }), expect.anything());
+
+    const replaced = { ...context, resourceData: resources("preview-b") };
+    expect(registry.isEnabled("study.execute-stage", replaced)).toBe(false);
+    await expect(registry.execute("study.execute-stage", replaced)).resolves.toMatchObject({ status: "failed" });
+    expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it("uses the selected artifact for the clicked stage and rejects a stale source pin", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-stage" }));
+    const api = { commands: { submit } } as unknown as ControlRoomApi;
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const initialState = {
+      kind: "stage_result", run_id: "relax-a", step_id: "step-a", case_id: "nominal",
+      artifact_id: "state-a", content_sha256: "a".repeat(64),
+    } as const;
+    const resources = (sceneRevision: number) => ({
+      ...runtimeResourceData({ sceneRevision, meshRevision: 4 }),
+      [MODEL_SCENE_PATH]: {
+        revision: sceneRevision,
+        study: { stages: [{ kind: "relax", stage_id: "clicked-stage" }] },
+      },
+    });
+    const context = {
+      api, input: { stageId: "clicked-stage" }, sessionScopeKey, source: "explorer" as const,
+      resourceData: resources(9),
+    };
+    setStageInitialStateChoice(api, sessionScopeKey, "clicked-stage", 9, initialState);
+
+    await expect(registry.execute("study.execute-stage", context)).resolves.toMatchObject({ status: "pending" });
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ initial_state: initialState, target: { kind: "stage_id", stage_id: "clicked-stage" } }),
+      expect.anything(),
+    );
+
+    const newer = { ...context, resourceData: resources(10) };
+    expect(registry.isEnabled("study.execute-stage", newer)).toBe(false);
+    await expect(registry.execute("study.execute-stage", newer)).resolves.toMatchObject({ status: "failed" });
+    expect(submit).toHaveBeenCalledOnce();
+
+    await expect(registry.execute("study.execute-stage", newer, {
+      stageId: "clicked-stage", initialState: { kind: "authored_study" },
+    })).resolves.toMatchObject({ status: "pending" });
+    expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
+      initial_state: { kind: "authored_initial_state", source: { kind: "study", scene_revision: 10 } },
+    }), expect.anything());
+  });
+
+  it.each([
+    ["scene revision", { scene_revision: 10 }, "previous-run"],
+    ["mesh revision", { mesh_revision: 5 }, "previous-run"],
+    ["domain generation", { domain_generation_id: "grid-b" }, "previous-run"],
+    ["region initial state revision", { region_initial_state_revision: 19 }, "previous-run"],
+    ["current run", {}, "other-run"],
+    ["current run", {}, null],
+  ] as const)("stops a stage start when the %s changes during refresh", async (field, changed, runId) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = runtimeResourceData({
+      sceneRevision: 9, meshRevision: 4, regionInitialStateRevision: 18,
+    });
+    const original = {
+      ...(resources[SESSION_STATUS_RESOURCE_KEY] as object),
+      run: { run_id: "previous-run" },
+      resources: { scene_revision: 9, mesh_revision: 4, domain_generation_id: "grid-a", region_initial_state_revision: 18 },
+    };
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
+
+    const result = await registry.execute("study.execute-stage", {
+      api: {
+        commands: { submit },
+        sessions: { current: { status: vi.fn(async () => ({
+          ...original,
+          resources: { ...original.resources, ...changed },
+          run: runId ? { run_id: runId } : null,
+        })) } },
+      } as never,
+      input: { stageId: "relax-b" },
+      resourceData: {
+        ...resources,
+        [SESSION_STATUS_RESOURCE_KEY]: original,
+        [MODEL_SCENE_PATH]: {
+          scene_revision: 9,
+          study: { stages: [{ kind: "relax", stage_id: "relax-b" }] },
+        },
+      },
+      source: "explorer",
+    });
+
+    expect(result).toEqual({ status: "failed", message: expect.stringContaining(field) });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["run", true, 0],
+    ["run", false, 0],
+    ["relax", true, 0],
+    ["relax", false, 0],
+    ["run", true, 500],
+    ["relax", true, 500],
+    ["relax", false, 503],
+  ] as const)("reconciles a lost %s submission response without sending the command again (record found: %s, HTTP status: %s)", async (kind, published, status) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const bus = new EventBus<KernelEventMap>();
+    const observe = vi.fn();
+    bus.on("study:compute-observation", observe);
+    let entry: { client_intent_id: string; command_id: string; kind: string } | undefined;
+    const submit = vi.fn(async (request: { client_intent_id: string; kind: string }) => {
+      expect(observe).toHaveBeenCalledWith({
+        clientIntentId: request.client_intent_id, kind, sessionScopeKey, state: "started",
+      });
+      if (published) {
+        entry = {
+          client_intent_id: request.client_intent_id,
+          command_id: "accepted-stage",
+          kind: request.kind,
+        };
+      }
+      throw status === 0
+        ? new ControlRoomApiError("Connection lost", 0, null, "API_UNAVAILABLE")
+        : new ControlRoomApiError("Response publication failed", status, "request-a", "INTERNAL_ERROR");
+    });
+    const list = vi.fn(async () => ({ commands: entry ? [entry] : [] }));
+    const detail = vi.fn(async () => entry);
+
+    const result = await registry.execute("study.execute-stage", {
+      api: { commands: { submit, list, detail } } as never,
+      bus,
+      input: { stageId: "chosen-stage" },
+      resourceData: {
+        ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+        [MODEL_SCENE_PATH]: {
+          scene_revision: 9,
+          study: { stages: [{ kind, stage_id: "chosen-stage" }] },
+        },
+      },
+      sessionScopeKey,
+      source: "explorer",
+    });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      clientIntentId: submit.mock.calls[0][0].client_intent_id,
+      clientIntentKind: kind,
+      observation: published ? "waiting" : "publication-unconfirmed",
+      status: "pending",
+    });
+    if (published) {
+      expect(detail).toHaveBeenCalledWith("accepted-stage", { sessionScopeKey });
+      expect(result.commandId).toBe("accepted-stage");
+    } else {
+      expect(detail).not.toHaveBeenCalled();
+      expect(result.commandId).toBeUndefined();
+    }
+  });
+
+  it.each([
+    [409, "command_current_run_changed"],
+    [503, "accepted_preparation_pending"],
+    [503, "accepted_execution_store_unavailable"],
+    [503, "accepted_held_supersession_pending"],
+  ] as const)("keeps a definitive admission response (%s, %s) separate from a lost Compute response", async (status, code) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => {
+      throw new ControlRoomApiError("Compute is not ready.", status, "request-a", code);
+    });
+    const list = vi.fn(async () => ({ commands: [] }));
+    const detail = vi.fn();
+    const bus = new EventBus<KernelEventMap>();
+    const observe = vi.fn();
+    bus.on("study:compute-observation", observe);
+    const result = await registry.execute("study.execute-stage", {
+      api: { commands: { submit, list, detail } } as never,
+      bus,
+      input: { stageId: "chosen-stage" },
+      resourceData: {
+        ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+        [MODEL_SCENE_PATH]: {
+          scene_revision: 9,
+          study: { stages: [{ kind: "relax", stage_id: "chosen-stage" }] },
+        },
+      },
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "explorer",
+    });
+
+    expect(result).toEqual({ status: "failed", message: "Compute is not ready." });
+    expect(observe.mock.calls.map(([event]) => event.state)).toEqual(["started", "rejected"]);
+    expect(submit).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledOnce();
+    expect(detail).not.toHaveBeenCalled();
+  });
+
+  it("retains the submitted intent when the pinned API instance changes", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const bus = new EventBus<KernelEventMap>();
+    const observe = vi.fn();
+    bus.on("study:compute-observation", observe);
+    const submit = vi.fn(async () => {
+      throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, "request-a", "API_INSTANCE_MISMATCH");
+    });
+    const list = vi.fn(async () => ({ commands: [] }));
+    const result = await registry.execute("study.execute-stage", {
+      api: { commands: { submit, list } } as never,
+      bus,
+      input: { stageId: "chosen-stage" },
+      resourceData: {
+        ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+        [MODEL_SCENE_PATH]: {
+          scene_revision: 9,
+          study: { stages: [{ kind: "relax", stage_id: "chosen-stage" }] },
+        },
+      },
+      sessionScopeKey: "session=A&epoch=A%401&request_scope_epoch=api%3A1",
+      source: "explorer",
+    });
+    expect(result).toEqual({ status: "failed", message: "API instance changed; reopen Fullmag" });
+    expect(observe.mock.calls.map(([event]) => event.state)).toEqual(["started"]);
+    expect(submit).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the displayed scene before starting the whole Study", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      resourceData: {
+        ...runtimeResourceData({ sceneRevision: 10 }),
+        [MODEL_SCENE_PATH]: { scene_revision: 9, study: { stages: [] } },
+      },
+      source: "explorer" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(false);
+    expect(registry.get("study.run")?.disabledReason?.(context)).toContain("displayed Study");
+  });
+
+  it.each(["study.run", "study.execute-stage"] as const)(
+    "blocks %s while another Inspector draft is dirty without applying it",
+    async (id) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const pendingForms = new PendingFormRegistry();
+      const apply = vi.fn(async () => true);
+      const reset = vi.fn();
+      const dirtyForm = { apply, applying: false, dirty: true, mode: "staged", reset, valid: true } as const;
+      pendingForms.register(Symbol("material"), dirtyForm);
+      pendingForms.register(Symbol("active-clean-form"), { ...dirtyForm, dirty: false });
+      const submit = vi.fn();
+      const context = {
+        api: { commands: { submit } } as never,
+        input: { stageId: "chosen-stage" },
+        pendingForms,
+        resourceData: {
+          ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+          [MODEL_SCENE_PATH]: {
+            scene_revision: 9,
+            study: { stages: [{ kind: "relax", stage_id: "chosen-stage" }] },
+          },
+        },
+        source: "explorer" as const,
+      };
+
+      expect(registry.isEnabled(id, context)).toBe(false);
+      expect(await registry.execute(id, context)).toMatchObject({
+        message: expect.stringContaining("Apply or discard"),
+        status: "failed",
+      });
+      expect(apply).not.toHaveBeenCalled();
+      expect(reset).not.toHaveBeenCalled();
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("blocks Compute only for geometry writes in the current session", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const objectEditSession = new ObjectEditSessionController<GeometryObjectDraft>();
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    objectEditSession.beginSceneMutation("another-session", "other-object");
+    const submit = vi.fn();
+    const context = {
+      api: { commands: { submit } } as never,
+      objectEditSession,
+      resourceData: runtimeResourceData(),
+      sessionScopeKey,
+      source: "ribbon" as const,
+    };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    objectEditSession.beginSceneMutation(sessionScopeKey, "object");
+    expect(await registry.execute("study.run", context)).toMatchObject({
+      message: expect.stringContaining("pending geometry change"),
+      status: "failed",
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("rechecks Inspector edits after refreshing Compute preconditions", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const pendingForms = new PendingFormRegistry();
+    const owner = Symbol("texture");
+    const submit = vi.fn();
+    const list = vi.fn(async () => {
+      pendingForms.register(owner, {
+        apply: async () => false, applying: false, dirty: true, mode: "staged",
+        reset: () => undefined, valid: true,
+      });
+      return { commands: [] };
+    });
+
+    const result = await registry.execute("study.run", {
+      api: { commands: { list, submit } } as never,
+      pendingForms,
+      resourceData: runtimeResourceData(),
+      source: "ribbon",
+    });
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ message: expect.stringContaining("Apply or discard"), status: "failed" });
+    expect(pendingForms.getTransitionSnapshot().dirtyOwnerCount).toBe(1);
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("honors ready terminal fields when the workspace is awaiting its next command", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resources = runtimeResourceData({
+      discretization: "fem",
+      explicitTopology: true,
+      meshRevision: 0,
+      runtimeState: "awaiting_command",
+      runtimeControls: [{ kind: "compute_fields", enabled: true }],
+    });
+    const resourceData = {
+      ...resources,
+      [SESSION_STATUS_RESOURCE_KEY]: {
+        ...(resources[SESSION_STATUS_RESOURCE_KEY] as object),
+        run: { run_id: "finished-run" },
+      },
+      [SIMULATION_STAGES_EXECUTION_PATH]: {
+        run_id: "finished-run",
+        runtime_state: "completed",
+      },
+    };
+    expect(registry.isEnabled("study.compute-fields", {
+      api: {} as never,
+      resourceData,
+      source: "explorer",
+    })).toBe(true);
+  });
+
+  it("rejects skipping a clicked stage while another stage is active", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const context = {
+      api: {} as never,
+      input: { stageId: "stage-000" },
+      resourceData: runtimeResourceData({ activeStageIndex: 1, runtimeState: "running" }),
+      source: "explorer" as const,
+    };
+    expect(registry.isEnabled("study.skip", context)).toBe(false);
+    expect(registry.get("study.skip")?.disabledReason?.(context))
+      .toBe("Only the clicked active stage can be skipped.");
+    expect(registry.isEnabled("study.skip", {
+      ...context,
+      input: { stageId: "stage-001" },
+    })).toBe(true);
+  });
+
+  it("removes the clicked flat stage and keeps another stage selected", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const before = {
+      scene_revision: 3,
+      study: { stages: [
+        { kind: "relax", stage_id: "clicked" },
+        { kind: "run", stage_id: "selected" },
+      ] },
+    };
+    const after = { scene_revision: 4, study: { stages: [before.study.stages[1]] } };
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const commitTransaction = vi.fn(async () => ({ scene_revision: 4 }));
+    const api = {
+      model: { scene: vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after), commitTransaction },
+    };
+    const history = new AuthoringHistoryController(api as never, resources);
+    const selection = selectionController();
+    selection.set(studyStageSelection(1, "selected").get() as never, "explorer");
+    expect(await registry.execute("study.remove-selected-stage", {
+      api: api as never,
+      authoringHistory: history,
+      input: { stageId: "clicked" },
+      resourceData: { [MODEL_SCENE_PATH]: before },
+      resources,
+      selection,
+      source: "explorer",
+    })).toMatchObject({ status: "completed" });
+    expect(commitTransaction).toHaveBeenCalledWith({
+      base_revision: 3,
+      kind: "merge_patch",
+      merge_patch: { study: after.study },
+    }, undefined);
+    expect(selection.get()?.ref).toMatchObject({ stageId: "selected" });
+  });
+
   it("uses active lane ahead of explicit-topology compatibility flags", () => {
     const activeFdm = {
       capabilities: {
@@ -3433,6 +3925,23 @@ describe("study runtime command contributions", () => {
     expect(registry.isEnabled("study.run", currentMeshContext)).toBe(true);
   });
 
+  it("uses backend mesh readiness after a compatible scene edit", () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      meshRevision: 5,
+      meshSourceSceneRevision: 3,
+      sceneRevision: 4,
+      runtimeControls: [{ kind: "compute_fields", enabled: true }],
+    });
+    resourceData[MODEL_READINESS_PATH] = {
+      ...(resourceData[MODEL_READINESS_PATH] as object),
+      checks: [{ id: "discretization", label: "Discretization", state: "complete" }],
+    };
+    const context = { api: {} as never, resourceData, source: "test" as const };
+    expect(registry.isEnabled("study.compute-fields", context)).toBe(true);
+  });
+
   it("does not bypass local FEM mesh readiness when backend reports compute enabled", () => {
     const registry = registryWithStudyRuntimeCommands();
     const resourceData = runtimeResourceData({
@@ -3763,11 +4272,14 @@ describe("study runtime command contributions", () => {
         kind: "solve",
         precondition: {
           command_revision: 0,
+          current_run: { kind: "none" },
+          mesh_revision: 0,
           region_coefficients_revision: 17,
           region_initial_state_revision: 18,
           region_membership_revision: 16,
           region_topology_revision: 15,
           runtime_state: "awaiting_command",
+          scene_revision: 3,
         },
       }),
     );

@@ -856,20 +856,45 @@ Oryginalny receipt i jego archiwum muszą pozostać identyczne. Obecność bloka
 CAS, terminalu lub wskaźników current/verified powoduje odmowę. Nowa operacja
 sprawdza pełne powiązanie wcześniejszego przygotowania, proof, result i helpera,
 a następnie wykonuje dwie obserwacje i trzecią bezpośrednio przed CAS, zachowując
-dotychczasową kwalifikację obcych mountów Windows/WSL. Świeże dowody trafiają
+zakres group-local: logicznych konsumentów własnego projektu i wolumenu oraz
+bezpośrednich bindów, bez fizycznej analizy cudzych checkoutów Windows/WSL.
+Świeże dowody trafiają
 do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
 CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
 SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
-Odczyty pełnych dowodów niezależnych źródeł Windows wykonuje najwyżej czterech
-obserwatorów równocześnie, z osobną kopią ustalonego kontekstu. Współdzielenie
-pomiaru tego samego tekstowego źródła nie współdzieli autoryzacji konsumenta:
-każdy kontener nadal przechodzi kontrole, także dla `absent-stopped`.
-Koordynator zbiera całą partię i ponownie sprawdza kontenery oraz kontekst.
-Równoległość skraca okno obserwacji; pełna równość dowodów, wszystkie trzy
-obserwacje i warunki CAS pozostają obowiązkowe. Ciągły churn nadal powoduje odmowę.
+Dawne równoległe obserwacje fizycznych cudzych checkoutów nie są częścią
+tego kontraktu group-local; nie są wymagane do tej failure-only publikacji.
 Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
-historycznego proof jako świeżego dowodu. Testy źródłowe nie zastępują
+historycznego proof jako świeżego dowodu. Wariant nie łączy się z
+`--recover-absent-helper`: przygotowana generacja nadal wymaga oryginalnego
+żywego helpera. Nowe pliki i terminal są publikowane pod wspólnymi blokadami
+transakcji, z ponownym sprawdzeniem hashy starej generacji przed zapisem.
+Testy źródłowe nie zastępują
 potwierdzenia konkretnej operacji na silniku Docker.
+
+### Pusty bootstrap po SIGABRT API, bez native ownera
+
+`stop-empty-api-abort-volume` obsługuje jawnie wybraną próbę development, która
+zbudowała i opublikowała pakiet, ale API zakończyło start przez SIGABRT (-6)
+przed powstaniem ownera i jakiegokolwiek runu. Wymaga `--attempt`,
+`--config-sha256`, `--source-root` i `--port`; `--preview` zapisuje plan bez
+zatrzymania, a `--apply --expected-plan-sha256 <sha256>` ponownie sprawdza
+ten sam plan pod blokadą operacji i zatrzymuje dokładnie przypiętą parę.
+
+Dowód obejmuje oba puste namespace runtime-services, pusty runs, brak API PID
+i otwartego portu, wyłącznie init i supervisor w backendzie, brak aktywacji,
+zwolnione rezerwacje i lease, zgodność publication/config oraz pełne tożsamości
+i czasy startu usług. Obecność dodatkowego konsumenta projektu lub control
+volume blokuje operację. Odczyty nie analizują fizycznie cudzych checkoutów.
+
+Po stopie backend ma exit 1, frontend exit 0, a process-tree zachowuje
+`shutdown_unknown`, przyczynę API -6 i brak ownera. Receipt potwierdza ten
+rzeczywisty stan; nie deklaruje drain. Oddzielna para
+`recreate-volume --fresh-state --empty-api-abort-stop <stop-attempt>
+--empty-api-abort-stop-sha256 <raw-terminal-sha256>` dopuszcza wyłącznie
+archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
+blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
+namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
 
 ### Archiwizacja odrzuconej aktywacji bez Run
 

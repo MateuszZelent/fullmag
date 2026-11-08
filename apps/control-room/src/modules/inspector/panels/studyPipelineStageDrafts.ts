@@ -2,6 +2,7 @@ import type { JsonObject } from "@/kernel/api/apiTypes";
 import type { StudyStageSourceEntry } from "@/shared/domain/study/studyStageSource";
 
 import {
+  createPipelinePhysicalStageDraft,
   createStudyStageDraft,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -27,8 +28,8 @@ const PIPELINE_PRIMITIVE_DRAFT_KINDS: Readonly<Record<string, StudyStageDraftKin
  * Build inspector drafts for canonical `study_pipeline` entries.
  *
  * Known primitive payloads are parsed into typed drafts so the inspector shows
- * their configuration; `pipelineNodeId` keeps them read-only. Macros and other
- * primitives stay `unsupported`, with the original payload preserved.
+ * their configuration. Run and Relax use the canonical payload editor.
+ * Macros and other read-only entries retain their original payload.
  */
 export function createPipelineStudyStageDrafts(
   entries: readonly StudyStageSourceEntry[],
@@ -37,9 +38,9 @@ export function createPipelineStudyStageDrafts(
     const draftKind = entry.stageKind
       ? PIPELINE_PRIMITIVE_DRAFT_KINDS[entry.stageKind]
       : undefined;
-    const parsed = draftKind
-      ? createStudyStageDraft({ ...entry.payload, kind: draftKind }, index)
-      : null;
+    const parsed = draftKind === "run" || draftKind === "relax"
+      ? createPipelinePhysicalStageDraft(entry.payload, draftKind, index)
+      : draftKind ? createStudyStageDraft({ ...entry.payload, kind: draftKind }, index) : null;
     const draft = parsed && parsed.kind === draftKind
       ? parsed
       : createStudyStageDraft({ kind: "unsupported" }, index);
@@ -49,6 +50,9 @@ export function createPipelineStudyStageDrafts(
       stageId: entry.queueId ?? `stage-${index + 1}`,
       pipelineNodeId: entry.queueId ?? undefined,
       pipelineEnabled: entry.enabled,
+      pipelineNodeEnabled: entry.nodeEnabled,
+      pipelineAncestorsEnabled: entry.ancestorsEnabled,
+      ...(draftKind === "run" || draftKind === "relax" ? { stageEnabled: entry.nodeEnabled } : {}),
       pipelineGroupIds: [...entry.groupIds],
     };
   });
