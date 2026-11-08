@@ -28,7 +28,22 @@ from docker_volume_reconcile import fingerprint
 SCHEMA = "fullmag.docker-preowner-drained-stop.v1"
 INTENT_SCHEMA = "fullmag.docker-preowner-drained-stop-intent.v1"
 PROOF_SCHEMA = "fullmag.development-terminal-observation-proof.v1"
+COMPUTE_PROOF_SCHEMA = "fullmag.development-terminal-observation-proof.v2"
 REFUSAL = "stored host resource policy differs from explicit ledger configuration"
+OWNERLESS_PARENT_ERROR = (
+    "Runtime admission failed; services retained: API startup entered diagnostic-only mode; "
+    "inspect API startup logs for the cause"
+)
+OWNERLESS_STARTUP_ERROR = (
+    "API startup entered diagnostic-only mode; inspect API startup logs for the cause"
+)
+OWNERLESS_SHUTDOWN_ERROR = (
+    "no pinned runtime service owner was available for authenticated drain"
+)
+OWNERLESS_PROCESS_KEYS = {
+    "schema", "state", "accepted_store", "api_pid", "bootstrap", "qualification",
+    "error", "api_diagnostic_only", "api_failure_fence",
+}
 GIB = 1024 ** 3
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 MAX_PROBE_BYTES = 256 * 1024
@@ -244,6 +259,153 @@ print(json.dumps({'schema':'fullmag.preowner-cold-api-probe.v1','processes':proc
 '''
 
 
+_OWNERLESS_API_PROBE = r'''import hashlib,json,os,pathlib,re,stat,urllib.error,urllib.request,uuid
+MAX=1048576
+OWNER='/opt/fullmag/runtime-control/runtime-services/OWNER.json'
+PROCESS='/opt/fullmag/runtime-control/runtime-service/process-tree.json'
+CONFIG='/opt/fullmag/runtime-control/runtime-service/docker-all.json'
+STARTUP_ERROR='API startup entered diagnostic-only mode; inspect API startup logs for the cause'
+PROCESS_KEYS={'schema','state','accepted_store','api_pid','bootstrap','qualification','error','api_diagnostic_only','api_failure_fence'}
+def fail(message): raise RuntimeError(message)
+def unique(pairs):
+ d={}
+ for k,v in pairs:
+  if k in d: fail('duplicate JSON field')
+  d[k]=v
+ return d
+def read(path,limit=MAX):
+ p=pathlib.Path(path)
+ for parent in (p,*p.parents):
+  try:
+   if parent.is_symlink(): fail('evidence traverses symlink')
+  except OSError: fail('evidence parent cannot be inspected')
+ fd=os.open(p,os.O_RDONLY|getattr(os,'O_CLOEXEC',0)|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0))
+ try:
+  a=os.fstat(fd)
+  if not stat.S_ISREG(a.st_mode) or a.st_nlink!=1 or a.st_size>limit: fail('evidence is not a bounded regular file')
+  data=bytearray()
+  while len(data)<=limit:
+   chunk=os.read(fd,min(65536,limit+1-len(data)))
+   if not chunk: break
+   data.extend(chunk)
+  b=os.fstat(fd); c=os.stat(p,follow_symlinks=False)
+  ident=lambda x:(x.st_dev,x.st_ino,x.st_size,x.st_mtime_ns)
+  if (len(data)!=a.st_size or len(data)>limit or a.st_nlink!=1 or b.st_nlink!=1 or c.st_nlink!=1
+      or not stat.S_ISREG(b.st_mode) or not stat.S_ISREG(c.st_mode) or ident(a)!=ident(b) or ident(a)!=ident(c)):
+   fail('evidence changed while being read')
+  return bytes(data)
+ finally: os.close(fd)
+def obj(raw,label):
+ try: value=json.loads(raw.decode('utf-8'),object_pairs_hook=unique,parse_constant=lambda _:fail(label+' contains non-finite JSON'))
+ except (UnicodeDecodeError,json.JSONDecodeError) as e: fail(label+' is invalid JSON: '+str(e))
+ if not isinstance(value,dict): fail(label+' is not an object')
+ return value
+process_raw=read(PROCESS); process=obj(process_raw,'process receipt')
+if (set(process)!=PROCESS_KEYS or process.get('schema')!='fullmag.docker-process-tree.v1'
+    or process.get('state')!='failed_outcome_retained' or process.get('error')!=STARTUP_ERROR
+    or process.get('api_diagnostic_only') is not True or type(process.get('api_pid')) is not int
+    or process['api_pid']<=1 or not isinstance(process.get('accepted_store'),str)
+    or not isinstance(process.get('qualification'),str)
+    or re.fullmatch('/opt/fullmag/runtime-control/runtime-service/api-failure-[0-9a-f]{32}[.]json',process.get('api_failure_fence','')) is None
+    or process_raw!=json.dumps(process,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()+b'\n'):
+ fail('process receipt is not the exact ownerless diagnostic startup record')
+owner=obj(read(OWNER),'persisted native owner'); config_raw=read(CONFIG); config=obj(config_raw,'native configuration')
+if (owner.get('schema_version')!='runtime_service_owner.v1' or owner.get('state')!='drained'
+    or not isinstance(owner.get('pid'),int) or len(owner.get('children',[]))!=2
+    or {c.get('role') for c in owner['children']}!={'compute','preparation'}):
+ fail('historical native owner is not the exact Drained owner')
+if (config.get('schema_version')!='runtime_service_config.v2'
+    or process['accepted_store']!=config.get('store_root')):
+ fail('ownerless process receipt does not pin the configured accepted store')
+old_pids=[owner.get('pid')]+[child.get('pid') for child in owner.get('children',[])]
+if (len(old_pids)!=3 or any(type(pid) is not int or pid<=0 for pid in old_pids)
+    or any(pathlib.Path('/proc',str(pid)).exists() for pid in old_pids)):
+ fail('historical native owner process is present or ambiguous')
+def proc(pid):
+ p=pathlib.Path('/proc')/str(pid); statline=(p/'stat').read_text(); tail=statline[statline.rfind(')')+2:].split()
+ raw=(p/'cmdline').read_bytes()
+ if len(raw)>65536: fail('process command exceeds bound')
+ return {'pid':pid,'ppid':int(tail[1]),'start_ticks':int(tail[19]),'exe':os.readlink(p/'exe'),
+         'argv':[x.decode('utf-8') for x in raw.split(bytes([0])) if x]}
+rows=[]
+for item in pathlib.Path('/proc').iterdir():
+ if item.name.isdigit():
+  try: rows.append(proc(int(item.name)))
+  except FileNotFoundError: pass
+ if len(rows)>32: fail('process inventory exceeds bound')
+init=[p for p in rows if p['pid']==1]
+entry=[p for p in rows if '/opt/fullmag/entrypoint.py' in p['argv']]
+api=[p for p in rows if p['exe'].endswith('/fullmag-api')]
+probe=[p for p in rows if p['pid']==os.getpid()]
+health_processes=[p for p in rows if p['ppid']==0 and pathlib.Path(p['exe']).name.startswith('python3')
+        and p['argv']==['/usr/local/bin/python3','/opt/fullmag/healthcheck.py']]
+if (len(init)!=1 or len(entry)!=1 or len(api)!=1 or len(probe)!=1
+    or pathlib.Path(init[0]['exe']).name not in {'tini','docker-init'}
+    or entry[0]['ppid']!=1 or api[0]['ppid']!=entry[0]['pid'] or api[0]['pid']!=process['api_pid']
+    or entry[0]['argv']!=['/usr/local/bin/python3','/opt/fullmag/entrypoint.py']
+    or api[0]['argv']!=[api[0]['exe']] or len(health_processes)>1
+    or {p['pid'] for p in rows}!={1,entry[0]['pid'],api[0]['pid'],os.getpid(),*(p['pid'] for p in health_processes)}):
+ fail('diagnostic namespace is not exactly tini, entrypoint, API, probe and optional image healthcheck')
+before=proc(api[0]['pid'])
+fd=os.open('/proc/'+str(api[0]['pid'])+'/environ',os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NONBLOCK)
+try:
+ if not stat.S_ISREG(os.fstat(fd).st_mode): fail('API environment is not a procfs stream')
+ env=bytearray()
+ while len(env)<=MAX:
+  chunk=os.read(fd,min(65536,MAX+1-len(env)))
+  if not chunk: break
+  env.extend(chunk)
+ if len(env)>MAX: fail('API environment exceeds bound')
+finally: os.close(fd)
+if proc(api[0]['pid'])!=before: fail('API process identity changed during environment read')
+fences=[x.split(b'=',1)[1].decode() for x in env.split(bytes([0])) if x.startswith(b'FULLMAG_API_RUNTIME_FAILURE_FENCE=')]
+if len(fences)!=1 or fences[0]!=process['api_failure_fence']:
+ fail('API environment and process receipt do not pin the same failure fence')
+fence=obj(read(fences[0]),'API failure fence')
+reason='API startup entered diagnostic-only mode; inspect API startup logs for the cause'
+next_action='Inspect runtime diagnostics and repair before a managed restart; do not replay Compute.'
+if (set(fence)!={'schema','api_pid','api_instance_id','stage','reason','next_action'}
+    or fence.get('schema')!='fullmag.api-runtime-failure-fence.v1' or fence.get('stage')!='runtime_startup'
+    or fence.get('api_pid')!=api[0]['pid'] or fence.get('reason')!=reason or fence.get('next_action')!=next_action):
+ fail('API fence is not the exact ownerless startup diagnostic')
+try: uuid.UUID(fence['api_instance_id'])
+except (ValueError,TypeError,KeyError): fail('API fence instance identity is invalid')
+def get(path):
+ request=urllib.request.Request('http://127.0.0.1:8081'+path,headers={'Host':'localhost','Accept':'application/json','Connection':'close'})
+ try:
+  with urllib.request.urlopen(request,timeout=5) as response:
+   headers=response.getheaders(); raw=response.read(MAX+1)
+   if len(raw)>MAX: fail('API response exceeds bound')
+   ids=[v.strip() for k,v in headers if k.lower()=='x-fullmag-api-instance']
+   if len(ids)!=1: fail('API response identity is ambiguous')
+   uuid.UUID(ids[0]); return response.status,ids[0],obj(raw,'API response')
+ except urllib.error.HTTPError as e:
+  raw=e.read(65537); ids=e.headers.get_all('x-fullmag-api-instance') or []
+  if len(raw)>65536 or len(ids)!=1: fail('API error response identity is ambiguous')
+  uuid.UUID(ids[0]); return e.code,ids[0],obj(raw,'API error response')
+health_code,health_id,health=get('/v2/platform/health')
+status_code,status_id,status=get('/v2/sessions/current/status')
+if (health_code!=200 or health_id!=status_id or health_id!=fence['api_instance_id']
+    or health.get('status')!='degraded' or health.get('active_session') is not False
+    or status_code!=503 or status.get('code')!='runtime_unavailable'
+    or status.get('message')!='Runtime startup failed; API diagnostics remain available and execution is disabled.'):
+ fail('API is not the exact diagnostic-only/no-session instance')
+process_material=sorted((p['pid'],p['ppid'],p['start_ticks'],pathlib.Path(p['exe']).name)
+                        for p in rows if p['pid']!=os.getpid() and p not in health_processes)
+relative=fences[0].removeprefix('/opt/fullmag/')
+print(json.dumps({'schema':'fullmag.preowner-ownerless-api-probe.v1','processes':process_material,
+ 'processes_sha256':hashlib.sha256(json.dumps(process_material,separators=(',',':')).encode()).hexdigest(),
+ 'probe_present':True,'api_instance_sha256':hashlib.sha256(health_id.encode()).hexdigest(),
+ 'health_status':health_code,'health_state':health['status'],'active_session':False,
+ 'current_status':status_code,'failure_reason':reason,'failure_fence_relative':relative,
+ 'failure_fence_sha256':hashlib.sha256(read(fences[0])).hexdigest(),
+ 'owner_sha256':hashlib.sha256(read(OWNER)).hexdigest(),
+ 'process_tree_sha256':hashlib.sha256(process_raw).hexdigest(),
+ 'native_config_sha256':hashlib.sha256(config_raw).hexdigest(),
+ 'process_receipt':process},sort_keys=True,separators=(',',':')))
+'''
+
+
 _OWNER_LOCK_PROBE = r'''import fcntl,hashlib,json,os,stat
 import pathlib
 path='/control/runtime-control/runtime-services/OWNER.lock'
@@ -334,13 +496,71 @@ def _container_pin(actual):
     }
 
 
-def _stopped_state(actual, expected):
+def _ownerless_parent(previous):
+    error = previous.get("error") if isinstance(previous, Mapping) else None
+    return isinstance(error, str) and error == OWNERLESS_PARENT_ERROR
+
+
+def _validate_ownerless_process_receipt(receipt):
+    _require(isinstance(receipt, Mapping) and set(receipt) == OWNERLESS_PROCESS_KEYS
+             and receipt.get("schema") == "fullmag.docker-process-tree.v1"
+             and receipt.get("state") == "failed_outcome_retained"
+             and receipt.get("error") == OWNERLESS_STARTUP_ERROR
+             and receipt.get("api_diagnostic_only") is True
+             and type(receipt.get("api_pid")) is int and receipt["api_pid"] > 1
+             and isinstance(receipt.get("accepted_store"), str)
+             and receipt["accepted_store"].startswith("/")
+             and isinstance(receipt.get("qualification"), str)
+             and isinstance(receipt.get("api_failure_fence"), str)
+             and re.fullmatch(
+                 r"/opt/fullmag/runtime-control/runtime-service/api-failure-[0-9a-f]{32}\.json",
+                 receipt["api_failure_fence"],
+             ) is not None,
+             "ownerless API startup process receipt is not the exact diagnostic-only shape")
+    return dict(receipt)
+
+
+def _validate_ownerless_shutdown_receipt(before, after):
+    before = _validate_ownerless_process_receipt(before)
+    _require(isinstance(after, Mapping)
+             and set(after) == OWNERLESS_PROCESS_KEYS | {"api_exit_code", "shutdown_error"}
+             and type(after.get("api_exit_code")) is int
+             and after.get("shutdown_error") == OWNERLESS_SHUTDOWN_ERROR,
+             "ownerless API stop lacks an exact completed API wait observation")
+    expected = dict(before)
+    expected.update(state="shutdown_unknown", api_exit_code=after["api_exit_code"],
+                    shutdown_error=OWNERLESS_SHUTDOWN_ERROR)
+    _require(dict(after) == expected,
+             "ownerless API stop changed startup evidence beyond the exact no-owner shutdown")
+    return dict(after)
+
+
+def _validate_ownerless_api_stop_record(cold_api, stop_record, current_raw):
+    _require(isinstance(cold_api, Mapping)
+             and cold_api.get("schema") == "fullmag.preowner-ownerless-api-probe.v1",
+             "ownerless API stop has no matching startup probe")
+    before = _validate_ownerless_process_receipt(cold_api.get("process_receipt"))
+    _require(cold_api.get("process_tree_sha256") == _sha(canonical(before) + b"\n"),
+             "ownerless startup process receipt digest differs from the reviewed probe")
+    _require(isinstance(stop_record, Mapping)
+             and set(stop_record) == {"schema", "process_receipt", "process_receipt_sha256"}
+             and stop_record.get("schema") == "fullmag.preowner-ownerless-api-stop.v1",
+             "ownerless API stop journal has an unexpected shape")
+    after = _validate_ownerless_shutdown_receipt(before, stop_record.get("process_receipt"))
+    expected_raw = canonical(after) + b"\n"
+    _require(isinstance(current_raw, bytes) and current_raw == expected_raw
+             and stop_record.get("process_receipt_sha256") == _sha(expected_raw),
+             "final ownerless API process receipt differs from its immutable journal")
+    return after
+
+
+def _stopped_state(actual, expected, *, exit_code=0):
     state = actual.get("State", {})
     _require(_container_pin(actual) == expected
              and state.get("Status") == "exited"
              and state.get("Running") is False
              and state.get("Pid") == 0
-             and state.get("ExitCode") == 0
+             and state.get("ExitCode") == exit_code
              and state.get("OOMKilled") is False,
              "stopped Docker incarnation or exit outcome differs")
     return {
@@ -401,6 +621,7 @@ def _load_parent(control, previous, document, *, selected, attempt, config_sha25
     _require(stored_document == document and document.get("name") == control.project,
              "parent Compose document differs")
     inputs = terminal.get("inputs", {})
+    ownerless_api_failure = _ownerless_parent(terminal)
     _require(terminal.get("schema") == "fullmag.docker-build-operation.v1"
              and terminal.get("phase") == "development"
              and terminal.get("state") == "failed-confirmed"
@@ -415,9 +636,14 @@ def _load_parent(control, previous, document, *, selected, attempt, config_sha25
              and inputs.get("image_id") == image_id
              and terminal.get("backend_container") in (None, backend_container_id),
              "parent failed-development scope differs")
-    _require(terminal.get("ledger_profile") == "group-ledger-v1"
-             and REFUSAL in terminal.get("error", ""),
-             "parent development is not the exact cold group-ledger refusal")
+    if ownerless_api_failure:
+        _require(terminal.get("ledger_profile") == "group-ledger-v1"
+                 and terminal.get("error", "").strip() == OWNERLESS_PARENT_ERROR,
+                 "parent development is not the exact ownerless group-ledger API startup failure")
+    else:
+        _require(terminal.get("ledger_profile") == "group-ledger-v1"
+                 and REFUSAL in terminal.get("error", ""),
+                 "parent development is not the exact cold group-ledger refusal")
     group = terminal.get("worker_cgroup", {})
     _require(group.get("state") == "ready" and group.get("container_id") == backend_container_id
              and group.get("image_id") == image_id and group.get("compose_project") == control.project,
@@ -440,6 +666,28 @@ def _terminal_observation_metadata(previous):
     return metadata
 
 
+def _qualified_source_binding(value):
+    schema = value.get("schema") if isinstance(value, Mapping) else None
+    if schema == PROOF_SCHEMA:
+        request_id = value.get("source_request_id")
+        source_sha256 = value.get("source_sha256")
+        _require(isinstance(request_id, str)
+                 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", request_id)
+                 and isinstance(source_sha256, str) and SHA.fullmatch(source_sha256),
+                 "startup source request binding is invalid")
+        return {"request_id": request_id, "source_sha256": source_sha256}
+    if schema == COMPUTE_PROOF_SCHEMA:
+        compute = value.get("compute")
+        _require(isinstance(compute, Mapping) and set(compute) == {"command_id", "receipt_sha256"}
+                 and isinstance(compute.get("command_id"), str)
+                 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", compute["command_id"])
+                 and isinstance(compute.get("receipt_sha256"), str)
+                 and SHA.fullmatch(compute["receipt_sha256"]),
+                 "direct Compute receipt binding is invalid")
+        return {"compute": dict(compute)}
+    _require(False, "source proof schema is unsupported")
+
+
 def _source_proof(control, selected, previous, proof, proof_sha256, *, proof_path=None):
     _require(isinstance(proof_sha256, str) and SHA.fullmatch(proof_sha256), "source proof digest is invalid")
     relative = "runtime-control/terminal-observation/" + proof_sha256 + "/proof.json"
@@ -458,15 +706,18 @@ def _source_proof(control, selected, previous, proof, proof_sha256, *, proof_pat
     metadata = _terminal_observation_metadata(previous)
     original_iteration = value.get("original_iteration")
     operation_sha = value.get("operation_sha256")
+    schema = value.get("schema")
     _require(metadata.get("proof_sha256") == proof_sha256
              and metadata.get("request_sha256") == _sha(request_raw)
              and metadata.get("stop_attempt") == original_iteration
              and metadata.get("stop_sha256") == operation_sha,
              "parent authorization does not bind this original terminal stop")
-    _require(value.get("schema") == PROOF_SCHEMA and isinstance(original_iteration, str)
+    _require(isinstance(schema, str) and schema in {PROOF_SCHEMA, COMPUTE_PROOF_SCHEMA}
+             and isinstance(original_iteration, str)
              and ATTEMPT.fullmatch(original_iteration)
              and isinstance(operation_sha, str) and SHA.fullmatch(operation_sha),
              "source proof schema or original stop pins differ")
+    source_binding = _qualified_source_binding(value)
     for key in ("compose_project", "control_volume", "source_root"):
         expected = control.project if key == "compose_project" else control.volume if key == "control_volume" else str(selected)
         _require(value.get(key) == expected, "source proof workspace scope differs: " + key)
@@ -511,15 +762,14 @@ def _source_proof(control, selected, previous, proof, proof_sha256, *, proof_pat
         "run_id": value["run_id"],
         "catalog_sha256": value["catalog_sha256"],
         "catalog_revision": value["catalog_revision"],
-        "request_id": value["source_request_id"],
-        "source_sha256": value["source_sha256"],
+        **source_binding,
         "proof": value,
         "state_root": str(state),
         "store_root": str(store_root),
     }
 
 
-def _native_history(control, source):
+def _native_history(control, source, *, current_process_receipt=None):
     proof = source["proof"]
     attempt = source["original_iteration"]
     root = "iteration/attempts/" + attempt
@@ -552,14 +802,21 @@ def _native_history(control, source):
         control, "runtime-control/runtime-services/OWNER.json")
     config_raw, config, config_sha = _record(
         control, "runtime-control/runtime-service/docker-all.json", canonical_record=True)
+    historical_process_sha = _sha(canonical(process) + b"\n")
     _require(drain_sha == proof["drain_sha256"]
              and drain.get("schema") == "fullmag.docker-idle-restart-drain.v1"
              and drain.get("backend_container_id") == operation.get("backend_container")
              and process.get("schema") == "fullmag.docker-process-tree.v1"
              and process.get("state") == "drained"
-             and drain.get("process_receipt_sha256") == _sha(canonical(process) + b"\n")
-             and process_raw == canonical(process) + b"\n" and process_tree == process,
-             "current process-tree is not the exact historical drained receipt")
+             and drain.get("process_receipt_sha256") == historical_process_sha,
+             "source drain is not the exact historical native receipt")
+    if current_process_receipt is None:
+        _require(process_raw == canonical(process) + b"\n" and process_tree == process,
+                 "current process-tree is not the exact historical drained receipt")
+    else:
+        _require(process_raw == canonical(current_process_receipt) + b"\n"
+                 and process_tree == current_process_receipt,
+                 "current ownerless process receipt differs from its exact shutdown observation")
     ready_owner = process.get("service_owner", {})
     terminal_owner = process.get("terminal_service_owner", {})
     _require(owner.get("state") == "drained" and terminal_owner.get("state") == "drained",
@@ -605,12 +862,13 @@ def _native_history(control, source):
         source["relative"]: source["sha256"],
         source["request_relative"]: source["request_sha256"],
         ready_relative: ready_sha,
-        "runtime-control/runtime-service/process-tree.json": process_sha,
         "runtime-control/runtime-services/OWNER.json": owner_sha,
         "runtime-control/runtime-service/docker-all.json": config_sha,
         fence_relative: source["failure_fence_sha256"],
         "backend/runtime-provenance.json": None,
     }
+    if current_process_receipt is None:
+        pinned["runtime-control/runtime-service/process-tree.json"] = process_sha
     provenance_raw, provenance, provenance_sha = _record(
         control, "backend/runtime-provenance.json", canonical_record=True)
     _require(provenance.get("state") == "succeeded"
@@ -630,7 +888,7 @@ def _native_history(control, source):
     return {
         "control_hashes": pinned,
         "native_config_sha256": config_sha,
-        "process_tree_sha256": process_sha,
+        "process_tree_sha256": historical_process_sha,
         "owner_sha256": owner_sha,
         "ready_owner_sha256": ready_sha,
         "drain_sha256": drain_sha,
@@ -828,6 +1086,43 @@ def _cold_probe(backend_id, document, ledger_policy):
     return guest
 
 
+def _ownerless_api_probe(backend_id):
+    result = docker_capture("exec", backend_id, "python3", "-I", "-B", "-c", _OWNERLESS_API_PROBE,
+                            timeout=35)
+    if len(result.stdout) > MAX_PROBE_BYTES:
+        raise BuildControlError("Pre-owner drained stop: ownerless API probe exceeds its bound")
+    guest = _json(result.stdout, "ownerless API probe", maximum=MAX_PROBE_BYTES)
+    process_rows = guest.get("processes")
+    _require(set(guest) == {
+        "schema", "processes", "processes_sha256", "probe_present", "api_instance_sha256",
+        "health_status", "health_state", "active_session", "current_status", "failure_reason",
+        "failure_fence_relative", "failure_fence_sha256", "owner_sha256", "process_tree_sha256",
+        "native_config_sha256", "process_receipt",
+    } and isinstance(process_rows, list) and len(process_rows) == 3
+             and all(isinstance(row, list) and len(row) == 4
+                     and type(row[0]) is int and type(row[1]) is int and type(row[2]) is int
+                     and isinstance(row[3], str) for row in process_rows)
+             and process_rows == sorted(process_rows)
+             and len({row[0] for row in process_rows}) == len(process_rows)
+             and isinstance(guest.get("processes_sha256"), str)
+             and guest["processes_sha256"] == _sha(json.dumps(process_rows, separators=(",", ":")).encode()),
+             "ownerless API process inventory is malformed")
+    _require(all(isinstance(guest.get(key), str) and SHA.fullmatch(guest[key]) for key in (
+        "processes_sha256", "api_instance_sha256", "failure_fence_sha256", "owner_sha256",
+        "process_tree_sha256", "native_config_sha256",
+    )), "ownerless API record digests are malformed")
+    _require(guest.get("schema") == "fullmag.preowner-ownerless-api-probe.v1"
+             and guest.get("probe_present") is True
+             and guest.get("health_status") == 200 and guest.get("health_state") == "degraded"
+             and guest.get("active_session") is False and guest.get("current_status") == 503
+             and guest.get("failure_reason") == OWNERLESS_STARTUP_ERROR,
+             "current backend is not the exact ownerless API-only failure")
+    receipt = _validate_ownerless_process_receipt(guest.get("process_receipt"))
+    _require(guest.get("process_tree_sha256") == _sha(canonical(receipt) + b"\n"),
+             "ownerless probe process receipt digest differs")
+    return guest
+
+
 def _containers(control, identity, previous, document, backend_id, image_id, *, running):
     from docker_dev_up import _compose_container_id
     from docker_volume_dev import _validate_retained_service
@@ -866,19 +1161,21 @@ def _containers(control, identity, previous, document, backend_id, image_id, *, 
     return ids, actual
 
 
-def _history(control, source):
+def _history(control, source, *, current_process_receipt=None):
     _require(isinstance(source.get("failure_fence_relative"), str)
              and isinstance(source.get("failure_fence_sha256"), str)
              and SHA.fullmatch(source["failure_fence_sha256"]),
              "cold API failure-fence path and digest are not pinned")
-    return _native_history(control, source)
+    return _native_history(control, source, current_process_receipt=current_process_receipt)
 
 
 def _collect(control, identity, selected, *, attempt, config_sha256, image_id,
              backend_container_id, proof_path, proof_sha256, previous, document, layout):
+    ownerless = _ownerless_parent(previous)
     parent_root, parent_raw, compose_raw, _ = _load_parent(
         control, previous, document, selected=selected, attempt=attempt,
-        config_sha256=config_sha256, image_id=image_id, backend_container_id=backend_container_id)
+        config_sha256=config_sha256, image_id=image_id, backend_container_id=backend_container_id,
+        allow_legacy_root_namespace=ownerless)
     source = _source_proof(control, selected, previous, None, proof_sha256, proof_path=proof_path)
     ids, actual = _containers(control, identity, previous, document, backend_container_id, image_id, running=True)
     _require(actual["backend"].get("State", {}).get("StartedAt") == previous.get("backend_started_at"),
@@ -890,22 +1187,38 @@ def _collect(control, identity, selected, *, attempt, config_sha256, image_id,
     _require(saved["budget"]["cpus"] * 1000 >= ledger["total_budget"]["cpu_millis"]
              and saved["budget"]["memory_bytes"] >= ledger["total_budget"]["memory_bytes"] + GIB,
              "saved backend limits do not cover the historical ledger budget and API headroom")
-    cold = _cold_probe(ids["backend"], document, ledger)
-    _require(previous.get("error", "").strip() ==
-             ("Runtime startup failed; diagnostic API retained: " + cold["failure_reason"]).strip(),
-             "live startup fence differs from the failed-development terminal")
+    if ownerless:
+        cold = _ownerless_api_probe(ids["backend"])
+        current_raw, current_receipt, _ = _record(
+            control, "runtime-control/runtime-service/process-tree.json", canonical_record=True)
+        current_receipt = _validate_ownerless_process_receipt(current_receipt)
+        _require(current_raw == canonical(cold["process_receipt"]) + b"\n"
+                 and current_receipt == cold["process_receipt"],
+                 "ownerless probe and persisted process receipt differ")
+        _require(previous.get("error", "").strip() == OWNERLESS_PARENT_ERROR,
+                 "parent terminal does not describe the exact ownerless API startup failure")
+    else:
+        cold = _cold_probe(ids["backend"], document, ledger)
+        _require(previous.get("error", "").strip() ==
+                 ("Runtime startup failed; diagnostic API retained: " + cold["failure_reason"]).strip(),
+                 "live startup fence differs from the failed-development terminal")
     source["failure_fence_relative"] = cold["failure_fence_relative"]
     source["failure_fence_sha256"] = cold["failure_fence_sha256"]
-    native = _history(control, source)
+    native = _history(control, source, current_process_receipt=current_receipt if ownerless else None)
     _require(cold.get("native_config_sha256") == source["native_config_sha256"]
-             and cold.get("owner_sha256") == native["owner_sha256"]
-             and cold.get("process_tree_sha256") == native["process_tree_sha256"],
-             "live cold API owner/process/config differs from the exact historical Drained records")
+             and cold.get("owner_sha256") == native["owner_sha256"],
+             "live cold API owner/config differs from the exact historical Drained records")
+    if ownerless:
+        _require(cold.get("process_tree_sha256") == _sha(canonical(current_receipt) + b"\n"),
+                 "ownerless live API process receipt differs from its source probe")
+    else:
+        _require(cold.get("process_tree_sha256") == native["process_tree_sha256"],
+                 "live cold API process differs from the exact historical Drained receipt")
     released = _released(control, actual["backend"])
     _require(released.get("active_count") == 0, "host ledger or local store contains an active lease")
     run_pins = _run_pins(control, actual["backend"])
     cert = _certificate(selected, layout, previous, document)
-    _require(_history(control, source) == native,
+    _require(_history(control, source, current_process_receipt=current_receipt if ownerless else None) == native,
              "historical native/control proof changed during collection")
     return {
         "schema": "fullmag.preowner-drained-stop-plan.v1",
@@ -1048,13 +1361,26 @@ def stop(args):
         }
         intent_sha = _publish_immutable(control, intent_relative, intent)
         operation["daemon_pending"] = True
+        ownerless_api_stop = plan["cold_api"].get("schema") == "fullmag.preowner-ownerless-api-probe.v1"
         for service in ("backend", "frontend"):
             docker_capture("stop", "--time", "60", ids[service], timeout=75)
             stopped = _inspect("container", ids[service])
-            _stopped_state(stopped, plan["containers"][service]["before"])
+            expected_exit = 1 if ownerless_api_stop and service == "backend" else 0
+            _stopped_state(stopped, plan["containers"][service]["before"], exit_code=expected_exit)
         after = {service: _inspect("container", ids[service]) for service in ("backend", "frontend")}
-        stop_states = {service: _stopped_state(after[service], plan["containers"][service]["before"])
+        stop_states = {service: _stopped_state(
+                           after[service], plan["containers"][service]["before"],
+                           exit_code=1 if ownerless_api_stop and service == "backend" else 0)
                        for service in after}
+        ownerless_post_receipt = None
+        ownerless_post_receipt_raw = None
+        if ownerless_api_stop:
+            ownerless_post_receipt_raw, ownerless_post_receipt, _ = _record(
+                control, "runtime-control/runtime-service/process-tree.json", canonical_record=True)
+            ownerless_post_receipt = _validate_ownerless_shutdown_receipt(
+                plan["cold_api"]["process_receipt"], ownerless_post_receipt)
+            _require(ownerless_post_receipt_raw == canonical(ownerless_post_receipt) + b"\n",
+                     "ownerless API shutdown receipt is not canonical")
         _assert_group_inventory(control, ids["backend"], ids["frontend"])
         parent_raw_after, parent_after, _ = _record(
             control, "development/attempts/" + args.attempt + "/terminal.json", canonical_record=True)
@@ -1065,7 +1391,8 @@ def stop(args):
                                      args.proof_sha256, proof_path=proof_path)
         source_after["failure_fence_relative"] = plan["cold_api"]["failure_fence_relative"]
         source_after["failure_fence_sha256"] = plan["cold_api"]["failure_fence_sha256"]
-        native_after = _history(control, source_after)
+        native_after = _history(control, source_after,
+                                current_process_receipt=ownerless_post_receipt if ownerless_api_stop else None)
         _require(native_after == plan["native_history"], "historical native/control records changed during stop")
         owner_lock_after = _owner_lock_identity(control, args.image_id)
         _require(owner_lock_after == plan["owner_lock"], "OWNER.lock changed during stop")
@@ -1114,6 +1441,12 @@ def stop(args):
             "saved_budget": plan["saved_budget"],
             "certificate": plan["certificate"],
         }
+        if ownerless_api_stop:
+            journal["ownerless_api_stop"] = {
+                "schema": "fullmag.preowner-ownerless-api-stop.v1",
+                "process_receipt": ownerless_post_receipt,
+                "process_receipt_sha256": _sha(ownerless_post_receipt_raw),
+            }
         journal_sha = _publish_immutable(control, journal_relative, journal)
         operation["daemon_pending"] = False
         operation["receipt"].update(state="succeeded", result={
@@ -1146,7 +1479,7 @@ def retained_context(control, previous, document, actual, proof, proof_sha256):
         "source_proof", "containers", "native_history", "owner_lock", "host_ledger",
         "released", "run_pins", "saved_budget", "certificate",
     }
-    _require(set(journal) == expected_journal_keys
+    _require(set(journal) in (expected_journal_keys, expected_journal_keys | {"ownerless_api_stop"})
              and journal_raw == canonical(journal) + b"\n"
              and journal.get("schema") == SCHEMA
              and journal.get("state") == "stopped-confirmed"
@@ -1177,6 +1510,10 @@ def retained_context(control, previous, document, actual, proof, proof_sha256):
     _require(isinstance(plan, Mapping) and set(plan) == expected_plan_keys
              and _sha(canonical(plan)) == journal.get("plan_sha256"),
              "pre-owner stop plan differs from its immutable pin")
+    ownerless_api_stop = (isinstance(plan.get("cold_api"), Mapping)
+                          and plan["cold_api"].get("schema") == "fullmag.preowner-ownerless-api-probe.v1")
+    _require(("ownerless_api_stop" in journal) is ownerless_api_stop,
+             "journal ownerless API stop marker differs from its reviewed probe")
     _require(plan.get("schema") == "fullmag.preowner-drained-stop-plan.v1"
              and plan.get("native_drain_performed") is False
              and isinstance(plan.get("controller_sha256"), str)
@@ -1218,7 +1555,8 @@ def retained_context(control, previous, document, actual, proof, proof_sha256):
     parent_root, parent_raw, compose_raw, _ = _load_parent(
         control, previous, document, selected=Path(previous.get("inputs", {}).get("source_root", "")),
         attempt=parent_attempt, config_sha256=parent.get("config_sha256"),
-        image_id=plan.get("parent", {}).get("image_id"), backend_container_id=backend_id)
+        image_id=plan.get("parent", {}).get("image_id"), backend_container_id=backend_id,
+        allow_legacy_root_namespace=ownerless_api_stop)
     _require(_sha(parent_raw) == parent.get("terminal_sha256")
              and _sha(compose_raw) == plan.get("parent", {}).get("compose_sha256")
              and parent.get("terminal_observation") == plan.get("parent_terminal_observation"),
@@ -1240,11 +1578,13 @@ def retained_context(control, previous, document, actual, proof, proof_sha256):
     for service, observed in fresh.items():
         _require(_container_pin(observed) == journal["containers"][service]["before"],
                  "current stopped Docker incarnation differs: " + service)
-        stopped_pin = _stopped_state(observed, journal["containers"][service]["before"])
+        expected_exit = 1 if ownerless_api_stop and service == "backend" else 0
+        stopped_pin = _stopped_state(observed, journal["containers"][service]["before"],
+                                     exit_code=expected_exit)
         _require(stopped_pin == journal["containers"][service].get("after"),
                  "journal stopped exit record differs from the current container: " + service)
         _require(_container_pin(actual[service]) == _container_pin(observed)
-                 and actual[service].get("State", {}).get("ExitCode") == 0
+                 and actual[service].get("State", {}).get("ExitCode") == expected_exit
                  and actual[service].get("State", {}).get("OOMKilled") is False,
                  "caller stopped service observation differs: " + service)
     from docker_compose_identity import validate_source_labels
@@ -1277,9 +1617,14 @@ def retained_context(control, previous, document, actual, proof, proof_sha256):
              "source proof projection differs from the reviewed stop plan")
     _require(plan.get("cold_api", {}).get("probe_present") is True,
              "cold API exact-process observation lacks its one-shot probe identity")
+    current_process_receipt = None
+    if ownerless_api_stop:
+        current_process_raw = control.read_bytes("runtime-control/runtime-service/process-tree.json")
+        current_process_receipt = _validate_ownerless_api_stop_record(
+            plan["cold_api"], journal.get("ownerless_api_stop"), current_process_raw)
     source["failure_fence_relative"] = plan["cold_api"]["failure_fence_relative"]
     source["failure_fence_sha256"] = plan["cold_api"]["failure_fence_sha256"]
-    native = _history(control, source)
+    native = _history(control, source, current_process_receipt=current_process_receipt)
     _require(native == journal.get("native_history") == plan.get("native_history"),
              "historical native/control/catalog hashes changed")
     owner_lock = _owner_lock_identity(control, fresh["backend"]["Image"])
