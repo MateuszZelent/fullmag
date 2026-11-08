@@ -391,8 +391,7 @@ class HistoryQualificationTests(unittest.TestCase):
             history.select_candidates([base, base], set(), history_count=0, history_bytes=0)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
 
 
 class RejectedHistoryTests(unittest.TestCase):
@@ -456,3 +455,7 @@ class RejectedHistoryTests(unittest.TestCase):
     def test_any_related_retirement_path_or_unknown_blob_is_refused(self):
         for path in ["retirements/"+TOKEN,"retirements/"+TOKEN+"/project/extra.json","objects/"+SOURCE]:
             with self.subTest(path=path),self.assertRaises(history.HistoryError):self.check(self.evidence(),{},[path])
+
+
+if __name__ == "__main__":
+    unittest.main()

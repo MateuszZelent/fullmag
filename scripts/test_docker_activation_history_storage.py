@@ -199,8 +199,7 @@ class HistoryStorageTests(unittest.TestCase):
             self.apply(changed)
 
 
-if __name__ == "__main__":
-    unittest.main()
+
 
 
 class RejectedHistoryStorageTests(HistoryStorageTests):
@@ -222,3 +221,7 @@ class RejectedHistoryStorageTests(HistoryStorageTests):
             result = subprocess.run(["bash","-euo","pipefail","-c",script.replace("/control",str(self.root))],capture_output=True,timeout=5)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout,expected)
+
+
+if __name__ == "__main__":
+    unittest.main()
