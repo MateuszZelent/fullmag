@@ -25,6 +25,12 @@ const MATERIAL_LABELS: Readonly<Record<string, string>> = {
   mat_ms: "Ms",
 };
 
+const MATERIAL_NAMES: Readonly<Record<string, string>> = {
+  mat_aex: "Exchange stiffness",
+  mat_alpha: "Gilbert damping",
+  mat_ms: "Saturation magnetization",
+};
+
 const MATERIAL_ORDER: Readonly<Record<string, number>> = {
   mat_ms: 0,
   mat_aex: 1,
@@ -66,7 +72,12 @@ function energyDensityUnit(unit: string): boolean {
 }
 
 function materialLabel(row: FdmCellQuantitySample): string {
-  return MATERIAL_LABELS[row.id] ?? (row.label.replace(/^material\s+/i, "").trim() || row.id.replace(/^mat_/, ""));
+  return MATERIAL_LABELS[row.id] ?? (row.id.replace(/^mat_/, "") || row.id);
+}
+
+function materialName(row: FdmCellQuantitySample): string {
+  const label = row.label.replace(/^material\s+/i, "").trim();
+  return MATERIAL_NAMES[row.id] ?? (label || row.id.replace(/^mat_/, ""));
 }
 
 function energyLabel(row: FdmCellQuantitySample): string {
@@ -127,13 +138,22 @@ function unavailableText(row: FdmCellQuantitySample, fallback: string): string {
 
 function MaterialReadout({ row }: { row: FdmCellQuantitySample }) {
   const usable = row.status === "ready" && row.scalar !== null && Number.isFinite(row.scalar);
+  const rawUnit = row.unit.trim();
+  const unit = rawUnit === "1" || rawUnit.toLowerCase() === "dimensionless" ? null : rawUnit || null;
   return (
     <QuantityMarker row={row} status={usable ? "ready" : "unavailable"}>
-      <FieldRow
-        label={materialLabel(row)}
-        unit={row.unit === "1" || row.unit.toLowerCase() === "dimensionless" ? undefined : row.unit || undefined}
-        value={usable ? <NumberValue name="scalar" value={row.scalar!} /> : "Unavailable"}
-      />
+      <div className="fm-fdm-cell-physics__material-row">
+        <div className="fm-fdm-cell-physics__material-identity">
+          <span className="fm-fdm-cell-physics__material-symbol">{materialLabel(row)}</span>
+          <span className="fm-fdm-cell-physics__material-name">{materialName(row)}</span>
+        </div>
+        <div className="fm-fdm-cell-physics__material-value">
+          {usable
+            ? <NumberValue name="scalar" value={row.scalar!} />
+            : <span className="fm-fdm-cell-physics__unavailable-value">Unavailable</span>}
+          {unit ? <span className="fm-fdm-cell-physics__material-unit">{unit}</span> : null}
+        </div>
+      </div>
       {!usable ? (
         <p className="fm-fdm-cell-physics__reason">
           {unavailableText(row, "No current coefficient is published for this cell.")}
@@ -178,7 +198,9 @@ function MagnetizationReadout({ row }: { row: FdmCellQuantitySample }) {
               <dd><NumberValue name={name} value={components[index]} /></dd>
             </div>
           ))}
-          <div className="fm-fdm-cell-physics__component fm-fdm-cell-physics__component--magnitude">
+        </dl>
+        <dl className="fm-fdm-cell-physics__magnitude" aria-label="Magnetization norm">
+          <div>
             <dt>|m|</dt>
             <dd><NumberValue name="magnitude" value={magnitude} /></dd>
           </div>

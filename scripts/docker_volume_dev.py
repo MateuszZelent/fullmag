@@ -7141,6 +7141,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     inputs.pop('config_sha256', None)
     carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
     bind_reconcile = _frontend_refresh_bind_reconciler(document)
+    # A refused preflight must not displace the still-live verified DEV fence.
+    inspect_services(ids['frontend']); healthy_idle()
     with control.operation('development', inputs) as operation:
         _pin_private_group_storage(control, operation, new_render=False, previous=previous)
         operation['receipt'].update(operator_probe_record)

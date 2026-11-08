@@ -1,9 +1,7 @@
 .fm-fdm-cell-physics {
-  gap: var(--fm-space-3);
-}
-
-.fm-fdm-cell-physics [data-slot="inspector-group"] {
-  padding-block-end: var(--fm-space-2);
+  min-width: 0;
+  container: fdm-cell-physics / inline-size;
+  gap: var(--fm-inspector-group-gap);
 }
 
 .fm-fdm-cell-physics__summary {
@@ -13,7 +11,7 @@
   justify-content: space-between;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
-  padding: 0 var(--fm-space-2) var(--fm-space-2);
+  padding: 0 var(--fm-space-1) var(--fm-space-2);
 }
 
 .fm-fdm-cell-physics__identity {
@@ -21,8 +19,6 @@
   min-width: 0;
   gap: var(--fm-space-1);
 }
-
-
 
 .fm-fdm-cell-physics__identity strong {
   overflow: hidden;
@@ -85,14 +81,64 @@
   min-width: 0;
 }
 
-.fm-fdm-cell-physics__quantity > .fm-inspector-field-row {
+.fm-fdm-cell-physics__material-row {
+  display: grid;
+  min-width: 0;
   min-height: var(--fm-control-height-compact);
-  grid-template-columns: minmax(48px, 0.55fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--fm-space-2);
   padding-inline: var(--fm-space-1);
 }
 
-.fm-fdm-cell-physics__quantity .fm-inspector-field-row__value {
+.fm-fdm-cell-physics__material-identity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: calc(var(--fm-space-4) + var(--fm-space-2)) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__material-symbol {
+  min-width: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fm-fdm-cell-physics__material-name {
+  min-width: 0;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.fm-fdm-cell-physics__material-value {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: max-content minmax(3ch, max-content);
+  align-items: baseline;
+  justify-content: end;
+  gap: var(--fm-space-1);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-sm);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.fm-fdm-cell-physics__material-unit {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-fdm-cell-physics__material-value data {
+  font: inherit;
+  font-variant-numeric: inherit;
 }
 
 .fm-fdm-cell-physics__reason {
@@ -101,7 +147,7 @@
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-2xs);
   line-height: 1.35;
-  padding: 0 var(--fm-space-1) var(--fm-space-1) calc(var(--fm-space-1) + 48px);
+  padding: 0 var(--fm-space-1) var(--fm-space-1);
 }
 
 .fm-fdm-cell-physics__readout-heading {
@@ -125,8 +171,8 @@
 .fm-fdm-cell-physics__components {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--fm-space-1);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--fm-space-2);
   margin: 0;
   padding: 0 var(--fm-space-1);
 }
@@ -135,13 +181,10 @@
   display: grid;
   min-width: 0;
   gap: var(--fm-space-1);
-  border-inline-start: 1px solid var(--fm-border-subtle);
-  padding-inline-start: var(--fm-space-1);
-}
-
-.fm-fdm-cell-physics__component:first-child {
-  border-inline-start: 0;
-  padding-inline-start: 0;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-panel-raised);
+  padding: var(--fm-space-2);
 }
 
 .fm-fdm-cell-physics__component dt {
@@ -155,15 +198,45 @@
   margin: 0;
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
+  font-size: var(--fm-font-size-sm);
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fm-fdm-cell-physics__component--magnitude dd {
+.fm-fdm-cell-physics__magnitude {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border-top: 1px solid var(--fm-border-subtle);
+  margin: var(--fm-space-2) var(--fm-space-1) 0;
+  padding-top: var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__magnitude > div {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__magnitude dt {
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-fdm-cell-physics__magnitude dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-sm);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .fm-fdm-cell-physics__empty {
@@ -191,6 +264,7 @@
 
 .fm-fdm-cell-physics__table-wrap {
   min-width: 0;
+  width: 100%;
 }
 
 .fm-fdm-cell-physics__energy-table {
@@ -240,7 +314,7 @@
 }
 
 .fm-fdm-cell-physics__energy-table td data {
-  font-size: var(--fm-font-size-xs);
+  font-size: var(--fm-font-size-sm);
   color: var(--fm-text-primary);
   font-family: var(--fm-font-mono);
   font-variant-numeric: tabular-nums;
@@ -253,6 +327,7 @@
 
 .fm-fdm-cell-physics__energy-table tr[data-fdm-energy-term="total"] > * {
   border-top: 1px solid var(--fm-border-default);
+  background: color-mix(in srgb, var(--fm-bg-panel-raised) 55%, var(--fm-bg-panel));
   color: var(--fm-text-primary);
   font-weight: 650;
 }
@@ -291,4 +366,22 @@
 .fm-fdm-cell-physics__sources .fm-inspector-field-row__value {
   display: block;
   text-align: right;
+}
+
+@container fdm-cell-physics (max-width: 300px) {
+  .fm-fdm-cell-physics__energy-table td data {
+    font-size: var(--fm-font-size-xs);
+  }
+
+  .fm-fdm-cell-physics__components {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--fm-space-1);
+  }
+
+  .fm-fdm-cell-physics__component {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding-block: var(--fm-space-1);
+  }
 }
