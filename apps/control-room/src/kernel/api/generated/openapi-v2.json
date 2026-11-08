@@ -20744,6 +20744,10 @@
           "solver": {
             "$ref": "#/components/schemas/SolverSummary",
             "description": "Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`."
+          },
+          "solver_energy_current_available": {
+            "description": "Whether `simulation/solver/energies/current` can return a source-qualified current sample now.",
+            "type": "boolean"
           }
         },
         "required": [

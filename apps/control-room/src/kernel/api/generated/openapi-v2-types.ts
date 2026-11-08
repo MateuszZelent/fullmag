@@ -10365,6 +10365,8 @@ export interface components {
             session: components["schemas"]["SessionSummary"];
             /** @description Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`. */
             solver: components["schemas"]["SolverSummary"];
+            /** @description Whether `simulation/solver/energies/current` can return a source-qualified current sample now. */
+            solver_energy_current_available?: boolean;
         };
         MagnetizationApplyReceiptResource: {
             operation_id: string;

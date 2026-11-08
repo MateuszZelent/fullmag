@@ -1088,6 +1088,7 @@ LiveStatus = TypedDict(
         'runtime_bundle_version': 'str',
         'session': 'SessionSummary',
         'solver': 'SolverSummary',
+        'solver_energy_current_available': 'bool',
     },
     total=False,
 )

@@ -587,11 +587,8 @@ export function shouldLoadRuntimeScalars(
 
 type SolverEnergyReadinessStatus = Pick<
   LiveStatusResource,
-  "resources" | "session" | "run"
-> & {
-  /** Optional locally until the generated OpenAPI contract is refreshed. */
-  solver_energy_current_available?: boolean;
-};
+  "resources" | "session" | "run" | "solver_energy_current_available"
+>;
 
 type SolverEnergyStatusRevision = {
   available: boolean;
@@ -1526,7 +1523,7 @@ export function useSolverEnergyCurrentResource({
     (status) => {
       const current = status.data;
       if (!current) return null;
-      const readinessStatus = current as SolverEnergyReadinessStatus;
+      const readinessStatus = current;
       return {
         available: shouldLoadSolverEnergyCurrent(true, readinessStatus),
         revision: solverEnergyCurrentStatusRevision(readinessStatus),
@@ -1551,6 +1548,7 @@ export function useSolverEnergyCurrentResource({
   const resource = useSessionScopedResource<
     SourceScopedSolverEnergyCurrentResource | null
   >({
+    abortStaleInflight: true,
     enabled: enabled && currentEnergyAvailable,
     load,
     resolveRevision: (data) =>
@@ -1565,17 +1563,17 @@ export function useSolverEnergyCurrentResource({
     lastStatusRevision.current = statusRevision;
     if (
       statusRevision.available &&
+      resource.status === "ready" &&
       (previous === null ||
         !previous.available ||
         previous.sourceIdentity !== statusRevision.sourceIdentity ||
         previous.revision !== statusRevision.revision)
     ) {
-      // Force through the shared resource cache on first readiness and after
-      // source transitions; an unchanged endpoint invalidation revision alone
-      // could otherwise reuse a prior run's settled entry.
+      // Empty and in-flight entries are handled by the ordinary gated load.
+      // Force only a settled entry when readiness/source identity advances.
       refetch();
     }
-  }, [enabled, refetch, statusRevision]);
+  }, [enabled, refetch, resource.status, statusRevision]);
   return {
     ...resource,
     data: solverEnergyCurrentDataForStatus(resource.data, statusRevision),
