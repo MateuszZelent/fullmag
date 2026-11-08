@@ -3173,7 +3173,7 @@ def _validate_study_fdm_material_state(value):
     if (not isinstance(value, Mapping)
             or not isinstance(value.get("object_id"), str) or not value["object_id"]
             or not isinstance(value.get("material_id"), str) or not value["material_id"]
-            or value.get("material_name") != "film"
+            or value.get("material_name") != "film material"
             or not isinstance(properties, Mapping)
             or properties.get("Ms") != 600000 or properties.get("Aex") != 1e-11
             or properties.get("alpha") != 0.5

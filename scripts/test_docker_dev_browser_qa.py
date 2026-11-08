@@ -2949,6 +2949,14 @@ sceneAfter.revision = 32;
 sceneAfter.materials[0].properties.Ms = 600000;
 sceneAfter.materials[0].properties.Aex = 1e-11;
 assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,sceneAfter),true);
+const withoutOptionalDmi = structuredClone(sceneBefore);
+delete withoutOptionalDmi.materials[0].properties.Dind;
+delete withoutOptionalDmi.materials[0].properties.Dbulk;
+assert.equal(runner.studyStageMaterialSceneMatches(withoutOptionalDmi,sceneAfter),true);
+const changedDmi = structuredClone(sceneAfter);
+changedDmi.materials[0].properties.Dind = 1e-3;
+assert.equal(runner.studyStageMaterialSceneMatches(withoutOptionalDmi,changedDmi),false);
+
 const changedM0 = structuredClone(sceneAfter);
 changedM0.magnetization_assets[0].value = [0,1,0];
 assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,changedM0),false);
@@ -3235,7 +3243,7 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
         if mode == "material-stage-a":
             magnetization_hash = "d" * 64
             material_before = {
-                "object_id": "film", "material_id": "mat-film", "material_name": "film",
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
                 "properties": {"Ms": 800000, "Aex": 13e-12, "alpha": 0.5, "Dind": None, "Dbulk": None},
                 "magnetization_ref": "mag-film", "magnetization_asset_sha256": magnetization_hash,
             }
@@ -3247,7 +3255,7 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
                 "base_revision": 31,
                 "kind": "patch_material",
                 "material_id": "mat-film",
-                "patch": {"name": "film", "properties": {
+                "patch": {"name": "film material", "properties": {
                     "Aex": 1e-11, "Dind": None, "Dbulk": None, "Ms": 600000, "alpha": 0.5,
                 }},
             }
@@ -3274,7 +3282,7 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
         if mode == "fdm-cell-study":
             material_hash = "d" * 64
             material_state = {
-                "object_id": "film", "material_id": "mat-film", "material_name": "film",
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
                 "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
                 "magnetization_ref": "mag-film", "magnetization_asset_sha256": material_hash,
             }

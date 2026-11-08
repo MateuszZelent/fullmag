@@ -170,8 +170,12 @@ function studyStageMaterialProjection(scene, materialId) {
   if (!plainRecord(material) || !plainRecord(material.properties)) return null;
   const projection = structuredClone(material);
   delete projection.properties;
-  const otherProperties = Object.fromEntries(Object.entries(material.properties)
-    .filter(([key]) => key !== "Ms" && key !== "Aex"));
+  const otherProperties = {
+    ...Object.fromEntries(Object.entries(material.properties)
+      .filter(([key]) => key !== "Ms" && key !== "Aex")),
+    Dind: material.properties.Dind ?? null,
+    Dbulk: material.properties.Dbulk ?? null,
+  };
   return { material: projection, otherProperties };
 }
 
@@ -1314,13 +1318,17 @@ export async function runStudyStageRerun() {
       assert.equal(await materialRow.count(), 1, "The task-owned material Explorer row is absent or duplicated");
       await materialRow.click();
 
-      const nameField = page.getByLabel("Name", { exact: true });
-      const msField = page.getByLabel("Ms", { exact: true });
-      const aexField = page.getByLabel("Aex", { exact: true });
-      const alphaField = page.getByLabel("alpha", { exact: true });
-      const dindField = page.getByLabel("Dind", { exact: true });
-      const dbulkField = page.getByLabel("Dbulk", { exact: true });
+      const nameField = page.locator('input[aria-label="Name"]');
+      const msField = page.locator('input[aria-label="Ms"]');
+      const aexField = page.locator('input[aria-label="Aex"]');
+      const alphaField = page.locator('input[aria-label="alpha"]');
+      const dindField = page.locator('input[aria-label="Dind"]');
+      const dbulkField = page.locator('input[aria-label="Dbulk"]');
       await msField.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      await page.waitForFunction(() => {
+        const input = document.querySelector('input[aria-label="Ms"]');
+        return input && !input.disabled && input.value !== "";
+      }, null, { timeout: Math.min(15_000, timerBudget()) });
       const unchangedFields = {
         name: await nameField.inputValue(),
         alpha: await alphaField.inputValue(),
@@ -1403,7 +1411,7 @@ export async function runStudyStageRerun() {
       await studyRow.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
       assert.equal(await studyRow.count(), 1, "The task-owned Study Explorer row is absent or duplicated");
       await studyRow.click();
-      const cellField = page.getByLabel("FDM default cell", { exact: true });
+      const cellField = page.locator('input[aria-label="FDM default cell"]');
       await cellField.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
       const parseCell = (value) => value.split(",").map((item) => Number(item.trim()));
       assert.deepEqual(parseCell(await cellField.inputValue()), fdmCellBeforeState.cell,

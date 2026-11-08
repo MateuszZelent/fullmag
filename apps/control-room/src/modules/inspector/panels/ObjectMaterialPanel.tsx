@@ -251,9 +251,13 @@ function useObjectMaterialPanelState(
     useState<AcknowledgedAssignmentBaseOverride | null>(null);
   const materialId = normalizeMaterialRef(object.material);
   const material = useMaterialResource(materialId);
+  const anisotropyResourceEnabled = materialInspectorSections(selection.kind).includes(
+    "uniaxial-anisotropy",
+  );
   const anisotropyInteraction = useObjectInteractionResource(
     object.objectId || null,
     "uniaxial_anisotropy",
+    { enabled: anisotropyResourceEnabled },
   );
   const baseAnisotropyDraft = useMemo(
     () =>
