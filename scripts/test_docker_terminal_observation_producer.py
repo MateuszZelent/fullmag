@@ -152,6 +152,102 @@ class ProducerTests(unittest.TestCase):
             producer.canonical(drain["process_receipt"]) + b"\n")
         self.control[relative] = producer.canonical(drain) + b"\n"
 
+    def attach_terminal_observation(self):
+        """Attach one producer-shaped, prior-run runtime receipt and its CAS files."""
+        prior_proof = {
+            "schema": producer.PROOF_SCHEMA,
+            "original_iteration": "1" * 32,
+            "compose_project": self.scope["compose_project"],
+            "control_volume": self.scope["control_volume"],
+            "source_root": self.scope["source_root"],
+            "image_id": "sha256:" + "f" * 64,
+            "config_sha256": "a" * 64,
+            "native_config_sha256": "b" * 64,
+            "terminal_evidence_sha256": "c" * 64,
+            "run_id": "prior-run-6c24",
+            "session_id": "prior-session-275",
+            "session_epoch": 1000,
+            "scene_revision": 4,
+        }
+        proof_raw = producer.canonical(prior_proof) + b"\n"
+        proof_sha = producer.sha(proof_raw)
+        api_id = "346dfd7e-f50e-450a-ad3e-97a42d8e2ddc"
+        process = producer.decode(self.control[BASE + "backend-drain.json"])["process_receipt"]
+        owner = process["service_owner"]
+        launch = {
+            "schema": "fullmag.terminal-observation-launch.v1",
+            "source_proof_sha256": proof_sha,
+            "source_native_config_sha256": prior_proof["native_config_sha256"],
+            "target_build_id": owner["build_commit"],
+            "target_source_sha256": owner["build_snapshot"],
+            "target_image_id": self.scope["image_id"],
+            "native_config_sha256": "d" * 64,
+            "terminal_evidence_sha256": prior_proof["terminal_evidence_sha256"],
+        }
+        launch_raw = producer.canonical(launch) + b"\n"
+        launch_sha = producer.sha(launch_raw)
+        installed = {
+            "schema": "fullmag.terminal-observation-restored.v1",
+            "api_instance_id": api_id,
+            "run_id": prior_proof["run_id"],
+            "session_id": prior_proof["session_id"],
+            "session_epoch": prior_proof["session_epoch"],
+            "scene_revision": prior_proof["scene_revision"],
+            "terminal_outcome": "completed",
+            "proof_sha256": proof_sha,
+            "launch_sha256": launch_sha,
+            "source_image_id": prior_proof["image_id"],
+            "source_config_sha256": prior_proof["config_sha256"],
+            "target_build_id": launch["target_build_id"],
+            "target_source_sha256": launch["target_source_sha256"],
+            "target_image_id": launch["target_image_id"],
+            "native_config_sha256": launch["native_config_sha256"],
+            "terminal_evidence_sha256": prior_proof["terminal_evidence_sha256"],
+        }
+        installed_raw = producer.canonical(installed) + b"\n"
+        relative = f"terminal-observation/{proof_sha}/installed-{api_id}.json"
+        annotation = {
+            "schema": "fullmag.terminal-observation-runtime.v1",
+            "api_instance_id": api_id,
+            "run_id": prior_proof["run_id"],
+            "session_id": prior_proof["session_id"],
+            "proof_sha256": proof_sha,
+            "launch_sha256": launch_sha,
+            "installed_relative": relative,
+            "installed_sha256": producer.sha(installed_raw),
+            "target_build_id": launch["target_build_id"],
+            "target_source_sha256": launch["target_source_sha256"],
+            "target_image_id": launch["target_image_id"],
+        }
+        prefix = f"runtime-control/terminal-observation/{proof_sha}/"
+        self.control[prefix + "proof.json"] = proof_raw
+        self.control[prefix + f"launch-{launch_sha}.json"] = launch_raw
+        self.control[prefix + relative.removeprefix(f"terminal-observation/{proof_sha}/")] = installed_raw
+        process["terminal_observation"] = annotation
+        drain_relative = BASE + "backend-drain.json"
+        drain = producer.decode(self.control[drain_relative])
+        drain["process_receipt"] = process
+        drain["process_receipt_sha256"] = producer.sha(producer.canonical(process) + b"\n")
+        self.control[drain_relative] = producer.canonical(drain) + b"\n"
+        return annotation
+
+    def attach_recovery_annotations(self):
+        self.change_native(lambda value: value.update(
+            container_recovery={
+                "schema_version": "runtime_service_container_recovery.v1",
+                "status": "recovered", "outcome": "retained_terminal_runs_recovered",
+                "request_id": "request-1", "request_sha256": "1" * 64,
+                "config_sha256": "2" * 64, "attestation_sha256": "3" * 64,
+                "owner_sha256_after": "4" * 64,
+            },
+            container_recovery_authorization={
+                "schema_version": "fullmag.docker-container-recovery-authorization.v1",
+                "request_id": "request-1", "request_sha256": "1" * 64,
+                "config_sha256": "2" * 64, "attestation_sha256": "3" * 64,
+                "owner_sha256_after": "4" * 64,
+            },
+        ))
+
     # Native pins above are deliberate unit-fixture placeholders, kept in
     # memory only. These tests do not qualify the native fence or publish proof.
     def test_fixture_failed_run_has_exact_original_pins(self):
@@ -214,6 +310,94 @@ class ProducerTests(unittest.TestCase):
 
     def test_partial_native_receipt_is_rejected(self):
         self.change_native(lambda value: value.update(shutdown_error="unknown"))
+        with self.assertRaises(ValueError):
+            self.build()
+
+    def test_terminal_observation_runtime_annotation_is_accepted_from_its_own_archives(self):
+        annotation = self.attach_terminal_observation()
+        proof = self.build()
+        self.assertEqual(proof["run_id"], RUN)
+        self.assertNotEqual(annotation["run_id"], proof["run_id"])
+        self.assertNotEqual(annotation["session_id"], proof["session_id"])
+
+    def test_terminal_observation_runtime_annotation_rejects_unbound_or_unknown_shapes(self):
+        self.attach_terminal_observation()
+        failures = (
+            lambda value: value["terminal_observation"].update(schema="future.v1"),
+            lambda value: value["terminal_observation"].update(unrecognized="extra"),
+            lambda value: value["terminal_observation"].update(installed_sha256="0" * 64),
+            lambda value: value["terminal_observation"].update(
+                installed_relative="terminal-observation/../foreign.json"),
+        )
+        for mutate in failures:
+            with self.subTest(mutate=mutate):
+                self.control = dict(self.controls)
+                self.attach_terminal_observation()
+                self.change_native(mutate)
+                with self.assertRaises(ValueError):
+                    self.build()
+
+    def test_terminal_observation_runtime_annotation_rejects_changed_archived_bindings(self):
+        for mutation in ("proof", "launch", "launch_extra", "installed", "installed_source_image",
+                         "installed_extra", "owner", "image"):
+            with self.subTest(mutation=mutation):
+                self.control = dict(self.controls)
+                annotation = self.attach_terminal_observation()
+                prefix = f"runtime-control/terminal-observation/{annotation['proof_sha256']}/"
+                relative = {
+                    "proof": prefix + "proof.json",
+                    "launch": prefix + f"launch-{annotation['launch_sha256']}.json",
+                    "launch_extra": prefix + f"launch-{annotation['launch_sha256']}.json",
+                    "installed": "runtime-control/" + annotation["installed_relative"],
+                    "installed_source_image": "runtime-control/" + annotation["installed_relative"],
+                    "installed_extra": "runtime-control/" + annotation["installed_relative"],
+                    "owner": BASE + "backend-drain.json",
+                    "image": BASE + "backend-drain.json",
+                }[mutation]
+                if mutation == "proof":
+                    self.control[relative] += b" "
+                elif mutation in {"launch", "launch_extra"}:
+                    value = producer.decode(self.control[relative])
+                    value["target_build_id"] = "f" * 40 if mutation == "launch" else value["target_build_id"]
+                    if mutation == "launch_extra":
+                        value["unrecognized"] = True
+                    self.control[relative] = producer.canonical(value) + b"\n"
+                elif mutation in {"installed", "installed_source_image", "installed_extra"}:
+                    value = producer.decode(self.control[relative])
+                    if mutation == "installed":
+                        value["run_id"] = "foreign-run"
+                    elif mutation == "installed_source_image":
+                        value["source_image_id"] = self.scope["image_id"]
+                    else:
+                        value["unrecognized"] = True
+                    self.control[relative] = producer.canonical(value) + b"\n"
+                elif mutation == "owner":
+                    drain = producer.decode(self.control[relative])
+                    drain["process_receipt"]["service_owner"]["build_commit"] = "f" * 40
+                    drain["process_receipt_sha256"] = producer.sha(
+                        producer.canonical(drain["process_receipt"]) + b"\n")
+                    self.control[relative] = producer.canonical(drain) + b"\n"
+                else:
+                    drain = producer.decode(self.control[relative])
+                    drain["process_receipt"]["terminal_observation"]["target_image_id"] = "sha256:" + "f" * 64
+                    drain["process_receipt_sha256"] = producer.sha(
+                        producer.canonical(drain["process_receipt"]) + b"\n")
+                    self.control[relative] = producer.canonical(drain) + b"\n"
+                with self.assertRaises(ValueError):
+                    self.build()
+
+    def test_terminal_observation_can_coexist_with_complete_legacy_recovery_annotations(self):
+        self.attach_terminal_observation()
+        self.attach_recovery_annotations()
+        self.build()
+
+    def test_legacy_recovery_annotations_remain_supported_without_terminal_observation(self):
+        self.attach_recovery_annotations()
+        self.build()
+
+    def test_terminal_observation_with_partial_recovery_annotation_is_rejected(self):
+        self.attach_terminal_observation()
+        self.change_native(lambda value: value.update(container_recovery={}))
         with self.assertRaises(ValueError):
             self.build()
 
