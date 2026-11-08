@@ -1889,6 +1889,7 @@ fn prepare_selected_live_stage_initial_state(
         study,
         &mut entries,
         selected,
+        command,
         targets_stage(command.target.as_ref()),
         previous_run_id,
         prepared_capture,
