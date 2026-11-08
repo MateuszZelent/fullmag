@@ -822,6 +822,22 @@ przewodnika. Obecność funkcji device nie potwierdza publicznego support dla
 każdego profilu, integratora ani precyzji. Wymagane są rzeczywiste przebiegi
 device z porównaniem do CPU i pomiarem transferów, nie tylko kompilacja.
 
+Natywna redukcja Zeemana obejmuje zadane pole i regionalny drive. Adapter
+rozdziela tę sumę na `E_ext` i `E_drive`, zachowując `E_total`. Ponowne
+materializowanie tego samego zaakceptowanego stanu nie może drugi raz
+odejmować drive. Pojedynczy globalny alias obiektu `free` otrzymuje te same
+składowe i momentowo ważone m co wynik globalny; innych scope nie zastępuje
+się globalną energią. Publikowane czasy pól, tabel i accepted-state identity
+są fizyczne, podczas gdy native integrator i jego harmonogram pozostają
+lokalne względem początku Run. Digest zegara powstaje po tej normalizacji. Gęstości CUDA
+stosują ten sam podział: `eden_ext` obejmuje bias i statyczny profil,
+`eden_drive` regionalny drive, a `eden_total` oba wkłady dokładnie raz.
+Każdy regionalny wkład wynosi $-\mu_0 M_{s,i}\,\mathbf m_i\cdot\mathbf H_{\mathrm{drive},i}$
+i jest ważony udziałem objętości komórki. Ten sam kernel obsługuje fp64 i fp32;
+fp32 z sub-cell boundary correction pozostaje jawnie niedostępne.
+Test ABI sprawdza lokalne $M_s$, maskę, legalne udziały objętości i całkę
+zgodną z energią skalarną; historyczny wkład Oersteda zachowuje swój kontrakt.
+
 ### 14.3. FEM CPU
 
 `project_regional_field_drive_bases` buduje bazy w przestrzeni P1, następnie
@@ -922,3 +938,7 @@ Regresje authoringu: `RegionalFieldDriveTests`; zegar: osobny skrypt source.
 | Ciągłość zegara kolejnych Run | `crates/fullmag-application/src/script_pipeline_compilation.rs` | `advance_physical_clock` | wspólna | source_visible; kwalifikacja sinusoidy w toku |
 | Wznowienie origin i odmowa resetu katalogu | `crates/fullmag-application/src/script_pipeline_acceptance.rs` | `physical_runs_keep_cumulative_clock_and_saved_waveform_origin` | wspólna | source_visible; CI w toku |
 | Zegar początkowego i zerokrokowego końcowego artefaktu | `crates/fullmag-runner/src/artifacts.rs` | `resumed_run_artifacts_preserve_stage_start_without_accepted_steps` | FDM/FEM | source_visible; kwalifikacja w toku |
+| Fizyczny zegar publikacji przed digestem | `crates/fullmag-runner/src/fdm/gpu/cuda/mod.rs` | `canonical_fdm_publication_clock` | FDM GPU | A10 CUDA/single zegar i energie PASS; regresje wymagają końcowego CI |
+| Idempotentny rozdział energii regionalnej | `crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs` | `split_native_regional_drive_energy` | FDM GPU | A9 RED zachowane; A10 energia/składowe PASS |
+
+| Podział regionalnej gęstości energii | `backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu` | `energy_density_kernel` | FDM GPU | RED A5 zachowane; GREEN A6/A7 fp64/fp32 i A10 public PASS |

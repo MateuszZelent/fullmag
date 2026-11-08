@@ -169,17 +169,19 @@ __global__ void energy_density_kernel(
             field_y += static_cast<double>(h_oe_y[index]);
             field_z += static_cast<double>(h_oe_z[index]);
         }
-        if (include_regional_field) {
-            field_x += regional_field_drive_component(
-                regional_drive_x, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-            field_y += regional_field_drive_component(
-                regional_drive_y, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-            field_z += regional_field_drive_component(
-                regional_drive_z, regional_drive_params, regional_drive_points,
-                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
-        }
+        density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
+    }
+    if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE) &&
+        include_regional_field) {
+        const double field_x = regional_field_drive_component(
+            regional_drive_x, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+        const double field_y = regional_field_drive_component(
+            regional_drive_y, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+        const double field_z = regional_field_drive_component(
+            regional_drive_z, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
         density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
     }
     if (kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive) {

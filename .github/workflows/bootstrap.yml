@@ -310,6 +310,9 @@ jobs:
           cargo test --locked -p fullmag-runner --lib resumed_run_artifacts_preserve_stage_start_without_accepted_steps
           cargo test --locked -p fullmag-runner --lib adaptive_fdm_cuda_identity_is_explicit_but_unvalidated_until_controller_artifact
           cargo test --locked -p fullmag-runner --lib timestep_qualification::tests
+          cargo test --locked -p fullmag-runner --lib cuda_regional_drive_energy_split_preserves_total_and_single_object_scalars
+          cargo test --locked -p fullmag-runner --lib cuda_publication_clock_is_physical_before_digest_and_keeps_relaxation_local
+          cargo test --locked -p fullmag-api --bin fullmag-api runtime_command_precondition_uses_published_durable_revision
           cargo test --locked -p fullmag-plan --lib materialized_input_preserves_full_u32_markers
           cargo test --locked -p fullmag-antenna-artifacts --lib canonical_attributes_preserve_u32_without_accepting_invalid_ranges
 
@@ -1123,7 +1126,9 @@ jobs:
           python -m pip install -e 'packages/fullmag-py[meshing,figures]'
 
       - name: Verify optimized regional convergence gate
-        run: python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
+        run: |
+          python -B -m unittest discover -s scripts/benchmarks -p test_regional_fdm_fem_convergence.py -v
+          python -B -m unittest discover -s scripts/benchmarks -p test_fdm_regional_drive_density_abi_checks.py -v
 
       - name: Verify precision-specific LLG qualification identities
         run: |

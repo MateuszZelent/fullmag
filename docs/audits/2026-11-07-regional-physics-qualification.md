@@ -835,3 +835,45 @@ snapshotu (domyślne 0). Dodano jego prawidłowy start 5 ps przed walidacją;
 kontrola IR pozostaje bez zmian. Pozostałe 164 testy biblioteki application
 oraz testy integracyjne przeszły. Python jobs odmówiły wcześniej pobrania
 dependencji (HTTP 504); wynik końcowego CI jest osobną bramką.
+
+## Końcowy podział energii CUDA i fizyczny zegar publikacji
+
+Natywna redukcja Zeemana pozostaje sumą biasu i regionalnego drive. Runner
+rozdziela ją idempotentnie na `E_ext`/`E_drive`, zachowując `E_total` i znany
+singleton `free`. Native integrator, harmonogram i waveform używają nadal
+zegara lokalnego; kopie publikowane w tabelach, polach i accepted-state clock
+otrzymują czas fizyczny przed wyznaczeniem digestu. Relaksacja zachowuje
+swój dotychczasowy zegar. Compute Fields używa tego samego rozdziału energii.
+
+Oddzielny błąd natywnej gęstości w CUDA przenosił regionalny drive do `eden_ext`
+i pozostawiał `eden_drive=0`, mimo poprawnego `eden_total`. Kernel fp64/fp32
+przenosi ten wkład do DRIVE i uwzględnia go w TOTAL dokładnie raz, zachowując
+lokalne Ms, maskę, phi i historyczną gałąź Oersteda. RED A5 wykazał 30 błędów.
+GREEN A6 wykonany z `python -O` ma 12 przypadków i zero błędów: osiem pomiarów
+analitycznych, dwa porównania legacy z pomiarem sprzed zmiany i dwie wymagane
+odmowy fp32 sub-cell. Nie rozszerza to capability fp32 boundary correction.
+Regresje testu wymagają statusu C ABI, wywołania snapshot dokładnie raz oraz
+odmowy NaN/±Inf także pod `python -O`: **2/2 PASS**. Review zamknęło oba P2.
+Dane: `regional_density_red_a5.zarr`, `regional_density_green_a6.zarr`;
+biblioteka GREEN A6 SHA-256
+`9301e2c6c773fcbf3484e3c050288b97cc9f861f8f00e929a7bdbd7773a08560`.
+
+Publiczny A10 GPU/single: oba Run zakończone, 8 i 22 kroki, czasy [0,2] i [2,5] ps,
+spójny digest, dokładnie zachowane dwie polityki adaptacyjne i brak fallbacku.
+Maksymalny błąd m=1,5994e-8, względny błąd energii=1,2849e-7,
+defekt normy=3,1982e-8, ciągłość=0, błąd sumy składowych=0. Gęstości i ich
+całki zgodne z analityką/energią skalarną przy niezmienionym progu 1e-5.
+Publiczny ślad GPU nadal jest próbkowany: nie dowodzi rzeczywistego pierwszego dt.
+Run `run-live-96b8f6aa21a583d600f55a2fcf0017b8abcb25494fe975cb9a33254052e705eb`,
+Compute `fm-0f75f64c-a4da-40f5-b96b-4f1cd75f1901`, source
+`d2da31cf210bb3886b7b741f4a0051af732ed12aef2fa0c8ef8f48b6410598d0`.
+Build/resume `1af43e74ebfc4a2abf77a7bebfd41c07`.
+
+Ponowne Compute Fields A10 odmówiło HTTP409 przed przyjęciem polecenia;
+lista poleceń zawierała tylko wcześniejszy Solve, bez aktywnej materializacji.
+Zachowano marker POST i dowód odczytu, bez replay. Walidator porównywał
+publiczną trwałą rewizję 2 z liczbą wpisów 1. Poprawka używa wspólnego
+`command_ledger_revisions` pod blokadą ledgeru, jak status i zasób commands;
+legacy bez trwałego journalu zachowuje licznik. Regresja obejmuje poprawną
+rewizję, odmowy stale/future i licznik historii oraz fallback legacy.
+Review nie wykazało blockerów źródłowych; końcowy A11 i CI są osobnymi bramkami.
