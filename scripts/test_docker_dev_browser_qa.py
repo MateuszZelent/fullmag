@@ -2904,25 +2904,33 @@ class StudyStageRerunContractTests(unittest.TestCase):
     def sources(qa):
         return qa._study_stage_rerun_source_sha256(ROOT)
 
-    def fdm_grid_resume_parent_documents(self, qa, *, changed=None):
+    def fdm_grid_resume_parent_documents(self, qa, *, changed=None, observed_phase=None):
         mode = "fdm-cell-study"
         current_sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
         prior_sources = deepcopy(current_sources)
         prior_sources["runner"] = "f" * 64
         report = self.result_fixture(mode, prior_sources)
         report.update(
-            state="outcome-unknown", outcome="unknown", phase="fdm-grid-observing",
+            state="outcome-unknown", outcome="unknown", phase=observed_phase or "fdm-grid-observing",
             failure="held-grid proof failed before Compute Study submission",
             command_receipt=None, command_count=0, command_attempt_count=0,
             ui_command_proven=False, after=None, reload_proof=None,
-            history_identity_preserved=None, public_terminal_proven=False, prepared_grid_run=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            prepared_grid_run=report["prepared_grid_run"] if observed_phase else None,
             client_ack_count=0,
         )
-        report["grid_refresh_receipt"].pop("domain_transition")
+        if not observed_phase:
+            report["grid_refresh_receipt"].pop("domain_transition")
         held_results_key = "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100"
         report["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
-        report["request_counts"].pop(held_results_key, None)
-        report["read_counts"]["stage_results"] = 2
+        if observed_phase:
+            report["request_counts"][held_results_key] -= 1
+            if report["request_counts"][held_results_key] == 0:
+                report["request_counts"].pop(held_results_key)
+            report["read_counts"]["stage_results"] = 3
+        else:
+            report["request_counts"].pop(held_results_key, None)
+            report["read_counts"]["stage_results"] = 2
         report["total_requests"] = sum(report["request_counts"].values())
         if changed == "solve-dispatched":
             report.update(command_count=1, command_attempt_count=1, ui_command_proven=True,
@@ -4291,6 +4299,51 @@ process.stdout.write(JSON.stringify(r.studyStagePreparedGridSummary(JSON.parse(p
                 public_url="http://127.0.0.1:3242",
                 browser_url="http://frontend:8080", expected_sources=missing_sources,
             )
+
+    def test_ready_grid_resume_requires_undispatched_study_and_the_observed_transition(self):
+        qa = self.qa
+        for phase in ("fdm-grid-ready", "ui-submit"):
+            control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(
+                qa, observed_phase=phase)
+            def load():
+                return qa._load_fdm_grid_resume_evidence(
+                    control, attempt, selected=ROOT, current=current, identity=identity,
+                    frontend_id="frontend-1", frontend_volume="frontend-state",
+                    public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+                    expected_sources=sources)
+            evidence = load()
+            self.assertEqual(evidence["prior_report"]["phase"], phase)
+            self.assertEqual(evidence["prior_grid_receipt"]["domain_transition"]["prepared_run_id"], "run-held")
+            script = """const r=await import(process.argv[1]);
+const e=JSON.parse(process.argv[2]);
+if(!r.studyStageFdmResumeEvidenceAllowed(e)) process.exit(1);
+for(const mutate of [x=>x.prior_report.command_attempt_count=1,
+ x=>delete x.prior_grid_receipt.domain_transition,
+ x=>x.prior_grid_receipt.domain_transition.prepared_run_id=x.prior_before.run_id,
+ x=>x.prior_grid_receipt.domain_transition.before_domain_generation_id='foreign']) {
+ const bad=structuredClone(e);mutate(bad);
+ if(r.studyStageFdmResumeEvidenceAllowed(bad)) process.exit(2);
+}"""
+            observed = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script,
+                (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri(),
+                json.dumps(evidence)], capture_output=True, text=True, timeout=20)
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            for reason, mutate in (
+                ("attempted Solve", lambda item: item.update(command_attempt_count=1)),
+                ("lost ready proof", lambda item: item.update(prepared_grid_run=None)),
+                ("foreign held run", lambda item: item["grid_refresh_receipt"]["domain_transition"].update(prepared_run_id="foreign")),
+            ):
+                altered = dict(control.documents)
+                wrapper_path=f"browser-qa/attempts/{attempt}/runner-output.json"
+                wrapper=json.loads(control.documents[wrapper_path]); report=json.loads(wrapper["stdout"])
+                mutate(report);wrapper["stdout"]=json.dumps(report)
+                control.documents[wrapper_path]=qa.canonical(wrapper)+b"\n"
+                with self.subTest(phase=phase, rejected=reason), self.assertRaises(qa.BuildControlError):
+                    load()
+                control.documents=altered
+            qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="b" * 32)
+            with self.assertRaises(qa.BuildControlError):
+                load()
 
     def test_fdm_grid_409_preserves_bounded_error_without_compute_or_retry(self):
         qa = self.qa

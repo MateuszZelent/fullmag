@@ -928,7 +928,8 @@ export function studyStageFdmResumeEvidenceAllowed(value) {
     const session = value.prior_session;
     const cell = value.prior_cell_receipt;
     const grid = value.prior_grid_receipt;
-    if (!plainRecord(prior) || prior.mode !== "fdm-cell-study" || prior.phase !== "fdm-grid-observing"
+    if (!plainRecord(prior) || prior.mode !== "fdm-cell-study"
+        || !["fdm-grid-observing", "fdm-grid-ready", "ui-submit"].includes(prior.phase)
         || prior.outcome !== "unknown" || prior.command_count !== 0 || prior.command_attempt_count !== 0
         || !plainRecord(session) || session.name !== sessionName
         || identityKeys.some((key) => typeof session[key] !== "string" || !session[key] || session[key].length > 512)
@@ -956,7 +957,24 @@ export function studyStageFdmResumeEvidenceAllowed(value) {
         || grid.terminal_detail?.kind !== "fdm_grid_refresh"
         || grid.terminal_detail?.status !== "completed"
         || grid.terminal_detail?.completion_status !== "completed"
-        || grid.domain_transition !== undefined) return false;
+        || (grid.domain_transition !== undefined) !== (prior.phase !== "fdm-grid-observing")) return false;
+    if (prior.phase !== "fdm-grid-observing") {
+      const transition = grid.domain_transition;
+      const keys = ["before_domain_cell_count", "before_domain_generation_id", "ready_domain_cell_count",
+        "ready_domain_generation_id", "scene_revision", "prior_run_id", "preserved_prior_result_identities",
+        "prepared_run_id", "preparation_id", "preparation_revision"];
+      if (!plainRecord(transition) || canonical(Object.keys(transition).sort()) !== canonical(keys.sort())
+          || transition.before_domain_cell_count !== 8 || transition.ready_domain_cell_count !== 16
+          || transition.before_domain_generation_id !== before.profile.domain_generation_id
+          || typeof transition.ready_domain_generation_id !== "string" || !transition.ready_domain_generation_id
+          || transition.ready_domain_generation_id === transition.before_domain_generation_id
+          || transition.scene_revision !== cell.scene_revision || transition.prior_run_id !== before.run_id
+          || canonical(transition.preserved_prior_result_identities) !== canonical(before.result_identities)
+          || typeof transition.prepared_run_id !== "string" || !transition.prepared_run_id
+          || transition.prepared_run_id === before.run_id
+          || typeof transition.preparation_id !== "string" || !transition.preparation_id
+          || !Number.isInteger(transition.preparation_revision) || transition.preparation_revision < 0) return false;
+    }
     const expectedScope = sessionScope(session);
     if (cell.scope_header !== expectedScope || grid.scope_header !== expectedScope
         || grid.payload?.kind !== "fdm_grid_refresh"
@@ -1124,6 +1142,8 @@ export async function runStudyStageRerun() {
   if (isGridMode) readCounts.preparation = 0;
   const requestCounts = {};
   const errors = [];
+  const pageErrorDetails = [];
+  let failureUiText = null;
   const violations = [];
   let totalRequests = 0;
   let phase = "preflight";
@@ -1552,7 +1572,12 @@ export async function runStudyStageRerun() {
     context = await browser.newContext({ viewport: { width: 1440, height: 780 }, serviceWorkers: "block" });
     page = await context.newPage();
     page.setDefaultTimeout(10_000);
-    page.on("pageerror", (error) => { if (errors.length < 16) errors.push(boundedMessage(error)); });
+    page.on("pageerror", (error) => {
+      if (errors.length < 16) errors.push(boundedMessage(error));
+      if (pageErrorDetails.length < 4) pageErrorDetails.push({ phase,
+        elapsed_ms: Date.now() - startedAt, message: boundedMessage(error),
+        stack: typeof error?.stack === "string" ? error.stack.slice(0, 4096) : null });
+    });
     page.on("console", (message) => {
       if (message.type() === "error" && errors.length < 16) errors.push(boundedMessage(message.text()));
     });
@@ -1590,6 +1615,14 @@ export async function runStudyStageRerun() {
       };
       const prepared = await readPreparedGridRun(session, priorSnapshot,
         resumeInput.prior_cell_receipt, resumeInput.grid_command_id);
+      const observed = resumeInput.prior_grid_receipt.domain_transition;
+      if (observed !== undefined) {
+        assert.equal(prepared.currentRun.run_id, observed.prepared_run_id,
+          "The observed held run was replaced before FDM resume");
+        assert.equal(prepared.profile.domain_generation_id, observed.ready_domain_generation_id);
+        assert.equal(prepared.preparation.preparation_id, observed.preparation_id);
+        assert.equal(prepared.preparation.revision, observed.preparation_revision);
+      }
       assert.deepEqual(studyStageMaterialState(prepared.scene), fdmMaterialBeforeState,
         "The FDM resume changed the accepted material or global magnetization asset");
       const history = await readResults(prior.run_id, session, ["relax-a"]);
@@ -2404,6 +2437,10 @@ export async function runStudyStageRerun() {
     outcome = "terminal-confirmed";
   } catch (error) {
     failure = boundedMessage(error);
+    if (page && !page.isClosed()) {
+      failureUiText = await page.locator("body").innerText({ timeout: 1000 })
+        .then((value) => value.slice(0, 12000)).catch(() => null);
+    }
     if (commandCount === 1 || materialCount === 1 || fdmCellCount === 1 || gridRefreshCount === 1
         || textureTransactionCount === 1) {
       outcome = "unknown";
@@ -2429,6 +2466,8 @@ export async function runStudyStageRerun() {
       state: failure ? (outcome === "unknown" ? "outcome-unknown" : "failed") : "passed",
       mode,
       failure,
+      page_error_details: pageErrorDetails,
+      failure_ui_text: failureUiText,
       public_url: publicUrl,
       probe_url: upstreamUrl,
       playwright_version: playwrightVersion,

@@ -3607,8 +3607,10 @@ def _load_fdm_grid_resume_evidence(control, attempt, *, selected, current, ident
     prior_report = _parse_study_stage_rerun_result(
         wrapper["stdout"].encode("utf-8"), public_url, browser_url, prior_sources, "fdm-cell-study",
     )
-    if (prior_report.get("outcome") != "unknown" or prior_report.get("phase") != "fdm-grid-observing"
-            or prior_report.get("prepared_grid_run") is not None
+    ready_parent = prior_report.get("phase") in {"fdm-grid-ready", "ui-submit"}
+    if (prior_report.get("outcome") != "unknown"
+            or prior_report.get("phase") not in {"fdm-grid-observing", "fdm-grid-ready", "ui-submit"}
+            or (prior_report.get("prepared_grid_run") is not None) != ready_parent
             or prior_report.get("command_receipt") is not None
             or prior_report.get("command_count") != 0
             or prior_report.get("command_attempt_count") != 0):
@@ -3710,7 +3712,8 @@ def _validate_fdm_grid_resume_evidence_shape(value, expected_sources=None):
             or not isinstance(before.get("result_identities"), list)
             or len(before["result_identities"]) != 1
             or not isinstance(report, Mapping)
-            or report != {"mode": "fdm-cell-study", "phase": "fdm-grid-observing", "outcome": "unknown",
+            or report.get("phase") not in {"fdm-grid-observing", "fdm-grid-ready", "ui-submit"}
+            or report != {"mode": "fdm-cell-study", "phase": report.get("phase"), "outcome": "unknown",
                           "command_count": 0, "command_attempt_count": 0}
             or not isinstance(value.get("prior_material_initial_state"), Mapping)
             or value.get("prior_material_initial_state") != before.get("material_state")
@@ -3721,8 +3724,18 @@ def _validate_fdm_grid_resume_evidence_shape(value, expected_sources=None):
             or not isinstance(grid, Mapping) or grid.get("accepted") is not True
             or grid.get("command_id") != value.get("grid_command_id")
             or grid.get("terminal_detail", {}).get("status") != "completed"
-            or "domain_transition" in grid):
+            or ("domain_transition" in grid) != (report.get("phase") != "fdm-grid-observing")):
         raise BuildControlError("FDM grid resume evidence does not prove one acknowledged pre-Solve grid attempt")
+    if report["phase"] != "fdm-grid-observing":
+        profile = before.get("profile")
+        transition = grid.get("domain_transition")
+        if (not isinstance(profile, Mapping) or profile.get("domain_cell_count") != 8
+                or not isinstance(transition, Mapping)
+                or transition.get("before_domain_generation_id") != profile.get("domain_generation_id")):
+            raise BuildControlError("FDM grid resume transition has a foreign original domain")
+        _validate_study_fdm_grid_refresh_receipt(
+            {"grid_refresh_receipt": grid}, session, cell, before["run_id"], before["result_identities"],
+        )
     if (not isinstance(value.get("grid_command_id"), str) or not 1 <= len(value["grid_command_id"]) <= 128
             or any(ord(character) < 32 or ord(character) == 127 for character in value["grid_command_id"])):
         raise BuildControlError("FDM grid resume evidence has no pinned grid command id")
