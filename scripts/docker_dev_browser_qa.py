@@ -4674,7 +4674,8 @@ def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sour
         "cell_scene_revision": cell.get("scene_revision"),
         "unmodified_scene_sha256_after": cell.get("unmodified_scene_sha256_after"),
     }
-    if (prior.get("mode") != "fdm-cell-study" or prior.get("phase") != "fdm-grid-observing"
+    if (prior.get("mode") != "fdm-cell-study"
+            or prior.get("phase") not in {"fdm-grid-observing", "fdm-grid-ready", "ui-submit"}
             or prior.get("outcome") != "unknown" or prior.get("command_count") != 0
             or prior.get("command_attempt_count") != 0
             or payload.get("resume_evidence") != expected_proof
@@ -4745,6 +4746,7 @@ def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sour
                   grid_refresh_count=1, grid_refresh_attempt_count=1, ui_grid_refresh_proven=True)
     joined["fdm_cell_receipt"] = deepcopy(cell)
     grid = deepcopy(evidence["prior_grid_receipt"])
+    observed_transition = grid.get("domain_transition")
     grid["domain_transition"] = {
         "before_domain_cell_count": before["profile"]["domain_cell_count"],
         "before_domain_generation_id": before["profile"]["domain_generation_id"],
@@ -4756,6 +4758,8 @@ def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sour
         "preparation_id": prepared["preparation"]["preparation_id"],
         "preparation_revision": prepared["preparation"]["revision"],
     }
+    if observed_transition is not None and observed_transition != grid["domain_transition"]:
+        raise BuildControlError("FDM resume replaced the already observed held preparation")
     joined["grid_refresh_receipt"] = grid
     joined["request_counts"][STUDY_FDM_CELL_TRANSACTION_KEY] = 1
     joined["request_counts"][command_key] = count + 1

@@ -4183,8 +4183,14 @@ process.stdout.write(JSON.stringify(r.studyStagePreparedGridSummary(JSON.parse(p
 
 
     def test_fdm_resume_keeps_current_request_counts_and_checks_the_joined_cycle(self):
+        for phase in (None, "fdm-grid-ready", "ui-submit"):
+            with self.subTest(parent_phase=phase):
+                self._assert_fdm_resume_joined_cycle(phase)
+
+    def _assert_fdm_resume_joined_cycle(self, phase):
         qa = self.qa
-        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(qa)
+        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(
+            qa, observed_phase=phase)
         evidence = qa._load_fdm_grid_resume_evidence(
             control, attempt, selected=ROOT, current=current, identity=identity,
             frontend_id="frontend-1", frontend_volume="frontend-state",
