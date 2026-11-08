@@ -1266,15 +1266,19 @@ i wynosi <=0,005. Defekt normy <=1e-10, względny przyrost energii między
 krokami <=1e-10. To kryteria kwalifikacji, a nie deklaracja uzyskanego wyniku;
 zmierzone wartości i ewentualne odmowy należą do raportu audytu.
 
-Uzupełniający test terminalnej relaksacji PG-BB używa ośmiu komórek 2 nm,
+Uzupełniający test terminalnej relaksacji używa ośmiu komórek 2 nm,
 dwóch ostrych regionów Ms=400/800 kA/m i alpha=0,1/0,4, A=13 pJ/m, bez demag,
 Bz=0,05 T oraz początkowego m=+x. Dokładne minimum to m=+z oraz
 E=-Bz sum(Ms_i V_i). Przed pomiarem ustala się: zakończenie przez torque,
 nie limit 2500 kroków; próg 1e-3 A/m dla double i 100 A/m dla single;
 maksymalny błąd składowej m odpowiednio 3e-8 i 3e-3, względny błąd energii
 1e-10 i 1e-5, defekt normy 1e-10 i 1e-5 oraz względny wzrost energii między
-krokami najwyżej 1e-12 i 1e-6. Osobne publiczne wykonania CPU/double,
-CUDA/double i CUDA/single zachowują intent, receipt i brak fallbacku.
+krokami najwyżej 1e-12 i 1e-6. CPU/double używa PG-BB i regionalnej alpha=0,1/0,4. Publiczne CUDA/double
+i CUDA/single używają obsługiwanego LLG-overdamped: jawna alpha=1 w obu
+regionach, RK4 i dt=5e-12 s. Jest to osobny test terminalnego minimum,
+nie parytet trajektorii różnych algorytmów. Publiczne PG-BB CUDA dla tej
+pojedynczej siatki pozostaje odmową capability przed Run. Każde wykonanie
+zachowuje intent, receipt i brak fallbacku.
 
 Współczynniki skalarne DMI w starszym `MaterialIR` są odrębną drogą od
 regionalnych pól: `interfacial_dmi` i `bulk_dmi` muszą trafić do planu FDM
