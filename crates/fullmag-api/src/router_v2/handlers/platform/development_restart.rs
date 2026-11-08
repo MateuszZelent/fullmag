@@ -252,6 +252,11 @@ async fn acquire_workspace_for_restart_inner(
                     });
             let run_id = if is_scratch {
                 None
+            } else if allow_restored_terminal_without_display_timestamp
+                && kind == RuntimeStatus::AwaitingCommand
+            {
+                validate_commandable_terminal_run(snapshot)?;
+                Some(snapshot.session.run_id.clone())
             } else {
                 Some(validate_terminal_run(
                     snapshot,
@@ -440,6 +445,101 @@ fn validate_terminal_run(
         }
     }
     Ok(run.run_id.clone())
+}
+
+/// Retirement-only validation for an accepted terminal run whose editable
+/// workspace has already returned to its commandable projection. Ordinary
+/// restart capture continues to require the strict terminal runtime shape.
+pub(crate) fn validate_commandable_terminal_run(
+    snapshot: &SessionStateResponse,
+) -> Result<&'static str, ApiError> {
+    let run = snapshot
+        .run
+        .as_ref()
+        .ok_or_else(|| not_restartable("a commandable workspace has no matching run manifest"))?;
+    let outcome = match run.status.as_str() {
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => {
+            return Err(not_restartable(
+                "a commandable workspace run has no terminal outcome",
+            ));
+        }
+    };
+    let session_id = snapshot.session.session_id.as_str();
+    let run_id = snapshot.session.run_id.as_str();
+    if session_id.trim().is_empty()
+        || session_id != session_id.trim()
+        || run_id.trim().is_empty()
+        || run_id != run_id.trim()
+        || run_id != run.run_id
+        || run.session_id != session_id
+        || snapshot.session.status != "awaiting_command"
+        || snapshot.session.finished_at_unix_ms != 0
+        || crate::session::effective_runtime_status_code(snapshot) != "awaiting_command"
+        || snapshot.runtime_status.code != "awaiting_command"
+        || snapshot.runtime_status.kind != RuntimeStatus::AwaitingCommand
+        || snapshot.runtime_status.is_busy
+        || !snapshot.runtime_status.can_accept_commands
+        || snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|live| live.status != "awaiting_command")
+    {
+        return Err(not_restartable(
+            "the commandable workspace and terminal run identities or statuses do not agree",
+        ));
+    }
+
+    let stage_execution = snapshot.stage_execution.as_ref().ok_or_else(|| {
+        not_restartable("a commandable terminal run has no stage execution projection")
+    })?;
+    let is_active_or_unknown_stage = |status| {
+        matches!(
+            status,
+            StageLifecycleState::Running | StageLifecycleState::Paused | StageLifecycleState::Unknown
+        )
+    };
+    let completed_stage_indexes = stage_execution
+        .stage_statuses
+        .iter()
+        .enumerate()
+        .filter_map(|(index, status)| {
+            matches!(
+                *status,
+                StageLifecycleState::Completed | StageLifecycleState::Skipped
+            )
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    // A commandable workspace retains unselected authored stages as pending;
+    // retirement checks the accepted task scope against the native run catalog.
+    if stage_execution.runtime_state.as_str() != outcome
+        || stage_execution.active_stage_index.is_some()
+        || stage_execution.active_stage_kind.is_some()
+        || stage_execution.total_stages != stage_execution.stage_statuses.len()
+        || stage_execution.total_stages != stage_execution.stages.len()
+        || stage_execution.completed_stage_indexes != completed_stage_indexes
+        || stage_execution
+            .stage_statuses
+            .iter()
+            .zip(&stage_execution.stages)
+            .any(|(status, stage)| status != &stage.status)
+        || stage_execution
+            .stage_statuses
+            .iter()
+            .any(|status| is_active_or_unknown_stage(*status))
+        || stage_execution
+            .stages
+            .iter()
+            .any(|stage| is_active_or_unknown_stage(stage.status))
+    {
+        return Err(not_restartable(
+            "the commandable workspace still reports an active, held, unknown, or inconsistent stage",
+        ));
+    }
+    Ok(outcome)
 }
 
 fn validate_preparation(snapshot: &SessionStateResponse) -> Result<(), ApiError> {
@@ -970,6 +1070,56 @@ mod tests {
         state
     }
 
+    fn populate_commandable_terminal_run(snapshot: &mut SessionStateResponse, run_id: &str) {
+        snapshot.session.run_id = run_id.to_string();
+        snapshot.session.status = "awaiting_command".to_string();
+        snapshot.session.finished_at_unix_ms = 0;
+        snapshot.run = Some(RunManifest {
+            run_id: run_id.to_string(),
+            session_id: snapshot.session.session_id.clone(),
+            status: "completed".to_string(),
+            total_steps: 3,
+            final_time: Some(1.0),
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_rotated_dmi: None,
+            final_e_total: None,
+            artifact_dir: String::new(),
+        });
+        snapshot.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 3,
+                "completed_stage_indexes": [0],
+                "stage_statuses": ["completed", "pending", "pending"],
+                "active_stage_index": null,
+                "active_stage_kind": null,
+                "runtime_state": "completed",
+                "stages": [
+                    {"stage_id": "stage-a", "status": "completed", "converged": false, "artifact_refs": []},
+                    {"stage_id": "stage-b", "status": "pending", "converged": false, "artifact_refs": []},
+                    {"stage_id": "stage-c", "status": "pending", "converged": false, "artifact_refs": []}
+                ]
+            }))
+            .expect("completed stage projection should deserialize"),
+        );
+        snapshot.runtime_status = crate::session::build_runtime_status_view("awaiting_command");
+    }
+
+    fn commandable_terminal_snapshot() -> SessionStateResponse {
+        let request: crate::types::CurrentLiveSnapshotRequest =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "session-commandable",
+                "session_status": "awaiting_command"
+            }))
+            .expect("minimal commandable snapshot request should deserialize");
+        let mut snapshot = crate::session::default_current_live_state(&request);
+        populate_commandable_terminal_run(&mut snapshot, "run-commandable");
+        snapshot
+    }
+
     fn session_command() -> SessionCommand {
         serde_json::from_value(serde_json::json!({
             "seq": 1,
@@ -1250,6 +1400,76 @@ mod tests {
             scene_document.editor.selected_entity_id.as_deref(),
             Some("entity-42")
         );
+    }
+
+    #[tokio::test]
+    async fn live_retirement_accepts_only_the_consistent_commandable_terminal_projection() {
+        let state = scratch_state().await;
+        {
+            let mut current = state.current_live_state.write().await;
+            populate_commandable_terminal_run(
+                current.as_mut().expect("fixture session should exist"),
+                "run-retirement-commandable",
+            );
+        }
+
+        // The normal restart gate continues to require the strict terminal
+        // runtime projection even when the run manifest itself is complete.
+        assert!(acquire_workspace_for_restart(&state).await.is_err());
+
+        let acquisition = acquire_workspace_for_live_retirement(&state)
+            .await
+            .expect("retirement may capture a validated commandable terminal run");
+        let RestartableWorkspace::Session { identity, .. } = &acquisition.workspace else {
+            panic!("commandable terminal run should be a session workspace");
+        };
+        assert_eq!(identity.run_id.as_deref(), Some("run-retirement-commandable"));
+        drop(acquisition);
+        assert!(state.development_admission.admit().await.is_ok());
+    }
+
+    #[test]
+    fn commandable_terminal_retirement_rejects_active_unknown_held_nonterminal_and_mismatched_runs() {
+        let base = commandable_terminal_snapshot();
+        assert_eq!(validate_commandable_terminal_run(&base).unwrap(), "completed");
+
+        let mut active = base.clone();
+        active.session.status = "running".to_string();
+        let active_execution = active.stage_execution.as_mut().unwrap();
+        active_execution.runtime_state = crate::types::RuntimeLifecycleState::Running;
+        active_execution.active_stage_index = Some(0);
+        active_execution.active_stage_kind = Some("solve".to_string());
+        active_execution.stage_statuses[0] = StageLifecycleState::Running;
+        active_execution.stages[0].status = StageLifecycleState::Running;
+        active_execution.completed_stage_indexes.clear();
+        active.runtime_status = crate::session::build_runtime_status_view("running");
+        assert!(validate_commandable_terminal_run(&active).is_err());
+
+        let mut unknown = base.clone();
+        let unknown_execution = unknown.stage_execution.as_mut().unwrap();
+        unknown_execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+        unknown_execution.stage_statuses[0] = StageLifecycleState::Unknown;
+        unknown_execution.stages[0].status = StageLifecycleState::Unknown;
+        unknown_execution.completed_stage_indexes.clear();
+        assert!(validate_commandable_terminal_run(&unknown).is_err());
+
+        let mut held = base.clone();
+        let stage_execution = held.stage_execution.as_mut().unwrap();
+        stage_execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+        stage_execution.active_stage_index = None;
+        stage_execution.active_stage_kind = None;
+        stage_execution.stage_statuses[0] = StageLifecycleState::Paused;
+        stage_execution.stages[0].status = StageLifecycleState::Paused;
+        stage_execution.completed_stage_indexes.clear();
+        assert!(validate_commandable_terminal_run(&held).is_err());
+
+        let mut nonterminal = base.clone();
+        nonterminal.run.as_mut().unwrap().status = "waiting_for_solve".to_string();
+        assert!(validate_commandable_terminal_run(&nonterminal).is_err());
+
+        let mut mismatched = base;
+        mismatched.run.as_mut().unwrap().session_id = "another-session".to_string();
+        assert!(validate_commandable_terminal_run(&mismatched).is_err());
     }
 
     #[tokio::test]

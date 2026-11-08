@@ -668,6 +668,10 @@ fn terminal_snapshot_outcome(current: &SessionStateResponse) -> Result<&'static 
     if is_unadmitted_startup_failure(current)? {
         return Ok(UNADMITTED_OUTCOME);
     }
+    if current.runtime_status.kind == fullmag_runner::RuntimeStatus::AwaitingCommand {
+        return crate::router_v2::handlers::platform::development_restart::validate_commandable_terminal_run(current)
+            .map_err(|error| anyhow::anyhow!(error.message));
+    }
     let outcome = match current.runtime_status.kind {
         fullmag_runner::RuntimeStatus::Completed => "completed",
         fullmag_runner::RuntimeStatus::Failed => "failed",
@@ -1545,6 +1549,30 @@ mod tests {
     fn terminal_catalog_authority_does_not_require_display_finished_timestamp() {
         let mut current = terminal_current_for_test();
         current.session.finished_at_unix_ms = 0;
+        assert_eq!(terminal_snapshot_outcome(&current).unwrap(), "completed");
+    }
+
+    #[test]
+    fn terminal_snapshot_outcome_accepts_the_shared_commandable_retirement_projection() {
+        let mut current = terminal_current_for_test();
+        current.session.status = "awaiting_command".to_string();
+        current.session.finished_at_unix_ms = 0;
+        current.runtime_status = crate::session::build_runtime_status_view("awaiting_command");
+        current.stage_execution = Some(
+            serde_json::from_value(serde_json::json!({
+                "total_stages": 1,
+                "completed_stage_indexes": [0],
+                "stage_statuses": ["completed"],
+                "active_stage_index": null,
+                "active_stage_kind": null,
+                "runtime_state": "completed",
+                "stages": [
+                    {"stage_id": "stage-a", "status": "completed", "converged": false, "artifact_refs": []}
+                ]
+            }))
+            .expect("completed stage projection should deserialize"),
+        );
+
         assert_eq!(terminal_snapshot_outcome(&current).unwrap(), "completed");
     }
 
