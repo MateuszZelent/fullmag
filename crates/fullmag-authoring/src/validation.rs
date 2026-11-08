@@ -172,6 +172,9 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if let Some(Some(thermal)) = &scene.study.thermal_noise {
+        thermal.validate().map_err(SceneDocumentValidationError::new)?;
+    }
     if let Some(reference) = &scene.study.fem_domain_mesh {
         if scene.study.requested_backend.eq_ignore_ascii_case("fdm") {
             return Err(SceneDocumentValidationError::new(

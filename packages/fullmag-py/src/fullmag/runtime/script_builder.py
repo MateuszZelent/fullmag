@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence, cast
 
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
+
 from fullmag._validation import (
     AUTO_SINC_NYQUIST_GUARD_FACTOR,
     SamplingPeriod,
@@ -291,6 +293,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
+        "thermal_noise": _export_thermal_noise(base_problem),
         "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
         "rotated_interfacial_dmi_object_ids": (
             _problem_rotated_interfacial_dmi_object_ids(base_problem)
@@ -659,7 +662,7 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(demag_lines)
 
-    thermal_lines = _render_thermal_noise(base_problem, surface=surface)
+    thermal_lines = _render_thermal_noise(base_problem, surface=surface, overrides=overrides)
     if thermal_lines:
         lines.append("")
         lines.extend(thermal_lines)
@@ -1349,6 +1352,13 @@ def _render_scene_document_bootstrap(
         lines.append(f"study.demag(realization={_python_literal(realization)})")
     if demag_enabled is False:
         lines.append("study.disable_demag()")
+
+    thermal_noise = canonical_thermal_noise(builder.get("thermal_noise"))
+    if thermal_noise is not None:
+        args = [f"temperature={_py_float_roundtrip(thermal_noise['temperature'])}"]
+        if "seed" in thermal_noise:
+            args.append(f"seed={int(thermal_noise['seed'])}")
+        lines.append(f"study.thermal_noise({', '.join(args)})")
 
     external_field = builder.get("external_field")
     if isinstance(external_field, (list, tuple)) and len(external_field) == 3:
@@ -11445,16 +11455,30 @@ def _render_demag(
     return lines
 
 
-def _render_thermal_noise(problem: Problem, *, surface: str) -> list[str]:
-    thermal_terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
-    if not thermal_terms:
-        return []
-    if len(thermal_terms) != 1:
+def _export_thermal_noise(problem: Problem) -> dict[str, object] | None:
+    terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
+    if not terms:
+        return None
+    if len(terms) != 1:
         raise ValueError("canonical flat-script rewrite requires at most one ThermalNoise term")
-    term = thermal_terms[0]
-    args = [f"temperature={_py_number(term.temperature)}"]
+    term = terms[0]
+    config: dict[str, object] = {"temperature": term.temperature}
     if term.seed is not None:
-        args.append(f"seed={term.seed}")
+        config["seed"] = str(term.seed)
+    return canonical_thermal_noise(config)
+
+
+def _render_thermal_noise(
+    problem: Problem, *, surface: str, overrides: Mapping[str, object] | None = None
+) -> list[str]:
+    config = (canonical_thermal_noise(overrides["thermal_noise"])
+              if overrides is not None and "thermal_noise" in overrides
+              else _export_thermal_noise(problem))
+    if config is None:
+        return []
+    args = [f"temperature={_py_float_roundtrip(config['temperature'])}"]
+    if "seed" in config:
+        args.append(f"seed={int(config['seed'])}")
     return ["# Brown thermal noise", f"{_surface_call(surface, 'thermal_noise')}({', '.join(args)})"]
 
 

@@ -76,6 +76,7 @@ _STUDY_FIELDS = frozenset(
         "demag_realization",
         "fdm",
         "external_field",
+        "thermal_noise",
         "rotated_interfacial_dmi",
         "rotated_interfacial_dmi_object_ids",
         "solver",

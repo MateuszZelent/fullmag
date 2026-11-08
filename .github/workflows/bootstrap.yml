@@ -410,6 +410,9 @@ jobs:
       - name: Run scene periodic boundary intent contracts
         run: cargo test -p fullmag-authoring scene_pbc --lib
 
+      - name: Run scene thermal intent preservation contracts
+        run: cargo test -p fullmag-authoring scene_thermal_noise_ --lib
+
       - name: Run postprocessing settings preservation contracts
         run: cargo test -p fullmag-authoring postprocessing_settings_ --lib
 
@@ -1165,6 +1168,9 @@ jobs:
 
       - name: Run Python API tests
         run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_api.py' -v
+
+      - name: Run regional material and thermal authoring regressions
+        run: python -m unittest discover -s packages/fullmag-py/tests -p 'test_regional_*.py' -v
 
       - name: Run raw single-k checkpoint inspector contracts
         run: python -B scripts/test_inspect_eigen_sample_checkpoint.py -v

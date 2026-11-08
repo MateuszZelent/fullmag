@@ -1317,6 +1317,19 @@ of the existing SI inputs; it does not change the material law, default
 transition policy or execution precision. Verify both Problem-to-Python and
 SceneDocument-to-Python paths for constant, linear and radial material fields.
 
+The same round-trip must retain Brown thermal-noise intent: temperature in
+kelvin and the optional positive u64 seed, including an unspecified entropy
+seed. SceneDocument carries it as the optional study-level `thermal_noise`
+configuration; its seed uses a decimal string to preserve all u64 bits through
+browser JSON, while ProblemIR and the Python DSL retain an integer seed.
+Absence means no authored noise in a complete scene; a missing
+override preserves an existing script, while explicit null removes its noise.
+Do not silently lower a stochastic regional model to deterministic dynamics.
+Preservation does not enable unsupported thermal/device combinations: the
+existing planner must still reject heterogeneous CUDA thermal noise before
+native execution. Check both seeded and entropy configurations through
+Problem and Scene exports, then check that public regional refusal.
+
 Sharp-interface and grain-assignment fixtures must explicitly author
 `material_transition(kind="sharp")` before local overrides. The public
 mesh-relative default remains intentional. CPU/CUDA agreement for that

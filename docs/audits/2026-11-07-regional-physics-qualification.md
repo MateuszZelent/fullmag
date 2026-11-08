@@ -396,7 +396,7 @@ i 1000 ziaren, CPU/double oraz CUDA/double i CUDA/single. Każdy lane musi przed
 zaliczeniem przejść niezależną kontrolę wszystkich wartości Ms/A/alpha
 i przestrzennego przypisania. Kadencja i tolerancje parytetu nie zostały
 poluzowane; niezmienione przypadki jednorodne zachowują poprzednie dowody.
-Ostra macierz jest jeszcze **NOT VERIFIED**.
+Ostra macierz została następnie zweryfikowana w kampanii phase2 opisanej poniżej.
 
 Pierwszy nowy lane sharp zakończył solve, ale dokładna wyrocznia wykryła jeszcze
 zaokrąglenie przy kanonicznym eksporcie: Ms 874632.565711 zamiast
@@ -409,8 +409,135 @@ pokazała RED w sześciu podprzypadkach, następnie GREEN na źródłowym SDK.
 Test podaje jawnie oś anizotropii, aby nie utożsamiać braku wartości z jej
 kanonicznym domyślnym wektorem.
 
-Źródłowy GREEN uruchomiono we własnym backendzie z PYTHONPATH wskazującym
-czytane źródła worktree. Domyślny interpreter tego kontenera używa SDK shadow
-z opublikowanego pakietu; potrzebna jest oficjalna przebudowa przed ponowieniem
-bramki publicznego runtime. Pierwszy request sharp a1 nie będzie odtwarzany.
-Aktualna poprawka SDK w runtime pozostaje **NOT VERIFIED**.
+Pierwszy GREEN dotyczył źródłowego SDK. Następnie oficjalna przebudowa z commita
+`73960796d3e3d55058d95ebbcb3fb79a60c07419` zakończyła się **PASS**, resume
+`6e5646a475a840e08dee6ed781300a54`. Snapshot SHA-256:
+`1466ee3b76f155b3b115dfeb9c12915b41c8ca725988c0edd849fa6de8eb0a5d`;
+receipt buildu SHA-256:
+`dc97b29c2e70dffac327abdf7153247dbd244b83af4635b5f17fc2d32778b52d`.
+Test dokładności przeszedł również na domyślnie importowanym SDK opublikowanego
+pakietu. Kontrakt FEM Poisson przeszedł, a testowana i opublikowana biblioteka
+FEM mają identyczny SHA-256:
+`7fbbe7ec92e601791d150155c8d428625d8c7f17f74eae995a617e761cb926e8`.
+
+Nowy request sharp CPU a2 przeszedł dokładną kontrolę 192 000 wartości
+Ms/A/alpha, 1000 zwycięskich ID po 64 komórki oraz momentu ważonego Ms.
+Run: `run-live-de412fa0b84d821c3736e49fb13cd01e05d5139567de883b24e2a5175216f12e`.
+Odpowiadający CUDA/single również przeszedł: max |dm| = 2,1725e-7,
+max względna różnica energii = 7,2801e-8, pól = 2,2077e-7 przy limitach 1e-5.
+Run: `run-live-bdacbeb432084004d246e775e7205e4941a7dc2931d8dce0560dcfca2d933f23`.
+Dowody: `regional_public_sharp_matrix_phase2_campaign.zarr` i sąsiednie Zarr
+poszczególnych skryptów na WSL. Pierwszego odrzuconego requestu a1 nie odtwarzano. Poprawka dokładności SDK
+w runtime: **PASS**. Kampania phase2 ukończyła **12/12 lane** i sześć porównań;
+końcowy niezależny odczyt potwierdził requested/resolved/actual CPU lub CUDA,
+precyzję, brak fallbacku i tę samą partycję właścicieli regionów. Wszystkie
+wartości materiałowe i przestrzenne przypisania przeszły dokładną wyrocznię.
+
+
+| Sharp: porównanie | Max norma Δm | Max względna różnica energii | Max względna różnica pola |
+|---|---:|---:|---:|
+| grains_short | 2.17240e-07 | 7.28007e-08 | 2.20761e-07 |
+| grains_long | 3.28816e-07 | 3.04454e-10 | 3.05711e-07 |
+| two_materials_short | 1.70226e-07 | 2.52374e-07 | 1.92910e-07 |
+| two_materials_long | 5.95728e-08 | 1.96518e-09 | 5.56560e-08 |
+| two_materials_scaled_short | 1.86185e-07 | 7.77028e-08 | 1.72623e-07 |
+| two_materials_scaled_long | 5.61399e-08 | 4.58375e-10 | 4.05960e-08 |
+
+Limity nie zmieniły się: fp64 |Δm| ≤ 1e-6, energia ≤ 1e-8, pola ≤ 1e-6;
+fp32 wszystkie trzy ≤ 1e-5. Długie pary obejmują 2000 nominalnych kroków
+RK4 po 1e-14 s, krótkie dziesięć kroków. Snapshot końcowy GPU z dt=0
+nie jest krokiem solvera. Ślad dyssypacji CPU obejmuje zaakceptowane kroki,
+a rzadsze próbki GPU nie dowodzą monotoniczności na każdym kroku.
+
+To kwalifikacja wymienionych konfiguracji FDM; nie zastępuje brakujących
+publicznych odmów, materializacji/recovery fp32 ani mapowania i zbieżności FEM.
+
+## Publiczne odmowy: wykryta utrata termiki w Scene
+
+CPU/single odmówił przed utworzeniem runu: `accepted_execution_plan_invalid`,
+HTTP 422, `execution_precision='single' requires a CUDA device`. Dowód zachowano
+przy `regional_reject_cpu_single.py` w sąsiednim Zarr.
+
+Heterogeniczny CUDA/double z `ThermalNoise(300, seed=17)` nieoczekiwanie
+zakończył Run, zamiast dojść do istniejącego zakazu termiki.
+Run: `run-live-7153c7517cccdef723b62512d08159cbc4c17a21d63d16a84992234feb8e33c9`.
+Loader oryginalnego skryptu zachował ThermalNoise, ale builder/Scene pomijały
+konfigurację i zaakceptowany plan nie zawierał termiki. Ten wynik jest
+**odrzucony jako dowód fizyki stochastic**, nie stanowi obsługi termiki CUDA.
+Zachowano 25 plików naukowych (2 643 266 B), źródło, hashe i diagnozę w
+`regional_reject_cuda_heterogeneous_thermal.zarr/thermal_intent_red`.
+
+Nowa regresja pokazała brak termiki w Scene oraz zaokrąglenie temperatury przez
+bezpośredni eksporter Problem (RED czterech podprzypadków). Poprawka przenosi
+typowane study.thermal_noise, z dodatnią skończoną temperaturą i opcjonalnym
+seedem. Seed jest decimal-string w Scene/builder/API, co zachowuje pełne u64
+w JS; w DSL i ProblemIR pozostaje integer. Missing override zachowuje termikę,
+null ją usuwa; parametry zmieniają tożsamość fizycznego modelu.
+
+Źródłowe kontrole w usługach grupy: cztery testy Python termiki **PASS**,
+321 testów API Python **PASS**, dwa testy TypeScript payload/history **PASS**,
+15 kontraktów workflow **PASS**, source-map i gate dokumentacji **PASS**.
+Review bez konkretnej usterki. Rust, regeneracja API i wdrożenie poprawki
+w pakiecie wymagają jeszcze zarządzanego buildu; publiczna odmowa termiki
+po tej poprawce pozostaje **NOT VERIFIED**. Oryginalnego requestu nie ponawiać.
+
+Przebudowa poprawki termiki: resume `f49aab3221444367b4c608a44545186d`,
+HEAD `6367397a08248516aa3c0aab62f2d1c349f0d82d` z roboczą deltą; snapshot
+`c817339af77c0428bc3bae2356012cd67dabce04b9d44f4bb07a89c281996109`.
+Receipt buildu SHA-256
+`02ed0ba5422237867a19e16b5d3e7fc67a74ad25c8385460439e82dde90848eb`.
+Natywny kontrakt Poisson **PASS**, SHA-256 biblioteki testowanej i opublikowanej
+`4bbc8a784c86954823029ca9813ad53bac94c939e09f9a967f6e3f0e107d01e2`.
+Zarządzana regeneracja OpenAPI/TS **PASS**, schema SHA-256
+`476819958270f2bc7932e82a9b4451ea766f1be6c421d82dc74c3fd02c81069e`;
+receipt codegen `e12613eb454998ef2a2edea447787026ae355fbead80d8cc639dd1ca68f07ac3`.
+Regeneracja modeli Python w usłudze frontend i kontrola zgodności nie wymagały
+zmian (study zachowuje tam ogólny typ). Typecheck Control Room **PASS**.
+
+Nowy request termiczny a2 został odrzucony wcześniej niż oczekiwano: ścisła
+allowlista `scene_document_ir.py` pomijała nowe pole. To pominięty konsument
+poprawki, nie poprawna odmowa fizyki. Rozszerzona regresja rzeczywistego
+`scene_document_to_execution_config` wykazała RED dla seed 17, u64 MAX i entropy,
+po uzupełnieniu allowlisty GREEN. Helper publicznego DEV wykonuje tę ścieżkę
+z live bindu źródeł WSL; nowa publiczna próba ma odrębne ID a3.
+Nie kopiowano zmian do shadow/pakietu. Samodzielna kopia SDK z pakietu wymaga
+jeszcze synchronizacji przy następnym oficjalnym buildzie; nie utożsamiać jej
+z rozszerzonym źródłowym GREEN. Publiczna próba a3: **PASS** — HTTP 422, accepted_execution_plan_invalid,
+`fdm_cuda_heterogeneous_material_unsupported:thermal`, bez dopuszczenia runu.
+Dowód: `regional_public_thermal_refusal_a3.zarr`.
+
+## Materializacja i odtworzenie terminalnego stanu fp32
+
+Nowy, odrębny fixture `regional_fp32_materialization_gpu_single.py` wykonał
+10 nominalnych kroków (11 zaakceptowanych z końcową różnicą zaokrągleń czasu),
+4096 komórek, CUDA/single/strict, bez fallbacku. Run:
+`run-live-d866e9a6a74b1dd193dae325ed41717e67c53c5565dccac97def225cce76f64e`.
+Receipt potwierdza single storage/compute/FFT i double reduction. Moment
+ważony Ms odpowiada początkowej magnetyzacji. Fizyczny czas końcowy 1e-13 s.
+
+Pierwsza próba QA `d3b5cbe295b641e1ae93efbea2e7d9b0` zakończyła się
+failed-confirmed na loopback probe podczas zimnej kompilacji frontendu;
+scenariusz komendy nie został wykonany. Po potwierdzonym HTTP 200:
+
+- QA `9b981c8ecf4c40358ec04dbb85bad247`: **PASS**. Jeden POST compute_fields,
+  utrata zaakceptowanej odpowiedzi, jeden intent/command w journal, UI pending
+  → completed, zero Solve. Command `fm-d857481c-4fec-4833-ad34-738c0a6e18d6`
+  zachowuje requested/resolved GPU/single/strict i engine fdm_cuda.
+- QA `397003e396894e099e6b3d11b562be5d`: **PASS**. Po page.reload ten sam API
+  instance, session i run, source_step=11, energia 5.000430118880073e-16 J
+  zgodna między status/run/scalars i widoczną stopką. Brak ponownego Solve.
+- Canvas WebGL2 widoczny, drawing buffer 617×495, context_lost=false.
+  Renderer SwiftShader; nie jest to dowód renderowania przez RTX.
+
+Źródła, dane runu i wybrane wyniki przeglądarkowe z PNG są na WSL w sąsiednim
+Zarr, pod `qualification_evidence` i `publication_browser_proof`. SHA-256
+wyniku Compute Fields `615d7f842507123da73b90449b1069b51aa90182a542b37b8ea549314526aafa`;
+reload `c2e9bb9eab6d692e7affe6de2bb98b7aa4387714a019a78a738a562062c8849d`.
+To dowód publikacji i odzyskania komendy/stanu, a nie sam w sobie dowód świeżej
+reewaluacji kernela dla każdego pola — poprawne zachowane dane nie były
+usuwane w celu wymuszenia takiej ścieżki. Numeryczny parytet pól fp32
+kwalifikuje osobna macierz i testy analityczne.
+
+Pozostają zwarte mapy FEM wraz ze wszystkimi konsumentami, wspólna relaksacja
+i zbieżność FDM/FEM, synchronizacja kopii SDK przy następnym buildzie oraz
+CI/review/integracja i kwalifikowany cleanup.

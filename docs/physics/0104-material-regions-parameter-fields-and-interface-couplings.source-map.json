@@ -1110,6 +1110,42 @@
       "symbol": "build_plan_exchange_operator",
       "responsibility": "Rejects FDM CPU and CUDA plans that combine non-zero DMI with a zero exchange connection between two active cells (fdm_dmi_decoupled_exchange_connection); first_decoupled_connection in crates/fullmag-engine/src/fdm/shared/exchange_operator.rs locates the connection and backends/fdm/api/c_api.cpp repeats the check for a FACES tail.",
       "evidence_status": "implemented"
+    },
+    {
+      "id": "thermal-config-roundtrip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/thermal_noise_authoring.py",
+      "symbol": "canonical_thermal_noise",
+      "responsibility": "Validate positive finite temperature and lossless decimal u64 seed across builder and scene transport."
+    },
+    {
+      "id": "thermal-script-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_thermal_noise",
+      "responsibility": "Preserve thermal intent and temperature precision in direct and Scene Python exports."
+    },
+    {
+      "id": "regional-thermal-roundtrip-regression",
+      "path": "packages/fullmag-py/tests/test_regional_thermal_roundtrip.py",
+      "symbol": "test_seeded_and_entropy_thermal_intent_survives_both_exports",
+      "responsibility": "Reject silent stochastic-to-deterministic conversion for seeded and entropy regional inputs."
+    },
+    {
+      "id": "thermal-scene-validation",
+      "path": "crates/fullmag-authoring/src/builder.rs",
+      "symbol": "ScriptBuilderThermalNoiseState",
+      "responsibility": "Own typed authoring configuration and validate lossless seed and SI temperature."
+    },
+    {
+      "id": "thermal-scene-model-identity",
+      "path": "crates/fullmag-authoring/src/authoring_model.rs",
+      "symbol": "energy_terms",
+      "responsibility": "Include authored thermal parameters in the model definition and its physical input identity."
+    },
+    {
+      "id": "thermal-scene-execution-lowering",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py",
+      "symbol": "_reject_unlowered_scene_fields",
+      "responsibility": "Admit the validated thermal study configuration through the strict shared Scene-to-ProblemIR/ExecutionConfig path without discarding it."
     }
   ],
   "public_api": {
