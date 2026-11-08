@@ -95,8 +95,8 @@ docker-dev-control-checks source_root scope="all" oracle_wheel="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_volume_checks.py" --source-root {{quote(source_root)}} --scope {{quote(scope)}}{{if oracle_wheel == "" { "" } else { " --oracle-wheel " + quote(oracle_wheel) } }}
 
 # Preserve one qualified terminal activation outside the bounded live pool.
-docker-dev-archive-activation source_root activation apply="false" plan_sha256="":
-    @{{storage_python}} "{{repo_root}}/scripts/docker_activation_history.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}{{if apply == "true" { if plan_sha256 == "" { error("apply requires a reviewed plan digest") } else { " --apply --plan-sha256 " + quote(plan_sha256) } } else if apply == "false" { if plan_sha256 == "" { "" } else { error("preview has no apply pin") } } else { error("apply must be true or false") } }}
+docker-dev-archive-activation source_root activation apply="false" plan_sha256="" rejected_no_run="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_activation_history.py" --repo-root "{{repo_root}}" --source-root {{quote(source_root)}} --activation {{quote(activation)}}{{if rejected_no_run == "true" { " --rejected-no-run" } else if rejected_no_run == "false" { "" } else { error("rejected_no_run must be true or false") } }}{{if apply == "true" { if plan_sha256 == "" { error("apply requires a reviewed plan digest") } else { " --apply --plan-sha256 " + quote(plan_sha256) } } else if apply == "false" { if plan_sha256 == "" { "" } else { error("preview has no apply pin") } } else { error("apply must be true or false") } }}
 
 # Run one interpreted module in the selected stopped group's managed helper.
 docker-dev-offline-check source_root module:

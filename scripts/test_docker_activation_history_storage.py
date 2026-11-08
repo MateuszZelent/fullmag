@@ -201,3 +201,24 @@ class HistoryStorageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RejectedHistoryStorageTests(HistoryStorageTests):
+    """Exercise the same crash/resume/fencing/readback contract with run_id=null."""
+    def setUp(self):
+        super().setUp()
+        from test_docker_activation_history_policy import RejectedHistoryTests
+        self.files = RejectedHistoryTests().evidence()
+        for name, content in self.files.items():
+            (self.source / name).write_bytes(content)
+        self.candidate = policy.qualify_rejected_activation(TOKEN, self.files,
+            project=PROJECT, volume=VOLUME, namespace="", store_records={}, inventory_paths=[])
+
+    def test_all_original_paths_read_exact_rejected_bytes(self):
+        self.apply(self.plan())
+        from docker_build_control import control_read_script
+        for name, expected in self.files.items():
+            script = control_read_script("/control/activation/attempts/"+TOKEN+"/"+name)
+            result = subprocess.run(["bash","-euo","pipefail","-c",script.replace("/control",str(self.root))],capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout,expected)

@@ -94,3 +94,5 @@ A5 PASS przy pierwotnych progach, po kwalifikowanym recovery A4.
 [Dowody i ograniczenia](../../audits/2026-11-07-regional-physics-qualification.md#zamknięcie-dodatkowych-bramek-runtime--a5-pass),
 [plan recovery](2026-11-08-regional-pre-prepare-recovery.md).
 To nie zastępuje checklisty integracji z Zadania 4.
+
+Kwalifikacja końcowa: A12 CUDA/single i pojedyncze Compute Fields z czasem 5 ps PASS; native density A7 PASS. Ograniczoną pulę aktywacji odblokowano kwalifikowaną archiwizacją jednego odrzuconego rekordu, z zachowaniem wszystkich bajtów. Szczegóły i ograniczenia zawiera końcowa sekcja audytu. Pozostałe checkboxy integracji są wykonywane dopiero po końcowym CI.

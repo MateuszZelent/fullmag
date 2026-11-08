@@ -407,14 +407,17 @@ case "${recipe}" in
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/docker_activation_history.py"*)
-    history_pattern="^[^[:space:]]+ \"([^\"]+)\" --repo-root \"([^\"]+)\" --source-root '([^']+)' --activation '([0-9a-f]{32})'( --apply --plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    history_pattern="^[^[:space:]]+ \"([^\"]+)\" --repo-root \"([^\"]+)\" --source-root '([^']+)' --activation '([0-9a-f]{32})'( --rejected-no-run)?( --apply --plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${history_pattern} ]]; then
       echo "[fullmag just] invalid activation history recipe" >&2
       exit 2
     fi
     history_args=(--repo-root "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}" --activation "${BASH_REMATCH[4]}")
     if [[ -n "${BASH_REMATCH[5]:-}" ]]; then
-      history_args+=(--apply --plan-sha256 "${BASH_REMATCH[6]}")
+      history_args+=(--rejected-no-run)
+    fi
+    if [[ -n "${BASH_REMATCH[6]:-}" ]]; then
+      history_args+=(--apply --plan-sha256 "${BASH_REMATCH[7]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_activation_history.py" "${history_args[@]}"
     ;;

@@ -176,6 +176,16 @@ class ActivationHistoryShellBoundaryTests(unittest.TestCase):
             "--activation", ATTEMPT, "--apply", "--plan-sha256", PLAN_SHA,
         ])
 
+    def test_rejected_profile_dispatches_preview_and_pinned_apply_without_shell_eval(self):
+        recipe = ('python "/ignored/scripts/docker_activation_history.py" '
+                  '--repo-root "/repo" --source-root \'/selected $(literal)\' '
+                  f"--activation '{ATTEMPT}' --rejected-no-run")
+        for suffix,extra in [("",[]),(f" --apply --plan-sha256 '{PLAN_SHA}'",["--apply","--plan-sha256",PLAN_SHA])]:
+            result=self.dispatch(recipe+suffix)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(result.stdout),["--repo-root","/repo","--source-root","/selected $(literal)","--activation",ATTEMPT,"--rejected-no-run",*extra])
+        self.assertNotEqual(self.dispatch(recipe+" --rejected-no-run").returncode,0)
+
     def test_rejects_extra_syntax_bad_activation_bad_plan_and_missing_pins(self):
         valid = ('python "/ignored/scripts/docker_activation_history.py" '
                  '--repo-root "/repo" --source-root \'/selected\' '

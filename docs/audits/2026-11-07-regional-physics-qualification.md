@@ -877,3 +877,56 @@ publiczną trwałą rewizję 2 z liczbą wpisów 1. Poprawka używa wspólnego
 legacy bez trwałego journalu zachowuje licznik. Regresja obejmuje poprawną
 rewizję, odmowy stale/future i licznik historii oraz fallback legacy.
 Review nie wykazało blockerów źródłowych; końcowy A11 i CI są osobnymi bramkami.
+
+
+## Końcowe A12 i Compute Fields — PASS
+
+Po poprawce rewizji API przebudowa `138c48e80e454e7281e17565f663781a`
+zakończyła się poprawnie w tej samej grupie. Snapshot źródeł:
+`4885b332029de386744f951e20c39b84e516d4635bf30d4148ce61da72d25595`.
+Porównano 89 zmienionych źródeł Rust/native/Python z build shadow: zero
+rozbieżności produkcyjnych; `dispatch.rs` ma wyłącznie późniejszą korektę
+istniejącego testu tekstowego pod `cfg(test)`. Native density GREEN A7:
+12 przypadków, zero błędów, z zachowanymi odmowami.
+
+A12 ponowiło niezależną kwalifikację dwóch Run z niezmienionymi progami i
+wynikami liczbowymi A10. Run:
+`run-live-a326e23dbeca4a47cfaee63d8c5bd07c57470e5491a6cbfe05aea7c701912486`,
+Compute `fm-58eb9459-30a3-4965-bfd4-c1b6d9be44c5`, source
+`ef7ad09aaaa970c6c9d5207e763e30b79b4a0f85c3c88cb10ef2b1b308c041dc`.
+Po zakończeniu przyjęto dokładnie jedno Compute Fields
+`fm-d0730600-4172-42bb-9b55-86e586817812`, używając publicznej rewizji poleceń.
+Nie uruchomiono dodatkowego Solve. Binarne FMVP i metadane sześciu pól mają
+wspólną ramkę obserwacji, krok 22, czas fizyczny 5 ps, stan complete i brak
+stale steps. Błędy względne H_ext=3,032e-8, H_eff=3,514e-8,
+eden_ext=1,669e-10, eden_drive=4,254e-8, eden_total=1,692e-8 przy progu 1e-5.
+Dane: `adaptive_clock_a12_gpu/regional_adaptive_clock_a12_gpu.zarr`,
+`adaptive_clock_a12_gpu_materialization.zarr`, `final_compiled_source_identity.zarr`.
+Wcześniejszy browser/reload pozostaje odrębnym, ograniczonym dowodem SwiftShader.
+
+### Odblokowanie ograniczonej puli aktywacji
+
+A11 zatrzymało się przed ACK helpera i przed utworzeniem Run: pula aktywacji
+osiągnęła 64 wpisy. Nie podniesiono limitu ani nie powtórzono Solve. Istniejącą
+receptę preview/apply rozszerzono o jawny `rejected-no-run-v1`: identyczne
+receipt/terminal, potwierdzone API400/422, zgodne źródło/provenance/result,
+brak Run/session/reconciliation, brak wycofania poprzednika oraz pełny skan
+SessionStore i aktywnych referencji pod istniejącymi blokadami. Katalogi QA
+oraz recovery pozostają żywymi korzeniami referencji. Oryginalne bajty są
+wymagane również w eksporcie na WSL obok źródła.
+
+Zarządzane kontrole finalnego wariantu: **670 PASS**. Review zamknęło uwagi.
+Preview/apply plan `b26e51dc92e3cc0bb64ee2004a7e58023fd1a38d81f53edd654ed6a18ea80a21`
+przeniosło dokładnie odrzuconą aktywację `22ce790f32c4427292bd761b8af6ec65`
+do history-v1: live 64→63, history 0→1, bez usunięcia rekordów i bez replay.
+Niezależny odczyt wszystkich sześciu plików przez dawne ścieżki logiczne
+potwierdził identyczne bajty/SHA z eksportem. Inne niezakwalifikowane próby
+pozostają zachowane. A12 ma nowy request i nie jest ponowieniem A11.
+Dowód: `rejected_activation_history_qualification.zarr`.
+
+CI `6d28edb98d3bec93ef90419d7cf46cd8e0a602fe`: bootstrap i nowe regresje
+zegara/podziału/revizji PASS. Oddzielny pełny runner wykazał jeden stary test
+tekstowy oczekujący zapisu `final_stats` zamiast kanonicznej kopii `published`;
+1881 pozostałych testów przeszło. Test teraz sprawdza kolejność redukcja M →
+normalizacja czasu → zapis, bez zmiany kodu produkcyjnego. Końcowe CI oraz
+integracja i retencja są następnymi krokami cyklu, nie częścią dowodu fizyki.
