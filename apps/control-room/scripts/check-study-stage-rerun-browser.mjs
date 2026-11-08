@@ -53,6 +53,16 @@ const materialSourceFiles = {
   api_client: new URL("../src/kernel/api/ControlRoomApi.ts", import.meta.url),
   api_paths: new URL("../src/kernel/api/apiPaths.ts", import.meta.url),
 };
+const fdmCellSourceFiles = {
+  study_global_authoring_model: new URL("../src/modules/inspector/panels/StudyGlobalAuthoringModel.ts", import.meta.url),
+  study_inspector_panel: new URL("../src/modules/inspector/panels/StudyInspectorPanel.tsx", import.meta.url),
+  study_execution_profile_model: new URL("../src/modules/inspector/panels/StudyExecutionProfileModel.ts", import.meta.url),
+  geometry_lifecycle_commands: new URL("../src/kernel/authoring/geometryLifecycleCommandContributions.ts", import.meta.url),
+  authoring_history: new URL("../src/kernel/authoring/authoringHistoryMutation.ts", import.meta.url),
+  api_client: new URL("../src/kernel/api/ControlRoomApi.ts", import.meta.url),
+  api_paths: new URL("../src/kernel/api/apiPaths.ts", import.meta.url),
+};
+const targetFdmCell = [1e-9, 2e-9, 2e-9];
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
 const MAX_API_BYTES = 2 * 1024 * 1024;
@@ -95,15 +105,16 @@ export function studyStageCommandForMode(mode) {
       initial_state: { kind: "default_for_target" },
     };
   }
-  if (mode === "study") return { kind: "solve", target: { kind: "study" } };
+  if (mode === "study" || mode === "fdm-cell-study") return { kind: "solve", target: { kind: "study" } };
   throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
 }
 
 export function studyStageExpectedStageIds(mode, phase) {
-  if (!["stage-b", "study", "material-stage-a"].includes(mode)) {
+  if (!["stage-b", "study", "material-stage-a", "fdm-cell-study"].includes(mode)) {
     throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
   }
-  if (phase === "before") return mode === "study" ? ["relax-b"] : [...stageIds];
+  if (phase === "before") return mode === "study" ? ["relax-b"]
+    : mode === "fdm-cell-study" ? ["relax-a"] : [...stageIds];
   if (phase === "after") return mode === "stage-b" ? ["relax-b"]
     : mode === "material-stage-a" ? ["relax-a"] : [...stageIds];
   throw new TypeError("Study stage rerun phase must be before or after");
@@ -238,6 +249,118 @@ export function studyStageMaterialTransactionOutcome(status, body, beforeScene) 
 export function studyStageShouldReadTerminalResources(status, runId) {
   return typeof runId === "string" && runId.length > 0
     && status?.run?.run_id === runId && status?.solver?.state === "awaiting_command";
+}
+
+function stripSceneRevision(scene) {
+  const projection = structuredClone(scene);
+  delete projection.revision;
+  delete projection.scene_revision;
+  return projection;
+}
+
+function sceneWithoutFdmDefaultCell(scene) {
+  const projection = stripSceneRevision(scene);
+  if (plainRecord(projection.study) && plainRecord(projection.study.fdm)) {
+    delete projection.study.fdm.default_cell;
+  }
+  return projection;
+}
+
+function applyJsonMergePatch(target, patch) {
+  if (!plainRecord(patch)) return structuredClone(patch);
+  const result = plainRecord(target) ? structuredClone(target) : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete result[key];
+    else result[key] = applyJsonMergePatch(result[key], value);
+  }
+  return result;
+}
+
+function readFdmDefaultCell(scene) {
+  assert(plainRecord(scene) && plainRecord(scene.study) && plainRecord(scene.study.fdm),
+    "P22 scene omitted its authored FDM grid settings");
+  const cell = scene.study.fdm.default_cell;
+  assert(Array.isArray(cell) && cell.length === 3
+    && cell.every((value) => Number.isFinite(value) && value > 0),
+  "P22 FDM default cell is missing or malformed");
+  return [...cell];
+}
+
+export function studyStageFdmCellState(scene) {
+  const cell = readFdmDefaultCell(scene);
+  assert.notDeepEqual(cell, targetFdmCell, "P22 FDM default cell already has the requested value");
+  return { cell };
+}
+
+export function studyStageFdmCellSceneMatches(beforeScene, afterScene) {
+  try {
+    studyStageFdmCellState(beforeScene);
+    if (canonical(readFdmDefaultCell(afterScene)) !== canonical(targetFdmCell)) return false;
+    return canonical(sceneWithoutFdmDefaultCell(beforeScene))
+      === canonical(sceneWithoutFdmDefaultCell(afterScene));
+  } catch {
+    return false;
+  }
+}
+
+export function studyStageFdmCellRequestAllowed(request, context) {
+  try {
+    const body = request?.body;
+    if (context?.phase !== "fdm-cell-submit" || context.transactionCount !== 0
+        || request?.method !== "POST" || request?.path !== modelTransactionsPath
+        || request?.scope !== sessionScope(context.session) || !plainRecord(body)
+        || canonical(Object.keys(body).sort()) !== canonical(["base_revision", "kind", "merge_patch"])
+        || body.kind !== "merge_patch" || body.base_revision !== context.beforeRevision
+        || !Number.isSafeInteger(context.beforeRevision) || !plainRecord(body.merge_patch)
+        || canonical(Object.keys(body.merge_patch)) !== canonical(["study"])
+        || !plainRecord(body.merge_patch.study)
+        || canonical(Object.keys(body.merge_patch.study).sort()) !== canonical(["fdm"])
+        || !plainRecord(body.merge_patch.study.fdm)
+        || canonical(Object.keys(body.merge_patch.study.fdm).sort()) !== canonical(["default_cell"])) return false;
+    const candidate = applyJsonMergePatch(context.beforeScene, body.merge_patch);
+    return studyStageFdmCellSceneMatches(context.beforeScene, candidate)
+      && canonical(candidate.study.fdm.default_cell) === canonical(targetFdmCell);
+  } catch {
+    return false;
+  }
+}
+
+export function studyStageFdmCellTransactionOutcome(status, body, beforeScene) {
+  try {
+    const before = studyStageFdmCellState(beforeScene);
+    const revision = beforeScene.revision ?? beforeScene.scene_revision;
+    const scene = body?.committed_scene;
+    if (!Number.isSafeInteger(status) || status < 200 || status >= 300
+        || !plainRecord(body) || body.transaction_kind !== "merge_patch"
+        || !Number.isSafeInteger(revision) || body.scene_revision !== revision + 1
+        || !plainRecord(scene) || (scene.revision ?? scene.scene_revision) !== body.scene_revision
+        || !studyStageFdmCellSceneMatches(beforeScene, scene)) {
+      return { outcome: "unknown", scene_revision: null, before_cell: before.cell, after_cell: null };
+    }
+    return { outcome: "accepted", scene_revision: body.scene_revision,
+      before_cell: before.cell, after_cell: [...scene.study.fdm.default_cell] };
+  } catch {
+    return { outcome: "unknown", scene_revision: null, before_cell: null, after_cell: null };
+  }
+}
+
+export function studyStageFdmGridRefreshRequestAllowed(request, context) {
+  try {
+    const body = request?.body;
+    const intent = body?.client_intent_id;
+    return context?.phase === "fdm-grid-submit" && context.refreshCount === 0
+      && request?.method === "POST" && request?.path === commandPath
+      && request?.scope === sessionScope(context.session) && plainRecord(body)
+      && canonical(Object.keys(body).sort()) === canonical(["client_intent_id", "kind", "precondition", "reason"])
+      && body.kind === "fdm_grid_refresh" && body.reason === "study_global_commit"
+      && plainRecord(body.precondition)
+      && canonical(Object.keys(body.precondition).sort()) === canonical(["scene_revision"])
+      && body.precondition.scene_revision === context.sceneRevision
+      && typeof intent === "string" && /^fdm-grid-refresh-[0-9]+-[0-9]+$/.test(intent)
+      && !context.existingIntentIds?.has(intent);
+  } catch {
+    return false;
+  }
 }
 
 export function studyStageCommandResponseOutcome(status, body) {
@@ -389,6 +512,7 @@ async function sourceHashes(mode) {
   const files = {
     ...sourceFiles,
     ...(mode === "material-stage-a" ? materialSourceFiles : {}),
+    ...(mode === "fdm-cell-study" ? fdmCellSourceFiles : {}),
   };
   const entries = await Promise.all(Object.entries(files).map(async ([key, path]) => {
     const raw = await fs.readFile(path);
@@ -494,11 +618,11 @@ export function validateStudyStageScene(scene) {
   };
 }
 
-function currentProfile(status, currentRun, currentSession, expectedSources) {
+function currentProfile(status, currentRun, currentSession, expectedSources, expectedCellCount = 8) {
   const domain = status?.domain;
   const resources = status?.resources;
-  assert(plainRecord(domain) && domain.discretization === "fdm" && domain.cell_count === 8,
-    "The current P22 domain is not the expected eight-cell FDM domain");
+  assert(plainRecord(domain) && domain.discretization === "fdm" && domain.cell_count === expectedCellCount,
+    "The current P22 domain has the wrong FDM cell count");
   assert(typeof domain.generation_id === "string" && domain.generation_id.length > 0
     && domain.generation_id === resources?.domain_generation_id,
   "P22 domain generation differs from the published resource identity");
@@ -681,6 +805,7 @@ export async function runStudyStageRerun() {
   let beforeSnapshot = null;
   let after = null;
   let reloadProof = null;
+  let expectedDomainCellCount = 8;
   let materialBeforeState = null;
   let materialSourceScene = null;
   let materialReceipt = null;
@@ -688,6 +813,20 @@ export async function runStudyStageRerun() {
   let materialCount = 0;
   let materialAttemptCount = 0;
   let uiMaterialProven = false;
+  let fdmCellBeforeState = null;
+  let fdmCellSourceScene = null;
+  let fdmMaterialBeforeState = null;
+  let fdmCellReceipt = null;
+  let fdmCellRequest = null;
+  let fdmCellCount = 0;
+  let fdmCellAttemptCount = 0;
+  let uiFdmCellProven = false;
+  let gridRefreshReceipt = null;
+  let gridRefreshRequest = null;
+  let gridRefreshCount = 0;
+  let gridRefreshAttemptCount = 0;
+  let uiGridRefreshProven = false;
+  let gridRefreshTerminalDetail = null;
   let commandCount = 0;
   let commandAttemptCount = 0;
   let clientAckCount = 0;
@@ -781,7 +920,7 @@ export async function runStudyStageRerun() {
       "Command queue revision differs from current status");
     assert.equal(solverStatus?.runtime_state, "awaiting_command",
       "Owning solver status is not awaiting a command");
-    const profile = currentProfile(statusAfter, currentRun, currentSession, expectedSources);
+    const profile = currentProfile(statusAfter, currentRun, currentSession, expectedSources, expectedDomainCellCount);
     const sceneStageIds = authoredSceneStageIds(scene);
     const sceneProfile = validateStudyStageScene(scene);
     assert.equal(scene.revision, statusAfter.resources.scene_revision,
@@ -821,7 +960,7 @@ export async function runStudyStageRerun() {
   }
 
   function summary(snapshot) {
-    return {
+    const value = {
       run_id: snapshot.currentRun.run_id,
       run_status: snapshot.currentRun.status,
       solver_state: snapshot.solverStatus.runtime_state,
@@ -835,6 +974,8 @@ export async function runStudyStageRerun() {
       result_identities: snapshot.resultIdentities,
       precondition: snapshot.precondition,
     };
+    if (mode === "fdm-cell-study") value.material_state = studyStageMaterialState(snapshot.scene);
+    return value;
   }
 
   function assertStageRerunSceneUnchanged(snapshot, expectedSession) {
@@ -844,7 +985,7 @@ export async function runStudyStageRerun() {
       "P22 scene changed during stage execution");
     assert.equal(snapshot.profile.domain_generation_id, before?.profile.domain_generation_id,
       "P22 domain generation changed during stage execution");
-    assert.equal(snapshot.profile.domain_cell_count, 8);
+    assert.equal(snapshot.profile.domain_cell_count, expectedDomainCellCount);
     assert.equal(snapshot.profile.domain_discretization, "fdm");
     assert.equal(snapshot.profile.requested_backend, "fdm");
     assert.equal(snapshot.profile.requested_device, "cpu");
@@ -862,6 +1003,15 @@ export async function runStudyStageRerun() {
       assert.equal(material.properties.Dbulk ?? null, materialBeforeState.properties.Dbulk ?? null);
       assert.equal(material.magnetization_ref, materialBeforeState.magnetization_ref);
       assert.equal(material.magnetization_asset_sha256, materialBeforeState.magnetization_asset_sha256);
+    }
+    if (mode === "fdm-cell-study") {
+      const material = studyStageMaterialState(snapshot.scene);
+      assert.equal(material.object_id, fdmMaterialBeforeState.object_id);
+      assert.equal(material.material_id, fdmMaterialBeforeState.material_id);
+      assert.equal(material.material_name, fdmMaterialBeforeState.material_name);
+      assert.deepEqual(material.properties, fdmMaterialBeforeState.properties);
+      assert.equal(material.magnetization_ref, fdmMaterialBeforeState.magnetization_ref);
+      assert.equal(material.magnetization_asset_sha256, fdmMaterialBeforeState.magnetization_asset_sha256);
     }
   }
 
@@ -882,6 +1032,10 @@ export async function runStudyStageRerun() {
     readCounts.solver_status++;
     const commands = await apiGet(commandsPath, expectedSession);
     readCounts.commands++;
+    for (const key of ["scene_revision", "mesh_revision", "domain_generation_id", ...regionRevisionKeys]) {
+      assert.equal(status.resources?.[key], beforeSnapshot?.status.resources?.[key],
+        "P22 authoring/resource precondition changed");
+    }
     return { status, currentRun, execution, solverStatus, commands };
   }
 
@@ -954,6 +1108,19 @@ export async function runStudyStageRerun() {
       assert.equal(materialBeforeState.properties.Dbulk ?? null, null, "P22 fixture Dbulk baseline differs");
       materialSourceScene = structuredClone(initial.scene);
     }
+    if (mode === "fdm-cell-study") {
+      fdmMaterialBeforeState = studyStageMaterialState(initial.scene);
+      assert.equal(fdmMaterialBeforeState.properties.Ms, 600000,
+        "P22 FDM-cell profile requires the accepted material Ms");
+      assert.equal(fdmMaterialBeforeState.properties.Aex, 1e-11,
+        "P22 FDM-cell profile requires the accepted material Aex");
+      assert.equal(fdmMaterialBeforeState.properties.alpha, 0.5, "P22 FDM-cell profile alpha baseline differs");
+      assert.equal(fdmMaterialBeforeState.properties.Dind ?? null, null, "P22 FDM-cell profile Dind baseline differs");
+      assert.equal(fdmMaterialBeforeState.properties.Dbulk ?? null, null, "P22 FDM-cell profile Dbulk baseline differs");
+      fdmCellBeforeState = studyStageFdmCellState(initial.scene);
+      fdmCellSourceScene = structuredClone(initial.scene);
+      assert.equal(initial.profile.domain_cell_count, 8, "P22 FDM-cell profile must start at eight cells");
+    }
     session = initial.session;
     assert.deepEqual(stableProjection(initial), stableProjection(await readSnapshot(session, { requireIdle: true })),
       "P22 public resources changed between initial bounded snapshots");
@@ -995,42 +1162,105 @@ export async function runStudyStageRerun() {
           return route.continue();
         }
         if (url.pathname === modelTransactionsPath) {
-          materialAttemptCount++;
+          if (mode !== "fdm-cell-study") materialAttemptCount++;
           const body = request.postDataJSON();
-          const allowed = mode === "material-stage-a" && studyStageMaterialRequestAllowed(
-            { method, path, scope, body },
-            {
-              phase,
-              materialCount,
-              session,
-              beforeRevision: materialSourceScene?.revision ?? materialSourceScene?.scene_revision,
-              before: materialBeforeState,
-            },
-          );
-          if (!allowed || materialCount !== 0) {
-            if (violations.length < 16) violations.push("Rejected a duplicate or out-of-scope material transaction");
-            return route.abort();
+          if (mode === "material-stage-a") {
+            const allowed = studyStageMaterialRequestAllowed({ method, path, scope, body },
+              { phase, materialCount, session,
+                beforeRevision: materialSourceScene?.revision ?? materialSourceScene?.scene_revision,
+                before: materialBeforeState });
+            if (!allowed || materialCount !== 0) {
+              if (violations.length < 16) violations.push("Rejected a duplicate or out-of-scope material transaction");
+              return route.abort();
+            }
+            materialRequest = request;
+            materialReceipt = { method, path: url.pathname, status: null, scope_header: scope,
+              payload: body, before_scene_revision: materialSourceScene.revision ?? materialSourceScene.scene_revision,
+              material_before: materialBeforeState, acknowledged: false };
+            materialCount++;
+            uiMaterialProven = true;
+            outcome = "unknown";
+            phase = "material-dispatched";
+            return route.continue();
           }
-          materialRequest = request;
-          materialReceipt = {
-            method,
-            path: url.pathname,
-            status: null,
-            scope_header: scope,
-            payload: body,
-            before_scene_revision: materialSourceScene.revision ?? materialSourceScene.scene_revision,
-            material_before: materialBeforeState,
-            acknowledged: false,
-          };
-          materialCount++;
-          uiMaterialProven = true;
-          outcome = "unknown";
-          phase = "material-dispatched";
-          return route.continue();
+          if (mode === "fdm-cell-study") {
+            fdmCellAttemptCount++;
+            const allowed = studyStageFdmCellRequestAllowed({ method, path, scope, body },
+              { phase, transactionCount: fdmCellCount, session,
+                beforeRevision: fdmCellSourceScene?.revision ?? fdmCellSourceScene?.scene_revision,
+                beforeScene: fdmCellSourceScene });
+            if (!allowed || fdmCellCount !== 0) {
+              if (violations.length < 16) violations.push("Rejected a duplicate or out-of-scope FDM cell transaction");
+              return route.abort();
+            }
+            fdmCellRequest = request;
+            fdmCellReceipt = { method, path: url.pathname, status: null, scope_header: scope,
+              payload: body, before_scene_revision: fdmCellSourceScene.revision ?? fdmCellSourceScene.scene_revision,
+              before_cell: fdmCellBeforeState.cell, acknowledged: false };
+            fdmCellCount++;
+            uiFdmCellProven = true;
+            outcome = "unknown";
+            phase = "fdm-cell-dispatched";
+            const response = await route.fetch();
+            const raw = await response.body();
+            assert(raw.length <= 512 * 1024, "P22 FDM cell transaction response exceeded its bound");
+            fdmCellReceipt.status = response.status();
+            const result = studyStageFdmCellTransactionOutcome(response.status(),
+              JSON.parse(raw.toString("utf8")), fdmCellSourceScene);
+            if (result.outcome === "accepted") {
+              fdmCellReceipt.transaction_kind = "merge_patch";
+              fdmCellReceipt.scene_revision = result.scene_revision;
+              fdmCellReceipt.after_cell = result.after_cell;
+              fdmCellReceipt.acknowledged = true;
+              fdmCellReceipt.unmodified_scene_sha256_before = createHash("sha256")
+                .update(canonical(sceneWithoutFdmDefaultCell(fdmCellSourceScene))).digest("hex");
+              fdmCellReceipt.unmodified_scene_sha256_after = createHash("sha256")
+                .update(canonical(sceneWithoutFdmDefaultCell(JSON.parse(raw.toString("utf8")).committed_scene))).digest("hex");
+              phase = "fdm-grid-submit";
+            } else {
+              phase = "fdm-cell-unknown";
+            }
+            return route.fulfill({ response });
+          }
+          if (violations.length < 16) violations.push("Rejected an unexpected model transaction");
+          return route.abort();
         }
         if (url.pathname === commandPath) {
-          commandAttemptCount++;
           const body = request.postDataJSON();
+          if (mode === "fdm-cell-study" && body?.kind === "fdm_grid_refresh") {
+            gridRefreshAttemptCount++;
+            const allowed = studyStageFdmGridRefreshRequestAllowed({ method, path, scope, body }, {
+              phase, refreshCount: gridRefreshCount, session,
+              sceneRevision: fdmCellReceipt?.scene_revision,
+              existingIntentIds: new Set(beforeClick?.commands?.commands
+                ?.map((item) => item?.client_intent_id).filter((value) => typeof value === "string") ?? []),
+            });
+            if (!allowed || gridRefreshCount !== 0) {
+              if (violations.length < 16) violations.push("Rejected a duplicate or unscoped automatic FDM grid refresh");
+              return route.abort();
+            }
+            gridRefreshReceipt = { method, path: url.pathname, status: null, scope_header: scope,
+              payload: body, accepted: false, terminal_detail: null };
+            gridRefreshRequest = request;
+            gridRefreshCount++;
+            uiGridRefreshProven = true;
+            outcome = "unknown";
+            phase = "fdm-grid-dispatched";
+            const response = await route.fetch();
+            const raw = await response.body();
+            assert(raw.length <= 64 * 1024, "P22 FDM grid refresh response exceeded its bound");
+            gridRefreshReceipt.status = response.status();
+            const accepted = studyStageCommandResponseOutcome(response.status(), JSON.parse(raw.toString("utf8")));
+            if (accepted.outcome === "accepted") {
+              gridRefreshReceipt.accepted = true;
+              gridRefreshReceipt.command_id = accepted.command_id;
+              phase = "fdm-grid-observing";
+            } else {
+              phase = "fdm-grid-unknown";
+            }
+            return route.fulfill({ response });
+          }
+          commandAttemptCount++;
           const allowed = studyStageRerunRequestAllowed(
             { method, path, scope, body },
             { mode, session, expectedPrecondition, commandCount, phase },
@@ -1166,6 +1396,162 @@ export async function runStudyStageRerun() {
       expectedPrecondition = postMaterial.precondition;
     }
 
+    if (mode === "fdm-cell-study") {
+      const studyRow = page.locator('[role="treeitem"][data-node-id="model:study"]');
+      await studyRow.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+      assert.equal(await studyRow.count(), 1, "The task-owned Study Explorer row is absent or duplicated");
+      await studyRow.click();
+      const cellField = page.getByLabel("FDM default cell", { exact: true });
+      await cellField.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      const parseCell = (value) => value.split(",").map((item) => Number(item.trim()));
+      assert.deepEqual(parseCell(await cellField.inputValue()), fdmCellBeforeState.cell,
+        "Study Inspector FDM default-cell field differs from the committed scene");
+      await cellField.fill("1e-9, 2e-9, 2e-9");
+      assert.deepEqual(parseCell(await cellField.inputValue()), targetFdmCell,
+        "Study Inspector did not retain the exact requested FDM default cell");
+      const applyGrid = page.getByRole("button", { name: "Apply Grid", exact: true });
+      await applyGrid.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      assert.equal(await applyGrid.isEnabled(), true, "The exact FDM grid edit is not commandable");
+      const globalResponseWait = page.waitForResponse((response) => {
+        const request = response.request();
+        const url = new URL(request.url());
+        return request.method() === "POST" && url.pathname === modelTransactionsPath
+          && request.headers()["x-fullmag-session-scope"] === sessionScope(session);
+      }, { timeout: Math.min(20_000, timerBudget()) }).catch((error) => {
+        throw new Error("P22 FDM cell merge-patch response was not observed: " + boundedMessage(error));
+      });
+      const gridResponseWait = page.waitForResponse((response) => {
+        const request = response.request();
+        const url = new URL(request.url());
+        if (request.method() !== "POST" || url.pathname !== commandPath
+            || request.headers()["x-fullmag-session-scope"] !== sessionScope(session)) return false;
+        try { return request.postDataJSON()?.kind === "fdm_grid_refresh"; }
+        catch { return false; }
+      }, { timeout: Math.min(45_000, timerBudget()) }).catch((error) => {
+        throw new Error("P22 automatic FDM grid refresh response was not observed: " + boundedMessage(error));
+      });
+      phase = "fdm-cell-submit";
+      await applyGrid.click();
+      const globalResponse = await deadline(globalResponseWait, Math.min(20_000, timerBudget()),
+        "P22 FDM cell merge-patch response timed out; authoring outcome is unknown");
+      if (!fdmCellRequest || fdmCellCount !== 1 || fdmCellAttemptCount !== 1 || !uiFdmCellProven) {
+        throw new Error("The real Study Inspector did not submit exactly one guarded FDM cell merge-patch");
+      }
+      assert.equal(globalResponse.request(), fdmCellRequest,
+        "The observed response was not for the exact guarded FDM cell transaction");
+      const globalBody = await globalResponse.body();
+      assert(globalBody.length <= 512 * 1024, "P22 FDM cell transaction ACK exceeded its bound");
+      const globalAck = JSON.parse(globalBody.toString("utf8"));
+      assert.equal(studyStageFdmCellTransactionOutcome(globalResponse.status(), globalAck,
+        fdmCellSourceScene).outcome, "accepted", "The FDM cell ACK did not prove the exact grid-only scene edit");
+      assert.equal(fdmCellReceipt.acknowledged, true, "The FDM cell ACK was not accepted by the write guard");
+      assert(["fdm-grid-submit", "fdm-grid-dispatched", "fdm-grid-observing"].includes(phase),
+        "Study did not arm its one automatic grid refresh after the ACK");
+
+      const gridResponse = await deadline(gridResponseWait, Math.min(45_000, timerBudget()),
+        "P22 automatic FDM grid refresh response timed out; outcome is unknown");
+      if (!gridRefreshRequest || gridRefreshCount !== 1 || gridRefreshAttemptCount !== 1 || !uiGridRefreshProven) {
+        throw new Error("The Study Inspector did not submit exactly one guarded automatic FDM grid refresh");
+      }
+      assert.equal(gridResponse.request(), gridRefreshRequest,
+        "The observed response was not for the exact automatic FDM grid refresh");
+      assert.equal(gridRefreshReceipt.accepted, true, "The FDM grid refresh ACK was not accepted");
+      assert.equal(gridRefreshReceipt.payload.reason, "study_global_commit");
+
+      const detailPath = commandPath + "/" + encodeURIComponent(gridRefreshReceipt.command_id);
+      const detailDeadline = Date.now() + Math.min(90_000, Math.max(1, timerBudget() - 8_000));
+      while (Date.now() < detailDeadline) {
+        record("GET", detailPath);
+        readCounts.command_details++;
+        const response = await page.request.fetch(new URL(detailPath, proxy.origin).href, {
+          method: "GET", headers: { accept: "application/json", "x-fullmag-session-scope": sessionScope(session) },
+          timeout: Math.min(10_000, timerBudget()),
+        });
+        if (response.status() === 404) {
+          await delay(Math.min(1_000, Math.max(0, detailDeadline - Date.now())));
+          continue;
+        }
+        assert(response.ok(), "P22 FDM grid refresh detail read failed");
+        const raw = await response.body();
+        assert(raw.length <= 64 * 1024, "P22 FDM grid refresh detail exceeded its bound");
+        const detail = JSON.parse(raw.toString("utf8"));
+        assert.equal(detail.command_id, gridRefreshReceipt.command_id);
+        assert.equal(detail.kind, "fdm_grid_refresh");
+        assert.equal(detail.client_intent_id, gridRefreshReceipt.payload.client_intent_id);
+        assert.equal(detail.reason, "study_global_commit");
+        if (detail.status === "completed" && detail.completion_status === "completed") {
+          assert(Number.isSafeInteger(detail.seq) && detail.seq >= 0,
+            "Completed FDM grid refresh omitted its terminal sequence");
+          gridRefreshTerminalDetail = {
+            command_id: detail.command_id, kind: detail.kind, status: detail.status,
+            completion_status: detail.completion_status, client_intent_id: detail.client_intent_id,
+            reason: detail.reason, seq: detail.seq,
+          };
+          break;
+        }
+        if (["failed", "cancelled", "rejected"].includes(detail.status)
+            || ["failed", "cancelled", "rejected"].includes(detail.completion_status)) {
+          throw new Error("The automatic FDM grid refresh reached a failed terminal state");
+        }
+        await delay(Math.min(500, Math.max(0, detailDeadline - Date.now())));
+      }
+      assert(gridRefreshTerminalDetail, "The automatic FDM grid refresh did not reach a bounded completed terminal state");
+      gridRefreshReceipt.terminal_detail = gridRefreshTerminalDetail;
+      const completionMessage = page.getByText(
+        "Committed global study settings. FDM grid replan completed; magnetization was reinitialized from the model.",
+        { exact: true },
+      );
+      await completionMessage.waitFor({ state: "visible", timeout: Math.min(20_000, timerBudget()) });
+
+      const readyDeadline = Date.now() + Math.min(60_000, Math.max(1, timerBudget() - 8_000));
+      let readyStatus = null;
+      let readyScene = null;
+      while (Date.now() < readyDeadline) {
+        readyStatus = await apiGet(statusPath, session, false);
+        readCounts.status++;
+        assertSameSession(session, readStudyStageSessionIdentity(readyStatus, { requireCommandable: false }));
+        readyScene = await apiGet(scenePath, session);
+        readCounts.scene++;
+        if (readyStatus.domain?.cell_count === 16
+            && typeof readyStatus.domain?.generation_id === "string"
+            && readyStatus.domain.generation_id !== beforeClick.profile.domain_generation_id
+            && readyStatus.resources?.domain_generation_id === readyStatus.domain.generation_id
+            && readyStatus.resources?.scene_revision === fdmCellReceipt.scene_revision
+            && (readyScene.revision ?? readyScene.scene_revision) === fdmCellReceipt.scene_revision
+            && readyStatus.solver?.state === "awaiting_command") break;
+        await delay(Math.min(1_000, Math.max(0, readyDeadline - Date.now())));
+      }
+      assert(readyStatus?.domain?.cell_count === 16
+        && readyStatus.domain.generation_id !== beforeClick.profile.domain_generation_id
+        && readyScene && studyStageFdmCellSceneMatches(fdmCellSourceScene, readyScene),
+      "The new sixteen-cell FDM domain did not become ready from the exact acknowledged grid policy");
+      expectedDomainCellCount = 16;
+      const postGrid = await readSnapshot(session, { requireIdle: true, expectedStageIds: ["relax-a"] });
+      assert.equal(postGrid.currentRun.run_id, beforeClick.currentRun.run_id,
+        "The automatic grid refresh replaced the previous A-only run before Compute Study");
+      assert.deepEqual(postGrid.resultIdentities, beforeClick.resultIdentities,
+        "The automatic grid refresh changed the prior A-only immutable result identity");
+      assert.deepEqual(postGrid.stageIds, ["relax-a"], "The automatic grid refresh changed the completed A-only stage scope");
+      const materialAfterGrid = studyStageMaterialState(postGrid.scene);
+      assert.equal(materialAfterGrid.magnetization_asset_sha256, fdmMaterialBeforeState.magnetization_asset_sha256,
+        "The FDM grid refresh changed the authored m0 asset");
+      assert.deepEqual(materialAfterGrid.properties, fdmMaterialBeforeState.properties,
+        "The FDM grid refresh changed the accepted material properties");
+      gridRefreshReceipt.domain_transition = {
+        before_domain_cell_count: beforeClick.profile.domain_cell_count,
+        before_domain_generation_id: beforeClick.profile.domain_generation_id,
+        ready_domain_cell_count: postGrid.profile.domain_cell_count,
+        ready_domain_generation_id: postGrid.profile.domain_generation_id,
+        scene_revision: postGrid.scene.revision ?? postGrid.scene.scene_revision,
+        preserved_run_id: postGrid.currentRun.run_id,
+        preserved_result_identities: postGrid.resultIdentities,
+      };
+      beforeSnapshot = postGrid;
+      before = summary(postGrid);
+      expectedPrecondition = postGrid.precondition;
+      phase = "fdm-grid-ready";
+    }
+
     let action;
     if (mode === "material-stage-a") {
       const expandParent = async (parentId) => {
@@ -1256,6 +1642,10 @@ export async function runStudyStageRerun() {
         }
       }
       const current = await readAfterCommand(session);
+      if (!current.currentRun) {
+        await delay(Math.min(1_000, Math.max(0, pollDeadline - Date.now())));
+        continue;
+      }
       const currentRunId = current.currentRun?.run_id;
       const commandState = current.commands?.commands?.find((entry) => entry.command_id === accepted.command_id);
       if (commandState?.execution_binding) retainExecutionBinding(commandState.execution_binding);
@@ -1360,7 +1750,9 @@ export async function runStudyStageRerun() {
     outcome = "terminal-confirmed";
   } catch (error) {
     failure = boundedMessage(error);
-    if (commandCount === 1 || materialCount === 1) outcome = "unknown";
+    if (commandCount === 1 || materialCount === 1 || fdmCellCount === 1 || gridRefreshCount === 1) {
+      outcome = "unknown";
+    }
   } finally {
     const afterHashes = await sourceHashes(mode).catch((error) => {
       errors.push(boundedMessage(error));
@@ -1392,6 +1784,15 @@ export async function runStudyStageRerun() {
       material_count: materialCount,
       material_attempt_count: materialAttemptCount,
       ui_material_proven: uiMaterialProven,
+      fdm_cell_receipt: fdmCellReceipt,
+      fdm_cell_count: fdmCellCount,
+      fdm_cell_attempt_count: fdmCellAttemptCount,
+      ui_fdm_cell_proven: uiFdmCellProven,
+      fdm_material_initial_state: fdmMaterialBeforeState,
+      grid_refresh_receipt: gridRefreshReceipt,
+      grid_refresh_count: gridRefreshCount,
+      grid_refresh_attempt_count: gridRefreshAttemptCount,
+      ui_grid_refresh_proven: uiGridRefreshProven,
       command_receipt: commandReceipt,
       command_count: commandCount,
       command_attempt_count: commandAttemptCount,

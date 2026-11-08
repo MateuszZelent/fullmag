@@ -9,7 +9,7 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
     def test_stage_rerun_browser_actual_recipes_dispatch_exact_mode(self):
         repo = Path(__file__).resolve().parents[1]
         source = '/selected/worktree with spaces/$(printf injected);literal'
-        for mode in ('stage-b', 'study', 'material-stage-a'):
+        for mode in ('stage-b', 'study', 'material-stage-a', 'fdm-cell-study'):
             dry = subprocess.run(['just', '--justfile', str(repo / 'justfile'), '--dry-run',
                 'docker-dev-browser-qa', source, '3242', '', '900', '1800', '', mode],
                 capture_output=True, text=True, timeout=15)
