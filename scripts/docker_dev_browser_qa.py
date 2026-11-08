@@ -3273,7 +3273,7 @@ def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser
             or before.get("scene_profile") != _expected_study_stage_scene_profile()
             or not isinstance(profile, Mapping)
             or profile.get("domain_discretization") != "fdm"
-            or profile.get("domain_cell_count") not in (8, 16)
+            or profile.get("domain_cell_count") != 8
             or profile.get("domain_generation_id") != (precondition.get("domain_generation_id")
                                                          if isinstance(precondition, Mapping) else None)
             or profile.get("requested_backend") != "fdm"
@@ -3325,7 +3325,7 @@ def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser
             or payload.get("command_attempt_count") != 0):
         raise BuildControlError("FDM-cell-study unknown outcome claims a compute dispatch or terminal proof")
     phase = payload.get("phase")
-    allowed_phases = ({"fdm-grid-ready", "ui-submit"} if profile["domain_cell_count"] == 16 else {
+    allowed_phases = ({"fdm-grid-ready", "ui-submit"} if payload.get("prepared_grid_run") is not None else {
         "fdm-cell-dispatched", "fdm-cell-unknown", "fdm-grid-submit", "fdm-grid-dispatched",
         "fdm-grid-observing", "fdm-grid-unknown",
     })
@@ -3357,21 +3357,33 @@ def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser
         if payload.get("grid_refresh_receipt") is not None:
             raise BuildControlError("FDM-cell-study retained a grid receipt without a grid-refresh attempt")
         grid_receipt = None
-    if profile["domain_cell_count"] == 16:
+    prepared = payload.get("prepared_grid_run")
+    if prepared is not None:
+        if not isinstance(grid_receipt, Mapping) or not grid_receipt.get("accepted"):
+            raise BuildControlError("FDM-cell-study reported a held run without an accepted grid refresh")
+        prepared = _validate_study_fdm_prepared_grid_run(
+            prepared, previous_run=run_id, previous_domain_generation=profile["domain_generation_id"],
+            cell_receipt=cell_receipt, previous_precondition=precondition,
+            expected_script_sha256=expected_sources["fixture"],
+        )
         transition = grid_receipt.get("domain_transition") if grid_receipt else None
-        if (payload.get("phase") != "fdm-grid-ready" or not isinstance(transition, Mapping)
-                or transition.get("ready_domain_generation_id") != profile.get("domain_generation_id")
-                or transition.get("preserved_run_id") != run_id
-                or transition.get("preserved_result_identities") != results):
-            raise BuildControlError("FDM-cell-study unknown outcome did not preserve the refreshed A-only grid state")
-    elif profile["domain_cell_count"] != 8:
-        raise BuildControlError("FDM-cell-study unknown outcome has an unsupported pre-compute domain")
+        if (payload.get("phase") not in {"fdm-grid-ready", "ui-submit"}
+                or not isinstance(transition, Mapping)
+                or transition.get("ready_domain_generation_id") != prepared["profile"].get("domain_generation_id")
+                or transition.get("prepared_run_id") != prepared.get("run_id")
+                or transition.get("prior_run_id") != run_id
+                or transition.get("preserved_prior_result_identities") != results
+                or transition.get("preparation_id") != prepared["preparation"]["preparation_id"]
+                or transition.get("preparation_revision") != prepared["preparation"]["revision"]):
+            raise BuildControlError("FDM-cell-study unknown outcome did not retain the ready held-grid frontier")
+    elif payload.get("phase") in {"fdm-grid-ready", "ui-submit"}:
+        raise BuildControlError("FDM-cell-study reached Compute Study arming without a held-grid proof")
     if (payload.get("client_ack_count") != payload.get("request_counts", {}).get(
             "POST /v2/sessions/current/visualization/client-acks", 0)):
         raise BuildControlError("FDM-cell-study unknown outcome client acknowledgement count differs")
     read_counts = payload.get("read_counts")
     required_reads = {"status", "current_session", "scene", "commands", "current_run", "stage_execution",
-                      "solver_status", "stage_results", "command_details"}
+                      "solver_status", "stage_results", "command_details", "preparation"}
     if (not isinstance(read_counts, Mapping) or set(read_counts) != required_reads
             or any(type(value) is not int or value < 0 or value > 512 for value in read_counts.values())):
         raise BuildControlError("FDM-cell-study unknown outcome read inventory is malformed")
@@ -3393,7 +3405,8 @@ def _validate_study_fdm_grid_refresh_receipt(payload, session, cell_receipt, pre
     receipt = payload.get("grid_refresh_receipt")
     if not isinstance(receipt, Mapping):
         raise BuildControlError("FDM-cell-study result omitted its automatic grid-refresh receipt")
-    base_fields = {"method", "path", "status", "scope_header", "payload", "accepted", "terminal_detail"}
+    base_fields = {"method", "path", "status", "scope_header", "payload", "accepted", "terminal_detail",
+                   "failed_grid_response"}
     request = receipt.get("payload")
     terminal = receipt.get("terminal_detail")
     transition = receipt.get("domain_transition")
@@ -3423,11 +3436,26 @@ def _validate_study_fdm_grid_refresh_receipt(payload, session, cell_receipt, pre
     if not accepted:
         if terminal is not None or "command_id" in receipt or transition is not None:
             raise BuildControlError("Unaccepted FDM grid refresh retained contradictory terminal evidence")
+        failed_response = receipt.get("failed_grid_response")
+        status = receipt.get("status")
+        if status is None:
+            if failed_response is not None:
+                raise BuildControlError("FDM grid refresh retained an error body without an HTTP response")
+        elif status >= 400:
+            if (not isinstance(failed_response, Mapping) or set(failed_response) != {"code", "message"}
+                    or not isinstance(failed_response.get("code"), str)
+                    or not 1 <= len(failed_response["code"]) <= 128
+                    or not isinstance(failed_response.get("message"), str)
+                    or not 1 <= len(failed_response["message"]) <= 512):
+                raise BuildControlError("Rejected FDM grid refresh omitted its bounded server error response")
+        elif failed_response is not None:
+            raise BuildControlError("FDM grid refresh reported an error body for a non-error response")
         if require_ready:
             raise BuildControlError("FDM-cell-study automatic grid refresh was not accepted")
         return dict(receipt)
     if (type(receipt.get("status")) is not int or not 200 <= receipt["status"] < 300
-            or not isinstance(receipt.get("command_id"), str) or not receipt["command_id"]):
+            or not isinstance(receipt.get("command_id"), str) or not receipt["command_id"]
+            or receipt.get("failed_grid_response") is not None):
         raise BuildControlError("Accepted FDM grid refresh omitted its command acknowledgement")
     if terminal is None:
         if transition is not None or require_ready:
@@ -3447,7 +3475,8 @@ def _validate_study_fdm_grid_refresh_receipt(payload, session, cell_receipt, pre
     if (not isinstance(transition, Mapping)
             or set(transition) != {"before_domain_cell_count", "before_domain_generation_id",
                 "ready_domain_cell_count", "ready_domain_generation_id", "scene_revision",
-                "preserved_run_id", "preserved_result_identities"}
+                "prior_run_id", "preserved_prior_result_identities", "prepared_run_id",
+                "preparation_id", "preparation_revision"}
             or transition.get("before_domain_cell_count") != 8
             or not isinstance(transition.get("before_domain_generation_id"), str)
             or not transition["before_domain_generation_id"]
@@ -3456,10 +3485,112 @@ def _validate_study_fdm_grid_refresh_receipt(payload, session, cell_receipt, pre
             or not transition["ready_domain_generation_id"]
             or transition["ready_domain_generation_id"] == transition["before_domain_generation_id"]
             or transition.get("scene_revision") != cell_receipt["scene_revision"]
-            or transition.get("preserved_run_id") != previous_run
-            or transition.get("preserved_result_identities") != prior_results):
-        raise BuildControlError("FDM-cell-study did not prove a ready sixteen-cell domain with retained A history")
+            or transition.get("prior_run_id") != previous_run
+            or transition.get("preserved_prior_result_identities") != prior_results
+            or not isinstance(transition.get("prepared_run_id"), str)
+            or not transition["prepared_run_id"] or transition["prepared_run_id"] == previous_run
+            or not isinstance(transition.get("preparation_id"), str) or not transition["preparation_id"]
+            or type(transition.get("preparation_revision")) is not int
+            or transition["preparation_revision"] < 0):
+        raise BuildControlError("FDM-cell-study did not prove a held sixteen-cell domain with retained A history")
     return dict(receipt)
+
+
+def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domain_generation, cell_receipt,
+                                           previous_precondition, expected_script_sha256):
+    if (not isinstance(value, Mapping)
+            or set(value) != {"run_id", "run_status", "solver_state", "execution_state", "stage_ids",
+                "authored_stage_ids", "stage_statuses", "completed_stage_indexes", "scene_profile", "profile",
+                "scene_revision", "precondition", "commands", "preparation"}):
+        raise BuildControlError("FDM-cell-study held-run proof has an unexpected shape")
+    run_id = value.get("run_id")
+    profile = value.get("profile")
+    if (not isinstance(run_id, str) or not run_id or run_id == previous_run
+            or value.get("run_status") != "waiting_for_compute"
+            or value.get("solver_state") != "awaiting_command"
+            or value.get("execution_state") != "awaiting_command"
+            or value.get("stage_ids") != []
+            or value.get("authored_stage_ids") != ["relax-a", "relax-b", "relax-c"]
+            or value.get("stage_statuses") != ["pending", "pending", "pending"]
+            or value.get("completed_stage_indexes") != []
+            or value.get("scene_profile") != _expected_study_stage_scene_profile()
+            or not isinstance(profile, Mapping)
+            or profile.get("domain_discretization") != "fdm"
+            or profile.get("domain_cell_count") != 16
+            or not isinstance(profile.get("domain_generation_id"), str)
+            or not profile["domain_generation_id"]
+            or profile["domain_generation_id"] == previous_domain_generation
+            or profile.get("requested_backend") != "fdm"
+            or profile.get("requested_device") != "cpu"
+            or profile.get("requested_precision") != "double"
+            or value.get("scene_revision") != cell_receipt.get("scene_revision")
+            or profile.get("script_sha256") != expected_script_sha256
+            or profile.get("script_path") != "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py"):
+        raise BuildControlError("FDM-cell-study did not retain the pending 16-cell accepted frontier")
+    precondition = value.get("precondition")
+    commands = value.get("commands")
+    preparation = value.get("preparation")
+    if (not isinstance(precondition, Mapping)
+            or precondition.get("current_run") != {"kind": "run", "run_id": run_id}
+            or precondition.get("runtime_state") != "awaiting_command"
+            or precondition.get("scene_revision") != cell_receipt.get("scene_revision")
+            or precondition.get("domain_generation_id") != profile["domain_generation_id"]
+            or type(precondition.get("mesh_revision")) is not int or precondition["mesh_revision"] < 0
+            or type(precondition.get("command_revision")) is not int or precondition["command_revision"] < 0
+            or any(type(precondition.get(key)) is not int or precondition[key] < 0 for key in (
+                "region_topology_revision", "region_membership_revision",
+                "region_coefficients_revision", "region_initial_state_revision"))
+            or "stage_execution_revision" in precondition):
+        raise BuildControlError("FDM-cell-study held-run precondition is stale or incomplete")
+    region_revision_keys = ("region_topology_revision", "region_membership_revision",
+                            "region_coefficients_revision", "region_initial_state_revision")
+    if (not isinstance(previous_precondition, Mapping)
+            or any(precondition.get(key) != previous_precondition.get(key) for key in region_revision_keys)):
+        raise BuildControlError("FDM-cell-study grid refresh changed region revisions outside the cell edit")
+    terminal_command_states = {"completed", "failed", "cancelled", "rejected"}
+    if (not isinstance(commands, Mapping)
+            or set(commands) != {"revision", "pending_count", "running_count", "terminal_statuses"}
+            or commands.get("revision") != precondition.get("command_revision")
+            or type(commands.get("pending_count")) is not int or commands["pending_count"] != 0
+            or type(commands.get("running_count")) is not int or commands["running_count"] != 0
+            or not isinstance(commands.get("terminal_statuses"), list)
+            or len(commands["terminal_statuses"]) > 128
+            or any(state not in terminal_command_states for state in commands["terminal_statuses"])):
+        raise BuildControlError("FDM-cell-study held run retained an active or stale command queue")
+    prep_fields = {"preparation_id", "revision", "resource_revision", "status", "active_stage_id", "failure",
+                   "receipt", "stages"}
+    if (not isinstance(preparation, Mapping) or set(preparation) != prep_fields
+            or preparation.get("status") != "ready" or preparation.get("active_stage_id") is not None
+            or preparation.get("failure") is not None
+            or type(preparation.get("revision")) is not int or preparation["revision"] < 0
+            or preparation.get("resource_revision") != preparation.get("revision")
+            or not isinstance(preparation.get("preparation_id"), str) or not preparation["preparation_id"]):
+        raise BuildControlError("FDM-cell-study held frontier omitted its ready preparation revision")
+    receipt = preparation.get("receipt")
+    if (not isinstance(receipt, Mapping)
+            or set(receipt) != {"schema_version", "preparation_id", "run_id", "plan_fingerprint", "payload_sha256"}
+            or receipt.get("schema_version") != "preparation_receipt.v1"
+            or receipt.get("preparation_id") != preparation["preparation_id"]
+            or receipt.get("run_id") != run_id
+            or not isinstance(receipt.get("plan_fingerprint"), str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["plan_fingerprint"])
+            or not isinstance(receipt.get("payload_sha256"), str)
+            or not SHA256_RE.fullmatch(receipt["payload_sha256"])):
+        raise BuildControlError("FDM-cell-study preparation receipt is malformed or belongs to another run")
+    expected_prep_stages = [
+        ("runtime_startup", "completed"), ("script_materialization", "completed"),
+        ("validation", "completed"), ("planning", "completed"),
+        ("domain_preparation", "completed"), ("meshing", "completed"),
+        ("mesh_postprocessing", "completed"), ("solver_initialization", "skipped"),
+        ("ready", "completed"),
+    ]
+    prep_stages = preparation.get("stages")
+    if (not isinstance(prep_stages, list) or len(prep_stages) != len(expected_prep_stages)
+            or any(not isinstance(stage, Mapping) or set(stage) != {"stage_id", "status"}
+                   for stage in prep_stages)
+            or [(stage.get("stage_id"), stage.get("status")) for stage in prep_stages] != expected_prep_stages):
+        raise BuildControlError("FDM-cell-study preparation did not reach the exact ready frontier")
+    return dict(value)
 
 
 def _validate_material_stage_a_unknown_payload(payload, public_url, browser_url, expected_sources):
@@ -3588,11 +3719,15 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
         raise BuildControlError("Study stage rerun unknown outcome omitted its fresh pre-command snapshot")
     previous_run = before.get("run_id")
     expected_before = _study_stage_expected_ids(expected_mode, "before")
-    precondition = before.get("precondition")
+    baseline_precondition = before.get("precondition")
+    prepared_grid_run = payload.get("prepared_grid_run") if expected_mode == "fdm-cell-study" else None
+    precondition = (prepared_grid_run.get("precondition") if isinstance(prepared_grid_run, Mapping)
+                    else baseline_precondition)
     expected_profile = {
         "domain_discretization": "fdm",
-        "domain_cell_count": 16 if expected_mode in {"fdm-cell-study", "texture-stage-b", "texture-study"} else 8,
-        "domain_generation_id": precondition.get("domain_generation_id") if isinstance(precondition, Mapping) else None,
+        "domain_cell_count": 16 if expected_mode in {"texture-stage-b", "texture-study"} else 8,
+        "domain_generation_id": baseline_precondition.get("domain_generation_id")
+            if isinstance(baseline_precondition, Mapping) else None,
         "requested_backend": "fdm",
         "requested_device": "cpu",
         "requested_precision": "double",
@@ -3612,8 +3747,11 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
         before_material = _validate_study_fdm_material_state(before.get("material_state"))
         if _validate_study_fdm_material_state(payload.get("fdm_material_initial_state")) != before_material:
             raise BuildControlError("FDM-cell-study changed the film material or m0 before Compute Study")
+    expected_precondition_run = (prepared_grid_run.get("run_id")
+                                 if isinstance(prepared_grid_run, Mapping) else previous_run)
     if (not isinstance(precondition, Mapping)
-            or precondition.get("current_run") != {"kind": "run", "run_id": previous_run}
+            or expected_mode == "fdm-cell-study" and not isinstance(prepared_grid_run, Mapping)
+            or precondition.get("current_run") != {"kind": "run", "run_id": expected_precondition_run}
             or precondition.get("runtime_state") != "awaiting_command"
             or not isinstance(precondition.get("domain_generation_id"), str)
             or not precondition["domain_generation_id"]
@@ -3663,12 +3801,21 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
         grid_receipt = _validate_study_fdm_grid_refresh_receipt(
             payload, session, cell_receipt, previous_run, before.get("result_identities"), require_ready=True,
         )
+        prepared_grid_run = _validate_study_fdm_prepared_grid_run(
+            prepared_grid_run, previous_run=previous_run,
+            previous_domain_generation=before["profile"].get("domain_generation_id"),
+            cell_receipt=cell_receipt, previous_precondition=baseline_precondition,
+            expected_script_sha256=expected_sources["fixture"],
+        )
         transition = grid_receipt.get("domain_transition")
         if (type(payload.get("grid_refresh_count")) is not int or payload.get("grid_refresh_count") != 1
                 or type(payload.get("grid_refresh_attempt_count")) is not int
                 or payload.get("grid_refresh_attempt_count") != 1
                 or payload.get("ui_grid_refresh_proven") is not True
-                or transition.get("ready_domain_generation_id") != before["profile"].get("domain_generation_id")):
+                or transition.get("ready_domain_generation_id") != prepared_grid_run["profile"].get("domain_generation_id")
+                or transition.get("prepared_run_id") != prepared_grid_run.get("run_id")
+                or transition.get("preparation_id") != prepared_grid_run["preparation"].get("preparation_id")
+                or transition.get("preparation_revision") != prepared_grid_run["preparation"].get("revision")):
             raise BuildControlError("FDM-cell-study unknown compute outcome omitted its ready sixteen-cell domain")
     receipt = payload.get("command_receipt")
     command = receipt.get("payload") if isinstance(receipt, Mapping) else None
@@ -3712,7 +3859,8 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
                 or not isinstance(binding.get("run_id"), str) or not binding["run_id"]
                 or (expected_mode in {"stage-b", "material-stage-a"}
                     and binding.get("step_id") != stage_target["stage_id"])
-                or (expected_mode in {"study", "fdm-cell-study"} and binding.get("step_id") is not None)):
+                or (expected_mode in {"study", "fdm-cell-study"} and binding.get("step_id") is not None)
+                or (expected_mode == "fdm-cell-study" and binding.get("run_id") != prepared_grid_run.get("run_id"))):
             raise BuildControlError("Unknown Study command retained a conflicting execution binding")
     if (payload.get("after") is not None or payload.get("history_identity_preserved") is not None
             or payload.get("public_terminal_proven") is not False
@@ -3725,6 +3873,8 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
     read_counts = payload.get("read_counts")
     required_counts = {"status": 3, "current_session": 3, "scene": 3, "commands": 3, "current_run": 3,
                        "stage_execution": 3, "solver_status": 3, "stage_results": 3, "command_details": 0}
+    if expected_mode == "fdm-cell-study":
+        required_counts["preparation"] = 1
     if (not isinstance(read_counts, Mapping) or set(read_counts) != set(required_counts)
             or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
                    or read_counts[key] > 512 for key, minimum in required_counts.items())):
@@ -4282,10 +4432,15 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         raise BuildControlError("Study stage rerun helper omitted before/after public resources")
     previous_run = before.get("run_id")
     new_run = after.get("run_id")
+    prepared_grid_run = payload.get("prepared_grid_run") if expected_mode == "fdm-cell-study" else None
     if (not isinstance(previous_run, str) or not previous_run or not isinstance(new_run, str)
-            or not new_run or new_run == previous_run):
+            or not new_run or new_run == previous_run
+            or expected_mode == "fdm-cell-study" and (
+                not isinstance(prepared_grid_run, Mapping) or prepared_grid_run.get("run_id") != new_run)):
         raise BuildControlError("Study stage rerun helper did not establish a distinct new run")
-    precondition = before.get("precondition")
+    baseline_precondition = before.get("precondition")
+    precondition = (prepared_grid_run.get("precondition") if isinstance(prepared_grid_run, Mapping)
+                    else baseline_precondition)
     if not isinstance(precondition, Mapping):
         raise BuildControlError("Study stage rerun omitted the fresh runtime command precondition")
 
@@ -4293,8 +4448,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     expected_after = _study_stage_expected_ids(expected_mode, "after")
     expected_profile = {
         "domain_discretization": "fdm",
-        "domain_cell_count": 16 if expected_mode in {"fdm-cell-study", "texture-stage-b", "texture-study"} else 8,
-        "domain_generation_id": precondition.get("domain_generation_id"),
+        "domain_cell_count": 16 if expected_mode in {"texture-stage-b", "texture-study"} else 8,
+        "domain_generation_id": baseline_precondition.get("domain_generation_id")
+            if isinstance(baseline_precondition, Mapping) else None,
         "requested_backend": "fdm",
         "requested_device": "cpu",
         "requested_precision": "double",
@@ -4310,6 +4466,13 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         (before, expected_before, "before"),
         (after, expected_after, "after"),
     ):
+        current_expected_profile = dict(expected_profile)
+        if expected_mode == "fdm-cell-study" and label == "after":
+            current_expected_profile["domain_cell_count"] = 16
+            current_expected_profile["domain_generation_id"] = (
+                prepared_grid_run.get("profile", {}).get("domain_generation_id")
+                if isinstance(prepared_grid_run, Mapping) else None
+            )
         if (value.get("run_status") != "completed"
                 or value.get("solver_state") != "awaiting_command"
                 or value.get("execution_state") != "completed"
@@ -4323,12 +4486,14 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
                     if stage_id in expected_ids]
                 or value.get("scene_profile") != expected_scene_profile
                 or not isinstance(value.get("profile"), Mapping)
-                or any(value["profile"].get(key) != expected for key, expected in expected_profile.items())
+                or any(value["profile"].get(key) != expected for key, expected in current_expected_profile.items())
                 ):
             raise BuildControlError(f"Study stage rerun {label} public run/stage state differs")
 
+    expected_precondition_run = (prepared_grid_run.get("run_id")
+                                 if isinstance(prepared_grid_run, Mapping) else previous_run)
     current_run = precondition.get("current_run")
-    if (current_run != {"kind": "run", "run_id": previous_run}
+    if (current_run != {"kind": "run", "run_id": expected_precondition_run}
             or type(precondition.get("scene_revision")) is not int
             or precondition["scene_revision"] < 0
             or type(precondition.get("mesh_revision")) is not int
@@ -4378,13 +4543,26 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         grid_receipt = _validate_study_fdm_grid_refresh_receipt(
             payload, session, cell_receipt, previous_run, before.get("result_identities"), require_ready=True,
         )
+        prepared_grid_run = _validate_study_fdm_prepared_grid_run(
+            prepared_grid_run, previous_run=previous_run,
+            previous_domain_generation=before["profile"].get("domain_generation_id"),
+            cell_receipt=cell_receipt, previous_precondition=before.get("precondition"),
+            expected_script_sha256=expected_sources["fixture"],
+        )
         transition = grid_receipt.get("domain_transition")
         if (type(payload.get("grid_refresh_count")) is not int or payload.get("grid_refresh_count") != 1
                 or type(payload.get("grid_refresh_attempt_count")) is not int
                 or payload.get("grid_refresh_attempt_count") != 1
                 or payload.get("ui_grid_refresh_proven") is not True
-                or transition.get("ready_domain_generation_id") != before["profile"].get("domain_generation_id")
-                or transition.get("ready_domain_cell_count") != before["profile"].get("domain_cell_count")):
+                or transition.get("ready_domain_generation_id") != prepared_grid_run["profile"].get("domain_generation_id")
+                or transition.get("ready_domain_cell_count") != 16
+                or transition.get("prepared_run_id") != prepared_grid_run.get("run_id")
+                or transition.get("prior_run_id") != previous_run
+                or transition.get("preserved_prior_result_identities") != before.get("result_identities")
+                or transition.get("preparation_id") != prepared_grid_run["preparation"].get("preparation_id")
+                or transition.get("preparation_revision") != prepared_grid_run["preparation"].get("revision")
+                or precondition != prepared_grid_run.get("precondition")
+                or new_run != prepared_grid_run.get("run_id")):
             raise BuildControlError("FDM-cell-study did not bind its automatic refresh to the 16-cell command domain")
     elif (payload.get("fdm_cell_count", 0) != 0 or payload.get("fdm_cell_attempt_count", 0) != 0
           or payload.get("fdm_cell_receipt") is not None or payload.get("ui_fdm_cell_proven", False) is not False
@@ -4511,6 +4689,8 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     read_counts = payload.get("read_counts")
     required_counts = {"status": 2, "current_session": 2, "scene": 2, "commands": 1, "current_run": 2,
                        "stage_execution": 2, "solver_status": 2, "stage_results": 3, "command_details": 0}
+    if expected_mode == "fdm-cell-study":
+        required_counts["preparation"] = 1
     if (not isinstance(read_counts, Mapping) or set(read_counts) != set(required_counts)
             or any(type(read_counts.get(key)) is not int or read_counts[key] < minimum
                    or read_counts[key] > 512 for key, minimum in required_counts.items())):

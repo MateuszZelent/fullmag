@@ -3086,7 +3086,12 @@ const tx = (await import(new URL('./lib/study-texture-browser-qa.mjs',process.ar
 const saved = structuredClone(original); saved.study.study_pipeline=tx.merge_patch.study.study_pipeline;
 const profile=runner.studyStageTextureSceneProfile(saved);
 assert.deepEqual(profile.stage_b_texture_reset,{stage_id:'relax-b',object_id:'film',scope:'object',initializer:null});
-assert.deepEqual(runner.studyStageTextureBaselineState(saved).global_m0.direction,[1,0,0]);
+const normalizedBaseline = runner.studyStageTextureBaselineState(saved);
+assert.deepEqual(normalizedBaseline.global_m0.direction,[1,0,0]);
+assert.deepEqual(normalizedBaseline.material.properties,
+  {Ms:600000,Aex:1e-11,alpha:0.5,Dind:null,Dbulk:null});
+const nonzeroDmi = structuredClone(saved); nonzeroDmi.materials[0].properties.Dind = 1e-3;
+assert.throws(()=>runner.studyStageTextureBaselineState(nonzeroDmi));
 for (const mutate of [
   (scene)=>{scene.study.study_pipeline.nodes[0].payload.stage_magnetization_assignments={};},
   (scene)=>{scene.study.study_pipeline.nodes[1].payload.stage_magnetization_assignments.assignments[0].region_id='core';},
@@ -3259,7 +3264,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
             "request_scope_epoch": "api:p22:1",
         }
         previous_run = "run-before"
-        new_run = "run-after"
+        new_run = "run-held" if mode == "fdm-cell-study" else "run-after"
         before_ids = (["relax-b"] if mode == "study" else ["relax-a"] if mode == "fdm-cell-study"
                       else ["relax-a", "relax-b", "relax-c"])
         after_ids = (["relax-b"] if mode == "stage-b" else ["relax-a"] if mode == "material-stage-a"
@@ -3269,9 +3274,9 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
         new_results = [self.result_identity(new_run, stage_id, index + 4)
                        for index, stage_id in enumerate(after_ids)]
         precondition = {
-            "scene_revision": 32 if mode in {"material-stage-a", "fdm-cell-study"} else 31,
-            "mesh_revision": 19 if mode == "fdm-cell-study" else 18,
-            "domain_generation_id": "fdm-domain-16" if mode == "fdm-cell-study" else "fdm-domain-8",
+            "scene_revision": 32 if mode == "material-stage-a" else 31,
+            "mesh_revision": 18,
+            "domain_generation_id": "fdm-domain-8",
             "region_topology_revision": 3,
             "region_membership_revision": 4,
             "region_coefficients_revision": 5,
@@ -3280,6 +3285,15 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
             "runtime_state": "awaiting_command",
             "command_revision": 0,
         }
+        command_precondition = deepcopy(precondition)
+        if mode == "fdm-cell-study":
+            command_precondition.update({
+                "scene_revision": 32,
+                "mesh_revision": 19,
+                "domain_generation_id": "fdm-domain-16",
+                "current_run": {"kind": "run", "run_id": new_run},
+                "command_revision": 1,
+            })
         if mode in {"stage-b", "material-stage-a"}:
             selected_stage = "relax-b" if mode == "stage-b" else "relax-a"
             command = {
@@ -3295,7 +3309,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
             command = {
                 "kind": "solve",
                 "target": {"kind": "study"},
-                "precondition": deepcopy(precondition),
+                "precondition": deepcopy(command_precondition),
                 "client_intent_id": "study:solve:p22-study",
                 "reason": "user_requested",
                 "requested_at_unix_ms": 1_799_000_000_000,
@@ -3331,8 +3345,8 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                                             if stage in before_ids],
                 "scene_profile": qa._expected_study_stage_scene_profile(),
                 "profile": {"domain_discretization": "fdm",
-                            "domain_cell_count": 16 if mode == "fdm-cell-study" else 8,
-                            "domain_generation_id": "fdm-domain-16" if mode == "fdm-cell-study" else "fdm-domain-8",
+                "domain_cell_count": 8,
+                            "domain_generation_id": "fdm-domain-8",
                             "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
                             "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
                             "script_sha256": sources["fixture"]},
@@ -3368,7 +3382,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                                             if stage in after_ids],
                 "scene_profile": qa._expected_study_stage_scene_profile(),
                 "profile": {"domain_discretization": "fdm",
-                            "domain_cell_count": 16 if mode == "fdm-cell-study" else 8,
+                "domain_cell_count": 16 if mode == "fdm-cell-study" else 8,
                             "domain_generation_id": "fdm-domain-16" if mode == "fdm-cell-study" else "fdm-domain-8",
                             "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
                             "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
@@ -3494,7 +3508,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "payload": {"client_intent_id": "fdm-grid-refresh-1799000000000-1",
                     "kind": "fdm_grid_refresh", "precondition": {"scene_revision": 32},
                     "reason": "study_global_commit"},
-                "accepted": True, "command_id": "grid-refresh-1",
+                "accepted": True, "command_id": "grid-refresh-1", "failed_grid_response": None,
                 "terminal_detail": {"command_id": "grid-refresh-1", "kind": "fdm_grid_refresh",
                     "status": "completed", "completion_status": "completed",
                     "client_intent_id": "fdm-grid-refresh-1799000000000-1",
@@ -3502,11 +3516,48 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "domain_transition": {"before_domain_cell_count": 8,
                     "before_domain_generation_id": "fdm-domain-8",
                     "ready_domain_cell_count": 16, "ready_domain_generation_id": "fdm-domain-16",
-                    "scene_revision": 32, "preserved_run_id": previous_run,
-                    "preserved_result_identities": deepcopy(before_results)},
+                    "scene_revision": 32, "prior_run_id": previous_run,
+                    "preserved_prior_result_identities": deepcopy(before_results),
+                    "prepared_run_id": new_run, "preparation_id": "prep-held", "preparation_revision": 14},
             }
+            prep_stage_statuses = [
+                ("runtime_startup", "completed"), ("script_materialization", "completed"),
+                ("validation", "completed"), ("planning", "completed"),
+                ("domain_preparation", "completed"), ("meshing", "completed"),
+                ("mesh_postprocessing", "completed"), ("solver_initialization", "skipped"),
+                ("ready", "completed"),
+            ]
+            payload["prepared_grid_run"] = {
+                "run_id": new_run, "run_status": "waiting_for_compute",
+                "solver_state": "awaiting_command", "execution_state": "awaiting_command",
+                "stage_ids": [], "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["pending", "pending", "pending"], "completed_stage_indexes": [],
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm", "domain_cell_count": 16,
+                    "domain_generation_id": "fdm-domain-16", "requested_backend": "fdm",
+                    "requested_device": "cpu", "requested_precision": "double",
+                    "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                    "script_sha256": sources["fixture"]},
+                "scene_revision": 32, "precondition": deepcopy(command_precondition),
+                "commands": {"revision": 1, "pending_count": 0, "running_count": 0,
+                    "terminal_statuses": ["completed"]},
+                "preparation": {
+                    "preparation_id": "prep-held", "revision": 14, "resource_revision": 14,
+                    "status": "ready", "active_stage_id": None, "failure": None,
+                    "receipt": {"schema_version": "preparation_receipt.v1", "preparation_id": "prep-held",
+                        "run_id": new_run, "plan_fingerprint": "sha256:" + "a" * 64,
+                        "payload_sha256": "b" * 64},
+                    "stages": [{"stage_id": stage_id, "status": state}
+                        for stage_id, state in prep_stage_statuses],
+                },
+            }
+            payload["read_counts"]["preparation"] = 1
+            payload["read_counts"]["stage_results"] = 4
             payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
             payload["request_counts"]["GET /v2/sessions/current/simulation/commands/grid-refresh-1"] = 1
+            payload["request_counts"]["GET /v2/sessions/current/simulation/preparation"] = 1
+            payload["request_counts"][
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100"] += 1
             payload["total_requests"] = sum(payload["request_counts"].values())
         return payload
 
@@ -3794,7 +3845,32 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     ("wrong ready domain", lambda item: item["grid_refresh_receipt"]["domain_transition"]
                      .update(ready_domain_cell_count=8)),
                     ("lost A history at refresh", lambda item: item["grid_refresh_receipt"]["domain_transition"]
-                     .update(preserved_result_identities=[])),
+                     .update(preserved_prior_result_identities=[])),
+                    ("grid response falsely has failure body", lambda item: item["grid_refresh_receipt"].update(
+                        failed_grid_response={"code": "stale", "message": "failed"})),
+                    ("held run aliases old A", lambda item: item["prepared_grid_run"].update(run_id="run-before")),
+                    ("held precondition has stale scene revision", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(scene_revision=31)),
+                    ("held run receipt belongs to another run", lambda item: item["prepared_grid_run"]
+                     ["preparation"]["receipt"].update(run_id="foreign-run")),
+                    ("held preparation revision is stale", lambda item: item["prepared_grid_run"]
+                     ["preparation"].update(resource_revision=13)),
+                    ("held preparation receipt hash is malformed", lambda item: item["prepared_grid_run"]
+                     ["preparation"]["receipt"].update(payload_sha256="bad")),
+                    ("held preparation is not ready", lambda item: item["prepared_grid_run"]
+                     ["preparation"].update(status="preparing")),
+                    ("held frontier executed A before Solve", lambda item: item["prepared_grid_run"]
+                     .update(stage_statuses=["completed", "pending", "pending"])),
+                    ("held command queue is active", lambda item: item["prepared_grid_run"]
+                     ["commands"].update(running_count=1)),
+                    ("held command queue has unknown terminal state", lambda item: item["prepared_grid_run"]
+                     ["commands"].update(terminal_statuses=["running"])),
+                    ("held frontier domain is stale", lambda item: item["prepared_grid_run"]
+                     ["profile"].update(domain_generation_id="fdm-domain-8")),
+                    ("grid refresh changed region revision", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(region_coefficients_revision=9)),
+                    ("transition names foreign held run", lambda item: item["grid_refresh_receipt"]
+                     ["domain_transition"].update(prepared_run_id="foreign-run")),
                     ("wrong material baseline", lambda item: item["before"]["material_state"]
                      ["properties"].update(Ms=800000)),
                     ("wrong reload domain", lambda item: item["reload_proof"]["canvas"]
@@ -3823,18 +3899,49 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
             client_ack_count=0,
         )
         payload["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
-        payload["request_counts"].pop(
-            "GET /v2/sessions/current/simulation/stages/results?run_id=run-after&limit=100")
+        held_results_key = "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100"
+        payload["request_counts"][held_results_key] -= 1
+        if payload["request_counts"][held_results_key] == 0:
+            payload["request_counts"].pop(held_results_key)
+        payload["read_counts"]["stage_results"] = 3
         payload["total_requests"] = sum(payload["request_counts"].values())
         self.assertEqual(qa._parse_study_stage_rerun_result(
             json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode), payload)
+
+        preparation_pending = self.result_fixture(mode, sources)
+        preparation_pending.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="Grid refresh completed but the new preparation frontier was not proven ready",
+            phase="fdm-grid-observing", prepared_grid_run=None,
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            client_ack_count=0,
+        )
+        preparation_pending["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
+        preparation_pending["request_counts"].pop(
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100")
+        preparation_pending["read_counts"]["stage_results"] = 2
+        preparation_pending["read_counts"]["preparation"] = 1
+        preparation_pending["grid_refresh_receipt"].pop("domain_transition")
+        preparation_pending["total_requests"] = sum(preparation_pending["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(preparation_pending).encode(), preparation_pending["public_url"],
+            preparation_pending["probe_url"], sources, mode), preparation_pending)
+        ready_without_proof = deepcopy(preparation_pending)
+        ready_without_proof["phase"] = "fdm-grid-ready"
+        with self.assertRaises(qa.BuildControlError):
+            qa._parse_study_stage_rerun_result(
+                json.dumps(ready_without_proof).encode(), ready_without_proof["public_url"],
+                ready_without_proof["probe_url"], sources, mode)
+
         for name, mutate in (
             ("compute secretly dispatched", lambda item: item["request_counts"].update(
                 {qa.STUDY_FDM_GRID_REFRESH_KEY: 2})),
             ("cell transaction duplicated", lambda item: item.update(fdm_cell_attempt_count=2)),
             ("grid refresh duplicated", lambda item: item.update(grid_refresh_attempt_count=2)),
             ("A history not preserved", lambda item: item["grid_refresh_receipt"]["domain_transition"]
-             .update(preserved_result_identities=[])),
+             .update(preserved_prior_result_identities=[])),
             ("wrong ready generation", lambda item: item["before"]["profile"]
              .update(domain_generation_id="foreign-domain")),
         ):
@@ -3858,12 +3965,79 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
             "status": 3, "current_session": 3, "scene": 3, "commands": 3,
             "current_run": 3, "stage_execution": 3, "solver_status": 3,
         })
-        dispatched["request_counts"].pop(
-            "GET /v2/sessions/current/simulation/stages/results?run_id=run-after&limit=100")
+        dispatched["request_counts"][held_results_key] -= 1
+        if dispatched["request_counts"][held_results_key] == 0:
+            dispatched["request_counts"].pop(held_results_key)
         dispatched["total_requests"] = sum(dispatched["request_counts"].values())
         self.assertEqual(qa._parse_study_stage_rerun_result(
             json.dumps(dispatched).encode(), dispatched["public_url"], dispatched["probe_url"], sources, mode),
             dispatched)
+        third_run = self.result_fixture(mode, sources)
+        third_run.update(state="outcome-unknown", outcome="unknown",
+            failure="Command response timed out after dispatch", after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False)
+        third_run["command_receipt"]["execution_binding"]["run_id"] = "run-third"
+        third_run["command_receipt"]["status"] = 503
+        for key in ("GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100",):
+            third_run["request_counts"][key] -= 1
+            if third_run["request_counts"][key] == 0:
+                third_run["request_counts"].pop(key)
+        third_run["total_requests"] = sum(third_run["request_counts"].values())
+        with self.assertRaises(qa.BuildControlError):
+            qa._parse_study_stage_rerun_result(
+                json.dumps(third_run).encode(), third_run["public_url"], third_run["probe_url"], sources, mode)
+
+    def test_fdm_grid_409_preserves_bounded_error_without_compute_or_retry(self):
+        qa = self.qa
+        mode = "fdm-cell-study"
+        sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        payload = self.result_fixture(mode, sources)
+        payload.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="The one automatic grid refresh was rejected before Compute Study",
+            phase="fdm-grid-unknown", prepared_grid_run=None,
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            client_ack_count=0,
+        )
+        payload["request_counts"][qa.STUDY_FDM_GRID_REFRESH_KEY] = 1
+        payload["request_counts"].pop("GET /v2/sessions/current/simulation/commands/grid-refresh-1")
+        payload["request_counts"].pop("GET /v2/sessions/current/simulation/preparation")
+        payload["request_counts"].pop(
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100")
+        payload["read_counts"].update({"preparation": 0, "stage_results": 2})
+        receipt = payload["grid_refresh_receipt"]
+        receipt.update({"status": 409, "accepted": False, "terminal_detail": None,
+                        "failed_grid_response": {
+                            "code": "accepted_live_study_run_replaced_before_publication",
+                            "message": "The accepted frontier changed before it could be published",
+                        }})
+        receipt.pop("command_id")
+        receipt.pop("domain_transition")
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode), payload)
+        for name, mutate in (
+            ("missing actual error body", lambda item: item["grid_refresh_receipt"].update(
+                failed_grid_response=None)),
+            ("empty error code", lambda item: item["grid_refresh_receipt"]["failed_grid_response"].update(code="")),
+            ("oversized error message", lambda item: item["grid_refresh_receipt"]["failed_grid_response"].update(
+                message="x" * 513)),
+            ("false 2xx error response", lambda item: item["grid_refresh_receipt"].update(status=200)),
+            ("retry was attempted", lambda item: item.update(grid_refresh_attempt_count=2)),
+            ("duplicate grid POST", lambda item: item["request_counts"].update(
+                {qa.STUDY_FDM_GRID_REFRESH_KEY: 2})),
+            ("Solve was dispatched", lambda item: item.update(command_count=1, command_attempt_count=1)),
+            ("foreign terminal command", lambda item: item["grid_refresh_receipt"].update(
+                command_id="foreign-grid-command")),
+        ):
+            invalid = deepcopy(payload)
+            mutate(invalid)
+            invalid["total_requests"] = sum(invalid["request_counts"].values())
+            with self.subTest(reason=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(
+                    json.dumps(invalid).encode(), invalid["public_url"], invalid["probe_url"], sources, mode)
 
     def test_camera_autosave_is_scoped_bounded_and_cannot_carry_model_edits(self):
         qa = self.qa
@@ -4172,6 +4346,50 @@ assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'
   {runtime_state:'awaiting_command'},{commands:[]}));
 assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
   {runtime_state:'paused'},{commands:[]}));
+const heldStatus = {run:{run_id:'held'},solver:{state:'awaiting_command'},
+  domain:{discretization:'fdm',cell_count:16,generation_id:'fdm-domain-16'},
+  resources:{scene_revision:32,mesh_revision:19,domain_generation_id:'fdm-domain-16',
+    commands_revision:1,simulation_preparation_revision:14,region_topology_revision:3,
+    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6}};
+const heldRun = {run_id:'held',status:'waiting_for_compute',session_id:'s'};
+const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1',
+  runtime_state:'awaiting_command',total_stages:3,stage_statuses:['pending','pending','pending'],
+  completed_stage_indexes:[],stages:['relax-a','relax-b','relax-c'].map((stage_id,index)=>
+    ({stage_id,index,status:'pending'}))};
+const prepStageStatuses = [['runtime_startup','completed'],['script_materialization','completed'],
+  ['validation','completed'],['planning','completed'],['domain_preparation','completed'],['meshing','completed'],
+  ['mesh_postprocessing','completed'],['solver_initialization','skipped'],['ready','completed']];
+const heldPreparation = {preparation_id:'prep-held',revision:14,status:'ready',active_stage_id:null,failure:null,
+  receipt:{schema_version:'preparation_receipt.v1',preparation_id:'prep-held',run_id:'held',
+    plan_fingerprint:'sha256:'+'a'.repeat(64),payload_sha256:'b'.repeat(64)},
+  stages:prepStageStatuses.map(([stage_id,status])=>({stage_id,status}))};
+const heldSession = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const heldCommands = {revision:1,commands:[{status:'completed'}],pending_count:0,running_count:0};
+const heldPrecondition = runner.studyStagePreparedGridPrecondition({status:heldStatus,currentRun:heldRun,
+  execution:heldExecution,solverStatus:{runtime_state:'awaiting_command'},commands:heldCommands,
+  preparation:heldPreparation,session:heldSession,previousRunId:'old',
+  previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+  expectedSceneRevision:32});
+assert.equal(heldPrecondition.current_run.run_id,'held');
+assert.equal(heldPrecondition.scene_revision,32);
+assert.equal(heldPrecondition.domain_generation_id,'fdm-domain-16');
+for (const altered of [
+  {preparation:{...heldPreparation,revision:13}},
+  {preparation:{...heldPreparation,receipt:{...heldPreparation.receipt,run_id:'foreign'}}},
+  {execution:{...heldExecution,stage_statuses:['completed','pending','pending']}},
+  {commands:{...heldCommands,pending_count:1}},
+  {currentRun:{...heldRun,run_id:'old'}},
+  {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:7}}},
+]) {
+  assert.throws(()=>runner.studyStagePreparedGridPrecondition({status:altered.status ?? heldStatus,
+    currentRun:altered.currentRun ?? heldRun,execution:altered.execution ?? heldExecution,
+    solverStatus:{runtime_state:'awaiting_command'},commands:altered.commands ?? heldCommands,
+    preparation:altered.preparation ?? heldPreparation,session:heldSession,previousRunId:'old',
+    previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+      region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+    expectedSceneRevision:32}));
+}
 const request = {method:'POST', path:'/v2/sessions/current/simulation/commands', scope,
   body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
     reason:'user_requested', requested_at_unix_ms:1000}};
