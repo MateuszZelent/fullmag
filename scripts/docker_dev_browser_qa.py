@@ -4355,7 +4355,8 @@ def _validate_study_texture_profile(payload, expected_mode, before, after, sessi
             or proof.get("codec_version") != matching[0].get("codec_version")
             or not isinstance(proof.get("artifact_sha256"), str)
             or not SHA256_RE.fullmatch(proof["artifact_sha256"])
-            or proof.get("authored_relation") != "matching_authored_input"
+            or proof.get("authored_relation") != ("authored_input_changed"
+                if expected_mode == "texture-stage-b" else "matching_authored_input")
             or proof.get("domain_relation") != "matching_published_layout"
             or proof.get("supports_magnetization_input") is not True):
         raise BuildControlError("Texture profile source is not the exact current same-domain catalog result")
@@ -4485,7 +4486,9 @@ def _validate_study_texture_unknown_payload(payload, public_url, browser_url, ex
             or proof.get("authored_stage_id") != stage_id or proof.get("run_id") != run_id
             or proof.get("artifact_id") != identities[0].get("artifact_id")
             or proof.get("artifact_sha256") != identities[0].get("artifact_sha256")
-            or proof.get("authored_relation") != "matching_authored_input"
+            or proof.get("authored_relation") != ("authored_input_changed"
+                if expected_mode == "texture-stage-b" and before.get("scene_profile", {}).get("pipeline_version") == "study_pipeline.v2"
+                else "matching_authored_input")
             or proof.get("domain_relation") != "matching_published_layout"
             or proof.get("supports_magnetization_input") is not True
             or before.get("texture_source_proof") != proof):

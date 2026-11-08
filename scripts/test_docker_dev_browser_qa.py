@@ -3214,6 +3214,15 @@ const sourceIdentity={project_id:'p',study_id:'s',source:{run_id:'run-a',task_id
 const catalog={next_cursor:null,results:[{...sourceIdentity,authored_relation:'matching_authored_input',
   domain_relation:'matching_published_layout',supports_magnetization_input:true}]};
 assert.equal(runner.studyStageTextureCatalogProof(catalog,'run-a','relax-a',sourceIdentity,'film').artifact_id,'artifact-a');
+const migrated=structuredClone(catalog); migrated.results[0].authored_relation='authored_input_changed';
+assert.equal(runner.studyStageTextureCatalogProof(migrated,'run-a','relax-a',sourceIdentity,'film',
+  'authored_input_changed').authored_relation,'authored_input_changed');
+const wrongArtifact=structuredClone(migrated); wrongArtifact.results[0].artifact_sha256='b'.repeat(64);
+assert.throws(()=>runner.studyStageTextureCatalogProof(wrongArtifact,'run-a','relax-a',sourceIdentity,'film',
+  'authored_input_changed'));
+assert.throws(()=>runner.studyStageTextureCatalogProof(migrated,'run-a','relax-a',sourceIdentity,'film',
+  'authoring_unavailable'));
+
 for (const change of [
   (item)=>item.authored_relation='authored_input_changed',
   (item)=>item.domain_relation='different_published_layout',
@@ -3274,8 +3283,17 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 parsed = qa._parse_study_stage_rerun_result(
                     encoded, payload["public_url"], payload["probe_url"], sources, mode,
                 )
-                self.assertEqual(parsed["texture_source_proof"]["authored_relation"], "matching_authored_input")
+                self.assertEqual(parsed["texture_source_proof"]["authored_relation"],
+                                 "authored_input_changed" if mode == "texture-stage-b" else "matching_authored_input")
                 self.assertFalse(parsed["native_execution_proven"])
+                wrong_relation = deepcopy(payload)
+                wrong_relation["texture_source_proof"]["authored_relation"] = (
+                    "matching_authored_input" if mode == "texture-stage-b" else "authored_input_changed")
+                wrong_relation["before"]["texture_source_proof"] = deepcopy(wrong_relation["texture_source_proof"])
+                with self.assertRaises(qa.BuildControlError):
+                    qa._parse_study_stage_rerun_result(
+                        json.dumps(wrong_relation).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+                    )
                 for mutate in (
                     lambda item: item["texture_source_proof"].update(domain_relation="different_published_layout"),
                     lambda item: item["texture_source_proof"].update(artifact_sha256="f" * 64),
@@ -3724,7 +3742,8 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
             "authored_stage_id": source_stage, "object_id": "film", "run_id": "run-before",
             "artifact_id": source_identity["artifact_id"], "artifact_sha256": source_identity["artifact_sha256"],
             "codec_id": source_identity["codec_id"], "codec_version": source_identity["codec_version"],
-            "authored_relation": "matching_authored_input", "domain_relation": "matching_published_layout",
+            "authored_relation": ("authored_input_changed" if mode == "texture-stage-b" else "matching_authored_input"),
+            "domain_relation": "matching_published_layout",
             "supports_magnetization_input": True,
         }
         reset = {"stage_id": "relax-b", "object_id": "film", "scope": "object", "initializer": None}

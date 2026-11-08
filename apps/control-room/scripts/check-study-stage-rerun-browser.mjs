@@ -731,7 +731,9 @@ export function studyStageTextureBaselineState(scene) {
 }
 
 /** Bind an accepted same-domain public result to the immutable A/B result identity. */
-export function studyStageTextureCatalogProof(resource, runId, stageId, expectedIdentity, objectId) {
+export function studyStageTextureCatalogProof(resource, runId, stageId, expectedIdentity, objectId,
+  expectedAuthoredRelation = "matching_authored_input") {
+  assert(["matching_authored_input", "authored_input_changed"].includes(expectedAuthoredRelation));
   assert(plainRecord(resource) && Array.isArray(resource.results) && resource.next_cursor == null,
     "P22 texture result catalog page is malformed or incomplete");
   const found = resource.results.filter((result) => result?.authored_stage_id === stageId);
@@ -740,7 +742,7 @@ export function studyStageTextureCatalogProof(resource, runId, stageId, expected
   const identity = studyStageResultIdentity(result);
   assert.equal(identity.source.run_id, runId, "P22 texture input result belongs to another run");
   assert.deepEqual(identity, expectedIdentity, "P22 texture input result differs from its immutable run identity");
-  assert.equal(result.authored_relation, "matching_authored_input");
+  assert.equal(result.authored_relation, expectedAuthoredRelation);
   assert.equal(result.domain_relation, "matching_published_layout");
   assert.equal(result.supports_magnetization_input, true);
   assert(typeof objectId === "string" && objectId.length > 0);
@@ -1213,7 +1215,7 @@ export async function runStudyStageRerun() {
     return resultIdentities(resource, runId, expectedStageIds);
   }
 
-  async function readTextureSourceProof(snapshot) {
+  async function readTextureSourceProof(snapshot, expectedAuthoredRelation = "matching_authored_input") {
     const stageId = mode === "texture-stage-b" ? "relax-a" : "relax-b";
     const path = resultsBasePath + "?run_id=" + encodeURIComponent(snapshot.currentRun.run_id) + "&limit=100";
     readCounts.stage_results++;
@@ -1226,7 +1228,8 @@ export async function runStudyStageRerun() {
     assert(expectedIdentity, "P22 texture source result identity is absent from the pinned run");
     const magnets = snapshot.scene.objects?.filter((object) => object?.role === "magnet") ?? [];
     assert.equal(magnets.length, 1, "P22 texture source scene does not have exactly one magnetic object");
-    return studyStageTextureCatalogProof(resource, snapshot.currentRun.run_id, stageId, expectedIdentity, magnets[0].id);
+    return studyStageTextureCatalogProof(resource, snapshot.currentRun.run_id, stageId, expectedIdentity,
+      magnets[0].id, expectedAuthoredRelation);
   }
 
   async function readSnapshot(expectedSession = null, {
@@ -1996,9 +1999,13 @@ export async function runStudyStageRerun() {
       assert.deepEqual(postTexture.stageIds, stageIds, "Saving Stage B changed the prior completed ABC scope");
       assert.deepEqual(studyStageTextureBaselineState(postTexture.scene), textureBaselineState,
         "Saving Stage B changed the accepted material, FDM cell geometry or global uniform +X m0");
-      const freshAProof = await readTextureSourceProof(postTexture);
-      assert.deepEqual(freshAProof, textureSourceProof,
-        "The accepted same-domain A source changed while saving the Stage B recipe");
+      // The catalog conservatively changes authoring relation when the
+      // pipeline migrates v1 -> v2. B uses its explicit authored reset; retain
+      // the exact immutable A artifact and matching domain across that edit.
+      const freshAProof = await readTextureSourceProof(postTexture, "authored_input_changed");
+      assert.deepEqual({ ...freshAProof, authored_relation: textureSourceProof.authored_relation }, textureSourceProof,
+        "The accepted same-domain A artifact changed while saving the Stage B recipe");
+      textureSourceProof = freshAProof;
       beforeSnapshot = postTexture;
       before = summary(postTexture);
       expectedPrecondition = postTexture.precondition;

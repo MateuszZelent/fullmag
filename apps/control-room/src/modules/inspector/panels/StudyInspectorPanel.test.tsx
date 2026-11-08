@@ -163,6 +163,122 @@ describe("StudyInspectorPanel", () => {
     expect(afterPipelineAck.stageDrafts).toEqual([{ ...newerPipeline, rawStage: committed.rawStage }]);
   });
 
+  it("preserves only the matching successful stage-save ACK through scene refresh", () => {
+    const globalDraft = createStudyGlobalDraft(null);
+    const stageA = {
+      ...createDefaultStudyStageDraft("relax", 0), stageId: "relax-a", pipelineNodeId: "relax-a",
+    };
+    const stageB = {
+      ...createDefaultStudyStageDraft("relax", 1), stageId: "relax-b", pipelineNodeId: "relax-b",
+    };
+    const drafts = [stageA, stageB];
+    const feedback = {
+      kind: "success" as const,
+      message: "Saved stage relax-b.",
+      sceneRevision: 4,
+    };
+    const state = {
+      authoringBusy: false,
+      authoringDraftsInitialized: true,
+      authoringFeedback: feedback,
+      authoringFeedbackScope: "stages" as const,
+      baselineGlobalDraft: globalDraft,
+      baselineStageDrafts: drafts,
+      draftSceneRevision: 3,
+      draftSceneSignature: "before-save-refresh",
+      globalDraft,
+      importDialogOpen: false,
+      importError: null,
+      importFileName: null,
+      importFmsBase64: null,
+      importInspection: null,
+      importInspecting: false,
+      importRestoreMode: "resume",
+      restoreDialogOpen: false,
+      selectedDraftIndex: 1,
+      selectedCommandId: null,
+      selectedRestoreCheckpointId: null,
+      stageDrafts: drafts,
+    } as Parameters<typeof studyInspectorPanelReducer>[0];
+    const refresh = (revision: number, signature: string) => ({
+      type: "resetStageDrafts" as const,
+      drafts,
+      globalDraft,
+      revision,
+      selectedIndex: 1,
+      signature,
+    });
+
+    const acknowledgedRefresh = studyInspectorPanelReducer(state, refresh(4, "saved-scene"));
+    expect(acknowledgedRefresh.authoringFeedback).toEqual(feedback);
+    expect(acknowledgedRefresh.authoringFeedbackScope).toBe("stages");
+    expect(studyInspectorPanelReducer(acknowledgedRefresh, {
+      type: "selectStageDraft", index: 1,
+    }).authoringFeedback).toEqual(feedback);
+    expect(studyInspectorPanelReducer(acknowledgedRefresh, {
+      type: "selectStageDraft", index: 0,
+    }).authoringFeedback).toBeNull();
+    const unrelatedGlobalFeedback = {
+      ...acknowledgedRefresh,
+      authoringFeedback: { kind: "success" as const, message: "Global save succeeded." },
+      authoringFeedbackScope: "global" as const,
+    };
+    expect(studyInspectorPanelReducer(unrelatedGlobalFeedback, {
+      type: "selectStageDraft", index: 0,
+    }).authoringFeedback).toEqual(unrelatedGlobalFeedback.authoringFeedback);
+    expect(studyInspectorPanelReducer(acknowledgedRefresh, {
+      type: "updateStageDraft", index: 1, patch: { maxSteps: "250" },
+    }).authoringFeedback).toBeNull();
+
+    const dirtyStageDrafts = [stageA, { ...stageB, maxSteps: "500" }];
+    const newerUnsavedEditRefresh = studyInspectorPanelReducer({
+      ...state, stageDrafts: dirtyStageDrafts,
+    }, {
+      ...refresh(4, "saved-scene"), preserveStageDrafts: dirtyStageDrafts,
+    });
+    expect(newerUnsavedEditRefresh.stageDrafts).toBe(dirtyStageDrafts);
+    expect(newerUnsavedEditRefresh.authoringFeedback).toBeNull();
+
+    const newerRefresh = studyInspectorPanelReducer(
+      acknowledgedRefresh, refresh(5, "newer-scene"),
+    );
+    expect(newerRefresh.authoringFeedback).toBeNull();
+    expect(newerRefresh.authoringFeedbackScope).toBeNull();
+
+    const stageTargetChanged = studyInspectorPanelReducer(acknowledgedRefresh, {
+      type: "clearStageAuthoringFeedback",
+    });
+    expect(stageTargetChanged.authoringFeedback).toBeNull();
+    expect(stageTargetChanged.stageDrafts).toBe(acknowledgedRefresh.stageDrafts);
+    const globalFeedback = { ...state, authoringFeedbackScope: "global" as const };
+    expect(studyInspectorPanelReducer(globalFeedback, {
+      type: "clearStageAuthoringFeedback",
+    })).toBe(globalFeedback);
+
+    const otherSelectionRefresh = studyInspectorPanelReducer(state, {
+      ...refresh(4, "saved-scene"), selectedIndex: 0,
+    });
+    expect(otherSelectionRefresh.authoringFeedback).toBeNull();
+    expect(otherSelectionRefresh.authoringFeedbackScope).toBeNull();
+
+    const legacyFeedbackRefresh = studyInspectorPanelReducer({
+      ...state,
+      authoringFeedback: { kind: "success", message: "Saved stage relax-b." },
+    }, refresh(4, "saved-scene"));
+    expect(legacyFeedbackRefresh.authoringFeedback).toBeNull();
+
+    const errorFeedbackRefresh = studyInspectorPanelReducer({
+      ...state,
+      authoringFeedback: { kind: "error", message: "Save failed.", sceneRevision: 4 },
+    }, refresh(4, "saved-scene"));
+    expect(errorFeedbackRefresh.authoringFeedback).toBeNull();
+
+    const globalFeedbackRefresh = studyInspectorPanelReducer({
+      ...state, authoringFeedbackScope: "global",
+    }, refresh(4, "saved-scene"));
+    expect(globalFeedbackRefresh.authoringFeedback).toBeNull();
+  });
+
   it("reports a partial Apply after globals commit and keeps stage drafts for review", async () => {
     const baselineGlobalDraft = createStudyGlobalDraft(null);
     const globalDraft = { ...baselineGlobalDraft, requestedBackend: "fdm" };

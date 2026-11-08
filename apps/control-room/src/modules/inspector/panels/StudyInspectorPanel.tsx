@@ -168,6 +168,7 @@ interface StudyInspectorPanelState {
   authoringFeedback: {
     kind: "error" | "success" | "warning";
     message: string;
+    sceneRevision?: number;
   } | null;
   authoringFeedbackScope: "global" | "stages" | null;
   baselineGlobalDraft: StudyGlobalDraft;
@@ -209,6 +210,7 @@ type StudyInspectorPanelAction =
       patch: Partial<StudyGlobalDraft>;
     }
   | { type: "selectStageDraft"; index: number }
+  | { type: "clearStageAuthoringFeedback" }
   | {
       type: "updateStageDraft";
       index: number;
@@ -266,7 +268,7 @@ export function studyInspectorPanelReducer(
   action: StudyInspectorPanelAction,
 ): StudyInspectorPanelState {
   switch (action.type) {
-    case "resetStageDrafts":
+    case "resetStageDrafts": {
       if (
         state.authoringDraftsInitialized &&
         state.draftSceneRevision === action.revision &&
@@ -274,12 +276,19 @@ export function studyInspectorPanelReducer(
       ) {
         return state;
       }
+      const preserveAcknowledgedStageSave =
+        state.authoringFeedbackScope === "stages" &&
+        state.selectedDraftIndex === action.selectedIndex &&
+        action.preserveStageDrafts === undefined &&
+        state.authoringFeedback?.kind === "success" &&
+        state.authoringFeedback.sceneRevision !== undefined &&
+        numericSceneRevision(action.revision) === state.authoringFeedback.sceneRevision;
       return {
         ...state,
         authoringBusy: false,
         authoringDraftsInitialized: true,
-        authoringFeedback: null,
-        authoringFeedbackScope: null,
+        authoringFeedback: preserveAcknowledgedStageSave ? state.authoringFeedback : null,
+        authoringFeedbackScope: preserveAcknowledgedStageSave ? "stages" : null,
         baselineGlobalDraft: action.globalDraft,
         baselineStageDrafts: action.preserveStageDrafts?.some((draft) => draft.pipelineNodeId)
           ? state.baselineStageDrafts
@@ -293,6 +302,10 @@ export function studyInspectorPanelReducer(
             : clampIndex(state.selectedDraftIndex, action.preserveStageDrafts),
         stageDrafts: action.preserveStageDrafts ?? action.drafts,
       };
+    }
+    case "clearStageAuthoringFeedback":
+      if (state.authoringFeedbackScope !== "stages" || state.authoringFeedback === null) return state;
+      return { ...state, authoringFeedback: null, authoringFeedbackScope: null };
     case "acceptGlobalDraft":
       return { ...state, baselineGlobalDraft: state.globalDraft };
     case "acceptStageDrafts": {
@@ -339,11 +352,18 @@ export function studyInspectorPanelReducer(
         authoringFeedbackScope: null,
         globalDraft: { ...state.globalDraft, ...action.patch },
       };
-    case "selectStageDraft":
-      return {
-        ...state,
-        selectedDraftIndex: clampIndex(action.index, state.stageDrafts),
-      };
+    case "selectStageDraft": {
+      const selectedDraftIndex = clampIndex(action.index, state.stageDrafts);
+      if (selectedDraftIndex === state.selectedDraftIndex) return state;
+      return state.authoringFeedbackScope === "stages"
+        ? {
+            ...state,
+            authoringFeedback: null,
+            authoringFeedbackScope: null,
+            selectedDraftIndex,
+          }
+        : { ...state, selectedDraftIndex };
+    }
     case "updateStageDraft":
       return {
         ...state,
@@ -794,6 +814,15 @@ export function useStudyInspectorPanelController(
   );
   const importInspectionGeneration = useRef(0);
   const importScopeRef = useRef(sessionScopeKey);
+  const selectedAuthoringTargetKey = selection.ref?.type === "study-stage"
+    ? JSON.stringify(["study-stage", selection.ref.nodeId, selection.ref.stageId])
+    : JSON.stringify(["node", selection.nodeId]);
+  const selectedAuthoringTargetRef = useRef(selectedAuthoringTargetKey);
+  useEffect(() => {
+    if (selectedAuthoringTargetRef.current === selectedAuthoringTargetKey) return;
+    selectedAuthoringTargetRef.current = selectedAuthoringTargetKey;
+    dispatch({ type: "clearStageAuthoringFeedback" });
+  }, [dispatch, selectedAuthoringTargetKey]);
   useEffect(() => {
     if (importScopeRef.current === sessionScopeKey) return;
     importScopeRef.current = sessionScopeKey;
@@ -1110,6 +1139,7 @@ export function useStudyInspectorPanelController(
     ? commandDisabledReason("study.build-and-run") ?? "An existing Build + Study is pending. Check it again to continue."
     : null;
   const commitStageDraftsImpl = async () => {
+    const feedbackTargetAtSave = selectedAuthoringTargetKey;
     const launch = stageApplyRun.current;
     const submittedDrafts = state.stageDrafts;
     const textureEdits = submittedDrafts.filter((draft, index) =>
@@ -1254,16 +1284,19 @@ export function useStudyInspectorPanelController(
       kernel.resources.invalidate(SIMULATION_COMMANDS_PATH, revision);
       kernel.resources.invalidate(SIMULATION_STAGES_RESULTS_PATH, revision);
       kernel.resources.invalidatePrefix?.(`${SIMULATION_STAGES_RESULTS_PATH}?`, revision);
-      dispatch({
-        type: "setAuthoringFeedback",
-        scope: "stages",
-        feedback: {
-          kind: "success",
-          message: pipelineDraft
-            ? `Saved stage ${pipelineDraft.stageId}.`
-            : `Committed ${submittedDrafts.length} study stage${submittedDrafts.length === 1 ? "" : "s"}.`,
-        },
-      });
+      if (selectedAuthoringTargetRef.current === feedbackTargetAtSave) {
+        dispatch({
+          type: "setAuthoringFeedback",
+          scope: "stages",
+          feedback: {
+            kind: "success",
+            message: pipelineDraft
+              ? `Saved stage ${pipelineDraft.stageId}.`
+              : `Committed ${submittedDrafts.length} study stage${submittedDrafts.length === 1 ? "" : "s"}.`,
+            sceneRevision: revision,
+          },
+        });
+      }
       if (launch) {
         launch.receipt = response;
         // Make the submitted baseline visible to the shared guard before the
