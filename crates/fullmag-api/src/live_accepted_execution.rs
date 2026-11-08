@@ -1854,6 +1854,67 @@ fn select_live_preparation_scene(
     Ok((scene.clone(), profile))
 }
 
+/// Prepare one selected stage without validating the unreduced Study graph.
+/// Authored v2 full resets have no StepOutput port, so bind their authored
+/// reference before the explicit Stage request is resolved; partial overlays
+/// keep their StepOutput port and still require a qualified predecessor.
+fn prepare_selected_live_stage_initial_state(
+    store: &fullmag_session::SessionStore,
+    context: &CurrentLiveRequestContext,
+    scene: &fullmag_authoring::SceneDocument,
+    study: &mut fullmag_authoring::StudyPlan,
+    mut entries: Vec<fullmag_plan::StudyProblemCatalogEntry>,
+    selected: usize,
+    command: &SessionCommand,
+    previous_run_id: Option<&str>,
+    prepared_capture: Option<&crate::live_stage_initial_state::PreparedStateCapture>,
+) -> Result<(
+    fullmag_plan::StudyProblemCatalog,
+    Value,
+    crate::live_accepted_continuation::InitialStateDecision,
+), ApiError> {
+    let selected_id = study.steps.get(selected)
+        .ok_or_else(|| ApiError::internal("selected live stage index is out of bounds"))?
+        .step_id.clone();
+    fullmag_application::bind_scene_study_authored_initial_state_ports(
+        study, &entries, Some(&selected_id),
+    ).map_err(|error| ApiError::unprocessable_with_code(
+        "accepted_study_state_flow_invalid",
+        format!("authored Study initial state could not be bound: {error:#}"),
+    ))?;
+    let decision = crate::live_stage_initial_state::resolve_requested_live_initial_state(
+        store,
+        context,
+        scene,
+        study,
+        &mut entries,
+        selected,
+        targets_stage(command.target.as_ref()),
+        previous_run_id,
+        prepared_capture,
+    )?;
+    let selected_id = &study.steps[selected].step_id;
+    entries.retain(|entry| entry.step_id() == selected_id);
+    let problem = entries
+        .first()
+        .ok_or_else(|| ApiError::unprocessable("selected stage has no bound ProblemIR"))?
+        .problem();
+    crate::live_stage_initial_state::restrict_live_study_to_selected_step(
+        study, selected, problem, &decision,
+    )?;
+    let catalog = fullmag_plan::StudyProblemCatalog::from_entries(study, entries)
+        .map_err(|error| {
+            ApiError::unprocessable_with_code(
+                "accepted_study_plan_invalid",
+                format!("selected StudyPlan input could not be bound: {error}"),
+            )
+        })?;
+    let binding = crate::live_stage_initial_state::selected_initial_state_binding(
+        &study.steps[selected], &decision, command.initial_state.as_ref(),
+    )?;
+    Ok((catalog, binding, decision))
+}
+
 /// Expensive preparation with no accepted durable-state publication. It may
 /// materialize bounded geometry/cache/staging assets in the workspace and reads
 /// immutable profile data; RunIntent/CAS and run catalog publication happen in
@@ -2275,31 +2336,14 @@ fn prepare_live_accepted(
         LiveAcceptedSubmission::Command { command, previous_run_id, prepared_capture, .. },
         Some(index),
     ) = (&submission, selected_step_index) {
-        let mut entries = fullmag_application::bind_study_execution_entries(
+        let entries = fullmag_application::bind_study_execution_entries(
             &study, inputs, profile_lookup,
         ).map_err(|error| ApiError::unprocessable_with_code(
             "accepted_execution_materialization_failed", error,
         ))?;
-        let decision = crate::live_stage_initial_state::resolve_requested_live_initial_state(
-            &store, context, scene, &mut study, &mut entries, index, command,
-            targets_stage(command.target.as_ref()), previous_run_id.as_deref(),
-            prepared_capture.as_ref(),
-        )?;
-        let selected_id = &study.steps[index].step_id;
-        entries.retain(|entry| entry.step_id() == selected_id);
-        let problem = entries.first()
-            .ok_or_else(|| ApiError::unprocessable("selected stage has no bound ProblemIR"))?
-            .problem();
-        crate::live_stage_initial_state::restrict_live_study_to_selected_step(
-            &mut study, index, problem, &decision,
-        )?;
-        let catalog = fullmag_plan::StudyProblemCatalog::from_entries(&study, entries)
-            .map_err(|error| ApiError::unprocessable_with_code(
-                "accepted_study_plan_invalid",
-                format!("selected StudyPlan input could not be bound: {error}"),
-            ))?;
-        let binding = crate::live_stage_initial_state::selected_initial_state_binding(
-            &study.steps[index], &decision, command.initial_state.as_ref(),
+        let (catalog, binding, decision) = prepare_selected_live_stage_initial_state(
+            &store, context, scene, &mut study, entries, index, command,
+            previous_run_id.as_deref(), prepared_capture.as_ref(),
         )?;
         if let crate::live_accepted_continuation::InitialStateDecision::Prepared(state) = decision {
             prepared_state_asset = Some(state);
@@ -3372,13 +3416,25 @@ mod tests {
         fullmag_plan::StudyProblemCatalog,
         fullmag_ir::ProblemIR,
     ) {
+        selected_b_scene_plan_with_assignment(None, None)
+    }
+
+    fn selected_b_scene_plan_with_assignment(
+        assignment: Option<serde_json::Value>,
+        region_id: Option<&str>,
+    ) -> (
+        fullmag_authoring::SceneDocument,
+        fullmag_authoring::StudyPlan,
+        fullmag_plan::StudyProblemCatalog,
+        fullmag_ir::ProblemIR,
+    ) {
         use fullmag_authoring::{
             StudyExecutionProfileReference, StudyModelReference, StudyPlanMigrationDefaults,
             StudySolverConfigReference,
         };
 
         let mut scene = ui_source_scene();
-        scene.study.study_pipeline = Some(serde_json::from_value(serde_json::json!({
+        let mut pipeline = serde_json::json!({
             "version": "study_pipeline.v2",
             "nodes": [
                 {"node_kind": "primitive", "id": "step:a", "label": "A",
@@ -3391,7 +3447,11 @@ mod tests {
                     "source": "ui_authored", "stage_kind": "run",
                     "payload": {"until_seconds": "1e-12"}}
             ]
-        })).unwrap());
+        });
+        if let Some(assignment) = assignment {
+            pipeline["nodes"][1]["payload"]["stage_magnetization_assignments"] = assignment;
+        }
+        scene.study.study_pipeline = Some(serde_json::from_value(pipeline).unwrap());
 
         let profile = fullmag_application::legacy_live_execution_profile();
         let defaults = StudyPlanMigrationDefaults {
@@ -3413,6 +3473,16 @@ mod tests {
 
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+        problem.magnets[0].initial_magnetization = Some(
+            fullmag_ir::InitialMagnetizationIR::Uniform { value: [1.0, 0.0, 0.0] },
+        );
+        if let Some(region_id) = region_id {
+            problem.object_regions.push(serde_json::from_value(serde_json::json!({
+                "region_id": region_id, "owner_object": "strip", "name": "core",
+                "shape": {"kind": "box", "size": [80e-9, 20e-9, 6e-9],
+                    "center": [0.0, 0.0, 0.0]},
+            })).unwrap());
+        }
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".into(),
             serde_json::json!({"device": "cpu", "precision": "double"}),
@@ -3434,12 +3504,170 @@ mod tests {
         (scene, study, catalog, problem)
     }
 
+    fn selected_b_authored_stage_command(scene_revision: u64) -> crate::types::SessionCommand {
+        serde_json::from_value(serde_json::json!({
+            "seq": 1,
+            "command_id": "cmd-selected-b-authored",
+            "kind": "run",
+            "created_at_unix_ms": 1,
+            "target": {"kind": "stage_id", "stage_id": "step:b"},
+            "initial_state": {
+                "kind": "authored_initial_state",
+                "source": {
+                    "kind": "stage",
+                    "scene_revision": scene_revision,
+                    "stage_id": "step:b"
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn selected_b_request_context() -> crate::types::CurrentLiveRequestContext {
+        crate::types::CurrentLiveRequestContext {
+            session_id: "session:selected-b-authored".into(),
+            run_id: None,
+            session_epoch: 1,
+            request_scope_epoch: "api:selected-b-authored".into(),
+        }
+    }
+
+    #[test]
+    fn selected_b_null_object_reset_uses_authored_port_before_explicit_stage_resolution() {
+        use fullmag_authoring::StudyInputSource;
+
+        let assignment = serde_json::json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "strip", "region_id": null, "initializer": null
+            }]
+        });
+        let (scene, mut study, catalog, problem) =
+            selected_b_scene_plan_with_assignment(Some(assignment), None);
+        assert!(study.steps[1].inputs.is_empty());
+        let upstream_a_inputs = study.steps[0].inputs.clone();
+        assert!(upstream_a_inputs.is_empty());
+        let scene_before = serde_json::to_value(&scene).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path()).unwrap();
+        let command = selected_b_authored_stage_command(scene.revision);
+
+        let (catalog, _binding, decision) = super::prepare_selected_live_stage_initial_state(
+            &store,
+            &selected_b_request_context(),
+            &scene,
+            &mut study,
+            catalog.into_entries(),
+            1,
+            &command,
+            None,
+            None,
+        )
+        .expect("the null object initializer is a valid authored full reset for B");
+
+        assert!(matches!(
+            decision,
+            crate::live_accepted_continuation::InitialStateDecision::Authored { .. }
+        ));
+        assert!(matches!(
+            &study.steps[1].inputs[0].source,
+            StudyInputSource::AuthoredInitialState { .. }
+        ));
+        assert_eq!(study.steps[1].inputs.len(), 1);
+        assert!(study.steps[1].inputs[0].required);
+        assert_eq!(study.steps[1].inputs[0].data_kind, fullmag_authoring::StudyPortDataKind::State);
+        assert!(study.steps[1].initial_state_overlay.is_none());
+        assert_eq!(study.steps[0].inputs, upstream_a_inputs);
+        assert_eq!(
+            study.steps.iter().filter(|step| step.enabled)
+                .map(|step| step.step_id.as_str()).collect::<Vec<_>>(),
+            vec!["step:b"]
+        );
+        assert_eq!(
+            catalog.entries().iter().map(|entry| entry.step_id()).collect::<Vec<_>>(),
+            vec!["step:b"]
+        );
+        assert_eq!(serde_json::to_value(&scene).unwrap(), scene_before);
+        let lowered = fullmag_plan::lower_study_plan(
+            &study,
+            |_| Ok::<_, String>(problem.clone()),
+        )
+        .expect("the authored selected-stage plan compiles");
+        assert_eq!(
+            lowered.steps.iter().filter(|step| step.enabled)
+                .map(|step| step.step_id.as_str()).collect::<Vec<_>>(),
+            vec!["step:b"]
+        );
+    }
+
+    #[test]
+    fn selected_b_without_reset_still_rejects_explicit_authored_stage_source() {
+        let (scene, mut study, catalog, _) = selected_b_scene_plan();
+        let original_inputs = study.steps.iter().map(|step| step.inputs.clone()).collect::<Vec<_>>();
+        let scene_before = serde_json::to_value(&scene).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path()).unwrap();
+        let command = selected_b_authored_stage_command(scene.revision);
+
+        let error = super::prepare_selected_live_stage_initial_state(
+            &store,
+            &selected_b_request_context(),
+            &scene,
+            &mut study,
+            catalog.into_entries(),
+            1,
+            &command,
+            None,
+            None,
+        )
+        .expect_err("a stage without an authored reset must not gain authored fallback");
+
+        assert_eq!(error.code.as_deref(), Some("stage_state_source_unresolved"));
+        assert_eq!(error.message, "the selected stage has no authored texture reset");
+        assert_eq!(
+            study.steps.iter().map(|step| step.inputs.clone()).collect::<Vec<_>>(),
+            original_inputs,
+        );
+        assert_eq!(serde_json::to_value(&scene).unwrap(), scene_before);
+    }
+
     #[test]
     fn selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b() {
         use fullmag_authoring::StudyInputSource;
         use super::{select_live_step, RuntimeCommandTarget};
 
-        let (_scene, mut study, catalog, problem) = selected_b_scene_plan();
+        let partial_reset = serde_json::json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "strip", "region_id": "core",
+                "initializer": {"kind": "uniform", "value": [0.0, 1.0, 0.0]}
+            }]
+        });
+        let (scene, mut study, catalog, problem) =
+            selected_b_scene_plan_with_assignment(Some(partial_reset), Some("core"));
+        let catalog = fullmag_application::bind_scene_study_authored_initial_states(
+            &mut study,
+            catalog,
+        )
+        .expect("bind A's authored initial state before selected-stage preparation");
+        let upstream_a_inputs = study.steps[0].inputs.clone();
+        assert!(matches!(
+            &upstream_a_inputs[0].source,
+            StudyInputSource::AuthoredInitialState { .. }
+        ));
+        assert!(study.steps[1].initial_state_overlay.is_some());
+        assert!(matches!(
+            &study.steps[1].inputs[0].source,
+            StudyInputSource::StepOutput { step_id, port, .. }
+                if step_id == "step:a" && port == "final_state"
+        ));
+        assert!(!fullmag_application::bind_scene_study_authored_initial_state_ports(
+            &mut study,
+            catalog.entries(),
+            Some("step:b"),
+        )
+        .expect("binding selected B must leave its partial overlay input intact"));
+        assert_eq!(study.steps[0].inputs, upstream_a_inputs);
         let target = RuntimeCommandTarget::StageId { stage_id: "step:b".into() };
         let selected = select_live_step(&study, "run", Some(&target)).unwrap();
         assert_eq!(study.steps[selected].step_id, "step:b");
@@ -3453,6 +3681,26 @@ mod tests {
             StudyInputSource::StepOutput { step_id, port, .. }
                 if step_id == "step:b" && port == "final_state"
         ));
+
+        let directory = tempfile::tempdir().unwrap();
+        let store = fullmag_session::SessionStore::open(directory.path()).unwrap();
+        let command = selected_b_authored_stage_command(scene.revision);
+        let mut unresolved_study = study.clone();
+        let error = super::prepare_selected_live_stage_initial_state(
+            &store,
+            &selected_b_request_context(),
+            &scene,
+            &mut unresolved_study,
+            catalog.entries().to_vec(),
+            selected,
+            &command,
+            None,
+            None,
+        )
+        .expect_err("a partial overlay still needs its qualified predecessor");
+        assert!(error.message.contains("unavailable current predecessor"), "{error}");
+        assert_eq!(study.steps[0].inputs, upstream_a_inputs);
+        assert!(study.steps[1].initial_state_overlay.is_some());
 
         let a_plan = fullmag_plan::plan(catalog.entries().iter()
             .find(|entry| entry.step_id() == "step:a").unwrap().problem()).unwrap();
@@ -3482,6 +3730,7 @@ mod tests {
         crate::live_stage_initial_state::restrict_live_study_to_selected_step(
             &mut study, selected, &problem, &decision,
         ).expect("rebind B to A's qualified result before validating the isolated graph");
+        assert_eq!(study.steps[0].inputs, upstream_a_inputs);
         assert!(!study.steps[0].enabled, "A is retained as definition, not scheduled");
         assert!(study.steps[1].enabled);
         assert!(!study.steps[2].enabled, "C is not scheduled by the selected-B request");

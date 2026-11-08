@@ -229,28 +229,39 @@ pub fn bind_scene_study_authored_initial_states(
     study: &mut StudyPlan,
     catalog: StudyProblemCatalog,
 ) -> Result<StudyProblemCatalog> {
+    if bind_scene_study_authored_initial_state_ports(study, catalog.entries(), None)? {
+        Ok(StudyProblemCatalog::from_entries(study, catalog.into_entries())?)
+    } else {
+        Ok(catalog)
+    }
+}
+
+/// Bind authored v2 state ports without validating the unreduced execution graph.
+/// A selected-stage caller must rebind inherited inputs before graph validation.
+pub fn bind_scene_study_authored_initial_state_ports(
+    study: &mut StudyPlan,
+    entries: &[StudyProblemCatalogEntry],
+    selected_step_id: Option<&str>,
+) -> Result<bool> {
     if study.source_pipeline_version.as_deref() != Some("study_pipeline.v2") {
-        return Ok(catalog);
+        return Ok(false);
     }
     let mut changed = false;
-    for step in study.steps.iter_mut().filter(|step| step.enabled && step.inputs.is_empty()) {
+    for step in study.steps.iter_mut().filter(|step| step.enabled && step.inputs.is_empty()
+        && selected_step_id.map_or(true, |id| step.step_id == id)) {
         if !matches!(&step.kind, StudyStepKind::Primitive {
             stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Run
                 | fullmag_authoring::StudyPrimitiveStageKind::Relax,
         }) {
             continue;
         }
-        let problem = catalog.entries().iter().find(|entry| entry.step_id() == step.step_id)
+        let problem = entries.iter().find(|entry| entry.step_id() == step.step_id)
             .with_context(|| format!("authored stage '{}' has no bound ProblemIR", step.step_id))?
             .problem();
         step.inputs.push(authored_initial_state_port(&step.step_id, problem)?);
         changed = true;
     }
-    if changed {
-        Ok(StudyProblemCatalog::from_entries(study, catalog.into_entries())?)
-    } else {
-        Ok(catalog)
-    }
+    Ok(changed)
 }
 
 fn authored_initial_state_port(step_id: &str, problem: &fullmag_ir::ProblemIR) -> Result<StudyInputPort> {
