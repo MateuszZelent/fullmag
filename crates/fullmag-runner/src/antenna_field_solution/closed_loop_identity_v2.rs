@@ -254,6 +254,52 @@ fn verify_rt0_sample_moments(
     Ok(())
 }
 
+
+fn verify_center_current(
+    cell: &super::closed_loop_v2::ClosedLoopCurrentCellV2,
+    points: &[[f64; 3]; 4],
+    axis: usize,
+    faces: &BTreeMap<[u64; 3], f64>,
+) -> Result<(), RunError> {
+    let mean=compensated_sum((0..4).map(|local|cell.vertex_current_xyz_apm2[3*local+axis]*0.25))?;
+    let j_scale=(0..4).fold(0.0_f64,|a,local|a.max(cell.vertex_current_xyz_apm2[3*local+axis].abs()));
+    if cell.center_current_xyz_apm2[axis].is_finite() && (mean-cell.center_current_xyz_apm2[axis]).abs()<=128.0*f64::EPSILON*j_scale {
+        return Ok(());
+    }
+    // Unverified samples from the first refusal, not an accepted source snapshot.
+    // Fixed arrays of hexadecimal bits bound the error without lossy JSON floats.
+    let bits = |value: f64| format!("{:016x}", value.to_bits());
+    let face_flux_bits: [Option<String>; 4] = std::array::from_fn(|opposite| {
+        let mut face = [0_u64; 3];
+        let mut next = 0;
+        for (local, id) in cell.vertex_ids.iter().enumerate() {
+            if local != opposite {
+                face[next] = *id;
+                next += 1;
+            }
+        }
+        face.sort_unstable();
+        faces.get(&face).map(|value| bits(*value))
+    });
+    let witness = serde_json::json!({
+        "schema": "fullmag.rt0_center_failure.v1",
+        "element": format!("{:016x}", cell.source_element_index),
+        "axis": axis,
+        "vertex_ids": cell.vertex_ids.map(|id| format!("{id:016x}")),
+        "vertex_xyz_bits": std::array::from_fn::<_, 12, _>(|i| bits(points[i / 3][i % 3])),
+        "vertex_j_bits": cell.vertex_current_xyz_apm2.map(bits),
+        "center_xyz_bits": cell.center_xyz_m.map(bits),
+        "center_j_bits": cell.center_current_xyz_apm2.map(bits),
+        "mean_bits": bits(mean),
+        "scale_bits": bits(j_scale),
+        "difference_bits": bits((mean-cell.center_current_xyz_apm2[axis]).abs()),
+        "budget_bits": bits(128.0*f64::EPSILON*j_scale),
+        // Opposite-local-vertex order; each flux uses the sorted stable-ID sign.
+        "face_flux_bits": face_flux_bits,
+    });
+    Err(invalid(&format!("cell-local J interpolation mismatch fullmag.rt0_center_failure.v1={witness}")))
+}
+
 fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
     by_id: &BTreeMap<u64,usize>, faces: &BTreeMap<[u64;3],f64>, owners: &BTreeMap<[u64;3],Vec<usize>>,
     cut_pairs: &[([u64;3],[u64;3])]) -> Result<(),RunError> {
@@ -273,9 +319,7 @@ fn verify_owned_geometry(source: &ClosedLoopAcceptedSourceInputV2,
             let center=compensated_sum(points.iter().map(|v| v[axis]*0.25))?;
             let xyz_scale=points.iter().fold(0.0_f64,|a,v| a.max(v[axis].abs()));
             require(cell.center_xyz_m[axis].is_finite() && (center-cell.center_xyz_m[axis]).abs()<=128.0*f64::EPSILON*xyz_scale,"sampled center geometry mismatch")?;
-            let mean=compensated_sum((0..4).map(|local|cell.vertex_current_xyz_apm2[3*local+axis]*0.25))?;
-            let j_scale=(0..4).fold(0.0_f64,|a,local|a.max(cell.vertex_current_xyz_apm2[3*local+axis].abs()));
-            require(cell.center_current_xyz_apm2[axis].is_finite() && (mean-cell.center_current_xyz_apm2[axis]).abs()<=128.0*f64::EPSILON*j_scale,"cell-local J interpolation mismatch")?;
+            verify_center_current(cell, &points, axis, faces)?;
         }
         verify_rt0_sample_affinity(&points, &cell.vertex_current_xyz_apm2)?;
         verify_rt0_sample_moments(&points, &cell.vertex_ids, &cell.vertex_current_xyz_apm2, faces)?;
