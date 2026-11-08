@@ -1609,19 +1609,29 @@ fn standalone_antenna_study(stage_id: &str, port_mode_id: &str) -> fullmag_ir::S
 pub(crate) fn parse_antenna_solve_selection(
     payload: &BTreeMap<String, Value>,
 ) -> Result<(String, String)> {
+    // Snapshot coverage and retained-source admission also call this parser
+    // directly, without the primitive materializer's execution-flag filtering.
+    for key in ["interactive_session_requested", "wait_for_solve"] {
+        if let Some(value) = payload.get(key) {
+            if !value.is_boolean() {
+                bail!("study pipeline primitive payload.{key} must be a boolean");
+            }
+        }
+    }
     let unsupported = payload
         .keys()
         .filter(|key| {
             !matches!(
                 key.as_str(),
                 "kind" | "stage_id" | "port_mode_id" | "port_mode_ids" | "entrypoint_kind"
+                    | "interactive_session_requested" | "wait_for_solve"
             )
         })
         .cloned()
         .collect::<Vec<_>>();
     if !unsupported.is_empty() {
         bail!(
-            "antenna_field_solve accepts only stage_id, port_mode_id(s), and entrypoint_kind; unsupported payload keys: {}",
+            "antenna_field_solve accepts only stage_id, port_mode_id(s), entrypoint_kind, and boolean execution flags; unsupported payload keys: {}",
             unsupported.join(", ")
         );
     }

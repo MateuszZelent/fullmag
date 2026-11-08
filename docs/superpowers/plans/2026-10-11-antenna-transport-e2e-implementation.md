@@ -5094,3 +5094,22 @@ Nie wykonano nowego Prepare/Solve/reference. EtaFAIL, kwalifikacja źródła
 oraz odtworzenie publikacji pozostają otwarte. W chwili tego odbioru eksperyment
 corner25 i kontrola w świeżej karcie UI oczekiwały odpowiedzi; późniejszą zgodę
 i wynik przygotowania opisuje następny checkpoint.
+
+## Checkpoint 08.11.2026 — zatwierdzone corner25, odmowa przed Solve
+
+Po jawnej zgodzie wykonano jedno przygotowanie e3103f240fcc49559ff0032e2d91e536
+na nowym pakiecie. Producent utworzył40703Tet4/14184węzłów i zachował nośnik20H.
+Publiczny CLI nadal odrzucił dwie flagi wykonania; failed-confirmed/exit2,
+child zebrany/exit1, compact request nie powstał. Nie wykonano Submit/Solve,
+retry, buildu lub restartu. API dostępne, kolejka pusta i active_workers0.
+
+Zlokalizowano bezpośrednie wywołanie parsera selekcji w kontroli zgodności
+migawek, z pominięciem wcześniejszego filtrowania flag w materializerze.
+Wspólny parser poprawiono w źródłach, zachowując odrzucanie złych typów
+oraz nieznanych pól; dodano dwie regresje. Rust/CI i odbiór pakietu tej poprawki
+pozostają niewykonane. Nie utożsamiać działającego eksportu sceny z pełną
+zgodnością ścieżki Prepare.
+
+20plików/3360660B próby i cache zachowano na WSL, manifest oraz hashe PASS.
+[Pełny wynik, przyczyna i piny](2026-11-08-corner25-post-update-experiment-result.md).
+Nie ma nowego pomiarueta/I/H; kwalifikacja źródła i reprodukcja publikacji otwarte.

@@ -429,6 +429,47 @@ fn antenna_action_snapshots_match_exact_selection_without_conflating_owner_id() 
 }
 
 #[test]
+fn primitive_execution_intent_antenna_snapshots_accept_boolean_flags() {
+    for interactive in [false, true] {
+        for wait in [false, true] {
+            let mut input = antenna_action_snapshots();
+            for (index, node) in input.study_pipeline.as_mut().unwrap().nodes.iter_mut().enumerate() {
+                if let StudyPipelineNode::Primitive { payload, .. } = node {
+                    payload.insert("interactive_session_requested".into(), json!(interactive));
+                    payload.insert("wait_for_solve".into(), json!(wait));
+                    input.stages[index].ir.problem_meta.runtime_metadata.insert(
+                        "interactive_session_requested".into(), json!(interactive));
+                    input.stages[index].ir.problem_meta.runtime_metadata.insert(
+                        "wait_for_solve".into(), json!(wait));
+                }
+            }
+            let before = serde_json::to_value((&input.study_pipeline,
+                input.stages.iter().map(|stage| &stage.ir).collect::<Vec<_>>())).unwrap();
+            validate_snapshot_gate(&input).unwrap();
+            let after = serde_json::to_value((&input.study_pipeline,
+                input.stages.iter().map(|stage| &stage.ir).collect::<Vec<_>>())).unwrap();
+            assert_eq!(after, before);
+        }
+    }
+}
+
+#[test]
+fn primitive_execution_intent_antenna_snapshots_reject_non_boolean_flags() {
+    for key in ["interactive_session_requested", "wait_for_solve"] {
+        for value in [json!(null), json!("false"), json!(0), json!([]), json!({})] {
+            let mut input = antenna_action_snapshots();
+            if let StudyPipelineNode::Primitive { payload, .. } =
+                &mut input.study_pipeline.as_mut().unwrap().nodes[0]
+            {
+                payload.insert(key.into(), value);
+            }
+            let error = validate_snapshot_gate(&input).unwrap_err().to_string();
+            assert!(error.contains(&format!("payload.{key} must be a boolean")), "{error}");
+        }
+    }
+}
+
+#[test]
 fn antenna_action_snapshots_reject_mismatched_selection_and_action() {
     use crate::script_stage_contract::ScriptExecutionStageAction;
     let mut wrong_stage = antenna_action_snapshots();
