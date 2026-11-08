@@ -99,8 +99,9 @@ Istniejące testy niezgodnych selektorów, nieznanych pól i kolejności pozosta
 Rzeczywista odmowa CLI jest dowodem RED. Nowe testy Rust nie były lokalnie
 kompilowane. Kontrola diff --check przeszła; host nie ma rustfmt, a backend
 nie ma parsera tree-sitter. Nie uznajemy tych braków ani przeglądu za
-wynik testów. Odbiór Rust w dozwolonym CI i odbiór managed nowego pakietu
-pozostają oddzielnymi bramkami. Działającego pakietu nie podmieniono.
+wynik testów. Odbiór Rust w dozwolonym CI zakończono zgodnie z końcowym checkpointem
+poniżej. Odbiór managed nowego pakietu pozostaje niewykonany.
+Działającego pakietu nie podmieniono.
 
 ## Zachowanie dowodów
 
@@ -152,3 +153,75 @@ Nie przypisujemy jeszcze liczby wykonanych nowych testów bez końcowego logu.
 obejmuje jedną zarządzaną aktualizację, jedno Prepare i jeden warunkowy Solve,
 dopiero po pełnym pozytywnym CI. Nie uruchomiono tej sekwencji:
 ostatnia zgoda jawnie wykluczała build/restart i automatyczne retry.
+
+## Odczytowa kontrola rzeczywistej rozdzielczości naroży
+
+Bez nowego Prepare/Solve porównano dwie zachowane surowe siatki NPZ:
+corner25 z bieżącej nieudanej próby oraz local50 z przygotowania15548336.
+Hashe obu cache potwierdzono względem ich oryginalnych raportów.
+Obliczenia dotyczą geometrii przed zdublowaniem węzłów sourcecut,
+a nie prądu lub odebranego requestu.
+
+Wybrano elementy o centroidzie w odległości do100nm od najbliższej
+z ośmiu zadanych pionowych krawędzi wklęsłych. Cały zakres z surowych
+siatek mieści się w wysokości krawędzi30–120nm, więc odległośćxy jest
+tu odległością do tych odcinków. Dla każdego Tet4 użyto najdłuższej
+z sześciu krawędzi; kwantyle są ważone liczbą komórek.
+
+| Diagnostyka w tym obszarze | local50 | corner25 |
+|---|---:|---:|
+| Liczba komórek | 993 | 5852 |
+| P05 najdłuższej krawędzi [nm] | 52,3732 | 30,2185 |
+| Mediana najdłuższej krawędzi [nm] | 70,4202 | 39,9583 |
+| P95 najdłuższej krawędzi [nm] | 100,5383 | 47,0992 |
+| Liczba wszystkich Tet4 | 34243 | 40703 |
+
+Mediana dla każdego z ośmiu naroży stanowi0,5221–0,5809 poprzedniej
+wartości. Zagęszczenie jest zatem rzeczywiste we wszystkich narożach,
+nie tylko nominalne. Nazwa25nm oznacza parametr meshera, nie gwarancję
+maksymalnej krawędzi25nm w każdym Tet4. Obie siatki zachowują objętość
+źródła około1,314e−18m³.
+
+Centroidowy wybór nie obejmuje identycznej objętości w obu siatkach;
+nie wyprowadzamy z niego nowego progu kwalifikacji ani dowodu kontrakcji eta.
+Nie zastępuje poprawnego publicznego Prepare oraz Solve.
+
+Dowód control:
+verification/gsg-corner25-mesh-resolution-20261108/result.json,
+SHA25638ab3c94e5dcbb058a8cc17b5c54ae90c7d2636110ba7fd46ca04faa297edcd4.
+Zachowano dokładny kod analizy, SHA256
+f6cda3910a1785a9b6b3a1c898590d8cae49c379bbe72683c5939c1c89f1273f.
+
+Na WSL:
+examples/sushruth_2020_closed_gsg/corner25_mesh_resolution_20261108.
+Osiem plików/3678462B obejmuje kod, wynik i oba pełne wejściowe cache
+z raportami producenta oraz przygotowania. Wszystkie hashe ponownie
+odczytano; manifest SHA256
+1194ae5c206629d4898a164a034f8c16af8a5648835b7397d7571a1a190fdd10.
+Katalog pozostaje prywatny0700, właścicielUID1000.
+Kod zachowuje historyczne bezwzględne ścieżki control i cel one-shot;
+nie nazywamy tego przenośnym replay ani Zarr.
+
+## Końcowy odbiór CI — 08.11.2026
+
+CI42492318729 zakończyło się success. Oba wybrane joby:
+rust-contracts i inspector-actions-browser-smoke — success.
+Pozostałe joby pominięte przez profil rust nie stanowią dowodu.
+Sprawdzony head_sha: e78009f7c46c5f65da2c795e9650c371c490e071.
+
+Pełny log Rust ma 46 698 452 B, SHA256
+ec6652ab608589fab71d3068300892c9f5efa205316f0b0d43a60d6a648d244d.
+Zachowano go w control:
+verification/antenna-selector-flags-20261108/ci-42492318729-rust-full.log.
+Log potwierdza obie nowe regresje z wynikiem ok:
+każda została wykonana w skupionym filtrze execution-intent oraz ponownie
+w pełnej grupie testów materializacji aplikacji. Nie znaleziono w logu
+błędów kompilacji error[E ani testów z końcowym FAILED.
+
+Terminalny odczyt GH ma SHA256
+03f82b8eb38ac773bcb82efc7cf2a60ee96874019cb9bbe60b5936b1e8cc526e,
+plik ci-42492318729-terminal.json w tym samym katalogu.
+Późniejsze commity raportów nie zmieniają testowanego kodu.
+To kończy bramkę CI poprawki selektora; nie oznacza wdrożenia nowego pakietu,
+poprawnego Prepare lub V/J/H. W tej kontynuacji nie wykonano nowego
+Prepare/Solve/restartu/buildu.

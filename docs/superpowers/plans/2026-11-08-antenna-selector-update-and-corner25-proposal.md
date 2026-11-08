@@ -76,3 +76,16 @@ Brak H-only, LLG, nowych geometrii, profili, recovery i automatycznego retry.
 Odmowa/Failed kończy sekwencję; utrata samej obserwacji nie upoważnia
 do ponownego Submit. Źródło pozostaje inspection-only do pełnej kwalifikacji.
 Raport nie zmienia równań ani nie ustanawia nowych progów zbieżności.
+
+## Zakończona weryfikacja przed decyzją
+
+CI42492318729 ma końcowy success dla commita e78009f7c46c5f65da2c795e9650c371c490e071.
+Oba wybrane joby Rust i browser zakończyły się sukcesem. Pełny log Rust
+potwierdza wykonanie obu nowych regresji zarówno we wcześniejszym filtrze,
+jak i w pełnej grupie testów aplikacji. Nie jest to kwalifikacja naukowa źródła.
+[Piny i logi](2026-11-08-corner25-post-update-experiment-result.md).
+
+Odczyt cache potwierdził rzeczywiste zagęszczenie wszystkich ośmiu naroży:
+mediana największej krawędzi elementu w pasie do100nm zmalała70,4202→39,9583nm.
+Nie przewidujemy z tego wynikueta lub H. Nie zmienia to zakresu i limitów
+opisanej powyżej jednej proponowanej sekwencji. Nadal oczekuje ona na decyzję.

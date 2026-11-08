@@ -5125,3 +5125,27 @@ Wynik Prepare e3103f24 pozostaje failed-confirmed, bez nowego V/J/H.
 [Gotowy następny zakres aktualizacji i eksperymentu](2026-11-08-antenna-selector-update-and-corner25-proposal.md)
 czeka na pełny odbiór CI i nową decyzję: ostatnia zgoda wykluczała build/restart,
 a pojedyncza próba została wykorzystana. Nie wykonano nowej sekwencji.
+
+### Rzeczywiste zagęszczenie corner25 — 08.11.2026
+
+Analiza zachowanych surowych cache, bez Prepare/Solve, potwierdza drobniejszą
+siatkę we wszystkich8wklęsłych narożach: mediana maksymalnej krawędzi Tet4
+w pasie centroidów do100nm spadła70,4202→39,9583nm. Liczba komórek w tym
+pasie wzrosła993→5852. Wszystkie lokalne ilorazy median0,5221–0,5809.
+Nie jest to dowód poprawyeta lub nowy próg kwalifikacji; wybór centroidowy
+nie obejmuje dokładnie identycznej objętości obu siatek.
+Kod, wynik i pełne wejścia (8plików/3678462B) zachowano na WSL i sprawdzono
+hashami. Szczegóły w raporcie2026-11-08-corner25-post-update-experiment-result.md.
+
+### Końcowy CI selektora — 08.11.2026
+
+Historyczny zapis „job Rust nadal w toku” jest zamknięty:
+CI42492318729 zakończone success dla e78009f7c46c5f65da2c795e9650c371c490e071.
+Oba wybrane joby Rust i browser success. Pełny log46698452B, SHAec6652ab…,
+potwierdza obie nowe regresje ok w filtrze execution-intent i pełnym zestawie
+materializacji aplikacji. Lokalnych testów Rust nie kompilowano.
+Szczegóły i pełne piny w2026-11-08-corner25-post-update-experiment-result.md.
+
+Gotowy zakres aktualizacji i jednej nowej warunkowej próby pozostaje
+niewykonany/do decyzji. W tej kontynuacji nie wykonano nowego Prepare/Solve,
+buildu ani restartu. Nadal nie ma nowegoeta/I/H i kwalifikacji źródła.
