@@ -1143,7 +1143,9 @@ export async function runStudyStageRerun() {
   const requestCounts = {};
   const errors = [];
   const pageErrorDetails = [];
+  const httpErrorDetails = [];
   let failureUiText = null;
+  let uiSubmitText = null;
   const violations = [];
   let totalRequests = 0;
   let phase = "preflight";
@@ -1580,6 +1582,13 @@ export async function runStudyStageRerun() {
     });
     page.on("console", (message) => {
       if (message.type() === "error" && errors.length < 16) errors.push(boundedMessage(message.text()));
+    });
+    page.on("response", (response) => {
+      if (response.status() >= 400 && httpErrorDetails.length < 16) {
+        const url = new URL(response.url());
+        httpErrorDetails.push({ phase, elapsed_ms: Date.now() - startedAt,
+          status: response.status(), method: response.request().method(), path: url.pathname.slice(0, 2048) });
+      }
     });
 
     if (isResume) {
@@ -2251,6 +2260,18 @@ export async function runStudyStageRerun() {
         "The real Stage B Inspector does not show the authored-stage initial state");
       action = page.getByRole("button", { name: "Run this stage", exact: true });
     } else {
+      if (mode === "texture-study") {
+        for (const parentId of ["model:study", "model:study:stages"]) {
+          const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
+          await parent.waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+          await parent.focus();
+          if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
+        }
+        const selected = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-b"]');
+        await selected.click();
+        await page.getByRole("button", { name: "Run this stage", exact: true })
+          .waitFor({ state: "visible", timeout: Math.min(15_000, timerBudget()) });
+      }
       const row = page.locator('[role="treeitem"][data-node-id="model:study"]');
       await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
       assert.equal(await row.count(), 1, "The Study Explorer row is absent or duplicated");
@@ -2268,6 +2289,8 @@ export async function runStudyStageRerun() {
       },
       { timeout: Math.min(20_000, timerBudget()) },
     ), "P22 command response was not observed: ");
+    uiSubmitText = await page.locator("body").innerText({ timeout: 1000 })
+      .then((value) => value.slice(0, 12000)).catch(() => null);
     phase = "ui-submit";
     if (mode === "texture-stage-b") await clickRunStageBOnce(page);
     else await action.click();
@@ -2467,6 +2490,8 @@ export async function runStudyStageRerun() {
       mode,
       failure,
       page_error_details: pageErrorDetails,
+      http_error_details: httpErrorDetails,
+      ui_submit_text: uiSubmitText,
       failure_ui_text: failureUiText,
       public_url: publicUrl,
       probe_url: upstreamUrl,
