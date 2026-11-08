@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   buildStageBUniformXResetTransaction,
+  fillStageBUniformXResetInInspector,
+  saveStageBResetAndWaitForAck,
   validateStageBUniformXResetExchange,
 } from "./study-texture-browser-qa.mjs";
 
@@ -244,4 +246,37 @@ test("rejects a transaction ACK for another mutation kind", () => {
   const exchange = successfulExchange();
   exchange.acknowledgement.body.transaction_kind = "patch_material";
   assert.throws(() => validateStageBUniformXResetExchange(exchange), /ACK|transaction/i);
+});
+
+
+test("fills the real texture combobox controls without selecting their labelled groups", async () => {
+  const selected = [];
+  const clicked = [];
+  const row = { click: async () => {}, waitFor: async () => {},
+    getAttribute: async (name) => name === "role" ? "treeitem" : "true" };
+  const page = {
+    locator: () => row,
+    getByLabel: () => { throw new Error("label selects both group and form control"); },
+    getByRole: (role, { name, exact }) => {
+      assert.equal(exact, true);
+      if (role === "combobox") return { selectOption: async (value) => selected.push([name, value]) };
+      assert.equal(role, "button");
+      return { click: async () => clicked.push(name) };
+    },
+  };
+  await fillStageBUniformXResetInInspector(page);
+  assert.deepEqual(selected, [["Magnetic object", "film"], ["Apply to", ""], ["Texture", "reset"]]);
+  assert.deepEqual(clicked, ["Add texture change", "Add to stage"]);
+});
+
+test("keeps the click failure observable when its pending Save response rejects during cleanup", async () => {
+  const row = { waitFor: async () => {},
+    getAttribute: async (name) => name === "role" ? "treeitem" : "true" };
+  const page = {
+    locator: () => row,
+    waitForResponse: () => Promise.reject(new Error("context closed")),
+    getByRole: () => ({ click: async () => { throw new Error("save click blocked"); } }),
+  };
+  await assert.rejects(saveStageBResetAndWaitForAck(page), /save click blocked/);
+  await new Promise((resolve) => setImmediate(resolve));
 });

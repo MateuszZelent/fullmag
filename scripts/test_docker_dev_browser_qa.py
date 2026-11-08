@@ -3041,19 +3041,193 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_texture_profiles_pin_B_local_v2_recipe_source_catalog_and_authored_stage_command(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+const baseline = () => ({
+  revision: 41,
+  objects: [{id:'film',name:'film',role:'magnet',material_ref:'mat-film',magnetization_ref:'mag-film'}],
+  materials: [{id:'mat-film',name:'film material',properties:{Ms:600000,Aex:1e-11,alpha:0.5}}],
+  magnetization_assets: [{id:'mag-film',kind:'preset_texture',preset_kind:'uniform',
+    preset_params:{direction:[1,0,0]}}],
+  study: {requested_backend:'fdm',requested_device:'cpu',requested_precision:'double',
+    fdm:{default_cell:[1e-9,2e-9,2e-9]},study_pipeline:{version:'study_pipeline.v1',nodes:[
+      {enabled:true,id:'relax-a',label:'Relax 1',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{adaptive_timestep:null,demag_interval_s:'',energy_tolerance:'',entrypoint_kind:'flat_relax',
+        fixed_timestep:'1e-13',integrator:'rk23',kind:'relax',max_relaxation_time_s:'',max_steps:'10',
+        relax_algorithm:'llg_overdamped',stage_id:'relax-a',torque_tolerance:'0.0001',until_seconds:''}},
+      {enabled:true,id:'relax-b',label:'Relax 2',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',max_steps:'1',
+        relax_algorithm:'projected_gradient_bb',stage_id:'relax-b',torque_tolerance:'0.0001',until_seconds:''}},
+      {enabled:true,id:'relax-c',label:'Relax 3',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',max_steps:'1',
+        relax_algorithm:'nonlinear_cg',stage_id:'relax-c',torque_tolerance:'0.0001',until_seconds:''}},
+    ]}},
+});
+assert.deepEqual(runner.studyStageCommandForMode('texture-stage-b',42), {
+  kind:'relax',target:{kind:'stage_id',stage_id:'relax-b'},
+  initial_state:{kind:'authored_initial_state',source:{kind:'stage',scene_revision:42,stage_id:'relax-b'}},
+});
+assert.deepEqual(runner.studyStageCommandForMode('texture-study'),{kind:'solve',target:{kind:'study'}});
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-stage-b','before'),['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-stage-b','after'),['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-study','before'),['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-study','after'),['relax-a','relax-b','relax-c']);
+const original = baseline();
+runner.studyStageTextureSceneProfile(original,{allowUnedited:true});
+assert.throws(()=>runner.studyStageTextureSceneProfile(original),/acknowledged/i);
+const tx = (await import(new URL('./lib/study-texture-browser-qa.mjs',process.argv[1]))).buildStageBUniformXResetTransaction({
+  scene:original,sceneRevision:41,statusSceneRevision:41,objectId:'film',
+});
+const saved = structuredClone(original); saved.study.study_pipeline=tx.merge_patch.study.study_pipeline;
+const profile=runner.studyStageTextureSceneProfile(saved);
+assert.deepEqual(profile.stage_b_texture_reset,{stage_id:'relax-b',object_id:'film',scope:'object',initializer:null});
+assert.deepEqual(runner.studyStageTextureBaselineState(saved).global_m0.direction,[1,0,0]);
+for (const mutate of [
+  (scene)=>{scene.study.study_pipeline.nodes[0].payload.stage_magnetization_assignments={};},
+  (scene)=>{scene.study.study_pipeline.nodes[1].payload.stage_magnetization_assignments.assignments[0].region_id='core';},
+  (scene)=>{scene.study.fdm.default_cell=[2e-9,1e-9,2e-9];},
+]) {
+  const bad=structuredClone(saved); mutate(bad); assert.throws(()=>runner.studyStageTextureSceneProfile(bad));
+}
+const sourceIdentity={project_id:'p',study_id:'s',source:{run_id:'run-a',task_id:'t',step_id:'relax-a',case_id:'c',attempt_id:'a',ownership_epoch:1},
+  authored_stage_id:'relax-a',artifact_id:'artifact-a',artifact_sha256:'a'.repeat(64),codec_id:'magnetization',codec_version:'1',accepted_at:'now'};
+const catalog={next_cursor:null,results:[{...sourceIdentity,authored_relation:'matching_authored_input',
+  domain_relation:'matching_published_layout',supports_magnetization_input:true}]};
+assert.equal(runner.studyStageTextureCatalogProof(catalog,'run-a','relax-a',sourceIdentity,'film').artifact_id,'artifact-a');
+for (const change of [
+  (item)=>item.authored_relation='authored_input_changed',
+  (item)=>item.domain_relation='different_published_layout',
+  (item)=>item.supports_magnetization_input=false,
+]) {
+  const bad=structuredClone(catalog); change(bad.results[0]);
+  assert.throws(()=>runner.studyStageTextureCatalogProof(bad,'run-a','relax-a',sourceIdentity,'film'));
+}
+const session={session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const precondition={scene_revision:42};
+const command=runner.studyStageCommandForMode('texture-stage-b',42);
+const request={method:'POST',path:'/v2/sessions/current/simulation/commands',scope:'session=s&epoch=s%401&request_scope_epoch=api%3A1',body:{
+  ...command,precondition:{...precondition},client_intent_id:'study:relax:texture-b',reason:'user_requested',requested_at_unix_ms:1799000000000,
+}};
+const context={mode:'texture-stage-b',session,expectedPrecondition:precondition,commandCount:0,phase:'ui-submit',
+  idempotencyKey:'study:relax:texture-b'};
+assert.equal(runner.studyStageRerunRequestAllowed(request,context),true);
+assert.equal(runner.studyStageRerunRequestAllowed(request,{...context,idempotencyKey:'foreign'}),false);
+assert.equal(runner.studyStageRerunRequestAllowed(request,{...context,phase:'texture-ready'}),false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request,body:{...request.body,initial_state:{kind:'default_for_target'}}},context),false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request,body:{...request.body,precondition:{scene_revision:41}}},context),false);
+assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_target:{kind:'stage_id',stage_id:'relax-b'},step_id:'relax-b'},'texture-stage-b','new'),true);
+assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_target:{kind:'study'},step_id:null},'texture-stage-b','new'),false);
+""";
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source.as_uri()],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_mode_specific_source_pins_leave_legacy_profiles_unchanged(self):
         qa = self.qa
         stage_b = qa._study_stage_rerun_source_sha256(ROOT, "stage-b")
         material = qa._study_stage_rerun_source_sha256(ROOT, "material-stage-a")
         fdm_cell = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
+        texture_stage = qa._study_stage_rerun_source_sha256(ROOT, "texture-stage-b")
+        texture_study = qa._study_stage_rerun_source_sha256(ROOT, "texture-study")
         self.assertEqual(set(stage_b), set(self.SOURCE_KEYS))
         self.assertEqual(set(material), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_MATERIAL_SOURCES))
         self.assertEqual(set(fdm_cell), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_FDM_CELL_SOURCES))
+        self.assertEqual(set(texture_stage), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_TEXTURE_SOURCES))
+        self.assertEqual(texture_stage, texture_study)
         qa._validate_study_stage_rerun_hashes(stage_b, "stage-b")
         qa._validate_study_stage_rerun_hashes(material, "material-stage-a")
         qa._validate_study_stage_rerun_hashes(fdm_cell, "fdm-cell-study")
+        qa._validate_study_stage_rerun_hashes(texture_stage, "texture-stage-b")
+        qa._validate_study_stage_rerun_hashes(texture_study, "texture-study")
         with self.assertRaises(qa.BuildControlError):
             qa._validate_study_stage_rerun_hashes(material, "stage-b")
+
+    def test_texture_profiles_accept_exact_terminal_proofs_and_reject_scope_drift(self):
+        qa = self.qa
+        for mode in ("texture-stage-b", "texture-study"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            payload = self.texture_result_fixture(mode, sources)
+            encoded = (json.dumps(payload) + "\n").encode()
+            with self.subTest(mode=mode):
+                parsed = qa._parse_study_stage_rerun_result(
+                    encoded, payload["public_url"], payload["probe_url"], sources, mode,
+                )
+                self.assertEqual(parsed["texture_source_proof"]["authored_relation"], "matching_authored_input")
+                self.assertFalse(parsed["native_execution_proven"])
+                for mutate in (
+                    lambda item: item["texture_source_proof"].update(domain_relation="different_published_layout"),
+                    lambda item: item["texture_source_proof"].update(artifact_sha256="f" * 64),
+                    lambda item: item["before"]["texture_state"].update(scope="region"),
+                    lambda item: item["before"]["profile"].update(domain_cell_count=8),
+                    lambda item: item["command_receipt"]["payload"].update(target={"kind": "stage_id", "stage_id": "relax-a"}),
+                    lambda item: item["after"]["scene_profile"].update(pipeline_version="study_pipeline.v1"),
+                ):
+                    bad = deepcopy(payload)
+                    mutate(bad)
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                        )
+                if mode == "texture-stage-b":
+                    for mutate in (
+                        lambda item: item["texture_receipt"]["payload"].__setitem__("base_revision", 38),
+                        lambda item: item["texture_receipt"]["acknowledgement"]["committed_scene"].__setitem__("revision", 41),
+                        lambda item: item["texture_receipt"]["payload"]["merge_patch"]["study"]["study_pipeline"]["nodes"][0]["payload"].update(
+                            stage_magnetization_assignments={"schema_version": "fullmag.magnetization-assignments.v1",
+                                                             "assignments": []}),
+                        lambda item: item["command_receipt"].update(idempotency_key="foreign"),
+                    ):
+                        bad = deepcopy(payload)
+                        mutate(bad)
+                        with self.assertRaises(qa.BuildControlError):
+                            qa._parse_study_stage_rerun_result(
+                                (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                            )
+                else:
+                    bad = deepcopy(payload)
+                    bad["texture_transaction_count"] = 1
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                        )
+
+    def test_texture_unknown_profiles_retain_possible_writes_without_terminal_claims(self):
+        qa = self.qa
+        for mode in ("texture-stage-b", "texture-study"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            payload = self.texture_result_fixture(mode, sources)
+            payload.update({
+                "state": "outcome-unknown", "outcome": "unknown",
+                "failure": "bounded observation ended after a possible dispatch",
+                "after": None, "reload_proof": None, "history_identity_preserved": None,
+                "public_terminal_proven": False, "native_execution_proven": False, "field_data_proven": False,
+            })
+            if mode == "texture-stage-b":
+                payload["command_receipt"] = None
+                payload["command_count"] = 0
+                payload["command_attempt_count"] = 0
+                payload["ui_command_proven"] = False
+                payload["request_counts"].pop("POST /v2/sessions/current/simulation/commands")
+            payload["total_requests"] = sum(payload["request_counts"].values())
+            parsed = qa._parse_study_stage_rerun_result(
+                (json.dumps(payload) + "\n").encode(), payload["public_url"], payload["probe_url"], sources, mode,
+            )
+            self.assertEqual(parsed["outcome"], "unknown")
+            self.assertIsNone(parsed["after"])
+            self.assertFalse(parsed["public_terminal_proven"])
+            bad = deepcopy(payload)
+            bad["command_attempt_count"] = 2
+            with self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(
+                    (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                )
 
     @staticmethod
     def result_identity(run_id, stage_id, index):
@@ -3334,6 +3508,133 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
             payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
             payload["request_counts"]["GET /v2/sessions/current/simulation/commands/grid-refresh-1"] = 1
             payload["total_requests"] = sum(payload["request_counts"].values())
+        return payload
+
+    def texture_result_fixture(self, mode, sources):
+        if mode not in {"texture-stage-b", "texture-study"}:
+            raise ValueError(mode)
+        base_mode = "stage-b" if mode == "texture-stage-b" else "study"
+        payload = self.result_fixture(base_mode, sources)
+        qa = self.qa
+        payload["mode"] = mode
+        scene_revision = 40
+        domain_id = "fdm-domain-16"
+        precondition = payload["before"]["precondition"]
+        precondition["scene_revision"] = scene_revision
+        precondition["mesh_revision"] = 19
+        precondition["domain_generation_id"] = domain_id
+        payload["command_receipt"]["payload"]["precondition"] = deepcopy(precondition)
+        for snapshot in (payload["before"], payload["after"]):
+            snapshot["profile"]["domain_cell_count"] = 16
+            snapshot["profile"]["domain_generation_id"] = domain_id
+            snapshot["scene_profile"] = qa._expected_study_stage_scene_profile(
+                pipeline_version="study_pipeline.v2", texture_object_id="film")
+        payload["reload_proof"]["canvas"]["fdm_model_count"] = 16
+
+        baseline = {
+            "material": {
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
+                "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
+                "magnetization_ref": "mag-film", "magnetization_asset_sha256": "d" * 64,
+            },
+            "default_cell": [1e-9, 2e-9, 2e-9],
+            "global_m0": {"object_id": "film", "magnetization_ref": "mag-film", "asset_sha256": "d" * 64,
+                           "preset_kind": "uniform", "direction": [1, 0, 0]},
+        }
+        source_stage = "relax-a" if mode == "texture-stage-b" else "relax-b"
+        source_identity = next(item for item in payload["before"]["result_identities"]
+                               if item["authored_stage_id"] == source_stage)
+        source_proof = {
+            "authored_stage_id": source_stage, "object_id": "film", "run_id": "run-before",
+            "artifact_id": source_identity["artifact_id"], "artifact_sha256": source_identity["artifact_sha256"],
+            "codec_id": source_identity["codec_id"], "codec_version": source_identity["codec_version"],
+            "authored_relation": "matching_authored_input", "domain_relation": "matching_published_layout",
+            "supports_magnetization_input": True,
+        }
+        reset = {"stage_id": "relax-b", "object_id": "film", "scope": "object", "initializer": None}
+        for snapshot in (payload["before"], payload["after"]):
+            snapshot["texture_state"] = deepcopy(reset)
+            snapshot["texture_baseline_state"] = deepcopy(baseline)
+            snapshot["texture_source_proof"] = deepcopy(source_proof)
+        payload["texture_source_proof"] = source_proof
+        payload["texture_baseline_state"] = baseline
+
+        command = payload["command_receipt"]["payload"]
+        if mode == "texture-stage-b":
+            command["initial_state"] = {"kind": "authored_initial_state", "source": {
+                "kind": "stage", "scene_revision": scene_revision, "stage_id": "relax-b"}}
+            payload["command_receipt"]["idempotency_key"] = command["client_intent_id"]
+        else:
+            payload["command_receipt"]["idempotency_key"] = command["client_intent_id"]
+
+        payload["texture_transaction_count"] = 0
+        payload["texture_transaction_attempt_count"] = 0
+        payload["texture_receipt"] = None
+        payload["ui_texture_proven"] = False
+        if mode == "texture-stage-b":
+            pipeline = {
+                "version": "study_pipeline.v1",
+                "nodes": [
+                    {"enabled": True, "id": "relax-a", "label": "Relax 1", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "adaptive_timestep": None, "demag_interval_s": "", "energy_tolerance": "",
+                        "entrypoint_kind": "flat_relax", "fixed_timestep": "1e-13", "integrator": "rk23",
+                        "kind": "relax", "max_relaxation_time_s": "", "max_steps": "10",
+                        "relax_algorithm": "llg_overdamped", "stage_id": "relax-a",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                    {"enabled": True, "id": "relax-b", "label": "Relax 2", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "energy_tolerance": "", "entrypoint_kind": "flat_relax", "kind": "relax",
+                        "max_steps": "1", "relax_algorithm": "projected_gradient_bb", "stage_id": "relax-b",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                    {"enabled": True, "id": "relax-c", "label": "Relax 3", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "energy_tolerance": "", "entrypoint_kind": "flat_relax", "kind": "relax",
+                        "max_steps": "1", "relax_algorithm": "nonlinear_cg", "stage_id": "relax-c",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                ],
+            }
+            scene_before = {
+                "revision": scene_revision - 1,
+                "objects": [{"id": "film", "name": "film", "role": "magnet", "material_ref": "mat-film",
+                             "magnetization_ref": "mag-film"}],
+                "materials": [{"id": "mat-film", "name": "film material", "properties": deepcopy(baseline["material"]["properties"])}],
+                "magnetization_assets": [{"id": "mag-film", "kind": "preset_texture", "preset_kind": "uniform",
+                                          "preset_params": {"direction": [1, 0, 0]}}],
+                "study": {"requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                          "fdm": {"default_cell": [1e-9, 2e-9, 2e-9]}, "study_pipeline": pipeline},
+            }
+            expected_pipeline = deepcopy(pipeline)
+            expected_pipeline["version"] = "study_pipeline.v2"
+            expected_pipeline["nodes"][1]["payload"]["stage_magnetization_assignments"] = {
+                "schema_version": "fullmag.magnetization-assignments.v1",
+                "assignments": [{"object_id": "film", "region_id": None, "initializer": None}],
+            }
+            tx_request = {"kind": "merge_patch", "base_revision": scene_revision - 1,
+                          "merge_patch": {"study": {"study_pipeline": expected_pipeline}}}
+            committed = deepcopy(scene_before)
+            committed["revision"] = scene_revision
+            committed["study"]["study_pipeline"] = expected_pipeline
+            payload["texture_transaction_count"] = 1
+            payload["texture_transaction_attempt_count"] = 1
+            payload["ui_texture_proven"] = True
+            payload["texture_receipt"] = {
+                "method": "POST", "path": "/v2/sessions/current/model/transactions",
+                "scope_header": payload["command_receipt"]["scope_header"], "status": 200,
+                "payload": tx_request, "scene_before": scene_before,
+                "acknowledgement": {"transaction_kind": "merge_patch", "scene_revision": scene_revision,
+                                    "committed_scene": committed},
+                "helper_ack": {"sceneRevision": scene_revision, "stageId": "relax-b", "objectId": "film"},
+                "ui_saved_ack_proven": True, "ui_saved_ack_text": "Saved stage relax-b.",
+            }
+            payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
+
+        old_results_path = "GET /v2/sessions/current/simulation/stages/results?run_id=run-before&limit=100"
+        new_results_path = "GET /v2/sessions/current/simulation/stages/results?run_id=run-after&limit=100"
+        payload["request_counts"][old_results_path] = 8 if mode == "texture-stage-b" else 6
+        payload["request_counts"][new_results_path] = 2
+        payload["read_counts"]["stage_results"] = 10 if mode == "texture-stage-b" else 8
+        payload["total_requests"] = sum(payload["request_counts"].values())
         return payload
 
     def test_terminal_scope_keeps_authored_rows_but_requires_only_selected_execution(self):

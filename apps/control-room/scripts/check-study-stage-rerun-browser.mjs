@@ -6,6 +6,14 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startBrowserQaLoopbackProxy } from "./lib/browser-qa-loopback-proxy.mjs";
+import {
+  buildStageBUniformXResetTransaction,
+  clickRunStageBOnce,
+  fillStageBUniformXResetInInspector,
+  saveStageBResetAndWaitForAck,
+  selectStageBAuthoredInitialState,
+  validateStageBUniformXResetExchange,
+} from "./lib/study-texture-browser-qa.mjs";
 
 const schema = "fullmag.docker-dev-study-stage-rerun-result.v1";
 const scenario = "study-stage-rerun";
@@ -64,6 +72,16 @@ const fdmCellSourceFiles = {
   api_client: new URL("../src/kernel/api/ControlRoomApi.ts", import.meta.url),
   api_paths: new URL("../src/kernel/api/apiPaths.ts", import.meta.url),
 };
+const textureSourceFiles = {
+  texture_helper: new URL("./lib/study-texture-browser-qa.mjs", import.meta.url),
+  stage_inspector_router: new URL("../src/modules/inspector/panels/StudyStageInspectorRouter.tsx", import.meta.url),
+  texture_editor: new URL("../src/modules/inspector/panels/stages/StageTextureAssignmentsEditor.tsx", import.meta.url),
+  stage_authoring_model: new URL("../src/modules/inspector/panels/StudyStageAuthoringModel.ts", import.meta.url),
+  study_inspector_panel: new URL("../src/modules/inspector/panels/StudyInspectorPanel.tsx", import.meta.url),
+  initial_state_selector: new URL("../src/modules/inspector/panels/stages/StageInitialStateSelector.tsx", import.meta.url),
+  initial_state_model: new URL("../src/kernel/runtime/studyStageInitialState.ts", import.meta.url),
+  api_client: new URL("../src/kernel/api/ControlRoomApi.ts", import.meta.url),
+};
 const targetFdmCell = [1e-9, 2e-9, 2e-9];
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_RESULT_BYTES = 2 * 1024 * 1024;
@@ -92,7 +110,7 @@ function sessionScope(session) {
     + "&request_scope_epoch=" + encodeURIComponent(session.request_scope_epoch);
 }
 
-export function studyStageCommandForMode(mode) {
+export function studyStageCommandForMode(mode, sceneRevision = null) {
   if (mode === "stage-b") {
     return {
       kind: "relax",
@@ -107,18 +125,30 @@ export function studyStageCommandForMode(mode) {
       initial_state: { kind: "default_for_target" },
     };
   }
-  if (mode === "study" || mode === "fdm-cell-study") return { kind: "solve", target: { kind: "study" } };
+  if (mode === "texture-stage-b") {
+    return {
+      kind: "relax",
+      target: { kind: "stage_id", stage_id: "relax-b" },
+      initial_state: { kind: "authored_initial_state", source: {
+        kind: "stage", scene_revision: sceneRevision, stage_id: "relax-b",
+      } },
+    };
+  }
+  if (["study", "fdm-cell-study", "texture-study"].includes(mode)) {
+    return { kind: "solve", target: { kind: "study" } };
+  }
   throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
 }
 
 export function studyStageExpectedStageIds(mode, phase) {
-  if (!["stage-b", "study", "material-stage-a", "fdm-cell-study"].includes(mode)) {
+  if (!["stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"].includes(mode)) {
     throw new TypeError("Study stage rerun mode is not one of the fixed profiles");
   }
-  if (phase === "before") return mode === "study" ? ["relax-b"]
+  if (phase === "before") return ["study", "texture-study"].includes(mode) ? ["relax-b"]
     : mode === "fdm-cell-study" ? ["relax-a"] : [...stageIds];
   if (phase === "after") return mode === "stage-b" ? ["relax-b"]
-    : mode === "material-stage-a" ? ["relax-a"] : [...stageIds];
+    : mode === "material-stage-a" ? ["relax-a"]
+      : mode === "texture-stage-b" ? ["relax-b"] : [...stageIds];
   throw new TypeError("Study stage rerun phase must be before or after");
 }
 
@@ -391,7 +421,7 @@ export function studyStageExecutionBindingMatches(binding, mode, runId) {
         || binding.run_id !== runId) return false;
     const target = studyStageCommandForMode(mode).target;
     if (canonical(binding.requested_target) !== canonical(target)) return false;
-    if (mode === "stage-b" || mode === "material-stage-a") return binding.step_id === target.stage_id;
+    if (["stage-b", "material-stage-a", "texture-stage-b"].includes(mode)) return binding.step_id === target.stage_id;
     return binding.step_id === undefined || binding.step_id === null;
   } catch {
     return false;
@@ -400,12 +430,12 @@ export function studyStageExecutionBindingMatches(binding, mode, runId) {
 
 export function studyStageRerunRequestAllowed(request, context) {
   try {
-    const expected = studyStageCommandForMode(context?.mode);
+    const expected = studyStageCommandForMode(context?.mode, context?.expectedPrecondition?.scene_revision);
     const body = request?.body;
     if (context.phase !== "ui-submit" || context.commandCount !== 0
         || request?.method !== "POST" || request?.path !== commandPath
         || request?.scope !== sessionScope(context.session) || !plainRecord(body)) return false;
-    const isStageTarget = context.mode === "stage-b" || context.mode === "material-stage-a";
+    const isStageTarget = ["stage-b", "material-stage-a", "texture-stage-b"].includes(context.mode);
     const expectedKeys = isStageTarget
       ? ["kind", "target", "initial_state", "precondition", "client_intent_id", "reason", "requested_at_unix_ms"]
       : ["kind", "target", "precondition", "client_intent_id", "reason", "requested_at_unix_ms"];
@@ -413,6 +443,7 @@ export function studyStageRerunRequestAllowed(request, context) {
     if (body.kind !== expected.kind || canonical(body.target) !== canonical(expected.target)
         || (isStageTarget && canonical(body.initial_state) !== canonical(expected.initial_state))
         || canonical(body.precondition) !== canonical(context.expectedPrecondition)) return false;
+    if (context.mode === "texture-stage-b" && context.idempotencyKey !== body.client_intent_id) return false;
     return typeof body.client_intent_id === "string"
       && body.client_intent_id.length > 0 && body.client_intent_id.length <= 128
       && body.client_intent_id.startsWith("study:" + (isStageTarget ? "relax" : "solve") + ":")
@@ -526,6 +557,7 @@ async function sourceHashes(mode) {
     ...sourceFiles,
     ...(mode === "material-stage-a" ? materialSourceFiles : {}),
     ...(mode === "fdm-cell-study" ? fdmCellSourceFiles : {}),
+    ...(["texture-stage-b", "texture-study"].includes(mode) ? textureSourceFiles : {}),
   };
   const entries = await Promise.all(Object.entries(files).map(async ([key, path]) => {
     const raw = await fs.readFile(path);
@@ -628,6 +660,93 @@ export function validateStudyStageScene(scene) {
       relax_algorithm: node.payload.relax_algorithm,
       max_steps: node.payload.max_steps,
     })),
+  };
+}
+
+/** Validate the one supported v1 -> v2 B-local +X reset without relaxing the imported v1 profile. */
+export function studyStageTextureSceneProfile(scene, { allowUnedited = false } = {}) {
+  const pipeline = scene?.study?.study_pipeline;
+  assert.deepEqual(scene?.study?.fdm?.default_cell, targetFdmCell,
+    "The texture profile requires the accepted sixteen-cell FDM cell geometry");
+  if (pipeline?.version === "study_pipeline.v1") {
+    assert(allowUnedited, "The texture profile requires the acknowledged Stage B reset");
+    const profile = validateStudyStageScene(scene);
+    return { ...profile, pipeline_version: "study_pipeline.v1", stage_b_texture_reset: null };
+  }
+  assert(plainRecord(pipeline) && pipeline.version === "study_pipeline.v2",
+    "The texture profile requires the exact saved Study pipeline v2");
+  const magnets = Array.isArray(scene.objects)
+    ? scene.objects.filter((object) => plainRecord(object) && object.role === "magnet") : [];
+  assert.equal(magnets.length, 1, "The texture profile requires exactly one magnetic object");
+  const objectId = magnets[0].id;
+  assert(typeof objectId === "string" && objectId.length > 0);
+  const baseline = structuredClone(scene);
+  baseline.study.study_pipeline.version = "study_pipeline.v1";
+  const b = baseline.study.study_pipeline.nodes.find((node) => node?.id === "relax-b");
+  assert(plainRecord(b?.payload) && Object.hasOwn(b.payload, "stage_magnetization_assignments"),
+    "The v2 texture profile has no stage-local B reset");
+  const assignment = b.payload.stage_magnetization_assignments;
+  assert.deepEqual(assignment, {
+    schema_version: "fullmag.magnetization-assignments.v1",
+    assignments: [{ object_id: objectId, region_id: null, initializer: null }],
+  }, "The v2 texture profile has an unexpected B-local assignment");
+  delete b.payload.stage_magnetization_assignments;
+  const profile = validateStudyStageScene(baseline);
+  const revision = baseline.revision ?? baseline.scene_revision;
+  const expected = buildStageBUniformXResetTransaction({
+    scene: baseline, sceneRevision: revision, statusSceneRevision: revision, objectId,
+  }).merge_patch.study.study_pipeline;
+  assert.deepEqual(pipeline, expected, "The v2 pipeline differs outside the single Stage B reset");
+  return { ...profile, pipeline_version: "study_pipeline.v2",
+    stage_b_texture_reset: { stage_id: "relax-b", object_id: objectId, scope: "object", initializer: null } };
+}
+
+export function studyStageTextureBaselineState(scene) {
+  const material = studyStageMaterialState(scene);
+  assert.equal(material.properties.Ms, 600000);
+  assert.equal(material.properties.Aex, 1e-11);
+  assert.equal(material.properties.alpha, 0.5);
+  assert.equal(material.properties.Dind ?? null, null);
+  assert.equal(material.properties.Dbulk ?? null, null);
+  const asset = scene.magnetization_assets.find((entry) => entry?.id === material.magnetization_ref);
+  assert(plainRecord(asset) && asset.kind === "preset_texture" && asset.preset_kind === "uniform"
+    && plainRecord(asset.preset_params), "The texture profile requires the accepted uniform +X global m0");
+  assert.deepEqual(asset.preset_params.direction, [1, 0, 0],
+    "The texture profile global m0 is not uniform +X");
+  return {
+    material,
+    default_cell: [...scene.study.fdm.default_cell],
+    global_m0: { object_id: material.object_id, magnetization_ref: material.magnetization_ref,
+      asset_sha256: material.magnetization_asset_sha256, preset_kind: asset.preset_kind,
+      direction: [...asset.preset_params.direction] },
+  };
+}
+
+/** Bind an accepted same-domain public result to the immutable A/B result identity. */
+export function studyStageTextureCatalogProof(resource, runId, stageId, expectedIdentity, objectId) {
+  assert(plainRecord(resource) && Array.isArray(resource.results) && resource.next_cursor == null,
+    "P22 texture result catalog page is malformed or incomplete");
+  const found = resource.results.filter((result) => result?.authored_stage_id === stageId);
+  assert.equal(found.length, 1, "P22 texture result catalog omitted or duplicated the required stage");
+  const result = found[0];
+  const identity = studyStageResultIdentity(result);
+  assert.equal(identity.source.run_id, runId, "P22 texture input result belongs to another run");
+  assert.deepEqual(identity, expectedIdentity, "P22 texture input result differs from its immutable run identity");
+  assert.equal(result.authored_relation, "matching_authored_input");
+  assert.equal(result.domain_relation, "matching_published_layout");
+  assert.equal(result.supports_magnetization_input, true);
+  assert(typeof objectId === "string" && objectId.length > 0);
+  return {
+    authored_stage_id: stageId,
+    object_id: objectId,
+    run_id: runId,
+    artifact_id: identity.artifact_id,
+    artifact_sha256: identity.artifact_sha256,
+    codec_id: identity.codec_id,
+    codec_version: identity.codec_version,
+    authored_relation: result.authored_relation,
+    domain_relation: result.domain_relation,
+    supports_magnetization_input: result.supports_magnetization_input,
   };
 }
 
@@ -819,6 +938,7 @@ export async function runStudyStageRerun() {
   let after = null;
   let reloadProof = null;
   let expectedDomainCellCount = 8;
+  if (["texture-stage-b", "texture-study"].includes(mode)) expectedDomainCellCount = 16;
   let materialBeforeState = null;
   let materialSourceScene = null;
   let materialReceipt = null;
@@ -840,6 +960,13 @@ export async function runStudyStageRerun() {
   let gridRefreshAttemptCount = 0;
   let uiGridRefreshProven = false;
   let gridRefreshTerminalDetail = null;
+  let textureSourceProof = null;
+  let textureBaselineState = null;
+  let textureSourceScene = null;
+  let textureReceipt = null;
+  let textureTransactionCount = 0;
+  let textureTransactionAttemptCount = 0;
+  let uiTextureProven = false;
   let commandCount = 0;
   let commandAttemptCount = 0;
   let clientAckCount = 0;
@@ -889,6 +1016,22 @@ export async function runStudyStageRerun() {
     return resultIdentities(resource, runId, expectedStageIds);
   }
 
+  async function readTextureSourceProof(snapshot) {
+    const stageId = mode === "texture-stage-b" ? "relax-a" : "relax-b";
+    const path = resultsBasePath + "?run_id=" + encodeURIComponent(snapshot.currentRun.run_id) + "&limit=100";
+    readCounts.stage_results++;
+    const resource = await apiGet(path, snapshot.session);
+    assert.equal(resource.scene_revision, snapshot.scene.revision ?? snapshot.scene.scene_revision,
+      "P22 texture source catalog is not pinned to the displayed scene revision");
+    assert.deepEqual(resource.authored_stage_ids, stageIds,
+      "P22 texture source catalog does not contain the exact authored Study stages");
+    const expectedIdentity = snapshot.resultIdentities.find((result) => result.authored_stage_id === stageId);
+    assert(expectedIdentity, "P22 texture source result identity is absent from the pinned run");
+    const magnets = snapshot.scene.objects?.filter((object) => object?.role === "magnet") ?? [];
+    assert.equal(magnets.length, 1, "P22 texture source scene does not have exactly one magnetic object");
+    return studyStageTextureCatalogProof(resource, snapshot.currentRun.run_id, stageId, expectedIdentity, magnets[0].id);
+  }
+
   async function readSnapshot(expectedSession = null, {
     requireIdle = true,
     expectedStageIds = studyStageExpectedStageIds(mode, "before"),
@@ -935,7 +1078,11 @@ export async function runStudyStageRerun() {
       "Owning solver status is not awaiting a command");
     const profile = currentProfile(statusAfter, currentRun, currentSession, expectedSources, expectedDomainCellCount);
     const sceneStageIds = authoredSceneStageIds(scene);
-    const sceneProfile = validateStudyStageScene(scene);
+    const sceneProfile = ["texture-stage-b", "texture-study"].includes(mode)
+      ? studyStageTextureSceneProfile(scene, {
+        allowUnedited: mode === "texture-stage-b" && textureTransactionCount === 0,
+      })
+      : validateStudyStageScene(scene);
     assert.equal(scene.revision, statusAfter.resources.scene_revision,
       "Committed scene revision differs from the P22 status");
     const observedStageIds = executionStageIds(execution, currentRun.run_id, observedSession);
@@ -988,6 +1135,13 @@ export async function runStudyStageRerun() {
       precondition: snapshot.precondition,
     };
     if (mode === "fdm-cell-study") value.material_state = studyStageMaterialState(snapshot.scene);
+    if (["texture-stage-b", "texture-study"].includes(mode)) {
+      value.texture_state = studyStageTextureSceneProfile(snapshot.scene, {
+        allowUnedited: mode === "texture-stage-b" && textureTransactionCount === 0,
+      }).stage_b_texture_reset;
+      value.texture_source_proof = textureSourceProof;
+      value.texture_baseline_state = studyStageTextureBaselineState(snapshot.scene);
+    }
     return value;
   }
 
@@ -1025,6 +1179,13 @@ export async function runStudyStageRerun() {
       assert.deepEqual(material.properties, fdmMaterialBeforeState.properties);
       assert.equal(material.magnetization_ref, fdmMaterialBeforeState.magnetization_ref);
       assert.equal(material.magnetization_asset_sha256, fdmMaterialBeforeState.magnetization_asset_sha256);
+    }
+    if (["texture-stage-b", "texture-study"].includes(mode)) {
+      assert.deepEqual(studyStageTextureBaselineState(snapshot.scene), textureBaselineState,
+        "The texture compute changed the accepted material, FDM grid or global +X m0");
+      assert.equal(snapshot.sceneProfile.pipeline_version, "study_pipeline.v2");
+      assert.deepEqual(snapshot.sceneProfile.stage_b_texture_reset,
+        { stage_id: "relax-b", object_id: textureBaselineState.material.object_id, scope: "object", initializer: null });
     }
   }
 
@@ -1134,6 +1295,19 @@ export async function runStudyStageRerun() {
       fdmCellSourceScene = structuredClone(initial.scene);
       assert.equal(initial.profile.domain_cell_count, 8, "P22 FDM-cell profile must start at eight cells");
     }
+    if (["texture-stage-b", "texture-study"].includes(mode)) {
+      assert.equal(initial.profile.domain_cell_count, 16, "P22 texture profile requires the qualified sixteen-cell FDM domain");
+      if (mode === "texture-stage-b") {
+        assert.equal(initial.scene.study.study_pipeline.version, "study_pipeline.v1",
+          "Texture-stage-B must start before its one UI-authored texture transaction");
+      } else {
+        assert.equal(initial.scene.study.study_pipeline.version, "study_pipeline.v2",
+          "Texture-study requires the previously acknowledged B-local recipe");
+      }
+      textureSourceScene = structuredClone(initial.scene);
+      textureBaselineState = studyStageTextureBaselineState(initial.scene);
+      textureSourceProof = await readTextureSourceProof(initial);
+    }
     session = initial.session;
     assert.deepEqual(stableProjection(initial), stableProjection(await readSnapshot(session, { requireIdle: true })),
       "P22 public resources changed between initial bounded snapshots");
@@ -1175,8 +1349,52 @@ export async function runStudyStageRerun() {
           return route.continue();
         }
         if (url.pathname === modelTransactionsPath) {
-          if (mode !== "fdm-cell-study") materialAttemptCount++;
+          if (!["fdm-cell-study", "texture-stage-b"].includes(mode)) materialAttemptCount++;
           const body = request.postDataJSON();
+          if (mode === "texture-stage-b") {
+            textureTransactionAttemptCount++;
+            const revision = textureSourceScene?.revision ?? textureSourceScene?.scene_revision;
+            const expected = buildStageBUniformXResetTransaction({
+              scene: textureSourceScene,
+              sceneRevision: revision,
+              statusSceneRevision: textureSourceScene?.revision ?? textureSourceScene?.scene_revision,
+              objectId: textureSourceProof?.object_id,
+            });
+            if (phase !== "texture-save-submit" || textureTransactionCount !== 0
+                || request.method() !== "POST" || path !== modelTransactionsPath
+                || scope !== sessionScope(session) || canonical(body) !== canonical(expected)) {
+              if (violations.length < 16) violations.push("Rejected an extra or out-of-scope B texture transaction");
+              return route.abort();
+            }
+            textureTransactionCount++;
+            uiTextureProven = true;
+            outcome = "unknown";
+            phase = "texture-save-dispatched";
+            textureReceipt = {
+              method, path: url.pathname, scope_header: scope, status: null, payload: body,
+              scene_before: textureSourceScene, acknowledgement: null, helper_ack: null,
+              ui_saved_ack_proven: false, ui_saved_ack_text: null,
+            };
+            const response = await route.fetch();
+            const raw = await response.body();
+            assert(raw.length <= MAX_API_BYTES, "P22 texture transaction acknowledgement exceeded its bound");
+            const acknowledgement = JSON.parse(raw.toString("utf8"));
+            textureReceipt.status = response.status();
+            textureReceipt.acknowledgement = acknowledgement;
+            const write = { method: request.method(), path: url.pathname, headers: request.headers(), body };
+            const helperAck = validateStageBUniformXResetExchange({
+              scene: textureSourceScene,
+              sceneRevision: revision,
+              statusSceneRevision: revision,
+              objectId: textureSourceProof.object_id,
+              sessionScopeKey: sessionScope(session),
+              writes: [write],
+              acknowledgement: { status: response.status(), body: acknowledgement },
+            });
+            textureReceipt.helper_ack = helperAck;
+            phase = "texture-save-acknowledged";
+            return route.fulfill({ response });
+          }
           if (mode === "material-stage-a") {
             const allowed = studyStageMaterialRequestAllowed({ method, path, scope, body },
               { phase, materialCount, session,
@@ -1276,14 +1494,16 @@ export async function runStudyStageRerun() {
           commandAttemptCount++;
           const allowed = studyStageRerunRequestAllowed(
             { method, path, scope, body },
-            { mode, session, expectedPrecondition, commandCount, phase },
+            { mode, session, expectedPrecondition, commandCount, phase,
+              idempotencyKey: request.headers()["idempotency-key"] },
           );
           if (!allowed || commandCount !== 0) {
             if (violations.length < 16) violations.push("Rejected a duplicate or out-of-scope Study command");
             return route.abort();
           }
           commandRequest = request;
-          commandReceipt = { method, path: url.pathname, status: null, scope_header: scope, payload: body };
+          commandReceipt = { method, path: url.pathname, status: null, scope_header: scope,
+            idempotency_key: request.headers()["idempotency-key"] ?? null, payload: body };
           commandCount++;
           uiCommandProven = true;
           outcome = "unknown";
@@ -1411,6 +1631,48 @@ export async function runStudyStageRerun() {
       beforeSnapshot = postMaterial;
       before = summary(postMaterial);
       expectedPrecondition = postMaterial.precondition;
+    }
+
+    if (mode === "texture-stage-b") {
+      const expandParent = async (parentId) => {
+        const parent = page.locator('[role="treeitem"][data-node-id="' + parentId + '"]');
+        await parent.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+        await parent.focus();
+        if (await parent.getAttribute("aria-expanded") !== "true") await parent.press("ArrowRight");
+      };
+      await expandParent("model:study");
+      await expandParent("model:study:stages");
+      await fillStageBUniformXResetInInspector(page, { objectId: textureSourceProof.object_id });
+      phase = "texture-save-submit";
+      const saveAck = await saveStageBResetAndWaitForAck(page, { timeout: Math.min(30_000, timerBudget()) });
+      if (!textureReceipt || textureTransactionCount !== 1 || textureTransactionAttemptCount !== 1
+          || !uiTextureProven || saveAck.status !== textureReceipt.status
+          || canonical(saveAck.body) !== canonical(textureReceipt.acknowledgement)) {
+        throw new Error("The real Stage B Inspector did not prove one exact saved reset transaction and ACK");
+      }
+      textureReceipt.ui_saved_ack_proven = true;
+      textureReceipt.ui_saved_ack_text = "Saved stage relax-b.";
+      const postTexture = await readSnapshot(session, { requireIdle: true, expectedStageIds: stageIds });
+      assert.equal(postTexture.currentRun.run_id, beforeClick.currentRun.run_id,
+        "Saving the Stage B recipe unexpectedly replaced the completed ABC run");
+      assert.equal(postTexture.scene.revision ?? postTexture.scene.scene_revision,
+        textureReceipt.helper_ack.sceneRevision, "Fresh scene revision differs from the exact Stage B save ACK");
+      assert.deepEqual(postTexture.resultIdentities, beforeClick.resultIdentities,
+        "Saving the Stage B recipe changed an immutable prior result identity");
+      assert.deepEqual(postTexture.stageIds, stageIds, "Saving Stage B changed the prior completed ABC scope");
+      assert.deepEqual(studyStageTextureBaselineState(postTexture.scene), textureBaselineState,
+        "Saving Stage B changed the accepted material, FDM cell geometry or global uniform +X m0");
+      const freshAProof = await readTextureSourceProof(postTexture);
+      assert.deepEqual(freshAProof, textureSourceProof,
+        "The accepted same-domain A source changed while saving the Stage B recipe");
+      beforeSnapshot = postTexture;
+      before = summary(postTexture);
+      expectedPrecondition = postTexture.precondition;
+      textureSourceScene = structuredClone(postTexture.scene);
+      await selectStageBAuthoredInitialState(page);
+      assert.equal(await page.getByLabel("Initial magnetization", { exact: true }).inputValue(), "authored_stage",
+        "The Stage B Inspector did not select its saved authored reset input");
+      phase = "texture-ready";
     }
 
     if (mode === "fdm-cell-study") {
@@ -1604,6 +1866,15 @@ export async function runStudyStageRerun() {
       assert.equal(await row.count(), 1, "The authored relax-b Explorer row is absent or duplicated");
       await row.click({ button: "right" });
       action = page.getByRole("menuitem", { name: "Run This Stage", exact: true });
+    } else if (mode === "texture-stage-b") {
+      const row = page.locator('[role="treeitem"][data-node-id="model:study:stages:stage:relax-b"]');
+      await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
+      assert.equal(await row.count(), 1, "The texture-stage-B Inspector row is absent or duplicated");
+      await row.click();
+      await selectStageBAuthoredInitialState(page);
+      assert.equal(await page.getByLabel("Initial magnetization", { exact: true }).inputValue(), "authored_stage",
+        "The real Stage B Inspector does not show the authored-stage initial state");
+      action = page.getByRole("button", { name: "Run this stage", exact: true });
     } else {
       const row = page.locator('[role="treeitem"][data-node-id="model:study"]');
       await row.waitFor({ state: "visible", timeout: Math.min(30_000, timerBudget()) });
@@ -1623,7 +1894,8 @@ export async function runStudyStageRerun() {
       { timeout: Math.min(20_000, timerBudget()) },
     ).catch((error) => { throw new Error("P22 command response was not observed: " + boundedMessage(error)); });
     phase = "ui-submit";
-    await action.click();
+    if (mode === "texture-stage-b") await clickRunStageBOnce(page);
+    else await action.click();
     const commandResponse = await deadline(responseWait, Math.min(20_000, timerBudget()),
       "P22 command response timed out; native outcome is unknown");
     if (!commandRequest || commandCount !== 1 || !uiCommandProven) {
@@ -1761,6 +2033,13 @@ export async function runStudyStageRerun() {
     const reloaded = await readSnapshot(session, { requireIdle: true, expectedStageIds: expectedAfterIds });
     assert.deepEqual(stableProjection(reloaded), stableProjection(afterSnapshot),
       "P22 reload changed the current run, scene, stage execution or result identities");
+    if (["texture-stage-b", "texture-study"].includes(mode)) {
+      assert.deepEqual(studyStageTextureBaselineState(reloaded.scene), textureBaselineState,
+        "P22 reload changed the texture profile material, grid or global +X m0");
+      assert.deepEqual(reloaded.sceneProfile.stage_b_texture_reset,
+        { stage_id: "relax-b", object_id: textureBaselineState.material.object_id, scope: "object", initializer: null },
+        "P22 reload lost or broadened the acknowledged B-local reset");
+    }
     const reloadedHistory = await readResults(before.run_id, session, studyStageExpectedStageIds(mode, "before"));
     assert.deepEqual(reloadedHistory, afterOldResults, "P22 reload changed prior immutable result identities");
     assert.equal(commandCount, 1, "P22 reload dispatched a second command");
@@ -1772,7 +2051,8 @@ export async function runStudyStageRerun() {
     outcome = "terminal-confirmed";
   } catch (error) {
     failure = boundedMessage(error);
-    if (commandCount === 1 || materialCount === 1 || fdmCellCount === 1 || gridRefreshCount === 1) {
+    if (commandCount === 1 || materialCount === 1 || fdmCellCount === 1 || gridRefreshCount === 1
+        || textureTransactionCount === 1) {
       outcome = "unknown";
       after = null;
       reloadProof = null;
@@ -1815,6 +2095,12 @@ export async function runStudyStageRerun() {
       fdm_cell_attempt_count: fdmCellAttemptCount,
       ui_fdm_cell_proven: uiFdmCellProven,
       fdm_material_initial_state: fdmMaterialBeforeState,
+      texture_source_proof: textureSourceProof,
+      texture_baseline_state: textureBaselineState,
+      texture_receipt: textureReceipt,
+      texture_transaction_count: textureTransactionCount,
+      texture_transaction_attempt_count: textureTransactionAttemptCount,
+      ui_texture_proven: uiTextureProven,
       grid_refresh_receipt: gridRefreshReceipt,
       grid_refresh_count: gridRefreshCount,
       grid_refresh_attempt_count: gridRefreshAttemptCount,

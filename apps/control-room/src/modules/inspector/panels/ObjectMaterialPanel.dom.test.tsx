@@ -83,15 +83,16 @@ vi.mock("@/kernel/resources/useResource", async (importOriginal) => {
       }) => Promise<unknown>;
       resourceKey: string;
     }) => {
+      const { enabled, load, resourceKey } = options;
       React.useEffect(() => {
-        if (!options.enabled) return;
+        if (!enabled) return;
         const controller = new AbortController();
         const record: { resourceKey: string; result?: unknown; error?: unknown } = {
-          resourceKey: options.resourceKey,
+          resourceKey: resourceKey,
         };
         mocks.resourceLoads.push(record);
-        void options.load({
-          resourceKey: options.resourceKey,
+        void load({
+          resourceKey: resourceKey,
           sessionScopeKey: SESSION_SCOPE,
           signal: controller.signal,
         }).then(
@@ -99,13 +100,13 @@ vi.mock("@/kernel/resources/useResource", async (importOriginal) => {
           (error: unknown) => { record.error = error; },
         );
         return () => controller.abort();
-      }, [options.enabled, options.load, options.resourceKey]);
+      }, [enabled, load, resourceKey]);
       return {
         data: null,
         error: null,
         refetch: mocks.refetch,
         revision: null,
-        status: options.enabled ? "loading" : "idle",
+        status: enabled ? "loading" : "idle",
       } as never;
     },
   };

@@ -96,6 +96,16 @@ STUDY_STAGE_FDM_CELL_SOURCES = {
     "api_client": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
     "api_paths": "apps/control-room/src/kernel/api/apiPaths.ts",
 }
+STUDY_STAGE_TEXTURE_SOURCES = {
+    "texture_helper": "apps/control-room/scripts/lib/study-texture-browser-qa.mjs",
+    "stage_inspector_router": "apps/control-room/src/modules/inspector/panels/StudyStageInspectorRouter.tsx",
+    "texture_editor": "apps/control-room/src/modules/inspector/panels/stages/StageTextureAssignmentsEditor.tsx",
+    "stage_authoring_model": "apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts",
+    "study_inspector_panel": "apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx",
+    "initial_state_selector": "apps/control-room/src/modules/inspector/panels/stages/StageInitialStateSelector.tsx",
+    "initial_state_model": "apps/control-room/src/kernel/runtime/studyStageInitialState.ts",
+    "api_client": "apps/control-room/src/kernel/api/ControlRoomApi.ts",
+}
 SAVED_PLAYBACK_RESULT_SCHEMA = "fullmag.docker-dev-saved-playback-result.v1"
 OPERATION_SCHEMA = "fullmag.docker-dev-browser-qa.v1"
 BROWSER_IMAGE_RE = re.compile(
@@ -452,13 +462,15 @@ def _validate_inspector_ack_hashes(value) -> None:
 
 
 def _study_stage_rerun_source_paths(mode: str) -> dict[str, str]:
-    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"}:
+    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun requires a fixed mode")
     sources = dict(STUDY_STAGE_RERUN_SOURCES)
     if mode == "material-stage-a":
         sources.update(STUDY_STAGE_MATERIAL_SOURCES)
     if mode == "fdm-cell-study":
         sources.update(STUDY_STAGE_FDM_CELL_SOURCES)
+    if mode in {"texture-stage-b", "texture-study"}:
+        sources.update(STUDY_STAGE_TEXTURE_SOURCES)
     return sources
 
 
@@ -1247,7 +1259,7 @@ def _compose_document(
     elif inspector_ack_source_sha256 is not None:
         raise BuildControlError("Inspector ACK source pins require their scenario")
     if study_stage_rerun is not None:
-        if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"}:
+        if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
             raise BuildControlError("Study stage rerun requires one of the fixed profiles")
         _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
@@ -1625,7 +1637,7 @@ def _validate_browser_helper(
         except BuildControlError as error:
             raise ControlOutcomeUnknown(str(error)) from error
         expected_pin = canonical(dict(study_stage_rerun_source_sha256)).decode("utf-8")
-        if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"}
+        if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}
                 or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
                 or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
                 or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
@@ -2947,23 +2959,27 @@ def _parse_inspector_ack_result(output, public_url, browser_url, expected_source
 
 
 def _study_stage_expected_ids(mode: str, phase: str) -> list[str]:
-    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"} or phase not in {"before", "after"}:
+    if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"} or phase not in {"before", "after"}:
         raise BuildControlError("Study stage rerun mode/phase is invalid")
     if phase == "before":
-        return ["relax-b"] if mode == "study" else ["relax-a"] if mode == "fdm-cell-study" else ["relax-a", "relax-b", "relax-c"]
+        return ["relax-b"] if mode in {"study", "texture-study"} else ["relax-a"] if mode == "fdm-cell-study" else ["relax-a", "relax-b", "relax-c"]
     if mode == "stage-b":
         return ["relax-b"]
     if mode == "material-stage-a":
         return ["relax-a"]
+    if mode == "texture-stage-b":
+        return ["relax-b"]
     return ["relax-a", "relax-b", "relax-c"]
 
 
-def _expected_study_stage_scene_profile() -> dict[str, object]:
-    return {
+def _expected_study_stage_scene_profile(
+    *, pipeline_version: str = "study_pipeline.v1", texture_object_id: str | None = None,
+) -> dict[str, object]:
+    profile = {
         "requested_backend": "fdm",
         "requested_device": "cpu",
         "requested_precision": "double",
-        "pipeline_version": "study_pipeline.v1",
+        "pipeline_version": pipeline_version,
         "stages": [
             {"id": "relax-a", "enabled": True, "node_kind": "primitive", "stage_kind": "relax",
              "relax_algorithm": "llg_overdamped", "max_steps": "10"},
@@ -2973,6 +2989,12 @@ def _expected_study_stage_scene_profile() -> dict[str, object]:
              "relax_algorithm": "nonlinear_cg", "max_steps": "1"},
         ],
     }
+    if pipeline_version == "study_pipeline.v2":
+        profile["stage_b_texture_reset"] = {
+            "stage_id": "relax-b", "object_id": texture_object_id,
+            "scope": "object", "initializer": None,
+        }
+    return profile
 
 
 STUDY_CAMERA_PATCH_KEY = "PATCH /v2/sessions/current/visualization/state"
@@ -3016,6 +3038,7 @@ def _validate_study_camera_patches(payload, session):
 
 STUDY_MATERIAL_TRANSACTION_KEY = "POST /v2/sessions/current/model/transactions"
 STUDY_FDM_CELL_TRANSACTION_KEY = "POST /v2/sessions/current/model/transactions"
+STUDY_TEXTURE_TRANSACTION_KEY = "POST /v2/sessions/current/model/transactions"
 STUDY_FDM_GRID_REFRESH_KEY = "POST /v2/sessions/current/simulation/commands"
 STUDY_FDM_CELL_TARGET = [1e-9, 2e-9, 2e-9]
 
@@ -3568,7 +3591,7 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
     precondition = before.get("precondition")
     expected_profile = {
         "domain_discretization": "fdm",
-        "domain_cell_count": 16 if expected_mode == "fdm-cell-study" else 8,
+        "domain_cell_count": 16 if expected_mode in {"fdm-cell-study", "texture-stage-b", "texture-study"} else 8,
         "domain_generation_id": precondition.get("domain_generation_id") if isinstance(precondition, Mapping) else None,
         "requested_backend": "fdm",
         "requested_device": "cpu",
@@ -3815,6 +3838,15 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
         or candidate.get("material_receipt") is not None or candidate.get("ui_material_proven") is not False
     ):
         return False
+    if expected_mode in {"texture-stage-b", "texture-study"} and (
+        type(candidate.get("texture_transaction_count")) is not int or candidate["texture_transaction_count"] != 0
+        or type(candidate.get("texture_transaction_attempt_count")) is not int
+        or candidate["texture_transaction_attempt_count"] != 0
+        or candidate.get("texture_receipt") is not None or candidate.get("ui_texture_proven") is not False
+        or candidate.get("command_count") != 0 or candidate.get("command_attempt_count") != 0
+        or candidate.get("command_receipt") is not None
+    ):
+        return False
     try:
         _validate_study_camera_patches(candidate, candidate.get("session_before"))
     except (BuildControlError, KeyError, TypeError, ValueError):
@@ -3851,6 +3883,8 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
             continue
         if key == ack_key and count <= 16:
             continue
+        if expected_mode in {"texture-stage-b", "texture-study"} and key == STUDY_TEXTURE_TRANSACTION_KEY:
+            return False
         if key == command_key and count == candidate["command_attempt_count"]:
             continue
         return False
@@ -3879,9 +3913,317 @@ def _study_stage_no_dispatch_proven(output: bytes, expected_sources, expected_mo
     )
 
 
+def _validate_study_texture_profile(payload, expected_mode, before, after, session, precondition):
+    if expected_mode not in {"texture-stage-b", "texture-study"}:
+        raise BuildControlError("Study texture validator received another profile")
+    baseline = payload.get("texture_baseline_state")
+    if (not isinstance(baseline, Mapping) or set(baseline) != {"material", "default_cell", "global_m0"}
+            or baseline.get("default_cell") != [1e-9, 2e-9, 2e-9]):
+        raise BuildControlError("Texture profile omitted its accepted sixteen-cell scene baseline")
+    material = baseline.get("material")
+    global_m0 = baseline.get("global_m0")
+    if (not isinstance(material, Mapping) or set(material) != {
+                "object_id", "material_id", "material_name", "properties", "magnetization_ref", "magnetization_asset_sha256"}
+            or material.get("object_id") != "film" or material.get("material_name") != "film material"
+            or material.get("properties") != {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None}
+            or not isinstance(material.get("material_id"), str) or not material["material_id"]
+            or not isinstance(material.get("magnetization_ref"), str) or not material["magnetization_ref"]
+            or not isinstance(material.get("magnetization_asset_sha256"), str)
+            or not SHA256_RE.fullmatch(material["magnetization_asset_sha256"])
+            or global_m0 != {"object_id": "film", "magnetization_ref": material.get("magnetization_ref"),
+                             "asset_sha256": material.get("magnetization_asset_sha256"),
+                             "preset_kind": "uniform", "direction": [1, 0, 0]}):
+        raise BuildControlError("Texture profile material, local grid or global m0 baseline differs")
+    reset = {"stage_id": "relax-b", "object_id": "film", "scope": "object", "initializer": None}
+    for label, snapshot in (("before", before), ("after", after)):
+        if (snapshot.get("texture_state") != reset
+                or snapshot.get("texture_baseline_state") != baseline
+                or snapshot.get("scene_profile") != _expected_study_stage_scene_profile(
+                    pipeline_version="study_pipeline.v2", texture_object_id="film")
+                or snapshot.get("profile", {}).get("domain_cell_count") != 16):
+            raise BuildControlError(f"Texture profile {label} did not retain the exact B-local reset and sixteen-cell state")
+
+    proof = payload.get("texture_source_proof")
+    stage_id = "relax-a" if expected_mode == "texture-stage-b" else "relax-b"
+    matching = [item for item in before.get("result_identities", [])
+                if isinstance(item, Mapping) and item.get("authored_stage_id") == stage_id]
+    if (not isinstance(proof, Mapping) or set(proof) != {
+                "authored_stage_id", "object_id", "run_id", "artifact_id", "artifact_sha256", "codec_id",
+                "codec_version", "authored_relation", "domain_relation", "supports_magnetization_input"}
+            or len(matching) != 1 or proof.get("authored_stage_id") != stage_id
+            or proof.get("object_id") != "film" or proof.get("run_id") != before.get("run_id")
+            or proof.get("artifact_id") != matching[0].get("artifact_id")
+            or proof.get("artifact_sha256") != matching[0].get("artifact_sha256")
+            or proof.get("codec_id") != matching[0].get("codec_id")
+            or proof.get("codec_version") != matching[0].get("codec_version")
+            or not isinstance(proof.get("artifact_sha256"), str)
+            or not SHA256_RE.fullmatch(proof["artifact_sha256"])
+            or proof.get("authored_relation") != "matching_authored_input"
+            or proof.get("domain_relation") != "matching_published_layout"
+            or proof.get("supports_magnetization_input") is not True):
+        raise BuildControlError("Texture profile source is not the exact current same-domain catalog result")
+    if payload.get("before", {}).get("texture_source_proof") != proof:
+        raise BuildControlError("Texture profile source proof is absent from the bounded baseline snapshot")
+
+    transaction_key = STUDY_TEXTURE_TRANSACTION_KEY
+    receipt = payload.get("texture_receipt")
+    count, attempts = payload.get("texture_transaction_count"), payload.get("texture_transaction_attempt_count")
+    if expected_mode == "texture-study":
+        if (count != 0 or attempts != 0 or receipt is not None or payload.get("ui_texture_proven") is not False):
+            raise BuildControlError("Texture-study must not author or submit another texture transaction")
+        return
+    if (type(count) is not int or count != 1 or type(attempts) is not int or attempts != 1
+            or payload.get("ui_texture_proven") is not True or not isinstance(receipt, Mapping)
+            or set(receipt) != {"method", "path", "scope_header", "status", "payload", "scene_before",
+                                "acknowledgement", "helper_ack", "ui_saved_ack_proven", "ui_saved_ack_text"}):
+        raise BuildControlError("Texture-stage-B must retain one UI transaction receipt")
+    expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+        session["session_epoch"], safe="") + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
+    scene_before = receipt.get("scene_before")
+    prior_revision = precondition.get("scene_revision") - 1
+    if (receipt.get("method") != "POST" or receipt.get("path") != "/v2/sessions/current/model/transactions"
+            or receipt.get("scope_header") != expected_scope or type(receipt.get("status")) is not int
+            or not 200 <= receipt["status"] < 300 or not isinstance(scene_before, Mapping)
+            or scene_before.get("revision") != prior_revision
+            or scene_before.get("study", {}).get("study_pipeline", {}).get("version") != "study_pipeline.v1"
+            or receipt.get("ui_saved_ack_proven") is not True
+            or receipt.get("ui_saved_ack_text") != "Saved stage relax-b."):
+        raise BuildControlError("Texture-stage-B transaction scope, revision or Inspector ACK is malformed")
+    expected_pipeline = deepcopy(scene_before["study"]["study_pipeline"])
+    nodes = expected_pipeline.get("nodes")
+    if not isinstance(nodes, list):
+        raise BuildControlError("Texture-stage-B transaction baseline pipeline is malformed")
+    targets = [node for node in nodes if isinstance(node, Mapping) and node.get("id") == "relax-b"]
+    if len(targets) != 1 or not isinstance(targets[0].get("payload"), Mapping):
+        raise BuildControlError("Texture-stage-B transaction is not bound to exactly one authored B")
+    expected_pipeline["version"] = "study_pipeline.v2"
+    expected_pipeline["nodes"] = [
+        ({**node, "payload": {**node["payload"], "stage_magnetization_assignments": {
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{"object_id": "film", "region_id": None, "initializer": None}],
+        }}} if node.get("id") == "relax-b" else node)
+        for node in nodes
+    ]
+    expected_request = {"kind": "merge_patch", "base_revision": prior_revision,
+                        "merge_patch": {"study": {"study_pipeline": expected_pipeline}}}
+    if canonical(receipt.get("payload")) != canonical(expected_request):
+        raise BuildControlError("Texture-stage-B transaction edits more than the exact B-local reset")
+    acknowledgement = receipt.get("acknowledgement")
+    committed = deepcopy(scene_before)
+    committed["revision"] = precondition["scene_revision"]
+    committed["study"]["study_pipeline"] = expected_pipeline
+    expected_ack = {"transaction_kind": "merge_patch", "scene_revision": precondition["scene_revision"],
+                    "committed_scene": committed}
+    if (canonical(acknowledgement) != canonical(expected_ack)
+            or receipt.get("helper_ack") != {"sceneRevision": precondition["scene_revision"],
+                                             "stageId": "relax-b", "objectId": "film"}):
+        raise BuildControlError("Texture-stage-B ACK differs from the exact revision-fenced committed scene")
+    if before.get("precondition", {}).get("scene_revision") != precondition.get("scene_revision"):
+        raise BuildControlError("Texture-stage-B command did not use the post-ACK scene revision")
+
+
+def _validate_study_texture_unknown_payload(payload, public_url, browser_url, expected_sources, expected_mode):
+    if (payload.get("state") != "outcome-unknown" or payload.get("outcome") != "unknown"
+            or not isinstance(payload.get("failure"), str) or not 1 <= len(payload["failure"]) <= 512
+            or payload.get("public_url") != public_url or payload.get("probe_url") != browser_url
+            or payload.get("playwright_version") != PLAYWRIGHT_VERSION
+            or payload.get("browser_gpu_mode") != "swiftshader-webgl-requested"
+            or payload.get("source_sha256_before") != expected_sources
+            or payload.get("source_sha256_after") != expected_sources):
+        raise BuildControlError("Texture unknown outcome omitted its source, browser or runtime pins")
+    session = payload.get("session_before")
+    if (not isinstance(session, Mapping) or payload.get("session_after") != session
+            or session.get("name") != "P22 three Relax stages"
+            or any(not isinstance(session.get(key), str) or not 1 <= len(session[key]) <= 512
+                   for key in ("session_id", "session_epoch", "request_scope_epoch"))):
+        raise BuildControlError("Texture unknown outcome changed its session or request scope")
+    before = payload.get("before")
+    if not isinstance(before, Mapping):
+        raise BuildControlError("Texture unknown outcome omitted its retained baseline")
+    expected_before = _study_stage_expected_ids(expected_mode, "before")
+    run_id = before.get("run_id")
+    precondition = before.get("precondition")
+    expected_cells = 16
+    if (not isinstance(run_id, str) or not run_id or before.get("run_status") != "completed"
+            or before.get("solver_state") != "awaiting_command" or before.get("execution_state") != "completed"
+            or before.get("stage_ids") != expected_before
+            or before.get("authored_stage_ids") != ["relax-a", "relax-b", "relax-c"]
+            or before.get("stage_statuses") != ["completed" if key in expected_before else "pending"
+                                                for key in ("relax-a", "relax-b", "relax-c")]
+            or before.get("completed_stage_indexes") != [index for index, key in enumerate(
+                ("relax-a", "relax-b", "relax-c")) if key in expected_before]
+            or before.get("profile", {}).get("domain_cell_count") != expected_cells
+            or before.get("profile", {}).get("script_sha256") != expected_sources["fixture"]
+            or before.get("profile", {}).get("script_path") != "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py"
+            or not isinstance(precondition, Mapping)
+            or precondition.get("current_run") != {"kind": "run", "run_id": run_id}
+            or precondition.get("runtime_state") != "awaiting_command"
+            or type(precondition.get("scene_revision")) is not int
+            or type(precondition.get("mesh_revision")) is not int
+            or not isinstance(precondition.get("domain_generation_id"), str)
+            or not precondition["domain_generation_id"]):
+        raise BuildControlError("Texture unknown outcome did not retain the exact sixteen-cell prior run")
+    baseline = payload.get("texture_baseline_state")
+    if (not isinstance(baseline, Mapping) or before.get("texture_baseline_state") != baseline
+            or baseline.get("default_cell") != [1e-9, 2e-9, 2e-9]
+            or baseline.get("material", {}).get("object_id") != "film"
+            or baseline.get("material", {}).get("material_name") != "film material"
+            or baseline.get("material", {}).get("properties") != {
+                "Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None}
+            or baseline.get("global_m0", {}).get("direction") != [1, 0, 0]
+            or baseline.get("global_m0", {}).get("preset_kind") != "uniform"):
+        raise BuildControlError("Texture unknown outcome changed or omitted the accepted scene baseline")
+    expected_reset = {"stage_id": "relax-b", "object_id": "film", "scope": "object", "initializer": None}
+    if (expected_mode == "texture-study" or payload.get("command_count") == 1):
+        if (before.get("texture_state") != expected_reset
+                or before.get("scene_profile") != _expected_study_stage_scene_profile(
+                    pipeline_version="study_pipeline.v2", texture_object_id="film")):
+            raise BuildControlError("Texture unknown command did not retain the acknowledged B-local recipe")
+    proof = payload.get("texture_source_proof")
+    stage_id = "relax-a" if expected_mode == "texture-stage-b" else "relax-b"
+    old_results = before.get("result_identities")
+    identities = [item for item in old_results if isinstance(item, Mapping)
+                  and item.get("authored_stage_id") == stage_id] if isinstance(old_results, list) else []
+    if (not isinstance(proof, Mapping) or len(identities) != 1
+            or proof.get("authored_stage_id") != stage_id or proof.get("run_id") != run_id
+            or proof.get("artifact_id") != identities[0].get("artifact_id")
+            or proof.get("artifact_sha256") != identities[0].get("artifact_sha256")
+            or proof.get("authored_relation") != "matching_authored_input"
+            or proof.get("domain_relation") != "matching_published_layout"
+            or proof.get("supports_magnetization_input") is not True
+            or before.get("texture_source_proof") != proof):
+        raise BuildControlError("Texture unknown outcome does not retain the exact same-domain source identity")
+
+    tx_count = payload.get("texture_transaction_count")
+    tx_attempts = payload.get("texture_transaction_attempt_count")
+    receipt = payload.get("texture_receipt")
+    if (type(tx_count) is not int or tx_count not in (0, 1) or type(tx_attempts) is not int
+            or tx_attempts != tx_count or payload.get("ui_texture_proven") is not (tx_count == 1)
+            or (expected_mode == "texture-study" and (tx_count != 0 or receipt is not None))
+            or (tx_count == 0 and receipt is not None)
+            or (tx_count == 1 and not isinstance(receipt, Mapping))):
+        raise BuildControlError("Texture unknown outcome has inconsistent save attempt evidence")
+    if tx_count:
+        expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
+            session["session_epoch"], safe="") + "&request_scope_epoch=" + quote(
+                session["request_scope_epoch"], safe="")
+        if (receipt.get("method") != "POST" or receipt.get("path") != "/v2/sessions/current/model/transactions"
+                or receipt.get("scope_header") != expected_scope
+                or not isinstance(receipt.get("payload"), Mapping)
+                or not isinstance(receipt.get("scene_before"), Mapping)
+                or receipt.get("scene_before", {}).get("study", {}).get("study_pipeline", {}).get("version") != "study_pipeline.v1"
+                or type(receipt.get("status")) is not int and receipt.get("status") is not None
+                or receipt.get("ui_saved_ack_proven") is True and receipt.get("ui_saved_ack_text") != "Saved stage relax-b."):
+            raise BuildControlError("Texture unknown outcome transaction receipt is malformed")
+        scene_before = receipt["scene_before"]
+        pipeline = deepcopy(scene_before["study"]["study_pipeline"])
+        nodes = pipeline.get("nodes")
+        if not isinstance(nodes, list) or sum(1 for node in nodes if node.get("id") == "relax-b") != 1:
+            raise BuildControlError("Texture unknown outcome transaction is not bound to exact authored B")
+        pipeline["version"] = "study_pipeline.v2"
+        pipeline["nodes"] = [
+            ({**node, "payload": {**node["payload"], "stage_magnetization_assignments": {
+                "schema_version": "fullmag.magnetization-assignments.v1",
+                "assignments": [{"object_id": "film", "region_id": None, "initializer": None}],
+            }}} if node.get("id") == "relax-b" else node) for node in nodes
+        ]
+        expected_request = {"kind": "merge_patch", "base_revision": scene_before.get("revision"),
+                            "merge_patch": {"study": {"study_pipeline": pipeline}}}
+        if canonical(receipt.get("payload")) != canonical(expected_request):
+            raise BuildControlError("Texture unknown outcome attempted edits outside the one B-local reset")
+        if receipt.get("status") is None:
+            if receipt.get("acknowledgement") is not None or receipt.get("helper_ack") is not None:
+                raise BuildControlError("Texture unknown outcome claims an ACK without an HTTP response")
+        elif receipt.get("acknowledgement") is None:
+            raise BuildControlError("Texture unknown outcome omitted the response body for a dispatched save")
+        elif 200 <= receipt["status"] < 300:
+            committed = deepcopy(scene_before)
+            committed["revision"] = scene_before.get("revision") + 1
+            committed["study"]["study_pipeline"] = pipeline
+            expected_ack = {"transaction_kind": "merge_patch", "scene_revision": committed["revision"],
+                            "committed_scene": committed}
+            expected_helper_ack = {"sceneRevision": committed["revision"], "stageId": "relax-b", "objectId": "film"}
+            if (canonical(receipt.get("acknowledgement")) != canonical(expected_ack)
+                    or receipt.get("helper_ack") != expected_helper_ack
+                    or (receipt.get("ui_saved_ack_proven") is True
+                        and receipt.get("ui_saved_ack_text") != "Saved stage relax-b.")):
+                raise BuildControlError("Texture unknown outcome changed or misreported the acknowledged B reset")
+
+    command_count = payload.get("command_count")
+    command_attempts = payload.get("command_attempt_count")
+    if (type(command_count) is not int or command_count not in (0, 1)
+            or type(command_attempts) is not int or command_attempts != command_count
+            or payload.get("ui_command_proven") is not (command_count == 1)
+            or payload.get("command_receipt") is not None and command_count == 0):
+        raise BuildControlError("Texture unknown outcome overstates or repeats its compute command")
+    if command_count:
+        command_receipt = payload["command_receipt"]
+        command = command_receipt.get("payload") if isinstance(command_receipt, Mapping) else None
+        stage_target = expected_mode == "texture-stage-b"
+        expected_target = ({"kind": "stage_id", "stage_id": "relax-b"} if stage_target
+                           else {"kind": "study"})
+        if (not isinstance(command, Mapping) or command.get("target") != expected_target
+                or command_receipt.get("method") != "POST"
+                or command_receipt.get("path") != "/v2/sessions/current/simulation/commands"
+                or command_receipt.get("scope_header") != ("session=" + quote(session["session_id"], safe="")
+                    + "&epoch=" + quote(session["session_epoch"], safe="") + "&request_scope_epoch="
+                    + quote(session["request_scope_epoch"], safe=""))
+                or command.get("precondition") != precondition
+                or command.get("reason") != "user_requested"
+                or not isinstance(command.get("client_intent_id"), str)
+                or command_receipt.get("idempotency_key") != command.get("client_intent_id") and stage_target
+                or (stage_target and command.get("initial_state") != {
+                    "kind": "authored_initial_state", "source": {"kind": "stage",
+                        "scene_revision": precondition["scene_revision"], "stage_id": "relax-b"}})
+                or (not stage_target and "initial_state" in command)):
+            raise BuildControlError("Texture unknown outcome command receipt is not the exact one-shot target")
+    if (payload.get("after") is not None or payload.get("reload_proof") is not None
+            or payload.get("history_identity_preserved") is not None
+            or payload.get("public_terminal_proven") is not False
+            or payload.get("native_execution_proven") is not False
+            or payload.get("field_data_proven") is not False):
+        raise BuildControlError("Texture unknown outcome claims terminal or native proof after an incomplete observation")
+    _validate_study_camera_patches(payload, session)
+    request_counts = payload.get("request_counts")
+    command_key = "POST /v2/sessions/current/simulation/commands"
+    ack_key = "POST /v2/sessions/current/visualization/client-acks"
+    if (not isinstance(request_counts, Mapping) or not 1 <= len(request_counts) <= 128
+            or request_counts.get(command_key, 0) != command_attempts
+            or request_counts.get(STUDY_TEXTURE_TRANSACTION_KEY, 0) != tx_count):
+        raise BuildControlError("Texture unknown outcome request inventory disagrees with observed dispatches")
+    for key, count in request_counts.items():
+        if (not isinstance(key, str) or " " not in key or type(count) is not int or count < 1 or count > 512):
+            raise BuildControlError("Texture unknown outcome request inventory is malformed")
+        method, path = key.split(" ", 1)
+        if method == "GET" and path.startswith("/v2/"):
+            continue
+        if key == STUDY_TEXTURE_TRANSACTION_KEY and tx_count == 1:
+            continue
+        if key == command_key and command_attempts == 1:
+            continue
+        if key == STUDY_CAMERA_PATCH_KEY and count <= 4:
+            continue
+        if key == ack_key and count <= 16:
+            continue
+        raise BuildControlError("Texture unknown outcome attempted another API mutation")
+    read_counts = payload.get("read_counts")
+    required_reads = {"status", "current_session", "scene", "commands", "current_run", "stage_execution",
+                      "solver_status", "stage_results", "command_details"}
+    if (not isinstance(read_counts, Mapping) or set(read_counts) != required_reads
+            or any(type(value) is not int or value < 0 or value > 512 for value in read_counts.values())
+            or payload.get("violations") != []):
+        raise BuildControlError("Texture unknown outcome omitted its bounded reads or strict request guard")
+    if (type(payload.get("total_requests")) is not int
+            or payload["total_requests"] != sum(request_counts.values()) or payload["total_requests"] > 512
+            or payload.get("request_limit") != 512 or payload.get("request_path_limit") != 128
+            or payload.get("per_path_read_limit") != 128):
+        raise BuildControlError("Texture unknown outcome exceeded its request budget")
+    return dict(payload)
+
+
 def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode):
     _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
-    if expected_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"}:
+    if expected_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun expected mode is invalid")
     if not isinstance(output, bytes) or len(output) > MAX_RESULT_BYTES:
         raise BuildControlError("Study stage rerun result exceeds its evidence budget")
@@ -3900,6 +4242,10 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("mode") != expected_mode):
         raise BuildControlError("Study stage rerun helper reported another scenario or mode")
     if payload.get("outcome") == "unknown":
+        if expected_mode in {"texture-stage-b", "texture-study"}:
+            return _validate_study_texture_unknown_payload(
+                payload, public_url, browser_url, expected_sources, expected_mode,
+            )
         if expected_mode == "material-stage-a" and payload.get("command_count") == 0:
             return _validate_material_stage_a_unknown_payload(
                 payload, public_url, browser_url, expected_sources,
@@ -3947,7 +4293,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     expected_after = _study_stage_expected_ids(expected_mode, "after")
     expected_profile = {
         "domain_discretization": "fdm",
-        "domain_cell_count": 16 if expected_mode == "fdm-cell-study" else 8,
+        "domain_cell_count": 16 if expected_mode in {"fdm-cell-study", "texture-stage-b", "texture-study"} else 8,
         "domain_generation_id": precondition.get("domain_generation_id"),
         "requested_backend": "fdm",
         "requested_device": "cpu",
@@ -3955,6 +4301,11 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         "script_sha256": expected_sources["fixture"],
         "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
     }
+    expected_scene_profile = _expected_study_stage_scene_profile(
+        pipeline_version="study_pipeline.v2" if expected_mode in {"texture-stage-b", "texture-study"} else "study_pipeline.v1",
+        texture_object_id=(before.get("texture_baseline_state", {}).get("material", {}).get("object_id")
+                           if expected_mode in {"texture-stage-b", "texture-study"} else None),
+    )
     for value, expected_ids, label in (
         (before, expected_before, "before"),
         (after, expected_after, "after"),
@@ -3970,7 +4321,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
                 or value.get("completed_stage_indexes") != [
                     index for index, stage_id in enumerate(("relax-a", "relax-b", "relax-c"))
                     if stage_id in expected_ids]
-                or value.get("scene_profile") != _expected_study_stage_scene_profile()
+                or value.get("scene_profile") != expected_scene_profile
                 or not isinstance(value.get("profile"), Mapping)
                 or any(value["profile"].get(key) != expected for key, expected in expected_profile.items())
                 ):
@@ -4042,15 +4393,23 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
           or payload.get("fdm_material_initial_state") is not None):
         raise BuildControlError("Study rerun profile reported an unrequested FDM-grid edit")
 
+    if expected_mode in {"texture-stage-b", "texture-study"}:
+        _validate_study_texture_profile(payload, expected_mode, before, after, session, precondition)
+    elif (payload.get("texture_transaction_count", 0) != 0
+          or payload.get("texture_transaction_attempt_count", 0) != 0
+          or payload.get("texture_receipt") is not None or payload.get("ui_texture_proven", False) is not False
+          or payload.get("texture_source_proof") is not None or payload.get("texture_baseline_state") is not None):
+        raise BuildControlError("Study rerun profile reported an unrequested texture edit")
+
     receipt = payload.get("command_receipt")
     command = receipt.get("payload") if isinstance(receipt, Mapping) else None
     expected_scope = "session=" + quote(session["session_id"], safe="") + "&epoch=" + quote(
         session["session_epoch"], safe=""
     ) + "&request_scope_epoch=" + quote(session["request_scope_epoch"], safe="")
-    stage_target = {"kind": "stage_id", "stage_id": "relax-b" if expected_mode == "stage-b" else "relax-a"}
+    stage_target = {"kind": "stage_id", "stage_id": "relax-b" if expected_mode in {"stage-b", "texture-stage-b"} else "relax-a"}
     expected_command = (
         {"kind": "relax", "target": stage_target}
-        if expected_mode in {"stage-b", "material-stage-a"}
+        if expected_mode in {"stage-b", "material-stage-a", "texture-stage-b"}
         else {"kind": "solve", "target": {"kind": "study"}}
     )
     if (not isinstance(receipt, Mapping)
@@ -4064,13 +4423,19 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or command.get("precondition") != precondition
             or not isinstance(command.get("client_intent_id"), str)
             or not command["client_intent_id"].startswith(
-                "study:" + ("relax" if expected_mode in {"stage-b", "material-stage-a"} else "solve") + ":")
+                "study:" + ("relax" if expected_mode in {"stage-b", "material-stage-a", "texture-stage-b"} else "solve") + ":")
             or len(command["client_intent_id"]) > 128
             or command.get("reason") != "user_requested"
             or type(command.get("requested_at_unix_ms")) is not int
             or command["requested_at_unix_ms"] <= 0):
         raise BuildControlError("Study stage rerun command receipt has the wrong method, scope or target")
-    if expected_mode in {"stage-b", "material-stage-a"}:
+    if expected_mode == "texture-stage-b":
+        if command.get("initial_state") != {"kind": "authored_initial_state", "source": {
+                "kind": "stage", "scene_revision": precondition["scene_revision"], "stage_id": "relax-b"}}:
+            raise BuildControlError("Texture-stage-B command did not pin the saved authored-stage input")
+        if receipt.get("idempotency_key") != command.get("client_intent_id"):
+            raise BuildControlError("Texture-stage-B command idempotency key differs from its client intent")
+    elif expected_mode in {"stage-b", "material-stage-a"}:
         if command.get("initial_state") != {"kind": "default_for_target"}:
             raise BuildControlError("Stage B command did not retain its default target initial state")
     elif "initial_state" in command:
@@ -4080,7 +4445,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or payload.get("ui_command_proven") is not True):
         raise BuildControlError("Study stage rerun did not submit exactly one command")
     expected_binding = {"requested_target": expected_command["target"], "run_id": new_run}
-    if expected_mode in {"stage-b", "material-stage-a"}:
+    if expected_mode in {"stage-b", "material-stage-a", "texture-stage-b"}:
         expected_binding["step_id"] = stage_target["stage_id"]
     if receipt.get("execution_binding") != expected_binding:
         raise BuildControlError("Study stage rerun terminal run is not bound to its accepted PPM command")
@@ -4140,7 +4505,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or canvas.get("quantity_id") != "m" or canvas.get("label_visible") is not True
             or canvas.get("field_state") != "data-ready"
             or type(canvas.get("fdm_model_count")) is not int
-            or canvas["fdm_model_count"] != (16 if expected_mode == "fdm-cell-study" else 8)):
+            or canvas["fdm_model_count"] != (16 if expected_mode in {"fdm-cell-study", "texture-stage-b", "texture-study"} else 8)):
         raise BuildControlError("Study stage rerun omitted its same-run reload, history or WebGL proof")
 
     read_counts = payload.get("read_counts")
@@ -4176,6 +4541,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         elif expected_mode == "fdm-cell-study" and key == STUDY_FDM_CELL_TRANSACTION_KEY:
             if count != 1:
                 raise BuildControlError("FDM-cell-study transaction count differs from one")
+        elif expected_mode == "texture-stage-b" and key == STUDY_TEXTURE_TRANSACTION_KEY:
+            if count != 1:
+                raise BuildControlError("Texture-stage-B transaction count differs from one")
         elif key != command_key or count != (2 if expected_mode == "fdm-cell-study" else 1):
             raise BuildControlError("Study stage rerun attempted an unexpected or duplicate mutation")
     if (request_counts.get(command_key) != (2 if expected_mode == "fdm-cell-study" else 1)
@@ -4186,6 +4554,10 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
         raise BuildControlError("Study stage rerun command request count differs from one")
     if expected_mode == "material-stage-a" and request_counts.get(STUDY_MATERIAL_TRANSACTION_KEY) != 1:
         raise BuildControlError("Material-stage-A omitted its single scoped material transaction")
+    if expected_mode == "texture-stage-b" and request_counts.get(STUDY_TEXTURE_TRANSACTION_KEY) != 1:
+        raise BuildControlError("Texture-stage-B omitted its single scoped B-local transaction")
+    if expected_mode == "texture-study" and request_counts.get(STUDY_TEXTURE_TRANSACTION_KEY, 0) != 0:
+        raise BuildControlError("Texture-study reported an unrequested B-local transaction")
     if expected_mode == "fdm-cell-study":
         _validate_study_fdm_request_inventory(payload, 1, 1)
     if any(payload.get(key) != [] for key in ("violations", "errors", "proxy_failures")):
@@ -5285,7 +5657,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     elif inspector_ack_sources is not None:
         raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
     if study_stage_rerun:
-        if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study"}
+        if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"}
                 or _study_stage_rerun_source_sha256(selected, study_stage_rerun_mode)
                 != study_stage_rerun_sources):
             raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
@@ -5687,7 +6059,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
     parser.add_argument(
         "--study-stage-rerun",
-        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study"),
+        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"),
         help="Run one fixed P22 UI-only Study stage profile and verify public results",
     )
     parser.add_argument(

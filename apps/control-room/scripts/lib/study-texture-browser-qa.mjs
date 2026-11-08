@@ -202,10 +202,10 @@ export async function fillStageBUniformXResetInInspector(page, { objectId = "fil
   await stageBRow(page).click();
   await requireStageBSelected(page);
   await page.getByRole("button", { name: STAGE_B_TEXTURE_SELECTORS.addTextureChange, exact: true }).click();
-  await page.getByLabel(STAGE_B_TEXTURE_SELECTORS.magneticObject, { exact: true }).selectOption(objectId);
-  await page.getByLabel(STAGE_B_TEXTURE_SELECTORS.applyTo, { exact: true })
+  await page.getByRole("combobox", { name: STAGE_B_TEXTURE_SELECTORS.magneticObject, exact: true }).selectOption(objectId);
+  await page.getByRole("combobox", { name: STAGE_B_TEXTURE_SELECTORS.applyTo, exact: true })
     .selectOption(STAGE_B_TEXTURE_SELECTORS.applyToObjectValue);
-  await page.getByLabel(STAGE_B_TEXTURE_SELECTORS.texture, { exact: true })
+  await page.getByRole("combobox", { name: STAGE_B_TEXTURE_SELECTORS.texture, exact: true })
     .selectOption(STAGE_B_TEXTURE_SELECTORS.resetToUniformXValue);
   await page.getByRole("button", { name: STAGE_B_TEXTURE_SELECTORS.addToStage, exact: true }).click();
 }
@@ -221,6 +221,9 @@ export async function saveStageBResetAndWaitForAck(page, { timeout = 30_000 } = 
       return false;
     }
   }, { timeout });
+  // Keep a failed click or context cleanup from orphaning this pending observer.
+  // Awaiting the original promise below still propagates an actual response failure.
+  void responsePromise.catch(() => undefined);
   await page.getByRole("button", { name: STAGE_B_TEXTURE_SELECTORS.saveStage, exact: true }).click();
   const response = await responsePromise;
   const body = await response.json();
@@ -232,7 +235,7 @@ export async function saveStageBResetAndWaitForAck(page, { timeout = 30_000 } = 
 /** Pin the authored B input after the local reset has been saved and acknowledged. */
 export async function selectStageBAuthoredInitialState(page) {
   await requireStageBSelected(page);
-  const selector = page.getByLabel(STAGE_B_TEXTURE_SELECTORS.initialMagnetization, { exact: true });
+  const selector = page.getByRole("combobox", { name: STAGE_B_TEXTURE_SELECTORS.initialMagnetization, exact: true });
   await selector.selectOption(STAGE_B_TEXTURE_SELECTORS.authoredStageValue);
 }
 
