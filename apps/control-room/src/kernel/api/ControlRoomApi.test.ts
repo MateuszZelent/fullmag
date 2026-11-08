@@ -1099,6 +1099,54 @@ describe("ControlRoomApi", () => {
     expect(requests.every((request) => !request.url.includes("session="))).toBe(true);
   });
 
+  it("returns null for an absent current energy sample with session and API instance pins", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const sessionScopeKey = "session=project-a&epoch=project-a%40123";
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      expectedApiInstance: pin,
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return new Response(null, {
+          headers: { ...contractHeaders, "x-fullmag-api-instance": pin },
+          status: 204,
+        });
+      },
+    });
+
+    await expect(
+      api.simulation.solver.energies.current({ sessionScopeKey }),
+    ).resolves.toBeNull();
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/solver/energies/current",
+    );
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe(sessionScopeKey);
+    expect(observedHeaders.get("x-fullmag-api-instance")).toBe(pin);
+  });
+
+  it("keeps the API instance fence on a no-content current energy response", async () => {
+    const api = new ControlRoomApi({
+      expectedApiInstance: "12345678-1234-4234-8234-123456789abc",
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: {
+            ...contractHeaders,
+            "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+          },
+          status: 204,
+        }),
+    });
+
+    await expect(api.simulation.solver.energies.current()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+  });
+
   it("routes full visualization replacements through scoped typed PUT requests", async () => {
     const scope = "session=project-a&epoch=project-a%40123";
     const requests: Array<{ method: string | undefined; scope: string | null; url: string }> = [];

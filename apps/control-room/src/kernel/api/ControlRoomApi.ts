@@ -3893,7 +3893,7 @@ export class ControlRoomApi {
     solver: {
       energies: {
         current: (options?: RequestOptions) =>
-          this.requestJson<SolverEnergyCurrentResource>(
+          this.requestOptionalJson<SolverEnergyCurrentResource>(
             SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
             options,
           ),

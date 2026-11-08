@@ -1874,13 +1874,14 @@ pub async fn get_solver_status(
     path = "/v2/sessions/current/simulation/solver/energies/current",
     responses(
         (status = 200, description = "Current solver energy sample", body = SolverEnergyCurrentResource),
-        (status = 404, description = "No solver energy data"),
+        (status = 204, description = "No current solver energy sample is available"),
+        (status = 404, description = "No active workspace"),
     ),
     tag = "simulation"
 )]
 pub async fn get_solver_energies_current(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<SolverEnergyCurrentResource>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -1893,13 +1894,14 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let selected = current_solver_energy_resource_for_snapshot(
+    let Some(selected) = current_solver_energy_resource_for_snapshot(
         snapshot,
         &request_context.request_scope_epoch,
-    )
-    .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
+    ) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
 
-    Ok(Json(selected))
+    Ok(Json(selected).into_response())
 }
 
 /// Resolve readiness and value from the same source-qualified selection used

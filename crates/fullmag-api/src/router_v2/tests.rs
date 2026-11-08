@@ -29072,6 +29072,83 @@ async fn solver_energies_current_endpoint_returns_latest_energy_sample() {
 }
 
 #[tokio::test]
+async fn solver_energies_current_endpoint_returns_empty_204_when_workspace_has_no_sample() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test]
+async fn solver_energies_current_endpoint_returns_zero_as_a_real_sample() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scalar_rows = vec![serde_json::from_value(serde_json::json!({
+            "kind": "physical_observation",
+            "step": 0,
+            "time": 0.0,
+            "solver_dt": 1.0e-15,
+            "mx": 1.0,
+            "my": 0.0,
+            "mz": 0.0,
+            "e_ex": 0.0,
+            "e_demag": 0.0,
+            "e_ext": 0.0,
+            "e_ani": 0.0,
+            "e_dmi": 0.0,
+            "e_total": 0.0,
+            "max_dm_dt": 0.0,
+            "max_h_eff": 0.0,
+            "max_h_demag": 0.0
+        }))
+        .expect("zero physical scalar sample")];
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["step"], 0);
+    assert_eq!(json["total"], 0.0);
+}
+
+#[tokio::test]
+async fn solver_energies_current_endpoint_keeps_404_without_live_workspace() {
+    let app = build_v2_router().with_state(test_app_state());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/energies/current")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn session_status_reports_current_energy_readiness_when_endpoint_has_a_sample() {
     let app = test_router_with_runtime_read_models().await;
     let response = app
@@ -48925,10 +49002,15 @@ fn openapi_status_schema_remains_thin_and_owned() {
         "capabilities".to_string(),
         "energies".to_string(),
         "metrics".to_string(),
+        "solver_energy_current_available".to_string(),
     ]);
     assert_eq!(
         status_props, expected,
         "LiveStatus may contain only summaries, capabilities, and revision pointers"
+    );
+    assert_eq!(
+        schemas["LiveStatus"]["properties"]["solver_energy_current_available"]["type"],
+        "boolean"
     );
 }
 
