@@ -147,7 +147,9 @@ test("rejects reset bound to A or C instead of B", () => {
     const exchange = successfulExchange({
       mutateRequest(body) {
         const children = body.merge_patch.study.study_pipeline.nodes[0].children;
-        children.find((node) => node.id === wrongStageId).payload.stage_magnetization_assignments =
+        const target = children.find((node) => node.id === wrongStageId);
+        assert(target, "the negative fixture must contain its target stage");
+        target.payload.stage_magnetization_assignments =
           children[1].payload.stage_magnetization_assignments;
         delete children[1].payload.stage_magnetization_assignments;
       },

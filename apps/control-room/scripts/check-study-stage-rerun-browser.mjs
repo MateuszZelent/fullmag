@@ -10,6 +10,7 @@ import { startBrowserQaLoopbackProxy } from "./lib/browser-qa-loopback-proxy.mjs
 const schema = "fullmag.docker-dev-study-stage-rerun-result.v1";
 const scenario = "study-stage-rerun";
 const sessionName = "P22 three Relax stages";
+const sessionRoutePath = "/session/p22-three-relax-stages";
 const fixtureRuntimePath = "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py";
 const stageIds = ["relax-a", "relax-b", "relax-c"];
 const statusPath = "/v2/sessions/current/status";
@@ -41,6 +42,7 @@ const sourceFiles = {
   stage_builder: new URL("../src/modules/explorer/builders/study/studyStageCommon.ts", import.meta.url),
   command_adapter: new URL("../src/kernel/runtime/studyRuntimeCommandAdapters.ts", import.meta.url),
   command_contributions: new URL("../src/kernel/runtime/studyRuntimeCommandContributions.ts", import.meta.url),
+  tab_routes: new URL("../src/kernel/layout/tabRoutes.ts", import.meta.url),
   study_compute_input: new URL("../src/kernel/runtime/studyComputeInput.ts", import.meta.url),
 };
 const materialSourceFiles = {
@@ -1692,11 +1694,14 @@ export async function runStudyStageRerun() {
     after = summary(afterSnapshot);
     after.preserved_prior_result_identities = afterOldResults;
     phase = "reload-observation";
+    await page.waitForURL((url) => url.pathname === sessionRoutePath
+      && url.origin === proxy.origin && url.search === "",
+    { timeout: Math.min(15_000, timerBudget()) });
     const reloadResponse = await page.reload({
       waitUntil: "domcontentloaded", timeout: Math.min(60_000, timerBudget()),
     });
     assert.equal(reloadResponse?.status(), 200, "P22 reload did not return HTTP 200");
-    assert.equal(new URL(page.url()).pathname, "/workspace", "P22 reload changed the workspace route");
+    assert.equal(new URL(page.url()).pathname, sessionRoutePath, "P22 reload changed the named session route");
     const home = page.locator('.fm-home-overlay[data-state="home-overlay"]');
     if (await home.isVisible().catch(() => false)) {
       await page.getByRole("button", { name: "Back to simulation", exact: true }).click();
@@ -1743,7 +1748,7 @@ export async function runStudyStageRerun() {
     assert.deepEqual(reloadedHistory, afterOldResults, "P22 reload changed prior immutable result identities");
     assert.equal(commandCount, 1, "P22 reload dispatched a second command");
     assert.equal(commandAttemptCount, 1, "P22 reload attempted a second command");
-    reloadProof = { status: 200, path: "/workspace", run_id: reloaded.currentRun.run_id,
+    reloadProof = { status: 200, path: sessionRoutePath, run_id: reloaded.currentRun.run_id,
       command_count: commandCount, command_attempt_count: commandAttemptCount,
       stable_projection: true, history_identity_preserved: true, canvas };
     publicTerminalProven = true;
@@ -1752,6 +1757,10 @@ export async function runStudyStageRerun() {
     failure = boundedMessage(error);
     if (commandCount === 1 || materialCount === 1 || fdmCellCount === 1 || gridRefreshCount === 1) {
       outcome = "unknown";
+      after = null;
+      reloadProof = null;
+      historyIdentityPreserved = null;
+      publicTerminalProven = false;
     }
   } finally {
     const afterHashes = await sourceHashes(mode).catch((error) => {

@@ -74,6 +74,7 @@ STUDY_STAGE_RERUN_SOURCES = {
     "stage_builder": "apps/control-room/src/modules/explorer/builders/study/studyStageCommon.ts",
     "command_adapter": "apps/control-room/src/kernel/runtime/studyRuntimeCommandAdapters.ts",
     "command_contributions": "apps/control-room/src/kernel/runtime/studyRuntimeCommandContributions.ts",
+    "tab_routes": "apps/control-room/src/kernel/layout/tabRoutes.ts",
     "study_compute_input": "apps/control-room/src/kernel/runtime/studyComputeInput.ts",
 }
 STUDY_STAGE_MATERIAL_SOURCES = {
@@ -4127,7 +4128,7 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
     reload = payload.get("reload_proof")
     canvas = reload.get("canvas") if isinstance(reload, Mapping) else None
     if (not isinstance(reload, Mapping) or reload.get("status") != 200
-            or reload.get("path") != "/workspace" or reload.get("run_id") != new_run
+            or reload.get("path") != "/session/p22-three-relax-stages" or reload.get("run_id") != new_run
             or type(reload.get("command_count")) is not int or reload["command_count"] != 1
             or type(reload.get("command_attempt_count")) is not int or reload["command_attempt_count"] != 1
             or reload.get("stable_projection") is not True or reload.get("history_identity_preserved") is not True

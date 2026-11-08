@@ -2893,7 +2893,7 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
 class StudyStageRerunContractTests(unittest.TestCase):
     SOURCE_KEYS = (
         "runner", "loopback_proxy", "fixture", "scene_adapter", "tree_view", "study_nodes",
-        "stage_builder", "command_adapter", "command_contributions", "study_compute_input",
+        "stage_builder", "command_adapter", "command_contributions", "study_compute_input", "tab_routes",
     )
 
     @classmethod
@@ -3187,7 +3187,7 @@ assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},so
                 "result_identities": new_results,
                 "preserved_prior_result_identities": deepcopy(before_results),
             },
-            "reload_proof": {"status": 200, "path": "/workspace", "run_id": new_run,
+            "reload_proof": {"status": 200, "path": "/session/p22-three-relax-stages", "run_id": new_run,
                 "command_count": 1, "command_attempt_count": 1,
                 "stable_projection": True, "history_identity_preserved": True,
                 "canvas": {"visible": True, "context_type": "WebGL2RenderingContext", "context_lost": False,
@@ -3419,6 +3419,8 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     completed_stage_indexes=[1] if mode == "material-stage-a" else [0])),
                 ("missing reload", lambda item: item.pop("reload_proof")),
                 ("reload foreign run", lambda item: item["reload_proof"].update(run_id="foreign")),
+                ("reload foreign route", lambda item: item["reload_proof"].update(path="/session/foreign-session")),
+                ("reload generic route", lambda item: item["reload_proof"].update(path="/workspace")),
                 ("reload duplicate submit", lambda item: item["reload_proof"].update(command_attempt_count=2)),
                 ("reload history lost", lambda item: item["reload_proof"].update(history_identity_preserved=False)),
                 ("reload context lost", lambda item: item["reload_proof"]["canvas"].update(context_lost=True)),
