@@ -256,7 +256,7 @@ case "${recipe}" in
       exec "${python_cmd}" -B "${script_dir}/docker_volume_stop_failed.py" "${prepared_stop_args[@]}"
       exit 0
     fi
-    volume_stop_failed_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_stop_failed.py\" --source-root '[^']+' --container-id '[0-9a-f]{64}' --image-id 'sha256:[0-9a-f]{64}' --process-receipt-sha256 '[0-9a-f]{64}'[[:space:]]*$"
+    volume_stop_failed_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_stop_failed.py\" --source-root '[^']+' --container-id '[0-9a-f]{64}' --image-id 'sha256:[0-9a-f]{64}' --process-receipt-sha256 '[0-9a-f]{64}'( --terminal-only)?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${volume_stop_failed_pattern} ]]; then
       echo "[fullmag just] invalid failed DEV supervisor stop recipe" >&2
       exit 2

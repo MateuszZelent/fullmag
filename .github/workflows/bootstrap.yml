@@ -138,6 +138,8 @@ jobs:
           cargo test -p fullmag-session --lib read_transaction
           cargo test -p fullmag-runtime-control --lib accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event
           cargo test -p fullmag-runtime-control --lib failed_no_spawn_stop_without_start_preserves_public_stop_fence_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib no_spawn_genesis_recovers_only_exact_immutable_admission_and_replays
+          cargo test --locked -p fullmag-runtime-control --lib step_output_inputs_are_derived_from_the_current_successful_attempt
           cargo test --locked -p fullmag-runtime-control --lib tests::accepted_task_stop_waits_for_writer_before_recovery_without_duplicating_stop -- --exact
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
@@ -303,7 +305,8 @@ jobs:
 
       - name: Run canonical FEM marker and artifact contracts
         run: |
-          cargo test --locked -p fullmag-fem-sys --lib versioned_stt_extension_is_append_only_after_legacy_plan_prefix
+          cargo test --locked -p fullmag-fem-sys --features build-native --lib versioned_stt_extension_is_append_only_after_legacy_plan_prefix
+          cargo test --locked -p fullmag-api --lib sequential_physical_pipeline_counts_only_enabled_physical_steps
           cargo test --locked -p fullmag-plan --lib materialized_input_preserves_full_u32_markers
           cargo test --locked -p fullmag-antenna-artifacts --lib canonical_attributes_preserve_u32_without_accepting_invalid_ranges
 
@@ -965,6 +968,10 @@ jobs:
           python -B scripts/test_docker_activation_history_output.py -v
           python -B scripts/test_docker_activation_history_references.py -v
           python -B scripts/test_docker_container_runtime_recovery.py -v
+          python -B scripts/test_docker_pending_admission_build.py -v
+          python -B scripts/test_docker_dev_recovery_build.py -v
+          python -B scripts/test_docker_volume_claimed_interruption.py -v
+          python -B scripts/test_docker_volume_no_spawn_cancellation.py -v
           python -B scripts/test_docker_volume_container_recovery.py -v
           python -B scripts/test_linux_native_device_preparation.py -v
           python -B scripts/test_docker_linux_host_readmission.py -v

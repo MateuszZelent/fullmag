@@ -59,8 +59,12 @@ pub fn compile_accepted_closed_loop_pipeline(
     let mut bindings = Vec::new();
     let mut previous = None;
     let mut previous_state:Option<String> = None;
+    let mut previous_physical = None;
     for execution in &compiled.executions {
         let source = execution.stage.provenance.as_ref().context("compiled execution has no authored identity")?;
+        if execution.stage.action.is_none() {
+            validate_physical_state_predecessor(previous_physical, &execution.stage.ir)?;
+        }
         let (kind,until_seconds,inputs,outputs)=match &execution.stage.action {
             Some(ResolvedScriptStageAction::AntennaClosedLoopInspection{input,requested_execution,output_id})=>{
                 let operation=fullmag_plan::validate_closed_loop_operation(&execution.stage.ir,&input.stage.id,&input.port.id,output_id)?;
@@ -84,7 +88,7 @@ pub fn compile_accepted_closed_loop_pipeline(
         let execution_binding=if explicit {snapshot_execution.get(&source.authored_step_id).context("physical snapshot lost its pinned execution profile")?} else {&captured.execution};
         entries.push(StudyProblemCatalogEntry::from_captured_materialized_step(&step, execution.stage.ir.clone(), execution_binding.clone(), references.identity.clone()).with_context(||format!("unsupported execution-intent mutation in authored step `{}`; accepted v4 never rebinds the captured profile", source.authored_step_id))?);
         bindings.push(json!({"execution_id":execution.execution_id,"authored_step_id":source.authored_step_id,"expansion_index":source.expansion_index,"ancestor_group_ids":source.ancestor_group_ids,"label":source.label,"notes":source.notes,"source":source.source,"problem_sha256":references.identity.problem_sha256}));
-        if matches!(&step.kind,StudyStepKind::Primitive{..}) {previous_state=Some(execution.execution_id.clone());}
+        if matches!(&step.kind,StudyStepKind::Primitive{..}) {previous_state=Some(execution.execution_id.clone());previous_physical=Some(&execution.stage.ir);}
         previous = Some(execution.execution_id.clone());
         steps.push(step);
     }
@@ -98,6 +102,13 @@ pub fn compile_accepted_closed_loop_pipeline(
     let source_reference = ImmutableAssetReference { asset_id:SCRIPT_PIPELINE_SOURCE_ASSET_ID.into(),content_sha256:crate::study_artifact_content_sha256(&source_bytes) };
     validate_accepted_script_pipeline_source(&study,&catalog,&source_bytes)?;
     Ok(AcceptedScriptPipeline { study,catalog,source_bytes,source_reference })
+}
+
+fn validate_physical_state_predecessor(previous: Option<&fullmag_ir::ProblemIR>, current: &fullmag_ir::ProblemIR) -> Result<()> {
+    if previous.is_some_and(|previous| !crate::script_stage_materialization::compatible_physical_state_topology(previous, current)) {
+        bail!("accepted physical state chain requires compatible runtime topology");
+    }
+    Ok(())
 }
 
 /// Physical ports reuse the existing State payload; the input name is not its data kind.
@@ -223,6 +234,7 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
     }
     let mut previous:Option<String>=None;
     let mut previous_state:Option<String>=None;
+    let mut previous_physical = None;
     for (step,execution) in study.steps.iter().zip(executions) {
         strict_keys(execution,&["execution_id","authored_step_id","expansion_index","ancestor_group_ids","label","notes","source","problem_sha256"])?;
         let node=nodes.iter().find(|n| n["authored_step_id"]==execution["authored_step_id"]).context("source execution owner missing")?;
@@ -243,6 +255,7 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
                 fullmag_plan::validate_closed_loop_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
             },
             StudyStepKind::Primitive{..}=>{
+                validate_physical_state_predecessor(previous_physical, entry.problem())?;
                 let node=crate::script_pipeline_compilation::authored_node(&authored.nodes,execution["authored_step_id"].as_str().context("physical source ID missing")?).context("physical source node missing")?;
                 let (kind,horizon,inputs,outputs)=physical_step_contract(node,entry.problem(),step.until_seconds.unwrap_or(0.0),previous_state.as_deref())?;
                 if step.kind!=kind || step.until_seconds!=horizon || step.inputs!=inputs || step.outputs!=outputs
@@ -250,6 +263,7 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
                     bail!("physical source operation, horizon or exact predecessor state chain differs");
                 }
                 previous_state=Some(step.step_id.clone());
+                previous_physical=Some(entry.problem());
             },
             _=>bail!("unsupported accepted source operation"),
         }
@@ -320,6 +334,36 @@ mod tests {
         assert_eq!(compiled.study.steps[1].completion_dependencies,vec![compiled.study.steps[0].step_id.clone()]);
         for step in &compiled.study.steps {assert_eq!(step.outputs,vec![StudyOutputPort{port_id:"final_state".into(),data_kind:StudyPortDataKind::State}]);}
         validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&compiled.source_bytes).unwrap();
+    }
+    #[test]
+    fn physical_chain_refuses_incompatible_topology_before_acceptance() {
+        let mut config=physical_config();
+        if let fullmag_ir::GeometryEntryIR::Box {size,..}=&mut config.stages[1].ir.geometry.entries[0] {
+            size[0] *= 2.0;
+        } else {panic!("expected box fixture");}
+        config.stages[1].ir.validate().unwrap();
+        config.ir=config.stages[1].ir.clone();
+        let error=compile_physical(config).err().expect("incompatible state chain must refuse");
+        assert!(error.to_string().contains("compatible runtime topology"),"{error:#}");
+    }
+    #[test]
+    fn cold_source_refuses_incompatible_physical_state_even_with_valid_capture_hashes() {
+        let compiled=compile_physical(physical_config()).unwrap();
+        let mut study=compiled.study.clone();
+        let old=&compiled.catalog.entries()[1];
+        let mut problem=old.problem().clone();
+        if let fullmag_ir::GeometryEntryIR::Box {size,..}=&mut problem.geometry.entries[0] {size[0]*=2.0;}
+        let refs=capture_study_input_references(&study.steps[1].step_id,&problem).unwrap();
+        study.steps[1].model=refs.model;
+        study.steps[1].solver_config=refs.solver_config;
+        study.steps[1].discretization=refs.discretization;
+        let entry=StudyProblemCatalogEntry::from_captured_materialized_step(&study.steps[1],problem,
+            old.execution_materialization().unwrap().clone(),refs.identity.clone()).unwrap();
+        let catalog=StudyProblemCatalog::from_entries(&study,vec![compiled.catalog.entries()[0].clone(),entry]).unwrap();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        source["executions"][1]["problem_sha256"]=json!(refs.identity.problem_sha256);
+        let error=validate_accepted_script_pipeline_source(&study,&catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("compatible runtime topology"),"{error:#}");
     }
     #[test]
     fn physical_contract_refuses_another_activation_identity() {

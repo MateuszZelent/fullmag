@@ -1230,6 +1230,24 @@
       "lane": "FDM/FEM authoring and planning",
       "tests": "script_imported_run_preserves_each_adaptive_snapshot_and_explicit_clear",
       "evidence_status": "source-test"
+    },
+    {
+      "id": "accepted_physical_state_chain",
+      "path": "crates/fullmag-application/src/script_pipeline_acceptance.rs",
+      "symbol": "compile_accepted_closed_loop_pipeline",
+      "responsibility": "Bind required final_state to next initial_state only for compatible physical topology; refuse unsupported transitions before acceptance."
+    },
+    {
+      "id": "accepted_physical_pipeline_route",
+      "path": "crates/fullmag-api/src/live_accepted_execution.rs",
+      "symbol": "has_sequential_physical_pipeline",
+      "responsibility": "Route whole sequential Run/Relax Study through source-bound v4 execution while preserving selected-step scope."
+    },
+    {
+      "id": "revalidate_typed_state_binding",
+      "path": "crates/fullmag-runtime-control/src/study.rs",
+      "symbol": "resolve_step_output_inputs",
+      "responsibility": "Preserve admitted typed bindings for repeated resolution and require exact canonical manifest/CAS revalidation before materializing initial magnetization."
     }
   ],
   "public_api": {

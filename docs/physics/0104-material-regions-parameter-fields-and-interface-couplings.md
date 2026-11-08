@@ -1583,3 +1583,15 @@ must include:
 | Scene material export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_geometries_from_override` | Exact material coefficients from scene overrides. |
 | Transition width export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_material_transition_kwargs` | Exact metric transition width. |
 | Coupling strength export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_couplings` | Exact exchange scale and coupling energy strengths. |
+
+Całe liniowe Study z co najmniej dwoma aktywnymi Run/Relax korzysta z producenta
+v4 wiążącego źródło i profile wykonania. Kolejny etap wymaga artefaktu
+`final_state` poprzedniego etapu jako `initial_state`. Jest to przekazanie
+magnetyzacji, bez zachowania historii integratora. Zgodność topologii i toru
+wykonania jest obowiązkowa; nieobsługiwany transfer lub akcja powoduje odmowę
+przed akceptacją Run. Jawny wybór pojedynczego etapu zachowuje swój zakres.
+
+Ponowna walidacja przypiętego wejścia State zachowuje jego typed binding;
+tożsamość i digest pochodzą z opublikowanego katalogu, a kodek i CAS są ponownie
+sprawdzane względem niezmiennego manifestu producenta. Metadane nie mogą
+powodować resetu stanu ani pozwalać na podmianę payloadu.

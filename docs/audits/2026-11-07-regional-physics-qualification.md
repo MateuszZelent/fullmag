@@ -675,3 +675,68 @@ zależności. Poprawiono osłonę (gałąź produkcyjna z MFEM nie zmienia zacho
 i kolejność joba. Weryfikacja konfiguracji bez MFEM, nowe regresje Rust oraz
 końcowe review/integracja/retencja pozostają bramkami CI i cyklu zamknięcia;
 nie są zastępowane powyższymi wynikami runtime.
+
+## Dodatkowa kontrola sekwencji Run — 8 listopada
+
+Test dwóch RK45 o różnych politykach i zmianie czasu drugiego etapu ujawnił
+dwa błędy workflow poza wcześniejszymi zielonymi macierzami regionów. A2
+potwierdziła dokładną politykę każdego Run, lecz starszy accepted adapter v2
+nie tworzył State edges: drugi Run zaczynał od authored m. Błąd ciągłości
+wynosił 0.01741947, a względny błąd energii 0.3999976. A3 została odrzucona
+przed Run przez limit aggregate capture: katalog źródła obejmował wszystkie
+dowody. Nowa próba używa własnego małego podkatalogu, bez zmiany limitów.
+
+A4 skorzystała z v4 i zakończyła pierwszy etap. Podczas admission drugiego
+scheduler odrzucił ponownie rozwiązywany, już typowany input jako niezgodny
+z beztypową projekcją katalogu. Owner jest Failed; drugi task nie uruchomił
+workera, lecz zachowuje aktywną lease i Pending permit. Dowody A4 są zapisane
+w parze skrypt/Zarr; A4 **nie kwalifikuje ciągłości**. Recovery ma osobny
+[plan](../superpowers/plans/2026-11-08-regional-pre-prepare-recovery.md),
+z exact admission pins i bez ręcznej zmiany owner/lease ani replay Solve.
+Dopóki nowa próba i końcowe CI nie przejdą, integracja pozostaje otwarta.
+
+### Zamknięcie dodatkowych bramek runtime — A5 PASS
+
+Po poprawieniu routingu do v4, kontroli topologii rzeczywistego poprzednika
+fizycznego i idempotentnego rozwiązywania typed State wykonano nową A5.
+Run `run-live-6b57363ec0307ef8f14ff610ec510df7c08b4cd8866d64ac64ce5cf2bd80ffeb`
+zakończył oba taski jako Succeeded; oficjalny launcher zwrócił Completed/0.
+Jedna przypięta komenda Compute: `fm-37527d50-e613-44b7-b5d1-dfa518633174`.
+Pierwszy etap: 9 kroków / 2 ps; drugi: 21 kroków / 3 ps. Obie pełne polityki
+RK45 są identyczne z autorskim snapshotem. Zgodność po łącznych 5 ps:
+
+| Miara | Wynik A5 | Pierwotny próg |
+|---|---:|---:|
+| Ciągłość m: początek drugiego vs koniec pierwszego | 0 | 1e-14 |
+| Maksymalny błąd składowej m względem analityki | 2.220446049e-16 | 5e-8 |
+| Maksymalny względny błąd energii obu etapów | 8.786223792e-16 | 1e-6 |
+| Maksymalny błąd normy | 2.220446049e-16 | 1e-10 |
+
+CPU/double bez fallbacku. Nowe etapy przenoszą m, bez obietnicy zachowania
+historii integratora. Oba zestawy pól, skalarów, kroków i provenance oraz
+niezmienne StudyPlan/StudyCatalog/definition są w
+`adaptive_continuity_a5/regional_adaptive_capture_a5.zarr`. Źródło skryptu:
+`638d63b427be5f3711294f6876a7f240843eaf25190b3e6db80afe935801b073`.
+Managed build `518c4fa2ea53468e96cb2d5819b3b0b0`, natywny kontrakt
+`87085fe7192a46a9b2f68f5e716c6765` — succeeded. Zbudowany snapshot:
+`723c5a0bb214b7088734a1998edf98484bc5133a41d36737134f77f4af05c51e`
+(HEAD `1a995003ed32ee31423d94c56d8ea51a68841891` + własna delta).
+Dowód dotyczy tego snapshotu; późniejsza korekta wyłącznego zakresu flagi
+stop OOM jest zmianą hostowego operatora, bez zmiany kodu obliczeniowego.
+
+A4 nie została powtórzona. Native operator odtworzył brakujące puste genesis
+z immutable admission i opublikował Stop/Cancelled/WorkerNoSpawn wyłącznie
+dla niewystartowanego drugiego taska. Operacja
+`58babead52c6416c9a37f837329f2ebe`, proof
+`01d61f886ea8a60a6951615f8aeee62ef3115cf31459589f431bfb12c32fd803`,
+release proof `dd6e8515864ed458a220d2dbdb236908123126379eb44618058ccb38fc4addd2`.
+Pierwszy task i wszystkie wyniki zachowano. Stop grupy
+`9cb9f85ca7c347d0a466e2b87a5aeae1` potwierdził terminalne taski i zwolnione
+lease; jawny terminal-only observer nie czyta dużych payloadów wyników.
+
+Nowe regresje Python: pending build/filesystem 4, repair build 30, collector
+22, no-spawn 9, Linux observer 82, failed stop 55, shell dispatch 19 — PASS.
+Regresje Rust dla admission/genesis, typed input replay oraz adaptive capture
+są obowiązkowymi krokami bootstrap CI; ich wynik jest niezależny od tego
+dowodu runtime. Końcowy stan CI i integracji pozostaje w PR #418 oraz
+w rejestrze worktree; ta sekcja nie zastępuje tych bramek.

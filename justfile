@@ -63,8 +63,8 @@ fullmag-dev-container script source_root="" port="" gpu_access="auto":
 docker-dev-codegen source_root="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" codegen-openapi {{if source_root == "" { "" } else { "--source-root " + quote(source_root) } }}
 # Stop only a pinned supervisor whose failed admission already reaped the API.
-docker-dev-stop-failed source_root container_id image_id process_receipt_sha256:
-    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}
+docker-dev-stop-failed source_root container_id image_id process_receipt_sha256 terminal_only="false":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_volume_stop_failed.py" --source-root {{quote(source_root)}} --container-id {{quote(container_id)}} --image-id {{quote(image_id)}} --process-receipt-sha256 {{quote(process_receipt_sha256)}}{{if terminal_only == "true" { " --terminal-only" } else if terminal_only == "false" { "" } else { error("terminal_only must be true or false") } }}
 
 # Explicit preview by default; --apply requires the reviewed plan SHA and resume additionally its intent SHA.
 docker-dev-stop-prepared-unclaimed source_root container_id image_id process_receipt_sha256 activation_attempt target target_sha256 apply="false" expected_plan_sha256="" continue_intent_sha256="":

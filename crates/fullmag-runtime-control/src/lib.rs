@@ -816,7 +816,7 @@ pub use scheduler::{
     accepted_run_has_scheduler_ready_task, accepted_run_step_is_preparation_frontier,
     accepted_run_step_is_preparation_frontier_from_snapshot,
     accepted_run_step_is_scheduler_ready, accepted_run_step_is_scheduler_ready_from_snapshot,
-    resume_next_admitted_accepted_task_with_host,
+    resume_next_admitted_accepted_task_with_host, ensure_admitted_task_coordinator_genesis,
     schedule_next_ready_accepted_task, schedule_next_ready_accepted_task_with_host,
     ScheduledAcceptedTask,
 };
@@ -906,6 +906,38 @@ mod tests {
     #[test]
     fn accepted_task_stop_is_durable_idempotent_and_terminal_after_stopped_event() {
         assert_task_stop_recovery(false, false);
+    }
+
+    #[test]
+    fn no_spawn_genesis_recovers_only_exact_immutable_admission_and_replays() {
+        let directory=tempfile::tempdir().unwrap();
+        let store=SessionStore::open(directory.path().join("store")).unwrap();
+        let mut task=TaskRecord::new(RunId::parse("run-admitted-genesis").unwrap(),"a".repeat(64)).unwrap();
+        task.queue().unwrap();
+        store.commit_run_catalog(&FmsRunCatalog {
+            schema_version:FMS_RUN_CATALOG_SCHEMA.into(),run_id:task.run_id.as_str().into(),revision:1,updated_at:chrono::Utc::now(),
+            tasks:vec![FmsTaskCatalogEntry {task_id:task.task_id.as_str().into(),input_fingerprint:task.input_fingerprint.clone(),
+                lifecycle:FmsTaskLifecycle::Queued,readiness:FmsTaskReadiness::Ready,observation:None,attempt_id:None,
+                ownership_epoch:None,resolved_input_fingerprint:None,artifact_ids:vec![],resource_id:None,
+                coordinator_watermark:None,coordinator_genesis:None}],
+        }).unwrap();
+        let claim=task.claim(ResourceLease::new("cpu-genesis",ResourceKind::Cpu,ResourceBudget {
+            cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1,
+        }).unwrap()).unwrap();
+        commit_claimed_task_admission(&store,&task,&claim).unwrap();
+        assert!(recover_coordinator(&store,&claim).is_err());
+        let mut stale=claim.clone();stale.lease.lease_token=fullmag_application::LeaseToken::new();
+        assert!(ensure_admitted_task_coordinator_genesis(&store,&stale).is_err());
+        ensure_admitted_task_coordinator_genesis(&store,&claim).unwrap();
+        let first=store.read_run_catalog(claim.run_id.as_str()).unwrap().unwrap();
+        ensure_admitted_task_coordinator_genesis(&store,&claim).unwrap();
+        assert_eq!(store.read_run_catalog(claim.run_id.as_str()).unwrap().unwrap(),first);
+        let recovered=recover_coordinator(&store,&claim).unwrap();
+        assert!(recovered.commands.is_empty() && recovered.events.is_empty());
+        request_failed_no_spawn_task_stop(&store,&claim.run_id,claim.task_id.as_str(),"exact no-spawn regression").unwrap();
+        let replay=recover_coordinator(&store,&claim).unwrap();
+        assert_eq!(replay.commands.len(),1);
+        assert!(matches!(replay.commands[0].command,WorkerCommand::Stop{..}));
     }
 
     #[test]

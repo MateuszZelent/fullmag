@@ -87,3 +87,10 @@ na ext4 WSL. Zachować cudze zmiany, dane, control, leases i provenance.
 Checkpoint 8.11: sekcje 2–3 mają dowody w raporcie audytu (native263de8/c1458c,
 convergence_a4 i relaxation_campaign_a3). Sekcja 4 pozostaje otwarta do
 końcowego CI, integracji oraz rzeczywistej retencji i wycofania worktree.
+
+Dodatkowy gate z review: dwie polityki RK45 + zmiana czasu drugiego Run
+wymagały naprawy routingu, State edges i ponownego rozwiązywania typed input.
+A5 PASS przy pierwotnych progach, po kwalifikowanym recovery A4.
+[Dowody i ograniczenia](../../audits/2026-11-07-regional-physics-qualification.md#zamknięcie-dodatkowych-bramek-runtime--a5-pass),
+[plan recovery](2026-11-08-regional-pre-prepare-recovery.md).
+To nie zastępuje checklisty integracji z Zadania 4.

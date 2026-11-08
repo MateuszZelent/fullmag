@@ -843,6 +843,11 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
     }
 }
 
+pub(crate) fn compatible_physical_state_topology(previous: &ProblemIR, current: &ProblemIR) -> bool {
+    requested_device(previous) == requested_device(current)
+        && same_runtime_state_topology(previous, current)
+}
+
 fn same_runtime_state_topology(previous: &ProblemIR, current: &ProblemIR) -> bool {
     previous.backend_policy.requested_backend == current.backend_policy.requested_backend
         && previous.backend_policy.execution_precision == current.backend_policy.execution_precision

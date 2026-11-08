@@ -926,6 +926,35 @@ fn validate_admission_matches_claim(
     Ok(())
 }
 
+/// Restore only the empty coordinator genesis of an immutable admission.
+/// The failed/no-spawn operator must independently fence owner and host permit.
+/// This publishes no Prepare, Start, task cancellation or lease release.
+pub fn ensure_admitted_task_coordinator_genesis(store: &SessionStore, claim: &TaskClaim) -> Result<()> {
+    let _writer = store.write_transaction()?;
+    let catalog = store.read_run_catalog(claim.run_id.as_str())?.context("admitted genesis requires run catalog")?;
+    let task = catalog.tasks.iter().find(|task| task.task_id == claim.task_id.as_str())
+        .context("admitted genesis task is missing")?;
+    if task.attempt_id.as_deref() != Some(claim.attempt_id.as_str())
+        || task.ownership_epoch != Some(claim.ownership_epoch.value()) {
+        bail!("admitted genesis claim is stale");
+    }
+    let has_journal = store.read_coordinator_journal(claim.run_id.as_str())?.iter().any(|entry|
+        entry.task_id == claim.task_id.as_str() && entry.attempt_id == claim.attempt_id.as_str()
+            && entry.ownership_epoch == claim.ownership_epoch.value());
+    if task.coordinator_genesis.is_some() || task.coordinator_watermark.is_some() || has_journal {
+        return Ok(()); // Existing recovery validates the complete causal chain.
+    }
+    let admission = store.read_task_admission(claim.run_id.as_str(),claim.task_id.as_str(),claim.attempt_id.as_str())?
+        .context("admitted genesis requires immutable admission")?;
+    validate_admission_matches_claim(&admission,task,claim)?;
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Preparing || &admission.task != task {
+        bail!("fresh admitted task differs from its immutable admission");
+    }
+    let coordinator = WorkerCoordinator::new(task_record_from_admission(&admission,claim)?,claim.clone())?;
+    crate::commit_coordinator_genesis(store,&coordinator.checkpoint())?;
+    Ok(())
+}
+
 fn task_record_from_admission(
     admission: &fullmag_session::FmsTaskAdmissionRecord,
     claim: &TaskClaim,
