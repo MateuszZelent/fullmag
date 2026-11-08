@@ -5149,3 +5149,16 @@ Szczegóły i pełne piny w2026-11-08-corner25-post-update-experiment-result.md.
 Gotowy zakres aktualizacji i jednej nowej warunkowej próby pozostaje
 niewykonany/do decyzji. W tej kontynuacji nie wykonano nowego Prepare/Solve,
 buildu ani restartu. Nadal nie ma nowegoeta/I/H i kwalifikacji źródła.
+
+
+## Checkpoint 08.11.2026 — zgoda na aktualizację, odmowa odczytowego preflightu
+
+Użytkownik zatwierdził aktualizację i jedną warunkową próbę corner25.
+Przed wywołaniem recepty kontrola bieżącej sesji odmówiła: wcześniejszy eksport model/syncs
+utworzył kanoniczny scene_document.py, a saved-authoring wymaga script=null.
+Scena zgadza się dokładnie z trwałym FMS; run=null, kolejka pusta i workers0.
+Nie zatrzymano usług; build0, Prepare0, Submit0. Nie ponawiano operacji.
+
+[Diagnoza i konkretny projekt naprawy preflightu](2026-11-08-generated-authoring-restart-preflight-proposal.md).
+Wymagane rozszerzenie chronionego checkpointu nie jest wdrożone. Stary pakiet
+nadal działa. Nie ma nowegoeta/I/H ani potwierdzonej zgodności z publikacją.
