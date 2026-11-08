@@ -1548,7 +1548,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
 
         before = loaded.problem.to_ir(include_geometry_assets=False)
         after = rewritten.problem.to_ir(include_geometry_assets=False)
-        self.assertIn("fm.thermal_noise(temperature=300, seed=123)", rendered)
+        self.assertIn("fm.thermal_noise(temperature=300.0, seed=123)", rendered)
         self.assertEqual(after["temperature"], before["temperature"])
         self.assertEqual(after["energy_terms"], before["energy_terms"])
 
