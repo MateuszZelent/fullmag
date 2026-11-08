@@ -677,6 +677,64 @@ def _read_live_development(
     return current, backend_id, frontend_id, frontend_volume, frontend_inputs
 
 
+def _read_unchanged_frontend_preflight(control, original, selected, identity):
+    """Use the verified live group after an authenticated, pre-mutation refusal.
+
+    The failed current/terminal remains the admission fence; this is a read
+    interpretation, never a replacement or invented successful DEV receipt.
+    """
+    from docker_volume_activate import _validate_running_group
+
+    inputs = original.get("inputs", {})
+    parent = inputs.get("frontend_refresh_from_attempt")
+    if not isinstance(parent, str) or re.fullmatch(r"[0-9a-f]{32}", parent) is None:
+        raise BuildControlError("Frontend preflight has no pinned predecessor")
+    if (original.get("schema") != "fullmag.docker-build-operation.v1"
+            or original.get("phase") != "development"
+            or original.get("state") != "failed-confirmed"
+            or original.get("compose_project") != control.project
+            or original.get("control_volume") != control.volume
+            or inputs.get("source_root") != str(selected)
+            or inputs.get("native_build_requested") is not False
+            or not str(original.get("error", "")).endswith(
+                "RuntimeError: Frontend refresh requires an empty healthy API")):
+        raise BuildControlError("Frontend failure is not an initial empty-API refusal")
+    root = "development/attempts/" + original["attempt"]
+    # These are persisted BEFORE the first service stop. Their absence and
+    # the exact refusal distinguish the first health fence from later ones.
+    for name in ("rollback-compose.json", "rollback-development-inputs.json", "compose.json"):
+        if control.read(root + "/" + name, optional=True) is not None:
+            raise BuildControlError("Frontend refusal crossed its pre-mutation boundary")
+    verified = control.read("development/verified.json")
+    if (not isinstance(verified, Mapping) or verified.get("attempt") != parent
+            or verified.get("state") != "succeeded" or verified.get("phase") != "development"
+            or verified.get("compose_project") != control.project
+            or verified.get("control_volume") != control.volume
+            or verified.get("inputs", {}).get("source_root") != str(selected)
+            or verified.get("inputs", {}).get("image_id") != inputs.get("image_id")
+            or verified.get("config_sha256") != inputs.get("frontend_refresh_from_config_sha256")
+            or verified.get("backend_volumes") != original.get("backend_volumes")
+            or verified.get("frontend_volume") != original.get("previous_frontend_volume")
+            or verified.get("state_root") != original.get("state_root")):
+        raise BuildControlError("Frontend preflight predecessor identity differs")
+    base = "development/attempts/" + parent
+    if canonical(control.read(base + "/terminal.json")) != canonical(verified):
+        raise BuildControlError("Frontend predecessor verified/terminal records differ")
+    document = control.read(base + "/compose.json")
+    if hashlib.sha256(canonical(document)).hexdigest() != verified["config_sha256"]:
+        raise BuildControlError("Frontend predecessor configuration differs")
+    image = inputs.get("image_id")
+    if not isinstance(image, str) or not IMAGE_ID_RE.fullmatch(image):
+        raise BuildControlError("Frontend predecessor image must be immutable")
+    ids = _validate_running_group(control, identity, document, verified, image,
+                                  source_root=str(selected))
+    if ids != (verified.get("backend_container"), verified.get("frontend_container")):
+        raise BuildControlError("Frontend predecessor service identities changed")
+    return {**verified, "development_terminal_state": original["state"],
+            "preflight_failure_attempt": original["attempt"],
+            "preflight_failure_sha256": hashlib.sha256(canonical(original)).hexdigest()}
+
+
 def _read_recovered_development(control, original, selected, identity):
     """Resolve an authenticated recovery without rewriting the original receipt."""
     from docker_volume_activate import _linked_runtime_terminals, _validate_running_group
@@ -688,6 +746,8 @@ def _read_recovered_development(control, original, selected, identity):
     terminal = control.read(root + "/terminal.json")
     if canonical(terminal) != canonical(original):
         raise BuildControlError("Development current differs from its terminal receipt")
+    if isinstance(original.get("inputs"), Mapping) and "frontend_refresh_from_attempt" in original["inputs"]:
+        return _read_unchanged_frontend_preflight(control, original, selected, identity)
     document = control.read(root + "/compose.json")
     config_sha256 = hashlib.sha256(canonical(document)).hexdigest()
     if original.get("config_sha256") not in (None, config_sha256):
@@ -1247,6 +1307,7 @@ def _compose_document(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    expect_fdm_cell_physics: bool = False,
 ) -> dict[str, object]:
     if type(inspector_ack) is not bool:
         raise BuildControlError("Inspector ACK scenario marker must be boolean")
@@ -1283,6 +1344,19 @@ def _compose_document(
         raise BuildControlError("Browser QA private group storage marker must be boolean")
     if type(expect_planar_airbox) is not bool:
         raise BuildControlError("Planar Airbox browser expectation must be boolean")
+    if type(expect_fdm_cell_physics) is not bool:
+        raise BuildControlError("FDM cell physics browser expectation must be boolean")
+    if expect_fdm_cell_physics and (
+        canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False
+        or expect_fem_airbox_vectors is True or expect_terminal_telemetry is True
+        or expect_run_performance is True or expect_planar_airbox
+        or expect_ambiguous_compute_fields is True or prepare_viewport_fixture
+        or airbox_inspector or saved_playback_item_id is not None
+        or inspector_ack or study_stage_rerun is not None
+    ):
+        raise BuildControlError(
+            "FDM cell physics QA requires canvas-only m readiness and excludes other scenarios"
+        )
     frontend_state_volume = {"type": "volume", "source": "frontend-state",
                              "target": "/state/development", "read_only": True,
                              "volume": {"nocopy": True}}
@@ -1449,6 +1523,8 @@ def _compose_document(
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FEM_AIRBOX_VECTORS"] = "1"
     if expect_terminal_telemetry is True:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY"] = "1"
+    if expect_fdm_cell_physics:
+        environment["CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS"] = "1"
     if expect_run_performance is True:
         environment["CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE"] = "1"
     if expect_ambiguous_compute_fields is not None:
@@ -1577,7 +1653,10 @@ def _validate_browser_helper(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    expect_fdm_cell_physics: bool = False,
 ) -> None:
+    if type(expect_fdm_cell_physics) is not bool:
+        raise ControlOutcomeUnknown("FDM cell physics helper expectation must be boolean")
     if type(private_group_storage) is not bool:
         raise ControlOutcomeUnknown("Browser helper private group storage marker is malformed")
     if private_group_storage and frontend_volume != control.volume:
@@ -1740,6 +1819,20 @@ def _validate_browser_helper(
             raise ControlOutcomeUnknown("Browser helper terminal telemetry expectation is duplicated or malformed")
     elif terminal_telemetry_environment:
         raise ControlOutcomeUnknown("Browser helper reported an unrequested terminal telemetry scenario")
+    fdm_cell_physics_environment = [
+        entry for entry in raw_environment
+        if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=")
+    ]
+    if expect_fdm_cell_physics:
+        if (canvas_only is not True or expect_live_field != "m" or expect_airbox_vectors is not False
+                or expect_fem_airbox_vectors is True or expect_terminal_telemetry is True
+                or expect_run_performance is True or expect_planar_airbox
+                or expect_ambiguous_compute_fields is True):
+            raise ControlOutcomeUnknown("FDM cell physics helper is outside its canvas-only m profile")
+        if fdm_cell_physics_environment != ["CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=1"]:
+            raise ControlOutcomeUnknown("Browser helper FDM cell physics expectation is duplicated or malformed")
+    elif fdm_cell_physics_environment:
+        raise ControlOutcomeUnknown("Browser helper reported an unrequested FDM cell physics profile")
     run_performance_environment = [
         entry for entry in raw_environment
         if entry.startswith("CONTROL_ROOM_BROWSER_QA_EXPECT_RUN_PERFORMANCE=")
@@ -5614,6 +5707,114 @@ def _validate_planar_airbox_observation(value: object, session: object) -> None:
         raise BuildControlError("Planar Airbox browser scenario changed or attempted a non-presentation resource")
 
 
+def _validate_fdm_visible_number(value):
+    literal = value["text"].strip()
+    if re.fullmatch(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:e[+-]?\d+)?", literal, re.I) is None:
+        raise BuildControlError("FDM cell visible number is malformed")
+    visible, raw = float(literal.replace(",", "")), value["raw"]
+    if not math.isfinite(visible):
+        raise BuildControlError("FDM cell visible number is non-finite")
+    if visible == raw:
+        return
+    absolute = abs(raw)
+    digits = 4 if absolute < 1e-3 or absolute >= 1e6 else 6
+    tolerance = (0.5 * 10 ** (math.floor(math.log10(absolute)) - digits + 1)
+                 + absolute * math.ulp(1.0) * 4) if absolute else 0
+    if abs(visible - raw) > tolerance:
+        raise BuildControlError("FDM cell visible text differs from its numeric value")
+
+
+def _validate_fdm_cell_physics_proof(proof: object) -> None:
+    if not isinstance(proof, Mapping) or proof.get("state") != "passed":
+        raise BuildControlError("Browser helper omitted the passed FDM cell physics proof")
+    if proof.get("real_pointer_pick") is not True or proof.get("keyboard_tabs") is not True:
+        raise BuildControlError("FDM cell physics proof omitted real picking or keyboard tab evidence")
+    observation = proof.get("observation")
+    if not isinstance(observation, Mapping):
+        raise BuildControlError("FDM cell physics proof omitted its visible observation")
+    ordinal = observation.get("ordinal")
+    if type(ordinal) is not int or ordinal < 0:
+        raise BuildControlError("FDM cell physics proof has an invalid selected cell ordinal")
+    rows = observation.get("rows")
+    if not isinstance(rows, list):
+        raise BuildControlError("FDM cell physics proof omitted sampled rows")
+    rows_by_id = {}
+    for row in rows:
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+            raise BuildControlError("FDM cell physics proof contains a malformed row")
+        if row["id"] in rows_by_id:
+            raise BuildControlError("FDM cell physics proof duplicates a quantity row")
+        rows_by_id[row["id"]] = row
+        values = row.get("values")
+        if not isinstance(values, list):
+            raise BuildControlError("FDM cell physics row omitted visible values")
+        for value in values:
+            if (not isinstance(value, Mapping) or not isinstance(value.get("kind"), str)
+                    or not isinstance(value.get("text"), str) or not value["text"]
+                    or isinstance(value.get("raw"), bool)
+                    or not isinstance(value.get("raw"), (int, float))
+                    or not math.isfinite(value["raw"])):
+                raise BuildControlError("FDM cell physics proof contains a non-finite visible value")
+            _validate_fdm_visible_number(value)
+    required = ("m", "mat_ms", "mat_aex", "mat_alpha", "eden_total")
+    if any(rows_by_id.get(quantity, {}).get("status") != "ready" for quantity in required):
+        raise BuildControlError("FDM cell physics proof omitted a ready magnetization, material, or total-energy row")
+    probes = proof.get("public_probes")
+    if not isinstance(probes, list):
+        raise BuildControlError("FDM cell physics proof omitted selected-cell public probes")
+
+    def matching_probe(quantity: str) -> Mapping[str, object]:
+        matches = [item for item in probes if isinstance(item, Mapping)
+                   and item.get("quantity_id") == quantity and item.get("cell_id") == ordinal]
+        if not matches:
+            raise BuildControlError("FDM cell physics proof omitted the exact public probe for " + quantity)
+        return matches[-1]
+
+    vector_sample = matching_probe("m").get("vector")
+    vector_row = {item["kind"]: item for item in rows_by_id["m"]["values"]}
+    if (not isinstance(vector_sample, list) or len(vector_sample) != 3
+            or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                   or not math.isfinite(value) for value in vector_sample)):
+        raise BuildControlError("FDM cell physics public magnetization probe is non-finite")
+    for index, component in enumerate(("mx", "my", "mz")):
+        visible = vector_row.get(component)
+        if visible is None or abs(visible["raw"] - vector_sample[index]) > 5e-6:
+            raise BuildControlError("Visible FDM cell magnetization differs from its public probe")
+
+    for quantity in required[1:]:
+        sample = matching_probe(quantity).get("scalar")
+        row_values = {item["kind"]: item for item in rows_by_id[quantity]["values"]}
+        visible = row_values.get("scalar")
+        if (isinstance(sample, bool) or not isinstance(sample, (int, float))
+                or not math.isfinite(sample) or visible is None
+                or abs(visible["raw"] - sample) > max(abs(sample) * 5e-6, 1e-30)):
+            raise BuildControlError("Visible FDM cell scalar differs from its public probe: " + quantity)
+    total_values = {item["kind"]: item for item in rows_by_id["eden_total"]["values"]}
+    if "cell-energy" not in total_values:
+        raise BuildControlError("FDM cell physics proof omitted finite total cell energy")
+
+    for key, expected_width in (("layout", 380), ("narrow_layout", 300)):
+        layout = proof.get(key)
+        if not isinstance(layout, Mapping):
+            raise BuildControlError("FDM cell physics proof omitted the " + key.replace("_", " ") + " measurement")
+        inspector_width = layout.get("inspector_width")
+        inner_width = layout.get("width")
+        scroll_width = layout.get("scroll_width")
+        total_bottom = layout.get("total_bottom")
+        footer_top = layout.get("footer_top")
+        values = (inspector_width, inner_width, scroll_width, total_bottom)
+        if (any(isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) for value in values)
+                or abs(inspector_width - expected_width) > 3
+                or inner_width <= 0 or scroll_width > inner_width + 1):
+            raise BuildControlError("FDM cell physics layout width, overflow, or total position is invalid")
+        if (layout.get("clipped_values") != []
+                or (footer_top is not None
+                    and (isinstance(footer_top, bool) or not isinstance(footer_top, (int, float))
+                         or not math.isfinite(footer_top) or total_bottom > footer_top))):
+            raise BuildControlError("FDM cell physics layout clips a value or covers the energy total")
+
+
 def _parse_result(
     output: bytes,
     public_url: str,
@@ -5630,7 +5831,11 @@ def _parse_result(
     expect_planar_airbox: bool = False,
     planar_airbox_harness_sha256: str | None = None,
     planar_field_evidence_sha256: str | None = None,
+    fdm_cell_physics_harness_sha256: str | None = None,
+    expect_fdm_cell_physics: bool = False,
 ) -> dict[str, object]:
+    if type(expect_fdm_cell_physics) is not bool:
+        raise BuildControlError("FDM cell physics result expectation must be boolean")
     text = output.decode("utf-8", "replace")
     payload = None
     for line in reversed(text.splitlines()):
@@ -5711,6 +5916,7 @@ def _parse_result(
         "canvas-engine-run-performance" if expect_run_performance else
         "canvas-home-ambiguous-compute-fields" if expect_ambiguous_compute_fields else
         "canvas-home-fem-airbox-vectors" if expect_fem_airbox_vectors else
+        "canvas-home-fdm-cell-physics" if expect_fdm_cell_physics else
         "canvas-home-live-field-airbox" if expect_airbox_vectors else
         "canvas-home-live-field" if expect_live_field is not None else
         "canvas-home-only" if canvas_only else
@@ -5772,6 +5978,26 @@ def _parse_result(
     elif ("expect_terminal_telemetry" in payload or "terminal_telemetry" in payload
             or terminal_telemetry_helper_sha256 is not None):
         raise BuildControlError("Browser helper reported an unrequested terminal telemetry proof")
+    if expect_fdm_cell_physics:
+        if (payload.get("expect_fdm_cell_physics") is not True
+                or not canvas_only or expect_live_field != "m" or expect_airbox_vectors
+                or expect_fem_airbox_vectors or expect_ambiguous_compute_fields
+                or expect_terminal_telemetry or expect_run_performance or expect_planar_airbox):
+            raise BuildControlError("FDM cell physics result differs from its admitted canvas-only m profile")
+        if (not isinstance(fdm_cell_physics_harness_sha256, str)
+                or not SHA256_RE.fullmatch(fdm_cell_physics_harness_sha256)):
+            raise BuildControlError("FDM cell physics selected-source hash is missing")
+        harness_hashes = payload.get("harness_source_sha256")
+        if (not isinstance(harness_hashes, Mapping)
+                or harness_hashes.get("algorithm") != "sha256"
+                or harness_hashes.get("unchanged") is not True
+                or harness_hashes.get("runner_before") != fdm_cell_physics_harness_sha256
+                or harness_hashes.get("runner_after") != fdm_cell_physics_harness_sha256):
+            raise BuildControlError("FDM cell physics browser source pin differs or changed during QA")
+        _validate_fdm_cell_physics_proof(payload.get("fdm_cell_physics"))
+    elif ("expect_fdm_cell_physics" in payload or fdm_cell_physics_harness_sha256 is not None
+          or (payload.get("fdm_cell_physics") is not None and not expect_terminal_telemetry)):
+        raise BuildControlError("Browser helper reported an unrequested FDM cell physics profile")
     if expect_run_performance:
         harness_hashes = payload.get("harness_source_sha256")
         if (not isinstance(run_performance_harness_sha256, str)
@@ -5903,6 +6129,20 @@ def _run(
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
 ) -> None:
+    receipt_inputs = (operation.get("receipt") or {}).get("inputs", {})
+    if not isinstance(receipt_inputs, Mapping):
+        raise BuildControlError("Browser QA operation inputs are malformed")
+    expect_fdm_cell_physics = receipt_inputs.get("expect_fdm_cell_physics", False)
+    if type(expect_fdm_cell_physics) is not bool:
+        raise BuildControlError("Browser QA FDM cell physics input must be boolean")
+    fdm_cell_physics_harness_sha256 = receipt_inputs.get("fdm_cell_physics_harness_sha256")
+    if expect_fdm_cell_physics:
+        if (not isinstance(fdm_cell_physics_harness_sha256, str)
+                or not SHA256_RE.fullmatch(fdm_cell_physics_harness_sha256)
+                or _run_performance_harness_sha256(selected) != fdm_cell_physics_harness_sha256):
+            raise BuildControlError("FDM cell physics selected-source pin differs")
+    elif "fdm_cell_physics_harness_sha256" in receipt_inputs:
+        raise BuildControlError("Unrequested FDM cell physics selected-source pin is present")
     root = operation["root"]
     helper_name = "fullmag-browser-qa-" + operation["receipt"]["attempt"][:12]
     control.write(root + "/compose.json", document)
@@ -5958,6 +6198,7 @@ def _run(
     # control-volume evidence, and explicit removal have all been observed.
     observed = _inspect(helper_name)
     _validate_browser_helper(observed, control, identity, frontend_volume, browser_image_id, result.returncode, selected,
+        expect_fdm_cell_physics=expect_fdm_cell_physics,
         canvas_only=canvas_only,
         expect_live_field=expect_live_field if expect_live_field is not None else None,
         expect_airbox_vectors=expect_airbox_vectors if expect_live_field is not None else None,
@@ -6018,7 +6259,9 @@ def _run(
                 run_performance_harness_sha256=run_performance_harness_sha256,
                 expect_planar_airbox=expect_planar_airbox,
                 planar_airbox_harness_sha256=planar_airbox_harness_sha256,
-                planar_field_evidence_sha256=planar_field_evidence_sha256)
+                planar_field_evidence_sha256=planar_field_evidence_sha256,
+                fdm_cell_physics_harness_sha256=fdm_cell_physics_harness_sha256,
+                expect_fdm_cell_physics=expect_fdm_cell_physics)
     except BuildControlError as error:
         study_no_dispatch_proven = (
             study_stage_rerun is not None
@@ -6313,6 +6556,18 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     expect_terminal_telemetry_input = inputs.get("expect_terminal_telemetry", False)
     if type(expect_terminal_telemetry_input) is not bool:
         raise BuildControlError("QA reconciliation terminal telemetry expectation must be boolean")
+    expect_fdm_cell_physics_input = inputs.get("expect_fdm_cell_physics", False)
+    if type(expect_fdm_cell_physics_input) is not bool:
+        raise BuildControlError("QA reconciliation FDM cell physics expectation must be boolean")
+    fdm_cell_physics_harness_sha256 = None
+    if expect_fdm_cell_physics_input:
+        fdm_cell_physics_harness_sha256 = inputs.get("fdm_cell_physics_harness_sha256")
+        if (not isinstance(fdm_cell_physics_harness_sha256, str)
+                or not SHA256_RE.fullmatch(fdm_cell_physics_harness_sha256)
+                or _run_performance_harness_sha256(selected) != fdm_cell_physics_harness_sha256):
+            raise BuildControlError("QA reconciliation FDM cell physics source pin differs")
+    elif "fdm_cell_physics_harness_sha256" in inputs:
+        raise BuildControlError("QA reconciliation unrequested FDM cell physics source pin")
     expect_run_performance_input = inputs.get("expect_run_performance", False)
     if type(expect_run_performance_input) is not bool:
         raise BuildControlError("QA reconciliation run performance expectation must be boolean")
@@ -6431,6 +6686,15 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         or expect_ambiguous_command_input
     ):
         raise BuildControlError("QA reconciliation terminal telemetry scenario does not match the primary-m canvas contract")
+    if expect_fdm_cell_physics_input and (
+        scenario != "standard" or not canvas_only_input or prepare_viewport_fixture
+        or expect_live_field_input != "m" or expect_airbox_vectors_input
+        or expect_fem_airbox_vectors_input or expect_ambiguous_command_input
+        or expect_terminal_telemetry_input or expect_run_performance_input
+        or expect_planar_airbox_input or airbox_inspector or inspector_ack
+        or saved_playback_item_id is not None or study_stage_rerun
+    ):
+        raise BuildControlError("QA reconciliation FDM cell physics profile differs from canvas-only m scope")
     if expect_run_performance_input and (
         scenario != "standard"
         or not canvas_only_input
@@ -6467,6 +6731,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_run_performance=(True if expect_run_performance_input else None),
+        expect_fdm_cell_physics=expect_fdm_cell_physics_input,
         expect_planar_airbox=expect_planar_airbox_input,
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector or inspector_ack or study_stage_rerun
@@ -6543,6 +6808,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         ),
         expect_terminal_telemetry=(True if expect_terminal_telemetry_input else None),
         expect_run_performance=(True if expect_run_performance_input else None),
+        expect_fdm_cell_physics=expect_fdm_cell_physics_input,
         expect_ambiguous_compute_fields=(
             None if scenario == "saved-playback" or airbox_inspector or inspector_ack or study_stage_rerun
             else expect_ambiguous_command_compose_pin
@@ -6659,6 +6925,11 @@ def main(argv: list[str] | None = None) -> int:
         "--expect-terminal-telemetry",
         action="store_true",
         help="Prove visible terminal Step and total energy against scoped API provenance before and after page reload (canvas-only, --expect-live-field m)",
+    )
+    parser.add_argument(
+        "--expect-fdm-cell-physics",
+        action="store_true",
+        help="Prove selected FDM cell Inspector values against public probes at 380/300 px (canvas-only, --expect-live-field m)",
     )
     parser.add_argument(
         "--expect-run-performance",
@@ -6782,6 +7053,18 @@ def main(argv: list[str] | None = None) -> int:
         raise BuildControlError(
             "--expect-terminal-telemetry requires --canvas-only --expect-live-field m and excludes other scenarios"
         )
+    if args.expect_fdm_cell_physics and (
+        not args.canvas_only or args.expect_live_field != "m"
+        or args.expect_airbox_vectors or args.expect_fem_airbox_vectors
+        or args.expect_terminal_telemetry or args.expect_run_performance
+        or args.expect_planar_airbox or args.expect_ambiguous_compute_fields
+        or args.prepare_viewport_fixture or args.airbox_inspector
+        or args.inspector_ack or args.saved_playback_item_id is not None
+        or args.study_stage_rerun is not None or args.resume_fdm_grid_attempt is not None
+    ):
+        raise BuildControlError(
+            "--expect-fdm-cell-physics requires --canvas-only --expect-live-field m and excludes other scenarios"
+        )
     if args.expect_run_performance and (
         not args.canvas_only
         or args.prepare_viewport_fixture
@@ -6884,6 +7167,9 @@ def main(argv: list[str] | None = None) -> int:
         _planar_airbox_harness_sha256(selected, "apps/control-room/scripts/lib/planar-field-evidence.mjs")
         if args.expect_planar_airbox else None
     )
+    fdm_cell_physics_harness_sha256 = (
+        _run_performance_harness_sha256(selected) if args.expect_fdm_cell_physics else None
+    )
     document = _compose_document(
         selected,
         identity,
@@ -6899,6 +7185,7 @@ def main(argv: list[str] | None = None) -> int:
         expect_fem_airbox_vectors=(True if args.expect_fem_airbox_vectors else None),
         expect_terminal_telemetry=(True if args.expect_terminal_telemetry else None),
         expect_run_performance=(True if args.expect_run_performance else None),
+        expect_fdm_cell_physics=args.expect_fdm_cell_physics,
         expect_planar_airbox=args.expect_planar_airbox,
         expect_ambiguous_compute_fields=(
             None if args.airbox_inspector or args.inspector_ack or args.saved_playback_item_id is not None
@@ -6944,6 +7231,7 @@ def main(argv: list[str] | None = None) -> int:
         "expect_live_field": args.expect_live_field,
         "expect_airbox_vectors": args.expect_airbox_vectors,
         "expect_terminal_telemetry": args.expect_terminal_telemetry,
+        "expect_fdm_cell_physics": args.expect_fdm_cell_physics,
         "expect_run_performance": args.expect_run_performance,
         "expect_ambiguous_compute_fields": args.expect_ambiguous_compute_fields,
         "expect_planar_airbox": args.expect_planar_airbox,
@@ -6974,6 +7262,8 @@ def main(argv: list[str] | None = None) -> int:
         inputs["source_script_sha256"] = source_script_sha256
     if args.expect_terminal_telemetry:
         inputs["terminal_telemetry_helper_sha256"] = terminal_telemetry_helper_sha256
+    if args.expect_fdm_cell_physics:
+        inputs["fdm_cell_physics_harness_sha256"] = fdm_cell_physics_harness_sha256
     if args.expect_run_performance:
         inputs["run_performance_harness_sha256"] = run_performance_harness_sha256
     if args.expect_planar_airbox:

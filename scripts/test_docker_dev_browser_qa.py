@@ -1162,6 +1162,64 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "/state/development/workspace/apps/control-room/scripts",
         })
 
+    def test_fdm_cell_physics_compose_and_cli_profile_are_explicit_and_bounded(self):
+        qa = self.qa
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+            canvas_only=True,
+            expect_live_field="m",
+            expect_airbox_vectors=False,
+            expect_ambiguous_compute_fields=False,
+            expect_fdm_cell_physics=True,
+        )
+        service = document["services"]["browser-qa"]
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS"], "1")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY"], "1")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD"], "m")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS"], "0")
+        self.assertNotIn("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY", service["environment"])
+        self.assertTrue(service["read_only"])
+        self.assertNotIn("ports", service)
+
+        for invalid in (
+            {"canvas_only": False, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": False},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": True,
+             "expect_ambiguous_compute_fields": False},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": False, "expect_terminal_telemetry": True},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": True},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+                    expect_fdm_cell_physics=True, **invalid,
+                )
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+                canvas_only=True, expect_live_field="m", expect_airbox_vectors=False,
+                expect_ambiguous_compute_fields=False, expect_fdm_cell_physics=1,
+            )
+
+        with patch.object(qa, "resolve_defaults", return_value=SimpleNamespace(source_root=ROOT, port=3199)):
+            with self.assertRaisesRegex(qa.BuildControlError, "--expect-fdm-cell-physics requires"):
+                qa.main(["--repo-root", str(ROOT), "--expect-fdm-cell-physics"])
+            with self.assertRaisesRegex(qa.BuildControlError, "--expect-fdm-cell-physics requires"):
+                qa.main([
+                    "--repo-root", str(ROOT), "--canvas-only", "--expect-live-field", "m",
+                    "--expect-airbox-vectors", "--expect-fdm-cell-physics",
+                ])
+
     def test_planar_airbox_compose_reuses_the_managed_readonly_runner(self):
         identity = {
             "project_name": "fullmag-worktree-fixture",
@@ -1962,6 +2020,45 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
             ],
         }
         qa._validate_browser_helper(document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
+
+        fdm_environment = [
+            "CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY=1",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD=m",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS=0",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS=0",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=1",
+        ]
+        fdm_document = deepcopy(document)
+        fdm_document["Config"]["Env"].extend(fdm_environment)
+        profile_kwargs = {
+            "canvas_only": True,
+            "expect_live_field": "m",
+            "expect_airbox_vectors": False,
+            "expect_ambiguous_compute_fields": False,
+            "expect_fdm_cell_physics": True,
+        }
+        qa._validate_browser_helper(
+            fdm_document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+            **profile_kwargs,
+        )
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                fdm_document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+            )
+        missing_profile_flag = deepcopy(fdm_document)
+        missing_profile_flag["Config"]["Env"].remove("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=1")
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                missing_profile_flag, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+                **profile_kwargs,
+            )
+        duplicate_profile_flag = deepcopy(fdm_document)
+        duplicate_profile_flag["Config"]["Env"].append("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=0")
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                duplicate_profile_flag, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+                **profile_kwargs,
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             local_alias_root = Path(temporary) / "docker-desktop-bind-mounts"
@@ -2765,6 +2862,148 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         self.assertTrue(any(path.endswith("/result.json") for path, _value in writes))
         receipts = [value for path, value in writes if path.endswith("/receipt.json")]
         self.assertTrue(any(value.get("browser_container_id") == browser_id for value in receipts))
+
+    def test_fdm_cell_physics_result_requires_pinned_real_cell_and_layout_proof(self):
+        qa = self.qa
+        vector = [1.0, -0.25, 0.5]
+        scalar_values = {
+            "mat_ms": 800000.0,
+            "mat_aex": 1.3e-11,
+            "mat_alpha": 0.01,
+            "eden_total": -25000.0,
+        }
+
+        def shown(kind, raw):
+            return {"kind": kind, "text": str(raw), "raw": raw}
+
+        rows = [{
+            "id": "m", "status": "ready",
+            "values": [shown("mx", vector[0]), shown("my", vector[1]), shown("mz", vector[2])],
+        }]
+        rows.extend({
+            "id": quantity, "status": "ready", "values": [shown("scalar", raw)],
+        } for quantity, raw in scalar_values.items() if quantity != "eden_total")
+        rows.append({
+            "id": "eden_total", "status": "ready",
+            "values": [shown("scalar", scalar_values["eden_total"]), shown("cell-energy", -2.5e-21)],
+        })
+        public_probes = [{"quantity_id": "m", "cell_id": 7, "vector": vector}]
+        public_probes.extend({
+            "quantity_id": quantity, "cell_id": 7, "scalar": raw,
+        } for quantity, raw in scalar_values.items())
+
+        def layout(inspector_width, inner_width):
+            return {
+                "inspector_width": inspector_width,
+                "width": inner_width,
+                "scroll_width": inner_width,
+                "total_bottom": 210,
+                "footer_top": 250,
+                "clipped_values": [],
+            }
+
+        proof = {
+            "state": "passed",
+            "real_pointer_pick": True,
+            "keyboard_tabs": True,
+            "observation": {"ordinal": 7, "rows": rows},
+            "public_probes": public_probes,
+            "layout": layout(380, 320),
+            "narrow_layout": layout(300, 240),
+        }
+        canvas = {
+            "rect": {"width": 1440, "height": 900},
+            "width": 1440,
+            "height": 900,
+            "context_type": "WebGL2RenderingContext",
+            "context_lost": False,
+            "drawing_buffer_width": 1440,
+            "drawing_buffer_height": 900,
+        }
+        source_hash = "a" * 64
+        payload = {
+            "schema": qa.RESULT_SCHEMA,
+            "state": "passed",
+            "public_url": "http://127.0.0.1:32871",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "canvas_only": True,
+            "expect_live_field": "m",
+            "expect_airbox_vectors": False,
+            "expect_ambiguous_compute_fields": False,
+            "expect_fdm_cell_physics": True,
+            "qa_scope": "canvas-home-fdm-cell-physics",
+            "skipped_areas": qa.CANVAS_ONLY_SKIPPED_AREAS,
+            "home_round_trip": True,
+            "session": {
+                "session_id": "session-1",
+                "session_epoch": "session-1@1",
+                "request_scope_epoch": "api:1",
+            },
+            "workspace": {"visible": True, "canvas_dom_stable": True},
+            "canvas_before": canvas,
+            "canvas_after": deepcopy(canvas),
+            "viewport_dom_observations": {
+                "field_data_proven": False,
+                "note": qa.VIEWPORT_DOM_OBSERVATIONS_NOTE,
+                **{
+                    key: {
+                        "dataset": {}, "quantity_labels": [],
+                        "dataset_entry_count": 0, "quantity_label_count": 0,
+                        "dataset_truncated": False, "quantity_labels_truncated": False,
+                    }
+                    for key in ("before_home", "after_home")
+                },
+            },
+            "live_field_observation": {"state": "ready"},
+            "canvas_screenshot": {"state": "captured"},
+            "fdm_cell_physics": proof,
+            "harness_source_sha256": {
+                "algorithm": "sha256", "unchanged": True,
+                "runner_before": source_hash, "runner_after": source_hash,
+            },
+            "page_errors": 0,
+            "console_errors": 0,
+            "request_failures": 0,
+            "http_errors": [],
+            "resource_responses": [],
+        }
+        encoded = lambda value: (json.dumps(value) + "\n").encode("utf-8")
+
+        def parse(candidate, requested_profile=True, **overrides):
+            with patch.object(qa, "_validate_live_field_observation"), \
+                 patch.object(qa, "_validate_canvas_screenshot"):
+                return qa._parse_result(
+                    encoded(candidate), payload["public_url"], payload["probe_url"],
+                    canvas_only=True,
+                    expect_live_field="m",
+                    expect_airbox_vectors=False,
+                    expect_ambiguous_compute_fields=False,
+                    fdm_cell_physics_harness_sha256=source_hash,
+                    expect_fdm_cell_physics=requested_profile,
+                    **overrides,
+                )
+
+        self.assertEqual(parse(payload), payload)
+        invalid_cases = (
+            ("wrong visible vector text", lambda item: item["fdm_cell_physics"]["observation"]["rows"][0]["values"][0].update(text="999")),
+            ("wrong visible scalar text", lambda item: item["fdm_cell_physics"]["observation"]["rows"][1]["values"][0].update(text="999")),
+            ("missing proof", lambda item: item.pop("fdm_cell_physics")),
+            ("helper flag", lambda item: item.update(expect_fdm_cell_physics=False)),
+            ("wrong inspector width", lambda item: item["fdm_cell_physics"]["layout"].update(inspector_width=300)),
+            ("clipped value", lambda item: item["fdm_cell_physics"]["narrow_layout"].update(clipped_values=["eden_total"])),
+            ("missing exact probe", lambda item: item["fdm_cell_physics"]["public_probes"].pop()),
+            ("changed runner", lambda item: item["harness_source_sha256"].update(runner_after="b" * 64)),
+        )
+        for name, mutate in invalid_cases:
+            with self.subTest(rejected=name):
+                invalid = deepcopy(payload)
+                mutate(invalid)
+                with self.assertRaises(qa.BuildControlError):
+                    parse(invalid)
+        with self.assertRaises(qa.BuildControlError):
+            parse(payload, requested_profile=1)
 
     def test_result_validator_rejects_invalid_buffers_and_recorded_errors(self):
         canvas = {
