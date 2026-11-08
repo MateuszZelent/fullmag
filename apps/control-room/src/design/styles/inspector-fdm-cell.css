@@ -1,0 +1,294 @@
+.fm-fdm-cell-physics {
+  gap: var(--fm-space-3);
+}
+
+.fm-fdm-cell-physics [data-slot="inspector-group"] {
+  padding-block-end: var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: 0 var(--fm-space-2) var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__identity {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+}
+
+
+
+.fm-fdm-cell-physics__identity strong {
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-fdm-cell-physics__status {
+  flex: 0 0 auto;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-xs);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 600;
+  line-height: 1.2;
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__status[data-state="ready"] {
+  border-color: color-mix(in srgb, var(--fm-success) 35%, var(--fm-border-subtle));
+  color: var(--fm-success-text);
+}
+
+.fm-fdm-cell-physics__status[data-state="loading"],
+.fm-fdm-cell-physics__status[data-state="stale"] {
+  border-color: color-mix(in srgb, var(--fm-warning) 35%, var(--fm-border-subtle));
+  color: var(--fm-warning-text);
+}
+
+.fm-fdm-cell-physics__status[data-state="error"] {
+  border-color: color-mix(in srgb, var(--fm-danger) 35%, var(--fm-border-subtle));
+  color: var(--fm-danger-text);
+}
+
+.fm-fdm-cell-physics__read-status {
+  margin: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+  padding-inline: var(--fm-space-2);
+}
+
+.fm-fdm-cell-physics__error {
+  display: grid;
+  justify-items: start;
+  gap: var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__error .fm-inspector-feedback {
+  width: 100%;
+  box-sizing: border-box;
+  margin-inline: 0;
+}
+
+.fm-fdm-cell-physics__quantity {
+  min-width: 0;
+}
+
+.fm-fdm-cell-physics__quantity > .fm-inspector-field-row {
+  min-height: var(--fm-control-height-compact);
+  grid-template-columns: minmax(48px, 0.55fr) minmax(0, 1fr);
+  padding-inline: var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__quantity .fm-inspector-field-row__value {
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-fdm-cell-physics__reason {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.35;
+  padding: 0 var(--fm-space-1) var(--fm-space-1) calc(var(--fm-space-1) + 48px);
+}
+
+.fm-fdm-cell-physics__readout-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  padding: 0 var(--fm-space-1) var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__unit {
+  flex: 0 0 auto;
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-fdm-cell-physics__components {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--fm-space-1);
+  margin: 0;
+  padding: 0 var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__component {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  border-inline-start: 1px solid var(--fm-border-subtle);
+  padding-inline-start: var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__component:first-child {
+  border-inline-start: 0;
+  padding-inline-start: 0;
+}
+
+.fm-fdm-cell-physics__component dt {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.2;
+}
+
+.fm-fdm-cell-physics__component dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-fdm-cell-physics__component--magnitude dd {
+  font-weight: 600;
+}
+
+.fm-fdm-cell-physics__empty {
+  margin: 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+  padding: 0 var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__unavailable {
+  display: grid;
+  gap: var(--fm-space-1);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  padding: var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__unavailable small {
+  overflow-wrap: anywhere;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.35;
+}
+
+.fm-fdm-cell-physics__table-wrap {
+  min-width: 0;
+}
+
+.fm-fdm-cell-physics__energy-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-fdm-cell-physics__energy-table th,
+.fm-fdm-cell-physics__energy-table td {
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-1);
+  text-align: right;
+  vertical-align: middle;
+}
+
+.fm-fdm-cell-physics__energy-table thead th {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.fm-fdm-cell-physics__energy-table th:first-child,
+.fm-fdm-cell-physics__energy-table td:first-child {
+  width: 28%;
+  text-align: left;
+}
+
+.fm-fdm-cell-physics__energy-table tbody th {
+  overflow-wrap: anywhere;
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 500;
+}
+
+.fm-fdm-cell-physics__energy-table th small {
+  display: block;
+  color: var(--fm-text-muted);
+  font: inherit;
+  font-size: var(--fm-font-size-2xs);
+  font-weight: 400;
+}
+
+.fm-fdm-cell-physics__energy-table td data {
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-fdm-cell-physics__energy-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.fm-fdm-cell-physics__energy-table tr[data-fdm-energy-term="total"] > * {
+  border-top: 1px solid var(--fm-border-default);
+  color: var(--fm-text-primary);
+  font-weight: 650;
+}
+
+.fm-fdm-cell-physics__unavailable-value {
+  color: var(--fm-text-muted);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.fm-fdm-cell-physics__table-note {
+  margin: var(--fm-space-1) 0 0;
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.35;
+}
+
+.fm-fdm-cell-physics__sources {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-1);
+  margin-top: var(--fm-space-1);
+}
+
+.fm-fdm-cell-physics__sources .fm-inspector-field-row {
+  grid-template-columns: minmax(84px, 0.8fr) minmax(0, 1fr);
+  min-height: var(--fm-control-height-compact);
+}
+
+.fm-fdm-cell-physics__sources .fm-inspector-field-row__label,
+.fm-fdm-cell-physics__sources .fm-inspector-field-row__value {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.fm-fdm-cell-physics__sources .fm-inspector-field-row__value {
+  display: block;
+  text-align: right;
+}

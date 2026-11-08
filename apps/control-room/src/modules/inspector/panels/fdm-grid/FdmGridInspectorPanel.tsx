@@ -8,12 +8,14 @@ import {
   useFdmRegionMembershipBinaryResource,
   useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
+import { fdmCellCenter, type FdmCellPhysicsTarget } from "@/kernel/resources/fdmCellPhysicsResources";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -25,6 +27,7 @@ import {
   VisualizationTargetInspectorPanel,
   type VisualizationInspectorOwner,
 } from "../ObjectVisualizationPanel";
+import { FdmCellPhysicsPanel } from "./FdmCellPhysicsPanel";
 import {
   resolveFdmGridInspectorModel,
   resolveFdmGridSelectionInspectorModel,
@@ -379,7 +382,23 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
     selection.ref?.type === "fdm-domain" &&
     selection.ref.visualizationTargetId.startsWith("fdm-native-layer:");
 
-  return (
+  const cellTarget = useMemo<FdmCellPhysicsTarget | null>(() => {
+    if (
+      !detail.cell || detail.cell.maskState === "inactive" || model.status !== "ready" ||
+      !model.generationId || !model.origin || !model.spacing || !model.membership ||
+      multilayerLayout.status !== "ready" || !multilayerLayout.data || multilayerLayout.data.available
+    ) return null;
+    return {
+      ordinal: Number(detail.cell.cellOrdinal),
+      generationId: model.generationId,
+      gridFingerprint: detail.cell.gridFingerprint,
+      membershipRevision: detail.cell.membershipRevision,
+      meshRevision: model.membership.meshRevision,
+      centerM: fdmCellCenter(model.origin, model.spacing, detail.cell.ijk),
+      cellSizeM: model.spacing,
+    };
+  }, [detail.cell, model, multilayerLayout.data, multilayerLayout.status]);
+  const gridPanel = (
     <FdmGridInspectorPanelView
       detail={detail}
       model={model}
@@ -393,5 +412,23 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
         ) : null
       }
     />
+  );
+  if (selection.ref?.type !== "fdm-cell") return gridPanel;
+  const physicsNotice = detail.notice ?? (multilayerLayout.status !== "ready" || !multilayerLayout.data
+    ? "Waiting for current FDM grid classification before reading cell physics."
+    : multilayerLayout.data.available
+    ? "Cell physics requires a physical single-grid FDM cell; the common multilayer grid is not a material carrier."
+    : detail.cell?.maskState === "inactive" ? "This cell is outside the magnetic support." : null);
+  return (
+    <Tabs defaultValue="physics">
+      <TabsList aria-label="FDM Cell details">
+        <TabsTrigger value="physics">Physics</TabsTrigger>
+        <TabsTrigger value="grid">Grid</TabsTrigger>
+      </TabsList>
+      <TabsContent value="physics">
+        <FdmCellPhysicsPanel target={cellTarget} notice={physicsNotice} />
+      </TabsContent>
+      <TabsContent value="grid">{gridPanel}</TabsContent>
+    </Tabs>
   );
 }
