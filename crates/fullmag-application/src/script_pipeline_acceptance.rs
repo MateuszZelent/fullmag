@@ -919,6 +919,182 @@ mod tests {
     }
 
     #[test]
+    fn relax_region_reset_round_trip_keeps_local_and_independent_owners_distinct() {
+        use crate::script_stage_contract::StudyPipelineNode;
+
+        let mut config = physical_config();
+        config.ir = fullmag_ir::ProblemIR::bootstrap_example();
+        config.stages.clear();
+
+        let global = fullmag_ir::InitialMagnetizationIR::Uniform { value: [1.0, 0.0, 0.0] };
+        let independent = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        let local = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 0.0, 1.0] };
+        let region_id = "strip:core";
+        config.ir.magnets[0].initial_magnetization = Some(global.clone());
+        config.ir.object_regions.push(serde_json::from_value(json!({
+            "region_id": region_id,
+            "owner_object": "strip",
+            "name": "core",
+            "shape": {
+                "kind": "box",
+                "size": [80e-9, 20e-9, 6e-9],
+                "center": [0.0, 0.0, 0.0]
+            }
+        })).unwrap());
+
+        let batch = |initializer: &fullmag_ir::InitialMagnetizationIR| json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "strip",
+                "region_id": region_id,
+                "initializer": initializer,
+            }],
+        });
+        let relax_node = |id: &str, payload| json!({
+            "id": id,
+            "label": id,
+            "node_kind": "primitive",
+            "stage_kind": "relax",
+            "enabled": true,
+            "payload": payload,
+        });
+        let mut b_payload = json!({
+            "kind": "relax",
+            "algorithm": "llg_overdamped",
+            "max_steps": 2,
+        });
+        b_payload["magnetization_assignments"] = batch(&independent);
+        b_payload["stage_magnetization_assignments"] = batch(&local);
+        config.study_pipeline = Some(serde_json::from_value(json!({
+            "version": "study_pipeline.v2",
+            "nodes": [
+                relax_node("a", json!({"kind": "relax", "max_steps": 2})),
+                relax_node("b", b_payload),
+                relax_node("c", json!({"kind": "relax", "max_steps": 2})),
+            ],
+        })).unwrap());
+
+        // These checks cover authored/materialized ProblemIR and state-port
+        // semantics. They do not assert native grid-cell samples.
+        let assert_textures = |compiled: &AcceptedScriptPipeline,
+                               index: usize,
+                               expected_region: Option<&fullmag_ir::InitialMagnetizationIR>| {
+            let problem = compiled.catalog.entries()[index].problem();
+            assert_eq!(problem.magnets[0].initial_magnetization.as_ref(), Some(&global));
+            let region_texture = problem.object_regions[0]
+                .texture_override
+                .as_ref()
+                .map(|texture| &texture.initial_magnetization);
+            assert_eq!(region_texture, expected_region);
+        };
+
+        let enabled = compile_physical(config.clone()).unwrap();
+        let [a, b, c] = enabled.study.steps.as_slice() else {
+            panic!("expected Relax stages A, B, C");
+        };
+        assert!(matches!(
+            &b.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(b.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &b.step_id
+        ));
+        assert!(c.initial_state_overlay.is_none());
+        assert_textures(&enabled, 0, None);
+        assert_textures(&enabled, 1, Some(&local));
+        assert_textures(&enabled, 2, Some(&independent));
+        let enabled_source: Value = serde_json::from_slice(&enabled.source_bytes).unwrap();
+        assert_eq!(enabled_source["nodes"][1]["authored_step_id"], "b");
+        assert_eq!(enabled_source["nodes"][1]["execution_ids"], json!([b.step_id]));
+        validate_accepted_script_pipeline_source(
+            &enabled.study,
+            &enabled.catalog,
+            &enabled.source_bytes,
+        )
+        .unwrap();
+        let b_step_id = b.step_id.clone();
+        let c_step_id = c.step_id.clone();
+
+        let StudyPipelineNode::Primitive { enabled, .. } =
+            &mut config.study_pipeline.as_mut().unwrap().nodes[1]
+        else {
+            panic!("expected Relax B");
+        };
+        *enabled = false;
+
+        let disabled = compile_physical(config.clone()).unwrap();
+        let [a, c] = disabled.study.steps.as_slice() else {
+            panic!("expected A and C when B is disabled");
+        };
+        assert_eq!(c.step_id, c_step_id);
+        assert_eq!(c.completion_dependencies, vec![a.step_id.clone()]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(c.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert_textures(&disabled, 0, None);
+        assert_textures(&disabled, 1, Some(&independent));
+        let disabled_source: Value = serde_json::from_slice(&disabled.source_bytes).unwrap();
+        assert_eq!(disabled_source["nodes"][1]["authored_step_id"], "b");
+        assert_eq!(disabled_source["nodes"][1]["execution_ids"], json!([]));
+        validate_accepted_script_pipeline_source(
+            &disabled.study,
+            &disabled.catalog,
+            &disabled.source_bytes,
+        )
+        .unwrap();
+
+        let StudyPipelineNode::Primitive { enabled, .. } =
+            &mut config.study_pipeline.as_mut().unwrap().nodes[1]
+        else {
+            panic!("expected Relax B");
+        };
+        *enabled = true;
+
+        let reenabled = compile_physical(config).unwrap();
+        let [a, b, c] = reenabled.study.steps.as_slice() else {
+            panic!("expected Relax stages A, B, C after re-enabling B");
+        };
+        assert_eq!(b.step_id, b_step_id);
+        assert_eq!(c.step_id, c_step_id);
+        assert!(matches!(
+            &b.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(b.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &b.step_id
+        ));
+        assert_textures(&reenabled, 1, Some(&local));
+        assert_textures(&reenabled, 2, Some(&independent));
+        validate_accepted_script_pipeline_source(
+            &reenabled.study,
+            &reenabled.catalog,
+            &reenabled.source_bytes,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn physical_chain_refuses_incompatible_topology_before_acceptance() {
         let mut config=physical_config();
         if let fullmag_ir::GeometryEntryIR::Box {size,..}=&mut config.stages[1].ir.geometry.entries[0] {
