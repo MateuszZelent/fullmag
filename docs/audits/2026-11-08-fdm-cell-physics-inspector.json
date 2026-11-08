@@ -483,5 +483,26 @@
     "apps/control-room/src/modules/inspector/panels/fdm-grid/FdmCellPhysicsPanel.tsx": "893962b000b30a5b41e6670943766894c3f0f3a9732d51879b9ab32bf2545c65",
     "apps/control-room/src/modules/inspector/panels/fdm-grid/FdmGridInspectorPanel.tsx": "8edb7c61a02c878fc4f74a204653ae2bf3ea673ef52bc4f82f7443cf024bcfa0",
     "apps/control-room/src/modules/inspector/panels/DedicatedInspectorRouteFrame.tsx": "0a6218ea03fb154d16feb6f7237d403c33124494dffb59aa4db913962757e0b2"
-  }
+  },
+  "post_browser_changes": [
+    {
+      "file": "apps/control-room/src/design/styles/inspector-fdm-cell.css",
+      "before_sha256": "398c41656f17541cdb59d2b930b7ca321358f204ef6b54c29fa2442052837a3e",
+      "after_sha256": "e9e94b05d6f928657425449ff0472f7be9d76e4d1b2f1655b01ad9531fe405ca",
+      "change": "Status text uses semantic success-text/warning-text/danger-text AA tokens; layout, data, interaction and borders unchanged.",
+      "status_text_contrast": {
+        "dark": {
+          "success": 8.46,
+          "warning": 9.89,
+          "danger": 5.75
+        },
+        "light": {
+          "success": 5.41,
+          "warning": 5.46,
+          "danger": 5.45
+        }
+      },
+      "css_contract_tests": "11/11 PASS"
+    }
+  ]
 }

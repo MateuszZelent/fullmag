@@ -47,18 +47,18 @@
 
 .fm-fdm-cell-physics__status[data-state="ready"] {
   border-color: color-mix(in srgb, var(--fm-success) 35%, var(--fm-border-subtle));
-  color: var(--fm-success);
+  color: var(--fm-success-text);
 }
 
 .fm-fdm-cell-physics__status[data-state="loading"],
 .fm-fdm-cell-physics__status[data-state="stale"] {
   border-color: color-mix(in srgb, var(--fm-warning) 35%, var(--fm-border-subtle));
-  color: var(--fm-warning);
+  color: var(--fm-warning-text);
 }
 
 .fm-fdm-cell-physics__status[data-state="error"] {
   border-color: color-mix(in srgb, var(--fm-danger) 35%, var(--fm-border-subtle));
-  color: var(--fm-danger);
+  color: var(--fm-danger-text);
 }
 
 .fm-fdm-cell-physics__read-status {
