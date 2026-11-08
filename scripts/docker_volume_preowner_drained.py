@@ -982,9 +982,81 @@ def _ledger_policy(control, document, backend):
     return value
 
 
+def _retained_compose_budget(control, document, backend, previous, image_id):
+    _require(_ownerless_parent(previous),
+             "retained Compose budget is only authorized for the exact ownerless parent")
+    inputs = previous.get("inputs")
+    selected = inputs.get("source_root") if isinstance(inputs, Mapping) else None
+    _require(isinstance(selected, str) and selected,
+             "ownerless parent has no exact retained source root")
+    _, terminal_raw, compose_raw, terminal = _load_parent(
+        control, previous, document, selected=selected, attempt=previous.get("attempt"),
+        config_sha256=previous.get("config_sha256"), image_id=image_id,
+        backend_container_id=backend.get("Id"), allow_legacy_root_namespace=True)
+
+    state = backend.get("State", {})
+    started_at = state.get("StartedAt") if isinstance(state, Mapping) else None
+    _require(isinstance(started_at, str) and started_at
+             and terminal.get("backend_started_at") == previous.get("backend_started_at") == started_at,
+             "retained Compose budget is not bound to the exact backend start time")
+
+    from docker_volume_cancelled_recovery import _compose_resource_budget
+
+    services = document.get("services")
+    _require(isinstance(services, Mapping), "retained Compose services are malformed")
+    service = services.get("backend")
+    _require(isinstance(service, Mapping), "retained backend Compose service is malformed")
+    budget = _compose_resource_budget(service)
+    environment = service.get("environment", {})
+    _require(isinstance(environment, Mapping)
+             and environment.get("FULLMAG_DOCKER_CPU_MILLIS") == str(budget["cpus"] * 1000)
+             and environment.get("FULLMAG_DOCKER_MEMORY_BYTES") == str(budget["memory_bytes"]),
+             "retained Compose budget differs from its explicit backend environment")
+
+    host = backend.get("HostConfig", {})
+    _require(isinstance(host, Mapping)
+             and type(host.get("Memory")) is int
+             and type(host.get("NanoCpus")) is int
+             and type(host.get("MemorySwap")) is int
+             and host.get("Memory") == budget["memory_bytes"]
+             and host.get("NanoCpus") == budget["cpus"] * 10**9
+             and host.get("MemorySwap") == budget["memory_swap_bytes"],
+             "current backend kernel limits differ from retained Compose")
+
+    worker = terminal.get("worker_cgroup", {})
+    outer = worker.get("outer_limits") if isinstance(worker, Mapping) else None
+    expected_outer = {
+        "cpu.max": f"{budget['cpus'] * 100000} 100000\n",
+        "memory.max": f"{budget['memory_bytes']}\n",
+    }
+    _require(worker.get("state") == "ready"
+             and isinstance(outer, Mapping) and set(outer) == set(expected_outer)
+             and dict(outer) == expected_outer,
+             "parent worker-cgroup admission limits differ from retained Compose")
+
+    _require(control.read_bytes("backend/resource-budget.json", optional=True,
+                                 maximum=64 * 1024, timeout=90) is None,
+             "a saved backend resource profile appeared during retained Compose validation")
+
+    return {
+        "source": "retained-compose",
+        "budget": budget,
+        "parent_attempt": previous["attempt"],
+        "image_id": image_id,
+        "started_at": started_at,
+        "parent_terminal_sha256": _sha(terminal_raw),
+        "parent_compose_sha256": _sha(compose_raw),
+    }
+
+
 def _budget(control, document, backend, previous, image_id):
     from docker_volume_resources import apply_saved_budget
     from docker_volume_unclaimed_cancellation import _saved_backend_budget
+
+    profile_raw = control.read_bytes(
+        "backend/resource-budget.json", optional=True, maximum=64 * 1024, timeout=90)
+    if profile_raw is None and _ownerless_parent(previous):
+        return _retained_compose_budget(control, document, backend, previous, image_id)
 
     saved = _saved_backend_budget(control, backend["Id"], document)
     receipt_raw = saved["receipt_raw"]
