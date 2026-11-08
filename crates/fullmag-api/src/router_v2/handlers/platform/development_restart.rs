@@ -1240,7 +1240,7 @@ mod tests {
         } else {
             Vec::new()
         };
-        snapshot.mesh_workspace = Some(accepted_mesh_workspace(mesh_owner_run_id));
+        snapshot.mesh_workspace = Some(accepted_mesh_workspace(mesh_owner_run_id).into());
         snapshot
     }
 
@@ -1565,7 +1565,7 @@ mod tests {
             execution.stage_statuses[0] = StageLifecycleState::Failed;
             execution.stages[0].status = StageLifecycleState::Failed;
             execution.completed_stage_indexes.clear();
-            snapshot.mesh_workspace = Some(accepted_mesh_workspace("run-previous"));
+            snapshot.mesh_workspace = Some(accepted_mesh_workspace("run-previous").into());
         }
 
         assert!(acquire_workspace_for_restart(&state).await.is_err());
@@ -1677,7 +1677,7 @@ mod tests {
                 {"id": "runtime", "status": "done"},
                 {"id": "readiness", "status": "warning"}
             ]
-        }));
+        }).into());
         assert!(validate_current_mesh_workspace(&supported_legacy_mesh).is_ok());
         assert!(validate_retirement_current_mesh_workspace(&supported_legacy_mesh).is_ok());
 
