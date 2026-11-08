@@ -3292,7 +3292,26 @@ async fn apply_projection(
             run.status = projection.status.to_string();
             changed = true;
         }
-        if let Some(scalar) = projection.latest_total_energy.as_ref() {
+        if let Some((stats, _)) = projection.terminal_stats.as_ref() {
+            // These statistics are pinned to the exact final accepted state,
+            // task attempt and clock, just like the terminal scalar series.
+            // Study output ports may omit E_total or refer to an earlier frame.
+            for (target, value) in [
+                (&mut run.final_time, stats.time),
+                (&mut run.final_e_ex, stats.e_ex),
+                (&mut run.final_e_demag, stats.e_demag),
+                (&mut run.final_e_ext, stats.e_ext),
+                (&mut run.final_e_ani, stats.e_ani),
+                (&mut run.final_e_dmi, stats.e_dmi),
+                (&mut run.final_e_rotated_dmi, stats.e_rotated_dmi),
+                (&mut run.final_e_total, stats.e_total),
+            ] {
+                if *target != Some(value) {
+                    *target = Some(value);
+                    changed = true;
+                }
+            }
+        } else if let Some(scalar) = projection.latest_total_energy.as_ref() {
             if scalar.time_s.is_finite() && scalar.time_s >= 0.0 {
                 if run.final_time != Some(scalar.time_s) {
                     run.final_time = Some(scalar.time_s);
