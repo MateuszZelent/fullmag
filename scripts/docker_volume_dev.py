@@ -25,6 +25,7 @@ from docker_build_control import (BuildControl, BuildControlError, DockerObserva
 from docker_dev_host import docker_argv, require_host, local_volume, validate_host_path
 import docker_preclaim_cancelled_restart as preclaim_restart
 import docker_saved_authoring_history as retained_history
+import docker_saved_authoring_generated as generated_authoring
 
 INCLUDE_UNTRACKED_ENV = "FULLMAG_DEV_INCLUDE_UNTRACKED"
 _MAX_INCLUDE_UNTRACKED_FILES = 10000
@@ -4786,7 +4787,11 @@ def _saved_authoring_document(raw):
     return value
 
 
-def _saved_authoring_validate_request(request, *, project, attempt, config_sha256, selected):
+def _saved_authoring_validate_request(request, *, project, attempt, config_sha256, selected,
+                                      allow_generated=False):
+    generated = generated_authoring.validate_checkpoint(request)
+    _saved_authoring_require(generated is None or allow_generated,
+        "generated source checkpoint is not enabled for recovery")
     empty_authoring = isinstance(request, dict) and request.get('schema') == _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA
     if empty_authoring:
         _saved_authoring_require(not any(key in request for key in (
@@ -4799,9 +4804,10 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
         'source_root', 'exclusive_operator_window', 'archive', 'session', 'containers',
         'package', 'service_owner_sha256'} | ({'cancelled_preclaim'} if cancelled else set())
         | ({'historical_preclaim'} if historical else set())
-        | ({'retained_run_catalogs'} if retained is not None else set())), 'checkpoint fields differ')
+        | ({'retained_run_catalogs'} if retained is not None else set())
+        | ({'generated_source'} if generated is not None else set())), 'checkpoint fields differ')
     _saved_authoring_require(request['schema'] in {'fullmag.saved-authoring-restart.v1', preclaim_restart.SCHEMA,
-                                                    _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA}
+                                                    _SAVED_EMPTY_AUTHORING_RESTART_SCHEMA, generated_authoring.SCHEMA}
         and request['compose_project'] == project and request['attempt'] == attempt
         and request['config_sha256'] == config_sha256
         and request['source_root'] == str(selected)
@@ -4871,7 +4877,7 @@ def _saved_authoring_validate_services(request, actual, *, quiesced=False):
             'service incarnation/configuration/state differs: ' + service)
 
 
-def _saved_authoring_validate_archive(raw, pin):
+def _saved_authoring_validate_archive(raw, pin, *, generated_source=None):
     _saved_authoring_require(len(raw) == pin['bytes'] and _saved_authoring_sha(raw) == pin['sha256'], 'saved Windows archive changed')
     source_entry = pin.get('source_entry')
     source_sha256 = pin.get('source_sha256')
@@ -4893,6 +4899,8 @@ def _saved_authoring_validate_archive(raw, pin):
                 and str(path) == entry.filename and '\\' not in entry.filename,
                 'unsafe archive entry')
         manifest = _saved_authoring_document(archive.read('manifest/project.json'))
+        if generated_source is not None:
+            generated_authoring.validate_archive(archive, manifest, generated_source)
         _saved_authoring_require(manifest.get('format') == 'fullmag.project.archive.v1'
             and manifest.get('project_schema') == 'fullmag.project.v1'
             and manifest.get('scene_schema') == 'scene.v2'
@@ -4964,10 +4972,15 @@ def _saved_authoring_read_archive(request, state):
     _saved_authoring_require(path.is_absolute() and path.suffix.lower() == '.fms', 'absolute FMS path required')
     storage.validate_path(path, state / 'runs' / 'projects', 'saved authoring project')
     raw = read_owned_regular(path, maximum=_SAVED_AUTHORING_MAX_ARCHIVE_BYTES)
+    generated = generated_authoring.validate_checkpoint(request)
+    if generated is not None:
+        return raw, _saved_authoring_validate_archive(raw, request['archive'], generated_source=generated)
     return raw, _saved_authoring_validate_archive(raw, request['archive'])
 
 
 def _saved_authoring_validate_probe(probe, request, scene):
+    generated_authoring.validate_probe(probe, request)
+    generated = request.get("schema") == generated_authoring.SCHEMA
     cancelled = preclaim_restart.validate_checkpoint(request)
     terminal_cancelled = cancelled is not None and 'stop_command_id' in cancelled
     _saved_authoring_require(probe.get('schema') == 'fullmag.saved-authoring-restart-probe.v1', 'probe schema differs')
@@ -4984,7 +4997,7 @@ def _saved_authoring_validate_probe(probe, request, scene):
         _saved_authoring_require(current.get('current') is True and current.get('session_id') == expected['session_id']
             and current.get('status') == ('cancelled' if terminal_cancelled else ('waiting_for_compute' if cancelled else 'awaiting_command'))
             and expected['source_kind'] == 'ui_authoring'
-            and current.get('script') is None and current.get('script_path') == '',
+            and (generated or (current.get('script') is None and current.get('script_path') == '')),
             'UI authoring owner/status/source-kind changed')
         _saved_authoring_require(all(status.get('session', {}).get(k) == expected[k]
             for k in ('session_id', 'session_epoch', 'request_scope_epoch'))
@@ -5061,7 +5074,8 @@ def _saved_authoring_validate_probe(probe, request, scene):
     preclaim_restart.validate_historical_binding(probe, request)
 
 
-_SAVED_AUTHORING_PROBE_SCRIPT = retained_history.PROBE_FUNCTION + "\n" + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
+_SAVED_AUTHORING_PROBE_SCRIPT = (retained_history.PROBE_FUNCTION + "\n"
+    + generated_authoring.PROBE_FUNCTION + "\n") + r"""import base64,fcntl,hashlib,json,os,pathlib,stat,sys,time,urllib.error,urllib.parse,urllib.request,uuid
 MAX=8*1024*1024
 request=json.load(sys.stdin)
 pin=request['checkpoint']; session=pin['session']
@@ -5118,6 +5132,10 @@ def api(path,payload=None):
    if not isinstance(value,dict): raise RuntimeError('API response is not an object')
   return {'status':response.status,'body':value,'api_instance_id':response.headers.get('x-fullmag-api-instance')}
 rows={}
+generated_source_before=None
+if pin.get('generated_source') is not None:
+ import runtime_service
+ generated_source_before=observe_generated_source(pin['generated_source'],runtime_service.canonical_paths().state_root/'local-live'/'current')
 for suffix in ('before',):
  for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_'+suffix]=api('/v2/sessions/current'+path)
 for name,path in [('health','/v2/platform/health'),('queue','/v2/platform/compute/queue'),('runtime','/v2/platform/runtime-service'),('commands','/v2/sessions/current/simulation/commands'),('run','/v2/sessions/current/simulation/runs/current'),('preparation','/v2/sessions/current/simulation/preparation'),('mesh','/v2/sessions/current/meshing/builds/current'),('mesh_history','/v2/sessions/current/meshing/builds'),('mesh_manifest','/v2/sessions/current/meshing/meshes/shared-domain/manifest')]: rows[name]=api(path)
@@ -5209,6 +5227,8 @@ provenance=json.loads(provenance_raw)
 extra={}
 if 'cancelled_preclaim' in pin or 'historical_preclaim' in pin: extra.update(preclaim_cancelled_snapshots(store,ledger,pin))
 for name,path in [('current',''),('status','/status'),('scene','/model/scene')]: rows[name+'_after']=api('/v2/sessions/current'+path)
+if generated_source_before is not None:
+ extra['generated_source']={'before':generated_source_before,'after':observe_generated_source(pin['generated_source'],paths.state_root/'local-live'/'current')}
 print(json.dumps({'schema':'fullmag.saved-authoring-restart-probe.v1','resources':rows,'run_directories':run_directories,'retained_run_catalogs':retained_catalogs,'transient_files':transient_files,'reservation_states':reservation_states,'accepted_store_id':store_id,'foreign_reservations_observed':foreign_reservations,'process_receipt':receipt,'provenance_sha256':hashlib.sha256(provenance_raw).hexdigest(),'source_snapshot_sha256':provenance.get('source_snapshot_sha256'),**extra},sort_keys=True))
 """
 
@@ -7889,7 +7909,7 @@ def _retained_operation(
             raise BuildControlError("Saved authoring checkpoint CAS differs")
         saved_authoring = _saved_authoring_document(checkpoint_raw)
         _saved_authoring_validate_request(saved_authoring, project=control.project, attempt=args.attempt,
-            config_sha256=args.config_sha256, selected=selected)
+            config_sha256=args.config_sha256, selected=selected, allow_generated=True)
         _saved_authoring_validate_services(saved_authoring, actual)
     if restart_idle_service:
         diagnostic_terminal = None

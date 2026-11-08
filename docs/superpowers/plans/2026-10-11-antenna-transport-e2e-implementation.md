@@ -5177,3 +5177,16 @@ Sam wpis105m/s nie jest wejściem naszej całki i nie wyjaśnia jej rozbieżnoś
 [Raport, źródła i dowody](2026-11-08-sushruth-table-one-consistency-audit.md).
 Pełne11plików/9577452B zachowano i odczytano na ext4 WSL; manifestf3615a49….
 Kwalifikacja źródła GSG i reprodukcja publikacji pozostają otwarte.
+
+
+## Checkpoint 08.11.2026 — zatwierdzony generated-authoring, preflight PASS
+
+Po jawnej zgodzie wdrożono addytywny wariant checkpointu, zachowując odmowy
+legacy i wszystkich istniejących ścieżek recovery.6 nowych i65 starych testów
+PASS; niezależny przegląd bez blokera. Pełny rzeczywisty preflight PASS,
+z zachowaniem źródła/sceny i released lease, bez Start lub Solve.
+Publiczny authoring save zachował nowy FMS revision6 na ext4 WSL.
+
+[Wdrożenie i dokładne dowody](2026-11-08-generated-authoring-restart-execution.md).
+Pozostała jedna zatwierdzona aktualizacja3203, jedno Prepare corner25
+i warunkowo jedno V/J/H. W chwili checkpointu żaden z tych kroków nie ruszył.
