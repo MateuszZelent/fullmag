@@ -541,6 +541,8 @@ case "${recipe}" in
     docker_dev_frontend_refresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" refresh-frontend-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --frontend-frozen-resume '([0-9a-f]{32})' --frontend-frozen-resume-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --saved-authoring-checkpoint '([a-zA-Z0-9_./-]+)' --saved-authoring-checkpoint-sha256 '([0-9a-f]{64})')?( --stop-only)?( --allow-prepared-session)?[[:space:]]*$"
     docker_dev_prelaunch_stop_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --quiesce-api --capture-prelaunch-failure[[:space:]]*$"
+    docker_dev_terminal_capture_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --allow-prepared-session --capture-terminal-observation[[:space:]]*$"
+    docker_dev_terminal_restore_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --terminal-observation-stop '([0-9a-f]{32})'[[:space:]]*$"
     docker_dev_native_terminal_stop_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --quiesce-api --capture-native-terminal[[:space:]]*$"
     docker_dev_prelaunch_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --prelaunch-failure-stop '([0-9a-f]{32})' --prelaunch-failure-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
     docker_dev_native_terminal_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --native-terminal-stop '([0-9a-f]{32})' --native-terminal-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
@@ -642,6 +644,14 @@ case "${recipe}" in
     elif [[ "${recipe}" =~ ${docker_dev_resume_recreation_pattern} ]]; then
       docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --resume-recreation "${BASH_REMATCH[5]}")
+    elif [[ "${recipe}" =~ ${docker_dev_terminal_capture_pattern} ]]; then
+      docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --stop-only --allow-prepared-session --capture-terminal-observation)
+    elif [[ "${recipe}" =~ ${docker_dev_terminal_restore_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --terminal-observation-stop "${BASH_REMATCH[5]}")
     elif [[ "${recipe}" =~ ${docker_dev_native_terminal_stop_pattern} ]]; then
       docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"

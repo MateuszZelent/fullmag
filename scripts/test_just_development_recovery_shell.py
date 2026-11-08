@@ -54,7 +54,11 @@ class DevelopmentRecoveryShellTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         source = '/selected/worktree with spaces/$(printf injected);literal'
         base = ['a' * 32, 'b' * 64, source]
-        recipes = [('docker-dev-stop-prelaunch-failure', base + ['3242'],
+        recipes = [('docker-dev-capture-terminal', base + ['3242'],
+                    [b'--stop-only', b'--allow-prepared-session', b'--capture-terminal-observation']),
+                   ('docker-dev-restore-terminal', base + ['c' * 32, '3242'],
+                    [b'--terminal-observation-stop', b'c' * 32]),
+                   ('docker-dev-stop-prelaunch-failure', base + ['3242'],
                     [b'--stop-only', b'--quiesce-api', b'--capture-prelaunch-failure']),
                    ('docker-dev-recreate-prelaunch-failure', base + ['c' * 32, 'd' * 64, '3242'],
                     [b'--fresh-state', b'--prelaunch-failure-stop', b'c' * 32,
