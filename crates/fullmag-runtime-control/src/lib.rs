@@ -924,7 +924,17 @@ mod tests {
         let claim=task.claim(ResourceLease::new("cpu-genesis",ResourceKind::Cpu,ResourceBudget {
             cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1,
         }).unwrap()).unwrap();
-        commit_claimed_task_admission(&store,&task,&claim).unwrap();
+        // This fixture exercises genesis from an existing immutable admission,
+        // independently of the public RunSpec/profile admission pipeline.
+        let now=chrono::Utc::now();
+        store.commit_task_admission(&FmsResourceLease {
+            schema_version:FMS_RESOURCE_LEASE_SCHEMA.into(),resource_id:claim.lease.resource_id.clone(),
+            kind:FmsResourceKind::Cpu,budget:FmsResourceBudget {cpu_millis:100,memory_bytes:1,gpu_memory_bytes:0,storage_bytes:1},
+            run_id:claim.run_id.as_str().into(),task_id:claim.task_id.as_str().into(),
+            attempt_id:claim.attempt_id.as_str().into(),ownership_epoch:claim.ownership_epoch.value(),
+            lease_token:claim.lease.lease_token.as_str().into(),state:FmsResourceLeaseState::Active,
+            acquired_at:now,heartbeat_at:now,heartbeat_sequence:0,released_at:None,host_launch_binding:None,
+        }).unwrap();
         assert!(recover_coordinator(&store,&claim).is_err());
         let mut stale=claim.clone();stale.lease.lease_token=fullmag_application::LeaseToken::new();
         assert!(ensure_admitted_task_coordinator_genesis(&store,&stale).is_err());
