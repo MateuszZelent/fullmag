@@ -589,7 +589,7 @@ describe("StudyInspectorPanelModel", () => {
     });
   });
 
-  it("summarizes active and failed command queue states", () => {
+  it("prefers the newest active command over an older failed command", () => {
     expect(
       resolveCommandSummary({
         accepted_count: 0,
@@ -626,21 +626,21 @@ describe("StudyInspectorPanelModel", () => {
           {
             command_id: "cmd-1",
             created_at_unix_ms: 1,
-            kind: "compute_fields",
+            error: "stage target mismatch",
+            kind: "pause",
             seq: 1,
-            status: "running",
+            status: "failed",
           },
           {
             command_id: "cmd-2",
             created_at_unix_ms: 2,
-            error: "stage target mismatch",
-            kind: "pause",
+            kind: "compute_fields",
             seq: 2,
-            status: "failed",
+            status: "running",
           },
         ],
         completed_count: 0,
-        dispatched_count: 0,
+        dispatched_count: 1,
         failed_count: 1,
         pending_count: 0,
         rejected_count: 0,
@@ -648,10 +648,71 @@ describe("StudyInspectorPanelModel", () => {
         running_count: 1,
       } as never),
     ).toMatchObject({
-      badge: "failed",
+      badge: "running",
       commandId: "cmd-2",
-      error: "stage target mismatch",
-      label: "Pause failed",
+      error: null,
+      label: "Compute Fields running",
+    });
+  });
+
+  it("clears an older command error after a later completion but retains failure history", () => {
+    const commands = [
+      {
+        command_id: "cmd-old-failure",
+        created_at_unix_ms: 1,
+        error: "FutureTimestamp",
+        kind: "relax",
+        seq: 1,
+        status: "failed",
+      },
+      {
+        command_id: "cmd-recovered-run",
+        created_at_unix_ms: 2,
+        kind: "run",
+        seq: 2,
+        status: "completed",
+      },
+    ];
+    const queue = {
+      accepted_count: 0,
+      can_accept_commands: true,
+      commands,
+      completed_count: 1,
+      dispatched_count: 0,
+      failed_count: 1,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 3,
+      running_count: 0,
+    };
+
+    expect(resolveCommandSummary(queue as never)).toMatchObject({
+      badge: "completed",
+      commandId: "cmd-recovered-run",
+      error: null,
+      label: "Run completed",
+    });
+    expect(commands[0]).toMatchObject({
+      command_id: "cmd-old-failure",
+      error: "FutureTimestamp",
+      status: "failed",
+    });
+
+    const newestFailure = {
+      ...queue,
+      commands: [
+        commands[1],
+        { ...commands[0], command_id: "cmd-new-failure", seq: 3 },
+      ],
+      completed_count: 1,
+      failed_count: 1,
+      revision: 4,
+    };
+    expect(resolveCommandSummary(newestFailure as never)).toMatchObject({
+      badge: "failed",
+      commandId: "cmd-new-failure",
+      error: "FutureTimestamp",
+      label: "Relax failed",
     });
   });
 
