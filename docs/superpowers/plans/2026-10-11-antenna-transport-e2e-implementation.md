@@ -5205,3 +5205,16 @@ brak nowego solution_set lub eta. Oba lease i obie rezerwacje hosta released.
 Bez retry,nowego recovery,zmiany tolerancji lub dalszego Solve.
 [Pełny audyt i następny brakujący dowód](2026-11-08-generated-authoring-corner25-sequence-result.md).
 Nadal NOT VERIFIED: kwalifikacja źródła, Fig.3, napęd LLG i odbiór browsera.
+
+
+## Etap2/5 — odczytowa diagnoza centroidu RT0,08.11.2026
+
+Nowego buildu/Prepare/Submit/Solve nie wykonano. Na rzeczywistej geometrii
+i syntetycznym RT0 uzyskano świadek naruszenia obecnej nierówności center J:
+różnica/budżet18,352888; po dokładnej translacji0. Sześć kontroli arytmetycznych PASS.
+Nie jest to przyczyna potwierdzona dla rzeczywistego Failed ani kwalifikacja źródła.
+Brakują bity odrzuconej komórki; walidacja poprzedza publikację artefaktów.
+[Audyt](2026-11-08-rt0-centroid-readonly-diagnosis.md) i
+[osobna propozycja diagnostyki](2026-11-08-rt0-center-first-failure-diagnostic-proposal.md).
+Świadek ma zmieścić się w istniejącym raporcie błędu; predykat/tolerancje bez zmian.
+Plan oczekuje na przegląd i nową decyzję, bez automatycznego ponowienia.
