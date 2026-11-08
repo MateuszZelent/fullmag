@@ -1329,6 +1329,18 @@ context/single pozostają niedopuszczone; pozostałe bramki planera/native
 nie są przez worker omijane. Samo rozszerzenie tej walidacji nie jest dowodem
 wykonania: wymagane są osobne testy publicznego Run, pól, publikacji i recovery.
 
+Imported Run zachowuje osobną pełną politykę adaptive_timestep każdego
+przechwyconego etapu, w tym tolerance_mode, atol/rtol, dt_initial/min/max,
+safety, growth/shrink oraz limity rotacji i normy. Zmiana czasu trwania
+pipeline nie może zastępować jej ustawieniami bazowego IR. Snapshot używa
+kanonicznych wartości liczbowych; jawne null usuwa politykę. Legacy capture
+z dodatnim fixed_timestep pozostaje zgodny. Adaptacyjny Run bez snapshotu
+wymaga ponownego eksportu skryptu; dziedziczenie nie odtworzy brakujących
+nastaw. Polityka nieprawidłowa,
+nieznane pola albo konflikt z fixed_timestep są odmową przed wykonaniem.
+Regresja dwóch RK45 o różnych tolerancjach i krokach sprawdza Python→Scene
+oraz materializację IR po zmianie czasu drugiego etapu.
+
 Natywny harness `fdm_regions_pbc_abi_checks.py` rozróżnia jedną krawędź otwartą
 i dwie różne krawędzie okresowe przy dwóch komórkach na wybranej osi. Wyrocznia
 ma `E_ex = L A V |m1-m0|²/h²` i

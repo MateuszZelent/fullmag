@@ -171,6 +171,27 @@ def _stage_adaptive_timestep_draft(
     }
 
 
+def _validate_adaptive_snapshot(value: object) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError("adaptive timestep must be an object or null")
+    unknown = set(value) - {
+        "tolerance_mode", "atol", "rtol", "dt_initial", "dt_min", "dt_max",
+        "safety", "growth_limit", "shrink_limit", "max_spin_rotation", "norm_tolerance",
+    }
+    if unknown:
+        raise ValueError("adaptive timestep has unknown fields: " + ", ".join(sorted(unknown)))
+    if "tolerance_mode" in value and value["tolerance_mode"] not in {"advanced", "max_error"}:
+        raise ValueError("adaptive timestep has unknown tolerance_mode")
+    for key, item in value.items():
+        if key == "tolerance_mode" or item is None or item == "":
+            continue
+        number = _number_or_none(item)
+        if isinstance(item, bool) or number is None or not math.isfinite(number):
+            raise ValueError(f"adaptive timestep {key} must be a finite number or null")
+
+
 def _advanced_policy_with_overrides(
     fallback: AdaptiveTimestep | None,
     overrides: dict[str, object],
@@ -901,6 +922,7 @@ def _reject_unrendered_scene_nested_fields(
 
 
 def _scene_solver_keyword_args(source: Mapping[str, object]) -> list[str]:
+    _validate_adaptive_snapshot(source.get("adaptive_timestep"))
     args: list[str] = []
     integrator = source.get("integrator")
     if isinstance(integrator, str) and integrator.strip():
@@ -3214,6 +3236,10 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         "entrypoint_kind": stage.entrypoint_kind,
         "integrator": dynamics.integrator,
         "fixed_timestep": _text_number(dynamics.fixed_timestep),
+        "adaptive_timestep": (
+            dynamics.adaptive_timestep.to_ir()
+            if dynamics.adaptive_timestep is not None else None
+        ),
         "demag_interval_s": _text_number(
             dynamics.field_refresh.demag_interval_s
             if dynamics.field_refresh is not None
@@ -8601,7 +8627,9 @@ def _render_stages(
         dynamics_signature = (
             stage_dynamics.to_ir() if stage_dynamics is not None else None
         )
-        if previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature:
+        if (previous_dynamics_signature is not None and dynamics_signature != previous_dynamics_signature) or (
+            isinstance(study, TimeEvolution) and "adaptive_timestep" in stage_override
+        ):
             if stage_dynamics is not None:
                 stage_solver_override = dict(solver_override)
                 timestep_policy_keys = (
@@ -8644,6 +8672,9 @@ def _render_stages(
                     for key in timestep_policy_keys:
                         if key not in {"dt_initial", "dt_min", "dt_max", "max_err"}:
                             stage_solver_override.pop(key, None)
+                elif "adaptive_timestep" in stage_override and stage_override["adaptive_timestep"] is None:
+                    for key in timestep_policy_keys:
+                        stage_solver_override.pop(key, None)
                 for key in (
                     "integrator",
                     "fixed_timestep",
@@ -8654,7 +8685,7 @@ def _render_stages(
                     "dt_max",
                     "max_err",
                 ):
-                    if key in stage_override and stage_override[key] not in (None, ""):
+                    if key in stage_override:
                         stage_solver_override[key] = stage_override[key]
                 lines.append(
                     _render_solver_call(
@@ -9457,6 +9488,7 @@ def _render_solver_call(
         "fixed_timestep" in solver_override
         and _number_or_none(solver_override.get("fixed_timestep")) is not None
     )
+    _validate_adaptive_snapshot(solver_override.get("adaptive_timestep"))
     has_advanced_override = isinstance(solver_override.get("adaptive_timestep"), dict)
     has_convenience_override = any(key in solver_override for key in convenience_keys)
     has_active_convenience_override = any(
@@ -9475,10 +9507,22 @@ def _render_solver_call(
     if has_fixed_override:
         resolved_adaptive = None
     elif has_advanced_override:
+        captured_policy = solver_override["adaptive_timestep"]
         resolved_adaptive = _advanced_policy_with_overrides(
-            dynamics.adaptive_timestep,
-            solver_override["adaptive_timestep"],
+            None if "tolerance_mode" in captured_policy else dynamics.adaptive_timestep,
+            captured_policy,
         )
+        mode = captured_policy.get("tolerance_mode", "advanced")
+        if mode == "max_error":
+            candidate = AdaptiveTimestep._from_max_error(
+                max_err=resolved_adaptive.atol, dt_initial=resolved_adaptive.dt_initial,
+                dt_min=resolved_adaptive.dt_min, dt_max=resolved_adaptive.dt_max,
+            )
+            if candidate != resolved_adaptive:
+                raise ValueError("max_error adaptive snapshot contains unrenderable advanced controls")
+            resolved_adaptive = candidate
+        elif mode != "advanced":
+            raise ValueError("adaptive timestep has unknown tolerance_mode")
         resolved_fixed = None
     elif has_convenience_override:
         resolved_adaptive = _max_error_policy_with_overrides(

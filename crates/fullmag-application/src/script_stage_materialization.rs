@@ -2193,6 +2193,111 @@ fn script_imported_run_replays_its_captured_dynamics_and_sampling_after_duration
     assert!(materialize("script_imported", &unsupported).is_err());
 }
 
+#[cfg(test)]
+#[test]
+fn script_imported_run_preserves_each_adaptive_snapshot_and_explicit_clear() {
+    let mut base = ProblemIR::bootstrap_example();
+    let mut last_payload = BTreeMap::new();
+    for (atol, initial, max) in [(1e-5, 1e-14, 1e-12), (1e-7, 2e-15, 2e-13)] {
+        let policy = serde_json::json!({
+            "tolerance_mode":"max_error", "atol":atol, "rtol":0.0,
+            "dt_initial":initial,"dt_min":1e-18,"dt_max":max,
+            "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+        });
+        let payload: BTreeMap<String, Value> = serde_json::from_value(serde_json::json!({
+            "kind":"run", "entrypoint_kind":"build", "integrator":"rk45",
+            "fixed_timestep":"", "adaptive_timestep":policy, "until_seconds":"3e-11"
+        }))
+        .unwrap();
+        let stage = materialize_pipeline_primitive(
+            &mut base,
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some("script_imported"),
+            &payload,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &stage.ir.study else {
+            panic!("Run expected");
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            adaptive_timestep,
+            fixed_timestep,
+            ..
+        } = dynamics;
+        assert_eq!(
+            *adaptive_timestep,
+            Some(serde_json::from_value(policy).unwrap())
+        );
+        assert!(fixed_timestep.is_none());
+        assert_eq!(stage.until_seconds, 3e-11);
+        base = stage.ir;
+        last_payload = payload;
+    }
+    for value in [
+        Value::String("invalid".into()),
+        serde_json::json!({"atol":-1}),
+        {
+            let mut value = last_payload["adaptive_timestep"].clone();
+            value["atol"] = serde_json::json!(-1);
+            value
+        },
+        {
+            let mut value = last_payload["adaptive_timestep"].clone();
+            value["unknown_control"] = serde_json::json!(1);
+            value
+        },
+    ] {
+        let mut payload = last_payload.clone();
+        payload.insert("adaptive_timestep".into(), value);
+        assert!(materialize_pipeline_primitive(
+            &mut base.clone(),
+            &ScriptAntennaAuthoringInventory::default(),
+            "run",
+            Some("script_imported"),
+            &payload,
+            None
+        )
+        .is_err());
+    }
+    let mut conflict = last_payload.clone();
+    conflict.insert("fixed_timestep".into(), serde_json::json!(1e-15));
+    assert!(materialize_pipeline_primitive(
+        &mut base.clone(),
+        &ScriptAntennaAuthoringInventory::default(),
+        "run",
+        Some("script_imported"),
+        &conflict,
+        None
+    )
+    .is_err());
+    let mut missing = last_payload.clone();
+    missing.remove("adaptive_timestep");
+    let error = materialize_pipeline_primitive(&mut base.clone(),
+        &ScriptAntennaAuthoringInventory::default(), "run", Some("script_imported"), &missing, None).unwrap_err();
+    assert!(error.to_string().contains("export the source script again"));
+    last_payload.insert("adaptive_timestep".into(), Value::Null);
+    let stage = materialize_pipeline_primitive(
+        &mut base,
+        &ScriptAntennaAuthoringInventory::default(),
+        "run",
+        Some("script_imported"),
+        &last_payload,
+        None,
+    )
+    .unwrap()
+    .unwrap();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = stage.ir.study else {
+        panic!("Run expected");
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        adaptive_timestep, ..
+    } = dynamics;
+    assert!(adaptive_timestep.is_none());
+}
+
 fn validate_pipeline_run_primitive_payload(
     payload: &BTreeMap<String, Value>,
     script_imported: bool,
@@ -2215,6 +2320,7 @@ fn validate_pipeline_run_primitive_payload(
                     key,
                     "integrator"
                         | "fixed_timestep"
+                        | "adaptive_timestep"
                         | "demag_interval_s"
                         | "sampling"
                         | "spin_wave_response"
@@ -2252,9 +2358,38 @@ fn apply_imported_run_capture(ir: &mut ProblemIR, payload: &BTreeMap<String, Val
     }
     if payload.contains_key("fixed_timestep") {
         *fixed_timestep = payload_f64(payload, "fixed_timestep")?;
-        if fixed_timestep.is_some() {
+        if fixed_timestep.is_some() && !payload.contains_key("adaptive_timestep") {
             *adaptive_timestep = None;
         }
+    }
+    if let Some(value) = payload.get("adaptive_timestep") {
+        if let Some(object) = value.as_object() {
+            for key in object.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "tolerance_mode"
+                        | "atol"
+                        | "rtol"
+                        | "dt_initial"
+                        | "dt_min"
+                        | "dt_max"
+                        | "safety"
+                        | "growth_limit"
+                        | "shrink_limit"
+                        | "max_spin_rotation"
+                        | "norm_tolerance"
+                ) {
+                    bail!("script-imported Run adaptive_timestep has unknown field: {key}");
+                }
+            }
+        }
+        *adaptive_timestep = serde_json::from_value(value.clone())
+            .context("script-imported Run adaptive_timestep is invalid")?;
+    } else if fixed_timestep.is_none()
+        && (adaptive_timestep.is_some()
+            || matches!(integrator.as_str(), "auto" | "rk23" | "rk45" | "coupled_imex_ark2"))
+    {
+        bail!("script-imported adaptive Run lacks its adaptive_timestep snapshot; export the source script again");
     }
     if payload.contains_key("demag_interval_s") {
         *field_refresh = payload_f64(payload, "demag_interval_s")?.map(|interval| {

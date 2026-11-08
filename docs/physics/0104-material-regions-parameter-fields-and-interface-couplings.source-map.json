@@ -1212,6 +1212,24 @@
       "path": "packages/fullmag-py/tests/test_fem_u32_marker_roundtrip.py",
       "symbol": "class FemU32MarkerRoundTripTests",
       "responsibility": "Check high u32 authoring, facet incidence, old NPZ fingerprints, Gmsh/COMSOL and native artifact roundtrip."
+    },
+    {
+      "id": "capture_run_adaptive_policy",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_stage_draft",
+      "responsibility": "Preserve complete stage-local adaptive policies and reject malformed or ambiguous imported Run snapshots",
+      "lane": "FDM/FEM authoring and planning",
+      "tests": "test_captured_runs_keep_distinct_adaptive_policies_after_duration_edit",
+      "evidence_status": "source-test"
+    },
+    {
+      "id": "materialize_run_adaptive_policy",
+      "path": "crates/fullmag-application/src/script_stage_materialization.rs",
+      "symbol": "apply_imported_run_capture",
+      "responsibility": "Preserve complete stage-local adaptive policies and reject malformed or ambiguous imported Run snapshots",
+      "lane": "FDM/FEM authoring and planning",
+      "tests": "script_imported_run_preserves_each_adaptive_snapshot_and_explicit_clear",
+      "evidence_status": "source-test"
     }
   ],
   "public_api": {

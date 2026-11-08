@@ -2082,6 +2082,64 @@ study.stages.add_run(stage_id='third', until=1e-11)
             with self.assertRaisesRegex(ValueError, 'run_sampling_unrendered_fields: unsupported'):
                 render_scene_document_as_script(scene)
 
+    def test_captured_runs_keep_distinct_adaptive_policies_after_duration_edit(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('adaptive-runs')\nstudy.engine('fdm')\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.solver(integrator='rk45', max_err=1e-5, dt_initial=1e-14, dt_max=1e-12)
+study.stages.add_run(stage_id='first', until=1e-11)
+study.solver(integrator='rk45', max_err=1e-7, dt_initial=2e-15, dt_max=2e-13)
+study.stages.add_run(stage_id='second', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root)
+            expected = [stage.problem.study.dynamics.to_ir()['adaptive_timestep'] for stage in loaded.stages]
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            nodes = scene['study']['study_pipeline']['nodes']
+            self.assertNotEqual(expected[0], expected[1])
+            self.assertEqual([node['payload']['adaptive_timestep'] for node in nodes], expected)
+            nodes[1]['payload']['until_seconds'] = '3e-11'
+            rewritten = _load_text(render_scene_document_as_script(scene), root, 'rewritten.py')
+            self.assertEqual([stage.problem.study.dynamics.to_ir()['adaptive_timestep'] for stage in rewritten.stages], expected)
+            self.assertEqual(rewritten.stages[1].default_until_seconds, 3e-11)
+            for invalid in ['invalid', True, [], {'atol': -1}]:
+                broken = json.loads(json.dumps(scene))
+                broken['study']['study_pipeline']['nodes'][0]['payload']['adaptive_timestep'] = invalid
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    render_scene_document_as_script(broken)
+            for key, invalid in [('dt_initial', True), ('dt_max', 'invalid'), ('atol', float('nan')), ('unknown_control', 1)]:
+                broken = json.loads(json.dumps(scene))
+                broken['study']['study_pipeline']['nodes'][0]['payload']['adaptive_timestep'][key] = invalid
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    render_scene_document_as_script(broken)
+            cleared = json.loads(json.dumps(scene))
+            payload = cleared['study']['study_pipeline']['nodes'][1]['payload']
+            payload.update(integrator='rk4', fixed_timestep='', adaptive_timestep=None)
+            # The public solver preserves omitted controls; clearing to an
+            # unspecified RK4 step cannot be represented after an adaptive Run.
+            with self.assertRaises(ValueError):
+                render_scene_document_as_script(cleared)
+            payload['fixed_timestep'] = '2e-15'
+            actual = _load_text(render_scene_document_as_script(cleared), root, 'cleared.py')
+            self.assertIsNone(actual.stages[1].problem.study.dynamics.adaptive_timestep)
+            self.assertEqual(actual.stages[1].problem.study.dynamics.fixed_timestep, 2e-15)
+
+    def test_captured_run_preserves_all_advanced_adaptive_controls(self) -> None:
+        script = "import fullmag as fm\nstudy=fm.study('advanced-runs')\nstudy.engine('fdm')\n"
+        script += textwrap.dedent(_SCENE_BODY)
+        script += """
+study.solver(integrator='rk45', adaptive_timestep=fm.AdaptiveTimestep(
+    atol=1e-7, rtol=1e-3, dt_initial=1e-15, dt_min=1e-18, dt_max=1e-12,
+    safety=.8, growth_limit=1.5, shrink_limit=.25, max_spin_rotation=.2, norm_tolerance=1e-4))
+study.stages.add_run(stage_id='advanced', until=1e-11)
+study.solver(integrator='rk45', max_err=1e-5, dt_initial=2e-15, dt_max=2e-13)
+study.stages.add_run(stage_id='maximum-error', until=2e-11)
+"""
+        with TemporaryDirectory() as tmp_dir:
+            loaded, rewritten, _ = _scene_round_trip(script, Path(tmp_dir))
+            self.assertEqual(_stage_study_ir(loaded), _stage_study_ir(rewritten))
+
     def test_captured_run_tables_roundtrip_with_cadence_expressions_and_ids(self) -> None:
         script = "import fullmag as fm\nstudy=fm.study('run-tables')\nstudy.engine('fdm')\nstudy.cell(5e-9,5e-9,5e-9)\n"
         script += textwrap.dedent(_SCENE_BODY)
