@@ -21,7 +21,11 @@ export function createProjectAuthoringSessionBinding(
   if (!projectId || !acceptedSessionId) throw new Error("A confirmed project and workspace are required.");
   const apiScope = api.resourceCacheScope;
   let pinned: SessionResourceIdentity | null = null;
-  const verifyCurrent = async () => {
+  const verifyCurrent = async (expectedSceneRevision?: number) => {
+    if (expectedSceneRevision !== undefined &&
+        (!Number.isSafeInteger(expectedSceneRevision) || expectedSceneRevision < 0)) {
+      throw new Error("The project's scene revision is unavailable. Save was stopped.");
+    }
     if (api.resourceCacheScope !== apiScope) throw new Error("The API connection changed. Save was stopped.");
     const scope = sessionRequestScopeKey(pinned);
     const [collection, status] = await Promise.all([
@@ -31,7 +35,10 @@ export function createProjectAuthoringSessionBinding(
     const current = confirmedSessionResourceIdentity(sessionResourceIdentityFromStatus(status), collection);
     if (api.resourceCacheScope !== apiScope || !current || current.sessionId !== acceptedSessionId ||
         (pinned !== null && !sessionResourceIdentitiesEqual(pinned, current))) {
-      throw new Error("The project's workspace changed. Save was stopped before writing a file.");
+      throw new Error("The project's workspace changed. Save could not confirm the current scene.");
+    }
+    if (expectedSceneRevision !== undefined && status.resources.scene_revision !== expectedSceneRevision) {
+      throw new Error("The scene changed during Save. Save again to include the latest edits.");
     }
     pinned ??= Object.freeze({ ...current });
   };
@@ -43,8 +50,13 @@ export function createProjectAuthoringSessionBinding(
       const scope = sessionRequestScopeKey(pinned);
       if (!scope) throw new Error("The project's workspace scope is unavailable.");
       const scene = await api.model.scene({ sessionScopeKey: scope });
-      await verifyCurrent();
-      return sceneDocumentPayload(scene);
+      const revision = scene.revision ?? scene.scene_revision;
+      if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0 ||
+          (scene.revision != null && scene.scene_revision != null && scene.revision !== scene.scene_revision)) {
+        throw new Error("The project's scene revision is unavailable. Save was stopped.");
+      }
+      await verifyCurrent(revision);
+      return { ...sceneDocumentPayload(scene), revision };
     },
   };
 }

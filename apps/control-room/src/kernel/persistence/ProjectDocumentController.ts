@@ -138,7 +138,7 @@ export const EMPTY_PROJECT_DOCUMENT_SNAPSHOT: ProjectDocumentSnapshot = {
 export interface ProjectAuthoringSessionBinding {
   readonly projectId: string;
   readSceneDocument(): Promise<Record<string, unknown>>;
-  verifyCurrent(): Promise<void>;
+  verifyCurrent(expectedSceneRevision?: number): Promise<void>;
 }
 
 export class ProjectDocumentController {
@@ -488,6 +488,21 @@ export class ProjectDocumentController {
   async save(): Promise<void> {
     this.assertOperationAvailable();
     const binding = this.authoringSessionBinding;
+    try {
+      await this.saveCurrentDocument(binding);
+    } catch (error) {
+      const document = this.documentView();
+      if (binding && this.authoringSessionBinding === binding &&
+          document?.resource.project_id === binding.projectId && !document.resource.dirty) {
+        this.snapshot = { ...document, resource: { ...document.resource, dirty: true } };
+        this.notify();
+      }
+      throw error;
+    }
+  }
+
+  private async saveCurrentDocument(binding: ProjectAuthoringSessionBinding | null): Promise<void> {
+    let verifySavedScene: (() => Promise<void>) | null = null;
     if (binding) {
       const captured = this.documentView();
       if (!captured || captured.resource.project_id !== binding.projectId) {
@@ -497,8 +512,14 @@ export class ProjectDocumentController {
       if (this.authoringSessionBinding !== binding || this.documentView()?.resource !== captured.resource) {
         throw new Error("The project changed while reading its workspace. Save was stopped.");
       }
-      await this.synchronizeAuthoring(sceneDocument, () => binding.verifyCurrent());
-      await binding.verifyCurrent();
+      const sceneRevision = sceneDocument.revision;
+      if (typeof sceneRevision !== "number" || !Number.isSafeInteger(sceneRevision) || sceneRevision < 0) {
+        throw new Error("The project's scene revision is unavailable. Save was stopped.");
+      }
+      // Capture each Save independently; another read cannot replace this fence.
+      verifySavedScene = () => binding.verifyCurrent(sceneRevision);
+      await this.synchronizeAuthoring(sceneDocument, verifySavedScene);
+      await verifySavedScene();
       if (this.authoringSessionBinding !== binding || this.documentView()?.resource.project_id !== binding.projectId) {
         throw new Error("The project changed while preparing Save.");
       }
@@ -533,6 +554,9 @@ export class ProjectDocumentController {
             client_intent_id: `control-room-${Date.now()}`,
           },
         });
+        // Host I/O may overlap a scene edit. Keep the document dirty if the
+        // written snapshot can no longer represent the current workspace.
+        if (verifySavedScene) await verifySavedScene();
         const revision =
           typeof result.revision === "number"
             ? result.revision
