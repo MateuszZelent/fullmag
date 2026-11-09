@@ -229,6 +229,16 @@ sprawdzenie ich historii i brak aktywnych konsumentów oraz natywny drain;
 tryb nie zwalnia Solve i nie anuluje zadań. Domyślne `false` zachowuje
 restrykcyjny restart; inne wartości argumentu są odrzucane.
 
+Dla nigdy niewykonanego, przygotowanego Study dziennik może być pusty albo
+zawierać wyłącznie ukończone `fdm_grid_refresh`, związane zachowanym targetem
+z dokładnie bieżącym runem. Liczniki, rewizje, identyfikatory i czasy receiptów
+muszą być spójne; synchroniczny Grid może nie mieć opcjonalnego czasu dispatch.
+Obce runy, polecenia solvera i komendy nieukończone lub z błędem blokują drain.
+Preflight zachowuje dopuszczony dziennik w dowodzie stopu. Nadal wymaga gotowej
+siatki, samych pending stages, manualnego Held gate bez `start_release` dla
+każdego zachowanego runu oraz właściwego natywnego drain; nie czyści kolejki
+ani historii w celu dopuszczenia restartu.
+
 Wyjątkiem od braku aktywnej sesji jest dokładnie przypięty model nieudanej
 aktywacji, którego przyjęte zadanie zostało jawnie anulowane przed rozpoczęciem
 przygotowania. Wymagany jest trwały dowód anulowania, brak rezerwacji i bieżącego

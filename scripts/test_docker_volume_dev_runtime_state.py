@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import hashlib
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -11,6 +13,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import urllib.parse
+import urllib.request
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -104,6 +108,240 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
             {},
             allow_legacy_frontend=True,
         )
+
+    @staticmethod
+    def _prepared_restart_probe_script():
+        captured = {}
+
+        def capture(*args, **kwargs):
+            captured["script"] = args[-1]
+            return "null\n"
+
+        with patch.object(docker_volume_dev, "docker_text", side_effect=capture):
+            result = docker_volume_dev._terminal_session_restart_probe(
+                "e" * 64, allow_prepared=True,
+            )
+        if result is not None:
+            raise AssertionError("probe generation unexpectedly returned a runtime result")
+        return captured["script"]
+
+    def _execute_prepared_restart_probe(self, commands, *, queue_items=(), released_runs=()):
+        run_id = "run-prepared-1"
+        session_id = "session-prepared-1"
+        api_instance = "11111111-2222-4333-8444-555555555555"
+        resource_revisions = {
+            "scene_revision": 5,
+            "mesh_revision": 8,
+            "stages_revision": 3,
+            "commands_revision": 10,
+            "command_completion_revision": 10,
+            "simulation_preparation_revision": 2,
+        }
+        status = {
+            "session": {
+                "session_id": session_id,
+                "session_epoch": "epoch-7",
+                "request_scope_epoch": "scope-9",
+            },
+            "solver": {"state": "awaiting_command"},
+            "resources": resource_revisions,
+            "run": {"run_id": run_id},
+        }
+        current_run = {
+            "run_id": run_id,
+            "session_id": session_id,
+            "status": "waiting_for_solve",
+            "revision": 11,
+        }
+        queue = {
+            "schema_version": "compute_queue.v1",
+            "next_cursor": None,
+            "items": list(queue_items),
+        }
+        routes = {
+            "/v2/sessions/current/status": status,
+            "/v2/sessions/current/simulation/runs/current": current_run,
+            "/v2/platform/compute/queue": queue,
+            "/v2/platform/runtime-service": {"configured": True, "state": "ready"},
+            "/v2/sessions/current/simulation/preparation": {
+                "status": "ready", "failure": None,
+            },
+            "/v2/sessions/current/simulation/stages/execution": {
+                "run_id": run_id,
+                "runtime_state": "awaiting_command",
+                "total_stages": 3,
+                "stage_statuses": ["pending", "pending", "pending"],
+                "completed_stage_indexes": [],
+            },
+            "/v2/sessions/current/simulation/commands": commands,
+        }
+
+        class Headers:
+            @staticmethod
+            def get_all(name):
+                return [api_instance] if name.lower() == "x-fullmag-api-instance" else []
+
+        class Response:
+            status = 200
+            headers = Headers()
+
+            def __init__(self, value):
+                self.raw = json.dumps(value).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self, size=-1):
+                return self.raw if size < 0 else self.raw[:size]
+
+        def urlopen(request, timeout=30):
+            path = urllib.parse.urlsplit(request.full_url).path
+            if request.get_method() != "GET" or path not in routes:
+                raise AssertionError(f"unexpected preflight request: {request.get_method()} {path}")
+            return Response(routes[path])
+
+        script = self._prepared_restart_probe_script()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            runs_root = root / "runs"
+            runs_root.mkdir()
+            held_run_ids = {run_id}
+            held_run_ids.update(item["run_id"] for item in queue_items)
+            for held_run_id in held_run_ids:
+                run_root = runs_root / held_run_id
+                run_root.mkdir()
+                intent = {
+                    "run_id": held_run_id,
+                    "specification": {
+                        "parameters": {
+                            "fullmag.accepted_run_start": {
+                                "schema_version": "accepted_run_start_policy.v1",
+                                "mode": "manual",
+                            },
+                        },
+                    },
+                }
+                (run_root / "run_intent.json").write_text(json.dumps(intent), encoding="utf-8")
+                if held_run_id in released_runs:
+                    (run_root / "start_release.json").write_text("{}", encoding="utf-8")
+            config = root / "runtime-service.json"
+            config.write_text(json.dumps({"store_root": str(root)}), encoding="utf-8")
+            output = io.StringIO()
+            namespace = {"__name__": "__restart_probe_fixture__"}
+            with patch.dict(os.environ, {"FULLMAG_RUNTIME_SERVICE_CONFIG": str(config)}):
+                with patch.object(urllib.request, "urlopen", side_effect=urlopen):
+                    with contextlib.redirect_stdout(output):
+                        exec(compile(script, "<prepared-restart-probe-fixture>", "exec"), namespace)
+            return json.loads(output.getvalue())
+
+    @staticmethod
+    def _prepared_commands(records):
+        states = {
+            "pending_count": "queued",
+            "accepted_count": "accepted",
+            "dispatched_count": "dispatched",
+            "running_count": "running",
+            "completed_count": "completed",
+            "rejected_count": "rejected",
+            "failed_count": "failed",
+        }
+        return {
+            "revision": 10,
+            **{field: sum(record.get("status") == state for record in records)
+               for field, state in states.items()},
+            "can_accept_commands": False,
+            "runtime_controls": [],
+            "commands": list(records),
+        }
+
+    @staticmethod
+    def _completed_grid_record(run_id="run-prepared-1", *, command_id="cmd-grid-1", seq=1):
+        return {
+            "command_id": command_id,
+            "seq": seq,
+            "kind": "fdm_grid_refresh",
+            "target": {"kind": "run", "run_id": run_id},
+            "status": "completed",
+            "created_at_unix_ms": 100,
+            "dispatched_at_unix_ms": 110,
+            "completed_at_unix_ms": 120,
+            "completion_status": "completed",
+            "error": None,
+        }
+
+    def test_prepared_restart_probe_accepts_empty_or_completed_current_run_grid_ledger(self):
+        queue_items = [{"run_id": "run-held-2", "state": "accepted"}]
+        synchronous_grid = self._completed_grid_record()
+        # Synchronous preparation receipts omit the optional dispatch timestamp
+        # and the absent error field, matching the real UI Grid response.
+        synchronous_grid.pop("dispatched_at_unix_ms")
+        synchronous_grid.pop("error")
+        for records in ([], [self._completed_grid_record()], [synchronous_grid]):
+            with self.subTest(record_count=len(records), synchronous=records == [synchronous_grid]):
+                result = self._execute_prepared_restart_probe(
+                    self._prepared_commands(records), queue_items=queue_items,
+                )
+                self.assertEqual(result["schema"], "fullmag.docker-prepared-session-drain-preflight.v1")
+                self.assertEqual(result["session_id"], "session-prepared-1")
+                self.assertEqual(result["session_epoch"], "epoch-7")
+                self.assertEqual(result["request_scope_epoch"], "scope-9")
+                self.assertEqual(result["run"]["run_id"], "run-prepared-1")
+                self.assertEqual(set(result["held_run_intent_sha256"]), {"run-prepared-1", "run-held-2"})
+                self.assertEqual(result["prepared_commands"], self._prepared_commands(records))
+
+    def test_prepared_restart_probe_rejects_foreign_or_nonterminal_command_receipts(self):
+        queue_items = [{"run_id": "run-held-2", "state": "accepted"}]
+        valid = self._completed_grid_record()
+        rejected = []
+        foreign = dict(valid, target={"kind": "run", "run_id": "run-held-2"})
+        rejected.append(("foreign run", foreign, None))
+        wrong_kind = dict(valid, kind="compute_energies")
+        rejected.append(("compute command", wrong_kind, None))
+        for state in ("queued", "accepted", "dispatched", "running", "rejected", "failed"):
+            rejected.append((state, dict(valid, status=state), None))
+        rejected.append(("cancelled completion", dict(valid, completion_status="cancelled"), None))
+        rejected.append(("failed completion", dict(valid, completion_status="failed"), None))
+        rejected.append(("error receipt", dict(valid, error="grid failed"), None))
+        rejected.append(("bad timestamp order", dict(valid, completed_at_unix_ms=109), None))
+        rejected.append(("invalid dispatch timestamp", dict(valid, dispatched_at_unix_ms="110"), None))
+        rejected.append(("missing completion timestamp", dict(valid, completed_at_unix_ms=None), None))
+        synchronous_reversed = dict(valid, completed_at_unix_ms=99)
+        synchronous_reversed.pop("dispatched_at_unix_ms")
+        rejected.append(("reversed synchronous receipt", synchronous_reversed, None))
+        rejected.append(("duplicate command id", dict(valid, seq=2), [valid]))
+        rejected.append(("duplicate sequence", dict(valid, command_id="cmd-grid-2"), [valid]))
+        for label, record, extra_records in rejected:
+            with self.subTest(label=label), self.assertRaisesRegex(
+                RuntimeError, "prepared restart",
+            ):
+                self._execute_prepared_restart_probe(
+                    self._prepared_commands([*(extra_records or ()), record]),
+                    queue_items=queue_items,
+                )
+
+    def test_prepared_restart_probe_rejects_inconsistent_counts_and_released_manual_runs(self):
+        record = self._completed_grid_record()
+        inconsistent = self._prepared_commands([record])
+        inconsistent["completed_count"] = 0
+        with self.assertRaisesRegex(RuntimeError, "prepared restart"):
+            self._execute_prepared_restart_probe(inconsistent)
+        stale_revision = self._prepared_commands([record])
+        stale_revision["revision"] = 9
+        with self.assertRaisesRegex(RuntimeError, "prepared restart"):
+            self._execute_prepared_restart_probe(stale_revision)
+
+        for released_run in ("run-prepared-1", "run-held-2"):
+            with self.subTest(released_run=released_run), self.assertRaisesRegex(
+                RuntimeError, "released Compute gate",
+            ):
+                self._execute_prepared_restart_probe(
+                    self._prepared_commands([record]),
+                    queue_items=[{"run_id": "run-held-2", "state": "accepted"}],
+                    released_runs=(released_run,),
+                )
 
     def test_actual_process_probe_reads_runtime_control_receipt_and_missing_state(self):
         with tempfile.TemporaryDirectory() as directory:

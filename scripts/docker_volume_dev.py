@@ -3565,6 +3565,67 @@ def require_empty_commands(commands):
     return (commands.get("commands")==[]
         and all(type(commands.get(key)) is int and commands[key]==0 for key in count_fields)
         and commands.get("can_accept_commands") is False)
+def require_prepared_commands(commands,run_id,status):
+    count_fields={"queued":"pending_count","accepted":"accepted_count",
+        "dispatched":"dispatched_count","running":"running_count",
+        "completed":"completed_count","rejected":"rejected_count",
+        "failed":"failed_count"}
+    if (not isinstance(commands,dict)
+            or type(commands.get("revision")) is not int or commands["revision"]<0
+            or type(commands.get("can_accept_commands")) is not bool
+            or not isinstance(commands.get("runtime_controls"),list)
+            or not isinstance(commands.get("commands"),list)):
+        return False
+    resources=status.get("resources")
+    if not isinstance(resources,dict): return False
+    commands_revision=resources.get("commands_revision")
+    completion_revision=resources.get("command_completion_revision")
+    if (type(commands_revision) is not int or commands_revision<0
+            or type(completion_revision) is not int or completion_revision<0):
+        return False
+    maximum_revision=18446744073709551615
+    legacy_revision=min(maximum_revision,commands_revision+completion_revision)
+    if commands["revision"] not in {commands_revision,legacy_revision}:
+        return False
+    counts={field:0 for field in count_fields.values()}
+    command_ids=set()
+    sequences=set()
+    records=commands["commands"]
+    for command in records:
+        if not isinstance(command,dict): return False
+        command_state=command.get("status")
+        count_field=count_fields.get(command_state)
+        if count_field is None: return False
+        counts[count_field]+=1
+        command_id=command.get("command_id")
+        sequence=command.get("seq")
+        if (not isinstance(command_id,str) or not command_id
+                or type(sequence) is not int or sequence<0
+                or command_id in command_ids or sequence in sequences):
+            return False
+        command_ids.add(command_id)
+        sequences.add(sequence)
+        if (command.get("kind")!="fdm_grid_refresh"
+                or command.get("target")!={"kind":"run","run_id":run_id}
+                or command_state!="completed"
+                or command.get("completion_status")!="completed"
+                or command.get("error") is not None):
+            return False
+        created=command.get("created_at_unix_ms")
+        dispatched=command.get("dispatched_at_unix_ms")
+        completed=command.get("completed_at_unix_ms")
+        if (any(type(value) is not int or value<0 for value in (created,completed))
+                or created>completed):
+            return False
+        # A synchronous completed grid has no dispatch timestamp. If the
+        # asynchronous path provides one, it must still lie within the receipt.
+        if dispatched is not None and (type(dispatched) is not int
+                or dispatched<created or dispatched>completed):
+            return False
+    for field,expected in counts.items():
+        value=commands.get(field)
+        if type(value) is not int or value<0 or value!=expected: return False
+    return True
 def require_ready_runtime(runtime):
     return runtime.get("configured") is True and runtime.get("state")=="ready"
 def startup_failed_preacceptance(status,run,identity):
@@ -3797,8 +3858,8 @@ else:
                 or len(stages["stage_statuses"])!=stages.get("total_stages")
                 or stages.get("completed_stage_indexes")!=[]
                 or any(value!="pending" for value in stages["stage_statuses"])
-                or commands.get("commands")!=[]):
-            raise RuntimeError("prepared restart requires a ready mesh and a never-started Study")
+                or not require_prepared_commands(commands,run_id,status)):
+            raise RuntimeError("prepared restart requires a ready mesh, a never-started Study, and only completed current-run grid receipts")
     if runtime.get("configured") is not True or runtime.get("state")!="ready":
         raise RuntimeError("terminal restart requires a live native runtime for drain")
     after=get("/v2/sessions/current/status")
@@ -3828,6 +3889,10 @@ else:
     if type(scene_revision) is int and scene_revision>=0:
         result["scene_revision"]=scene_revision
     if held_runs: result["held_run_intent_sha256"]=held_runs
+    if prepared:
+        # Retain the exact ledger admitted by this helper in the stop proof;
+        # the public target is the stored accepted-run binding, not a retarget.
+        result["prepared_commands"]=commands
     print(json.dumps(result,sort_keys=True))
 '''
     )

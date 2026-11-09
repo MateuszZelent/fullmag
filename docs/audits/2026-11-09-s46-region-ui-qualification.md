@@ -490,3 +490,26 @@ przyjętych danych przed/po odmowie jest identyczny: 3915 plików / 94 031 799 B
 Kwalifikacja ukończonego Grid wymaga niezależnego związania z bieżącym runem,
 manualnego Held gate bez start_release oraz wszystkich istniejących bramek
 native drain. Nie usunięto ani nie wyzerowano dziennika w celu obejścia tej odmowy.
+
+
+## Kwalifikacja przygotowanego Study po ukończonym Grid
+
+Poprawiony preflight dopuszcza pusty ledger albo wyłącznie completed
+fdm_grid_refresh o rzeczywistym zapisanym target=Run bieżącego runu.
+API-only commands.rs wiąże ten target z accepted_context przed publikacją,
+a command_status_resource kopiuje record.command.target bez retargetowania.
+Wymagane są zgodne liczniki i rewizje, unikalne ID/seq, completion_status=completed,
+brak błędu i prawidłowe czasy. Dispatch pozostaje opcjonalny dla synchronicznego
+Grid: rzeczywista odpowiedź 704 nie zawiera tego pola. Dodatkowy test tego
+kształtu był RED przed korektą i GREEN po niej. Gdy dispatch istnieje, musi
+leżeć między utworzeniem i zakończeniem. Dopuszczony ledger trafia do dowodu.
+
+Testy wykonują rzeczywisty generowany probe z mock GET i tymczasowym store
+intentów. Obejmują też obcy run, Compute, nieukończone/odrzucone/nieudane komendy,
+błędne liczniki/rewizje/czasy, duplikaty oraz start_release zarówno bieżącego,
+jak i innego zachowanego Held runu. Wszystkie dotychczasowe kontrole native drain,
+private network, scope i before/after pozostają aktywne. Rzeczywiste zastosowanie
+tej wersji recovery oraz kolejny odbiór UI nadal wymagają wykonania.
+
+Końcowe dwa moduły fixture recovery: 47 PASS (runtime state oraz terminal
+prestart recovery), po korekcie rzeczywistego wariantu synchronicznego Grid.
