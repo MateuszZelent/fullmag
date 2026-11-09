@@ -398,7 +398,10 @@ async fn cached_workspace_resources_remain_readable_during_a_mutation_transition
     .await
     .expect("solver status must not wait behind CAS staging")
     .unwrap();
-    assert_eq!(solver.runtime_state, "awaiting_command");
+    // The shared fixture's session manifest is running; the endpoint's
+    // effective runtime state preserves that manifest over its idle view hint.
+    assert_eq!(solver.runtime_state, "running");
+    assert_eq!(solver.session_status, "running");
     let energies = tokio::time::timeout(
         Duration::from_secs(1),
         simulation::get_solver_energies_current(State(Arc::clone(&state))),

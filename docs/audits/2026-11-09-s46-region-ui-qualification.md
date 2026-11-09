@@ -747,3 +747,36 @@ Przed odbiorem UI pozostają wykonanie nowych regresji oraz czysty native
 build commita. Oryginalne 4133 pliki i trzy zachowane zbiory po 3915 plików
 ponownie potwierdziły wszystkie hashe. Chronione kontenery 3242 zachowały
 PID 40953/41010 oraz StartedAt z 2026-11-08 12:36:17 UTC.
+
+
+## Czysty build fc9 i wykonane regresje CI
+
+Commit `fc9a94f84fc6d9fe345473130bce5f4e847ea77a` jest wypchnięty do PR #423.
+Czysty native DEV `8b78a35e1e744af292d9adb6ebbda351` zakończył się succeeded
+(CLI exit 0), z jawnym tym samym helper commit. Binarka wypisała `clean`,
+source snapshot `2118494522586c1cce35971f34262c6655d9152fad28e1cf5312d7bebb9c163e`,
+source digest `da01f860ce0e81e0e21be08af0c0026fce3f6a0da199313b7d624319a5e08577`.
+SHA terminala `8fbd15dbed856a9db2ba47dcba561674c2c8f5a43061e2a6db9494e541ca0346`,
+config `135fcd6e8b7a8de978d6faeda584190d9023640401f64d0787a15b0c9c78d4c8`.
+API `9783abb7-b328-4d1a-b338-9c2ec1260e86` potwierdziło health 200 bez aktywnej
+sesji i sessions 200 z pustą listą; warmup workspace/home 200. Grid/Compute
+ani odbioru S46 nie wykonano.
+
+Rust job [129188611530](https://github.com/MateuszZelent/fullmag/actions/runs/42625653277/job/129188611530)
+wykonał nowe testy publikacji: 7 PASS, 1 FAIL. Błąd dotyczył oczekiwania w
+`cached_workspace_resources_remain_readable_during_a_mutation_transition`:
+fixture deklaruje `session.status=running`, a test oczekiwał
+`awaiting_command` z pomocniczej, nieefektywnej wskazówki runtime.
+Endpoint zachował prawidłowy efektywny stan `running`. Asercję dopasowano do
+istniejącego kontraktu fixture i dodano kontrolę `session_status=running`;
+timeouty oraz sprawdzenie blokady złożonego command status pozostają.
+Nie zmieniono kodu produktu, fixture współdzielonej ani progów testu.
+
+Z logu tego joba potwierdzono także 14 odrębnych wyników PASS bramki startu
+(włącznie z FMS round-trip), w tym pięć nowych regresji: niepotwierdzony intent,
+persistent niepotwierdzony grant, ponowne potwierdzenie, nested shared reader
+bez zapisów ownera oraz dokładny direct receipt/odmowa obcego grantu.
+Pełne session tests oraz kolejne filtry FMRM/staged bridge/replay nie są
+potwierdzone tym wynikiem; przerwany blok nie wykonał ich po pierwszej odmowie.
+Poprawka testu wymaga ponowienia CI. S46, aktualne cykle UI i pozostałe bramki
+planu pozostają otwarte.
