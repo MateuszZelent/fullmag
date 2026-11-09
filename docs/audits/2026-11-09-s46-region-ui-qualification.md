@@ -17,6 +17,41 @@ profilu tekstury obiektu i nowego profilu regionu w managed frontendzie dało
 27 PASS; lokalne testy kontraktu workflow mają 15 PASS. Żaden z tych wyników
 nie jest odbiorem rzeczywistego S46.
 
+## Implementacja runnera i importu — odbiór pozostaje otwarty
+
+Dodano cztery stałe tryby przeglądarki: s46-local-export, s46-local-import,
+s46-independent-export i s46-independent-import. Runner wykonuje import pliku,
+Build + Study, edycję Inspectora, eksport kanonicznej kopii i ponowienie B przez
+menu PPM. Każdy zapis wymaga przypięcia instancji API, sesji, rewizji i dokładnie
+oczekiwanej treści. Compute całego Study czeka na ACK budowy oraz potwierdzenie
+właściwej domeny i gotowego przygotowania. Utrata potwierdzenia nie powtarza kliknięcia.
+Kontroler otrzymuje osobny parser dowodów i powiązanie eksportu z importem;
+kwalifikacja bezpośredniego przejścia DEV przez archiwum fresh-state jest zaimplementowana.
+Kontroler wymaga dokładnego poprzednika, archiwum i nowego DEV, przypiętych
+receiptami i hashami. Osobny przegląd zamknął lukę przypięcia commita recreate.
+Testy kontrolera i jego integracji: **18 PASS**, w tym legalny manifest źródeł
+przekraczający 512 KiB; limit pojedynczego rekordu kontrolnego wynosi 2 MiB.
+
+Testy helperów i runnera w managed frontendzie: **43 PASS**. Kontrakty workflow:
+**15 PASS**. Nie są dowodem wykonania powyższych czterech trybów. Eksport obu
+scen przez Python SDK w istniejącym backendzie zakończył się poprawnie, bez Solve.
+
+Przegląd kontraktu importu wykazał, że projects/from-script zwracało surowy JSON
+z Pythona, choć zapis sceny normalizuje go przez typ SceneDocument. Odpowiedź
+aktywacji korzysta teraz z tej samej kanonicznej serializacji; archiwum i bajty
+skryptu zachowują dotychczasowe źródło i hash. Dwie nowe regresje Rust obejmują
+normalizację aliasów i liczb, metadane Results, wyłączony B, niezależne przypisania,
+nieznane pola payloadu oraz obecność jawnych null dla pbc, thermal_noise i lokalnego
+initializer. Ich wykonanie oraz przebudowa backendu są nadal wymagane. Krok CI
+sprawdza także obecność obu nazw testów w zakończonym wyniku.
+
+Przed przebudową ponownie potwierdzono niezmienione **4133 pliki / 94 691 729 B**
+wyników własnej sesji; obie publiczne kolejki na 3243 i chronionym 3242 mają zero
+oczekujących i wykonywanych komend. Istniejące runy pozostają completed. Skrypt
+odczytowej kontroli nowych wejść solvera sprawdzi claim task/attempt/epoch,
+manifest i końcowy stan CAS, metadata planu, maskę FMRM v2 oraz wektory początkowe
+C i ponowionego B. Nie został jeszcze wykonany na nowych wynikach S46.
+
 ## Dwie rozróżnialne recepty
 
 | Wariant | Wejście | Reset | Oczekiwanie po wyłączeniu B |
@@ -68,13 +103,16 @@ archiwum i hashe zachowanych wyników; kontynuacja importu musi wskazywać
 identyczny SHA pobranego pliku oraz nowy jawny DEV/API identity. Zachować
 jawny budżet backendu 8 CPU / 32 GiB i frontendu 2 CPU / 8 GiB. Dotyczy to
 wyłącznie własnej grupy na 3243. Grupa użytkownika na 3242 pozostaje poza operacją.
-To przygotowany kierunek odbioru; tej migracji stanu jeszcze nie wykonano.
+Każde recreate S46 musi otrzymać jawne --helper-source-root równe checkoutowi
+aplikacji i --helper-source-commit równy jego pełnemu commitowi. Profil sprawdza
+ten istniejący binding także w receipcie recreate. Jest to przygotowany kierunek
+odbioru; tej migracji stanu jeszcze nie wykonano.
 
 ## Pozostałe prace
 
-Podpiąć dwa stałe profile do managed browser QA z hashami wszystkich źródeł,
-ścisłą listą żądań i walidacją dowodów także po błędzie/utracie ACK. Połączyć
-receipty eksportu i importu poprzez hash skryptu oraz archiwum źródła. Wykonać
+Wykonać cztery zaimplementowane profile managed browser QA i potwierdzić
+rzeczywiste powiązanie receiptów eksportu/importu przez hash skryptu oraz archiwum.
+Wykonać
 obie rzeczywiste sekwencje oraz testy odmowy zmiany celu/rewizji bez osłabiania
 istniejącego profilu całego obiektu `texture-stage-b`. FDM GPU, FEM i multilayer
 pozostają oddzielnymi bramkami pełnego planu.

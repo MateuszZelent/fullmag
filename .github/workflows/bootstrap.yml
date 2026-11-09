@@ -245,6 +245,16 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api accepted_fms_persistence_tests
           cargo test -p fullmag-api --bin fullmag-api context_bound_export_rejects_session_identity_before_script_read
 
+      - name: Verify canonical Python project activation scene
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::persistence::script_project::tests::activation_scene_ -- --nocapture | tee "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_uses_canonical_typed_scene_document ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_preserves_pipeline_resets_and_explicit_clears ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:
@@ -706,6 +716,7 @@ jobs:
           node --test
           apps/control-room/scripts/lib/study-texture-browser-qa.node-test.mjs
           apps/control-room/scripts/lib/study-region-reset-browser-qa.node-test.mjs
+          apps/control-room/scripts/lib/study-region-reset-runner.node-test.mjs
 
       - name: Typecheck, lint and test Control Room
         run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test
@@ -1092,6 +1103,7 @@ jobs:
           python -B scripts/test_linux_native_host.py -v
           python -B scripts/test_docker_dev_codegen.py -v
           python -B scripts/test_docker_dev_browser_qa.py -v
+          python -B scripts/test_docker_dev_region_reset_qa.py -v
           python -B scripts/test_docker_volume_receipts.py -v
           python -B scripts/test_docker_saved_authoring_history.py -v
           python -B scripts/test_docker_volume_device_access.py -v

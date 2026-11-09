@@ -5,6 +5,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -22,12 +23,81 @@ ROOT = Path(__file__).resolve().parents[1]
 def _load_qa_module():
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
+    scripts_root = str(ROOT / "scripts")
+    if scripts_root not in sys.path:
+        sys.path.insert(0, scripts_root)
     spec = importlib.util.spec_from_file_location("docker_dev_browser_qa_draft", ROOT / "scripts" / "docker_dev_browser_qa.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load browser QA wrapper")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _browser_helper_inspect_from_compose(qa, identity, document, image_id="sha256:" + "c" * 64):
+    service = document["services"]["browser-qa"]
+    volume_name = document["volumes"]["frontend-state"]["name"]
+    resolved_mounts = [
+        {"Type": "volume", "Name": volume_name, "Destination": "/state/development", "RW": False},
+    ]
+    for mount in service["volumes"][1:]:
+        resolved_mounts.append({"Type": "bind", "Source": mount["source"],
+                                "Destination": mount["target"], "RW": False})
+    configured_mounts = [
+        {"Type": "volume", "Source": volume_name, "Target": "/state/development", "ReadOnly": True},
+    ]
+    for mount in service["volumes"][1:]:
+        configured_mounts.append({"Type": "bind", "Source": mount["source"],
+                                  "Target": mount["target"], "ReadOnly": True})
+    return {
+        "Image": image_id,
+        "Config": {"User": service["user"], "Cmd": service["command"],
+                   "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                   "Labels": {**service["labels"], "com.docker.compose.project": identity["project_name"],
+                              "com.docker.compose.service": "browser-qa"}},
+        "HostConfig": {"GroupAdd": service["group_add"], "ReadonlyRootfs": True,
+                       "NetworkMode": identity["network_name"], "PortBindings": None,
+                       "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                       "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+                       "Mounts": configured_mounts},
+        "State": {"Running": False, "ExitCode": 0},
+        "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+        "Mounts": resolved_mounts,
+    }
+
+
+def _s46_parent_evidence(mode, source_text):
+    previous_attempt = "d" * 32
+    current_attempt = "e" * 32
+    recreation_attempt = "f" * 32
+    return {
+        "prior_attempt": "a" * 32,
+        "record_sha256": {"terminal": "b" * 64, "result": "c" * 64},
+        "mode": mode.replace("-import", "-export"),
+        "script_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
+        "source_text": source_text,
+        "source_name": "p22-s46-" + ("local" if "local" in mode else "independent") + ".py",
+        "parent_development_attempt": previous_attempt,
+        "source_commit": "1" * 40,
+        "fresh_state": {
+            "previous_development_attempt": previous_attempt,
+            "previous_development_terminal_sha256": "2" * 64,
+            "previous_state_root": "/tmp/fullmag-state/" + previous_attempt,
+            "previous_group_ledger_sha256": "3" * 64,
+            "recreation_attempt": recreation_attempt,
+            "generation_sha256": "4" * 64,
+            "recreation_terminal_sha256": "5" * 64,
+            "archive_terminal_sha256": "6" * 64,
+            "archive_intent_sha256": "7" * 64,
+            "retained_containers_sha256": "8" * 64,
+            "helper_source_binding_sha256": "9" * 64,
+            "current_development_attempt": current_attempt,
+            "current_development_terminal_sha256": "a" * 64,
+            "current_state_root": "/tmp/fullmag-state/" + current_attempt,
+            "current_compose_sha256": "b" * 64,
+            "current_group_ledger_sha256": "c" * 64,
+        },
+    }
 
 
 def _planar_airbox_observation_fixture(qa):
@@ -1128,6 +1198,115 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         self.assertIn('--pull-timeout', shell)
         self.assertIn('--saved-playback-item-id', shell)
         self.assertIn('exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py"', shell)
+        for mode in ("s46-local-export", "s46-independent-export", "s46-local-import", "s46-independent-import"):
+            self.assertIn(mode, recipe)
+            self.assertIn(mode, shell)
+        self.assertIn('region_reset_export_attempt=""', recipe)
+        self.assertIn('--region-reset-export-attempt', recipe)
+        self.assertIn('--region-reset-export-attempt', shell)
+
+    def test_s46_compose_uses_fixed_runner_source_map_and_parent_only_on_import(self):
+        qa = self.qa
+        region = qa.region_reset_qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree",
+                    "source_root": str(ROOT)}
+        for mode in region.MODES:
+            hashes = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            parent = None
+            if mode.endswith("-import"):
+                source_text = "# prior canonical export\n"
+                parent = _s46_parent_evidence(mode, source_text)
+            with self.subTest(mode=mode):
+                if mode.endswith("-import"):
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+                            3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+                document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+                    3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes,
+                    region_reset_parent_evidence=parent)
+                service = document["services"]["browser-qa"]
+                self.assertEqual(service["command"], [
+                    "node", "/state/development/workspace/apps/control-room/scripts/check-study-region-reset-browser.mjs",
+                    mode,
+                ])
+                self.assertEqual(service["environment"]["CONTROL_ROOM_REGION_RESET_SOURCE_PATHS"],
+                                 qa.canonical(region.source_paths(mode)).decode())
+                self.assertEqual(service["environment"].get("CONTROL_ROOM_REGION_RESET_PARENT"),
+                                 None if parent is None else qa.canonical(parent).decode())
+                fixture = next(mount for mount in service["volumes"]
+                               if mount["target"] == qa.STUDY_STAGE_RERUN_FIXTURE_TARGET)
+                self.assertEqual(fixture["source"], str(ROOT / region.source_paths(mode)["fixture"]))
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun="s46-local-export",
+                study_stage_rerun_source_sha256=qa._study_stage_rerun_source_sha256(ROOT, "s46-local-export"),
+                region_reset_parent_evidence={"unrequested": True})
+
+    def test_s46_cli_requires_exact_parent_attempt_only_for_import_profiles(self):
+        qa = self.qa
+        base = ["--repo-root", str(ROOT), "--study-stage-rerun"]
+        for args, message in (
+            (base + ["s46-local-import"], "requires --region-reset-export-attempt"),
+            (base + ["s46-local-import", "--region-reset-export-attempt", "A" * 32],
+             "32-character lowercase"),
+            (base + ["s46-independent-export", "--region-reset-export-attempt", "a" * 32],
+             "allowed only for an S46 import"),
+            (base + ["stage-b", "--region-reset-export-attempt", "a" * 32],
+             "allowed only for an S46 import"),
+        ):
+            with self.subTest(args=args), self.assertRaisesRegex(qa.BuildControlError, message):
+                qa.main(args)
+
+    def test_s46_helper_inspection_rejects_command_environment_and_mount_drift(self):
+        qa = self.qa
+        mode = "s46-independent-export"
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree",
+                    "source_root": str(ROOT)}
+        hashes = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+            3242, 180, study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+        helper = _browser_helper_inspect_from_compose(qa, identity, document)
+        control = SimpleNamespace(project=identity["project_name"], volume="fullmag-frontend-state")
+        qa._validate_browser_helper(helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+            study_stage_rerun=mode, study_stage_rerun_source_sha256=hashes)
+        for changed in ("command", "source-map", "fixture-mount", "unsolicited-env"):
+            altered = deepcopy(helper)
+            if changed == "command":
+                altered["Config"]["Cmd"][1] = "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+            elif changed == "source-map":
+                altered["Config"]["Env"].append("CONTROL_ROOM_REGION_RESET_SOURCE_PATHS={}")
+            elif changed == "fixture-mount":
+                altered["HostConfig"]["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+                altered["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+            else:
+                altered["Config"]["Env"].append("CONTROL_ROOM_REGION_RESET_PARENT={}")
+            with self.subTest(changed=changed), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(altered, control, identity, "fullmag-frontend-state",
+                    helper["Image"], 0, ROOT, study_stage_rerun=mode,
+                    study_stage_rerun_source_sha256=hashes)
+
+        import_mode = "s46-local-import"
+        import_hashes = qa._study_stage_rerun_source_sha256(ROOT, import_mode)
+        source_text = "# prior export\n"
+        parent = _s46_parent_evidence(import_mode, source_text)
+        import_document = qa._compose_document(ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state",
+            3242, 180, study_stage_rerun=import_mode, study_stage_rerun_source_sha256=import_hashes,
+            region_reset_parent_evidence=parent)
+        import_helper = _browser_helper_inspect_from_compose(qa, identity, import_document)
+        qa._validate_browser_helper(import_helper, control, identity, "fullmag-frontend-state",
+            import_helper["Image"], 0, ROOT, study_stage_rerun=import_mode,
+            study_stage_rerun_source_sha256=import_hashes, region_reset_parent_evidence=parent)
+        altered_parent = deepcopy(import_helper)
+        for index, value in enumerate(altered_parent["Config"]["Env"]):
+            if value.startswith("CONTROL_ROOM_REGION_RESET_PARENT="):
+                altered_parent["Config"]["Env"][index] = "CONTROL_ROOM_REGION_RESET_PARENT={}"
+                break
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(altered_parent, control, identity, "fullmag-frontend-state",
+                import_helper["Image"], 0, ROOT, study_stage_rerun=import_mode,
+                study_stage_rerun_source_sha256=import_hashes, region_reset_parent_evidence=parent)
 
     def test_browser_service_has_no_host_writes_or_published_ports(self):
         identity = {
@@ -5213,6 +5392,69 @@ assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.
             capture_output=True, text=True, timeout=10,
         )
         self.assertNotEqual(malformed.returncode, 0)
+
+        import_mode = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-local-import", "", "a" * 32],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(import_mode.returncode, 0, import_mode.stderr)
+        import_rendered = import_mode.stdout + import_mode.stderr
+        self.assertIn("--study-stage-rerun s46-local-import", import_rendered)
+        self.assertIn("--region-reset-export-attempt '" + "a" * 32 + "'", import_rendered)
+
+        import_without_parent = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-independent-import"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(import_without_parent.returncode, 0)
+
+        export_with_parent = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "s46-local-export", "", "a" * 32],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(export_with_parent.returncode, 0)
+
+    def test_just_shell_forwards_only_paired_s46_import_parent_pin(self):
+        wrapper = ROOT / "scripts/just_storage_shell.sh"
+        token = "a" * 32
+        with tempfile.TemporaryDirectory(prefix="fullmag-s46-shell-test-") as directory:
+            fake_python = Path(directory) / "python-stub"
+            log_path = Path(directory) / "argv.txt"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\n"
+                "if [[ \"${1:-}\" == \"-c\" ]]; then exit 0; fi\n"
+                "printf '%s\\n' \"$@\" > \"${S46_TEST_ARGV_LOG}\"\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            environment = {**os.environ, "FULLMAG_STORAGE_PYTHON": str(fake_python),
+                           "S46_TEST_ARGV_LOG": str(log_path)}
+            prefix = (f'python3 "{ROOT}/scripts/docker_dev_browser_qa.py" --repo-root "{ROOT}" '
+                      "--timeout '180' --pull-timeout '1800' ")
+            valid = prefix + "--study-stage-rerun s46-local-import --region-reset-export-attempt '" + token + "'"
+            result = subprocess.run(["bash", str(wrapper), valid], capture_output=True, text=True,
+                                    timeout=10, env=environment)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            argv = log_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(argv, ["-B", str(ROOT / "scripts/docker_dev_browser_qa.py"),
+                                    "--repo-root", str(ROOT), "--timeout", "180", "--pull-timeout", "1800",
+                                    "--study-stage-rerun", "s46-local-import",
+                                    "--region-reset-export-attempt", token])
+
+            log_path.unlink()
+            invalid_cases = (
+                prefix + "--study-stage-rerun s46-independent-import",
+                prefix + "--study-stage-rerun s46-independent-export --region-reset-export-attempt '" + token + "'",
+            )
+            for recipe in invalid_cases:
+                with self.subTest(recipe=recipe):
+                    rejected = subprocess.run(["bash", str(wrapper), recipe], capture_output=True,
+                                              text=True, timeout=10, env=environment)
+                    self.assertEqual(rejected.returncode, 2)
+                    self.assertFalse(log_path.exists())
 
 
 if __name__ == "__main__":

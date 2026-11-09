@@ -22,6 +22,7 @@ use fullmag_application::{
 use fullmag_authoring::{validate_scene_document_for_authoring, SceneDocument};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -351,9 +352,7 @@ fn build_project_from_script(
     }
 
     // Return the canonical scene without a parallel browser ZIP parser.
-    let activation_scene = scene_value.as_object()
-        .ok_or_else(|| ApiError::internal("exported scene is not an object"))?
-        .iter().map(|(key, value)| (key.clone(), value.clone())).collect();
+    let activation_scene = activation_scene_from_document(&scene_document)?;
 
     // 3. Build the project: scene, embedded script, metadata, provenance.
     let sha256 = format!("{:x}", Sha256::digest(&script_bytes));
@@ -438,6 +437,23 @@ fn build_project_from_script(
             fidelity,
         },
     })
+}
+
+fn activation_scene_from_document(
+    scene_document: &SceneDocument,
+) -> Result<BTreeMap<String, Value>, ApiError> {
+    let value = serde_json::to_value(scene_document).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize canonical scene document: {error}"
+        ))
+    })?;
+    let object = value.as_object().ok_or_else(|| {
+        ApiError::internal("serialized canonical scene document is not an object")
+    })?;
+    Ok(object
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect())
 }
 
 /// Re-render the scene to Python and compare the lowering of the original
@@ -960,6 +976,189 @@ ValueError: no fixed timestep
         let value = parse_helper_json(b"hello\n{\"a\": 1}\n\n").unwrap();
         assert_eq!(value["a"], 1);
         assert!(parse_helper_json(b"  \n").is_err());
+    }
+
+    #[test]
+    fn activation_scene_uses_canonical_typed_scene_document() {
+        let raw_scene = json!({
+            "version": "scene.v2",
+            "objects": [],
+            "couplings": [],
+            "materials": [],
+            "magnetization_assets": [],
+            "field_drives": {"drives": []},
+            "monitors": {"planar": []},
+            "current_modules": {"modules": []},
+            "study": {
+                "requested_backend": "cuda",
+                "requested_device": "gpu",
+                "requested_precision": "single",
+                "fdm": {"per_magnet": null},
+                "study_pipeline": null,
+                "stages": [{
+                    "kind": "relaxation",
+                    "entrypoint_kind": "builder",
+                    "relax_algorithm": "llg_overdamped",
+                    "fixed_timestep": "1e-12",
+                    "until_seconds": "2e-9",
+                    "max_steps": "12"
+                }]
+            },
+            "analysis": {"postprocessing_definitions": [{
+                "definition_id": "result-1",
+                "module_id": "fullmag.modes",
+                "module_version": "1",
+                "definition_schema": "fullmag.result-definition.v1",
+                "node_kind": "mode_visualization",
+                "label": "Mode 1",
+                "data_ref": {
+                    "run_id": "run-1",
+                    "dataset_id": "dataset-1",
+                    "dataset_revision": "revision-1"
+                },
+                "settings": {"mode_index": 1}
+            }]}
+        });
+        assert_eq!(raw_scene["objects"], json!([]));
+        assert_eq!(raw_scene["study"]["fdm"]["per_magnet"], Value::Null);
+        assert_eq!(raw_scene["study"]["stages"][0]["fixed_timestep"], "1e-12");
+        let scene_document: SceneDocument = serde_json::from_value(raw_scene)
+            .expect("legacy scene fields should deserialize into SceneDocument");
+        let activation_scene = activation_scene_from_document(&scene_document)
+            .expect("SceneDocument should serialize for the activation response");
+
+        for empty_field in ["objects", "couplings", "materials", "magnetization_assets"] {
+            assert!(
+                !activation_scene.contains_key(empty_field),
+                "empty {empty_field} should be omitted by typed serialization"
+            );
+        }
+        assert_eq!(activation_scene["study"]["fdm"], json!({}));
+        assert_eq!(activation_scene["field_drives"], json!({}));
+        assert_eq!(activation_scene["monitors"], json!({}));
+        assert_eq!(activation_scene["current_modules"], json!({}));
+        assert_eq!(activation_scene["study"]["requested_backend"], "cuda");
+        assert_eq!(activation_scene["study"]["requested_device"], "gpu");
+        assert_eq!(activation_scene["study"]["requested_precision"], "single");
+        assert!(activation_scene["study"].get("study_pipeline").is_none());
+
+        let stage = &activation_scene["study"]["stages"][0];
+        assert_eq!(stage["algorithm"], "llg_overdamped");
+        assert!(stage.get("relax_algorithm").is_none());
+        assert_eq!(stage["fixed_timestep"].as_f64(), Some(1e-12));
+        assert_eq!(stage["until_seconds"].as_f64(), Some(2e-9));
+        assert_eq!(stage["max_steps"].as_u64(), Some(12));
+
+        assert_eq!(
+            activation_scene["analysis"]["postprocessing_definitions"][0]["data_ref"],
+            json!({
+                "run_id": "run-1",
+                "dataset_id": "dataset-1",
+                "dataset_revision": "revision-1"
+            })
+        );
+        assert_eq!(
+            activation_scene["analysis"]["postprocessing_definitions"][0]["settings"],
+            json!({"mode_index": 1})
+        );
+    }
+
+    #[test]
+    fn activation_scene_preserves_pipeline_resets_and_explicit_clears() {
+        let scene_document: SceneDocument = serde_json::from_value(json!({
+            "version": "scene.v2",
+            "study": {
+                "pbc": null,
+                "thermal_noise": null,
+                "study_pipeline": {
+                    "version": "study_pipeline.v2",
+                    "nodes": [
+                        {
+                            "node_kind": "primitive",
+                            "id": "a",
+                            "label": "A",
+                            "enabled": true,
+                            "stage_kind": "run",
+                            "payload": {
+                                "magnetization_assignments": {
+                                    "schema_version": "fullmag.magnetization-assignments.v1",
+                                    "assignments": [{
+                                        "object_id": "b",
+                                        "initializer": {"kind": "uniform", "value": [0, 1, 0]}
+                                    }]
+                                },
+                                "events": [{"kind": "script_event", "step": "a"}],
+                                "opaque_sdk_payload": {"items": [1, null, "preserve"]}
+                            }
+                        },
+                        {
+                            "node_kind": "primitive",
+                            "id": "b",
+                            "label": "B",
+                            "enabled": false,
+                            "stage_kind": "run",
+                            "payload": {
+                                "magnetization_assignments": {
+                                    "schema_version": "fullmag.magnetization-assignments.v1",
+                                    "assignments": [{
+                                        "object_id": "b",
+                                        "initializer": {"kind": "uniform", "value": [0, 1, 0]}
+                                    }]
+                                },
+                                "stage_magnetization_assignments": {
+                                    "schema_version": "fullmag.magnetization-assignments.v1",
+                                    "assignments": [{
+                                        "object_id": "b",
+                                        "region_id": "b:core",
+                                        "initializer": null
+                                    }]
+                                },
+                                "opaque_sdk_payload": {"marker": {"keep": true}}
+                            }
+                        }
+                    ]
+                }
+            }
+        }))
+        .expect("pipeline payloads should deserialize into SceneDocument");
+        let activation_scene = activation_scene_from_document(&scene_document)
+            .expect("SceneDocument should serialize for the activation response");
+
+        assert_eq!(activation_scene["study"].get("pbc"), Some(&Value::Null));
+        assert_eq!(
+            activation_scene["study"].get("thermal_noise"),
+            Some(&Value::Null)
+        );
+        let nodes = &activation_scene["study"]["study_pipeline"]["nodes"];
+        assert_eq!(
+            nodes[0]["payload"]["events"],
+            json!([
+                {"kind": "script_event", "step": "a"}
+            ])
+        );
+        assert_eq!(
+            nodes[0]["payload"]["opaque_sdk_payload"],
+            json!({"items": [1, null, "preserve"]})
+        );
+        assert_eq!(nodes[1]["id"], "b");
+        assert_eq!(nodes[1]["enabled"], false);
+        assert_eq!(
+            nodes[1]["payload"]["magnetization_assignments"]["assignments"][0]["initializer"],
+            json!({"kind": "uniform", "value": [0, 1, 0]})
+        );
+        assert_eq!(
+            nodes[1]["payload"]["stage_magnetization_assignments"]["assignments"][0]
+                .get("initializer"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            nodes[1]["payload"]["stage_magnetization_assignments"]["assignments"][0]["region_id"],
+            "b:core"
+        );
+        assert_eq!(
+            nodes[1]["payload"]["opaque_sdk_payload"],
+            json!({"marker": {"keep": true}})
+        );
     }
 
     #[test]

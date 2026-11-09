@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 from urllib.request import Request, urlopen
 
 import fullmag_storage as storage
+import docker_dev_region_reset_qa as region_reset_qa
 from docker_build_control import (
     BuildControl,
     BuildControlError,
@@ -462,6 +463,8 @@ def _validate_inspector_ack_hashes(value) -> None:
 
 
 def _study_stage_rerun_source_paths(mode: str) -> dict[str, str]:
+    if mode in region_reset_qa.MODES:
+        return region_reset_qa.source_paths(mode)
     if mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study", "fdm-cell-study-resume",
                     "texture-stage-b", "texture-study"}:
         raise BuildControlError("Study stage rerun requires a fixed mode")
@@ -491,6 +494,9 @@ def _study_stage_rerun_source_sha256(selected: Path, mode: str = "stage-b") -> d
 
 
 def _validate_study_stage_rerun_hashes(value, mode: str = "stage-b") -> None:
+    if mode in region_reset_qa.MODES:
+        region_reset_qa._check_hash_map(value, mode)
+        return
     try:
         expected_sources = _study_stage_rerun_source_paths(mode)
     except BuildControlError:
@@ -1307,6 +1313,7 @@ def _compose_document(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
 ) -> dict[str, object]:
     if type(inspector_ack) is not bool:
@@ -1323,7 +1330,8 @@ def _compose_document(
         raise BuildControlError("Inspector ACK source pins require their scenario")
     if study_stage_rerun is not None:
         if study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                     "fdm-cell-study-resume", "texture-stage-b", "texture-study"}:
+                                     "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                     *region_reset_qa.MODES}:
             raise BuildControlError("Study stage rerun requires one of the fixed profiles")
         _validate_study_stage_rerun_hashes(study_stage_rerun_source_sha256, study_stage_rerun)
         if study_stage_rerun == "fdm-cell-study-resume":
@@ -1332,13 +1340,23 @@ def _compose_document(
             )
         elif study_stage_rerun_resume_evidence is not None:
             raise BuildControlError("FDM grid resume evidence requires its fixed resume profile")
+        if study_stage_rerun in region_reset_qa.MODES:
+            if study_stage_rerun.endswith("-import"):
+                region_reset_parent_evidence = region_reset_qa.validate_parent_evidence(
+                    region_reset_parent_evidence, study_stage_rerun,
+                )
+            elif region_reset_parent_evidence is not None:
+                raise BuildControlError("Region reset parent evidence requires a fixed import profile")
+        elif region_reset_parent_evidence is not None:
+            raise BuildControlError("Region reset parent evidence cannot be mixed with another profile")
         if (prepare_viewport_fixture or canvas_only is not None or expect_live_field is not None
                 or expect_airbox_vectors is not None or expect_ambiguous_compute_fields is not None
                 or airbox_inspector or saved_playback_item_id is not None
                 or expect_fem_airbox_vectors is not None or expect_terminal_telemetry is True
                 or expect_run_performance is True or expect_planar_airbox or inspector_ack):
             raise BuildControlError("Study stage rerun is a separate task-owned runtime command scenario")
-    elif study_stage_rerun_source_sha256 is not None or study_stage_rerun_resume_evidence is not None:
+    elif (study_stage_rerun_source_sha256 is not None or study_stage_rerun_resume_evidence is not None
+          or region_reset_parent_evidence is not None):
         raise BuildControlError("Study stage rerun source pins require their scenario")
     if type(private_group_storage) is not bool:
         raise BuildControlError("Browser QA private group storage marker must be boolean")
@@ -1502,6 +1520,14 @@ def _compose_document(
             if len(resume_raw.encode("utf-8")) > 128 * 1024:
                 raise BuildControlError("FDM grid resume evidence exceeds its environment bound")
             environment["CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE"] = resume_raw
+        if study_stage_rerun in region_reset_qa.MODES:
+            paths_raw = canonical(region_reset_qa.source_paths(study_stage_rerun)).decode("utf-8")
+            environment["CONTROL_ROOM_REGION_RESET_SOURCE_PATHS"] = paths_raw
+            if study_stage_rerun.endswith("-import"):
+                parent_raw = canonical(dict(region_reset_parent_evidence)).decode("utf-8")
+                if len(parent_raw.encode("utf-8")) > 96 * 1024:
+                    raise BuildControlError("Region reset parent evidence exceeds its environment bound")
+                environment["CONTROL_ROOM_REGION_RESET_PARENT"] = parent_raw
     elif airbox_inspector:
         environment["CONTROL_ROOM_BROWSER_QA_SCENARIO"] = "airbox-inspector"
     elif saved_playback_item_id is not None:
@@ -1542,6 +1568,7 @@ def _compose_document(
         },
     ]
     if study_stage_rerun is not None:
+        fixture_source = _study_stage_rerun_source_paths(study_stage_rerun)["fixture"]
         browser_volumes.extend([
             {
                 "type": "bind",
@@ -1552,7 +1579,7 @@ def _compose_document(
             },
             {
                 "type": "bind",
-                "source": str(selected / STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                "source": str(selected / fixture_source),
                 "target": STUDY_STAGE_RERUN_FIXTURE_TARGET,
                 "read_only": True,
                 "bind": {"create_host_path": False},
@@ -1589,7 +1616,9 @@ def _compose_document(
                     if saved_playback_item_id is not None
                     else [
                         "node",
-                        "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                        "/state/development/workspace/apps/control-room/scripts/"
+                        + ("check-study-region-reset-browser.mjs" if study_stage_rerun in region_reset_qa.MODES
+                           else "check-study-stage-rerun-browser.mjs"),
                         study_stage_rerun,
                     ]
                     if study_stage_rerun is not None
@@ -1653,6 +1682,7 @@ def _validate_browser_helper(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
 ) -> None:
     if type(expect_fdm_cell_physics) is not bool:
@@ -1713,6 +1743,10 @@ def _validate_browser_helper(
                                 if entry.startswith("CONTROL_ROOM_STUDY_STAGE_RERUN_RESUME_EVIDENCE=")]
     rerun_scenario = [entry for entry in raw_environment
                       if entry.startswith("CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun")]
+    region_paths_environment = [entry for entry in raw_environment
+                                if entry.startswith("CONTROL_ROOM_REGION_RESET_SOURCE_PATHS=")]
+    region_parent_environment = [entry for entry in raw_environment
+                                 if entry.startswith("CONTROL_ROOM_REGION_RESET_PARENT=")]
     if inspector_ack:
         try:
             _validate_inspector_ack_hashes(inspector_ack_source_sha256)
@@ -1747,13 +1781,43 @@ def _validate_browser_helper(
                 raise ControlOutcomeUnknown("Browser helper FDM grid resume evidence differs")
         elif rerun_resume_environment or study_stage_rerun_resume_evidence is not None:
             raise ControlOutcomeUnknown("Browser helper reported unrequested FDM grid resume evidence")
+        is_region_reset = study_stage_rerun in region_reset_qa.MODES
+        if is_region_reset:
+            try:
+                expected_paths = region_reset_qa.source_paths(study_stage_rerun)
+                if study_stage_rerun.endswith("-import"):
+                    expected_parent = region_reset_qa.validate_parent_evidence(
+                        region_reset_parent_evidence, study_stage_rerun,
+                    )
+                else:
+                    expected_parent = None
+            except BuildControlError as error:
+                raise ControlOutcomeUnknown(str(error)) from error
+            expected_paths_entry = "CONTROL_ROOM_REGION_RESET_SOURCE_PATHS=" + canonical(expected_paths).decode("utf-8")
+            expected_parent_entries = ([] if expected_parent is None else [
+                "CONTROL_ROOM_REGION_RESET_PARENT=" + canonical(expected_parent).decode("utf-8")
+            ])
+            region_prefix_entries = [entry for entry in raw_environment
+                                     if entry.startswith("CONTROL_ROOM_REGION_RESET_")]
+            if (region_paths_environment != [expected_paths_entry]
+                    or region_parent_environment != expected_parent_entries
+                    or set(region_prefix_entries) != {expected_paths_entry, *expected_parent_entries}):
+                raise ControlOutcomeUnknown("Browser helper S46 source map/parent environment differs")
+        elif region_paths_environment or region_parent_environment or any(
+                entry.startswith("CONTROL_ROOM_REGION_RESET_") for entry in raw_environment):
+            raise ControlOutcomeUnknown("Browser helper reported unsolicited S46 environment pins")
+        expected_runner = (
+            "check-study-region-reset-browser.mjs" if is_region_reset
+            else "check-study-stage-rerun-browser.mjs"
+        )
         if (study_stage_rerun not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                      "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
+                                      "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                      *region_reset_qa.MODES}
                 or rerun_source_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256=" + expected_pin]
                 or rerun_mode_environment != ["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE=" + study_stage_rerun]
                 or rerun_scenario != ["CONTROL_ROOM_BROWSER_QA_SCENARIO=study-stage-rerun"]
                 or config.get("Cmd") != [
-                    "node", "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                    "node", "/state/development/workspace/apps/control-room/scripts/" + expected_runner,
                     study_stage_rerun,
                 ]):
             raise ControlOutcomeUnknown("Browser helper Study stage rerun command or source pins differ")
@@ -1992,7 +2056,8 @@ def _validate_browser_helper(
             document, selected, "apps/control-room/src", STUDY_STAGE_RERUN_SRC_TARGET,
         )
         _validate_browser_helper_source_mount(
-            document, selected, STUDY_STAGE_RERUN_SOURCES["fixture"], STUDY_STAGE_RERUN_FIXTURE_TARGET,
+            document, selected, _study_stage_rerun_source_paths(study_stage_rerun)["fixture"],
+            STUDY_STAGE_RERUN_FIXTURE_TARGET,
         )
 
 
@@ -4864,7 +4929,13 @@ def _parse_fdm_grid_resume_result(output, public_url, browser_url, expected_sour
 
 
 def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_sources, expected_mode,
-                                    *, expected_resume_evidence=None):
+                                    *, expected_resume_evidence=None,
+                                    region_reset_parent_evidence=None):
+    if expected_mode in region_reset_qa.MODES:
+        return region_reset_qa.parse_result(
+            output, public_url, browser_url, expected_sources, expected_mode,
+            parent_evidence=region_reset_parent_evidence,
+        )
     if expected_mode == "fdm-cell-study-resume":
         _validate_study_stage_rerun_hashes(expected_sources, expected_mode)
         return _parse_fdm_grid_resume_result(
@@ -6128,6 +6199,7 @@ def _run(
     study_stage_rerun: str | None = None,
     study_stage_rerun_source_sha256: Mapping[str, str] | None = None,
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
+    region_reset_parent_evidence: Mapping[str, object] | None = None,
 ) -> None:
     receipt_inputs = (operation.get("receipt") or {}).get("inputs", {})
     if not isinstance(receipt_inputs, Mapping):
@@ -6217,6 +6289,7 @@ def _run(
         study_stage_rerun=study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_source_sha256,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
@@ -6239,6 +6312,7 @@ def _run(
             payload = _parse_study_stage_rerun_result(
                 raw, public_url, browser_url, study_stage_rerun_source_sha256, study_stage_rerun,
                 expected_resume_evidence=study_stage_rerun_resume_evidence,
+                region_reset_parent_evidence=region_reset_parent_evidence,
             )
             if payload.get("outcome") == "unknown" and result.returncode == 0:
                 raise BuildControlError("Study stage rerun helper returned success with an unknown command outcome")
@@ -6265,6 +6339,7 @@ def _run(
     except BuildControlError as error:
         study_no_dispatch_proven = (
             study_stage_rerun is not None
+            and study_stage_rerun not in region_reset_qa.MODES
             and _study_stage_no_dispatch_proven(
                 raw, study_stage_rerun_source_sha256, study_stage_rerun,
             )
@@ -6489,9 +6564,11 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
             raise BuildControlError("QA reconciliation Inspector ACK receipt includes another scenario")
     elif inspector_ack_sources is not None:
         raise BuildControlError("QA reconciliation Inspector ACK source pins have another scenario")
+    region_reset_parent_evidence = None
     if study_stage_rerun:
         if (study_stage_rerun_mode not in {"stage-b", "study", "material-stage-a", "fdm-cell-study",
-                                           "fdm-cell-study-resume", "texture-stage-b", "texture-study"}
+                                           "fdm-cell-study-resume", "texture-stage-b", "texture-study",
+                                           *region_reset_qa.MODES}
                 or _study_stage_rerun_source_sha256(selected, study_stage_rerun_mode)
                 != study_stage_rerun_sources):
             raise BuildControlError("QA reconciliation Study stage rerun mode/source pins differ")
@@ -6517,6 +6594,27 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
                 raise BuildControlError("QA reconciliation FDM grid parent record pins differ")
         elif "fdm_grid_resume_parent_attempt" in inputs or "fdm_grid_resume_parent_record_sha256" in inputs:
             raise BuildControlError("QA reconciliation has unrequested FDM grid resume parent pins")
+        if study_stage_rerun_mode in region_reset_qa.MODES:
+            if study_stage_rerun_mode.endswith("-import"):
+                parent_attempt = inputs.get("region_reset_export_attempt")
+                parent_hashes = inputs.get("region_reset_parent_record_sha256")
+                region_reset_parent_evidence = region_reset_qa.load_parent_evidence(
+                    control, parent_attempt, source_root=selected,
+                    mode=study_stage_rerun_mode, expected_sources=study_stage_rerun_sources,
+                )
+                if (parent_attempt != region_reset_parent_evidence["prior_attempt"]
+                        or parent_hashes != region_reset_parent_evidence["record_sha256"]
+                        or inputs.get("region_reset_parent_fresh_state")
+                        != region_reset_parent_evidence["fresh_state"]):
+                    raise BuildControlError("QA reconciliation S46 parent attempt/record pins differ")
+            elif ("region_reset_export_attempt" in inputs
+                  or "region_reset_parent_record_sha256" in inputs
+                  or "region_reset_parent_fresh_state" in inputs):
+                raise BuildControlError("QA reconciliation export carries unrequested S46 parent pins")
+        elif ("region_reset_export_attempt" in inputs
+              or "region_reset_parent_record_sha256" in inputs
+              or "region_reset_parent_fresh_state" in inputs):
+            raise BuildControlError("QA reconciliation has S46 parent pins on another Study profile")
         if (inputs.get("prepare_viewport_fixture") is not False or inputs.get("canvas_only") is not False
                 or inputs.get("expect_live_field") is not None or inputs.get("expect_airbox_vectors") is not False
                 or inputs.get("expect_fem_airbox_vectors", False) is not False
@@ -6743,6 +6841,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -6819,6 +6918,7 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         study_stage_rerun=study_stage_rerun_mode if study_stage_rerun else None,
         study_stage_rerun_source_sha256=study_stage_rerun_sources if study_stage_rerun else None,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
@@ -6945,8 +7045,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Prove one task-owned reversible name PATCH pending/ACK and restoration")
     parser.add_argument(
         "--study-stage-rerun",
-        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study"),
+        choices=("stage-b", "study", "material-stage-a", "fdm-cell-study", "texture-stage-b", "texture-study",
+                 *region_reset_qa.MODES),
         help="Run one fixed P22 UI-only Study stage profile and verify public results",
+    )
+    parser.add_argument(
+        "--region-reset-export-attempt",
+        help="Bind an S46 import to one succeeded same-group browser export attempt",
     )
     parser.add_argument(
         "--resume-fdm-grid-attempt",
@@ -6972,6 +7077,15 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("FULLMAG_BROWSER_QA_IMAGE", DEFAULT_BROWSER_IMAGE),
     )
     args = parser.parse_args(argv)
+    is_region_reset_import = args.study_stage_rerun in region_reset_qa.MODES and args.study_stage_rerun.endswith("-import")
+    if args.region_reset_export_attempt is not None:
+        if (not isinstance(args.region_reset_export_attempt, str)
+                or re.fullmatch(r"[0-9a-f]{32}", args.region_reset_export_attempt) is None):
+            raise BuildControlError("--region-reset-export-attempt requires one 32-character lowercase attempt id")
+        if not is_region_reset_import or args.reconcile_attempt:
+            raise BuildControlError("--region-reset-export-attempt is allowed only for an S46 import run")
+    elif is_region_reset_import:
+        raise BuildControlError("S46 import mode requires --region-reset-export-attempt")
     if args.reconcile_prestart and not args.reconcile_attempt:
         raise BuildControlError("--reconcile-prestart requires --reconcile-attempt and exact evidence pins")
     if args.resume_fdm_grid_attempt is not None:
@@ -7137,6 +7251,12 @@ def main(argv: list[str] | None = None) -> int:
         _study_stage_rerun_source_sha256(selected, args.study_stage_rerun)
         if args.study_stage_rerun is not None else None
     )
+    region_reset_parent_evidence = None
+    if is_region_reset_import:
+        region_reset_parent_evidence = region_reset_qa.load_parent_evidence(
+            control, args.region_reset_export_attempt, source_root=selected,
+            mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+        )
     study_stage_rerun_resume_evidence = None
     if args.resume_fdm_grid_attempt is not None:
         study_stage_rerun_resume_evidence = _load_fdm_grid_resume_evidence(
@@ -7198,6 +7318,7 @@ def main(argv: list[str] | None = None) -> int:
         study_stage_rerun=args.study_stage_rerun,
         study_stage_rerun_source_sha256=study_stage_rerun_sources,
         study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+        region_reset_parent_evidence=region_reset_parent_evidence,
         saved_playback_item_id=args.saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
@@ -7253,6 +7374,10 @@ def main(argv: list[str] | None = None) -> int:
         if study_stage_rerun_resume_evidence is not None:
             inputs["fdm_grid_resume_parent_attempt"] = study_stage_rerun_resume_evidence["prior_attempt"]
             inputs["fdm_grid_resume_parent_record_sha256"] = study_stage_rerun_resume_evidence["record_sha256"]
+        if region_reset_parent_evidence is not None:
+            inputs["region_reset_export_attempt"] = region_reset_parent_evidence["prior_attempt"]
+            inputs["region_reset_parent_record_sha256"] = region_reset_parent_evidence["record_sha256"]
+            inputs["region_reset_parent_fresh_state"] = region_reset_parent_evidence["fresh_state"]
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
     if args.expect_fem_airbox_vectors:
@@ -7273,9 +7398,23 @@ def main(argv: list[str] | None = None) -> int:
         live_fence = control.read("development/current.json")
         if hashlib.sha256(canonical(live_fence)).hexdigest() != current["development_fence_sha256"]:
             raise BuildControlError("Development attempt changed before browser QA admission")
+        if region_reset_parent_evidence is not None:
+            locked_parent = region_reset_qa.load_parent_evidence(
+                control, args.region_reset_export_attempt, source_root=selected,
+                mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+            )
+            if locked_parent != region_reset_parent_evidence:
+                raise BuildControlError("S46 parent export records changed before browser QA launch")
         browser_image_id, _ = _ensure_browser_image(
             operation, control, document, args.browser_image, args.pull_timeout
         )
+        if region_reset_parent_evidence is not None:
+            launch_parent = region_reset_qa.load_parent_evidence(
+                control, args.region_reset_export_attempt, source_root=selected,
+                mode=args.study_stage_rerun, expected_sources=study_stage_rerun_sources,
+            )
+            if launch_parent != region_reset_parent_evidence:
+                raise BuildControlError("S46 parent export records changed before the browser helper launch")
         if study_stage_rerun_resume_evidence is not None:
             _consume_fdm_grid_resume_evidence(
                 control, study_stage_rerun_resume_evidence,
@@ -7315,6 +7454,7 @@ def main(argv: list[str] | None = None) -> int:
             study_stage_rerun=args.study_stage_rerun,
             study_stage_rerun_source_sha256=study_stage_rerun_sources,
             study_stage_rerun_resume_evidence=study_stage_rerun_resume_evidence,
+            region_reset_parent_evidence=region_reset_parent_evidence,
         )
     return 0
 
