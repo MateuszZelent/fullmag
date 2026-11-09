@@ -9,9 +9,10 @@ import {
   type AuthoringHistoryWorkspaceState,
 } from "./AuthoringHistoryController";
 
-function scene(revision: number, marker: string): SceneResource {
+function scene(revision: number, marker: string, analysis?: unknown): SceneResource {
   return {
     editor: { marker },
+    ...(analysis === undefined ? {} : { analysis }),
     revision,
     scene: {
       authoring_schema: "scene.v2",
@@ -33,10 +34,17 @@ function deferred<T>() {
 
 describe("AuthoringHistoryController", () => {
   it("commits revision-fenced semantic undo and redo through replace_scene", async () => {
-    let current = scene(2, "after");
+    const beforeAnalysis = {
+      postprocessing_definitions: [{ definition_id: "before", settings: { plot: { color: "blue" } } }],
+    };
+    const afterAnalysis = {
+      postprocessing_definitions: [{ definition_id: "after", settings: { plot: { color: "red" } } }],
+    };
+    let current = scene(2, "after", afterAnalysis);
     const commitTransaction = vi.fn(async (request: { base_revision?: number | null }) => {
       const nextRevision = (request.base_revision ?? 0) + 1;
-      current = scene(nextRevision, nextRevision === 3 ? "before" : "after");
+      current = scene(nextRevision, nextRevision === 3 ? "before" : "after",
+        nextRevision === 3 ? beforeAnalysis : afterAnalysis);
       return {
         committed_scene: current,
         scene_revision: nextRevision,
@@ -74,9 +82,9 @@ describe("AuthoringHistoryController", () => {
     const onWorkspaceRestored = vi.fn();
 
     history.record({
-      after: scene(2, "after"),
+      after: scene(2, "after", afterAnalysis),
       afterWorkspaceState,
-      before: scene(1, "before"),
+      before: scene(1, "before", beforeAnalysis),
       beforeWorkspaceState,
       committedRevision: 2,
       label: "Edit geometry",
@@ -95,6 +103,7 @@ describe("AuthoringHistoryController", () => {
       base_revision: 2,
       kind: "replace_scene",
       scene: expect.objectContaining({
+        analysis: beforeAnalysis,
         editor: { marker: "before" },
       }),
     }, undefined);
@@ -117,6 +126,7 @@ describe("AuthoringHistoryController", () => {
       base_revision: 3,
       kind: "replace_scene",
       scene: expect.objectContaining({
+        analysis: afterAnalysis,
         editor: { marker: "after" },
       }),
     }, undefined);

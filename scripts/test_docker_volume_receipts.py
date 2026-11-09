@@ -515,6 +515,39 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
         dev._saved_authoring_validate_services(pin, actual, quiesced=True)
         dev._saved_authoring_validate_probe(proof, pin, scene)
 
+    def test_live_probe_rejects_analysis_only_difference_from_durable_archive(self):
+        import copy, hashlib
+        import docker_volume_dev as dev
+        from docker_build_control import canonical
+        dev, pin, scene, raw, files, pack, _, proof = self.fixture()
+        scene = copy.deepcopy(scene)
+        scene['analysis'] = {'postprocessing_definitions': [{
+            'definition_id': 'mode-view-1', 'revision': 4,
+            'module_id': 'analysis.dispersion', 'module_version': '2',
+            'definition_schema': 'analysis.dispersion.mode_visualization.v1',
+            'node_kind': 'mode_visualization', 'label': 'Mode view',
+            'data_ref': {'run_id': 'run-1', 'dataset_id': 'spectrum', 'dataset_revision': 'r3'},
+            'settings': {'projection': {'axis': [1, 0, 0], 'style': {'name': 'opaque'}}},
+        }]}
+        files['project/scene_document.json'] = canonical(scene)
+        files['project/definition.json'] = canonical({
+            'schema': 'fullmag.project.v1', 'project_id': pin['archive']['project_id'],
+            'revision': pin['archive']['project_revision'], 'scene': scene,
+        })
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+                              scene_sha256=hashlib.sha256(canonical(scene)).hexdigest())
+        for suffix in ('before', 'after'):
+            proof['resources']['scene_' + suffix]['body'] = copy.deepcopy(scene)
+
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        dev._saved_authoring_validate_probe(proof, pin, scene)
+
+        changed = copy.deepcopy(proof)
+        changed['resources']['scene_after']['body']['analysis']['postprocessing_definitions'][0]['settings']['projection']['axis'] = [0, 1, 0]
+        with self.assertRaisesRegex(BuildControlError, 'live authored scene differs from durable archive'):
+            dev._saved_authoring_validate_probe(changed, pin, scene)
+
     def test_accepts_empty_ui_authoring_archive_and_existing_strict_probe(self):
         dev, pin, scene, raw, _, _, _, proof = self.empty_authoring_fixture()
         dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,

@@ -4837,7 +4837,7 @@ _SAVED_AUTHORING_SCENE_FIELDS = (
     'version', 'revision', 'scene', 'universe', 'objects', 'couplings', 'materials',
     'magnetization_assets', 'field_drives', 'monitors', 'selections',
     'magnetization_constraints', 'current_modules', 'current_transports',
-    'spin_transports', 'spin_torques', 'oersted_fields', 'study', 'outputs', 'editor',
+    'spin_transports', 'spin_torques', 'oersted_fields', 'study', 'outputs', 'analysis', 'editor',
     'antenna_port_modes', 'antenna_field_solve_stages', 'antenna_target_projections',
     'solved_antenna_drives', 'antenna_spectrum_requests',
 )

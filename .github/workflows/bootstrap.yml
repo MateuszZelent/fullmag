@@ -256,6 +256,16 @@ jobs:
           grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_preserves_pipeline_resets_and_explicit_clears ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
           grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_matches_commit_normalization_without_mutating_source ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
 
+      - name: Verify complete authoring scene resource
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api schemas::authoring::scene_resource_analysis_tests:: -- --nocapture | tee "$RUNNER_TEMP/complete-authoring-scene.log"
+          grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_preserves_analysis_definitions_and_opaque_settings ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
+          grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
+
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:
