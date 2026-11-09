@@ -349,3 +349,62 @@ Nie jest to dowód różnicy po typowanej normalizacji Rust ani przyczyna 409.
 Dodano rzeczywistą scenę jako fixture oraz test Rust przechodzący przez render,
 capture i dokładny validator round-trip, z osobnym krokiem CI wymuszającym nazwę
 testu. Wynik tego testu pozostaje do odczytania; guard nie został osłabiony.
+
+
+## Potwierdzona przyczyna 409 i efektywna polityka zapisu
+
+DEV `623fbe00a7114365a4a2f769dacf2d95` z czystego commita
+`4cf2d8090926c136ee2d8f99f980449ca03b2d59` zakończył build i start API.
+Browser QA `c638f7f9fe434ce5bdeca933e7ac0036` zachowało body odrzuconego
+FDM Grid: HTTP 409, `accepted_ui_scene_round_trip_changed`. Odpowiedź trafiła
+również do UI. Nie wykonano Solve; sesja pozostała przy scenie 1, bez runu
+oraz bez przyjętych komend.
+
+Jednorazowy stateless import kanonicznego źródła do projektu, bez aktywacji
+sesji, pozwolił porównać typowany SceneDocument. Jest dokładnie sześć różnic:
+`autosave` dodane do trzech etapów i trzech payloadów pipeline. Każdy wpis to
+obowiązujący domyślny zapis `m` co 100 zaakceptowanych kroków Relax w Zarr.
+Scena, sesja, kolejka i ledger komend przed/po diagnostyce są identyczne.
+Test Rust rzeczywistej sceny w CI 4cf odtworzył ten sam błąd 409; obie nowe
+regresje zachowania `analysis` zostały rzeczywiście wykonane i przeszły.
+
+Poprawka wydziela czysty resolver istniejącej polityki IR. Runtime i kopia
+projekcji skryptowej używają tego samego właściciela defaultów; surowa scena,
+rewizja i fence nie są zmieniane. Normalizacja obejmuje flat stages oraz
+zagnieżdżone i wyłączone węzły pipeline. Custom cadence, target, tabela oraz
+konflikt formatu zachowują znaczenie. Jawne null czyści override, ale nadal
+dziedziczy skonfigurowany writer projektu. Nie wprowadzono semantyki null=off.
+Dodatkowa regresja walidatora musi przyjąć równoważny default, a odrzucić zmianę
+cadence w flat stage i osobno w payloadzie. Nowe testy IR, authoring i API mają
+wymuszone wykonanie w CI; ich wynik po poprawce pozostaje NOT VERIFIED.
+Lokalne lekkie kontrole: rustfmt obu zmienionych modułów i 15 kontraktów
+workflow przechodzą. Nie kompilowano backendu na hoście.
+
+Managed codegen API zakończył się powodzeniem w DEV 623. Receipt
+`backend/codegen/openapi-v2/45e67c8f51841a9e2bbdd2f733dae9b5173c7658b0981f90c8e002c18c892e79.json`
+potwierdza natywny commit 4cf, exit 0 oraz hashe opublikowanych plików.
+Diff OpenAPI/TypeScript zawiera wyłącznie opcjonalne opaque `SceneResource.analysis`.
+Managed typecheck przechodzi po generacji.
+
+Poprawka Save `8dc328e561c090f0669596c3b6f004c4ea7e220a` zachowuje już
+potwierdzone przez host ścieżkę, revision i hash także po nieudanym późniejszym
+fence sceny. Dokument pozostaje dirty; kolejny jawny Save używa aktualnego CAS.
+Regresja obejmuje host ACK rewizji 2, zmianę sceny podczas I/O i kolejny zapis
+rewizji 3 z expected_revision=2. Testy persistence: 61 PASS, focused ESLint i
+managed typecheck: exit 0. Niezależny review zamknął P2.
+Nowy build oraz pełny odbiór S46 pozostają wymagane; powyższe nie zamyka
+pozostałych P01–P22, FEM/GPU/multilayer ani bramek naukowych.
+
+
+Przegląd przed buildem wykrył dodatkowo lokalne `table_autosave` bez quantities
+oraz sampling `field_resolved_auto`. Projekcja uzupełnia pominięte quantities
+z tej samej neutralnej stałej IR co runner; publiczne `DEFAULT_TABLE_COLUMNS`
+pozostaje re-exportem tej listy. Schemat IR nadal wymaga jawnego quantities.
+Dla ustalania autora nowego primary writera projekcja uwzględnia `field` oraz
+`field_auto`, zgodnie z obecnym Python ownerem; resolved execution metadata
+pozostają w surowej scenie i nie są usuwane z porównania. Dodano odrębny test
+rzeczywistego render/capture lokalnej tabeli bez quantities. Testy Rust tych
+przypadków nadal wymagają wykonania w CI.
+
+Niezależny source review po korektach zamknął oba dodatkowe P2. Nie zastępuje to
+wykonania regresji Rust ani odbioru natywnej generacji po przebudowie.

@@ -3953,6 +3953,71 @@ mod tests {
     }
 
     #[test]
+    fn imported_relax_scene_with_implicit_table_quantities_survives_generated_source_capture() {
+        let mut authored: fullmag_authoring::SceneDocument = serde_json::from_str(include_str!(
+            "test_fixtures/s46_first_grid_import_scene.json"
+        ))
+        .unwrap();
+        let table = serde_json::json!({"table_autosave":{"every_steps":7}});
+        for stage in &mut authored.study.stages {
+            stage.extra.insert("sampling".into(), table.clone());
+        }
+        let mut raw = serde_json::to_value(&authored).unwrap();
+        for index in 0..3 {
+            raw["study"]["study_pipeline"]["nodes"][index]["payload"]["sampling"] = table.clone();
+        }
+        let authored = serde_json::from_value(raw).unwrap();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let generated = crate::script::render_accepted_scene_source_bounded(
+            &root, workspace.path(), &authored,
+        ).unwrap();
+        let capture = crate::script::capture_startup_script_scene(
+            &root, workspace.path(), &generated.path,
+        ).unwrap();
+        let captured = serde_json::from_value(capture.scene.unwrap()).unwrap();
+        super::validate_generated_scene_round_trip(&authored, &captured).unwrap();
+    }
+
+    #[test]
+    fn generated_source_projection_resolves_defaults_without_hiding_custom_cadence() {
+        let authored: fullmag_authoring::SceneDocument = serde_json::from_str(include_str!(
+            "test_fixtures/s46_first_grid_import_scene.json"
+        ))
+        .unwrap();
+        let policy = serde_json::json!({
+            "kind":"stage_autosave", "target":"results", "layout":"separate", "format":"zarr",
+            "fields":[{"kind":"field_autosave", "quantity":"m", "every_steps":100}]
+        });
+        let mut explicit = serde_json::to_value(&authored).unwrap();
+        for index in 0..3 {
+            explicit["study"]["stages"][index]["autosave"] = policy.clone();
+            explicit["study"]["study_pipeline"]["nodes"][index]["payload"]["autosave"] = policy.clone();
+        }
+        let captured: fullmag_authoring::SceneDocument =
+            serde_json::from_value(explicit.clone()).unwrap();
+        super::validate_generated_scene_round_trip(&authored, &captured).unwrap();
+        for pipeline in [false, true] {
+            let mut changed = explicit.clone();
+            let target = if pipeline {
+                &mut changed["study"]["study_pipeline"]["nodes"][1]["payload"]["autosave"]
+            } else {
+                &mut changed["study"]["stages"][1]["autosave"]
+            };
+            target["fields"][0]["every_steps"] = serde_json::json!(7);
+            let changed = serde_json::from_value(changed).unwrap();
+            let error = super::validate_generated_scene_round_trip(&authored, &changed).unwrap_err();
+            assert_eq!(
+                error.code.as_deref(),
+                Some("accepted_ui_scene_round_trip_changed")
+            );
+        }
+    }
+
+    #[test]
     fn generated_source_projection_keeps_revision_out_of_physics_without_weakening_commit_fence() {
         let authored = ui_source_scene();
         let mut captured = authored.clone();

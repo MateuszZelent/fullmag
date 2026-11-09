@@ -1115,6 +1115,11 @@ fn default_auto_sinc_nyquist_guard_factor() -> f64 {
     AUTO_SINC_NYQUIST_GUARD_FACTOR
 }
 
+/// Public table columns shared by authoring and runtime defaults. Omitted
+/// authoring quantities inherit these; explicit IR quantities stay required.
+pub const DEFAULT_TABLE_AUTOSAVE_QUANTITIES: &[&str] =
+    &["step", "t", "mx", "my", "mz", "e_total", "max_torque"];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableAutosaveIR {
     #[serde(default = "default_table_autosave_kind")]

@@ -266,6 +266,20 @@ jobs:
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_preserves_analysis_definitions_and_opaque_settings ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
 
+      - name: Verify effective project output policy
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-ir --lib project_output_policy::tests:: -- --nocapture | tee "$RUNNER_TEMP/project-output-policy.log"
+          grep -F "test project_output_policy::tests::explicit_policy_keeps_custom_schema_and_cadence_and_inherits_table ... ok" "$RUNNER_TEMP/project-output-policy.log"
+          cargo test --locked -p fullmag-authoring --lib script_output_projection::tests:: -- --nocapture | tee "$RUNNER_TEMP/script-output-projection.log"
+          grep -F "test script_output_projection::tests::default_relax_policy_matches_flat_and_nested_disabled_pipeline_without_mutating_source ... ok" "$RUNNER_TEMP/script-output-projection.log"
+          grep -F "test script_output_projection::tests::custom_cadence_is_retained_and_stays_distinguishable ... ok" "$RUNNER_TEMP/script-output-projection.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::generated_source_projection_resolves_defaults_without_hiding_custom_cadence -- --exact --nocapture | tee "$RUNNER_TEMP/effective-output-round-trip.log"
+          grep -F "test live_accepted_execution::tests::generated_source_projection_resolves_defaults_without_hiding_custom_cadence ... ok" "$RUNNER_TEMP/effective-output-round-trip.log"
+
       - name: Verify first FDM preparation source capture
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:
@@ -274,6 +288,8 @@ jobs:
           set -o pipefail
           cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture -- --exact --nocapture | tee "$RUNNER_TEMP/first-fdm-source-capture.log"
           grep -F "test live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture ... ok" "$RUNNER_TEMP/first-fdm-source-capture.log"
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::imported_relax_scene_with_implicit_table_quantities_survives_generated_source_capture -- --exact --nocapture | tee "$RUNNER_TEMP/local-table-source-capture.log"
+          grep -F "test live_accepted_execution::tests::imported_relax_scene_with_implicit_table_quantities_survives_generated_source_capture ... ok" "$RUNNER_TEMP/local-table-source-capture.log"
 
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}

@@ -7,8 +7,7 @@ use std::path::Path;
 use crate::types::StepStats;
 
 pub const DEFAULT_TABLE_ID: &str = "default";
-pub const DEFAULT_TABLE_COLUMNS: &[&str] =
-    &["step", "t", "mx", "my", "mz", "e_total", "max_torque"];
+pub use fullmag_ir::DEFAULT_TABLE_AUTOSAVE_QUANTITIES as DEFAULT_TABLE_COLUMNS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableColumnMeta {
