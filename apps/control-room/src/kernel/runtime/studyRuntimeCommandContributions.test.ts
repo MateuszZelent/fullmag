@@ -461,6 +461,24 @@ function unconfirmedComputeRecoveryFixture(kind: "solve" | "run" | "relax" = "so
 }
 
 describe("study runtime command contributions", () => {
+  it("does not retry the current intent through a stale recovery action targeting another intent", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+      const original = f.submit.mock.calls[0][0] as { client_intent_id: string };
+      const staleAction = { ...f.context, input: { clientIntentId: "previous-resolved-intent" } };
+      const enabled = f.registry.isEnabled("study.retry-compute", staleAction);
+      const result = await f.registry.execute("study.retry-compute", staleAction);
+
+      expect(enabled).toBe(false);
+      expect(result).toMatchObject({ status: "failed" });
+      expect(f.submit).toHaveBeenCalledOnce();
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey, original.client_intent_id)).toBe(true);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
   it("does not reopen Compute when its original foreground response follows an explicit retry rejection", async () => {
     const f = unconfirmedComputeRecoveryFixture();
     let rejectOriginal: (error: unknown) => void = () => undefined;
