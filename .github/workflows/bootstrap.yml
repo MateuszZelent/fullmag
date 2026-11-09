@@ -78,6 +78,27 @@ jobs:
           cache: pip
           cache-dependency-path: packages/fullmag-py/pyproject.toml
 
+      - name: Capture Rust contract source identity
+        run: |
+          python -B scripts/capture_source_snapshot_identity.py \
+            --repo-root . --ignore-non-runtime-dirty \
+            --output "$RUNNER_TEMP/fullmag-rust-source-identity.json"
+          python -B - <<'PYENV'
+          import json
+          import os
+          from pathlib import Path
+
+          identity = json.loads((Path(os.environ["RUNNER_TEMP"]) / "fullmag-rust-source-identity.json").read_text())
+          values = {
+              "FULLMAG_SOURCE_GIT_COMMIT": identity["head_commit_full"],
+              "FULLMAG_SOURCE_WORKTREE_STATE": "dirty" if identity["source_snapshot_dirty"] else "clean",
+              "FULLMAG_SOURCE_SNAPSHOT_SHA256": identity["source_snapshot_sha256"],
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              for name, value in values.items():
+                  environment.write(f"{name}={value}\n")
+          PYENV
+
       - name: Install Rust
         id: install-rust
         uses: dtolnay/rust-toolchain@stable
@@ -688,6 +709,8 @@ jobs:
             apps/control-room/src/kernel/api/generated/openapi-v2.json
             apps/control-room/src/kernel/api/generated/openapi-v2-types.ts
             apps/control-room/src/kernel/api/generated/openapi-v2-client.ts
+            apps/control-room/src/kernel/api/generated/openapi-v2-paths.ts
+            packages/fullmag-py/src/fullmag/client/_generated
           if-no-files-found: error
 
   api-hygiene-rg13:

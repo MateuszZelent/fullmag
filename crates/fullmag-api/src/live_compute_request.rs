@@ -576,9 +576,160 @@ mod tests {
         body
     }
 
+    fn configure_connected_runtime_service(store_root: &std::path::Path) {
+        use std::{
+            io::{BufRead, BufReader, Write},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+
+        use fullmag_session::runtime_service::{
+            RuntimeServiceChild, RuntimeServiceConfig, RuntimeServiceOwnerDescriptor,
+            RuntimeServiceState, RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH,
+            RUNTIME_SERVICE_OWNER_PROTOCOL, RUNTIME_SERVICE_OWNER_SCHEMA,
+        };
+
+        let store_root = std::fs::canonicalize(store_root)
+            .expect("accepted-store fixture root should be canonical");
+        let runtime_services = store_root.join("runtime-services");
+        std::fs::create_dir_all(&runtime_services)
+            .expect("runtime-service fixture directory should be created");
+        let budget = fullmag_session::FmsResourceBudget {
+            cpu_millis: 1_000,
+            memory_bytes: 1_024,
+            gpu_memory_bytes: 0,
+            storage_bytes: 1_024,
+        };
+        let config = RuntimeServiceConfig {
+            schema_version: "runtime_service_config.v1".into(),
+            store_root: store_root.clone(),
+            target_id: "desktop".into(),
+            compute_pool_id: "compute".into(),
+            preparation_pool_id: "preparation".into(),
+            compute_resources: vec![fullmag_session::FmsSchedulerResourceOffer {
+                resource_id: "compute.cpu".into(),
+                kind: fullmag_session::FmsResourceKind::Cpu,
+                budget: budget.clone(),
+            }],
+            preparation_resources: vec![fullmag_session::FmsPreparationResourceOffer {
+                resource_id: "preparation.cpu".into(),
+                budget,
+            }],
+            worker_timeout_seconds: 10,
+            preparation_timeout_seconds: 10,
+            heartbeat_interval_milliseconds: 100,
+            startup_timeout_seconds: 10,
+            drain_timeout_seconds: 10,
+            host_execution: None,
+        };
+        config.validate().expect("runtime-service fixture config is valid");
+        let config_path = std::path::PathBuf::from(
+            std::env::var_os("FULLMAG_RUNTIME_SERVICE_CONFIG")
+                .expect("isolated child must have its own runtime config path"),
+        );
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec(&config).expect("runtime-service config serializes"),
+        )
+        .expect("runtime-service config fixture should be written");
+
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .expect("loopback runtime-service fixture should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("runtime-service fixture listener should be nonblocking");
+        let address = listener
+            .local_addr()
+            .expect("runtime-service fixture address should be available");
+        let identity = fullmag_build_info::identity();
+        let now = chrono::Utc::now();
+        let owner = RuntimeServiceOwnerDescriptor {
+            schema_version: RUNTIME_SERVICE_OWNER_SCHEMA.into(),
+            owner_token: uuid::Uuid::new_v4().to_string(),
+            process_start_token: uuid::Uuid::new_v4().to_string(),
+            pid: 1,
+            host: "http-regression-fixture".into(),
+            target_id: config.target_id.clone(),
+            protocol: RUNTIME_SERVICE_OWNER_PROTOCOL.into(),
+            state: RuntimeServiceState::Ready,
+            acquired_at: now,
+            heartbeat_at: now,
+            compute_pool_generation: Some(1),
+            preparation_pool_generation: Some(1),
+            control_address: Some(address.to_string()),
+            build_commit: Some(identity.git_commit.into()),
+            build_snapshot: Some(identity.source_snapshot_sha256.into()),
+            compute_pool_id: Some(config.compute_pool_id.clone()),
+            preparation_pool_id: Some(config.preparation_pool_id.clone()),
+            children: vec![
+                RuntimeServiceChild {
+                    role: "compute".into(),
+                    pid: 2,
+                    status: "running".into(),
+                },
+                RuntimeServiceChild {
+                    role: "preparation".into(),
+                    pid: 3,
+                    status: "running".into(),
+                },
+            ],
+        };
+        fullmag_session::runtime_service::validate_descriptor(&owner)
+            .expect("runtime-service owner fixture is valid");
+        std::fs::write(
+            store_root.join(RUNTIME_SERVICE_OWNER_DESCRIPTOR_PATH),
+            serde_json::to_vec(&owner).expect("runtime-service owner serializes"),
+        )
+        .expect("runtime-service owner fixture should be written");
+
+        let response_owner = owner.clone();
+        let response_config = config.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let (stream, _) = loop {
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            if stream.read_line(&mut request).is_err() {
+                return;
+            }
+            let Ok(request) = serde_json::from_str::<serde_json::Value>(&request) else {
+                return;
+            };
+            let Some(nonce) = request.get("nonce").and_then(serde_json::Value::as_str) else {
+                return;
+            };
+            let response = serde_json::json!({
+                "schema_version": "runtime_service_status.v1",
+                "nonce": nonce,
+                "owner": response_owner,
+                "configuration": response_config,
+            });
+            let mut stream = stream.into_inner();
+            let _ = stream.write_all(response.to_string().as_bytes());
+            let _ = stream.write_all(b"\n");
+        });
+
+        // The parent passes this child's private config path via Command::env;
+        // fixture cases never mutate process-global environment variables.
+    }
+
     async fn compute_http_test_state(
         submit_store_root: Option<std::path::PathBuf>,
         missing_solve_material: bool,
+        connected_runtime_service: bool,
     ) -> Arc<AppState> {
         let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
         let state_mut = Arc::get_mut(&mut state).expect("test AppState must be uniquely owned");
@@ -586,6 +737,13 @@ mod tests {
         state_mut
             .current_live_session_epoch
             .store(8, std::sync::atomic::Ordering::Release);
+        if connected_runtime_service {
+            configure_connected_runtime_service(
+                submit_store_root
+                    .as_deref()
+                    .expect("connected runtime fixture requires an accepted-store root"),
+            );
+        }
 
         let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
             &crate::schemas::sessions::CreateSessionRequest {
@@ -704,7 +862,7 @@ mod tests {
         let unkeyed_dir = tempfile::tempdir().unwrap();
         let unkeyed_store_root = unkeyed_dir.path().join("submit-store");
         SessionStore::open(&unkeyed_store_root).unwrap();
-        let state = compute_http_test_state(Some(unkeyed_store_root), false).await;
+        let state = compute_http_test_state(Some(unkeyed_store_root), false, true).await;
         let (status, body) = post_compute_http(
             state,
             stale_compute_request(None, "previous-run"),
@@ -717,7 +875,7 @@ mod tests {
 
         // Without a configured store, an apparent replay miss is not a
         // completed owner-scoped durable scan and must stay unresolved.
-        let state = compute_http_test_state(None, false).await;
+        let state = compute_http_test_state(None, false, false).await;
         let (status, body) = post_compute_http(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
@@ -725,7 +883,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
-        assert_eq!(body["code"], "command_current_run_changed");
+        assert_eq!(body["code"], "session_connectivity_degraded");
         assert!(body.get("intent_disposition").is_none());
 
         // A matching key used for another body is positive evidence of a
@@ -753,7 +911,7 @@ mod tests {
             .unwrap()
             .commit_run_intent(&intent)
             .unwrap();
-        let state = compute_http_test_state(Some(conflict_store_root), false).await;
+        let state = compute_http_test_state(Some(conflict_store_root), false, false).await;
         let (status, body) = post_compute_http(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
@@ -770,7 +928,7 @@ mod tests {
         let material_dir = tempfile::tempdir().unwrap();
         let material_store_root = material_dir.path().join("submit-store");
         SessionStore::open(&material_store_root).unwrap();
-        let state = compute_http_test_state(Some(material_store_root), true).await;
+        let state = compute_http_test_state(Some(material_store_root), true, true).await;
         let (status, body) = post_compute_http(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
@@ -790,7 +948,7 @@ mod tests {
         let empty_dir = tempfile::tempdir().unwrap();
         let empty_store_root = empty_dir.path().join("submit-store");
         SessionStore::open(&empty_store_root).unwrap();
-        let state = compute_http_test_state(Some(empty_store_root), false).await;
+        let state = compute_http_test_state(Some(empty_store_root), false, true).await;
         let (status, body) = post_compute_http(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
@@ -804,9 +962,9 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
 
-        // The current implementation's semantic RED is only these missing
-        // machine dispositions; status, code, no-key/root, and body-conflict
-        // contracts above already pass against today's production code.
+        // The fixture's no-key, no-root, and body-conflict controls preserve
+        // their existing contracts. The intended semantic RED is only the
+        // missing disposition on the two terminal keyed rejection paths.
         assert_eq!(
             [material_disposition, stale_run_disposition],
             [Some("not_accepted".into()), Some("not_accepted".into())],
@@ -817,11 +975,15 @@ mod tests {
     fn keyed_stale_compute_http_error_has_only_a_linearized_not_accepted_disposition() {
         let child_test_name =
             "live_compute_request::tests::keyed_stale_compute_http_error_has_only_a_linearized_not_accepted_disposition_child";
+        let config_dir = tempfile::tempdir().expect("isolated runtime config directory");
         let status = std::process::Command::new(
             std::env::current_exe().expect("test harness executable is available"),
         )
         .args(["--ignored", "--exact", child_test_name, "--nocapture"])
-        .env("FULLMAG_RUNTIME_SERVICE_CONFIG", "test-runtime-service-config")
+        .env(
+            "FULLMAG_RUNTIME_SERVICE_CONFIG",
+            config_dir.path().join("APPLICATION.json"),
+        )
         .status()
         .expect("isolated HTTP regression child process should start");
         assert!(

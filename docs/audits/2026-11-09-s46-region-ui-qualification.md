@@ -1170,3 +1170,24 @@ health HTTP200/degraded. Dokładny typecheck exec pozostaje Running, więc nie
 ponowiono lokalnej bramki. Bieżący odczyt df pokazał 761 MiB wolnego na WSL
 i 20 GiB na C:, bez usuwania danych przez ten etap. Nie jest to dowód naprawy I/O
 ani wystarczającego miejsca dla wymaganego S46 export/import.
+
+
+Fixture HTTP została uzupełniona o protokołowo zgodny testowy owner Ready i
+kontrolowany socket statusu. Parent przekazuje prywatną ścieżkę konfiguracji
+przez Command::env; przypadki nie zmieniają globalnych zmiennych środowiska.
+Brak accepted-store zachowuje rzeczywistą odpowiedź connectivity degraded bez
+markera. Rust CI przechwytuje teraz prawdziwą tożsamość źródeł istniejącym
+capture_source_snapshot_identity.py przed Cargo: żaden walidator nie został
+osłabiony i nie podstawiono fikcyjnego 64-hex hasha. YAML i osadzony Python
+przeszły parser, a polecenie capture zwróciło poprawny commit/snapshot lokalnych
+źródeł. Rustfmt sparsował fixture. Kompilacja i właściwy semantic RED nadal
+wymagają następnej próby CI.
+
+Istniejący artefakt generated-api-contract zachowuje również mapę ścieżek
+TypeScript i cały generowany klient Pythona, zgodnie z już działającą bramką
+deterministyczności. Umożliwia to zastosowanie rzeczywistych wyników generatora
+po późniejszej zmianie schematu bez ręcznej edycji SDK.
+
+Dodano niewykonane jeszcze regresje widocznej akcji retry w Study Runtime
+(SSR, nie odbiór przeglądarki) oraz starej akcji wskazującej inny clientIntentId.
+Produktowy przycisk i dokładne targetowanie komendy czekają na ich RED.
