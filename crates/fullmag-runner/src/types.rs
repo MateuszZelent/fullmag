@@ -663,6 +663,27 @@ pub struct LiveFieldMaterializationStatus {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CpuFixedTransferDiagnostics {
+    pub state: String,
+    pub reason: String,
+    pub build_count: u64,
+    pub reuse_count: u64,
+    pub nnz: u64,
+    pub persistent_bytes: u64,
+    pub setup_wall_time_ns: u64,
+    pub setup_rss_baseline_bytes: u64,
+    pub setup_observed_peak_rss_bytes: u64,
+    pub setup_observed_peak_delta_bytes: u64,
+    pub setup_estimated_peak_delta_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CpuFixedCouplingTelemetry {
+    pub rhs: CpuFixedTransferDiagnostics,
+    pub recovery: CpuFixedTransferDiagnostics,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -805,6 +826,10 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
+    /// Historical results and unconfigured/non-GPU paths have no observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_amg_coarse_relax_type: Option<i32>,
     #[serde(default)]
     pub demag_amg_coarsening: i32,
     #[serde(default)]
@@ -1010,6 +1035,8 @@ pub struct StepStats {
     /// Optional native CPU RK accepted-endpoint cache receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_cache_telemetry: Option<fullmag_quantities::EndpointCacheTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_fixed_coupling: Option<CpuFixedCouplingTelemetry>,
     /// Versioned receipt of the native FEM state/material representation and
     /// cumulative conversion traffic observed by this backend handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1146,6 +1173,7 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
             demag_amg_aggressive_coarsening: 0,
@@ -1225,6 +1253,7 @@ impl Default for StepStats {
             demag_solves: 0,
             fsal_reused: false,
             endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fem_representation_receipt: None,
             solver_attempts: Vec::new(),
             poisson_iterations: 0,
@@ -1254,6 +1283,7 @@ impl Default for StepStats {
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
+        CpuFixedCouplingTelemetry, CpuFixedTransferDiagnostics,
         ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
         FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
     };
@@ -1280,6 +1310,36 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(stats.hot_loop_exchange_host_sync_count, 2);
         assert_eq!(stats.hot_loop_compute_host_sync_count, 6);
         assert_eq!(stats.hot_loop_control_scalar_host_sync_count, 4);
+    }
+
+    #[test]
+    fn cpu_fixed_coupling_is_optional_in_historical_step_json() {
+        let historical = serde_json::to_value(StepStats::default()).unwrap();
+        assert!(historical.get("cpu_fixed_coupling").is_none());
+        let restored: StepStats = serde_json::from_value(historical).unwrap();
+        assert!(restored.cpu_fixed_coupling.is_none());
+        let telemetry = CpuFixedCouplingTelemetry {
+            rhs: CpuFixedTransferDiagnostics {
+                state: "ready".into(),
+                build_count: 1,
+                reuse_count: 17,
+                nnz: 39,
+                persistent_bytes: 1024,
+                setup_wall_time_ns: 123,
+                ..Default::default()
+            },
+            recovery: CpuFixedTransferDiagnostics {
+                state: "quadrature".into(),
+                reason: "persistent cache budget exceeded".into(),
+                ..Default::default()
+            },
+        };
+        let value = serde_json::to_value(StepStats {
+            cpu_fixed_coupling: Some(telemetry.clone()),
+            ..Default::default()
+        }).unwrap();
+        let restored: StepStats = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.cpu_fixed_coupling, Some(telemetry));
     }
 
     #[test]
@@ -1771,7 +1831,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
 
 /// Native reducers expose aggregate DMI energy. In a rotated-only plan the
 /// aggregate is also the exact rotated component; it must not be zeroed.
-#[cfg(any(test, feature = "cuda", feature = "fem-gpu"))]
+#[cfg(any(test, feature = "cuda", feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn split_rotated_only_dmi_energy(rotated_dmi_only: bool, aggregate: f64) -> (f64, f64) {
     (aggregate, if rotated_dmi_only { aggregate } else { 0.0 })
 }
@@ -3375,6 +3435,7 @@ pub enum LlgTimestepQualificationId {
     ExplicitFixedFemGpuDouble,
     ExplicitAdaptiveFdmCpuDouble,
     ExplicitAdaptiveFdmCudaDouble,
+    ExplicitAdaptiveFdmCudaSingle,
     ExplicitAdaptiveFemCpuDouble,
     ExplicitAdaptiveFemGpuDouble,
 }
@@ -4471,6 +4532,8 @@ pub struct FdmGpuEndpointCacheTelemetry {
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_fixed_coupling: Option<CpuFixedCouplingTelemetry>,
     /// Engine that executed the run: e.g. "cpu_reference", "cuda_fdm",
     /// "fem_cpu_baseline_internal", "fem_cpu_native", "fem_native_gpu",
     /// "fem_eigen_cpu_baseline", or "fem_eigen_native_gpu".

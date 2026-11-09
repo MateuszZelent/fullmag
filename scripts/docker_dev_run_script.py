@@ -28,6 +28,14 @@ OBSERVER_RETRIES = 2
 MAX_OBSERVER_OUTPUT_BYTES = 256 * 1024
 CANCEL_TIMEOUT_SECONDS = 30
 
+
+def _activation_error_message(error: BaseException) -> str:
+    # Retain the concrete admission/transport cause while keeping an unknown
+    # outcome unknown. Diagnostics never authorize a retry or cancellation.
+    detail = " ".join(str(error).split())[:2048]
+    return ("Activation outcome is unknown; services remain running and no retry was attempted. "
+            + "Cause: " + type(error).__name__ + ": " + detail)
+
 # Fixed image-side observer and exact-run Stop client. Identity inputs are passed as argv
 # environment values to a validated backend container; no shell or user source
 # is interpolated into this program.
@@ -392,6 +400,10 @@ def run_script(
     timeout_seconds: float | None = None,
     attempt: str | None = None,
     config_sha256: str | None = None,
+    headless: bool = False,
+    solver_profile: bool = False,
+    cuda_trace: bool = False,
+    cancel_requested: Callable[[], bool] | None = None,
     output: Callable[[str], None] = _terminal_output,
 ) -> dict[str, Any]:
     """Run one script in the validated group, streaming progress until terminal."""
@@ -410,6 +422,14 @@ def run_script(
         return _result("rejected", "invalid_timeout", 2, status="not_started")
     if request_id is not None and not REQUEST_ID_RE.fullmatch(request_id):
         return _result("rejected", "invalid_request_id", 2, status="not_started")
+    if type(headless) is not bool:
+        return _result("rejected", "invalid_headless_mode", 2, status="not_started")
+    if type(solver_profile) is not bool:
+        return _result("rejected", "invalid_solver_profile", 2, status="not_started")
+    if type(cuda_trace) is not bool:
+        return _result("rejected", "invalid_cuda_trace", 2, status="not_started")
+    if cancel_requested is not None and not callable(cancel_requested):
+        return _result("rejected", "invalid_cancel_callback", 2, status="not_started")
 
     from docker_dev_defaults import _discover_pins, resolve_defaults
 
@@ -421,6 +441,7 @@ def run_script(
             defaults,
             requested_port=(defaults.port if port is not None else None),
             expected_attempt=attempt, expected_config_sha256=config_sha256,
+            frontend_required=not headless,
         )
     except (BuildControlError, OSError, ValueError) as error:
         return _result(
@@ -448,7 +469,10 @@ def run_script(
     if attempt is not None and (pins.attempt != attempt or pins.config_sha256 != config_sha256):
         return _result("rejected", "group_pin_mismatch", 2, status="not_started",
                        message="The running DEV group does not match the supplied pins.")
-    output(f"Web interface: http://127.0.0.1:{pins.port}/workspace")
+    if not headless:
+        output(f"Web interface: http://127.0.0.1:{pins.port}/workspace")
+    else:
+        output("Headless mode: retained frontend stays stopped.")
     output("Activating script: " + str(script))
 
     try:
@@ -482,6 +506,28 @@ def run_script(
             message="API identity was invalid; script activation was not attempted.",
         )
 
+    if cancel_requested is not None:
+        try:
+            requested = cancel_requested()
+        except Exception:
+            requested = None
+        if requested is True:
+            return _result(
+                "terminal", "interrupted_before_activation", 130,
+                status="not_started", attempt=pins.attempt,
+                config_sha256=pins.config_sha256,
+                api_instance_id=api_instance_id,
+                message="Interrupt received before activation; no request was sent.",
+            )
+        if requested is not False:
+            return _result(
+                "unknown", "cancel_request_unknown", 75,
+                status="not_started", attempt=pins.attempt,
+                config_sha256=pins.config_sha256,
+                api_instance_id=api_instance_id,
+                message="Cancellation request could not be read; activation was not attempted.",
+            )
+
     from docker_volume_activate import activate
 
     try:
@@ -492,6 +538,9 @@ def run_script(
             source_root=pins.source_root,
             script=Path(script),
             request_id=request_id,
+            headless=headless,
+            solver_profile=solver_profile,
+            cuda_trace=cuda_trace,
         ))
     except KeyboardInterrupt:
         return _result(
@@ -544,9 +593,9 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
-    except (ControlOutcomeUnknown, OSError, ValueError):
+    except (ControlOutcomeUnknown, OSError, ValueError) as error:
         return _result(
             "unknown",
             "activation_outcome_unknown",
@@ -555,7 +604,7 @@ def run_script(
             attempt=pins.attempt,
             config_sha256=pins.config_sha256,
             api_instance_id=api_instance_id,
-            message="Activation outcome is unknown; services remain running and no retry was attempted.",
+            message=_activation_error_message(error),
         )
 
     response = activation.get("response") if isinstance(activation, Mapping) else None
@@ -618,6 +667,20 @@ def run_script(
         if metadata["wait_for_solve"]:
             output("Waiting for Compute in the web interface.")
         while True:
+            if cancel_requested is not None:
+                try:
+                    requested = cancel_requested()
+                except Exception:
+                    requested = None
+                if requested is not False and requested is not True:
+                    return _result(
+                        "unknown", "cancel_request_unknown", 75,
+                        status=last_status, **base,
+                        request_scope_epoch=status_scope,
+                        message="Cancellation request could not be read; exact-run Stop was not sent.",
+                    )
+                if requested:
+                    raise KeyboardInterrupt
             try:
                 observed = _probe_with_retry(
                     pins.backend_container_id,
@@ -728,6 +791,20 @@ def run_script(
                     status=run_status, **base, request_scope_epoch=status_scope,
                     message="Observation deadline expired; the run was not cancelled and services remain running.",
                 )
+            if cancel_requested is not None:
+                try:
+                    requested = cancel_requested()
+                except Exception:
+                    requested = None
+                if requested is not False and requested is not True:
+                    return _result(
+                        "unknown", "cancel_request_unknown", 75,
+                        status=run_status, **base,
+                        request_scope_epoch=status_scope,
+                        message="Cancellation request could not be read; exact-run Stop was not sent.",
+                    )
+                if requested:
+                    raise KeyboardInterrupt
             time.sleep(POLL_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         return _cancel_run(pins.backend_container_id, base,

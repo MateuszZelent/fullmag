@@ -216,9 +216,18 @@ class _Model(_Namespace):
             body=_drop_none({"expected_scene_revision": expected_scene_revision}),
         )
 
-    def commit(self, transaction: Mapping[str, Any]) -> Any:
+    def commit(
+        self,
+        transaction: Mapping[str, Any],
+        *,
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
         """Commit one ``AuthoringTransactionRequest`` and return the response."""
-        return self._client.call_json("model_post_sessions_current_model_transactions", body=dict(transaction))
+        return self._client.call_json(
+            "model_post_sessions_current_model_transactions",
+            body=dict(transaction),
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key else None,
+        )
 
     def replace_scene(self, scene: Mapping[str, Any], *, base_revision: Optional[int] = None) -> Any:
         return self.commit(_drop_none({"kind": "replace_scene", "scene": dict(scene), "base_revision": base_revision}))

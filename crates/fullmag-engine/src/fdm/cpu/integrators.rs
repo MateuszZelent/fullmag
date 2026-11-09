@@ -258,6 +258,193 @@ mod adaptive_decision_tests {
     }
 
     #[test]
+    fn rk45_hard_endpoint_uses_short_physical_step_for_all_cpu_layouts() {
+        let endpoint_time = 5.0e-10;
+        let endpoint_dt = endpoint_time;
+        let dt_min = 1.0e-9;
+
+        // The AoS-only fallback must use the real endpoint interval.
+        let mut aos_problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        aos_problem.ms_field = Some(vec![1.0]);
+        assert!(!aos_problem.soa_fast_path_supported());
+        let mut aos = aos_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("AoS state");
+        let aos_initial_m = aos.magnetization[0];
+        let mut aos_ws = aos_problem.create_workspace();
+        let mut aos_bufs = aos_problem.create_integrator_buffers();
+        let aos_report = aos_problem
+            .step_rk45_to_hard_endpoint_with_buffers_evaluation(
+                &mut aos,
+                endpoint_time,
+                &mut aos_ws,
+                &mut aos_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("AoS endpoint step");
+        assert_eq!(aos_report.dt_used, endpoint_dt);
+        assert_eq!(aos_report.time_seconds, endpoint_time);
+        assert_eq!(aos.time_seconds, endpoint_time);
+        assert_ne!(aos.magnetization[0], aos_initial_m);
+        assert_eq!(aos_bufs.adaptive_attempts().len(), 1);
+        assert_eq!(aos_bufs.adaptive_attempts()[0].dt_attempt, endpoint_dt);
+        assert!((dt_min..=1.0).contains(&aos_bufs.adaptive_attempts()[0].dt_next));
+
+        // The AoS wrapper's supported buffer-SoA lane keeps the same endpoint.
+        let buffer_soa_problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let mut buffer_soa = buffer_soa_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("buffer-SoA state");
+        let buffer_soa_initial_m = buffer_soa.magnetization[0];
+        let mut buffer_soa_ws = buffer_soa_problem.create_workspace();
+        let mut buffer_soa_bufs = buffer_soa_problem.create_integrator_buffers();
+        let buffer_soa_report = buffer_soa_problem
+            .step_rk45_to_hard_endpoint_with_buffers_evaluation(
+                &mut buffer_soa,
+                endpoint_time,
+                &mut buffer_soa_ws,
+                &mut buffer_soa_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("buffer-SoA endpoint step");
+        assert_eq!(buffer_soa_report.dt_used, endpoint_dt);
+        assert_eq!(buffer_soa_report.time_seconds, endpoint_time);
+        assert_eq!(buffer_soa.time_seconds, endpoint_time);
+        assert_ne!(buffer_soa.magnetization[0], buffer_soa_initial_m);
+        assert_eq!(buffer_soa_bufs.adaptive_attempts().len(), 1);
+        assert_eq!(
+            buffer_soa_bufs.adaptive_attempts()[0].dt_attempt,
+            endpoint_dt
+        );
+        assert!((dt_min..=1.0).contains(&buffer_soa_bufs.adaptive_attempts()[0].dt_next));
+
+        // The runner's persistent SoA state path also accepts only this final
+        // shortened physical interval while leaving controller bounds intact.
+        let persistent_problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let mut persistent_soa = persistent_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent-SoA seed")
+            .to_soa();
+        let persistent_initial_m = persistent_soa.magnetization.gather_to_aos();
+        let mut persistent_ws = persistent_problem.create_workspace();
+        let mut persistent_bufs = persistent_problem.create_integrator_buffers();
+        let persistent_report = persistent_problem
+            .step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+                &mut persistent_soa,
+                endpoint_time,
+                &mut persistent_ws,
+                &mut persistent_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("persistent-SoA endpoint step");
+        assert_eq!(persistent_report.dt_used, endpoint_dt);
+        assert_eq!(persistent_report.time_seconds, endpoint_time);
+        assert_eq!(persistent_soa.time_seconds, endpoint_time);
+        assert_ne!(
+            persistent_soa.magnetization.gather_to_aos(),
+            persistent_initial_m
+        );
+        assert_eq!(persistent_bufs.adaptive_attempts().len(), 1);
+        assert_eq!(
+            persistent_bufs.adaptive_attempts()[0].dt_attempt,
+            endpoint_dt
+        );
+        assert!((dt_min..=1.0).contains(&persistent_bufs.adaptive_attempts()[0].dt_next));
+    }
+
+    #[test]
+    fn rk45_rejected_hard_endpoint_attempt_fails_once_without_state_commit() {
+        let problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let endpoint_time = 5.0e-10;
+        let mut state = problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("persistent-SoA seed")
+            .to_soa();
+        let before = state.clone();
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        buffers.set_adaptive_error_script_for_tests([2.0]);
+
+        let error = problem
+            .step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+                &mut state,
+                endpoint_time,
+                &mut workspace,
+                &mut buffers,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect_err("an inaccurate terminal trial must fail closed");
+
+        assert_eq!(error.to_string(), "dt_min_exhausted");
+        assert_eq!(state, before);
+        assert_eq!(buffers.adaptive_attempts().len(), 1);
+        assert_eq!(
+            buffers.adaptive_attempts()[0].decision,
+            crate::AdaptiveAttemptDecision::Failed
+        );
+        assert_eq!(
+            buffers.adaptive_attempts()[0].reason,
+            crate::AdaptiveAttemptReason::DtMinExhausted
+        );
+        assert_eq!(buffers.adaptive_attempts()[0].dt_attempt, endpoint_time);
+        assert_eq!(buffers.adaptive_accepted_attempts(), 0);
+        assert_eq!(buffers.adaptive_rejected_attempts(), 0);
+        assert_eq!(problem.thermal_step(), 0);
+    }
+
+    #[test]
+    fn ordinary_rk45_minimum_and_fixed_rk45_step_semantics_are_unchanged() {
+        let short_dt = 5.0e-10;
+        let adaptive_problem = adaptive_test_problem(crate::TimeIntegrator::RK45);
+        let mut adaptive_state = adaptive_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("adaptive state");
+        let mut adaptive_ws = adaptive_problem.create_workspace();
+        let mut adaptive_bufs = adaptive_problem.create_integrator_buffers();
+        let adaptive_report = adaptive_problem
+            .step_with_buffers_evaluation(
+                &mut adaptive_state,
+                short_dt,
+                &mut adaptive_ws,
+                &mut adaptive_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("ordinary adaptive RK45 step");
+        assert_eq!(adaptive_report.dt_used, 1.0e-9);
+        assert_eq!(adaptive_state.time_seconds, 1.0e-9);
+
+        let fixed_problem = crate::ExchangeLlgProblem::with_terms(
+            crate::GridShape::new(1, 1, 1).expect("valid grid"),
+            crate::CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            crate::MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            crate::LlgConfig::new(100.0, crate::TimeIntegrator::RK45)
+                .expect("valid fixed LLG config"),
+            crate::EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                external_field: Some([0.0, 1.0, 0.0]),
+                ..Default::default()
+            },
+        );
+        let mut fixed_state = fixed_problem
+            .uniform_state([1.0, 0.0, 0.0])
+            .expect("fixed state");
+        let mut fixed_ws = fixed_problem.create_workspace();
+        let mut fixed_bufs = fixed_problem.create_integrator_buffers();
+        let fixed_report = fixed_problem
+            .step_with_buffers_evaluation(
+                &mut fixed_state,
+                short_dt,
+                &mut fixed_ws,
+                &mut fixed_bufs,
+                crate::EvaluationRequest::Minimal,
+            )
+            .expect("fixed RK45 step");
+        assert_eq!(fixed_report.dt_used, short_dt);
+        assert_eq!(fixed_state.time_seconds, short_dt);
+    }
+
+    #[test]
     fn direct_cpu_entry_points_propagate_injected_nonfinite_error_norm() {
         for integrator in [crate::TimeIntegrator::RK23, crate::TimeIntegrator::RK45] {
             let problem = adaptive_test_problem(integrator);
@@ -2345,11 +2532,39 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.rk45_step_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, false)
+    }
+
+    pub(crate) fn rk45_step_buf_at_hard_endpoint(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        self.rk45_step_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, true)
+    }
+
+    fn rk45_step_buf_with_endpoint_policy(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        hard_endpoint: bool,
+    ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
-            dt.min(cfg.dt_max).max(cfg.dt_min)
+            let dt_floor = if hard_endpoint && dt < cfg.dt_min {
+                dt
+            } else {
+                cfg.dt_min
+            };
+            dt.min(cfg.dt_max).max(dt_floor)
         } else {
             dt
         };
@@ -2773,11 +2988,39 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.rk45_step_soa_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, false)
+    }
+
+    pub(crate) fn rk45_step_soa_buf_at_hard_endpoint(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        self.rk45_step_soa_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, true)
+    }
+
+    fn rk45_step_soa_buf_with_endpoint_policy(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        hard_endpoint: bool,
+    ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
-            dt.min(cfg.dt_max).max(cfg.dt_min)
+            let dt_floor = if hard_endpoint && dt < cfg.dt_min {
+                dt
+            } else {
+                cfg.dt_min
+            };
+            dt.min(cfg.dt_max).max(dt_floor)
         } else {
             dt
         };
@@ -3659,11 +3902,39 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.rk45_step_soa_state_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, false)
+    }
+
+    pub(crate) fn rk45_step_soa_state_buf_at_hard_endpoint(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        self.rk45_step_soa_state_buf_with_endpoint_policy(state, dt, ws, bufs, evaluation, true)
+    }
+
+    fn rk45_step_soa_state_buf_with_endpoint_policy(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        hard_endpoint: bool,
+    ) -> Result<StepReport> {
         let cfg = self.dynamics.adaptive;
         let mut adaptive_controller =
             AdaptiveStepController::new(4, cfg, state.adaptive_previous_error);
         let mut dt = if self.dynamics.adaptive_enabled {
-            dt.min(cfg.dt_max).max(cfg.dt_min)
+            let dt_floor = if hard_endpoint && dt < cfg.dt_min {
+                dt
+            } else {
+                cfg.dt_min
+            };
+            dt.min(cfg.dt_max).max(dt_floor)
         } else {
             dt
         };

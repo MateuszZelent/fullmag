@@ -14,6 +14,10 @@ pub struct ScalarObservationSource {
     pub scalar_revision: u64,
 }
 
+pub use crate::study_execution_contract::{
+    HistoricalScalarCoverage, HistoricalScalarWindow, ScalarSeriesIdentity,
+};
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ScalarWindow {
     pub revision: u64,
@@ -22,6 +26,10 @@ pub struct ScalarWindow {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<f64>>,
     pub observation_frames: Vec<AcceptedObservationFrameRef>,
+    /// Present for the current, authenticated accepted Study series, even
+    /// while awaiting its first physical sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<ScalarSeriesIdentity>,
     /// Present only when the window contains exactly the current accepted row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_observation: Option<ScalarObservationSource>,

@@ -254,6 +254,25 @@ class DockerGroupStorageTests(unittest.TestCase):
         self.assertIn("CHOWN", command)
         self.assertIn("--cap-drop", command)
 
+    def test_owner_manifest_accepts_generated_leading_underscore_worktree_only(self):
+        worktree_id = "_codex_ci_fix-43689414c43ecd3c"
+        compose_project = "fullmag-worktree-" + worktree_id
+        control = FakeControl(self.source, project=compose_project, worktree=worktree_id)
+
+        manifest = group_storage.owner_manifest(control, self.source)
+
+        self.assertEqual(manifest["source_worktree_id"], worktree_id)
+        self.assertEqual(manifest["source_project_id"], "source-project-alpha")
+        for invalid_worktree_id in (".leading", "-leading", "../escape", "unsafe\x00id"):
+            with self.subTest(worktree_id=repr(invalid_worktree_id)):
+                control.identity["worktree_id"] = invalid_worktree_id
+                with self.assertRaises(group_storage.GroupStorageError):
+                    group_storage.owner_manifest(control, self.source)
+        control.identity["project_id"] = "_unsafe_project"
+        control.identity["worktree_id"] = worktree_id
+        with self.assertRaises(group_storage.GroupStorageError):
+            group_storage.owner_manifest(control, self.source)
+
     def test_operation_receipt_must_bind_source_project_and_volume(self):
         bad = self.operation_for(self.control, self.source)
         bad["receipt"]["control_volume"] = "foreign-volume"

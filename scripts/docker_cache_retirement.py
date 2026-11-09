@@ -12,8 +12,11 @@ import base64
 import json
 import re
 import posixpath
-from pathlib import Path
+import shlex
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import textwrap
+import time
+import unicodedata
 from typing import Any, Callable, Mapping
 
 from docker_build_control import MIN_FREE_CONTROL_BYTES, bounded_capture, docker_capture
@@ -36,6 +39,7 @@ PRIVATE_GROUP_RESULT_PATH = "cache-retirement/private-group-cache.json"
 PRIVATE_GROUP_REGISTRY_SCHEMA = "fullmag.private-group-cache-registry.v1"
 PRIVATE_GROUP_CLEANUP_SCHEMA = "fullmag.private-group-cache-retirement.v1"
 _ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_WORKTREE_ID = re.compile(r"^[a-z0-9_][a-z0-9._-]{0,127}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{64}$")
@@ -47,9 +51,17 @@ _PRIVATE_CACHE_LEAVES = {
     "frontend": (
         "workspace/node_modules",
         "workspace/apps/control-room/node_modules",
-        "workspace/apps/control-room/.next-control-room-8080",
-        "workspace/apps/control-room/.next",
     ),
+}
+_PRIVATE_NEXT_CACHE_ALIASES = {
+    "workspace/apps/control-room/.next": {
+        "target": "/state/development/cache/next/default",
+        "cache": "cache/next/default",
+    },
+    "workspace/apps/control-room/.next-control-room-8080": {
+        "target": "/state/development/cache/next/dev-8080",
+        "cache": "cache/next/dev-8080",
+    },
 }
 _PRIVATE_PRESERVED = (
     "source workspaces are not mounted",
@@ -190,7 +202,7 @@ def _container_inventory(docker: Callable[..., Any] | None) -> list[dict[str, An
 def _identity(control: Any, layout: Mapping[str, Any]) -> dict[str, str]:
     identity = _mapping(getattr(control, "identity", None), "BuildControl identity")
     worktree_id = _text(layout.get("worktree_id"), "worktree_id")
-    if _ID.fullmatch(worktree_id) is None:
+    if _WORKTREE_ID.fullmatch(worktree_id) is None:
         raise CacheRetirementError("worktree_id is not a safe registered identifier")
     if identity.get("checkout_kind") != "worktree" or worktree_id == "master":
         raise CacheRetirementError("Cache retirement is allowed only for a registered non-master worktree")
@@ -209,8 +221,22 @@ def _identity(control: Any, layout: Mapping[str, Any]) -> dict[str, str]:
     segment = re.sub(r"[^a-z0-9_-]+", "-", worktree_id).strip("-")
     if project != f"fullmag-worktree-{segment}":
         raise CacheRetirementError("Compose project is not the exact worktree project")
-    return {"worktree_id": worktree_id, "source_root": source_root,
-            "project_id": project_id, "compose_project": project}
+    from docker_backend_volume_cache import BackendVolumeCacheError, _safe_project_id
+
+    try:
+        cache_project_id = _safe_project_id(layout)
+    except BackendVolumeCacheError as error:
+        raise CacheRetirementError("Resolved backend cache project identity is invalid") from error
+    result = {"worktree_id": worktree_id, "source_root": source_root,
+              "project_id": project_id, "compose_project": project}
+    # Preserve the identity of durable plans written with a common project ID.
+    if cache_project_id != project_id:
+        result["cache_project_id"] = cache_project_id
+    return result
+
+
+def _cache_project_id(identity: Mapping[str, str]) -> str:
+    return identity.get("cache_project_id", identity["project_id"])
 
 
 def _same_volume_identity(first: Mapping[str, Any], second: Mapping[str, Any]) -> bool:
@@ -256,7 +282,7 @@ def _private_group_registry(control: Any, layout: Mapping[str, Any],
     namespace = getattr(control, "namespace", "")
     try:
         planned = cache._plan(
-            {**dict(layout), "project_id": identity["project_id"],
+            {**dict(layout), "project_id": _cache_project_id(identity),
              "worktree_id": identity["worktree_id"],
              "compose_project": identity["compose_project"]},
             identity["source_root"], profile.get("runtime_image_id"),
@@ -270,14 +296,14 @@ def _private_group_registry(control: Any, layout: Mapping[str, Any],
         if (profile.get("state") != "ready" or profile.get("group_volume") is not True
                 or profile.get("shared_packages") is not True
                 or profile.get("volume_names", {}).get(cache.BUILD_VOLUME_ROLE) != control.volume
-                or profile.get("project_id") != identity["project_id"]
+                or profile.get("project_id") != _cache_project_id(identity)
                 or profile.get("worktree_id") != identity["worktree_id"]
                 or profile.get("control_project") != identity["compose_project"]
                 or profile.get("control_namespace") != namespace):
             raise CacheRetirementError("Private group cache profile is not bound to this worktree/control volume")
         expected_unit = cache._sha256({
             "schema": _PRIVATE_UNIT_SCHEMA,
-            "project_id": identity["project_id"],
+            "project_id": _cache_project_id(identity),
             "worktree_id": identity["worktree_id"],
             "source_root": identity["source_root"],
         })
@@ -326,6 +352,8 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
     encoded = base64.b64encode(marker).decode("ascii")
     leaves = json.dumps({role: list(paths) for role, paths in _PRIVATE_CACHE_LEAVES.items()},
                         sort_keys=True, separators=(",", ":"))
+    next_aliases = json.dumps(_PRIVATE_NEXT_CACHE_ALIASES,
+                              sort_keys=True, separators=(",", ":"))
     expected_values = {key: group[key] for key in
                        ("unit_key", "registry_sha256", "owner_sha256")}
     expected_values["plan_sha256"] = plan_sha256
@@ -339,6 +367,7 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
 
         expected_marker = base64.b64decode("{encoded}", validate=True)
         leaves = json.loads({leaves!r})
+        next_aliases = json.loads({next_aliases!r})
         expected = json.loads({expected!r})
         preserved = json.loads({preserved!r})
         paths = json.loads({roots!r})
@@ -413,39 +442,113 @@ def _private_group_cleanup_script(owner: Mapping[str, Any], group: Mapping[str, 
                 raise SystemExit("retained cache inventory exceeds its report bound")
             return values
 
+        def open_parent(root_fd, parts):
+            current = os.dup(root_fd)
+            try:
+                for part in parts:
+                    next_fd = opened_dir(current, part)
+                    os.close(current)
+                    current = next_fd
+                return current
+            except FileNotFoundError:
+                os.close(current)
+                return None
+            except BaseException:
+                os.close(current)
+                raise
+
+        def clear_directory_leaf(root_fd, role, relative, report_states):
+            parts = relative.split("/")
+            parent = open_parent(root_fd, parts[:-1])
+            report_key = role + "/" + relative
+            if parent is None:
+                report_states[report_key] = "absent"
+                return
+            try:
+                try:
+                    metadata = os.stat(parts[-1], dir_fd=parent,
+                                       follow_symlinks=False)
+                except FileNotFoundError:
+                    report_states[report_key] = "absent"
+                    return
+                if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                    raise SystemExit("allowlisted cache leaf is linked or not a directory")
+                target_fd = opened_dir(parent, parts[-1])
+                try:
+                    clear_tree(target_fd)
+                finally:
+                    os.close(target_fd)
+                os.rmdir(parts[-1], dir_fd=parent)
+                report_states[report_key] = "cleared"
+            finally:
+                os.close(parent)
+
+        def unlink_next_aliases(root_fd):
+            states = {{}}
+            opened_aliases = []
+            try:
+                for relative, binding in next_aliases.items():
+                    parts = relative.split("/")
+                    parent = open_parent(root_fd, parts[:-1])
+                    if parent is None:
+                        states["frontend/" + relative] = "absent"
+                        continue
+                    try:
+                        try:
+                            metadata = os.stat(parts[-1], dir_fd=parent,
+                                               follow_symlinks=False)
+                        except FileNotFoundError:
+                            states["frontend/" + relative] = "absent"
+                            continue
+                        if stat.S_ISLNK(metadata.st_mode):
+                            actual_target = os.readlink(parts[-1], dir_fd=parent)
+                            if actual_target != binding["target"]:
+                                raise SystemExit("managed Next cache alias target does not match")
+                            kind = "symlink"
+                        elif stat.S_ISDIR(metadata.st_mode):
+                            kind = "legacy-directory"
+                        else:
+                            raise SystemExit("managed Next cache alias is not a directory or symlink")
+                        opened_aliases.append((parent, parts[-1], relative, kind))
+                        parent = None
+                    finally:
+                        if parent is not None:
+                            os.close(parent)
+
+                for parent, name, relative, kind in opened_aliases:
+                    if kind == "symlink":
+                        metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        if (
+                            not stat.S_ISLNK(metadata.st_mode)
+                            or os.readlink(name, dir_fd=parent)
+                            != next_aliases[relative]["target"]
+                        ):
+                            raise SystemExit("managed Next cache alias changed before unlink")
+                        os.unlink(name, dir_fd=parent)
+                        states["frontend/" + relative] = "unlinked"
+                    else:
+                        clear_directory_leaf(root_fd, "frontend", relative, states)
+                return states
+            finally:
+                for parent, _, _, _ in opened_aliases:
+                    os.close(parent)
+
         states = {{}}
         roots = {{}}
+        frontend_fd = os.open(paths["frontend"], flags)
+        roots["frontend"] = (frontend_fd, bounded_names(frontend_fd))
+        states.update(unlink_next_aliases(frontend_fd))
         for role, root_path in (("backend", paths["backend"]), ("frontend", paths["frontend"])):
-            root_fd = os.open(root_path, flags)
-            roots[role] = (root_fd, bounded_names(root_fd))
+            if role == "frontend":
+                root_fd = frontend_fd
+            else:
+                root_fd = os.open(root_path, flags)
+                roots[role] = (root_fd, bounded_names(root_fd))
             for relative in leaves[role]:
-                parts = relative.split("/")
-                parent = os.dup(root_fd)
-                try:
-                    try:
-                        for part in parts[:-1]:
-                            next_fd = opened_dir(parent, part)
-                            os.close(parent)
-                            parent = next_fd
-                    except FileNotFoundError:
-                        states[role + "/" + relative] = "absent"
-                        continue
-                    try:
-                        before = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
-                    except FileNotFoundError:
-                        states[role + "/" + relative] = "absent"
-                        continue
-                    if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
-                        raise SystemExit("allowlisted cache leaf is linked or not a directory")
-                    target_fd = opened_dir(parent, parts[-1])
-                    try:
-                        clear_tree(target_fd)
-                    finally:
-                        os.close(target_fd)
-                    os.rmdir(parts[-1], dir_fd=parent)
-                    states[role + "/" + relative] = "cleared"
-                finally:
-                    os.close(parent)
+                clear_directory_leaf(root_fd, role, relative, states)
+
+        for binding in next_aliases.values():
+            clear_directory_leaf(frontend_fd, "frontend", binding["cache"], states)
 
         retained = {{role: {{"root_entries": entries,
                             "workspace_entries": list_dir(fd, ["workspace"]),
@@ -475,14 +578,29 @@ def _valid_private_group_cleanup_receipt(value: Any, group: Mapping[str, Any],
             *expected, "leaves", "retained", "preserved"}
             or any(value.get(key) != expected_value for key, expected_value in expected.items())):
         return False
-    expected_leaves = {role + "/" + path for role, paths in _PRIVATE_CACHE_LEAVES.items()
-                       for path in paths}
+    legacy_leaves = {role + "/" + path for role, paths in _PRIVATE_CACHE_LEAVES.items()
+                     for path in paths}
+    alias_leaves = {"frontend/" + path for path in _PRIVATE_NEXT_CACHE_ALIASES}
+    legacy_leaves.update(alias_leaves)
+    expected_leaves = legacy_leaves | {
+        "frontend/" + binding["cache"]
+        for binding in _PRIVATE_NEXT_CACHE_ALIASES.values()
+    }
     leaves = value.get("leaves")
     retained = value.get("retained")
-    if (not isinstance(leaves, Mapping) or set(leaves) != expected_leaves
-            or any(state not in {"cleared", "absent"} for state in leaves.values())
+    if (not isinstance(leaves, Mapping)
+            or frozenset(leaves) not in {frozenset(expected_leaves), frozenset(legacy_leaves)}
             or not isinstance(retained, Mapping) or set(retained) != {"backend", "frontend"}
             or value.get("preserved") != list(_PRIVATE_PRESERVED)):
+        return False
+    leaf_keys = set(leaves)
+    if leaf_keys == legacy_leaves:
+        if any(state not in {"cleared", "absent"} for state in leaves.values()):
+            return False
+    elif (
+        any(leaves[key] not in {"cleared", "absent"} for key in leaf_keys - alias_leaves)
+        or any(leaves[key] not in {"unlinked", "cleared", "absent"} for key in alias_leaves)
+    ):
         return False
     expected_retained_fields = {"root_entries", "workspace_entries", "control_room_entries",
                                 "unknown_next_cache_entries"}
@@ -537,7 +655,7 @@ def _private_group_cleanup_command(control: Any, script: str, helper_image: str)
 
 def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
                                group: Mapping[str, Any], operation: dict[str, Any],
-                               plan_sha256: str) -> dict[str, Any]:
+                               plan_sha256: str, *, resumed_private_raw=None) -> dict[str, Any]:
     expected_receipt = {
         "schema": PRIVATE_GROUP_CLEANUP_SCHEMA,
         "unit_key": group["unit_key"], "registry_sha256": group["registry_sha256"],
@@ -548,13 +666,20 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         if (not isinstance(previous, Mapping)
                 or any(previous.get(key) != value for key, value in expected_receipt.items())):
             raise CacheRetirementError("Private group cache cleanup receipt differs from the durable plan")
-        if not _valid_private_group_cleanup_receipt(previous, group, plan_sha256):
+        if _valid_private_group_cleanup_receipt(previous, group, plan_sha256):
+            return dict(previous)
+        if (resumed_private_raw is None
+                or control.read_bytes(PRIVATE_GROUP_RESULT_PATH) != resumed_private_raw):
             raise CacheRetirementError("Prior private cache cleanup outcome is not proven; retaining group data")
-        return dict(previous)
+    elif resumed_private_raw is not None:
+        raise CacheRetirementError("Reconciled private cache receipt disappeared before retry")
     if getattr(control, "_active_operation", operation) is not operation:
         raise CacheRetirementError("Private cache cleanup requires the active BuildControl operation")
     import docker_group_storage as group_storage
 
+    attempt = operation.get("receipt", {}).get("attempt")
+    if attempt is not None:
+        expected_receipt["attempt"] = attempt
     try:
         owner = group_storage.owner_manifest(control, identity["source_root"])
         if hashlib.sha256(_canonical(owner)).hexdigest() != group["owner_sha256"]:
@@ -562,7 +687,6 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         script = _private_group_cleanup_script(owner, group, plan_sha256=plan_sha256)
         args = _private_group_cleanup_command(
             control, script, _private_group_helper_image(control, group))
-        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         entrypoint = args.index("--entrypoint")
         mounts = [*group_storage.cli_mount_args(control, "backend", "/private-backend"),
                   *group_storage.cli_mount_args(control, "frontend", "/private-frontend")]
@@ -575,14 +699,16 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
         else:
             raise CacheRetirementError("Private cache cleanup helper has no bounded control mount")
         operation["daemon_pending"] = True
+        control.write(PRIVATE_GROUP_RESULT_PATH, {**expected_receipt, "state": "started"})
         result = bounded_capture(args, data=b"", timeout=900, maximum=128 * 1024)
         if getattr(result, "returncode", 1) != 0:
             control.write(PRIVATE_GROUP_RESULT_PATH,
                           {**expected_receipt, "state": "outcome-unknown"})
+            diagnostic = bytes(result.stderr).decode("utf-8", errors="replace").strip()[-500:]
             raise CacheRetirementError(
-                "Private group cache helper did not prove its daemon-side outcome; the BuildControl lease is retained"
+                "Private group cache helper did not prove its daemon-side outcome; "
+                "the BuildControl lease is retained" + (f": {diagnostic}" if diagnostic else "")
             )
-        operation["daemon_pending"] = False
         value = json.loads(bytes(result.stdout).decode("utf-8"))
         if (not isinstance(value, Mapping)
                 or any(value.get(key) != expected_receipt.get(key) for key in
@@ -592,16 +718,18 @@ def _clear_private_group_cache(control: Any, identity: Mapping[str, str],
             raise CacheRetirementError("Private group cache cleanup helper returned an incomplete receipt")
         receipt = dict(value)
         control.write(PRIVATE_GROUP_RESULT_PATH, receipt)
+        operation["daemon_pending"] = False
         return receipt
     except CacheRetirementError:
         raise
     except Exception as error:
-        try:
-            control.write(PRIVATE_GROUP_RESULT_PATH,
-                          {**expected_receipt, "state": "outcome-unknown"})
-        except Exception:
-            pass
-        raise CacheRetirementError("Private group cache cleanup outcome is unknown; all later retirement is retained") from error
+        if operation["daemon_pending"]:
+            try:
+                control.write(PRIVATE_GROUP_RESULT_PATH,
+                              {**expected_receipt, "state": "outcome-unknown"})
+            except Exception:
+                pass
+        raise CacheRetirementError("Private group cache cleanup could not be confirmed; later retirement is retained") from error
 
 
 def _group_match(document: Mapping[str, Any], identity: Mapping[str, str]) -> bool:
@@ -646,7 +774,7 @@ def _expected_backend_profile(control: Any, layout: Mapping[str, Any], identity:
             or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES
             or not isinstance(unit, str) or _SHA.fullmatch(unit) is None):
         raise CacheRetirementError("Backend cache volume identity labels are incomplete")
-    project_layout = {**dict(layout), "project_id": identity["project_id"],
+    project_layout = {**dict(layout), "project_id": _cache_project_id(identity),
                       "compose_project": identity["compose_project"]}
     shared_packages = role == cache.BUILD_VOLUME_ROLE
     try:
@@ -674,7 +802,7 @@ def _backend_volumes(control: Any, layout: Mapping[str, Any], identity: Mapping[
 
     # Scope loosely enough to notice malformed identity labels for this
     # exact project and worktree, then validate the complete set below.
-    filters = {cache.LABEL_PROJECT: identity["project_id"],
+    filters = {cache.LABEL_PROJECT: _cache_project_id(identity),
                cache.LABEL_WORKTREE: identity["worktree_id"]}
     names = _list_volumes(filters, docker)
     builds: dict[str, dict[str, Any]] = {}
@@ -766,12 +894,12 @@ def _frontend_volumes(control: Any, identity: Mapping[str, str],
 def _shared_package(control: Any, identity: Mapping[str, str], docker: Callable[..., Any] | None):
     import docker_shared_build_storage as shared
 
-    name = shared.shared_volume_names(identity["project_id"])[shared.PACKAGE_ROLE]
+    name = shared.shared_volume_names(_cache_project_id(identity))[shared.PACKAGE_ROLE]
     document = _inspect_volume(name, docker)
     if document is None:
         return None
     try:
-        validated = shared.validate_volume_document(document, identity["project_id"], shared.PACKAGE_ROLE)
+        validated = shared.validate_volume_document(document, _cache_project_id(identity), shared.PACKAGE_ROLE)
     except shared.SharedBuildStorageError as error:
         raise CacheRetirementError(f"Shared package volume identity is unsafe: {error}") from error
     return {"name": name, "labels": dict(validated["Labels"]), "mountpoint": validated["Mountpoint"]}
@@ -783,6 +911,55 @@ def _safe_subpath(cache: Any, document: Mapping[str, Any], mount: Mapping[str, A
         return cache._observed_volume_subpath(document, mount, target, name, mountpoint)
     except cache.BackendVolumeCacheError as error:
         raise CacheRetirementError(f"Shared package consumer subpath is unknown: {error}") from error
+
+
+def _recorded_cache_key(cache: Any, source_root: Any, worktree: Any,
+                        toolchain: Any, cargo_profile: Any) -> dict[str, Any]:
+    """Rebuild a recorded cache identity without consulting the source checkout."""
+
+    if (not isinstance(source_root, str) or not source_root
+            or any(unicodedata.category(character) == "Cc" for character in source_root)):
+        raise CacheRetirementError("Recorded source root is missing or contains control characters")
+
+    if source_root.startswith("/"):
+        if (source_root.startswith("//") or source_root.endswith("/")
+                or "//" in source_root or "\\" in source_root):
+            raise CacheRetirementError("Recorded POSIX source root is not canonical")
+        path = PurePosixPath(source_root)
+        if (not path.is_absolute() or str(path) != source_root
+                or any(part in {".", ".."} for part in path.parts[1:])):
+            raise CacheRetirementError("Recorded POSIX source root is not canonical")
+    elif (len(source_root) >= 3 and source_root[0].isalpha()
+          and source_root[1] == ":" and source_root[2] == "\\"):
+        if "/" in source_root or "\\\\" in source_root or source_root.endswith("\\"):
+            raise CacheRetirementError("Recorded Windows source root is not canonical")
+        path = PureWindowsPath(source_root)
+        if (not path.is_absolute() or str(path) != source_root
+                or path.drive != source_root[:2] or not path.root
+                or any(part in {".", ".."} for part in path.parts[1:])):
+            raise CacheRetirementError("Recorded Windows source root is not canonical")
+    else:
+        raise CacheRetirementError("Recorded source root must be a local absolute POSIX or Windows drive path")
+
+    try:
+        worktree = cache._require_worktree_identifier(worktree)
+        toolchain = cache._require_image_id(toolchain, "toolchain_image")
+    except cache.BackendVolumeCacheError as error:
+        raise CacheRetirementError("Recorded cache identity has an invalid worktree or toolchain") from error
+    if not isinstance(cargo_profile, str) or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES:
+        raise CacheRetirementError("Recorded cache identity has an unsupported cargo profile")
+
+    inputs = {
+        "source_root": source_root,
+        "worktree_id": worktree,
+        "toolchain_image_id": toolchain,
+        "cargo_profile": cargo_profile,
+    }
+    return {
+        "schema": cache.KEY_SCHEMA,
+        "key": cache._sha256({"schema": cache.KEY_SCHEMA, **inputs}),
+        "inputs": inputs,
+    }
 
 
 def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Mapping[str, str],
@@ -802,42 +979,42 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             raise CacheRetirementError("A container still consumes the retiring worktree's shared package namespace")
     if isinstance(unit, str) and unit in retiring_units:
         raise CacheRetirementError("A container still consumes a retiring groups/<unit_key> namespace")
-    maintenance = cache._is_registered_shared_maintenance(document["Config"], labels, identity["project_id"])
+    project_id = _cache_project_id(identity)
+    maintenance = cache._is_registered_shared_maintenance(document["Config"], labels, project_id)
     compose_project = labels.get("com.docker.compose.project")
     worktree = labels.get(cache.LABEL_WORKTREE)
     cache_key = labels.get(cache.LABEL_CACHE_KEY)
     toolchain = labels.get(cache.LABEL_TOOLCHAIN)
     cargo_profile = labels.get(cache.LABEL_CARGO_PROFILE)
-    expected_unit = None
-    if (labels.get(cache.LABEL_SCHEMA) == cache.SCHEMA
-            and labels.get(cache.LABEL_PROFILE) == cache.PROFILE
-            and labels.get(cache.LABEL_PROJECT) == identity["project_id"]
-            and isinstance(unit, str) and _SHA.fullmatch(unit)
-            and labels.get(cache.LABEL_OWNER) == unit
-            and isinstance(cache_key, str) and _SHA.fullmatch(cache_key)
-            and isinstance(worktree, str) and _ID.fullmatch(worktree)
-            and isinstance(toolchain, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain)
-            and cargo_profile in cache.SUPPORTED_CARGO_PROFILES):
-        expected_unit = cache._sha256({
-            "schema": cache.SCHEMA, "project_id": identity["project_id"],
-            "cache_key": cache_key, "worktree_id": worktree,
-            "toolchain_image_id": toolchain, "cargo_profile": cargo_profile,
-        })
-    if expected_unit is None or expected_unit != unit:
+    if (labels.get(cache.LABEL_SCHEMA) != cache.SCHEMA
+            or labels.get(cache.LABEL_PROFILE) != cache.PROFILE
+            or labels.get(cache.LABEL_PROJECT) != project_id
+            or not isinstance(unit, str) or _SHA.fullmatch(unit) is None
+            or labels.get(cache.LABEL_OWNER) != unit
+            or not isinstance(cache_key, str) or _SHA.fullmatch(cache_key) is None
+            or not isinstance(worktree, str) or _WORKTREE_ID.fullmatch(worktree) is None
+            or not isinstance(toolchain, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", toolchain) is None
+            or cargo_profile not in cache.SUPPORTED_CARGO_PROFILES):
         raise CacheRetirementError("Unknown shared package consumer identity; all shared root consumers must be registered")
-    expected_compose = ("fullmag-master" if labels.get("org.fullmag.source.checkout-kind") == "main-checkout"
+    checkout_kind = labels.get("org.fullmag.source.checkout-kind")
+    expected_compose = ("fullmag-master" if checkout_kind == "main-checkout"
                         else "fullmag-worktree-" + re.sub(r"[^a-z0-9_-]+", "-", worktree).strip("-"))
+    # Current Compose pins source identity in labels and only exports the host
+    # source path. Older profiles can also carry the matching source env pins.
+    source_pins = {
+        "FULLMAG_SOURCE_PROJECT_ID": identity["project_id"],
+        "FULLMAG_SOURCE_WORKTREE_ID": worktree,
+        "FULLMAG_SOURCE_CHECKOUT_KIND": checkout_kind,
+    }
     if (compose_project != expected_compose
             or labels.get("org.fullmag.source.project-id") != identity["project_id"]
             or labels.get("org.fullmag.source.worktree-id") != worktree
-            or labels.get("org.fullmag.source.checkout-kind") not in {"worktree", "main-checkout"}
+            or checkout_kind not in {"worktree", "main-checkout"}
             or labels.get("org.fullmag.compose.project") != expected_compose
-            or environment.get("FULLMAG_SOURCE_PROJECT_ID") != identity["project_id"]
-            or environment.get("FULLMAG_SOURCE_WORKTREE_ID") != worktree
-            or environment.get("FULLMAG_SOURCE_CHECKOUT_KIND") != labels.get("org.fullmag.source.checkout-kind")
+            or any(environment.get(key, value) != value for key, value in source_pins.items())
             or environment.get("FULLMAG_BACKEND_CACHE_SCHEMA") != cache.SCHEMA
             or environment.get("FULLMAG_BACKEND_CACHE_PROFILE") != cache.PROFILE
-            or environment.get("FULLMAG_BACKEND_CACHE_PROJECT_ID") != identity["project_id"]
+            or environment.get("FULLMAG_BACKEND_CACHE_PROJECT_ID") != project_id
             or environment.get("FULLMAG_BACKEND_CACHE_UNIT_KEY") != unit
             or environment.get("FULLMAG_BACKEND_CACHE_OWNER_ID") != unit
             or environment.get("FULLMAG_BACKEND_CACHE_KEY") != cache_key
@@ -847,14 +1024,36 @@ def _registered_other_shared_consumer(document: Mapping[str, Any], identity: Map
             or environment.get("FULLMAG_SHARED_BACKEND_STORE") != cache.SHARED_BACKEND_TARGET
             or environment.get("FULLMAG_SHARED_BACKEND_GROUP") != cache.shared_group(unit)):
         raise CacheRetirementError("Shared package consumer labels/environment do not form one exact registered identity")
-    source_root = environment.get("FULLMAG_SOURCE_ROOT")
+    source_root = environment.get("FULLMAG_SOURCE_HOST_ROOT", environment.get("FULLMAG_SOURCE_ROOT"))
     try:
-        observed_key = cache.cache_key(source_root, worktree, toolchain, cargo_profile)["key"]
-    except (cache.BackendVolumeCacheError, TypeError) as error:
+        key_document = _recorded_cache_key(cache, source_root, worktree, toolchain, cargo_profile)
+    except (cache.BackendVolumeCacheError, TypeError, ValueError) as error:
         raise CacheRetirementError("Shared package consumer source root cannot be qualified") from error
-    name_id = hashlib.sha256(f"{identity['project_id']}:{unit}".encode()).hexdigest()[:24]
-    if (observed_key != cache_key
-            or environment.get("FULLMAG_BACKEND_CACHE_BUILD_VOLUME") != f"fullmag-backend-v2-{name_id}-build"
+    storage_profile = environment.get("FULLMAG_PRIVATE_GROUP_STORAGE")
+    if storage_profile == "group-volume-v1":
+        from bootstrap_docker_toolchain import control_volume_name
+
+        build_volume = control_volume_name(expected_compose)
+        expected_unit = cache._sha256({
+            "schema": _PRIVATE_UNIT_SCHEMA, "project_id": project_id,
+            "worktree_id": worktree, "source_root": key_document["inputs"]["source_root"],
+        })
+        if environment.get("FULLMAG_BACKEND_CACHE_CONTROL_VOLUME") != build_volume:
+            raise CacheRetirementError("Shared package consumer group control volume is not canonical")
+    elif storage_profile is None:
+        expected_unit = cache._sha256({
+            "schema": cache.SCHEMA, "project_id": project_id,
+            "cache_key": cache_key, "worktree_id": worktree,
+            "toolchain_image_id": toolchain, "cargo_profile": cargo_profile,
+        })
+        name_id = hashlib.sha256(f"{project_id}:{unit}".encode()).hexdigest()[:24]
+        build_volume = f"fullmag-backend-v2-{name_id}-build"
+    else:
+        raise CacheRetirementError("Shared package consumer has an unknown private storage profile")
+    if expected_unit != unit:
+        raise CacheRetirementError("Unknown shared package consumer unit identity")
+    if (key_document["key"] != cache_key
+            or environment.get("FULLMAG_BACKEND_CACHE_BUILD_VOLUME") != build_volume
             or environment.get("FULLMAG_BACKEND_CACHE_PACKAGE_VOLUME") != volume
             or environment.get("FULLMAG_SHARED_BACKEND_VOLUME") != volume):
         raise CacheRetirementError("Shared package consumer cache key or volume names are not derived from its source identity")
@@ -1081,8 +1280,8 @@ def _validate_prior_plan(plan: Any, control: Any, layout: Mapping[str, Any],
         import docker_shared_build_storage as shared
         if not isinstance(shared_doc, Mapping) or not isinstance(shared_doc.get("labels"), Mapping):
             raise CacheRetirementError("Existing retirement shared package volume record is malformed")
-        if (shared_doc.get("name") != shared.shared_volume_names(identity["project_id"])[shared.PACKAGE_ROLE]
-                or dict(shared_doc["labels"]) != shared.shared_volume_labels(identity["project_id"], shared.PACKAGE_ROLE)
+        if (shared_doc.get("name") != shared.shared_volume_names(_cache_project_id(identity))[shared.PACKAGE_ROLE]
+                or dict(shared_doc["labels"]) != shared.shared_volume_labels(_cache_project_id(identity), shared.PACKAGE_ROLE)
                 or pending != sorted(set(unit_keys) | ({group_unit} if group_unit else set()))):
             raise CacheRetirementError("Existing retirement shared namespace plan is inconsistent")
         try:
@@ -1108,9 +1307,146 @@ def _helper_ids(operation: Mapping[str, Any]) -> set[str]:
     return result
 
 
+def _publish_interrupted_terminal(control, helper_id, attempt, terminal_path, terminal, pins, docker):
+    checks = []
+    for relative, raw in pins.items():
+        path = shlex.quote(control.path(relative))
+        digest = hashlib.sha256(raw).hexdigest()
+        checks.append(f'test -f {path}; test "$(readlink -f {path})" = {path}; '
+                      f'test "$(stat -c %h {path})" = 1; '
+                      f'test "$(sha256sum {path} | cut -d " " -f1)" = {digest}')
+    for relative in (terminal_path, NAMESPACE_RESULT_PATH, RESULT_PATH, "cache-retirement/group-intents"):
+        path = shlex.quote(control.path(relative))
+        checks.append(f'test ! -e {path}; test ! -L {path}')
+    lock = shlex.quote(control.path("operation.lock"))
+    target = shlex.quote(control.path(terminal_path))
+    parent = shlex.quote(posixpath.dirname(control.path(terminal_path)))
+    body = shlex.quote(_canonical(terminal).decode("utf-8"))
+    script = "; ".join([
+        "umask 027", *checks,
+        f'test "$(readlink -f {lock})" = {lock}',
+        f'exec 8<{lock}', 'if flock -n 8; then exit 72; fi',
+        f'test "$(cat {shlex.quote(control.path("active"))})" = {attempt}',
+        f'tmp=$(mktemp {parent}/.retirement-terminal.XXXXXXXX)',
+        'trap \'rm -f -- "$tmp"\' EXIT',
+        f'printf "%s\\n" {body} > "$tmp"', 'sync "$tmp"',
+        f'mv -nT -- "$tmp" {target}', f'sync {parent}',
+    ])
+    _run(("exec", "--user", "65532:65532", helper_id,
+          "/bin/bash", "-euo", "pipefail", "-c", control._namespace_guard(script)), docker)
+
+
+def _reconcile_private_cleanup(control, identity, plan, closing, inputs, resume, docker):
+    """Terminalize only an abandoned private cleanup under the original lease."""
+    if re.fullmatch(r"[0-9a-f]{32}@[0-9a-f]{64}", resume) is None:
+        raise CacheRetirementError("Retirement resume pin must be an exact attempt@receipt_sha256")
+    attempt, receipt_sha = resume.split("@")
+    root = f"cache-retirement/attempts/{attempt}"
+    receipt_path, terminal_path = f"{root}/receipt.json", f"{root}/terminal.json"
+    receipt_raw = control.read_bytes(receipt_path)
+    if hashlib.sha256(receipt_raw).hexdigest() != receipt_sha:
+        raise CacheRetirementError("Retirement attempt receipt differs from its operator pin")
+    receipt = _mapping(json.loads(receipt_raw), "Retirement attempt receipt")
+    expected = {
+        "schema": "fullmag.docker-build-operation.v1", "phase": "cache-retirement",
+        "attempt": attempt, "compose_project": control.project, "control_volume": control.volume,
+        "helper_container": f"fullmag-control-{attempt}", "inputs": inputs,
+    }
+    if control.namespace:
+        expected.update(control_namespace=control.namespace,
+                        namespace_registry_sha256=control.namespace_registry_sha256)
+    if (any(receipt.get(key) != value for key, value in expected.items())
+            or receipt.get("state") not in {"starting", "outcome-unknown-resources-retained"}):
+        raise CacheRetirementError("Retirement attempt is not the interrupted operation for this plan")
+
+    private_raw = control.read_bytes(PRIVATE_GROUP_RESULT_PATH)
+    private = _mapping(json.loads(private_raw), "Interrupted private cache receipt")
+    group = plan["private_group_cache"]
+    private_expected = {
+        "schema": PRIVATE_GROUP_CLEANUP_SCHEMA, "plan_sha256": inputs["plan_sha256"],
+        **{key: group[key] for key in ("unit_key", "registry_sha256", "owner_sha256")},
+    }
+    if "attempt" in private or receipt["state"] == "starting":
+        private_expected["attempt"] = attempt
+    if (set(private) != {*private_expected, "state"}
+            or any(private.get(key) != value for key, value in private_expected.items())
+            or private.get("state") not in {"started", "outcome-unknown"}):
+        raise CacheRetirementError("Interrupted private cache receipt does not bind the exact attempt and plan")
+    if (control.read(NAMESPACE_RESULT_PATH, optional=True) is not None
+            or control.read(RESULT_PATH, optional=True) is not None):
+        raise CacheRetirementError("Interrupted retirement has already reached a later phase")
+
+    pins = {receipt_path: receipt_raw, PRIVATE_GROUP_RESULT_PATH: private_raw}
+    for relative, document in ((PLAN_PATH, plan), (CLOSING_PATH, closing)):
+        raw = control.read_bytes(relative)
+        if json.loads(raw) != document:
+            raise CacheRetirementError("Retirement plan or closing marker changed during reconciliation")
+        pins[relative] = raw
+    for relative, key in ((GROUP_STORAGE_REGISTRY_PATH, "registry_sha256"),
+                          (GROUP_STORAGE_OWNER_PATH, "owner_sha256")):
+        raw = control.read_bytes(relative)
+        if hashlib.sha256(_canonical(json.loads(raw))).hexdigest() != group[key]:
+            raise CacheRetirementError("Private group profile or owner changed during reconciliation")
+        pins[relative] = raw
+
+    active = control.read_bytes("active", optional=True)
+    terminal_raw = control.read_bytes(terminal_path, optional=True)
+    if active not in (None, (attempt + "\n").encode()):
+        raise CacheRetirementError("Active retirement lease belongs to a different attempt")
+    if active is None and terminal_raw is None:
+        raise CacheRetirementError("Interrupted attempt has neither its original lease nor a recovery terminal")
+    if terminal_raw is None:
+        helper_id = control._inspect_operation_helper({"receipt": dict(receipt)})
+        if _run(("logs", helper_id), docker).splitlines() != ["READY", "LOGGED"]:
+            raise CacheRetirementError("Original lease has not finished logging; recovery refused")
+    else:
+        saved = _mapping(json.loads(terminal_raw), "Retirement recovery terminal")
+        recovery = _mapping(saved.get("private_cleanup_recovery"), "Private cleanup recovery proof")
+        helper_id = recovery.get("helper_container_id")
+    if not isinstance(helper_id, str) or _CONTAINER_ID.fullmatch(helper_id) is None:
+        raise CacheRetirementError("Original retirement helper ID is malformed")
+
+    terminal = {
+        **receipt, "state": "failed-confirmed",
+        "private_cleanup_recovery": {
+            "schema": "fullmag.interrupted-private-cache-retirement.v1",
+            "helper_container_id": helper_id, "original_receipt_sha256": receipt_sha,
+            "interrupted_private_receipt_sha256": hashlib.sha256(private_raw).hexdigest(),
+            "interrupted_private_receipt": dict(private),
+        },
+    }
+    if terminal_raw is not None and json.loads(terminal_raw) != terminal:
+        raise CacheRetirementError("Existing retirement terminal does not match the interrupted attempt")
+
+    documents = _container_inventory(docker)
+    matching = [doc for doc in documents if doc["Id"] == helper_id]
+    if matching:
+        control._inspect_operation_helper({"receipt": dict(receipt)}, expected_id=helper_id)
+    elif terminal_raw is None:
+        raise CacheRetirementError("Original retirement lease disappeared before terminal publication")
+    _check_consumers(documents, identity, plan["volumes"], plan["shared_package_volume"],
+                     set(plan["namespaces_pending"]), {helper_id} if matching else set(),
+                     group["volume_name"], group["mountpoint"])
+    if terminal_raw is None:
+        pins["active"] = active
+        _publish_interrupted_terminal(control, helper_id, attempt, terminal_path, terminal, pins, docker)
+        if control.read(terminal_path) != terminal:
+            raise CacheRetirementError("Reconciled terminal did not persist; retaining the retirement lease")
+
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        active = control.read_bytes("active", optional=True)
+        if active is None and all(doc["Id"] != helper_id for doc in _container_inventory(docker)):
+            return private_raw
+        if active not in (None, (attempt + "\n").encode()):
+            raise CacheRetirementError("A different lease appeared after retirement reconciliation")
+        time.sleep(0.25)
+    raise CacheRetirementError("Original retirement helper has not released the reconciled lease")
+
+
 def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
            retire_namespaces: Callable[[list[str], dict[str, Any]], Mapping[str, Any]] | None = None,
-           docker: Callable[..., Any] | None = None) -> dict[str, Any]:
+           docker: Callable[..., Any] | None = None, resume: str | None = None) -> dict[str, Any]:
     """Remove exact private cache volumes for one already-registered worktree.
 
     Shared `groups/<unit_key>` paths are delegated to a required guest callback
@@ -1120,8 +1456,8 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
     if not isinstance(task_id, str) or not task_id.strip() or not isinstance(owner, str) or not owner.strip():
         raise CacheRetirementError("Retirement requires exact nonempty task_id and owner")
     identity = _identity(control, layout)
-    before = _container_inventory(docker)
-    _check_group_empty(before, identity)
+    if resume is None:
+        _check_group_empty(_container_inventory(docker), identity)
 
     previous_plan = control.read(PLAN_PATH, optional=True)
     if previous_plan is not None:
@@ -1213,11 +1549,23 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
         for item in current_plan["volumes"]:
             if _inspect_volume(item["name"], docker) is not None:
                 raise CacheRetirementError("A private volume reappeared after successful retirement; retaining it")
+        _check_group_empty(_container_inventory(docker), identity)
         return dict(previous_result)
+
+    operation_inputs = {"task_id": task_id, "owner": owner, **identity, "plan_sha256": plan_sha256}
+    resumed_private_raw = None
+    if resume is not None:
+        if previous_plan is None or previous_closing is None or private_group is None or previous_namespace is not None:
+            raise CacheRetirementError("Resume requires a durable plan interrupted during private group cleanup")
+        _recheck_inventory(control, layout, identity, current_plan, previous_plan, docker)
+        resumed_private_raw = _reconcile_private_cleanup(
+            control, identity, current_plan, closing, operation_inputs, resume, docker
+        )
+        _check_group_empty(_container_inventory(docker), identity)
 
     with control.operation(
         "cache-retirement",
-        {"task_id": task_id, "owner": owner, **identity, "plan_sha256": plan_sha256},
+        operation_inputs,
         minimum_free_bytes=MIN_FREE_CONTROL_BYTES,
     ) as operation:
         helper_ids = _helper_ids(operation)
@@ -1237,7 +1585,7 @@ def retire(control: Any, layout: Mapping[str, Any], task_id: str, owner: str, *,
             if _private_group_registry(control, layout, identity, docker) != private_group:
                 raise CacheRetirementError("Private group cache owner changed before its cache cleanup")
             private_cleanup = _clear_private_group_cache(
-                control, identity, private_group, operation, plan_sha256
+                control, identity, private_group, operation, plan_sha256, resumed_private_raw=resumed_private_raw
             )
 
         namespace_receipt = None

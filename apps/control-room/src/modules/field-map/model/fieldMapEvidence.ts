@@ -1,3 +1,5 @@
+import type { FieldMapRenderModel } from "./fieldMapRenderModel";
+
 export type PlanarEvidenceStatus = "error" | "loading" | "ready";
 
 export interface PlanarRasterEvidence {
@@ -15,6 +17,8 @@ export interface PlanarOverlayCounts {
 }
 
 export interface PlanarRenderEvidence {
+  /** Exact lightweight presentation identity acknowledged by this render. */
+  renderKey?: string;
   glyphCount: number;
   overlayCounts: PlanarOverlayCounts;
   raster: PlanarRasterEvidence | null;
@@ -157,6 +161,7 @@ export function samePlanarRenderEvidence(
   const rb = next.raster;
   return previous.glyphCount === next.glyphCount &&
     previous.sampleIdentity === next.sampleIdentity &&
+    previous.renderKey === next.renderKey &&
     a.boundsSegments === b.boundsSegments &&
     a.contours === b.contours &&
     a.meshSegments === b.meshSegments &&
@@ -212,4 +217,14 @@ export function planarRasterChecksum(pixels: Uint8ClampedArray): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/** Payload identities are authoritative; only small presentation values belong here. */
+export function planarModelRenderKey(model: FieldMapRenderModel): string {
+  return JSON.stringify([
+    model.sampleIdentity, model.colormap, model.component, model.range, model.rasterOpacity,
+    model.layers, model.vectorBudget, model.vectorScale, model.vectorStyle,
+    model.wireframeStyle, model.pointStyle, model.frame, model.bounds, model.boundsOutline,
+    model.viewport, model.resolution, model.interaction, model.samplePoints.length,
+  ]);
 }

@@ -6,6 +6,32 @@ use crate::scene::{
     MagnetizationMapping, SceneMaterialParameterAssignment, SceneObjectRegion, TextureTransform3D,
 };
 
+/// Brown-noise authoring transport; decimal seeds retain u64 precision in JSON/JS.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptBuilderThermalNoiseState {
+    pub temperature: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
+}
+
+impl ScriptBuilderThermalNoiseState {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.temperature.is_finite() || self.temperature <= 0.0 {
+            return Err("thermal_noise.temperature must be finite and positive kelvin");
+        }
+        if let Some(seed) = &self.seed {
+            if seed.is_empty() || seed.starts_with('0') || seed.len() > 20
+                || !seed.bytes().all(|b| b.is_ascii_digit())
+                || !matches!(seed.parse::<u64>(), Ok(value) if value > 0)
+            {
+                return Err("thermal_noise.seed must be a canonical positive u64 decimal string");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderAdaptiveTimestepState {
     #[serde(default = "default_adaptive_tolerance_mode")]
@@ -383,6 +409,17 @@ impl StudyPrimitiveStageKind {
         Self::LoadState,
         Self::Export,
     ];
+
+    /// These canonical pipeline nodes configure later physical inputs in the
+    /// sequential materializer. They require no independent worker task.
+    pub fn is_pipeline_input_configuration(self) -> bool {
+        matches!(
+            self,
+            Self::SetField | Self::SetCurrent
+                | Self::AddFieldDrive | Self::RemoveFieldDrive
+                | Self::TableAutosave | Self::Autosave
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -891,6 +928,8 @@ pub struct ScriptBuilderState {
     pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]
@@ -902,11 +941,15 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_noise: Option<ScriptBuilderThermalNoiseState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi_object_ids: Option<Vec<String>>,
     pub solver: ScriptBuilderSolverState,
     pub mesh: ScriptBuilderMeshState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_domain_mesh: Option<crate::SceneFemDomainMeshReference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub universe: Option<ScriptBuilderUniverseState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

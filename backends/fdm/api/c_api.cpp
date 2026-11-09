@@ -773,6 +773,14 @@ bool valid_transfer_kind(fullmag_fdm_transfer_kind transfer_kind) {
         transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
 }
 
+bool same_multilayer_grid(
+    const fullmag_fdm_grid_desc &lhs,
+    const fullmag_fdm_grid_desc &rhs)
+{
+    return lhs.nx == rhs.nx && lhs.ny == rhs.ny && lhs.nz == rhs.nz &&
+        lhs.dx == rhs.dx && lhs.dy == rhs.dy && lhs.dz == rhs.dz;
+}
+
 bool valid_centered_aligned_transfer(const fullmag_fdm_layer_desc_v2 &layer) {
     const auto &native = layer.native_grid;
     const auto &convolution = layer.convolution_grid;
@@ -889,12 +897,7 @@ bool validate_multilayer_plan_v2(
             const fullmag_fdm_grid_desc &native = layer.native_grid;
             const fullmag_fdm_grid_desc &convolution = layer.convolution_grid;
             const bool common_convolution_matches =
-                convolution.nx == common_convolution_grid.nx &&
-                convolution.ny == common_convolution_grid.ny &&
-                convolution.nz == common_convolution_grid.nz &&
-                convolution.dx == common_convolution_grid.dx &&
-                convolution.dy == common_convolution_grid.dy &&
-                convolution.dz == common_convolution_grid.dz;
+                same_multilayer_grid(convolution, common_convolution_grid);
             const bool native_cell_size_matches =
                 native.dx == common_convolution_grid.dx &&
                 native.dy == common_convolution_grid.dy &&
@@ -1660,7 +1663,8 @@ static fullmag_fdm_backend *fullmag_fdm_backend_create_impl(
             owner = "thermal";
         } else if (ctx->has_zhang_li_stt || ctx->has_slonczewski_stt || ctx->has_sot) {
             owner = "spin_torque";
-        } else if (reserve_rotated_dmi && plan->ms_field != nullptr) {
+        } else if (reserve_rotated_dmi && plan->ms_field != nullptr &&
+                   plan->precision != FULLMAG_FDM_PRECISION_DOUBLE) {
             owner = "rotated_dmi_variable_ms";
         }
         if (owner == nullptr && plan->a_field != nullptr &&
@@ -2185,6 +2189,70 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 #endif
 }
 
+int fullmag_fdm_backend_set_multilayer_xy_periodic_v1(
+    fullmag_fdm_backend *handle)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle) return FULLMAG_FDM_ERR_INVALID;
+    auto &ctx = *reinterpret_cast<Context *>(handle);
+    if (!ctx.has_multilayer_plan_v2 || !ctx.gpu_workspace_setup_complete ||
+        ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE || !ctx.enable_demag ||
+        ctx.multilayer_layers.empty() || ctx.multilayer_kernels.empty()) {
+        ctx.last_error =
+            "multilayer_xy_periodic_v1_requires_prepared_fp64_v2_demag_plan";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx.multilayer_xy_periodic || ctx.gpu_workspace_step_active ||
+        ctx.step_count != 0 || ctx.multilayer_bb_partials != nullptr ||
+        ctx.multilayer_demag_stage_counters.refresh_count != 0) {
+        ctx.last_error =
+            "multilayer_xy_periodic_v1_must_be_set_once_before_first_evaluation";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    const auto &common = ctx.multilayer_layers.front().convolution_grid;
+    for (const auto &layer : ctx.multilayer_layers) {
+        const bool aligned =
+            layer.transfer_kind == FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED ||
+            (layer.transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY &&
+             same_multilayer_grid(layer.native_grid, common));
+        if (!aligned || !same_multilayer_grid(layer.convolution_grid, common)) {
+            ctx.last_error =
+                "multilayer_xy_periodic_v1_requires_aligned_layers_on_one_common_grid";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+    }
+
+    auto expected_fft_grid = common;
+    if (common.nz > std::numeric_limits<uint32_t>::max() / 2u) {
+        ctx.last_error = "multilayer_xy_periodic_v1_open_z_padding_overflows";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    expected_fft_grid.nz *= 2u;
+    for (const auto &kernel : ctx.multilayer_kernels) {
+        if (!same_multilayer_grid(kernel.fft_grid, expected_fft_grid)) {
+            ctx.last_error =
+                "multilayer_xy_periodic_v1_requires_unpadded_xy_and_doubled_z_fft";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+    }
+
+    // Tensor spectra and FFT workspaces are already staged. Only the local
+    // stencils change, on axes whose opposite edges meet across the period.
+    for (auto &layer : ctx.multilayer_layers) {
+        layer.periodic_x = layer.native_grid.nx == common.nx;
+        layer.periodic_y = layer.native_grid.ny == common.ny;
+    }
+    ctx.multilayer_xy_periodic = true;
+    context_invalidate_observables(ctx);
+    ctx.last_error.clear();
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_rotated_interfacial_dmi_desc_v1 *descriptor)
@@ -2584,6 +2652,10 @@ int fullmag_fdm_backend_step(
     context_begin_endpoint_step_accounting(*ctx);
     ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
     if (ctx->has_multilayer_plan_v2) {
+        if (ctx->multilayer_xy_periodic) {
+            ctx->last_error = "periodic XY multilayer execution requires PG-BB";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
         if (ctx->gpu_transport_rhs.active) {
             ctx->last_error =
                 "spin transport is unsupported for v2 multilayer handles";

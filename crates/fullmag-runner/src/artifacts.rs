@@ -1147,6 +1147,7 @@ fn demag_amg_profile_metadata(
     serde_json::json!({
         "provider": "mfem_hypre_boomeramg",
         "relax_type": stats.demag_amg_relax_type,
+        "coarse_relax_type": stats.demag_amg_coarse_relax_type,
         "coarsening": stats.demag_amg_coarsening,
         "interpolation": stats.demag_amg_interpolation,
         "aggressive_coarsening": stats.demag_amg_aggressive_coarsening,
@@ -1252,7 +1253,7 @@ fn demag_runtime_metadata(
                 (None, None)
             };
 
-            serde_json::json!({
+            let mut metadata = serde_json::json!({
                 "model": resolved_demag.model_name(),
                 "magnetostatic_boundary_model": magnetostatic_boundary_model,
                 "boundary_variant": boundary_variant,
@@ -1307,7 +1308,15 @@ fn demag_runtime_metadata(
                     .air_box_config
                     .as_ref()
                     .and_then(|cfg| cfg.robin_beta_factor),
-            })
+            });
+            if provenance.execution_engine == "fem_cpu_native" {
+                if let Some(coupling) = provenance.cpu_fixed_coupling.as_ref()
+                    .or_else(|| last.and_then(|stats| stats.cpu_fixed_coupling.as_ref()))
+                {
+                    metadata["cpu_fixed_coupling"] = serde_json::json!(coupling);
+                }
+            }
+            metadata
         }
         _ => serde_json::Value::Null,
     }
@@ -2521,20 +2530,29 @@ pub(crate) fn write_artifacts(
         )?;
     }
 
+    let initial_time = if matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. }) {
+        match &plan.backend_plan {
+            BackendPlanIR::Fdm(plan) => plan.time_stage.start_time_s,
+            BackendPlanIR::Fem(plan) => plan.time_stage.start_time_s,
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
     write_field_file(
         &output_dir.join("m_initial.json"),
         &field_context,
         &execution_provenance,
         "m",
         0,
-        0.0,
+        initial_time,
         0.0,
         &executed.initial_magnetization,
     )?;
 
     let mut final_stats = accepted_steps.last().cloned().unwrap_or(StepStats {
         step: 0,
-        time: 0.0,
+        time: initial_time,
         dt: 0.0,
         e_ex: 0.0,
         e_demag: 0.0,
@@ -5897,6 +5915,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resumed_run_artifacts_preserve_stage_start_without_accepted_steps() {
+        let problem = fullmag_ir::ProblemIR::bootstrap_example();
+        for mut plan in [test_execution_plan(None), test_fem_execution_plan()] {
+            let (count, engine) = match &mut plan.backend_plan {
+                BackendPlanIR::Fdm(fdm) => {
+                    fdm.time_stage.start_time_s = 2e-12;
+                    (fdm.initial_magnetization.len(), "cpu_reference")
+                }
+                BackendPlanIR::Fem(fem) => {
+                    fem.time_stage.start_time_s = 2e-12;
+                    (fem.mesh.nodes.len(), "fem_cpu_native")
+                }
+                _ => unreachable!(),
+            };
+            let output_dir = std::env::temp_dir().join(format!("fullmag-stage-clock-{engine}-{}-{}",
+                std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+            let executed = ExecutedRun {
+                result: RunResult {status: RunStatus::Completed, steps: Vec::new(),
+                    final_magnetization: vec![[1.0,0.0,0.0]; count], completion: None},
+                initial_magnetization: vec![[1.0,0.0,0.0]; count], field_snapshots: Vec::new(),
+                field_snapshot_count: 0, auxiliary_artifacts: Vec::new(),
+                provenance: ExecutionProvenance {execution_engine: engine.into(), precision: "double".into(), ..Default::default()},
+            };
+            write_artifacts(&output_dir, &problem, &plan, &executed, None).unwrap();
+            for name in ["m_initial.json", "m_final.json"] {
+                let payload: serde_json::Value = serde_json::from_slice(&fs::read(output_dir.join(name)).unwrap()).unwrap();
+                assert_eq!(payload["time"], serde_json::json!(2e-12));
+                assert_eq!(payload["step"], 0);
+            }
+            fs::remove_dir_all(output_dir).unwrap();
+        }
+    }
+
+    #[test]
     fn scalar_csv_publishes_drive_energy_between_external_and_anisotropy() {
         let mut stats = StepStats::default();
         stats.e_ext = 2.0;
@@ -6264,6 +6316,54 @@ mod tests {
             .as_object()
             .expect("artifact provenance must be an object")
             .contains_key("mfem_version"));
+    }
+
+    #[test]
+    fn cpu_fixed_coupling_metadata_prefers_final_counters_and_handles_zero_steps() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else { panic!("FEM fixture"); };
+        fem.enable_demag = true;
+        let telemetry = crate::types::CpuFixedCouplingTelemetry {
+            rhs: crate::types::CpuFixedTransferDiagnostics {
+                state: "ready".into(), build_count: 1, reuse_count: 19, nnz: 31,
+                persistent_bytes: 4096, setup_wall_time_ns: 77, reason: String::new(),
+                setup_rss_baseline_bytes: 1000,
+                setup_observed_peak_rss_bytes: 1900,
+                setup_observed_peak_delta_bytes: 900,
+                setup_estimated_peak_delta_bytes: 1500,
+            },
+            recovery: crate::types::CpuFixedTransferDiagnostics {
+                state: "quadrature".into(), reason: "persistent cache budget exceeded".into(),
+                ..Default::default()
+            },
+        };
+        let mut stale = telemetry.clone();
+        stale.rhs.reuse_count = 17;
+        let steps = vec![StepStats {
+            step: 2, time: 2.0e-14, cpu_fixed_coupling: Some(stale), ..Default::default()
+        }];
+        let mut provenance = ExecutionProvenance {
+            execution_engine: "fem_cpu_native".into(),
+            cpu_fixed_coupling: Some(telemetry.clone()),
+            ..Default::default()
+        };
+        let metadata = demag_runtime_metadata(&plan, &provenance, &steps);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["reuse_count"], 19);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_rss_baseline_bytes"], 1000);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_observed_peak_rss_bytes"], 1900);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_observed_peak_delta_bytes"], 900);
+        assert_eq!(metadata["cpu_fixed_coupling"]["rhs"]["setup_estimated_peak_delta_bytes"], 1500);
+        assert_eq!(metadata["cpu_fixed_coupling"]["recovery"]["reason"], telemetry.recovery.reason);
+        let zero_steps = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(zero_steps["cpu_fixed_coupling"], serde_json::json!(telemetry));
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step, 2);
+        assert_eq!(steps[0].time, 2.0e-14);
+        provenance.cpu_fixed_coupling = None;
+        assert!(demag_runtime_metadata(&plan, &provenance, &[]).get("cpu_fixed_coupling").is_none());
+        provenance.execution_engine = "fem_native_gpu".into();
+        provenance.cpu_fixed_coupling = Some(telemetry);
+        assert!(demag_runtime_metadata(&plan, &provenance, &steps).get("cpu_fixed_coupling").is_none());
     }
 
     #[test]
@@ -9993,6 +10093,7 @@ mod tests {
                 demag_solver_apply_wall_time_ns: 19,
                 demag_solver_setup_reused: true,
                 demag_amg_relax_type: 6,
+                demag_amg_coarse_relax_type: Some(18),
                 demag_amg_coarsening: 10,
                 demag_amg_interpolation: 7,
                 demag_amg_aggressive_coarsening: 2,
@@ -10025,6 +10126,7 @@ mod tests {
         assert_eq!(metadata["policy_source"], "resolved_default");
         assert_eq!(metadata["amg_profile"]["provider"], "mfem_hypre_boomeramg");
         assert_eq!(metadata["amg_profile"]["relax_type"], 6);
+        assert_eq!(metadata["amg_profile"]["coarse_relax_type"], 18);
         assert_eq!(metadata["amg_profile"]["coarsening"], 10);
         assert_eq!(metadata["amg_profile"]["interpolation"], 7);
         assert_eq!(metadata["amg_profile"]["aggressive_coarsening"], 2);
@@ -10047,6 +10149,7 @@ mod tests {
         let unset = demag_amg_profile_metadata("AMG", Some(&StepStats::default()));
         assert_eq!(unset["strength_threshold"], serde_json::Value::Null);
         assert_eq!(unset["max_levels"], serde_json::Value::Null);
+        assert_eq!(unset["coarse_relax_type"], serde_json::Value::Null);
         assert_eq!(metadata["requested_linear_solver"], serde_json::Value::Null);
         assert_eq!(
             metadata["requested_preconditioner"],
@@ -11310,6 +11413,7 @@ mod tests {
             fdm_gpu_step_transaction_telemetry: None,
             fdm_gpu_observation_policy: None,
             fdm_gpu_endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fdm_cpu_step_transaction_telemetry: None,
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
@@ -12219,6 +12323,7 @@ mod tests {
             fdm_gpu_step_transaction_telemetry: None,
             fdm_gpu_observation_policy: None,
             fdm_gpu_endpoint_cache_telemetry: None,
+            cpu_fixed_coupling: None,
             fdm_cpu_step_transaction_telemetry: None,
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,

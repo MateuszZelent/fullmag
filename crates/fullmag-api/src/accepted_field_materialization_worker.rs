@@ -9,7 +9,10 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use fullmag_runtime_control::{AcceptedStudySnapshot, AcceptedWorkerStep};
-use fullmag_session::{FmsArtifactCatalogEntry, FmsArtifactStatus, SessionStore};
+use fullmag_session::{
+    FmsArtifactCatalogEntry, FmsArtifactStatus, SessionStore,
+    FMS_ACCEPTED_TERMINAL_LAYOUT_ARTIFACT_TYPE as TERMINAL_LAYOUT_ARTIFACT_TYPE,
+};
 use fullmag_runner::{
     AcceptedMagnetizationInput, AcceptedMaterializationBatch, AcceptedMaterializationLane,
     AcceptedMaterializationRequest, materialize_accepted_observables,
@@ -74,6 +77,177 @@ const TERMINAL_COMPLETION_SCHEMA: &str = "accepted_terminal_completion.v1";
 const MAX_TERMINAL_COMPLETION_BYTES: u64 = 256 * 1024;
 
 pub(crate) const TERMINAL_COMPLETION_ARTIFACT_TYPE: &str = "accepted_terminal_completion";
+const TERMINAL_LAYOUT_SCHEMA: &str = "fullmag.accepted-terminal-magnetization-layout.v1";
+const MAX_TERMINAL_LAYOUT_BYTES: u64 = 4096;
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalLayoutRecord {
+    schema_version: String,
+    run_id: String,
+    step_id: String,
+    task_id: String,
+    attempt_id: String,
+    ownership_epoch: u64,
+    state_object_ref: String,
+    pub(crate) layout_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) admitted_input_sha256: Option<String>,
+}
+
+impl TerminalLayoutRecord {
+    fn artifact_id(&self) -> String {
+        let digest = fullmag_session::canonical_json_sha256(&json!([
+            self.run_id, self.task_id, self.attempt_id, self.ownership_epoch,
+        ]));
+        format!("accepted-terminal-layout-{digest}")
+    }
+
+    fn logical_path(&self) -> String {
+        format!("outputs/{}/{}/accepted-terminal-layout.v1.json", self.task_id, self.attempt_id)
+    }
+}
+
+fn bare_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// The completed manifest pins the output. This small companion record can
+/// qualify the layout without opening that output's numerical samples.
+pub(crate) fn terminal_evidence_for_final_state(
+    store: &SessionStore,
+    artifacts: &fullmag_session::FmsArtifactCatalog,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    step_id: &str,
+    state_object_ref: &str,
+) -> Option<TerminalLayoutRecord> {
+    let attempt_id = task.attempt_id.as_deref()?;
+    let epoch = task.ownership_epoch?;
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Succeeded
+        || fullmag_session::task_id_for_study_step(&artifacts.run_id, step_id).ok()? != task.task_id
+    {
+        return None;
+    }
+    let mut entries = artifacts.entries.iter().filter(|entry| {
+        entry.artifact_type == TERMINAL_LAYOUT_ARTIFACT_TYPE
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == epoch
+            && task.artifact_ids.contains(&entry.artifact_id)
+    });
+    let entry = entries.next()?;
+    if entries.next().is_some() || entry.status != FmsArtifactStatus::Published
+        || entry.required || entry.study_output.is_some()
+        || entry.object_ref.as_deref() != Some(entry.content_sha256.as_str())
+    {
+        return None;
+    }
+    let bytes = store.cas().get_bounded(&entry.content_sha256, MAX_TERMINAL_LAYOUT_BYTES).ok()??;
+    let record: TerminalLayoutRecord = serde_json::from_slice(&bytes).ok()?;
+    if record.schema_version != TERMINAL_LAYOUT_SCHEMA
+        || record.run_id != artifacts.run_id || record.step_id != step_id
+        || record.task_id != task.task_id || record.attempt_id != attempt_id
+        || record.ownership_epoch != epoch || record.state_object_ref != state_object_ref
+        || entry.artifact_id != record.artifact_id() || entry.logical_path != record.logical_path()
+        || !bare_sha256(&record.layout_sha256)
+        || record.admitted_input_sha256.as_deref().is_some_and(|digest| !bare_sha256(digest))
+    {
+        return None;
+    }
+    Some(record)
+}
+
+/// Compare admitted recipes without copying the execution plan or its samples.
+/// The Prepare fingerprint is checked against the immutable plan before dispatch.
+fn terminal_admitted_input_sha256(step: &AcceptedWorkerStep) -> Option<String> {
+    let resolved = &step.resolved_input;
+    if resolved.frozen_stage_context.is_some() || !bare_sha256(&resolved.plan_fingerprint) {
+        return None;
+    }
+    let request = &resolved.requested_execution;
+    Some(fullmag_session::canonical_json_sha256(&json!({
+        "schema": "fullmag.terminal-admitted-stage-input.v1",
+        "plan": resolved.plan_fingerprint,
+        "solver": step.problem.study,
+        "until_seconds": step.until_seconds,
+        "overlay": step.initial_state_overlay,
+        "execution": [request.backend.as_str(), request.device.as_str(),
+                      request.precision.as_str(), request.mode.as_str()],
+        "resolved_inputs": resolved.inputs,
+    })))
+}
+
+fn publish_terminal_layout(
+    store: &SessionStore,
+    step: &AcceptedWorkerStep,
+    state: &fullmag_application::MagnetizationStateArtifact,
+    state_object_ref: &str,
+    budget: u64,
+) -> Result<u64> {
+    let claim = &step.claim;
+    let mut record = TerminalLayoutRecord {
+        schema_version: TERMINAL_LAYOUT_SCHEMA.into(),
+        run_id: claim.run_id.as_str().into(),
+        step_id: step.step_id.clone(),
+        task_id: claim.task_id.as_str().into(),
+        attempt_id: claim.attempt_id.as_str().into(),
+        ownership_epoch: claim.ownership_epoch.value(),
+        state_object_ref: state_object_ref.into(),
+        layout_sha256: state.space_fingerprint.clone(),
+        admitted_input_sha256: terminal_admitted_input_sha256(step),
+    };
+    let artifact_id = record.artifact_id();
+    let logical_path = record.logical_path();
+    if let Some(catalog) = store.read_artifact_catalog(&record.run_id)? {
+        let mut entries = catalog.entries.iter().filter(|entry| {
+            entry.task_id == record.task_id && entry.attempt_id == record.attempt_id
+                && entry.ownership_epoch == record.ownership_epoch
+        });
+        if let Some(entry) = entries.clone().find(|entry| entry.artifact_type == TERMINAL_LAYOUT_ARTIFACT_TYPE) {
+            if entry.artifact_id != artifact_id || entry.logical_path != logical_path
+                || entry.status != FmsArtifactStatus::Published || entry.required || entry.study_output.is_some()
+                || entry.object_ref.as_deref() != Some(entry.content_sha256.as_str())
+                || entries.filter(|entry| entry.artifact_type == TERMINAL_LAYOUT_ARTIFACT_TYPE).count() != 1
+            {
+                bail!("terminal magnetization layout replay differs from its immutable record");
+            }
+            let bytes = store.cas().get_bounded(&entry.content_sha256, MAX_TERMINAL_LAYOUT_BYTES)?
+                .context("terminal magnetization layout replay object is missing")?;
+            let previous: TerminalLayoutRecord = serde_json::from_slice(&bytes)?;
+            // Preserve a published layout-only receipt from an earlier worker.
+            if previous.admitted_input_sha256.is_none() {
+                record.admitted_input_sha256 = None;
+            }
+            if previous != record {
+                bail!("terminal magnetization layout replay differs from its immutable record");
+            }
+            return Ok(bytes.len() as u64);
+        }
+        if entries.any(|entry| entry.artifact_type == "study_output_manifest") {
+            return Ok(0);
+        }
+    }
+    let bytes = serde_json::to_vec(&record)?;
+    let byte_count = bytes.len() as u64;
+    if byte_count > MAX_TERMINAL_LAYOUT_BYTES {
+        bail!("terminal magnetization layout record exceeds its limit");
+    }
+    if byte_count > budget { return Ok(0); }
+    let object_ref = retry_worker_store_writer_busy(|| store.cas().put(&bytes))?;
+    let lease = store.read_resource_lease(
+        &record.run_id, claim.lease.resource_id.as_str(), claim.lease.lease_token.as_str(),
+    )?.context("terminal magnetization layout resource lease missing")?;
+    let entry = FmsArtifactCatalogEntry {
+        artifact_id, logical_path, task_id: record.task_id, attempt_id: record.attempt_id,
+        ownership_epoch: record.ownership_epoch, artifact_type: TERMINAL_LAYOUT_ARTIFACT_TYPE.into(),
+        content_sha256: object_ref.clone(), object_ref: Some(object_ref),
+        status: FmsArtifactStatus::Published, required: false, study_output: None,
+    };
+    retry_worker_store_writer_busy(|| {
+        store.append_artifact_catalog_entries_for_lease(&lease, std::slice::from_ref(&entry))
+    })?;
+    Ok(byte_count)
+}
 
 /// Runs only inside the admitted worker, before Completing releases its lease.
 /// Unsupported postprocessing is recorded without changing a completed Solve
@@ -85,12 +259,15 @@ pub(crate) fn prepare_and_publish(
     execution: &crate::accepted_study_worker::AcceptedRunnerExecution,
 ) -> Result<()> {
     if execution.status != fullmag_runner::RunStatus::Completed { return Ok(()); }
-    let Some(source) = execution.accepted_state_ref.as_ref() else { return Ok(()); };
+    let source = execution.accepted_state_ref.as_ref();
+    let is_live_study = accepted.run.specification.parameters.get("live_workspace").is_some();
+    if source.is_none() && !is_live_study { return Ok(()); }
     let study_step = accepted.study.steps.iter().find(|candidate| candidate.step_id == step.step_id)
         .context("materialization study step missing")?;
     let mut states = execution.outputs.iter().filter(|output| {
-        study_step.outputs.iter().any(|port| port.port_id == output.port_id
-            && port.data_kind == fullmag_authoring::StudyPortDataKind::State)
+        (source.is_some() || output.port_id == crate::study_execution_contract::FINAL_STATE_PORT)
+            && study_step.outputs.iter().any(|port| port.port_id == output.port_id
+                && port.data_kind == fullmag_authoring::StudyPortDataKind::State)
     });
     let Some(output) = states.next() else { return Ok(()); };
     if states.next().is_some() { bail!("materialization requires one exact final state"); }
@@ -110,17 +287,32 @@ pub(crate) fn prepare_and_publish(
             "accepted quantities omitted: no observation storage budget after declared outputs");
         return Ok(());
     }
+    if source.is_none()
+        && (output.codec_id != fullmag_application::STUDY_MAGNETIZATION_CODEC_ID
+            || output.codec_version != fullmag_application::STUDY_MAGNETIZATION_CODEC_VERSION)
+    {
+        return Ok(());
+    }
     let state_object_ref = fullmag_application::study_artifact_content_sha256(&output.bytes);
+    let decoded = fullmag_application::decode_study_artifact_bytes(
+        "state", &output.codec_id, &output.codec_version, &output.bytes)?;
+    let (state, has_frozen_lifecycle) = match decoded {
+        fullmag_application::DecodedStudyArtifact::MagnetizationState(state) => (state, false),
+        fullmag_application::DecodedStudyArtifact::FrozenMagnetizationState(state)
+            if step.resolved_input.frozen_stage_context.is_some()
+                && step.resolved_input.requested_execution.backend == "fdm"
+                && step.resolved_input.requested_execution.device == "gpu" => (state.state, true),
+        _ => bail!("materialization requires an accepted magnetization artifact"),
+    };
+    let Some(source) = source else {
+        publish_terminal_layout(store, step, &state, &state_object_ref, budget)?;
+        return Ok(());
+    };
     let artifact_id = format!("accepted-quantities-{}", fullmag_session::canonical_json_sha256(&json!({
         "run": step.claim.run_id, "task": step.claim.task_id,
         "attempt": step.claim.attempt_id, "epoch": step.claim.ownership_epoch,
         "source": source, "state": state_object_ref,
     })));
-    let decoded = fullmag_application::decode_study_artifact_bytes(
-        "state", &output.codec_id, &output.codec_version, &output.bytes)?;
-    let fullmag_application::DecodedStudyArtifact::MagnetizationState(state) = decoded else {
-        bail!("materialization requires an accepted magnetization artifact");
-    };
     let terminal_stats = execution.terminal_stats.as_ref().and_then(|stats| {
         match build_terminal_scalar_stats(step, source, &state_object_ref, stats, &state) {
             Ok(record) => Some(record),
@@ -141,7 +333,20 @@ pub(crate) fn prepare_and_publish(
         publish_terminal_completion(store, step, &record, budget.saturating_sub(terminal_stats_bytes))?
             .unwrap_or(0)
     } else { 0 };
+    if has_frozen_lifecycle {
+        // The typed handoff supports completion and scalar evidence. The
+        // standalone field evaluator has no frozen reference input.
+        return Ok(());
+    }
     let quantity_budget = budget.saturating_sub(terminal_stats_bytes).saturating_sub(completion_bytes);
+    let layout_bytes = if is_live_study
+        && output.port_id == crate::study_execution_contract::FINAL_STATE_PORT
+    {
+        publish_terminal_layout(store, step, &state, &state_object_ref, quantity_budget)?
+    } else {
+        0
+    };
+    let quantity_budget = quantity_budget.saturating_sub(layout_bytes);
     let can_materialize_quantities = quantity_budget >= 4096;
     if !can_materialize_quantities && terminal_stats_bytes == 0 {
         tracing::warn!(task_id = %step.claim.task_id.as_str(),
@@ -798,6 +1003,56 @@ pub(crate) fn read_terminal_completion(
     Ok(stats)
 }
 
+/// Qualify completion against the already verified final-state manifest and
+/// its succeeded task. This reads only a bounded completion record.
+pub(crate) fn terminal_completion_for_final_state(
+    store: &SessionStore,
+    artifacts: &fullmag_session::FmsArtifactCatalog,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+    step_id: &str,
+    source: &fullmag_quantities::AcceptedStateRef,
+    state_object_ref: &str,
+) -> Option<TerminalCompletionRecord> {
+    let attempt_id = task.attempt_id.as_deref()?;
+    let ownership_epoch = task.ownership_epoch?;
+    if task.lifecycle != fullmag_session::FmsTaskLifecycle::Succeeded
+        || source.id.run_id != artifacts.run_id
+        || source.id.stage_id.as_deref() != Some(step_id)
+        || source.generation.runtime_epoch != ownership_epoch
+    {
+        return None;
+    }
+    let mut matches = artifacts.entries.iter().filter(|entry| {
+        task.artifact_ids.contains(&entry.artifact_id)
+            && entry.task_id == task.task_id
+            && entry.attempt_id == attempt_id
+            && entry.ownership_epoch == ownership_epoch
+            && entry.artifact_type == TERMINAL_COMPLETION_ARTIFACT_TYPE
+            && entry.status == FmsArtifactStatus::Published
+    });
+    let entry = matches.next()?;
+    if matches.next().is_some() {
+        tracing::warn!(task_id = %task.task_id, "terminal completion artifact pin is ambiguous");
+        return None;
+    }
+    let record = match read_terminal_completion(store, entry) {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(task_id = %task.task_id, error = %error, "invalid terminal completion artifact");
+            return None;
+        }
+    };
+    if &record.source != source
+        || record.state_object_ref != state_object_ref
+        || record.input_fingerprint != task.input_fingerprint
+        || record.resolved_input_fingerprint != task.resolved_input_fingerprint
+    {
+        tracing::warn!(task_id = %task.task_id, "terminal completion differs from its final state or task input");
+        return None;
+    }
+    Some(record)
+}
+
 fn publish_terminal_completion(
     store: &SessionStore,
     step: &AcceptedWorkerStep,
@@ -1055,6 +1310,77 @@ pub(crate) fn validate_completion(completion: &fullmag_ir::StageCompletionIR) ->
 pub(crate) mod completion_tests {
     use super::*;
 
+    #[test]
+    fn saved_layout_requires_the_exact_succeeded_attempt_and_final_state() {
+        use fullmag_session::{FmsArtifactCatalog, FmsTaskCatalogEntry, FmsTaskLifecycle};
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let record = TerminalLayoutRecord {
+            schema_version: TERMINAL_LAYOUT_SCHEMA.into(),
+            run_id: "run-layout".into(),
+            task_id: fullmag_session::task_id_for_study_step("run-layout", "relax").unwrap(),
+            step_id: "relax".into(),
+            attempt_id: "attempt".into(),
+            ownership_epoch: 2,
+            state_object_ref: "a".repeat(64),
+            layout_sha256: "b".repeat(64),
+            admitted_input_sha256: Some("f".repeat(64)),
+        };
+        let digest = store.cas().put(&serde_json::to_vec(&record).unwrap()).unwrap();
+        let entry = FmsArtifactCatalogEntry {
+            artifact_id: record.artifact_id(),
+            logical_path: record.logical_path(),
+            task_id: record.task_id.clone(),
+            attempt_id: record.attempt_id.clone(),
+            ownership_epoch: record.ownership_epoch,
+            artifact_type: TERMINAL_LAYOUT_ARTIFACT_TYPE.into(),
+            object_ref: Some(digest.clone()),
+            content_sha256: digest,
+            status: FmsArtifactStatus::Published,
+            required: false,
+            study_output: None,
+        };
+        let mut catalog = FmsArtifactCatalog {
+            schema_version: fullmag_session::FMS_ARTIFACT_CATALOG_SCHEMA.into(),
+            run_id: record.run_id.clone(),
+            revision: 1,
+            updated_at: chrono::Utc::now(),
+            entries: vec![entry.clone()],
+        };
+        let mut task: FmsTaskCatalogEntry = serde_json::from_value(json!({
+            "task_id": record.task_id,
+            "input_fingerprint": "c".repeat(64),
+            "lifecycle": FmsTaskLifecycle::Succeeded,
+            "attempt_id": record.attempt_id,
+            "ownership_epoch": record.ownership_epoch,
+            "artifact_ids": [entry.artifact_id]
+        })).unwrap();
+        let read = |catalog: &FmsArtifactCatalog, task: &FmsTaskCatalogEntry, digest: &str| {
+            terminal_evidence_for_final_state(&store, catalog, task, &record.step_id, digest)
+        };
+        assert_eq!(read(&catalog, &task, &record.state_object_ref).as_ref(), Some(&record));
+        assert_eq!(read(&catalog, &task, &"d".repeat(64)), None);
+        task.ownership_epoch = Some(3);
+        assert_eq!(read(&catalog, &task, &record.state_object_ref), None);
+        task.ownership_epoch = Some(record.ownership_epoch);
+        catalog.entries.push(entry.clone());
+        assert_eq!(read(&catalog, &task, &record.state_object_ref), None);
+        catalog.entries.clear();
+        assert_eq!(read(&catalog, &task, &record.state_object_ref), None);
+
+        let mut old_record = serde_json::to_value(&record).unwrap();
+        old_record.as_object_mut().unwrap().remove("admitted_input_sha256");
+        let old_digest = store.cas().put(&serde_json::to_vec(&old_record).unwrap()).unwrap();
+        catalog.entries.push(FmsArtifactCatalogEntry {
+            object_ref: Some(old_digest.clone()),
+            content_sha256: old_digest,
+            ..entry
+        });
+        let legacy = read(&catalog, &task, &record.state_object_ref).unwrap();
+        assert_eq!(legacy.layout_sha256, record.layout_sha256);
+        assert!(legacy.admitted_input_sha256.is_none());
+    }
+
     pub(crate) fn fixture(reason: fullmag_ir::StageStopReason, converged: bool)
         -> (TerminalCompletionRecord, FmsArtifactCatalogEntry) {
         let clock = fullmag_quantities::ObservationClock {
@@ -1092,16 +1418,20 @@ pub(crate) mod completion_tests {
                 threshold: Some(if converged { 0.25 } else { 7.0 }),
             },
         };
-        let digest = fullmag_application::study_artifact_content_sha256(&serde_json::to_vec(&record).unwrap());
-        let entry = FmsArtifactCatalogEntry {
-            artifact_id: terminal_completion_artifact_id(&record), task_id: record.task_id.clone(),
+        let entry = entry_for(&record);
+        (record, entry)
+    }
+
+    pub(crate) fn entry_for(record: &TerminalCompletionRecord) -> FmsArtifactCatalogEntry {
+        let digest = fullmag_application::study_artifact_content_sha256(&serde_json::to_vec(record).unwrap());
+        FmsArtifactCatalogEntry {
+            artifact_id: terminal_completion_artifact_id(record), task_id: record.task_id.clone(),
             attempt_id: record.attempt_id.clone(), ownership_epoch: record.ownership_epoch,
-            logical_path: terminal_completion_logical_path(&record),
+            logical_path: terminal_completion_logical_path(record),
             artifact_type: TERMINAL_COMPLETION_ARTIFACT_TYPE.into(),
             content_sha256: digest.clone(), object_ref: Some(digest),
             status: FmsArtifactStatus::Published, required: false, study_output: None,
-        };
-        (record, entry)
+        }
     }
 
     #[test]

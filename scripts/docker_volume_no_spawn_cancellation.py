@@ -194,6 +194,20 @@ try:
   if item.get('task_id')==identity['task_id'] and item.get('attempt_id')==identity['owner']['attempt_id']:
    claim=item['payload']['checkpoint']['claim']
    if not claims or claim not in claims:claims.append(claim)
+ if not claims and isinstance(tasks[0].get('coordinator_genesis'),dict):
+  genesis=tasks[0]['coordinator_genesis'];checkpoint=genesis.get('checkpoint',{})
+  if (sha(canon(checkpoint))!=genesis.get('checkpoint_sha256') or checkpoint.get('command_sequence')!=0
+      or checkpoint.get('event_sequence')!=0):raise RuntimeError('pre-Prepare genesis differs')
+  claims=[checkpoint['claim']]
+ if not claims:
+  admission=load(run/'task_admissions'/identity['task_id']/(identity['owner']['attempt_id']+'.json'))
+  if (admission.get('schema_version')!='task_admission.v1' or admission.get('task')!=tasks[0]
+      or admission.get('lease')!=lease or tasks[0].get('coordinator_genesis') is not None
+      or tasks[0].get('coordinator_watermark') is not None or tasks[0].get('lifecycle')!='preparing'):
+   raise RuntimeError('immutable pre-Prepare admission differs')
+  claims=[{'run_id':identity['run_id'],'task_id':identity['task_id'],'attempt_id':identity['owner']['attempt_id'],
+   'ownership_epoch':identity['owner']['ownership_epoch'],'lease':{k:lease[k] for k in
+    ('resource_id','kind','budget','lease_token','heartbeat_sequence')}}]
  if len(claims)!=1:raise RuntimeError('immutable claim is absent or ambiguous')
  binary=paths.package/'bin/fullmag-runtime-service'
  native_environment(paths,binary)
@@ -238,7 +252,8 @@ def cancel(args):
     from docker_development_inputs import select_checkout
     from docker_dev_host import require_host
     from docker_compose_identity import compose_project_identity,validate_source_labels
-    from docker_volume_dev import _validate_retained_service
+    from docker_volume_dev import _validate_retained_service, docker_text
+    import docker_group_ledger
     import fullmag_storage as storage
     require_host();selected=select_checkout(args.repo_root,args.source_root).resolve(strict=True)
     identity=compose_project_identity(storage.resolve_layout(selected,'docker-all-gpu'))
@@ -265,9 +280,13 @@ def cancel(args):
         actual=actual[0];validate_source_labels(actual,identity)
         require(actual.get('Image')==args.image_id and actual.get('State',{}).get('Running')is True,'backend is not the retained running image')
         _validate_retained_service(document,actual,'backend',image['Config'])
-        require(any(m.get('Destination')=='/host-ledger' and m.get('Type')=='volume'
-                    and m.get('Name','').startswith('fullmag-dev-group-ledger-v1-') for m in actual.get('Mounts',[])),
-                'requires a private DEV group ledger')
+        try:
+            ledger = docker_group_ledger.retained_profile(document, args.image_id)
+            require(not ledger.get('ledger_subpath') or ledger['volume_name'] == control.volume,
+                    'private DEV ledger does not belong to the selected control volume')
+            docker_group_ledger.validate_container(actual, ledger, docker_text)
+        except docker_group_ledger.GroupLedgerError as error:
+            raise BuildControlError('No-spawn cancellation: ' + str(error)) from error
         if first is not None:require((actual['State']['StartedAt'],fingerprint(actual))==first,'backend restarted or changed')
         require(control.read_bytes('development/current.json')==previous_raw
                 and control.read_bytes(base+'/terminal.json')==previous_raw

@@ -58,10 +58,10 @@ cylinder = study.geometry(
     fm.Cylinder(radius=50 * NM, height=30 * NM).translate((0, 0, 25 * NM)),
     name="upper_cylinder", object_id="upper-cylinder",
 )
-cylinder.Ms = 1000000.0
+cylinder.Ms = 1.3e6  #A/m
 cylinder.Aex = 10e-12
 cylinder.Ku1 = 0.0
-cylinder.alpha = 1.0
+cylinder.alpha = 1.0    
 cylinder.mesh(cell_size=CELL)
 cylinder.m = fm.texture.uniform(-1.0, 0.0, 0.0)
 

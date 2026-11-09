@@ -116,8 +116,8 @@ def _rekey_per_domain_quality_for_markers(
     """
     if per_domain_quality is None:
         return None
-    source = np.asarray(source_markers, dtype=np.int32).reshape(-1)
-    assigned = np.asarray(assigned_markers, dtype=np.int32).reshape(-1)
+    source = np.asarray(source_markers, dtype=np.uint32).reshape(-1)
+    assigned = np.asarray(assigned_markers, dtype=np.uint32).reshape(-1)
     if source.shape != assigned.shape or source.size == 0:
         return None
     source_to_target: dict[int, int] = {}
@@ -168,7 +168,7 @@ def _quality_reports_for_final_mixed_markers(
         if gamma.size != mesh.n_elements:
             return None
     return extract_per_domain_quality(
-        np.asarray(assigned_markers, dtype=np.int32),
+        np.asarray(assigned_markers, dtype=np.uint32),
         sicn,
         gamma,
         volumes,
@@ -422,7 +422,7 @@ def _extract_frozen_magnetic_submesh(
     if not isinstance(marker, (int, np.integer)):
         raise ValueError(f"region marker for {geometry_name!r} must be an integer")
     marker_int = int(marker)
-    magnetic_element_mask = np.asarray(shared_mesh.element_markers, dtype=np.int32) == marker_int
+    magnetic_element_mask = np.asarray(shared_mesh.element_markers, dtype=np.uint32) == marker_int
     if not np.any(magnetic_element_mask):
         raise ValueError(f"shared mesh contains no elements for magnetic marker {marker_int}")
 
@@ -477,7 +477,7 @@ def _extract_frozen_magnetic_submesh(
         cell_offsets=cell_offsets,
         cell_nodes=cell_nodes,
         cell_global_ordinals=shared_mesh.cell_global_ordinals[magnetic_ordinals],
-        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.int32),
+        element_markers=np.full(len(magnetic_ordinals), marker_int, dtype=np.uint32),
         facet_types=facet_types,
         facet_roles=shared_mesh.facet_roles[selected_interface_ordinals],
         facet_offsets=facet_offsets,
@@ -591,8 +591,8 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
     )
     merged_element_markers = np.concatenate(
         [
-            np.asarray(magnetic_mesh.element_markers, dtype=np.int32),
-            np.zeros(air_mesh.n_elements, dtype=np.int32),
+            np.asarray(magnetic_mesh.element_markers, dtype=np.uint32),
+            np.zeros(air_mesh.n_elements, dtype=np.uint32),
         ]
     )
     interface_face_keys = {
@@ -646,12 +646,12 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         cell_types=merged_cell_types,
         cell_offsets=merged_cell_offsets,
         cell_nodes=merged_cell_nodes,
-        element_markers=merged_element_markers.astype(np.int32, copy=False),
+        element_markers=merged_element_markers.astype(np.uint32, copy=False),
         facet_types=facet_types,
         facet_roles=facet_roles,
         facet_offsets=facet_offsets,
         facet_nodes=facet_nodes,
-        boundary_markers=np.asarray(boundary_markers, dtype=np.int32),
+        boundary_markers=np.asarray(boundary_markers, dtype=np.uint32),
         cell_global_ordinals=np.arange(len(merged_cell_types), dtype=np.int64),
         facet_global_ordinals=np.arange(len(facet_types), dtype=np.int64),
         periodic_boundary_pairs=periodic_boundary_pairs,
@@ -808,7 +808,7 @@ def _air_element_mask_outside_frozen_magnetic_submesh(
     generated: MeshData,
     frozen: FrozenMagneticSubmeshPayload,
 ) -> np.ndarray:
-    marker_mask = np.asarray(generated.element_markers, dtype=np.int32) == 0
+    marker_mask = np.asarray(generated.element_markers, dtype=np.uint32) == 0
     if not np.any(marker_mask):
         return marker_mask
     elements = np.asarray(generated.elements, dtype=np.int32)
@@ -849,7 +849,7 @@ def _boundary_faces_for_kept_elements(
     )
     return (
         np.asarray(mesh.boundary_faces[boundary_keep], dtype=np.int32),
-        np.asarray(mesh.boundary_markers[boundary_keep], dtype=np.int32),
+        np.asarray(mesh.boundary_markers[boundary_keep], dtype=np.uint32),
     )
 
 
@@ -1930,7 +1930,7 @@ def _element_bounds_for_marker(
     mesh: MeshData,
     marker: int,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
-    mask = np.asarray(mesh.element_markers, dtype=np.int32) == int(marker)
+    mask = np.asarray(mesh.element_markers, dtype=np.uint32) == int(marker)
     if not np.any(mask):
         return None
     element_nodes = mesh.nodes[
@@ -1962,7 +1962,7 @@ def _match_geometry_bounds_to_source_markers(
 
     marker_candidates = sorted(
         int(marker)
-        for marker in np.unique(np.asarray(mesh.element_markers, dtype=np.int32))
+        for marker in np.unique(np.asarray(mesh.element_markers, dtype=np.uint32))
         if int(marker) > 0
     )
     if len(marker_candidates) < len(geometries):
@@ -2273,7 +2273,7 @@ def _emit_shared_domain_mesh_summary(
         f"{mesh.nodes.shape[0]} nodes, {mesh.n_boundary_faces} boundary faces"
     )
 
-    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
     air_mask = element_markers == 0
     region_masks: list[tuple[str, str, np.ndarray]] = []
     for entry in region_markers:
@@ -2392,7 +2392,7 @@ def _magnetic_submesh_signatures(
         dtype=np.int64,
     )
     elements = np.asarray(mesh.elements, dtype=np.int64)
-    element_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+    element_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
     nodes = np.asarray(mesh.nodes, dtype=np.float64)
     signatures: list[dict[str, object]] = []
     for marker_entry in region_markers:
@@ -3908,8 +3908,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
 
         # Classify elements back to geometries
-        source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
-        assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
+        source_markers = np.asarray(mesh.element_markers, dtype=np.uint32)
+        assigned_markers = np.zeros(mesh.n_elements, dtype=np.uint32)
         region_markers: list[dict[str, object]] = []
         object_region_markers: list[dict[str, object]] = []
         if mixed_v2_direct:
@@ -3919,7 +3919,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 raise ValueError(
                     "mixed_v2_marker_coverage_invalid: expected air=0 and body markers 1/2"
                 )
-            assigned_markers = np.asarray(source_markers, dtype=np.int32).copy()
+            assigned_markers = np.asarray(source_markers, dtype=np.uint32).copy()
             region_markers = [
                 {"geometry_name": box.geometry_name, "marker": 1},
                 {"geometry_name": ring_geometry.geometry_name, "marker": 2},

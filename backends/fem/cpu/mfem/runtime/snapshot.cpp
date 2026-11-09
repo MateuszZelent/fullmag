@@ -77,28 +77,39 @@ bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error
         error = "GPU snapshot full-domain demag recovery failed: " + error;
         return false;
     }
-    if (!fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_ex, ctx.exchange.h_xyz, ctx.transfer_audit.audit, "h_ex", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_demag, ctx.demag.h_xyz, ctx.transfer_audit.audit, "h_demag", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_ext, ctx.zeeman.h_ext_xyz, ctx.transfer_audit.audit, "h_ext", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_eff, ctx.effective_field.h_xyz, ctx.transfer_audit.audit, "h_eff", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_ani, ctx.anisotropy.h_uniaxial_xyz, ctx.transfer_audit.audit, "h_ani", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_cubic_ani, ctx.anisotropy.h_cubic_xyz, ctx.transfer_audit.audit, "h_cubic_ani", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_dmi, ctx.dmi.h_interfacial_xyz, ctx.transfer_audit.audit, "h_dmi", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_bulk_dmi, ctx.dmi.h_bulk_xyz, ctx.transfer_audit.audit, "h_bulk_dmi", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_oe, ctx.oersted.h_xyz, ctx.transfer_audit.audit, "h_oe", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_therm, ctx.thermal_brown.h_xyz, ctx.transfer_audit.audit, "h_therm", error) ||
-        !fullmag::fem::gpu_state_download_component_aos(
-            gpu, gpu.fields.h_mel, ctx.magnetoelastic.h_xyz, ctx.transfer_audit.audit, "h_mel", error)) {
+    if (!fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_ex, ctx.exchange.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_ex", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_demag, ctx.demag.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_demag", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_ext, ctx.zeeman.h_ext_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_ext", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_eff, ctx.effective_field.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_eff", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_ani, ctx.anisotropy.h_uniaxial_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_ani", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_cubic_ani, ctx.anisotropy.h_cubic_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_cubic_ani", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_dmi, ctx.dmi.h_interfacial_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_dmi", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_bulk_dmi, ctx.dmi.h_bulk_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_bulk_dmi", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_oe, ctx.oersted.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_oe", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_therm, ctx.thermal_brown.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_therm", error) ||
+        !fullmag::fem::gpu_state_download_component_aos_packed(
+            gpu, gpu.fields.h_mel, ctx.magnetoelastic.h_xyz, ctx.transfer_audit.audit,
+            ctx.gpu_state.cuda.compute_stream, "h_mel", error)) {
         error = "GPU snapshot field readback failed: " + error;
         return false;
     }

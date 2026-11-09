@@ -40,6 +40,8 @@ const REGION_MATERIAL_PARAMETERS: RegionMaterialParameter[] = [
   "aex",
   "alpha",
   "ku1",
+  "ku2",
+  "anisotropy_axis",
 ];
 import {
   defaultMaterialFieldDraft,
@@ -110,21 +112,58 @@ function getParentParamInfo(
       ) {
         return { value: field.field.value, unit };
       }
+      if (
+        field.field?.kind === "constant" &&
+        Array.isArray(field.field.value) &&
+        field.field.value.length === 3
+      ) {
+        return { value: `[${field.field.value.join(", ")}]`, unit: "" };
+      }
       return { value: `${field.field?.kind ?? "authored"} field`, unit };
     }
   }
 
-  if (param.toLowerCase() === "ku1") {
+  if (param.toLowerCase() === "anisotropy_axis") {
     const anisotropy = sceneData?.objects
       ?.find((object) => object.id === objectId)
       ?.physics_stack?.find((entry) => entry.kind === "uniaxial_anisotropy");
     const params = anisotropy?.params;
     if (params && typeof params === "object" && !Array.isArray(params)) {
-      const ku1 = (params as Record<string, unknown>).ku1;
-      if (typeof ku1 === "number" && Number.isFinite(ku1)) {
+      const axisVal = (params as Record<string, unknown>).axis;
+      if (
+        Array.isArray(axisVal) &&
+        axisVal.length === 3 &&
+        axisVal.every((item) => typeof item === "number" && Number.isFinite(item))
+      ) {
+        return { value: `[${axisVal.join(", ")}]`, unit: "" };
+      }
+    }
+    if (sceneData?.materials) {
+      const material = sceneData.materials.find((m) => m.id === materialRef);
+      const props = material?.properties as Record<string, unknown> | undefined;
+      const matAxis = props?.anisotropy_axis ?? props?.anisu;
+      if (
+        Array.isArray(matAxis) &&
+        matAxis.length === 3 &&
+        matAxis.every((item) => typeof item === "number" && Number.isFinite(item))
+      ) {
+        return { value: `[${matAxis.join(", ")}]`, unit: "" };
+      }
+    }
+    return { value: "[0, 0, 1]", unit: "" };
+  }
+
+  if (param.toLowerCase() === "ku1" || param.toLowerCase() === "ku2") {
+    const anisotropy = sceneData?.objects
+      ?.find((object) => object.id === objectId)
+      ?.physics_stack?.find((entry) => entry.kind === "uniaxial_anisotropy");
+    const params = anisotropy?.params;
+    if (params && typeof params === "object" && !Array.isArray(params)) {
+      const kuVal = (params as Record<string, unknown>)[param.toLowerCase()];
+      if (typeof kuVal === "number" && Number.isFinite(kuVal)) {
         // This panel shows the authored parent value, even when the saved term
         // is disabled. Activation is a separate physics-stack property.
-        return { value: ku1, unit: defaultMaterialOverrideUnit(param) };
+        return { value: kuVal, unit: defaultMaterialOverrideUnit(param) };
       }
     }
   }
@@ -538,36 +577,141 @@ function useObjectRegionMagneticParametersPanelView({
                     label={`Override ${index + 1}`}
                     type="select"
                     value={override.parameter}
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                      updateMaterialOverride(index, {
-                        parameter: event.target.value as RegionMaterialParameter,
-                      })
-                    }
+                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                      const nextParam = event.target.value as RegionMaterialParameter;
+                      if (nextParam === "anisotropy_axis") {
+                        updateMaterialOverride(index, {
+                          parameter: nextParam,
+                          unit: "",
+                          vectorValue: override.vectorValue ?? [0, 0, 1],
+                        });
+                      } else {
+                        updateMaterialOverride(index, {
+                          parameter: nextParam,
+                          unit: defaultMaterialOverrideUnit(nextParam),
+                          value: defaultMaterialOverrideValue(nextParam),
+                          vectorValue: undefined,
+                        });
+                      }
+                    }}
                   >
                     <option value="ms">Ms</option>
                     <option value="aex">Aex</option>
                     <option value="alpha">alpha</option>
                     <option value="ku1">Ku1</option>
+                    <option value="ku2">Ku2</option>
+                    <option value="anisotropy_axis">anisu (Axis)</option>
                   </FormField>
                   <FieldRow
                     label="Inherited parent"
                     value={`${parentInfo.value} ${parentInfo.unit}`.trim()}
                   />
-                  <PhysicalScalarField
-                    label="Local override"
-                    unit={override.unit}
-                    value={override.value}
-                    onValueChange={(next) => updateMaterialOverride(index, { value: next })}
-                  />
-                  <FormField
-                    label="Unit"
-                    mono={false}
-                    type="text"
-                    value={override.unit}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      updateMaterialOverride(index, { unit: event.target.value })
-                    }
-                  />
+                  {override.parameter === "anisotropy_axis" ? (
+                    <>
+                      <PhysicalScalarField
+                        label="Axis X"
+                        value={(override.vectorValue ?? [0, 0, 1])[0]}
+                        onValueChange={(next) => {
+                          const currentAxis = override.vectorValue ?? [0, 0, 1];
+                          updateMaterialOverride(index, {
+                            vectorValue: [next, currentAxis[1], currentAxis[2]],
+                          });
+                        }}
+                      />
+                      <PhysicalScalarField
+                        label="Axis Y"
+                        value={(override.vectorValue ?? [0, 0, 1])[1]}
+                        onValueChange={(next) => {
+                          const currentAxis = override.vectorValue ?? [0, 0, 1];
+                          updateMaterialOverride(index, {
+                            vectorValue: [currentAxis[0], next, currentAxis[2]],
+                          });
+                        }}
+                      />
+                      <PhysicalScalarField
+                        label="Axis Z"
+                        value={(override.vectorValue ?? [0, 0, 1])[2]}
+                        onValueChange={(next) => {
+                          const currentAxis = override.vectorValue ?? [0, 0, 1];
+                          updateMaterialOverride(index, {
+                            vectorValue: [currentAxis[0], currentAxis[1], next],
+                          });
+                        }}
+                      />
+                      <div className="fm-inspector-toolbar fm-toolbar-top">
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          onClick={() =>
+                            updateMaterialOverride(index, {
+                              vectorValue: [1, 0, 0],
+                            })
+                          }
+                        >
+                          +X [1, 0, 0]
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          onClick={() =>
+                            updateMaterialOverride(index, {
+                              vectorValue: [0, 1, 0],
+                            })
+                          }
+                        >
+                          +Y [0, 1, 0]
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          onClick={() =>
+                            updateMaterialOverride(index, {
+                              vectorValue: [0, 0, 1],
+                            })
+                          }
+                        >
+                          +Z [0, 0, 1] (PMA)
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="ghost"
+                          onClick={() => {
+                            const [ax, ay, az] = override.vectorValue ?? [0, 0, 1];
+                            const norm = Math.hypot(ax, ay, az);
+                            if (norm > 0 && Number.isFinite(norm)) {
+                              updateMaterialOverride(index, {
+                                vectorValue: [ax / norm, ay / norm, az / norm],
+                              });
+                            }
+                          }}
+                        >
+                          Normalize |u|=1
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <PhysicalScalarField
+                        label="Local override"
+                        unit={override.unit}
+                        value={override.value}
+                        onValueChange={(next) => updateMaterialOverride(index, { value: next })}
+                      />
+                      <FormField
+                        label="Unit"
+                        mono={false}
+                        type="text"
+                        value={override.unit}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          updateMaterialOverride(index, { unit: event.target.value })
+                        }
+                      />
+                    </>
+                  )}
                   <FormField
                     label="Override priority"
                     type="number"

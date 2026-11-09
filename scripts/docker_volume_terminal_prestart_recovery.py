@@ -108,9 +108,12 @@ def validate_observation(value):
 def validate_preflight(probe):
     required = {"schema", "api_instance_id", "session_id", "session_epoch",
                 "request_scope_epoch", "run", "compute_queue", "runtime_service"}
-    require(isinstance(probe, dict) and set(probe) in
-            (required, required | {"held_run_intent_sha256"})
+    optional = {"held_run_intent_sha256", "scene_revision"}
+    require(isinstance(probe, dict) and required <= set(probe) <= required | optional
             and probe["schema"] == PREFLIGHT_SCHEMA, "Only a terminal session preflight is supported")
+    if "scene_revision" in probe:
+        require(type(probe["scene_revision"]) is int and probe["scene_revision"] >= 0,
+                "Terminal preflight scene revision is invalid")
     require(all(isinstance(probe[k], str) and probe[k]
                 for k in ("api_instance_id", "session_id", "session_epoch", "request_scope_epoch")),
             "Terminal preflight session identity is incomplete")

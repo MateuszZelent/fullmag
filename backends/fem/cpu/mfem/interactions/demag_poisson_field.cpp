@@ -66,12 +66,26 @@ void update_demag_poisson_visual_effective_field(
     const std::vector<double> &h_eff_xyz,
     const std::vector<double> &h_demag_xyz)
 {
+    const size_t node_count = h_eff_xyz.size() / 3u;
+    const bool has_valid_magnetic_mask = ctx.mesh.magnetic_node_mask.empty() ||
+        ctx.mesh.magnetic_node_mask.size() == node_count;
     if (!ctx.demag.h_visual_xyz.empty() &&
+        h_eff_xyz.size() % 3u == 0u &&
         ctx.demag.h_visual_xyz.size() == h_eff_xyz.size() &&
-        h_demag_xyz.size() == h_eff_xyz.size()) {
+        h_demag_xyz.size() == h_eff_xyz.size() &&
+        has_valid_magnetic_mask) {
         ctx.effective_field.h_visual_xyz = h_eff_xyz;
-        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
-            ctx.effective_field.h_visual_xyz[i] += ctx.demag.h_visual_xyz[i] - h_demag_xyz[i];
+        for (size_t node = 0; node < node_count; ++node) {
+            if (ctx.mesh.magnetic_node_mask.empty() ||
+                ctx.mesh.magnetic_node_mask[node] != 0u) {
+                continue;
+            }
+            const size_t component = node * 3u;
+            for (size_t axis = 0; axis < 3u; ++axis) {
+                const size_t index = component + axis;
+                ctx.effective_field.h_visual_xyz[index] +=
+                    ctx.demag.h_visual_xyz[index] - h_demag_xyz[index];
+            }
         }
         return;
     }

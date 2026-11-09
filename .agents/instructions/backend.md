@@ -270,7 +270,7 @@ and dependencies, prepares consistent build inputs in the Compose group's named
 Docker volumes, compiles only what is needed using the persistent volume/BuildKit
 cache, validates the result, and starts API/native runtime in that same container.
 Unchanged inputs reuse the existing result. Build staging, packages, build logs,
-receipts, and provenance must stay in those technical volumes; host `storage` is
+and build receipts/provenance must stay in those technical volumes; host `storage` is
 reserved for user sessions, simulation results, projects, settings, history, and
 explicit operational infrastructure. No separate host manifest-refresh command
 is required. The persistent `frontend` service keeps Next.js HMR running. Preserve
@@ -293,7 +293,7 @@ qualified retention. For a retained group, keep its verified current package
 and one direct rollback and remove older unreferenced generations. A completed,
 merged group with no consumers is retired through `worktree-finish`, including
 its private backend build/package and frontend namespaces. Preserve active
-consumers, pins, control/provenance records, shared dependency volumes, and
+consumers, pins, control/build-provenance records, shared dependency volumes, and
 user sessions/results. Reconcile historical volume labels and Compose project
 IDs alongside the registered source/worktree and resolved storage root; an
 empty plan receipt does not prove completion when independent inventory still
@@ -370,6 +370,17 @@ and similar commands are debugging tools, not default user guidance.
 - Windows używa FULLMAG_PROJECT_STORAGE_ROOT z pliku .env głównego checkoutu przez resolver. Codzienny development korzysta ze ścieżki Docker dev opisanej w `AGENTS.md`; natywna trasa pozostaje legacy/non-development: `just fullmag ...` używa `scripts/windows/run_fullmag.ps1`, a FEM CPU/GPU `scripts/windows/run_fullmag_fem.ps1` i Docker Desktop. `CARGO_TARGET_DIR`, store pnpm/npm, cache narzędzi, TEMP/TMP, CUDA i Playwright muszą pochodzić z zaakceptowanego profilu pod `storage`; `FULLMAG_WINDOWS_*_ROOT` jest tylko zwalidowanym adapterem zgodności i żadna Windowsowa trasa nie używa `wsl.exe` jako ukrytego fallbacku.
 - Wyjątek zatwierdzony 05.10.2026: `FULLMAG_WINDOWS_VOLATILE_ROOT` w lokalnym `.env` głównego checkoutu może kierować wyłącznie odtwarzalną kopię wejść kompilatora oraz jego `TEMP`/`TMP`/`TMPDIR` na lokalny RAM-disk. Natywny launcher sprawdza oznaczenie projektu/worktree/profilu i przywraca zmienne po Cargo. Kopia źródeł na RAM-disku wymaga obsługi Windows `GetFinalPathNameByHandleW`; przy `ERROR_INVALID_FUNCTION` launcher jawnie zachowuje jedną trwałą kopię źródeł dla backendu i desktopu, pozostawiając TEMP na RAM-disku. Trwałe snapshoty, target/cache Cargo, pakiety, logi, receipts i sesje pozostają w kanonicznym storage. Brak skonfigurowanego dysku blokuje nowy build; nie blokuje uruchomienia istniejącego zgodnego pakietu z `build=false`. Wyjątek nie dotyczy Linuxa ani kontenerowego FEM. Szczegóły: [Windows-first development](../../docs/guides/windows-first-development.md#ulotne-dane-kompilacji-na-ram-disku).
 - Linux używa trwałego `storage` projektu oraz container-backed `just` dla ciężkich FEM/MFEM/CUDA/hypre/libCEED. Ochrona ext4/mount pozostaje wymagana; bezpośredni duży zapis na CIFS jest odrzucany. Zgodnie z decyzją hostową z 24.10.2026 nowe backing images ext4 kieruje się do `E:\git\storage` (WSL: `/mnt/e/git/storage`), poza storage projektu. To ścieżka pliku obrazu, nie mount ext4 ani root danych użytkownika. Przed alokacją wymagane jest potwierdzenie obsługi przez launcher/resolver; brak obsługi oznacza `NOT VERIFIED`, bez fallbacku do `storage/build-volumes`. Aktywnych istniejących obrazów nie przenosi się w ramach tej polityki. Zatwierdzony mount view nie jest storage rootem, a `/tmp` służy wyłącznie małemu stagingowi.
+- W Linux/WSL każda symulacja ma własny `<stem>.py`, a sąsiedni `<stem>.zarr` leży na hoście WSL/ext4, nie w
+  Docker named volume. PNG/PPTX, checkpointy i provenance potrzebne do interpretacji/wznowienia trzymaj na WSL
+  albo w samowystarczalnym Zarr; jedyna kopia nie może być w Dockerze.
+- `FULLMAG_SCRIPT_OUTPUT_DIRECTORY` z `.env` głównego checkoutu mapuje wskazany istniejący podkatalog jako RW
+  alias; bind źródeł pozostaje RO. Nigdy nie montuj całego checkoutu RW.
+- Przed retencją historycznego wolumenu zinwentaryzuj root control/owner/lock i ledger, zachowaj/wyeksportuj
+  wymagane rekordy i sprawdź, że dane/provenance do wznowienia są na WSL lub w samowystarczalnym Zarr. Wymagaj
+  receipt oraz braku aktywnych zadań, konsumentów, lease i referencji; nie usuwaj aktywnego lock/ledger.
+  Receipt ani metadane nie uchylają blokad. Zmiana instrukcji nie dowodzi mountów ani runtime; pozostaje **NOT
+  VERIFIED**.
+
 - Każda recepta `just`, także ręcznie uruchomiona, musi wykonać resolver/preflight przed pierwszym zapisem, używać przypisanego profilu i zapisać stan końcowy. Brak podpięcia danej recepty oznacz `NOT VERIFIED`; hostowy `cargo`/`cmake`/Docker pozostaje diagnostyką, gdy istnieje zarządzana recepta. Nie wykonuj automatycznego `fetch`/`pull`/bootstrapu ani nie twórz nowych płaskich rootów po odmowie ścieżki.
 - FEM time-integration performance gates must cover every supported explicit RK integrator, not only Heun.
 - When FEM CPU and FEM GPU work are split between agents, each agent must stay within its explicitly assigned lane. A CPU-assigned agent must not create GPU hot-loop or GPU-state artifacts, and vice versa.

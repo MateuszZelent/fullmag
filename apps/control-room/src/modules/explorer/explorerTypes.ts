@@ -627,6 +627,8 @@ interface ModelTreeStudySnapshot {
 }
 
 export interface ModelTreeStudyStageSnapshot {
+  /** Stable ID from the authored document, independent of runtime projection. */
+  authoredStageId?: string | null;
   pipelineNodeId?: string;
   pipelineEnabled?: boolean;
   pipelineLabel?: string | null;
@@ -683,6 +685,7 @@ export interface ModelTreeMeshSnapshot {
   latestBuildStatus?: string | null;
   lastError?: string | null;
   manifestSourceSceneRevision?: number | string | null;
+  manifestValidatedSceneRevision?: number | null;
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;

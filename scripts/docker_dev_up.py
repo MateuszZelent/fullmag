@@ -27,6 +27,7 @@ from docker_build_control import (
     BuildControl,
     BuildControlError,
     bounded_capture,
+    build_input_digest,
     canonical,
     compose_capture,
     docker_capture,
@@ -42,6 +43,7 @@ SOURCE_MATCH_MARKER = "FULLMAG_SOURCE_MATCH_V1:"
 TERMINAL_STATES = frozenset({"succeeded", "failed-confirmed"})
 IMAGE_HELPER_SOURCES = (
     ("backend_dev.py", "docker/all-in-one/backend_dev.py"),
+    ("backend_native_contracts.py", "docker/all-in-one/backend_native_contracts.py"),
     ("backend_source.py", "docker/all-in-one/backend_source.py"),
     ("backend_group_cache_cleanup.py", "docker/all-in-one/backend_group_cache_cleanup.py"),
     ("backend_volume_cache_maintenance.py", "docker/all-in-one/backend_volume_cache_maintenance.py"),
@@ -746,7 +748,11 @@ def _verified_build_receipt(
         or not isinstance(inputs, Mapping)
     ):
         raise BuildInputUnknown(f"Retained {phase} build receipt inputs are incomplete")
-    if hashlib.sha256(canonical(inputs)).hexdigest() != source_digest:
+    try:
+        observed_digest = build_input_digest(inputs)
+    except BuildControlError as error:
+        raise BuildInputUnknown(f"Retained {phase} build receipt operational metadata is invalid") from error
+    if observed_digest != source_digest:
         raise BuildInputUnknown(f"Retained {phase} build receipt input digest is invalid")
     return receipt
 
@@ -905,7 +911,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
         # That is an authenticated rebuild requirement, not an unknown receipt.
         changed.append("toolchain")
     current_toolchain = _toolchain_identity(group)
-    if hashlib.sha256(canonical(current_toolchain)).hexdigest() != toolchain["source_digest"]:
+    if build_input_digest(current_toolchain) != toolchain["source_digest"]:
         if "toolchain" not in changed:
             changed.append("toolchain")
     from docker_dev import BASE_CONTEXT_FILES, RUNTIME_IMAGE_CONTEXT_FILES
@@ -918,7 +924,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
             "docker/all-in-one/Dockerfile.dev.dockerignore",
         ),
     }
-    if hashlib.sha256(canonical(current_development)).hexdigest() != development["source_digest"]:
+    if build_input_digest(current_development) != development["source_digest"]:
         changed.append("image-dev")
     current_backend = {
         "parent_image_id": development_image,
@@ -928,7 +934,7 @@ def _build_inputs_match(group: RetainedGroup) -> bool:
             "docker/all-in-one/Dockerfile.backend.dockerignore",
         ),
     }
-    if hashlib.sha256(canonical(current_backend)).hexdigest() != backend["source_digest"]:
+    if build_input_digest(current_backend) != backend["source_digest"]:
         changed.append("image-backend")
     if changed:
         raise BuildInputDrift(changed)
@@ -978,6 +984,37 @@ def _qualify_running_runtime(group: RetainedGroup) -> None:
             "Linked runtime receipts do not match the current DEV container incarnations; "
             "use explicit recovery"
         )
+
+
+def _latest_ui_mode(group: RetainedGroup) -> str | None:
+    """Return the latest verified UI mode for this exact retained container pair."""
+    from docker_volume_activate import _linked_runtime_terminals
+
+    try:
+        terminals = _linked_runtime_terminals(
+            group.control, group.attempt, group.terminal,
+            source_root=str(group.source_root),
+            image=str(group.backend.get("Image", "")),
+            config_sha256=group.config_sha256,
+        )
+    except (BuildControlError, KeyError, TypeError, ValueError) as error:
+        raise DockerDevUpError("Retained UI mode receipt could not be verified") from error
+    matching = [
+        terminal for terminal in terminals
+        if terminal.get("backend_container") == group.backend_id
+        and terminal.get("frontend_container") == group.frontend_id
+    ]
+    if not matching:
+        raise DockerDevUpError("No verified UI mode receipt matches the retained service pair")
+
+    def order(terminal):
+        finished = terminal.get("finished_at")
+        return finished if isinstance(finished, (int, float)) and not isinstance(finished, bool) else 0
+
+    mode = max(matching, key=order).get("ui_mode")
+    if mode not in (None, "gui", "headless"):
+        raise DockerDevUpError("Retained UI mode receipt is invalid")
+    return mode
 
 
 def _script_output_mapping_matches(group: RetainedGroup) -> bool:
@@ -1052,6 +1089,13 @@ def _script_output_mapping_matches(group: RetainedGroup) -> bool:
 
 def _lifecycle_args(group: RetainedGroup, args: argparse.Namespace, **updates) -> argparse.Namespace:
     values = vars(args).copy()
+    if values.get("network_subnet") is None:
+        configurations = group.document.get("networks", {}).get("fullmag", {}).get("ipam", {}).get("config", [])
+        if configurations:
+            from docker_dev_network import parse_requested_subnet, validate_retained_subnet
+            subnet = parse_requested_subnet(configurations[0].get("subnet"))
+            validate_retained_subnet(group.document, subnet)
+            values["network_subnet"] = subnet
     values.update(
         repo_root=group.repo_root,
         source_root=group.source_root,
@@ -1073,15 +1117,21 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
     if script is None:
         return None
     import fullmag_storage as storage
-    from docker_startup_script import prepare
+    from docker_startup_script import cuda_trace_sha256, prepare
+
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise DockerDevUpError("Script activation cuda trace opt-in must be a boolean")
 
     try:
         source_commit = storage.git(group.source_root, "rev-parse", "HEAD")
+        prepare_options = {"cuda_trace": True} if cuda_trace else {}
         authorization = prepare(
             group.source_root,
             script,
             request_id="fullmag-activation-probe",
             source_commit=source_commit,
+            **prepare_options,
         )
     except (OSError, TypeError, ValueError, storage.StorageError) as error:
         raise DockerDevUpError(
@@ -1097,6 +1147,9 @@ def _stable_activation_request_id(group: RetainedGroup, args: argparse.Namespace
             authorization.source_commit or "",
         )
     )
+    if cuda_trace:
+        trace_sha256 = cuda_trace_sha256(authorization.cuda_trace)
+        material += b"\0cuda_trace\0" + trace_sha256.encode("ascii")
     return "docker-volume-up-" + hashlib.sha256(material).hexdigest()
 
 
@@ -1134,9 +1187,14 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
         raise DockerDevUpError(
             "DEV group disappeared after managed recreate; activation outcome is unknown"
         )
-    if _service_mode(refreshed) != "running-healthy":
+    expected_mode = (
+        "backend-running-frontend-stopped"
+        if getattr(args, "headless", False)
+        else "running-healthy"
+    )
+    if _service_mode(refreshed) != expected_mode:
         raise DockerDevUpError(
-            "Managed recreate did not leave a healthy backend/frontend group; "
+            "Managed recreate did not leave the requested healthy DEV service mode; "
             "activation is withheld"
         )
     _qualify_running_runtime(refreshed)
@@ -1144,6 +1202,8 @@ def _recreate_after_drift(group: RetainedGroup, args: argparse.Namespace, *, dra
 
 
 def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
+    from docker_dev_network import validate_retained_subnet
+    validate_retained_subnet(group.document, getattr(args, "network_subnet", None))
     from docker_volume_dev import (
         INCLUDE_UNTRACKED_ENV,
         normalize_include_untracked_paths,
@@ -1205,6 +1265,60 @@ def _reconcile_group(group: RetainedGroup, args: argparse.Namespace) -> None:
             "Existing backend is running but not healthy; automatic up will not interrupt "
             "a pending build or unknown runtime. Inspect its logs and use explicit recovery"
         )
+    headless = bool(getattr(args, "headless", False))
+    if headless and mode in {"running-healthy", "backend-running-frontend-stopped"}:
+        ui_mode = _latest_ui_mode(group)
+        if ui_mode == "headless" and group.frontend_running:
+            raise DockerDevUpError(
+                "Headless receipt has a running frontend; ownership/state mismatch blocks reuse"
+            )
+        if mode == "backend-running-frontend-stopped" and ui_mode == "headless":
+            try:
+                source_matches = _source_matches(group)
+            except ImageHelperDrift:
+                _recreate_after_drift(group, args, drain=True)
+                return
+            if not source_matches:
+                _recreate_after_drift(group, args, drain=True)
+                return
+            _activate_if_requested(group, args)
+            return
+        try:
+            source_matches = _source_matches(group)
+        except ImageHelperDrift:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        if not source_matches:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        from docker_volume_dev import resume, stop_idle
+
+        stop_idle(_lifecycle_args(group, args, script=None))
+        resume(_lifecycle_args(group, args, restart_backend=True))
+        _activate_if_requested(group, args)
+        return
+    if (not headless and mode in {"running-healthy", "backend-running-frontend-stopped"}
+            and _latest_ui_mode(group) == "headless"):
+        if group.frontend_running:
+            raise DockerDevUpError(
+                "Headless receipt has a running frontend; ownership/state mismatch blocks GUI reconciliation"
+            )
+        try:
+            source_matches = _source_matches(group)
+        except ImageHelperDrift:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        if not source_matches:
+            _recreate_after_drift(group, args, drain=True)
+            return
+        # A headless backend may have an active accepted Run. Use the same
+        # native drain gate as the reverse transition before starting UI.
+        from docker_volume_dev import resume, stop_idle
+
+        stop_idle(_lifecycle_args(group, args, script=None))
+        resume(_lifecycle_args(group, args, restart_backend=True, headless=False))
+        _activate_if_requested(group, args)
+        return
     if mode == "running-healthy":
         try:
             source_matches = _source_matches(group)

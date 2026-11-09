@@ -7,6 +7,7 @@ network, Docker socket, host writes, or application execution responsibility.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 import errno
 import hashlib
 import json
@@ -47,6 +48,27 @@ class BuildControlError(RuntimeError):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def semantic_build_inputs(inputs):
+    """Project build identity while retaining console ownership in receipts.
+
+    Only the exact, validated operation token is non-semantic. Every other
+    input, including unknown future keys, remains covered by the digest.
+    """
+    if not isinstance(inputs, Mapping):
+        raise BuildControlError("Build inputs must be an object")
+    result = dict(inputs)
+    if "console_session_id" in result:
+        token = result["console_session_id"]
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None:
+            raise BuildControlError("Build input console session identity is invalid")
+        del result["console_session_id"]
+    return result
+
+
+def build_input_digest(inputs):
+    return hashlib.sha256(canonical(semantic_build_inputs(inputs))).hexdigest()
 
 
 def _available_space(space):
@@ -98,6 +120,11 @@ def control_read_script(path, maximum=MAX_DOCUMENT_BYTES):
         raise BuildControlError("Invalid control-volume absolute path")
     if type(maximum) is not int or maximum <= 0 or maximum > MAX_DOCUMENT_BYTES:
         raise BuildControlError("Invalid control-document byte budget")
+
+    from docker_activation_history_reader import activation_history_read_script
+    historical = activation_history_read_script(path, maximum)
+    if historical is not None:
+        return historical
 
     components = parsed.parts[2:]  # omit the root slash and ``control``
     checks = [
@@ -619,8 +646,20 @@ class BuildControl:
         if len(data) > MAX_DOCUMENT_BYTES:
             raise BuildControlError("Control document exceeds its byte budget")
         path = self.path(relative)
+        if relative == "activation/history-v1" or relative.startswith("activation/history-v1/"):
+            raise BuildControlError("Archived activation records are immutable")
+        archive_guard = ""
+        activation = re.match(r"/control/activation/attempts/([0-9a-f]{32})(?:/|$)", path)
+        if activation is not None:
+            history = "/control/activation/history-v1"
+            archived = history + "/" + activation[1]
+            archive_guard = (
+                f"test ! -L {history}; if test -e {history}; then test -d {history}; "
+                f"test \"$(readlink -f {history})\" = {history}; fi; "
+                f"test ! -L {archived}; test ! -e {archived}; "
+            )
         parent = str(PurePosixPath(path).parent)
-        script = (f"umask 027; mkdir -p '{parent}'; "
+        script = (archive_guard + f"umask 027; mkdir -p '{parent}'; "
                   f"test \"$(readlink -f '{parent}')\" = '{parent}'; test ! -L '{path}'; "
                   f"if test -e '{path}'; then test -f '{path}'; test $(stat -c %h '{path}') = 1; fi; "
                   f"t=$(mktemp '{parent}/.publish.XXXXXXXX'); "
@@ -717,6 +756,15 @@ class BuildControl:
                 or (minimum_free_bytes < MIN_FREE_BUILD_BYTES
                     and phase not in CACHE_ONLY_PHASES)):
             raise BuildControlError("Invalid build-space admission for operation phase")
+        console_id = os.environ.get("FULLMAG_CONSOLE_SESSION_ID")
+        if console_id is not None:
+            if not re.fullmatch(r"[0-9a-f]{32}", console_id):
+                raise BuildControlError("Invalid console session identity")
+            if os.environ.get("FULLMAG_CONSOLE_CANCEL_REQUESTED") == console_id:
+                raise BuildControlError("Console startup cancelled before the next managed operation")
+            if "console_session_id" in inputs and inputs["console_session_id"] != console_id:
+                raise BuildControlError("Console session identity differs from operation inputs")
+            inputs = {**inputs, "console_session_id": console_id}
         token = uuid.uuid4().hex
         root = f"{phase}/attempts/{token}"
         path = self.path(root)
@@ -863,7 +911,7 @@ def build_volume_toolchain(repo):
         raise BuildControlError("Untracked dependency inputs require explicit Git staging before build")
     source_identity = {"source_inputs": manifest, "build_args": build.get("args", {}),
                        "target": build["target"]}
-    digest = hashlib.sha256(canonical(source_identity)).hexdigest()
+    digest = build_input_digest(source_identity)
     service["image"] = "fullmag/fem-gpu-toolchain:inputs-" + digest[:24]
     with control.operation("toolchain", source_identity,
                            minimum_free_bytes=MIN_FREE_CONTROL_BYTES) as operation:
@@ -942,7 +990,7 @@ def build_volume_runtime_images(repo, control, toolchain, *, helper_source_bindi
         identity = {"parent_image_id": parent, "files": manifest}
         if helper_source_binding is not None:
             identity["helper_source"] = helper_source_binding
-        digest = hashlib.sha256(canonical(identity)).hexdigest()
+        digest = build_input_digest(identity)
         tag = "fullmag/development-" + kind + ":inputs-" + digest[:24]
         parent_digest = parent[7:] if parent.startswith("sha256:") else parent
         parent_ref = "fullmag/" + control.project + "-base:sha-" + parent_digest

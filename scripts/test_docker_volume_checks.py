@@ -84,6 +84,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 from unittest import mock
 import docker_dev_codegen as codegen
 
@@ -118,7 +119,7 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
+        paths = (*checks.IMPORT_FILES, *checks.ANTENNA_FILES, *checks.VISUALIZATION_FILES, *checks.FIELD_MAP_FILES, *checks.AIRBOX_FILES, *checks.CAMERA_FILES, *checks.TELEMETRY_FILES, 'scripts/typecheck-control-room.mjs', 'tsconfig.typecheck.json',
                  'tsconfig.json', 'next.config.ts', 'next.config.test.ts', 'vitest.config.ts', 'eslint.config.mjs', 'package.json',
                  'src/kernel/api/generated/openapi-v2.json', 'src/kernel/api/generated/openapi-v2-types.ts',
                  'src/kernel/api/generated/openapi-v2-client.ts', 'src/kernel/api/generated/openapi-v2-paths.ts')
@@ -138,9 +139,194 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.view = mock.patch.object(frontend_inputs, 'frontend_view', return_value={'files': []}).start()
         self.addCleanup(mock.patch.stopall)
 
-    def run_checks(self, scope='frontend-import'):
-        result = checks.frontend_import_checks(self.control, self.root, {'worktree_id': 'selected'}, scope=scope)
+    def run_checks(self, scope='frontend-import', identity=None):
+        result = checks.frontend_import_checks(self.control, self.root,
+            identity or {'worktree_id': 'selected'}, scope=scope)
         return result, self.control.write.call_args.args[1]
+
+    def enable_field_map_source_services(self):
+        namespace = 'namespaces/' + 'a' * 32
+        self.source_identity = {
+            'project_name': self.control.project,
+            'project_id': 'project-id',
+            'worktree_id': 'selected',
+            'checkout_kind': 'worktree',
+            'source_root': str(self.root),
+        }
+        labels = {
+            'com.docker.compose.project': self.control.project,
+            'org.fullmag.compose.project': self.control.project,
+            'org.fullmag.source.project-id': self.source_identity['project_id'],
+            'org.fullmag.source.worktree-id': self.source_identity['worktree_id'],
+            'org.fullmag.source.checkout-kind': self.source_identity['checkout_kind'],
+        }
+        self.documents = {}
+        self.service_ids = {}
+        backend_mounts = [
+            {'Type': 'bind', 'Source': str(self.root), 'Destination': '/opt/fullmag/source', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'bind', 'Source': str(self.root / '.git'), 'Destination': '/opt/fullmag/source-git', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'backend-build', 'Source': '/var/lib/docker/volumes/backend-build/_data',
+             'Destination': '/build', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'backend-package', 'Source': '/var/lib/docker/volumes/backend-package/_data',
+             'Destination': '/opt/fullmag/package', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/opt/fullmag/control', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+        ]
+        frontend_mounts = [
+            {'Type': 'bind', 'Source': str(self.root), 'Destination': '/opt/fullmag/source', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/state/development', 'Driver': 'local', 'Mode': 'rw', 'RW': True, 'Propagation': ''},
+            {'Type': 'volume', 'Name': 'fullmag-selected-private', 'Source': '/var/lib/docker/volumes/fullmag-selected-private/_data',
+             'Destination': '/opt/fullmag/control', 'Driver': 'local', 'Mode': 'ro', 'RW': False, 'Propagation': ''},
+        ]
+        mounts_by_service = {'backend': backend_mounts, 'frontend': frontend_mounts}
+        for service in ('backend', 'frontend'):
+            identifier = ('e' if service == 'backend' else 'f') * 64
+            self.service_ids[service] = identifier
+            source_variable = 'FULLMAG_SOURCE_HOST_ROOT' if service == 'backend' else 'FULLMAG_SOURCE_ROOT'
+            environment = [source_variable + '=' + str(self.root),
+                           'FULLMAG_CONTROL_NAMESPACE=' + namespace]
+            if service == 'frontend':
+                environment.append('FULLMAG_FRONTEND_HOST_PORT=3202')
+            service_labels = {**labels, 'com.docker.compose.service': service}
+            config_mounts = []
+            for mount in mounts_by_service[service]:
+                host_mount = {'Type': mount['Type'], 'Source': mount['Name'] if mount['Type'] == 'volume' else mount['Source'],
+                              'Target': mount['Destination']}
+                if mount['Type'] == 'volume':
+                    host_mount['VolumeOptions'] = {'Subpath': namespace if mount['Destination'] == '/opt/fullmag/control'
+                                                   and service == 'backend' else
+                                                   namespace + '/frontend' if mount['Destination'] == '/opt/fullmag/control' else
+                                                   ''}
+                else:
+                    host_mount['ReadOnly'] = True
+                    host_mount['BindOptions'] = {'Propagation': 'rprivate'}
+                config_mounts.append(host_mount)
+            state = {'Running': service == 'frontend',
+                     'Status': 'running' if service == 'frontend' else 'exited',
+                     'Pid': 234 if service == 'frontend' else 0,
+                     'ExitCode': 0, 'StartedAt': 'stable-start', 'FinishedAt': 'stable-finish',
+                     'Paused': False, 'Restarting': False, 'Dead': False, 'OOMKilled': False,
+                     'Health': {'Status': 'healthy'}}
+            self.documents[service] = {
+                'Id': identifier,
+                'Image': 'sha256:' + ('b' if service == 'backend' else 'c') * 64,
+                'Config': {'Image': 'fullmag-' + service + ':dev', 'Env': environment,
+                           'Labels': service_labels},
+                'State': state,
+                'Mounts': mounts_by_service[service],
+                'HostConfig': {'Mounts': config_mounts},
+            }
+        def listed_services(*arguments, **_kwargs):
+            if arguments[:3] != ('ps', '--all', '--quiet'):
+                raise AssertionError('source scope must only inventory existing Compose containers')
+            service = next((value.rsplit('=', 1)[1] for value in arguments
+                            if value.startswith('label=com.docker.compose.service=')), None)
+            if service not in self.service_ids:
+                raise AssertionError('source scope queried an unexpected Compose service')
+            return SimpleNamespace(stdout=(self.service_ids[service] + '\n').encode())
+        self.inventory = mock.patch.object(checks, 'docker_capture', side_effect=listed_services).start()
+        self.inspect = mock.patch.object(codegen, '_inspect',
+            side_effect=lambda identifier: next(document for document in self.documents.values()
+                if document['Id'] == identifier)).start()
+        self.running.side_effect = lambda _project, service, *_args: (
+            self.service_ids[service][:12], self.documents[service])
+
+    def test_field_map_source_scope_accepts_cleanly_stopped_backend_without_runtime_claim(self):
+        self.enable_field_map_source_services()
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-field-map-source')
+        self.assertEqual(receipt['runtime_qualification'], 'NOT VERIFIED')
+        self.assertEqual(receipt['backend_state_before'], {
+            'status': 'exited', 'running': False, 'pid': 0, 'exit_code': 0,
+            'qualification': 'stopped-clean-maintenance'})
+        self.assertEqual(receipt['backend_state_after'], receipt['backend_state_before'])
+        self.assertEqual(receipt['source_bindings_before'], receipt['source_bindings_after'])
+        self.assertEqual(receipt['technical_volumes_before'], receipt['technical_volumes_after'])
+        self.assertEqual(receipt['services_before'], receipt['services_after'])
+        self.assertEqual([entry['name'] for entry in receipt['commands']],
+                         ['prepare', 'typecheck', 'vitest', 'eslint'])
+        for entry, (name, arguments) in zip(receipt['commands'], checks.FIELD_MAP_COMMANDS):
+            self.assertEqual(entry['name'], name)
+            self.assertEqual(entry['arguments'], list(arguments))
+        self.assertEqual(self.execute.call_count, len(checks.FIELD_MAP_COMMANDS))
+        self.assertTrue(all(call.args[0] == self.service_ids['frontend']
+                            for call in self.execute.call_args_list))
+        self.assertNotIn('runtime', [entry['name'] for entry in receipt['commands']])
+        self.assertNotIn('api', [entry['name'] for entry in receipt['commands']])
+
+    def test_field_map_source_scope_accepts_backend_only_when_running_healthy(self):
+        self.enable_field_map_source_services()
+        self.documents['backend']['State'].update(Running=True, Status='running', Pid=345)
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['backend_state_before']['qualification'], 'running-healthy')
+
+    def test_field_map_source_scope_rejects_wrong_source_or_compose_group_before_commands(self):
+        for mutation in ('source', 'group'):
+            with self.subTest(mutation=mutation):
+                self.enable_field_map_source_services()
+                if mutation == 'source':
+                    self.documents['backend']['Config']['Env'][0] = 'FULLMAG_SOURCE_HOST_ROOT=/foreign/source'
+                else:
+                    self.documents['frontend']['Config']['Labels']['com.docker.compose.project'] = 'foreign-group'
+                result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+                self.assertEqual(result, 1)
+                self.assertEqual(receipt['state'], 'failed')
+                self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_unhealthy_running_backend_before_commands(self):
+        self.enable_field_map_source_services()
+        self.documents['backend']['State'].update(Running=True, Status='running', Pid=345,
+                                                   Health={'Status': 'unhealthy'})
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['state'], 'failed')
+        self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_changed_service_image_pin(self):
+        self.enable_field_map_source_services()
+        def change_image(*_args, **_kwargs):
+            self.documents['frontend']['Image'] = 'sha256:' + 'd' * 64
+            return b'pass', b''
+        self.execute.side_effect = change_image
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_field_map_source_scope_requires_full_inspect_identity_after_short_docker_id(self):
+        self.enable_field_map_source_services()
+        wrong_frontend = {**self.documents['frontend'], 'Id': 'a' * 64}
+        self.running.side_effect = lambda _project, service, *_args: (
+            self.service_ids[service][:12],
+            wrong_frontend if service == 'frontend' else self.documents[service])
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertIn('inspected container identity changed', receipt['error'])
+        self.assertEqual(self.execute.call_count, 0)
+
+    def test_field_map_source_scope_rejects_changed_technical_volume_pin(self):
+        self.enable_field_map_source_services()
+        self.volumes.side_effect = [{'control_volume_name': 'before'},
+                                    {'control_volume_name': 'after'}]
+        result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+        self.assertEqual(result, 1)
+        self.assertEqual(receipt['technical_volumes_before'], {'control_volume_name': 'before'})
+        self.assertEqual(receipt['technical_volumes_after'], {'control_volume_name': 'after'})
+        self.assertIn('changed during checks', receipt['error'])
+
+    def test_field_map_source_scope_rejects_stopped_backend_unless_pid_and_exit_are_clean(self):
+        for pid, exit_code in ((1, 0), (0, 1)):
+            with self.subTest(pid=pid, exit_code=exit_code):
+                self.enable_field_map_source_services()
+                self.documents['backend']['State'].update(Pid=pid, ExitCode=exit_code)
+                result, receipt = self.run_checks('frontend-field-map-source', self.source_identity)
+                self.assertEqual(result, 1)
+                self.assertEqual(self.execute.call_count, 0)
 
     def test_fixed_commands_use_only_existing_frontend_and_volume_paths(self):
         result, receipt = self.run_checks()
@@ -250,6 +436,41 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.assertEqual(commands[-2]['name'], 'architecture')
         self.assertEqual(commands[-1]['name'], 'api-hygiene')
 
+    def test_camera_scope_runs_gesture_regressions_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-camera')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-camera')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-camera-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.CAMERA_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.CAMERA_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_airbox_scope_uses_authoritative_inspector_and_geometry_tests(self):
+        result, receipt = self.run_checks('frontend-airbox')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-airbox')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-airbox-checks/receipt.json')
+        vitest = next(command for command in receipt['commands'] if command['name'] == 'vitest')
+        for test in checks.AIRBOX_TESTS:
+            self.assertIn(test, vitest['arguments'])
+        self.assertTrue(set(checks.AIRBOX_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
+    def test_field_map_scope_runs_canonical_planar_tests_in_existing_frontend(self):
+        result, receipt = self.run_checks('frontend-field-map')
+        self.assertEqual(result, 0)
+        self.assertEqual(receipt['scope'], 'frontend-field-map')
+        self.assertEqual(self.control.write.call_args.args[0],
+                         'verification/frontend-field-map-checks/receipt.json')
+        commands = receipt['commands']
+        vitest = next(command for command in commands if command['name'] == 'vitest')
+        self.assertIn('src/modules/field-map/components/FieldMapToolbar.test.tsx', vitest['arguments'])
+        self.assertIn('src/modules/field-map/model/fieldMapDataPlan.test.ts', vitest['arguments'])
+        self.assertIn('src/modules/inspector/visualization/VisualizationViewContext.test.ts', vitest['arguments'])
+        self.assertTrue(set(checks.FIELD_MAP_FILES) <= set(receipt['selected_frontend_input_hashes']))
+
     def test_antenna_scope_uses_exact_geometry_tests_lint_and_separate_receipt(self):
         result, receipt = self.run_checks('frontend-antenna')
         self.assertEqual(result, 0)
@@ -326,6 +547,30 @@ class FrontendImportCheckTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 2)
         resolve.assert_not_called()
 
+    def test_cli_routes_source_only_field_map_scope_to_existing_frontend(self):
+        identity = {'worktree_id': 'selected'}
+        configuration = {'services': {'fem-gpu-toolchain': {'build': {'args': {'FULLMAG_CUDA_BASE_IMAGE': 'fixed-helper'}}}}}
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root),
+                 '--scope', 'frontend-field-map-source']), \
+             mock.patch.object(checks.storage, 'resolve_layout', return_value='layout'), \
+             mock.patch.object(checks, 'compose_project_identity', return_value=identity), \
+             mock.patch('docker_build_control.toolchain_configuration', return_value=configuration), \
+             mock.patch.object(checks, 'BuildControl', return_value=self.control), \
+             mock.patch.object(checks, 'frontend_import_checks', return_value=0) as frontend, \
+             mock.patch.object(checks, 'docker_capture') as backend:
+            self.assertEqual(checks.main(), 0)
+        frontend.assert_called_once_with(self.control, self.root.resolve(), identity,
+                                         scope='frontend-field-map-source')
+        backend.assert_not_called()
+        with mock.patch.object(checks.sys, 'argv', ['checks', '--source-root', str(self.root),
+                 '--scope', 'frontend-field-map-source-extra']), \
+             mock.patch.object(checks.sys, 'stderr'), \
+             mock.patch.object(checks.storage, 'resolve_layout') as resolve:
+            with self.assertRaises(SystemExit) as error:
+                checks.main()
+        self.assertEqual(error.exception.code, 2)
+        resolve.assert_not_called()
+
 
 class FrontendAntennaShellBoundaryTests(unittest.TestCase):
     def dispatch(self, recipe):
@@ -350,6 +595,38 @@ class FrontendAntennaShellBoundaryTests(unittest.TestCase):
         result = self.dispatch(recipe)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), ['--source-root', source_root, '--scope', 'frontend-antenna'])
+
+    def test_dispatches_only_exact_activation_history_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'activation-history'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'activation-history'])
+        for invalid in (recipe + '; printf injected', recipe.replace('activation-history', 'activation-history-extra')):
+            rejected = self.dispatch(invalid)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertFalse(rejected.stdout.strip())
+
+    def test_dispatches_literal_field_map_scope_as_fixed_argv(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-field-map'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-field-map'])
+
+    def test_dispatches_only_exact_field_map_source_scope(self):
+        recipe = ('python "/ignored/scripts/docker_volume_checks.py" '
+                  "--source-root '/selected' --scope 'frontend-field-map-source'")
+        result = self.dispatch(recipe)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout),
+                         ['--source-root', '/selected', '--scope', 'frontend-field-map-source'])
+        rejected = self.dispatch(recipe.replace('frontend-field-map-source',
+                                                'frontend-field-map-source-extra'))
+        self.assertEqual(rejected.returncode, 2)
+        self.assertFalse(rejected.stdout.strip())
 
     def test_dispatches_only_exact_telemetry_source_scope(self):
         recipe = ('python "/ignored/scripts/docker_volume_checks.py" '

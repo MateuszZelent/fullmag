@@ -13,6 +13,9 @@ use super::planar_monitors::{
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldQuery {
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
     pub sample_token: Option<String>,
     pub component: Option<String>,
     pub scope_kind: Option<String>,
@@ -54,6 +57,11 @@ pub struct PlanarFieldQuery {
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldProbeQuery {
+    /// Default-source fractional position override.
+    pub position_fraction: Option<f64>,
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
     pub u_m: f64,
     pub v_m: f64,
     pub sample_token: Option<String>,
@@ -178,6 +186,9 @@ pub struct PlanarSectionResource {
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
+    /// Accepted source observation, when the exact selected carrier proves it.
+    /// Null means cross-quantity temporal coherence cannot be established.
+    pub observation_frame: Option<super::common::AcceptedObservationFrameRef>,
     pub schema_version: String,
     pub sample_token: String,
     #[serde(with = "crate::schemas::decimal_u64")]
@@ -236,6 +247,11 @@ pub struct PlanarFieldMetaResource {
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldProfileQuery {
+    /// Default-source fractional position override.
+    pub position_fraction: Option<f64>,
+    /// Default source only: exact world coordinate in meters along the plane's
+    /// normal axis, without grid/node snapping. Exclusive with position_fraction.
+    pub position_m: Option<f64>,
     pub u0_m: f64,
     pub v0_m: f64,
     pub u1_m: f64,

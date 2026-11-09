@@ -1,5 +1,6 @@
 import type {
   DomainMetaResource,
+  PlanarFieldMetaResource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 
@@ -45,7 +46,7 @@ export interface PlanarSectionGeometry {
   /** FDM cell layers along the normal; null for unstructured domains. */
   layerCount: number | null;
   layerSpacing: number | null;
-  /** Native FDM cell counts along u and v; null for unstructured domains. */
+  /** Native FDM cell counts along u and v; null when the source does not publish them. */
   nativeResolution: readonly [number, number] | null;
   /**
    * Discrete node-plane coordinates of a swept FEM mesh along the normal
@@ -60,7 +61,7 @@ export interface PlanarSectionGeometry {
   navigationStepM?: number | null;
 }
 
-/** Attach FEM node-plane stops or the continuous navigation step published by the backend section. */
+/** Attach the navigation stops or step published by the backend section. */
 export function withSectionStops(
   geometry: PlanarSectionGeometry | null,
   section: {
@@ -74,10 +75,60 @@ export function withSectionStops(
   const stops = section.layer_stops_m ?? [];
   if (stops.length >= 2) return { ...geometry, stops };
   const step = section.navigation_step_m;
-  return section.navigation_step_kind === "median_element_height" &&
+  return (section.navigation_step_kind === "median_element_height" ||
+    section.navigation_step_kind === "fdm_cell") &&
     typeof step === "number" && Number.isFinite(step) && step > 0
     ? { ...geometry, navigationStepM: step }
     : geometry;
+}
+
+/**
+ * Resolve common section geometry from the current base planar sample.
+ * Its section identity is authoritative for Airbox bounds and normal layers;
+ * the magnetic domain grid does not describe those values. In-plane native
+ * resolution is intentionally unavailable because planar metadata does not
+ * publish the base carrier's u/v cell counts.
+ */
+export function resolvePlanarSectionGeometryFromMeta(
+  section: PlanarFieldMetaResource["section"] | null | undefined,
+  plane: PlanarSectionPlane,
+): PlanarSectionGeometry | null {
+  if (!section || section.plane !== plane) return null;
+  const axes = PLANE_AXES[plane];
+  if (section.normal_axis !== axes.normal) return null;
+  const { normal_min_m: normalMin, normal_max_m: normalMax } = section;
+  if (
+    !Number.isFinite(normalMin) ||
+    !Number.isFinite(normalMax) ||
+    normalMax <= normalMin
+  ) {
+    return null;
+  }
+
+  const fdmLayers = section.stops_kind === "fdm_cell_layers";
+  const publishedLayerCount = fdmLayers
+    ? positiveInteger(section.layer_count)
+    : null;
+  const publishedLayerSpacing = fdmLayers &&
+    typeof section.layer_spacing_m === "number" &&
+    Number.isFinite(section.layer_spacing_m) &&
+    section.layer_spacing_m > 0
+    ? section.layer_spacing_m
+    : null;
+  const hasDiscreteFdmLayers =
+    publishedLayerCount !== null && publishedLayerSpacing !== null;
+  if (fdmLayers && !hasDiscreteFdmLayers) return null;
+  const geometry: PlanarSectionGeometry = {
+    plane,
+    ...axes,
+    normalMin,
+    normalMax,
+    normalExtent: normalMax - normalMin,
+    layerCount: hasDiscreteFdmLayers ? publishedLayerCount : null,
+    layerSpacing: hasDiscreteFdmLayers ? publishedLayerSpacing : null,
+    nativeResolution: null,
+  };
+  return withSectionStops(geometry, section);
 }
 
 /** Number of discrete layers (FDM cells or FEM node planes), or null if continuous. */

@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from docker_build_control import BuildControl
+from docker_script_output_mounts import OUTPUT_ROOT
 import docker_volume_post_build_generation as continuation
 import test_docker_volume_post_build_generation as generation_fixtures
 
@@ -250,6 +251,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
             return original_prepare(*prepare_args, **prepare_kwargs)
 
         fake_script_mounts = types.ModuleType("docker_script_output_mounts")
+        fake_script_mounts.OUTPUT_ROOT = OUTPUT_ROOT
         fake_script_mounts.configure = lambda *_args, **_kwargs: None
         fake_script_mounts.validate = lambda *_args, **_kwargs: None
         fake_cgroup = types.ModuleType("docker_worker_cgroup")
@@ -328,7 +330,7 @@ class PostBuildStartIntegrationTests(unittest.TestCase):
                 mock.patch.object(dev, "_resolved_control_subpath", side_effect=lambda _control, service: service),
                 mock.patch.object(dev, "_reassert_operator_probe_environment"),
                 mock.patch.object(dev, "compose_capture", side_effect=compose_capture),
-                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args: events.append("compose-start")),
+                mock.patch.object(dev, "_start_compose_services", side_effect=lambda *_args, **_kwargs: (events.append("compose-start") or ("b" * 64, "c" * 64))),
                 mock.patch.object(dev, "_finish", side_effect=finish),
                 mock.patch("docker_backend_volume_cache.validate_container"),
                 mock.patch.object(continuation, "prepare_start_binding", side_effect=prepare),

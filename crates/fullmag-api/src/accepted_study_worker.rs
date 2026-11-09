@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use fullmag_application::DecodedStudyArtifact;
 use fullmag_authoring::{
-    StudyAcceptancePolicy, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPortDataKind,
+    StudyAcceptancePolicy, StudyOutputPort, StudyPortDataKind,
 };
 use fullmag_ir::ExecutionPlanIR;
 use fullmag_runner::{
@@ -30,9 +30,13 @@ pub(crate) mod accepted_antenna_progress;
 #[path = "completed_inspection_recovery.rs"]
 pub(crate) mod completed_inspection_recovery;
 
+#[path = "accepted_scalar_history.rs"]
+pub(crate) mod scalar_history;
+
 #[path = "accepted_worker_execution_receipt.rs"]
 mod accepted_worker_execution_receipt;
 use accepted_worker_execution_receipt::{
+    validate_reported_native_failure_started,
     worker_execution_identity_from_plan, WorkerExecutionReceiptIdentity,
     WorkerExecutionStartedReceipt, WORKER_EXECUTION_RECEIPT_SCHEMA,
     WORKER_EXECUTION_STARTED_RECEIPT,
@@ -75,6 +79,9 @@ const ACCEPTED_LIVE_HEADER_MAX_BYTES: u64 = 256 * 1024;
 const ACCEPTED_LIVE_RECENT_CLOCK_SAMPLES: usize = 256;
 
 /// Bounded live observation header written by an accepted worker attempt.
+/// The accepted worker dispatcher admits one case per ordinary Live task.
+pub(crate) const DEFAULT_ACCEPTED_CASE_ID: &str = "default";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedLiveObservationHeader {
@@ -573,17 +580,22 @@ fn validate_accepted_worker_parameters(
     parameters: &serde_json::Value,
     accepted_step_id: &str,
     allow_operation_profile: bool,
+    allow_cuda_trace: bool,
 ) -> Result<()> {
     if parameters.get(crate::accepted_solver_profile::PARAMETER).is_some() && !allow_operation_profile {
         bail!("solver_profile is supported only for accepted closed-loop inspection");
     }
     crate::accepted_solver_profile::config(parameters)?;
+    if crate::accepted_solver_profile::cuda_trace::config(parameters)?.is_some() && !allow_cuda_trace {
+        bail!("cuda_trace is supported only for accepted FEM GPU execution");
+    }
     let parameters = parameters
         .as_object()
         .context("accepted worker RunSpec parameters must be an object")?;
     for key in parameters.keys() {
         if key != "live_workspace" && key != fullmag_session::ACCEPTED_RUN_START_POLICY_KEY
-            && key != crate::accepted_solver_profile::PARAMETER {
+            && key != crate::accepted_solver_profile::PARAMETER
+            && key != crate::accepted_solver_profile::cuda_trace::PARAMETER {
             bail!("accepted worker has no binding for RunSpec parameter `{key}`");
         }
     }
@@ -605,16 +617,31 @@ fn validate_accepted_worker_parameters(
             "execution_input",
             "command_id",
             "request_idempotency_key",
+            "request_receipt",
             "step_id",
             "command",
             "startup_source_sha256",
             "initial_state_source",
+            "study_history_parent",
         ];
         if let Some(key) = live_workspace
             .keys()
             .find(|key| !ALLOWED_LIVE_WORKSPACE_KEYS.contains(&key.as_str()))
         {
             bail!("accepted worker has no binding for live_workspace field `{key}`");
+        }
+        if let Some(value) = live_workspace.get("study_history_parent") {
+            crate::study_execution_contract::parse_study_history_parent(value)?;
+        }
+        if let Some(value) = live_workspace.get("request_receipt") {
+            let receipt: fullmag_session::LiveComputeRequestReceipt = serde_json::from_value(value.clone())
+                .context("accepted worker received an invalid live Compute receipt")?;
+            receipt.validate()?;
+            if live_workspace.get("command_id").and_then(serde_json::Value::as_str)
+                != Some(receipt.command_id.as_str())
+            {
+                bail!("accepted worker live Compute receipt has a different command ID");
+            }
         }
         for key in ["api_instance_id", "session_id"] {
             if live_workspace
@@ -1465,21 +1492,161 @@ pub(crate) fn existing_private_attempt_output_dir(
     store: &SessionStore,
     claim: &fullmag_application::TaskClaim,
 ) -> Result<PathBuf> {
-    for (value, label) in [
-        (claim.run_id.as_str(), "run_id"),
-        (claim.task_id.as_str(), "task_id"),
-        (claim.attempt_id.as_str(), "attempt_id"),
-    ] {
+    existing_private_attempt_output_dir_for_identity(
+        store,
+        claim.run_id.as_str(),
+        claim.task_id.as_str(),
+        claim.attempt_id.as_str(),
+        claim.ownership_epoch.value(),
+    )
+}
+
+fn existing_private_attempt_output_dir_for_identity(
+    store: &SessionStore,
+    run_id: &str,
+    task_id: &str,
+    attempt_id: &str,
+    ownership_epoch: u64,
+) -> Result<PathBuf> {
+    for (value, label) in [(run_id, "run_id"), (task_id, "task_id"), (attempt_id, "attempt_id")] {
         fullmag_session::repository_path::validate_store_id(value)
             .with_context(|| format!("worker attempt {label} is invalid"))?;
     }
+    if ownership_epoch == 0 {
+        bail!("worker attempt ownership epoch must be positive");
+    }
     let root = store.root();
     let runs_root = require_real_directory(&root.join("runs"))?;
-    let run_root = require_real_directory(&runs_root.join(claim.run_id.as_str()))?;
+    let run_root = require_real_directory(&runs_root.join(run_id))?;
     let worker_root = require_real_directory(&run_root.join("worker-attempts"))?;
-    let task_root = require_real_directory(&worker_root.join(claim.task_id.as_str()))?;
-    let attempt_root = require_real_directory(&task_root.join(claim.attempt_id.as_str()))?;
-    require_real_directory(&attempt_root.join(format!("epoch-{}", claim.ownership_epoch.value())))
+    let task_root = require_real_directory(&worker_root.join(task_id))?;
+    let attempt_root = require_real_directory(&task_root.join(attempt_id))?;
+    require_real_directory(&attempt_root.join(format!("epoch-{ownership_epoch}")))
+}
+
+/// Establish the narrow prelaunch-failure proof from the attempt receipts and
+/// the durable worker inbox. The caller verifies the catalog against the
+/// accepted Study before relying on this evidence.
+pub(crate) fn prelaunch_failure_proves_applied_start(
+    store: &SessionStore,
+    catalog: &fullmag_session::FmsRunCatalog,
+    task: &fullmag_session::FmsTaskCatalogEntry,
+) -> Result<bool> {
+    let (Some(attempt_id), Some(ownership_epoch)) =
+        (task.attempt_id.as_deref(), task.ownership_epoch)
+    else {
+        return Ok(false);
+    };
+    let read_transaction = store.read_transaction()?;
+    let current_catalog = store
+        .read_run_catalog(&catalog.run_id)?
+        .context("prelaunch failure run catalog disappeared")?;
+    if &current_catalog != catalog {
+        bail!("prelaunch failure run catalog changed since its projection snapshot");
+    }
+    let attempt = match existing_private_attempt_output_dir_for_identity(
+        store,
+        catalog.run_id.as_str(),
+        &task.task_id,
+        attempt_id,
+        ownership_epoch,
+    ) {
+        Ok(path) => path,
+        Err(error) if is_not_found_error(&error) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let Some(started) = read_attempt_receipt::<WorkerExecutionStartedReceipt>(
+        &attempt,
+        WORKER_EXECUTION_STARTED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let Some(failure) = read_attempt_receipt::<WorkerPrelaunchFailedReceipt>(
+        &attempt,
+        WORKER_PRELAUNCH_FAILED_RECEIPT,
+    )? else {
+        return Ok(false);
+    };
+    let claim = &started.identity.claim;
+    if failure.error.trim().is_empty()
+        || !started.identity.matches_same_attempt(&failure.identity)
+        || claim.run_id.as_str() != catalog.run_id.as_str()
+        || claim.task_id.as_str() != task.task_id.as_str()
+        || claim.attempt_id.as_str() != attempt_id
+        || claim.ownership_epoch.value() != ownership_epoch
+        || task.resource_id.as_deref() != Some(claim.lease.resource_id.as_str())
+    {
+        bail!("prelaunch failure receipts differ from the current run task attempt");
+    }
+
+    // The actual prelaunch storage failure is published before any solver
+    // output exists. Unknown files and directories fail closed, including
+    // live magnetization sidecars with their own file names.
+    let mut receipt_count = 0;
+    for entry in fs::read_dir(&attempt).context("list prelaunch failure attempt evidence")? {
+        let entry = entry.context("read prelaunch failure attempt entry")?;
+        receipt_count += 1;
+        if receipt_count > 2 {
+            bail!("prelaunch failure attempt contains extra execution evidence");
+        }
+        let name = entry.file_name().into_string()
+            .map_err(|_| anyhow::anyhow!("prelaunch failure attempt has a non-UTF8 entry"))?;
+        if !matches!(name.as_str(), WORKER_EXECUTION_STARTED_RECEIPT | WORKER_PRELAUNCH_FAILED_RECEIPT) {
+            bail!("prelaunch failure attempt contains unexpected execution evidence");
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .context("inspect prelaunch failure attempt evidence")?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            bail!("prelaunch failure attempt receipts must be regular files");
+        }
+    }
+    if receipt_count != 2 {
+        bail!("prelaunch failure attempt must contain exactly two receipts");
+    }
+
+    let empty_checkpoint = fullmag_application::WorkerCommandInbox::new(claim).checkpoint();
+    let inbox_path = fullmag_session::FmsWorkerInboxRecord::new(
+        serde_json::to_value(empty_checkpoint)?,
+    )?
+    .relative_path()?;
+    let inbox_bytes = fullmag_session::repository_path::read_bounded_regular_file(
+        store.root(),
+        &inbox_path,
+        usize::try_from(fullmag_session::MAX_TERMINAL_CATALOG_METADATA_BYTES)
+            .context("worker inbox metadata budget does not fit in memory")?,
+    )
+    .context("read bounded durable worker inbox for prelaunch failure proof")?;
+    let record: fullmag_session::FmsWorkerInboxRecord = serde_json::from_slice(&inbox_bytes)
+        .context("decode durable worker inbox for prelaunch failure proof")?;
+    record.validate().context("validate durable worker inbox record")?;
+    if record.relative_path()? != inbox_path {
+        bail!("prelaunch failure worker inbox path differs from its claim");
+    }
+    let checkpoint = serde_json::from_value(record.payload)
+        .context("decode typed worker inbox checkpoint for prelaunch failure proof")?;
+    let inbox = fullmag_application::WorkerCommandInbox::restore(claim, checkpoint)
+        .context("restore typed worker inbox for prelaunch failure proof")?;
+    let checkpoint = inbox.checkpoint();
+    if checkpoint.pending.is_some() || checkpoint.claim != claim.identity() {
+        bail!("prelaunch failure worker inbox has an uncertain or foreign command");
+    }
+    let starts = checkpoint.applied.iter()
+        .filter(|command| matches!(&command.command, fullmag_application::WorkerCommand::Start))
+        .collect::<Vec<_>>();
+    if starts.len() != 1 {
+        bail!("prelaunch failure worker inbox must contain exactly one applied Start");
+    }
+    let start = starts[0];
+    if start.message_id != started.identity.start_message_id
+        || start.sequence != started.identity.start_sequence
+        || !start.claim.matches_claim(claim)
+    {
+        bail!("prelaunch failure Started receipt differs from its applied Start");
+    }
+    drop(read_transaction);
+    validate_reported_native_failure_started(store, &attempt, claim, start)
+        .context("validate prelaunch failure Started receipt against the accepted plan")?;
+    Ok(true)
 }
 
 pub(crate) fn write_immutable_attempt_receipt<T: Serialize>(
@@ -1554,15 +1721,18 @@ fn accepted_state_ref_from_runner_snapshot(
     else {
         return Ok(None);
     };
-    if !fdm_plan.spin_transport_plans.is_empty() || fdm_plan.frozen_spins.is_some() {
-        return Ok(None);
-    }
-
     let requested_device = accepted_step
         .resolved_input
         .requested_execution
         .device
         .as_str();
+    let accepted_cuda_frozen = requested_device == "gpu"
+        && accepted_step.resolved_input.frozen_stage_context.is_some();
+    if !fdm_plan.spin_transport_plans.is_empty()
+        || (fdm_plan.frozen_spins.is_some() && !accepted_cuda_frozen)
+    {
+        return Ok(None);
+    }
     if requested_device == "gpu"
         && (!fdm_plan.fdm_gpu_charge_transports.is_empty()
             || fdm_plan.temperature.unwrap_or(0.0) > 0.0
@@ -2619,6 +2789,37 @@ fn validate_accepted_worker_start_preconditions(
     Ok(())
 }
 
+/// Validate numeric execution before reserving an attempt. Field/state f64
+/// codecs do not require the CUDA integrator to use internal double storage.
+fn accepted_fdm_execution_precision(
+    request: &fullmag_application::RequestedExecution,
+    problem_precision: fullmag_ir::ExecutionPrecision,
+    single_grid: Option<&fullmag_ir::FdmPlanIR>,
+    has_frozen_terminal_context: bool,
+) -> Result<fullmag_ir::ExecutionPrecision> {
+    use fullmag_ir::ExecutionPrecision;
+    let precision = match (request.device.as_str(), request.precision.as_str()) {
+        ("cpu" | "gpu", "double") => ExecutionPrecision::Double,
+        ("gpu", "single") if single_grid.is_some() && !has_frozen_terminal_context => ExecutionPrecision::Single,
+        _ => bail!("accepted FDM execution requires CPU/GPU double or single-grid GPU single; frozen terminal single is unsupported"),
+    };
+    if request.backend != "fdm" || request.mode != "strict" {
+        bail!("accepted FDM worker supports only explicit FDM CPU/GPU strict execution");
+    }
+    if problem_precision != precision {
+        bail!("accepted FDM request precision differs from immutable ProblemIR precision");
+    }
+    if let Some(plan) = single_grid {
+        if plan.precision != precision {
+            bail!("accepted FDM request precision differs from resolved single-grid precision");
+        }
+        plan.precision_policy
+            .validate_for(precision)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(precision)
+}
+
 fn execute_accepted_worker_start_with_snapshot(
     store: &SessionStore,
     accepted: &fullmag_runtime_control::AcceptedStudySnapshot,
@@ -2650,6 +2851,18 @@ fn execute_accepted_worker_start_with_snapshot(
     }
 
     let specification = &accepted.run.specification;
+    crate::study_execution_contract::validate_worker_initial_state_binding(
+        specification,
+        &accepted.study,
+        accepted_step,
+    )
+    .context("validate accepted live initial state before dispatch")?;
+    crate::accepted_solver_profile::validate_resolved_study_profile(
+        &specification.parameters,
+        &accepted.study,
+        &accepted.catalog,
+        &accepted.lowered,
+    )?;
     let immutable_problem = accepted
         .catalog
         .entries()
@@ -2685,7 +2898,8 @@ fn execute_accepted_worker_start_with_snapshot(
     }
     // Validate the same bounded RunSpec metadata before backend dispatch;
     // FEM must not bypass the live-workspace/start-policy binding guard.
-    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id, false)?;
+    validate_accepted_worker_parameters(&specification.parameters, &accepted_step.step_id,
+        request.backend == "fem", request.backend == "fem")?;
     if request.backend == "fem" {
         crate::accepted_fem_study_worker::validate_declared_outputs(&study_step.outputs)
             .context("validate accepted FEM output contract before recovery or reservation")?;
@@ -2699,13 +2913,13 @@ fn execute_accepted_worker_start_with_snapshot(
             interrupt_requested,
         );
     }
-    if request.backend != "fdm"
-        || !matches!(request.device.as_str(), "cpu" | "gpu")
-        || request.precision != "double"
-        || request.mode != "strict"
-    {
-        bail!("accepted worker currently supports only FDM CPU/GPU double strict");
-    }
+    let single_grid = match &accepted_step.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(plan) => Some(plan),
+        _ => None,
+    };
+    accepted_fdm_execution_precision(request,
+        accepted_step.problem.backend_policy.execution_precision,
+        single_grid, accepted_step.resolved_input.frozen_stage_context.is_some())?;
     if !specification.seeds.is_empty()
         || !accepted_step.problem.problem_meta.seeds.is_empty()
     {
@@ -2728,8 +2942,6 @@ fn execute_accepted_worker_start_with_snapshot(
         );
     }
     if accepted_step.problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fdm
-        || accepted_step.problem.backend_policy.execution_precision
-            != fullmag_ir::ExecutionPrecision::Double
         || accepted_step.problem.validation_profile.execution_mode
             != fullmag_ir::ExecutionMode::Strict
         || accepted_step.execution_plan.common.requested_backend != fullmag_ir::BackendTarget::Fdm
@@ -2741,7 +2953,7 @@ fn execute_accepted_worker_start_with_snapshot(
         )
     {
         bail!(
-            "accepted worker execution plan is outside the supported FDM/FDM multilayer CPU/GPU double strict lanes"
+            "accepted worker execution plan is outside the supported FDM CPU/GPU strict lanes"
         );
     }
     if let fullmag_ir::BackendPlanIR::FdmMultilayer(plan) =
@@ -2962,6 +3174,14 @@ fn execute_accepted_worker_start_with_snapshot(
         if let Some(storage) = &mut storage {
             storage.finish(true, &attempt_output_dir)?;
         }
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            if let Err(error) = scalar_history::prepare_scalar_history(
+                store, &attempt_output_dir, accepted_step, &receipt_identity, &outputs,
+            ) {
+                tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                    "solver scalar history could not be archived");
+            }
+        }
         persist_completed_worker_execution_with_terminal(
             store,
             &attempt_output_dir,
@@ -3022,7 +3242,7 @@ fn validate_inspection_run_parameters(
     step_id: &str,
     allow_operation_profile: bool,
 ) -> Result<()> {
-    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile)?;
+    validate_accepted_worker_parameters(&specification.parameters, step_id, allow_operation_profile, false)?;
     let parameters = specification.parameters.as_object()
         .context("inspection RunSpec parameters must be an object")?;
     if parameters.keys().any(|key| {
@@ -3037,7 +3257,7 @@ fn validate_inspection_run_parameters(
         "api_instance_id", "session_id", "session_epoch", "scene_revision", "command_id",
         "request_idempotency_key", "step_id", "command", "startup_source_sha256",
     ].into_iter().collect();
-    if live.keys().map(String::as_str).filter(|key| *key != "execution_input")
+    if live.keys().map(String::as_str).filter(|key| !matches!(*key, "execution_input" | "study_history_parent"))
         .collect::<BTreeSet<_>>() != expected_keys {
         bail!("inspection live workspace binding has unsupported fields");
     }
@@ -3294,6 +3514,8 @@ fn execute_accepted_fem_worker_start(
     )?;
     let storage_attempt_dir = attempt_output_dir.clone();
     let execution: Result<AcceptedRunnerExecution> = (|| {
+        let mut profile = crate::accepted_solver_profile::step_profile::Capture::new(
+            crate::accepted_solver_profile::config(&accepted.run.specification.parameters)?.unwrap_or_default());
         let outcome = crate::accepted_fem_study_worker::execute_accepted_fem_attempt(
             accepted_step,
             &prepared,
@@ -3303,8 +3525,22 @@ fn execute_accepted_fem_worker_start(
                 .map(|value| value.data_root())
                 .unwrap_or(&attempt_output_dir),
             interrupt_requested,
-        )
-        .context("execute accepted FEM CPU/GPU worker attempt")?;
+            &mut profile,
+            || crate::accepted_solver_profile::cuda_capture::Capture::start(
+                prepared.cuda_trace.as_ref(), &attempt_output_dir, &receipt_identity,
+                prepared.gpu_uuid.as_deref()),
+        );
+        let profile_outcome = match &outcome {
+            Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Completed(_)) =>
+                crate::accepted_solver_profile::step_profile::Outcome::Completed,
+            Ok(crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Cancelled { .. }) =>
+                crate::accepted_solver_profile::step_profile::Outcome::Cancelled,
+            Err(_) => crate::accepted_solver_profile::step_profile::Outcome::Failed,
+        };
+        if let Err(error) = profile.persist(&attempt_output_dir, &receipt_identity, profile_outcome) {
+            eprintln!("accepted FEM step profile persistence failed: {error:#}");
+        }
+        let outcome = outcome.context("execute accepted FEM CPU/GPU worker attempt")?;
         match outcome {
             crate::accepted_fem_study_worker::AcceptedFemExecutionOutcome::Cancelled {
                 completed_step_count,
@@ -3328,6 +3564,14 @@ fn execute_accepted_fem_worker_start(
                 }).cloned();
                 if let Some(storage) = &mut storage {
                     storage.finish(true, &execution.attempt_output_dir)?;
+                }
+                if accepted.run.specification.parameters.get("live_workspace").is_some() {
+                    if let Err(error) = scalar_history::prepare_scalar_history(
+                        store, &execution.attempt_output_dir, accepted_step, &receipt_identity, &execution.outputs,
+                    ) {
+                        tracing::warn!(task = %accepted_step.claim.task_id.as_str(), error = %error,
+                            "solver scalar history could not be archived");
+                    }
                 }
                 persist_completed_worker_execution(
                     store,
@@ -3889,7 +4133,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         Some(&control.interrupt_requested),
     );
     let execution = match execution {
@@ -3915,7 +4159,7 @@ fn apply_accepted_start_effect(
         accepted,
         start,
         &accepted_step,
-        "default",
+        DEFAULT_ACCEPTED_CASE_ID,
         None,
     )
     .context("recover completed worker receipt before publication")?;
@@ -3932,6 +4176,12 @@ fn apply_accepted_start_effect(
     // Evaluate immutable terminal observables while this process still owns
     // the solver's resource lease. HTTP handlers only adopt the CAS bundle.
     if !control.interrupt_requested.load(Ordering::Acquire) {
+        if accepted.run.specification.parameters.get("live_workspace").is_some() {
+            let receipt = worker_execution_receipt_identity(start, &accepted_step, DEFAULT_ACCEPTED_CASE_ID)?;
+            scalar_history::publish_scalar_history(
+                store, &durable_execution.attempt_output_dir, &accepted_step, &receipt, &durable_execution.outputs,
+            ).context("publish accepted scalar history")?;
+        }
         crate::accepted_field_materialization_worker::prepare_and_publish(
             store, accepted, &accepted_step, &durable_execution,
         )
@@ -4731,11 +4981,152 @@ pub(crate) fn read_explicit_runner_artifact(
 }
 
 #[cfg(test)]
+mod accepted_fdm_precision_tests {
+    use super::accepted_fdm_execution_precision;
+    use fullmag_application::RequestedExecution;
+    use fullmag_ir::{ExecutionPrecision as Precision, FdmPlanIR, FdmPrecisionPolicyIR};
+
+    fn request(device: &str, precision: &str) -> RequestedExecution {
+        RequestedExecution {
+            backend: "fdm".into(),
+            device: device.into(),
+            precision: precision.into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        }
+    }
+
+    fn plan(precision: Precision) -> FdmPlanIR {
+        FdmPlanIR {
+            precision,
+            precision_policy: FdmPrecisionPolicyIR::resolve(precision),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retains_cpu_gpu_double_and_admits_matching_single_grid_cuda_single() {
+        let double = plan(Precision::Double);
+        for device in ["cpu", "gpu"] {
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    Some(&double),
+                    false
+                )
+                .unwrap(),
+                Precision::Double
+            );
+            assert_eq!(
+                accepted_fdm_execution_precision(
+                    &request(device, "double"),
+                    Precision::Double,
+                    None,
+                    false
+                )
+                .unwrap(),
+                Precision::Double
+            );
+        }
+        let single = plan(Precision::Single);
+        assert_eq!(
+            accepted_fdm_execution_precision(
+                &request("gpu", "single"),
+                Precision::Single,
+                Some(&single),
+                false
+            )
+            .unwrap(),
+            Precision::Single
+        );
+    }
+
+    #[test]
+    fn refuses_cpu_multilayer_and_frozen_terminal_single_without_fallback() {
+        let single = plan(Precision::Single);
+        for (device, grid, frozen) in [
+            ("cpu", Some(&single), false),
+            ("gpu", None, false),
+            ("gpu", Some(&single), true),
+            ("auto", Some(&single), false),
+        ] {
+            assert!(accepted_fdm_execution_precision(
+                &request(device, "single"),
+                Precision::Single,
+                grid,
+                frozen
+            )
+            .is_err());
+        }
+        let mut extended = request("gpu", "single");
+        extended.mode = "extended".into();
+        assert!(accepted_fdm_execution_precision(
+            &extended,
+            Precision::Single,
+            Some(&single),
+            false
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_request_ir_plan_and_numeric_policy_mismatches() {
+        let single = plan(Precision::Single);
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Double,
+            Some(&single),
+            false
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&plan(Precision::Double)),
+            false
+        )
+        .is_err());
+        let mut bad_policy = single.clone();
+        bad_policy.precision_policy.reduction = Precision::Single;
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "single"),
+            Precision::Single,
+            Some(&bad_policy),
+            false
+        )
+        .is_err());
+        assert!(accepted_fdm_execution_precision(
+            &request("gpu", "double"),
+            Precision::Double,
+            Some(&single),
+            false
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
 mod closed_loop_run_parameter_tests {
     use super::validate_accepted_inspection_run_parameters;
     use fullmag_application::{ProjectId, ProjectSnapshot, RequestedExecution, RequestedResourceBudget,
         RunId, RunSpecification, StudyId, StudyReference};
     use serde_json::json;
+
+    #[test]
+    fn cuda_trace_passes_fem_worker_binding_but_never_inspection_binding() {
+        let mut specification = startup();
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER] = json!({
+            "schema_version": "accepted_cuda_trace.v1", "max_bytes": 67108864, "max_duration_ms": 60000
+        });
+        super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).unwrap();
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", false, false).is_err());
+        for allow_profile in [false, true] {
+            assert!(super::validate_inspection_run_parameters(&specification, "step", allow_profile).is_err());
+        }
+        specification.parameters[crate::accepted_solver_profile::cuda_trace::PARAMETER]["max_bytes"] = json!(0);
+        assert!(super::validate_accepted_worker_parameters(&specification.parameters, "step", true, true).is_err());
+    }
 
     fn startup() -> RunSpecification {
         let source = "a".repeat(64);

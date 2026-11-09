@@ -489,7 +489,7 @@ pub(crate) fn all_in_gpu_fem_env_requested() -> bool {
     FemSelectionEnvSnapshot::capture().all_in_gpu_requested()
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 pub(crate) fn all_in_gpu_fem_required() -> bool {
     all_in_gpu_fem_env_requested()
 }

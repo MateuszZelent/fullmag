@@ -508,7 +508,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration and optional stage-owned mesh generation, topology fingerprint, and mesh revision identity; missing legacy identity remains unknown and is never synthesized from mesh names or element counts |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
-| `simulation/solver/energies/*` | current and historical energy samples |
+| `simulation/solver/energies/*` | current and historical energy samples; `current` returns 204 without a body when a valid workspace has no qualified current sample, 200 for an available sample (including exact zero), and 404 when no workspace exists |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
 | `data/artifacts` | artifact index entries; entries may expose optional region-owned authoring provenance summaries (`scene_revision`, authored region count, material field count, coupling count, blocked/deferred diagnostic counts) but must not inline heavy artifact payloads |
@@ -523,6 +523,8 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+`LiveStatus.solver_energy_current_available` is a thin availability hint computed by the same qualified-source selector as the current-energy resource. It may change between the status read and the resource request. Clients must accept an empty 204 response as no current sample, retain request-scope and API-instance checks, and hide data from an earlier run or stage. The hint does not authorize a historical fallback during active Docker execution or synthesize a zero-energy sample.
 
 Analytic mesh-region projection is fail-closed. Singular or non-finite affine
 transforms, imported solids without a qualified analytic occupancy evaluator,
@@ -998,6 +1000,45 @@ ID and is resolved through the model resource. Public v9 patches validate a
 finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
 legacy v8 persistence input is migrated privately and is never dual-written
 as `active_monitor_id`.
+
+`visualization/state.planar.field_overlays` is an additive presentation list
+(default `[]` for persisted documents without the property), with at most four
+entries and unique non-empty `id` values. Each entry owns `quantity_id`,
+`component`, `view_scope`, `colormap`, `range`, `raster_opacity`,
+`raster_visible`, `vectors_visible`, and `vector_style`, using the existing
+planar types and validation. `view_scope: {"kind":"object","scope_id":"<object_id>"}`
+selects a canonical scene object for FDM or FEM, intersected with the source
+target. Object ids are validated against the current visualization target
+registry; membership is resolved by the existing object-target machinery.
+An omitted PATCH property preserves the list; a
+supplied list replaces it atomically, including `[]` to clear it. Source,
+default slice/operator, resolution, quality, and camera/interaction remain
+shared by the single planar view. Profiles do not modify the scene, Python,
+ProblemIR, or solver fields.
+
+Default-source planar reads accept either `position_fraction` (existing
+carrier-relative layer/node snapping) or `position_m` (finite SI world
+coordinate on the selected plane's normal axis), never both. `position_m`
+samples the exact physical plane without per-carrier FDM/FEM snapping; the
+other two frame coordinates retain the source's origin. The request is not
+clamped to a carrier's extent: occupancy describes missing intersections.
+Section metadata publishes the exact requested/resolved coordinate and its
+carrier-relative fraction (which may lie outside `[0,1]`). Absolute position
+is part of source/sample identity and is preserved in scalar, vector, mask,
+mesh, probe, profile and PNG request replay. Probe and profile queries also
+preserve fractional position overrides. Authored-monitor reads reject either
+override and retain their authored physical frame. Composition clients align
+samples using physical frames and verify shared plane/operator and resource
+revisions; equal pixel indices or equal fractions across scopes are insufficient.
+
+Planar metadata exposes nullable `observation_frame` using the existing
+`AcceptedObservationFrameRef`. Two quantities prove temporal coherence when
+both references are present and `observation_frame_id` matches. Quantity and
+carrier revisions are local identities and need not match across quantities.
+The reference comes from the exact selected publication; accepted target-only
+Airbox layouts inherit their publication's frame. Historical Airbox artifacts
+and persisted snapshots without this proof publish null. Clients must report
+unknown coherence instead of substituting the current session step.
 
 Default-source target resolution is quantity-domain aware: `magnetic_only`
 quantities such as `m` select `magnetic_domain`, while full-domain quantities
@@ -2247,3 +2288,12 @@ scenę, hash albo przypisanie projektu/runu. Obie odpowiedzi wyraźnie
 sygnalizują projekcję tylko do odczytu; nie deklarują zgodności z dawnym
 stanem authoring ani kwalifikacji naukowej. Dane wynikowe pozostają związane
 z niezmiennymi wejściami przyjętego obliczenia.
+
+### Rewizja optymistyczna poleceń po zakończeniu Solve
+
+`precondition.command_revision` porównuje tę samą rewizję, którą publikują
+`status.resources.commands_revision` i zasób `simulation/commands`. Dla trwałego
+journalu jest to jego monotoniczna rewizja, także po zmianach lifecycle; liczba
+wpisów ograniczonej historii nie zastępuje tej rewizji. Legacy bez trwałego
+journalu zachowuje dotychczasowy licznik. Niezgodność odmawia przed przyjęciem
+polecenia i nie uruchamia Solve ani materializacji.

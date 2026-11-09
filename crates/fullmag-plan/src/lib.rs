@@ -38,6 +38,7 @@ pub mod preparation;
 pub mod quantities;
 mod region_conflict;
 mod region_textures;
+pub use region_textures::study_magnetization_overlay_mask;
 mod regional_field_drive;
 mod sampling;
 mod selection;
@@ -118,6 +119,7 @@ pub use selection::{
     ResolvedFrozenSpinsReference, SelectionDofMembership,
 };
 pub use study_catalog::{
+    authored_initial_state_reference, validate_authored_initial_state,
     capture_study_input_references, lower_study_plan_with_catalog, CapturedStudyInputIdentity,
     CapturedStudyInputReferences, StudyCatalogError, StudyProblemCatalog, StudyProblemCatalogEntry,
     CAPTURED_STUDY_INPUT_IDENTITY_SCHEMA_V1, STUDY_PROBLEM_CATALOG_SCHEMA,

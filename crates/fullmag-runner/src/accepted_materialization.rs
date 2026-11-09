@@ -412,9 +412,12 @@ pub(crate) fn evaluate_lane_observables(
                 backend
                     .upload_magnetization(input.values)
                     .map_err(|error| error.to_string())?;
-                let stats = backend
+                let mut stats = backend
                     .snapshot_step_stats(exact_plan.grid.cells)
                     .map_err(|error| error.to_string())?;
+                crate::fdm::gpu::cuda::execute::apply_regional_drive_energy(
+                    &exact_plan, &mut stats, input.values,
+                );
                 let snapshots = selected
                     .iter()
                     .map(|quantity| {

@@ -110,7 +110,7 @@ export function WorkspaceShellClient() {
     homeView.close();
   }, [sessionScopeKey, startOwnsPage]);
 
-  if (savedPlayback) return <SavedResultsWorkspaceShell />;
+  if (savedPlayback && !savedPlayback.studyResult) return <SavedResultsWorkspaceShell />;
 
   if (sessionState !== "ready" && project.state === "ready") {
     return <ProjectWorkspaceShell sessionState={sessionState} onRetry={onRetry} />;

@@ -502,6 +502,23 @@ Multilayer FDM with region-owned material/coupling is out of scope for v1 and
 must be capability-gated. It cannot silently fall through to a partially
 implemented path.
 
+#### CPU observation workspace lifetime
+
+Repeated accepted-state field capture must reuse an observation FFT workspace
+for the unchanged grid, cell dimensions and demagnetizing boundary policy.
+The observation workspace is separate from the integration workspace so its
+FFT counters do not become solver counters. Reuse concerns scratch buffers,
+FFT plans and Newell spectra; each capture still evaluates the current accepted
+magnetization and local $M_s$ at the accepted time. It must preserve the
+full-domain stray field in inactive cells and the solver's active-cell mask.
+The energy, exchange connection operator, LLG steps, output cadence, thermal
+counter and requested execution policy remain the same. Compare fresh/reused
+fields and densities for successive states, including heterogeneous $M_s$ and
+inactive cells; verify that one workspace lifecycle serves both captures.
+Runtime timing is a separate gate. A cancelled timing baseline is not a
+completed physics trajectory, and a development build is not a release
+throughput qualification.
+
 ### 3.2 FEM
 
 FEM realizes material fields as coefficients over elements, nodes, or
@@ -872,16 +889,25 @@ average is the exact P1/DG0 moment-weighted mean:
 
 Here `E` is the set of active magnetic elements, `V_e [m^3]` is the element
 volume, and `m` is the dimensionless P1 reduced magnetization. The per-object
-reduction (`fullmag_fem_backend_average_m_for_nodes_f64`) uses the same
-formula. Its `E_O` contains the active elements whose four vertices all belong
-to the object node set `N_O`. It does not use a lumped nodal `Ms` weight, which
+reduction (`fullmag_fem_backend_average_m_for_elements_f64`) uses the same
+formula. Its `E_O` contains exactly the active elements selected by the
+object's resolved element markers or element ranges. Shared interface nodes
+do not transfer element ownership. It does not use a lumped nodal `Ms` weight, which
 is undefined for DG0. For two equal-volume tetrahedra with
 `Ms = 400 kA/m` and `m = +x`, and `Ms = 800 kA/m` and `m = -x`, the object that
 contains both has `<m_x> = (400 - 800)/1200 = -1/3`. Each one-tetrahedron object
-has `<m_x> = +1` or `-1`. Limitation: when objects share interface nodes, a
-foreign tetrahedron whose four vertices all lie on that interface also enters
-`E_O`. An element-indexed per-object reduction ABI would remove this case and is
-deferred. Nodal and scalar `Ms` keep the existing lumped-mass weighting.
+has `<m_x> = +1` or `-1`. A regression must also exclude a foreign tetrahedron
+whose four vertices are shared with the selected object. The legacy node-set
+ABI retains its induced-node-set semantics; the runner must not use it for
+DG0 per-object observables. Duplicate element indices have set semantics,
+out-of-range indices are rejected, and inactive elements contribute nothing.
+Nodal and scalar `Ms` keep the existing lumped-mass weighting. This change
+requires native/runner contract tests and a managed-runtime check before it
+can be considered qualified; source inspection alone is not runtime evidence.
+The native plan importer preserves the requested consistent-mass policy even
+in a dependency-free ABI build, so the initial-state average contract observes
+the same material intent. This does not provide MFEM operators or time stepping:
+those capabilities remain unavailable without the MFEM stack.
 
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
@@ -1174,6 +1200,86 @@ FDM materializuje maski i pola na komórkach. FEM materializuje conformal domain
 markers albo jawnie raportowaną projekcję. Region mesh-only pozostaje polem
 rozmiaru i nie tworzy niezależnych stopni swobody magnetyzacji.
 
+Canonical FEM domain and boundary labels remain u32. MFEM receives separate,
+import-owned compact positive attributes with forward and reverse maps
+([ADR 0079](../adr/0079-fem-compact-canonical-marker-maps.md)). Storage for each
+map scales with distinct marker count, not the largest label. Domain zero
+retains its physical air meaning and cannot alias magnetic material one;
+explicit boundary zero and one remain distinct in the representation.
+Only emitted exterior/periodic-seam facets enter the boundary map. Missing
+canonical marker buffers retain default one in the main builder. Accepted
+transport without domain markers retains its legacy ElementNo+1 attributes. Public selectors are translated
+once before assembly; missing selectors fail explicitly, subject to the
+existing BC legality. Legacy per-element transport coefficients retain their
+per-element volume attributes; accepted transport and boundary conditions use
+their own appropriate maps. This representation preserves canonical buffers,
+continuous magnetization, finite-element spaces, SI coefficients and physical
+fluxes. It does not enable a previously unsupported CPU/GPU interaction.
+The internal operator identity records the mapping policy; canonical public
+mesh/marker identities retain their established meaning. Versioned native ABI
+extension carries a full u32 Poisson selector without narrowing legacy fields.
+Python MeshData validates integer range before normalization to u32, including
+legacy nonnegative int32 buffers. Typed lead selectors and accepted-charge
+artifact readers retain canonical u32. NPZ readers verify original member
+bytes before normalization; canonical topology fingerprints encode values,
+not NumPy signedness. Working incidence arrays with -1 sentinels use int64.
+Gmsh/COMSOL export separate compact positive tags and reverse them through
+the existing hash-bound sidecar; group display names cannot override that
+explicit identity. Negative markers are rejected, not reinterpreted.
+
+#### Wyrocznia zbieżności regionalnej FDM/FEM
+
+Przed pomiarem przypinamy wspólny problem wymiany na pręcie długości 64 nm
+oraz przekroju 4 nm × 4 nm. Dwie konformalne połowy mają A=(13,26) pJ/m,
+Ms=(0,8;1,6) MA/m, alpha=0,5 i gamma=2,211e5 m/(A s). Stosunek A/Ms jest
+stały. Demag, precesja i inne oddziaływania są wyłączone. Dla k=2 pi/L,
+theta(x,t)=a(t) cos(kx), m=(cos theta,sin theta,0) dokładne rozwiązanie
+czystego tłumienia ma a(t)=0,2 exp(-D k² t), gdzie
+D=[alpha gamma/(1+alpha²)] [2 A/(mu0 Ms)]. Pochodna theta znika na końcach
+oraz na interfejsie, więc spełnione są naturalny warunek brzegowy i ciągłość
+strumienia wymiany pomimo skoku A. Energia wynosi
+E_ex=w² L (A1+A2) a² k²/4. Pole obejmuje zarówno składową styczną theta_xx,
+jak i radialną -theta_x² m; porównanie nie pomija składowej radialnej.
+
+Recepta naukowa w wybranym backendzie DEV ładuje opublikowane biblioteki,
+bez kompilowania: `scripts/benchmarks/regional_fdm_fem_convergence.py`.
+FDM CUDA/double używa centrów komórek, harmonicznych A_FACES i lokalnego Ms.
+FEM CPU/double używa P1, sześciu tetraedrów na segment, konformalne DG0 A/Ms
+oraz consistent mass. Nie promuje to DG0 na GPU. W osi x obowiązuje Neumann,
+a y/z są periodyczne w obu realizacjach. Klasy węzłów FEM na przekroju
+zachowują dokładną podprzestrzeń jednowymiarową. Bez tych więzów interpolacja
+na jednej warstwie tetraedrów ma artefakty silnego laplasjanu w węzłach
+brzegowych; zgodność słabej macierzy K/M nie gwarantuje wtedy przyjętej
+silnej normy L2 pola. Pierwszy taki pomiar pozostaje negatywnym dowodem,
+nie kwalifikacją. Zmiana warunku poprzecznego nie zmienia rozwiązania
+analitycznego niezależnego od y/z ani niżej podanych progów.
+Obie siatki mają kolejno
+8/16/32 segmenty, kanoniczne regiony 257 i UINT32_MAX, RK4, dt=1e-14 s,
+100 kroków. Każdy przebieg zapisuje nową parę skrypt/Zarr na WSL, surowe pola,
+energię w każdym kroku oraz hashe bibliotek i nagłówków.
+
+Bramki ustalone przed pomiarem: względny błąd energii maleje co najmniej 2×
+na zagęszczenie i na najdrobniejszej siatce wynosi <=0,03; ważony objętością
+błąd L2 pola maleje >=1,5× i wynosi <=0,05. Błąd amplitudy po 100 krokach
+maleje >=2× i wynosi <=0,01. Względna różnica amplitud FDM/FEM maleje >=2×
+i wynosi <=0,005. Defekt normy <=1e-10, względny przyrost energii między
+krokami <=1e-10. To kryteria kwalifikacji, a nie deklaracja uzyskanego wyniku;
+zmierzone wartości i ewentualne odmowy należą do raportu audytu.
+
+Uzupełniający test terminalnej relaksacji używa ośmiu komórek 2 nm,
+dwóch ostrych regionów Ms=400/800 kA/m i alpha=0,1/0,4, A=13 pJ/m, bez demag,
+Bz=0,05 T oraz początkowego m=+x. Dokładne minimum to m=+z oraz
+E=-Bz sum(Ms_i V_i). Przed pomiarem ustala się: zakończenie przez torque,
+nie limit 2500 kroków; próg 1e-3 A/m dla double i 100 A/m dla single;
+maksymalny błąd składowej m odpowiednio 3e-8 i 3e-3, względny błąd energii
+1e-10 i 1e-5, defekt normy 1e-10 i 1e-5 oraz względny wzrost energii między
+krokami najwyżej 1e-12 i 1e-6. CPU/double używa PG-BB i regionalnej alpha=0,1/0,4. Publiczne CUDA/double
+i CUDA/single używają obsługiwanego LLG-overdamped: jawna alpha=1 w obu
+regionach, RK4 i dt=5e-12 s. Jest to osobny test terminalnego minimum,
+nie parytet trajektorii różnych algorytmów. Publiczne PG-BB CUDA dla tej
+pojedynczej siatki pozostaje odmową capability przed Run. Każde wykonanie
+zachowuje intent, receipt i brak fallbacku.
+
 Współczynniki skalarne DMI w starszym `MaterialIR` są odrębną drogą od
 regionalnych pól: `interfacial_dmi` i `bulk_dmi` muszą trafić do planu FDM
 single-grid. Jawny term energii ma pierwszeństwo (również przy D=0), bez
@@ -1193,6 +1299,56 @@ Python/UI round-trip zachowuje requested intent: właściciela, nazwę, shape,
 markery, projection/conformal mode oraz capability result. Validation errors
 blokują niepoprawne zakresy i `Ms<=0`; unsupported combinations blokują planner.
 Nie wolno porzucać regionu lub coupling po cichu.
+
+Eksport Python i SceneDocument zachowuje także `shape.center` dla box/sphere,
+`shape.center` i `shape.axis` dla cylinder oraz pełne wyrażenie CSG. Zastąpienie
+CSG pudełkiem lub wyzerowanie przesunięcia zmienia wsparcie parametrów, a więc
+problem fizyczny. Nieznany typ kształtu musi zostać odrzucony. Regresje obu
+ścieżek eksportu porównują kanoniczny shape IR, a publiczny przypadek dwóch
+połówek z Ms 400/800 kA/m sprawdza niezależnie moment globalny `mx=-1/3`.
+
+Ograniczony harness `scripts/benchmarks/fdm_regions_interaction_abi_checks.py`
+sprawdza w natywnym CUDA lokalne wagi Ms w tożsamości
+`dE/dε = -mu0 * sum_i Ms_i V_i H_i · dm_i/dε` oraz niezależne różnice energii
+Zeeman/uniaxial/cubic/MEL. Dla stałego pola +z i początkowego m=+x wyrocznia LLG
+ma `ω_i=gamma H/(1+alpha_i²)`, `m_z=tanh(alpha_i ω_i t)` oraz
+`m_x+i m_y=sech(alpha_i ω_i t) exp(i ω_i t)`. Czas pochodzi z zaakceptowanych
+statystyk solvera. Sprawdzenie pięciu integratorów nie włącza adaptacji ani
+nie kwalifikuje długich trajektorii fp32. Heterogeniczne A trafia do ABI v2
+jako współczynniki FACES; raw ABI bez widm Newella ma jawnie odmówić demagu.
+Dokładne tolerancje, biblioteka i wyniki znajdują się w audycie kwalifikacji
+z 7 listopada 2026; ten punkt nie zastępuje publicznych testów CPU/CUDA.
+
+Accepted worker musi zachować precyzję dopuszczonego planu single-grid CUDA:
+requested `single` oznacza storage/compute/FFT FP32 i redukcje FP64 zgodnie
+z `FdmPrecisionPolicyIR`, także dla zakwalifikowanych pól regionalnych.
+Kanoniczny readback pól i accepted-state w f64 jest formatem transferu;
+nie zmienia precyzji integratora. Request, ProblemIR i plan muszą wskazywać
+tę samą precyzję i politykę. CPU/single, multilayer/single oraz frozen terminal
+context/single pozostają niedopuszczone; pozostałe bramki planera/native
+nie są przez worker omijane. Samo rozszerzenie tej walidacji nie jest dowodem
+wykonania: wymagane są osobne testy publicznego Run, pól, publikacji i recovery.
+
+Imported Run zachowuje osobną pełną politykę adaptive_timestep każdego
+przechwyconego etapu, w tym tolerance_mode, atol/rtol, dt_initial/min/max,
+safety, growth/shrink oraz limity rotacji i normy. Zmiana czasu trwania
+pipeline nie może zastępować jej ustawieniami bazowego IR. Snapshot używa
+kanonicznych wartości liczbowych; jawne null usuwa politykę. Legacy capture
+z dodatnim fixed_timestep pozostaje zgodny. Adaptacyjny Run bez snapshotu
+wymaga ponownego eksportu skryptu; dziedziczenie nie odtworzy brakujących
+nastaw. Polityka nieprawidłowa,
+nieznane pola albo konflikt z fixed_timestep są odmową przed wykonaniem.
+Regresja dwóch RK45 o różnych tolerancjach i krokach sprawdza Python→Scene
+oraz materializację IR po zmianie czasu drugiego etapu.
+
+Natywny harness `fdm_regions_pbc_abi_checks.py` rozróżnia jedną krawędź otwartą
+i dwie różne krawędzie okresowe przy dwóch komórkach na wybranej osi. Wyrocznia
+ma `E_ex = L A V |m1-m0|²/h²` i
+`H_ex,i = 2 L A (m_j-m_i)/(mu0 Ms_i h²)`, gdzie `L=1` lub `2`.
+Pozostałe osie długości jeden nie dodają energii ani pola. Test obejmuje trzy
+orientacje osi, okresowość osi singleton oraz rzadkie etykiety u32 do `u32::MAX`;
+oddzielny przypadek sprawdza lokalne A przez FACES. Nie otwiera to publicznej
+bramki GPU/fp32/PBC ani nie kwalifikuje większych siatek okresowych.
 
 (material-regions-implementation-mapping)=
 ### 4.7 Implementation mapping
@@ -1244,6 +1400,35 @@ They are part of the physics contract, not implementation preferences.
    field.
 
 ### 5.2 Cross-backend checks
+
+Canonical Python export must preserve the IEEE-754 values of material
+coefficients, regional parameter-field payloads, metric transition widths and
+interface-coupling strengths. Use round-trip numeric literals rather than a
+display formatter with a fixed significant-digit limit. This is preservation
+of the existing SI inputs; it does not change the material law, default
+transition policy or execution precision. Verify both Problem-to-Python and
+SceneDocument-to-Python paths for constant, linear and radial material fields.
+
+The same round-trip must retain Brown thermal-noise intent: temperature in
+kelvin and the optional positive u64 seed, including an unspecified entropy
+seed. SceneDocument carries it as the optional study-level `thermal_noise`
+configuration; its seed uses a decimal string to preserve all u64 bits through
+browser JSON, while ProblemIR and the Python DSL retain an integer seed.
+Absence means no authored noise in a complete scene; a missing
+override preserves an existing script, while explicit null removes its noise.
+Do not silently lower a stochastic regional model to deterministic dynamics.
+Preservation does not enable unsupported thermal/device combinations: the
+existing planner must still reject heterogeneous CUDA thermal noise before
+native execution. Check both seeded and entropy configurations through
+Problem and Scene exports, then check that public regional refusal.
+
+Sharp-interface and grain-assignment fixtures must explicitly author
+`material_transition(kind="sharp")` before local overrides. The public
+mesh-relative default remains intentional. CPU/CUDA agreement for that
+smoothed default does not qualify a discontinuous-coefficient oracle.
+For a sharp grain fixture, independently verify the winning cell count and
+the realized local Ms/A/alpha against the authored seeded values, in addition
+to comparing the two solver lanes.
 
 1. Smooth `Ms(x)` and `Aex(x)` field authoring lowers to FDM cell fields and FEM
    coefficient fields with matching provenance.
@@ -1380,6 +1565,33 @@ must include:
 | FEM transport Ms | `crates/fullmag-plan/src/fem.rs` | `fem_spin_transport_ms_realization_error` | Planner rejection of DG0 or heterogeneous nodal `Ms` with the scalar-`M_s` transport descriptor. |
 | FEM transport Ms | `crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs` | `validate_transport_ms_realization` | Runner preflight of the same rule before any native transport call. |
 | FEM transport Ms | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `validate_transport_stage_ms_realization` | Native rejection before the reciprocal stage-transport torque is installed. |
-| FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_nodes_f64` | Per-object average `m`; with DG0 `Ms` it uses the element moment-weighted reduction. |
-| FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_node_set` | Exact P1/DG0 moment reduction over the elements whose vertices all lie in a node set. |
+| FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_elements_f64` | DG0 per-object average `m` over explicit owned elements. |
+| FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
+| FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
+| FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |
+| FEM shared-node regression fixture | `backends/fem/tests/element_dg0_workflow_contract.cpp` | `make_dg0_shared_node_plan` | Analytical ABI regression with unequal volumes: selected elements give 0.5; the induced node set gives 9/14. The initial-state average contract runs separately from MFEM dynamics in CI. |
 | FEM Ms regressions | `crates/fullmag-plan/src/tests.rs` | `fem_spin_transport_ms_realization_admits_only_the_scalar_torque_coefficient` | Planner rejection table for transport with spatial `Ms`. |
+| CPU observation FFT | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `observable_demag_field_with_workspace` | Full-domain stray field with reusable observation scratch and spectra. |
+| CPU observation FFT | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `observable_effective_field_with_workspace` | Current accepted effective field without rebuilding observation FFT plans. |
+| CPU accepted capture | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `capture_full_active_cpu_fields` | Separate observation workspace lifetime and integrator telemetry. |
+| CPU observation regression | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `cpu_snapshot_reuses_observation_fft_workspace_across_states` | Fresh/reused field and density equality, current states, inactive cells and local Ms. |
+| Sharp parity fixture | `scripts/benchmarks/fdm_regions_parity_case.py` | `_half` | Explicit sharp intent instead of the smooth authoring default. |
+| Sharp parity authoring regression | `packages/fullmag-py/tests/test_regional_parity_fixture.py` | `test_heterogeneous_parity_cases_author_sharp_coefficients` | Public fixture to ProblemIR verification for both material-pair cases and grains. |
+| Material numeric export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_material_parameter_field_expr` | Exact f64 parameter payloads through canonical Python. |
+| Material numeric regression | `packages/fullmag-py/tests/test_regional_material_precision.py` | `test_material_fields_and_interface_parameters_preserve_f64_values` | Direct and Scene exports preserve material values, metric widths and exchange strengths. |
+| Base material export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_geometry_and_materials` | Exact material coefficients in direct export. |
+| Scene material export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_geometries_from_override` | Exact material coefficients from scene overrides. |
+| Transition width export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_material_transition_kwargs` | Exact metric transition width. |
+| Coupling strength export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_couplings` | Exact exchange scale and coupling energy strengths. |
+
+Całe liniowe Study z co najmniej dwoma aktywnymi Run/Relax korzysta z producenta
+v4 wiążącego źródło i profile wykonania. Kolejny etap wymaga artefaktu
+`final_state` poprzedniego etapu jako `initial_state`. Jest to przekazanie
+magnetyzacji, bez zachowania historii integratora. Zgodność topologii i toru
+wykonania jest obowiązkowa; nieobsługiwany transfer lub akcja powoduje odmowę
+przed akceptacją Run. Jawny wybór pojedynczego etapu zachowuje swój zakres.
+
+Ponowna walidacja przypiętego wejścia State zachowuje jego typed binding;
+tożsamość i digest pochodzą z opublikowanego katalogu, a kodek i CAS są ponownie
+sprawdzane względem niezmiennego manifestu producenta. Metadane nie mogą
+powodować resetu stanu ani pozwalać na podmianę payloadu.

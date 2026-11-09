@@ -389,6 +389,15 @@ pub struct SceneCurrentModulesState {
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
 }
 
+fn deserialize_scene_thermal_noise_presence<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<crate::ScriptBuilderThermalNoiseState>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<crate::ScriptBuilderThermalNoiseState>::deserialize(deserializer).map(Some)
+}
+
 fn deserialize_scene_pbc_presence<'de, D>(
     deserializer: D,
 ) -> Result<Option<Option<fullmag_ir::FdmPeriodicityIR>>, D::Error>
@@ -862,6 +871,8 @@ pub struct SceneStudyState {
     pub pbc: Option<Option<fullmag_ir::FdmPeriodicityIR>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_demag_solver_policy: Option<fullmag_ir::FemLinearSolverPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_demag_accuracy_contract: Option<fullmag_ir::FemDemagAccuracyContractIR>,
     #[serde(default = "default_true")]
     pub exchange_enabled: bool,
     #[serde(default = "default_true")]
@@ -872,6 +883,10 @@ pub struct SceneStudyState {
     pub fdm: Option<SceneFdmDiscretizationState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    // Missing preserves script intent; null explicitly clears authored noise.
+    #[serde(default, skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_scene_thermal_noise_presence")]
+    pub thermal_noise: Option<Option<crate::ScriptBuilderThermalNoiseState>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -882,6 +897,8 @@ pub struct SceneStudyState {
     pub universe_mesh: Option<ScriptBuilderUniverseState>,
     #[serde(default = "default_mesh")]
     pub shared_domain_mesh: ScriptBuilderMeshState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_domain_mesh: Option<SceneFemDomainMeshReference>,
     #[serde(default = "default_mesh")]
     pub mesh_defaults: ScriptBuilderMeshState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -904,6 +921,15 @@ pub struct SceneStudyState {
     /// with the scene for initial viewport defaults and is not solver input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visualization_hint: Option<Value>,
+}
+
+/// An authored native archive relative to the scene's asset root.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SceneFemDomainMeshReference {
+    pub source: String,
+    pub sha256: String,
+    pub build_requested: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]

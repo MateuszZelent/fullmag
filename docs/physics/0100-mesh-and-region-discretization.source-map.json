@@ -186,6 +186,13 @@
       "evidence_status": "implemented"
     },
     {
+      "id": "canonical-domain-mesh",
+      "path": "packages/fullmag-py/src/fullmag/runtime/scene_document_ir.py",
+      "symbol": "_capture_scene_document",
+      "responsibility": "Verifies and materializes the pinned native mesh from the script asset root before lowering the Scene.",
+      "evidence_status": "implemented"
+    },
+    {
       "id": "comsol-export",
       "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
       "symbol": "export_comsol_mesh",
@@ -265,6 +272,28 @@
         "backend_support": "FEM CPU/GPU",
         "problem_ir": "geometry_assets.fem_domain_mesh_asset",
         "source": "packages/fullmag-py/src/fullmag/meshing/persistence.py::load_mesh_artifact"
+      },
+      {
+        "python": "study.mesh.load.expected_sha256",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "When provided, 64 lowercase hexadecimal characters must match the full archive. A canonical reference must resolve beneath the script directory.",
+        "meaning": "Opt into canonical transport of the exact native archive.",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "study.fem_domain_mesh.sha256",
+        "source": "packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.load"
+      },
+      {
+        "python": "study.mesh.load.build_requested",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "When provided, the flag participates in the mesh authoring fingerprint check.",
+        "meaning": "Restore the authored build flag when replaying a pinned Scene reference.",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "study.fem_domain_mesh.build_requested",
+        "source": "packages/fullmag-py/src/fullmag/world.py::StudyMeshHandle.load"
       },
       {
         "python": "study.mesh.save_or_load.path",

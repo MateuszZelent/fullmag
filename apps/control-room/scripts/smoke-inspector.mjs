@@ -2156,7 +2156,9 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
 
   try {
     await page.waitForFunction(
-      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes("Magnetic texture saved."),
+      () => document.querySelector(".fm-inspector-panel")?.textContent?.includes(
+        "Magnetic texture applied. Initial magnetization is pending.",
+      ),
       undefined,
       { timeout: 5_000 },
     );
@@ -2207,8 +2209,15 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   assert(evidence.renderCount <= 3,
     `Magnetic Texture render count exceeded budget: ${evidence.renderCount}.`);
   const mutationRequests = fixture.requests.slice(requestStart);
+  assert(
+    fixture.manifest.source_scene_revision === fixtureSnapshot.manifest.source_scene_revision &&
+      fixture.manifest.validated_for_scene_revision === fixture.revision,
+    "Magnetic texture Apply must retain the mesh build and advance its scene validation.",
+  );
   assert(mutationRequests.length <= 12,
     `Magnetic texture request budget exceeded: ${JSON.stringify(mutationRequests)}.`);
+  assert(!mutationRequests.some((entry) => entry.includes("/data/fields/m/samples/vector")),
+    "Viewport requested magnetization vectors while the applied initial state was pending.");
   const transactionMutationCount = mutationRequests.filter(
     (entry) => entry === "POST /v2/sessions/current/model/transactions",
   ).length;
@@ -2220,6 +2229,7 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
     `Magnetic texture request budget did not contain exactly one model transaction and sync: ${JSON.stringify(mutationRequests)}.`,
   );
   fixture.texturePatchDelayMs = 0;
+  fixture.textureInitialStatePending = false;
   fixture.manifest = fixtureSnapshot.manifest;
   fixture.revision = fixtureSnapshot.revision;
   fixture.scene = fixtureSnapshot.scene;
@@ -2252,6 +2262,20 @@ async function qualifyMagneticTextureMutationStability(page, inspector, fixture)
   notFoundResponses.length = 0;
   notFoundResponseEvidence.length = 0;
   notFoundResponseEvidenceTasks.length = 0;
+}
+
+async function expandPhysicsInteractionChecklist(inspector) {
+  const interactionSection = inspector.getByRole("button", {
+    name: "Physics Interaction",
+    exact: true,
+  });
+  assert(
+    await interactionSection.count() === 1,
+    "Physics Interaction checklist section is missing from the interaction inspector.",
+  );
+  if ((await interactionSection.getAttribute("aria-expanded")) !== "true") {
+    await interactionSection.click();
+  }
 }
 
 async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
@@ -2295,6 +2319,8 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
   await globalNodeMetadata
     .locator(`dd[title="${globalRotatedNodeId}"]`)
     .waitFor({ state: "attached", timeout: 60_000 });
+
+  await expandPhysicsInteractionChecklist(inspector);
 
   const rotatedToggle = inspector.getByRole("checkbox", {
     name: /^Rotated interfacial DMI(?:\s|$)/,
@@ -2349,6 +2375,7 @@ async function qualifyPhysicsScopeExclusivity(page, inspector, fixture) {
     owner: "physics-interaction",
     label: "Object interfacial DMI recovery",
   });
+  await expandPhysicsInteractionChecklist(inspector);
   const interfacialToggle = inspector.getByRole("checkbox", {
     name: /^Interfacial DMI(?:\s|$)/,
   });
@@ -4258,6 +4285,7 @@ function createInspectorFixture() {
     scene,
     topology,
     texturePatchDelayMs: 0,
+    textureInitialStatePending: false,
     geometryPatchDelayMs: 0,
     geometryPatchPending: false,
     geometryMutationBodies: [],
@@ -4655,7 +4683,17 @@ async function installInspectorFixtureApi(page, fixture) {
           transaction_kind: body.kind,
         });
       }
-      if (body.kind !== "patch_magnetization" || body.object_id !== "film") {
+      const target = body.target;
+      const operationId = body.operation_id;
+      const headers = request.headers();
+      if (
+        body.kind !== "apply_magnetization" ||
+        target?.kind !== "object" || target.object_id !== "film" ||
+        body.base_revision !== fixture.revision ||
+        !/^[a-f0-9]{32}$/.test(operationId) ||
+        headers["idempotency-key"] !== operationId ||
+        !headers["x-fullmag-session-scope"]
+      ) {
         fixture.unknownMutationPaths.push(request.method() + " " + path + url.search);
         return fulfillJson(
           route,
@@ -4667,20 +4705,30 @@ async function installInspectorFixtureApi(page, fixture) {
       if (fixture.texturePatchDelayMs > 0) {
         await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.texturePatchDelayMs));
       }
-      const asset = body.asset ?? null;
+      const asset = target.asset;
+      const object = fixture.scene.objects.find((candidate) => candidate.id === target.object_id);
+      if (!object) return fulfillJson(route, { error: { code: "inspector_fixture_object_missing" } }, 404);
       fixture.revision += 1;
       fixture.scene.revision = fixture.revision;
-      fixture.manifest.source_scene_revision = fixture.revision;
-      fixture.visualization.revision = fixture.revision;
-      fixture.scene.magnetization_assets = asset ? [asset] : [];
-      fixture.scene.objects[0] = {
-        ...fixture.scene.objects[0],
-        magnetization_ref: body.magnetization_ref ?? null,
-      };
+      fixture.manifest.validated_for_scene_revision = fixture.revision;
+      fixture.textureInitialStatePending = true;
+      if (asset) {
+        fixture.scene.magnetization_assets = [
+          ...(fixture.scene.magnetization_assets ?? []).filter((existing) => existing.id !== asset.id),
+          asset,
+        ];
+      }
+      object.magnetization_ref = asset?.id ?? null;
       return fulfillJson(route, {
         committed_scene: fixture.scene,
         scene_revision: fixture.revision,
         transaction_kind: body.kind,
+        magnetization_apply: {
+          operation_id: operationId,
+          scene_revision: fixture.revision,
+          scopes: [{ object_id: target.object_id }],
+          status: "initial_state_pending",
+        },
       });
     }
     if (path === "/v2/sessions/current/model/syncs" && request.method() === "POST") {
@@ -5017,6 +5065,17 @@ async function installInspectorFixtureApi(page, fixture) {
       });
     }
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
+    if (path === "/v2/sessions/current/simulation/stages/results") {
+      return fulfillJson(route, {
+        revision: "study-results:" + fixture.revision,
+        project_id: "inspector-routing-smoke",
+        scene_revision: fixture.revision,
+        authored_input_sha256: null,
+        authored_stage_ids: [],
+        results: [],
+        next_cursor: null,
+      });
+    }
     if (path === "/v2/sessions/current/simulation/stages/execution") {
       const modal = fixture.analysisProduct === "modal_eigen";
       const stageId = modal ? "eigen-dispersion" : "frequency-response";
@@ -5224,6 +5283,7 @@ async function installInspectorFixtureApi(page, fixture) {
     }
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path, fixture));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
+      if (fixture.textureInitialStatePending) return fulfillEmpty(route, 204);
       const fieldVector = inspectorFieldVector(path, fixture);
       return fulfillBinary(route, fieldVector.buffer, 200, fieldVector.headers);
     }
@@ -5473,6 +5533,9 @@ function inspectorDomainMeta(fixture) {
 }
 
 function inspectorFieldCatalog(fixture) {
+  if (fixture.textureInitialStatePending) {
+    return { domain_generation_id: 1, quantities: [], revision: fixture.revision };
+  }
   return {
     domain_generation_id: 1,
     quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({

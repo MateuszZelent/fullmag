@@ -15,6 +15,8 @@
 !Dockerfile.backend
 !Dockerfile.backend.dockerignore
 !backend_dev.py
+!docker/all-in-one/backend_native_contracts.py
+!backend_native_contracts.py
 !backend_source.py
 !backend_candidate_retirement.py
 !worker_cgroup_gate.py

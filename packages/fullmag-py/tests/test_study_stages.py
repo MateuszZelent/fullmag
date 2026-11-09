@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import copy
 import inspect
 import textwrap
 import unittest
@@ -8,7 +10,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import fullmag as fm
-from fullmag.runtime.script_builder import rewrite_loaded_problem_script
+from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.scene_document_ir import scene_document_to_execution_config
+from fullmag.runtime.script_builder import (
+    export_builder_draft,
+    render_scene_document_as_script,
+    rewrite_loaded_problem_script,
+)
 
 
 def _load(script_body: str):
@@ -31,6 +39,311 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+
+    def test_captured_stages_keep_their_own_region_textures(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9))
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+core.texture = fm.texture.uniform(0, 0, 1)
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+"""
+        )
+
+        directions = []
+        for stage in loaded.stages:
+            region = stage.problem.to_ir(include_geometry_assets=False)["object_regions"][0]
+            texture = region["texture_override"]["initial_magnetization"]
+            directions.append(texture["preset_params"]["direction"])
+        self.assertEqual(directions, [[0, 1, 0], [0, 0, 1]])
+
+    def test_sampling_helper_keeps_explicit_run_snapshots_and_reset_order(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(5e-14, quantities=["mx", "my"], stage_id="table")
+body.m = fm.texture.uniform(0, 1, 0)
+study.stages.add_run(stage_id="after", until=1e-12)
+"""
+        )
+
+        before, configuration, after = loaded.stages
+        self.assertEqual(
+            [before.stage_id, configuration.stage_id, after.stage_id],
+            ["before", "table", "after"],
+        )
+        self.assertIsNone(before.problem.study.to_ir()["sampling"].get("table_autosave"))
+        self.assertEqual(
+            after.problem.study.to_ir()["sampling"]["table_autosave"]["sample_period_s"],
+            5e-14,
+        )
+        self.assertEqual(configuration.action["kind"], "table_autosave")
+        self.assertFalse(configuration.magnetization_assignments)
+        assignment, = after.magnetization_assignments
+        self.assertEqual(assignment.initializer.to_ir()["preset_params"]["direction"], [0, 1, 0])
+        before_ir = before.problem.to_ir(include_geometry_assets=False)
+        after_ir = after.problem.to_ir(include_geometry_assets=False)
+        for problem, direction in ((before_ir, [1, 0, 0]), (after_ir, [0, 1, 0])):
+            texture = problem["magnets"][0]["initial_magnetization"]
+            self.assertEqual(texture["preset_params"]["direction"], direction)
+
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        config = scene_document_to_execution_config(
+            scene,
+            requested_backend="fem",
+            requested_device="cpu",
+            requested_precision="double",
+            requested_mode="strict",
+        )
+        self.assertFalse(config.get("stages"))
+        base = config["ir"]
+        self.assertIsNone(base["study"]["sampling"].get("table_autosave"))
+        self.assertEqual(
+            base["magnets"][0]["initial_magnetization"]["preset_params"]["direction"],
+            [1, 0, 0],
+        )
+        nodes = config["study_pipeline"]["nodes"]
+        self.assertEqual([node["id"] for node in nodes], ["before", "table", "after"])
+        self.assertEqual(nodes[1]["payload"]["table_autosave"]["sample_period_s"], 5e-14)
+        self.assertEqual(
+            nodes[2]["payload"]["magnetization_assignments"],
+            loaded.study_pipeline_document()["nodes"][2]["payload"]["magnetization_assignments"],
+        )
+
+    def test_script_export_keeps_an_explicit_repeat_of_the_same_texture(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+study.stages.add_relax(stage_id="third", max_steps=2, dt=1e-13)
+"""
+        )
+        pipeline = loaded.study_pipeline_document()
+        self.assertEqual(pipeline["version"], "study_pipeline.v2")
+        first_node, second_node, third_node = pipeline["nodes"]
+        self.assertNotIn("magnetization_assignments", first_node["payload"])
+        self.assertNotIn("magnetization_assignments", third_node["payload"])
+        batch = second_node["payload"]["magnetization_assignments"]
+        self.assertEqual(batch["schema_version"], "fullmag.magnetization-assignments.v1")
+        assignment, = batch["assignments"]
+        self.assertEqual(assignment["object_id"], "film")
+        self.assertIsNone(assignment["region_id"])
+        self.assertEqual(assignment["initializer"]["preset_params"]["direction"], [1, 0, 0])
+
+        rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        statements = ast.parse(str(rendered)).body
+        relax_lines = [
+            statement.lineno
+            for statement in statements
+            if isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr == "add_relax"
+        ]
+        texture_lines = [
+            statement.lineno
+            for statement in statements
+            if isinstance(statement, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "m"
+                for target in statement.targets
+            )
+        ]
+
+        self.assertEqual(len(relax_lines), 3)
+        first, second, third = relax_lines
+        self.assertTrue(any(first < line < second for line in texture_lines))
+        self.assertFalse(any(second < line < third for line in texture_lines))
+
+    def test_scene_export_preserves_edited_relax_controls_and_texture_reset(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+body.m = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="second", max_steps=3, dt=1e-13)
+"""
+        )
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        stage = scene["study"]["study_pipeline"]["nodes"][1]
+        payload = stage["payload"]
+        payload.pop("torque_tolerance", None)
+        payload.pop("energy_tolerance", None)
+        payload.update(
+            torque_tolerance_apm=0.002,
+            energy_tolerance_j=1e-20,
+            max_steps="7",
+            relax_alpha=0.2,
+            demag_interval_s=2e-12,
+        )
+
+        reloaded = _load(render_scene_document_as_script(scene))
+        first, second = reloaded.stages
+        self.assertEqual(second.stage_id, "second")
+        self.assertEqual(first.problem.study.max_steps, 2)
+        self.assertEqual(second.problem.study.max_steps, 7)
+        self.assertEqual(second.problem.study.torque_tolerance, 0.002)
+        self.assertEqual(second.problem.study.energy_tolerance, 1e-20)
+        self.assertEqual(second.problem.study.dynamics.field_refresh.demag_interval_s, 2e-12)
+        self.assertEqual(second.problem.magnets[0].material.alpha, 0.2)
+        self.assertEqual(len(second.magnetization_assignments), 1)
+
+    def test_scene_export_preserves_resets_across_disabled_nodes(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9), region_id="core-id")
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_relax(stage_id="disabled", max_steps=2, dt=1e-13)
+body.m = fm.texture.uniform(-1, 0, 0)
+study.stages.add_relax(stage_id="disabled-group-member", max_steps=2, dt=1e-13)
+core.texture = fm.texture.uniform(0, 0, 1)
+study.stages.add_relax(stage_id="third", max_steps=2, dt=1e-13)
+study.stages.add_relax(stage_id="fourth", max_steps=2, dt=1e-13)
+"""
+        )
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        nodes = scene["study"]["study_pipeline"]["nodes"]
+        first, disabled, grouped, third, fourth = nodes
+        disabled["enabled"] = False
+        nodes[:] = [
+            first,
+            disabled,
+            {
+                "id": "group",
+                "label": "Disabled group",
+                "node_kind": "group",
+                "enabled": False,
+                "children": [grouped],
+            },
+            third,
+            fourth,
+        ]
+
+        reloaded = _load(render_scene_document_as_script(scene))
+        self.assertEqual(reloaded.study_pipeline_document()["nodes"], nodes)
+        first_stage, third_stage, fourth_stage = reloaded.stages
+        self.assertEqual(
+            [stage.stage_id for stage in reloaded.stages],
+            ["first", "third", "fourth"],
+        )
+        self.assertFalse(first_stage.magnetization_assignments)
+        self.assertFalse(fourth_stage.magnetization_assignments)
+        self.assertEqual(
+            [
+                {
+                    "object_id": assignment.object_id,
+                    "region_id": assignment.region_id,
+                    "initializer": assignment.initializer.to_ir(),
+                }
+                for assignment in third_stage.magnetization_assignments
+            ],
+            disabled["payload"]["magnetization_assignments"]["assignments"]
+            + third["payload"]["magnetization_assignments"]["assignments"],
+        )
+        initial_region = reloaded.stages[0].problem.to_ir(include_geometry_assets=False)["object_regions"][0]
+        self.assertEqual(
+            initial_region["texture_override"]["initial_magnetization"]["preset_params"]["direction"],
+            [0, 1, 0],
+        )
+
+    def test_scene_round_trip_keeps_stage_local_reset_separate_from_script_assignment(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9), region_id="core-id")
+study.stages.add_relax(stage_id="a", max_steps=2, dt=1e-13)
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="b", max_steps=2, dt=1e-13)
+study.stages.add_relax(stage_id="c", max_steps=2, dt=1e-13)
+"""
+        )
+        scene = build_scene_document_from_builder(export_builder_draft(loaded))
+        nodes = scene["study"]["study_pipeline"]["nodes"]
+        stage_local = {
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "film", "region_id": "core-id",
+                "initializer": {"kind": "uniform", "value": [0, 0, 1]},
+            }],
+        }
+        nodes[1]["payload"]["stage_magnetization_assignments"] = stage_local
+
+        for flat in (False, True):
+            for enabled in (False, True):
+                with self.subTest(flat=flat, enabled=enabled):
+                    scene = copy.deepcopy(scene)
+                    scene["study"]["study_pipeline"]["nodes"][1]["enabled"] = enabled
+                    candidate = copy.deepcopy(scene)
+                    if flat:
+                        candidate["study"]["stages"] = [
+                            {**node["payload"], "stage_id": node["id"], "enabled": node["enabled"]}
+                            for node in candidate["study"].pop("study_pipeline")["nodes"]
+                        ]
+
+                    reloaded = _load(render_scene_document_as_script(candidate))
+                    authored = reloaded.study_pipeline_document()["nodes"]
+                    self.assertEqual(authored[1]["id"], "b")
+                    self.assertEqual(authored[1]["enabled"], enabled)
+                    self.assertEqual(authored[1]["payload"]["stage_magnetization_assignments"], stage_local)
+                    self.assertEqual([stage.stage_id for stage in reloaded.stages],
+                                     ["a", "b", "c"] if enabled else ["a", "c"])
+                    # Only the independent setter belongs to Python's persistent capture.
+                    assignments = reloaded.stages[1].magnetization_assignments
+                    self.assertEqual(len(assignments), 1)
+                    self.assertEqual(assignments[0].initializer.to_ir()["preset_params"]["direction"], [0, 1, 0])
+                    config = scene_document_to_execution_config(
+                        candidate, requested_backend="fem", requested_device="cpu",
+                        requested_precision="double", requested_mode="strict",
+                    )
+                    config_b = config["study_pipeline"]["nodes"][1]
+                    self.assertEqual(config_b["payload"]["stage_magnetization_assignments"], stage_local)
+                    self.assertEqual(config_b["enabled"], enabled)
+                    if flat:
+                        ids = [
+                            stage["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"]
+                            for stage in config["stages"]
+                        ]
+                        self.assertEqual(ids, ["a", "b", "c"] if enabled else ["a", "c"])
+                    else:
+                        self.assertEqual(config["stages"], [])
+
+    def test_script_round_trip_keeps_initial_and_scoped_textures_per_stage(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+core = body.add_region("core", fm.Box(5e-9, 5e-9, 5e-9))
+core.texture = fm.texture.uniform(0, 1, 0)
+study.stages.add_relax(stage_id="first", max_steps=2, dt=1e-13)
+core.set_texture(fm.texture.uniform(0, 0, 1))
+body.m.set(fm.texture.uniform(0, 1, 0))
+study.stages.add_relax(stage_id="second", max_steps=2, dt=1e-13)
+"""
+        )
+        rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        reloaded = _load(str(rendered))
+
+        directions = []
+        for stage in reloaded.stages:
+            ir = stage.problem.to_ir(include_geometry_assets=False)
+            body_texture = ir["magnets"][0]["initial_magnetization"]
+            region_texture = ir["object_regions"][0]["texture_override"]["initial_magnetization"]
+            directions.append((
+                body_texture["preset_params"]["direction"],
+                region_texture["preset_params"]["direction"],
+            ))
+        self.assertEqual(directions, [
+            ([1, 0, 0], [0, 1, 0]),
+            ([0, 1, 0], [0, 0, 1]),
+        ])
+
     def test_transport_current_action_mutates_exact_electrodes_for_subsequent_run(self) -> None:
         loaded = _load(
             _PREAMBLE
@@ -514,6 +827,7 @@ def build():
                 "entrypoint_kind": "build",
                 "integrator": "rk4",
                 "fixed_timestep": "1e-15",
+                "adaptive_timestep": None,
                 "demag_interval_s": "",
                 "until_seconds": "4e-12",
                 "relax_algorithm": "",

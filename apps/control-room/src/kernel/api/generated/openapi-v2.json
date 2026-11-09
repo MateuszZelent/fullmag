@@ -230,6 +230,16 @@
       },
       "AcceptedObservationFrameRef": {
         "properties": {
+          "authored_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuthoredInitialStateOrigin"
+              }
+            ]
+          },
           "domain_generation_id": {
             "type": "string"
           },
@@ -4974,6 +4984,39 @@
         ],
         "type": "object"
       },
+      "AuthoredInitialStateOrigin": {
+        "additionalProperties": false,
+        "description": "Input identity of an authored initial-state publication. It has its own\ngeneration even when its domain and solver clock have not changed.",
+        "properties": {
+          "initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "plan_fingerprint": {
+            "type": "string"
+          },
+          "preparation_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "plan_fingerprint",
+          "scene_revision",
+          "initial_state_revision",
+          "values_sha256"
+        ],
+        "type": "object"
+      },
       "AuthoringTransactionRequest": {
         "oneOf": [
           {
@@ -5024,12 +5067,52 @@
                 ],
                 "type": "string"
               },
+              "magnetization_apply": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MagnetizationApplyRequest",
+                    "description": "A deliberate magnetization reset, including repeated assignments\nwhose authored texture value is unchanged."
+                  }
+                ]
+              },
               "scene": {
                 "type": "object"
               }
             },
             "required": [
               "scene",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Save and explicitly reinitialize exactly one authored texture target.",
+            "properties": {
+              "base_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "apply_magnetization"
+                ],
+                "type": "string"
+              },
+              "operation_id": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/MagnetizationApplyTarget"
+              }
+            },
+            "required": [
+              "base_revision",
+              "operation_id",
+              "target",
               "kind"
             ],
             "type": "object"
@@ -5685,6 +5768,16 @@
         "properties": {
           "committed_scene": {
             "$ref": "#/components/schemas/SceneResource"
+          },
+          "magnetization_apply": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MagnetizationApplyReceiptResource"
+              }
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -6421,6 +6514,16 @@
               "null"
             ]
           },
+          "execution_binding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionBinding"
+              }
+            ]
+          },
           "field_materialization_requirements": {
             "items": {
               "$ref": "#/components/schemas/FieldMaterializationRequirement"
@@ -6696,6 +6799,35 @@
         ],
         "type": "object"
       },
+      "CommandExecutionBinding": {
+        "description": "Immutable binding of an accepted command to its own execution.",
+        "properties": {
+          "requested_target": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandTarget"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "description": "The selected authored step for a single-stage execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
       "CommandExecutionReadbackResource": {
         "properties": {
           "backend": {
@@ -6864,6 +6996,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "execution_binding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CommandExecutionBinding"
+              }
             ]
           },
           "request_id": {
@@ -17396,6 +17538,69 @@
         ],
         "type": "object"
       },
+      "HistoricalScalarCoverage": {
+        "enum": [
+          "solver_series",
+          "terminal_sample"
+        ],
+        "type": "string"
+      },
+      "HistoricalScalarWindow": {
+        "description": "Archived physical samples read from one claim-qualified artifact.",
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "content_sha256": {
+            "type": "string"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/HistoricalScalarCoverage"
+          },
+          "next_start": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "rows": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "series": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity"
+          },
+          "total_rows": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "series",
+          "artifact_id",
+          "content_sha256",
+          "coverage",
+          "total_rows",
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
       "HistoryEntry": {
         "properties": {
           "at": {
@@ -20539,6 +20744,10 @@
           "solver": {
             "$ref": "#/components/schemas/SolverSummary",
             "description": "Thin solver summary for polling cadence and top-bar state. Detailed solver state is owned by `simulation/solver/status`."
+          },
+          "solver_energy_current_available": {
+            "description": "Whether `simulation/solver/energies/current` can return a source-qualified current sample now.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -20555,6 +20764,156 @@
           "metrics"
         ],
         "type": "object"
+      },
+      "MagnetizationApplyReceiptResource": {
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "prepared_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparedInitialStateResource"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/MagnetizationApplyScope"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MagnetizationApplyStatus"
+          }
+        },
+        "required": [
+          "operation_id",
+          "scene_revision",
+          "scopes",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/MagnetizationApplyScope"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation_id",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyScope": {
+        "additionalProperties": false,
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id"
+        ],
+        "type": "object"
+      },
+      "MagnetizationApplyStatus": {
+        "enum": [
+          "initial_state_pending",
+          "initial_state_ready"
+        ],
+        "type": "string"
+      },
+      "MagnetizationApplyTarget": {
+        "oneOf": [
+          {
+            "properties": {
+              "asset": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "asset",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              },
+              "texture_override": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneTextureOverride"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "texture_override",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "MagnetizationAssetPatchRequest": {
         "properties": {
@@ -25299,6 +25658,15 @@
               "integer",
               "null"
             ]
+          },
+          "validated_for_scene_revision": {
+            "description": "Current scene whose mesher inputs still match this immutable publication.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -26123,6 +26491,26 @@
               "$ref": "#/components/schemas/ModelReadinessCheck"
             },
             "type": "array"
+          },
+          "initial_state_pending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MagnetizationApplyReceiptResource"
+              }
+            ]
+          },
+          "prepared_initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparedInitialStateResource"
+              }
+            ]
           },
           "ready_to_export": {
             "type": "boolean"
@@ -27874,6 +28262,17 @@
           "non_injective": {
             "type": "boolean"
           },
+          "observation_frame": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AcceptedObservationFrameRef",
+                "description": "Accepted source observation, when the exact selected carrier proves it.\nNull means cross-quantity temporal coherence cannot be established."
+              }
+            ]
+          },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
           },
@@ -28030,6 +28429,56 @@
           "partial",
           "empty",
           "occupied_measure"
+        ],
+        "type": "object"
+      },
+      "PlanarFieldOverlayState": {
+        "additionalProperties": false,
+        "description": "Presentation of an additional field on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
+        "properties": {
+          "colormap": {
+            "type": "string"
+          },
+          "component": {
+            "$ref": "#/components/schemas/PlanarFieldComponent"
+          },
+          "id": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "range": {
+            "$ref": "#/components/schemas/PlanarColorRangeState"
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "raster_visible": {
+            "type": "boolean"
+          },
+          "vector_style": {
+            "$ref": "#/components/schemas/PlanarVectorStyleState"
+          },
+          "vectors_visible": {
+            "type": "boolean"
+          },
+          "view_scope": {
+            "$ref": "#/components/schemas/PlanarViewScopeState"
+          }
+        },
+        "required": [
+          "id",
+          "quantity_id",
+          "component",
+          "view_scope",
+          "colormap",
+          "range",
+          "raster_opacity",
+          "raster_visible",
+          "vectors_visible",
+          "vector_style"
         ],
         "type": "object"
       },
@@ -29093,6 +29542,25 @@
             "type": "object"
           },
           {
+            "description": "Canonical scene object identity, intersected with the selected source.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "scope_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scope_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "enum": [
@@ -29200,6 +29668,16 @@
           "display_unit": {
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "field_overlays": {
+            "description": "Omitted preserves the list; a supplied list replaces it atomically.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": [
+              "array",
               "null"
             ]
           },
@@ -29367,6 +29845,13 @@
               "string",
               "null"
             ]
+          },
+          "field_overlays": {
+            "description": "Additional quantities in the same physical planar view.",
+            "items": {
+              "$ref": "#/components/schemas/PlanarFieldOverlayState"
+            },
+            "type": "array"
           },
           "interaction": {
             "$ref": "#/components/schemas/PlanarInteractionState"
@@ -29945,6 +30430,42 @@
           "failed"
         ],
         "type": "string"
+      },
+      "PreparedInitialStateResource": {
+        "additionalProperties": false,
+        "properties": {
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observation_frame_id": {
+            "type": "string"
+          },
+          "publication_id": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values_sha256": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "initial_state_revision",
+          "publication_id",
+          "observation_frame_id",
+          "domain_generation_id",
+          "values_sha256"
+        ],
+        "type": "object"
       },
       "PrescribedSotFormulaVersion": {
         "enum": [
@@ -34020,6 +34541,84 @@
         ],
         "type": "object"
       },
+      "RuntimeAuthoredInitialStateSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "study"
+                ],
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scene_revision",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage"
+                ],
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "stage_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "stage_id",
+              "scene_revision",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "initial_state_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "prepared"
+                ],
+                "type": "string"
+              },
+              "publication_id": {
+                "type": "string"
+              },
+              "scene_revision": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "scene_revision",
+              "initial_state_revision",
+              "publication_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "RuntimeCapabilityMatrix": {
         "properties": {
           "engines": {
@@ -34044,6 +34643,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeInitialStateRequest"
+              }
             ]
           },
           "precondition": {
@@ -34090,6 +34699,22 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "current_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuntimeCommandRunPrecondition"
+              }
+            ]
+          },
+          "domain_generation_id": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -34178,6 +34803,43 @@
           "enabled"
         ],
         "type": "object"
+      },
+      "RuntimeCommandRunPrecondition": {
+        "description": "Pin the current run seen when Compute was requested, including its absence.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "none"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "run"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "RuntimeCommandTarget": {
         "oneOf": [
@@ -34287,6 +34949,93 @@
             },
             "required": [
               "command_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeInitialStateRequest": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "default_for_target"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "authored_initial_state"
+                ],
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/RuntimeAuthoredInitialStateSource"
+              }
+            },
+            "required": [
+              "source",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "allow_stale_model": {
+                "type": "boolean"
+              },
+              "artifact_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "stage_result"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "case_id",
+              "artifact_id",
+              "content_sha256",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "latest_compatible_state"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
               "kind"
             ],
             "type": "object"
@@ -34956,6 +35705,40 @@
         ],
         "type": "object"
       },
+      "ScalarSeriesIdentity": {
+        "description": "Run, authored execution step, case and worker attempt of one scalar series.",
+        "properties": {
+          "attempt_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "ownership_epoch": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "task_id",
+          "step_id",
+          "case_id",
+          "attempt_id",
+          "ownership_epoch"
+        ],
+        "type": "object"
+      },
       "ScalarWindow": {
         "properties": {
           "columns": {
@@ -35000,6 +35783,17 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "series": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ScalarSeriesIdentity",
+                "description": "Present for the current, authenticated accepted Study series, even\nwhile awaiting its first physical sample."
+              }
+            ]
           },
           "total_rows": {
             "format": "int64",
@@ -37004,6 +37798,18 @@
           },
           "study": {
             "additionalProperties": true,
+            "properties": {
+              "thermal_noise": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ThermalNoiseResource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
             "type": [
               "object",
               "null"
@@ -43760,13 +44566,14 @@
                     ]
                   },
                   "until_seconds": {
+                    "description": "Omit for an exact authored StageId in the accepted Study lane.",
                     "format": "double",
-                    "type": "number"
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   }
                 },
-                "required": [
-                  "until_seconds"
-                ],
                 "type": "object"
               },
               {
@@ -44247,6 +45054,428 @@
         ],
         "type": "object"
       },
+      "StudyResultAuthoredRelation": {
+        "enum": [
+          "matching_authored_input",
+          "authored_input_changed",
+          "stage_absent",
+          "authoring_unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultCompletion": {
+        "description": "Terminal solver evidence qualified against the same final state and attempt.",
+        "properties": {
+          "converged": {
+            "description": "Absent when this completion carries no relaxation evidence.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "metric_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricKind"
+              }
+            ]
+          },
+          "metric_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metric_unit": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageMetricUnit"
+              }
+            ]
+          },
+          "metric_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StageStopReason"
+              }
+            ]
+          },
+          "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "StudyResultDomainRelation": {
+        "enum": [
+          "matching_published_layout",
+          "different_published_layout",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultGeometry": {
+        "oneOf": [
+          {
+            "properties": {
+              "cell_size_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "grid_cells": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "fdm"
+                ],
+                "type": "string"
+              },
+              "origin_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "grid_cells",
+              "origin_m",
+              "cell_size_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "fdm_multilayer"
+                ],
+                "type": "string"
+              },
+              "layers": {
+                "items": {
+                  "$ref": "#/components/schemas/StudyResultLayerGeometry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "layers",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "element_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "kind": {
+                "enum": [
+                  "fem"
+                ],
+                "type": "string"
+              },
+              "node_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "node_count",
+              "element_count",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StudyResultInitialState": {
+        "properties": {
+          "reset_scopes": {
+            "description": "Authored samples that replaced the base state at the named scopes.",
+            "items": {
+              "$ref": "#/components/schemas/StudyResultResetScope"
+            },
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StudyResultInitialStateSource"
+          }
+        },
+        "required": [
+          "source",
+          "reset_scopes"
+        ],
+        "type": "object"
+      },
+      "StudyResultInitialStateSource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "authored"
+                ],
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reference",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "stage_result"
+                ],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "selection": {
+                "$ref": "#/components/schemas/StudyResultInputSelection"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "step_id",
+              "case_id",
+              "artifact_id",
+              "content_sha256",
+              "selection",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_id": {
+                "type": "string"
+              },
+              "content_sha256": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "prepared"
+                ],
+                "type": "string"
+              },
+              "publication_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "publication_id",
+              "artifact_id",
+              "content_sha256",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "StudyResultInputSelection": {
+        "enum": [
+          "predecessor",
+          "selected_result",
+          "latest_compatible",
+          "pinned_result"
+        ],
+        "type": "string"
+      },
+      "StudyResultLayerGeometry": {
+        "properties": {
+          "cell_size_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "grid_cells": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "value_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value_offset": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "layer_id",
+          "object_id",
+          "grid_cells",
+          "origin_m",
+          "cell_size_m",
+          "value_offset",
+          "value_count"
+        ],
+        "type": "object"
+      },
+      "StudyResultPredecessorRelation": {
+        "enum": [
+          "newer_different_output",
+          "earlier_predecessor_changed",
+          "newer_same_output",
+          "no_later_matching_input",
+          "not_applicable",
+          "unavailable"
+        ],
+        "type": "string"
+      },
+      "StudyResultResetScope": {
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id"
+        ],
+        "type": "object"
+      },
+      "StudyResultStateResource": {
+        "properties": {
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_sha256": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "description": "Exact layout fingerprint, including the magnetically active support.",
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/StudyResultGeometry"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity"
+          },
+          "step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "support_available": {
+            "description": "If true, the support subresource returns FMSP in sample order.",
+            "type": "boolean"
+          },
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "source",
+          "artifact_id",
+          "artifact_sha256",
+          "step",
+          "time_s",
+          "sample_count",
+          "domain_generation_id",
+          "topology_fingerprint",
+          "geometry",
+          "support_available"
+        ],
+        "type": "object"
+      },
       "StudyRuntimePatchRequest": {
         "properties": {
           "parallel_execution": {
@@ -44334,6 +45563,142 @@
           "requested_precision",
           "requested_mode",
           "parallel_execution"
+        ],
+        "type": "object"
+      },
+      "StudyStageResult": {
+        "properties": {
+          "accepted_at": {
+            "type": "string"
+          },
+          "artifact_id": {
+            "type": "string"
+          },
+          "artifact_sha256": {
+            "type": "string"
+          },
+          "authored_relation": {
+            "$ref": "#/components/schemas/StudyResultAuthoredRelation"
+          },
+          "authored_stage_id": {
+            "description": "Authored stage identity when it can be mapped to the durable execution.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "codec_id": {
+            "type": "string"
+          },
+          "codec_version": {
+            "type": "string"
+          },
+          "completion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StudyResultCompletion",
+                "description": "Omitted when no exact terminal completion record is available."
+              }
+            ]
+          },
+          "domain_relation": {
+            "$ref": "#/components/schemas/StudyResultDomainRelation",
+            "description": "Comparison with the published live magnetization layout."
+          },
+          "initial_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StudyResultInitialState",
+                "description": "Qualified input of the producing task attempt. Legacy evidence may be absent."
+              }
+            ]
+          },
+          "predecessor_relation": {
+            "$ref": "#/components/schemas/StudyResultPredecessorRelation",
+            "description": "Later successful results along the inherited chain of admitted inputs."
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScalarSeriesIdentity",
+            "description": "The owner of both the final state and the archived scalar series."
+          },
+          "study_id": {
+            "type": "string"
+          },
+          "supports_magnetization_input": {
+            "description": "Same-space and input-port admission are verified when a command is submitted.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project_id",
+          "study_id",
+          "source",
+          "artifact_id",
+          "artifact_sha256",
+          "codec_id",
+          "codec_version",
+          "accepted_at",
+          "authored_relation",
+          "supports_magnetization_input"
+        ],
+        "type": "object"
+      },
+      "StudyStageResultsResource": {
+        "properties": {
+          "authored_input_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authored_stage_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project_id": {
+            "description": "Current project. Each result retains the original project for playback.",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/StudyStageResult"
+            },
+            "type": "array"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "revision",
+          "project_id",
+          "authored_stage_ids",
+          "results"
         ],
         "type": "object"
       },
@@ -44653,6 +46018,30 @@
           "never"
         ],
         "type": "string"
+      },
+      "ThermalNoiseResource": {
+        "additionalProperties": false,
+        "description": "Existing Brown-noise intent; seed is a lossless decimal u64 string on JSON transport.",
+        "properties": {
+          "seed": {
+            "description": "Positive u64 decimal without signs, whitespace or leading zeroes; absent uses entropy.",
+            "pattern": "^[1-9][0-9]{0,19}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "temperature": {
+            "description": "Positive finite temperature in kelvin.",
+            "exclusiveMinimum": 0,
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "temperature"
+        ],
+        "type": "object"
       },
       "ThreadAutoSchema": {
         "enum": [
@@ -50255,6 +51644,504 @@
           },
           "500": {
             "description": "Corrupt, oversized or invalid scalar"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authored stage ID or exact durable execution ID. Omit to include all final states.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable run in the owning workspace.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation from a previous response with the same filters.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100. The default is 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyStageResultsResource"
+                }
+              }
+            },
+            "description": "Published final states for the selected durable run"
+          },
+          "400": {
+            "description": "Invalid filter or page"
+          },
+          "404": {
+            "description": "Unknown run"
+          },
+          "409": {
+            "description": "Run or result ownership differs"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyResultStateResource"
+                }
+              }
+            },
+            "description": "Immutable Study state with its exact spatial carrier"
+          },
+          "404": {
+            "description": "Unknown result"
+          },
+          "409": {
+            "description": "Inconsistent project, run or carrier binding"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/magnetization": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_magnetization",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMVP v3 magnetization bound to the saved result and its exact domain",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-encoding": {
+                "description": "FMVP;version=3",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged immutable magnetization"
+          },
+          "404": {
+            "description": "Unknown result"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/scalars": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_scalars",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalScalarWindow"
+                }
+              }
+            },
+            "description": "Immutable scalar series owned by this saved Study state"
+          },
+          "400": {
+            "description": "Invalid row limit"
+          },
+          "404": {
+            "description": "Qualified archived scalars unavailable"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/support": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_support",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMSP support mask in exact saved sample order",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No explicit support mask"
+          },
+          "304": {
+            "description": "Unchanged immutable mask"
+          }
+        },
+        "tags": [
+          "persistence"
+        ]
+      }
+    },
+    "/v2/persistence/projects/{project_id}/runs/{run_id}/study-results/{artifact_id}/topology": {
+      "get": {
+        "operationId": "persistence_get_persistence_projects_project_id_runs_run_id_study_results_artifact_id_topology",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous response for this saved result",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "FMMT v2 topology of the saved FEM state",
+            "headers": {
+              "ETag": {
+                "description": "Strong ETag for this saved result payload",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Exact saved sample layout fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-generation-id": {
+                "description": "Saved result artifact SHA-256",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Exact saved topology fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-source-id": {
+                "description": "Saved Study result artifact ID",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged immutable topology"
+          },
+          "404": {
+            "description": "FEM topology is unavailable"
           }
         },
         "tags": [
@@ -56392,6 +58279,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -56619,6 +58516,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -56852,6 +58759,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57092,6 +59009,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -57313,6 +59250,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -57569,6 +59526,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -57793,6 +59760,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58023,6 +60000,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58264,6 +60251,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58502,6 +60499,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -58737,6 +60744,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -58985,6 +61002,26 @@
             }
           },
           {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "u_m",
             "required": true,
@@ -59214,6 +61251,26 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default-source fractional position override.",
+            "in": "query",
+            "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59478,6 +61535,16 @@
             }
           },
           {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59710,6 +61777,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59948,6 +62025,16 @@
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Default source only: exact world coordinate in meters along the plane's\nnormal axis, without grid/node snapping. Exclusive with position_fraction.",
+            "in": "query",
+            "name": "position_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -62121,6 +64208,18 @@
             }
           },
           {
+            "description": "Expected authored magnetization frame from the current field metadata",
+            "in": "header",
+            "name": "x-fullmag-expected-observation-frame-id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Exact immutable artifact carrier selector.",
             "in": "query",
             "name": "carrier_id",
@@ -62374,6 +64473,12 @@
                 "schema": {
                   "minimum": 0,
                   "type": "integer"
+                }
+              },
+              "x-fullmag-observation-frame-id": {
+                "description": "Identity of the authored magnetization frame, when served",
+                "schema": {
+                  "type": "string"
                 }
               },
               "x-fullmag-payload-state": {
@@ -68479,6 +70584,18 @@
         "operationId": "model_post_sessions_current_model_transactions",
         "parameters": [
           {
+            "description": "Required for a scoped magnetization apply",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "$ref": "#/components/parameters/FullmagSessionScope"
           }
         ],
@@ -69499,8 +71616,11 @@
             },
             "description": "Current solver energy sample"
           },
+          "204": {
+            "description": "No current solver energy sample is available"
+          },
           "404": {
-            "description": "No solver energy data"
+            "description": "No active workspace"
           }
         },
         "tags": [
@@ -69605,6 +71725,183 @@
         },
         "tags": [
           "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/results": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_stages_results",
+        "parameters": [
+          {
+            "description": "Authored stage ID or exact durable execution ID. Omit to include all final states.",
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact durable run in the owning workspace.",
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque continuation from a previous response with the same filters.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page size, from 1 to 100. The default is 25.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudyStageResultsResource"
+                }
+              }
+            },
+            "description": "Bounded durable Study results and their current authored relation"
+          },
+          "400": {
+            "description": "Invalid filter, page size or cursor"
+          },
+          "404": {
+            "description": "Workspace or requested run is unavailable"
+          },
+          "409": {
+            "description": "Workspace changed or the result binding is inconsistent"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/stages/results/scalars": {
+      "get": {
+        "operationId": "data_get_sessions_current_simulation_stages_results_scalars",
+        "parameters": [
+          {
+            "description": "Exact accepted run",
+            "in": "query",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact accepted Study step",
+            "in": "query",
+            "name": "step_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact output case",
+            "in": "query",
+            "name": "case_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Succeeded worker attempt",
+            "in": "query",
+            "name": "attempt_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Succeeded worker ownership epoch",
+            "in": "query",
+            "name": "ownership_epoch",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Comma-separated scalar columns",
+            "in": "query",
+            "name": "columns",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "First archived row ordinal",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Number of rows, 1 to 2048",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/FullmagSessionScope"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalScalarWindow"
+                }
+              }
+            },
+            "description": "Archived scalar samples and their exact source"
+          },
+          "404": {
+            "description": "Qualified scalar history unavailable"
+          }
+        },
+        "tags": [
+          "data"
         ]
       }
     },

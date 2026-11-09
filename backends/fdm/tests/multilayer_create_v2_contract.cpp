@@ -316,6 +316,147 @@ void centered_aligned_transfer_embeds_masks_and_pulls_native_fields() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void periodic_xy_bb_wraps_only_axes_that_span_the_common_grid() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("periodic XY BB seam check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    constexpr double pitch = 1.0e-9;
+    constexpr double dmi = 2.0e-3;
+    constexpr double mu0 = 4.0 * 3.14159265358979323846e-7;
+    const double spins[4][3] = {
+        {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}, {-1.0, 0.0, 0.0}, {0.0, 0.0, -1.0},
+    };
+    const auto magnetization = [&](uint32_t side) {
+        std::vector<double> values;
+        for (uint32_t y = 0; y < side; ++y) {
+            for (uint32_t x = 0; x < side; ++x) {
+                const auto &spin = spins[(x + y) % 4u];
+                values.insert(values.end(), spin, spin + 3);
+            }
+        }
+        return values;
+    };
+    const auto full = magnetization(4);
+    const auto centered = magnetization(2);
+    fullmag_fdm_layer_desc_v2 layers[2] = {
+        make_layer(0, full.data()), make_layer(1, centered.data()),
+    };
+    for (auto &layer : layers) {
+        layer.convolution_grid = {4, 4, 1, pitch, pitch, pitch};
+        layer.z_offset_cells = 0;
+    }
+    layers[0].native_grid = layers[0].convolution_grid;
+    layers[0].initial_magnetization_len = full.size();
+    layers[1].native_grid = {2, 2, 1, pitch, pitch, pitch};
+    layers[1].initial_magnetization_len = centered.size();
+    layers[1].transfer_kind = FULLMAG_FDM_TRANSFER_CENTERED_ALIGNED;
+
+    // Isolate local seam fields and energies from the tensor input.
+    const fullmag_fdm_complex64 zero_spectra[128]{};
+    fullmag_fdm_tensor_kernel_desc_v2 kernels[4]{};
+    for (uint32_t dst = 0; dst < 2; ++dst) {
+        for (uint32_t src = 0; src < 2; ++src) {
+            auto &kernel = kernels[2 * dst + src];
+            kernel = make_kernel(dst, src, zero_spectra);
+            kernel.fft_grid = {4, 4, 2, pitch, pitch, pitch};
+            kernel.kernel_len = 32;
+        }
+    }
+    auto plan = make_plan(layers, 2);
+    plan.enable_demag = 1;
+    plan.kernels = kernels;
+    plan.kernel_count = 4;
+    auto *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "periodic XY fixture creation failed");
+    check_error_contains(handle, "prepared all FFT workspaces");
+    check(fullmag_fdm_backend_set_multilayer_xy_periodic_v1(handle) == FULLMAG_FDM_OK,
+          "periodic XY FFT shape should enable local seams");
+
+    const fullmag_fdm_rotated_interfacial_dmi_desc_v1 rotated_dmi = {
+        FULLMAG_FDM_ROTATED_INTERFACIAL_DMI_ABI_V1,
+        sizeof(fullmag_fdm_rotated_interfacial_dmi_desc_v1),
+        1,
+        0,
+        dmi,
+    };
+    check(fullmag_fdm_backend_set_rotated_interfacial_dmi_v1(handle, &rotated_dmi)
+              == FULLMAG_FDM_OK,
+          "periodic XY rotated DMI configuration failed");
+
+    constexpr uint64_t scalars_per_layer = 20;
+    double scalars[2 * scalars_per_layer]{};
+    check(fullmag_fdm_backend_multilayer_bb(handle, 0, 0.0, scalars, 2 * scalars_per_layer)
+              == FULLMAG_FDM_OK,
+          "periodic XY BB evaluation failed");
+    const auto layer_field = [&](uint32_t index, fullmag_fdm_observable observable) {
+        std::vector<double> values(layers[index].initial_magnetization_len);
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  handle, index, observable, values.data(), values.size()) == FULLMAG_FDM_OK,
+              "periodic XY BB field copy failed");
+        return values;
+    };
+
+    const auto &material = layers[0].material;
+    const double aex = material.exchange_stiffness;
+    const double exchange_scale = 2.0 * aex /
+        (mu0 * material.saturation_magnetisation * pitch * pitch);
+    const double dmi_scale = dmi / (mu0 * material.saturation_magnetisation * pitch);
+    const auto full_ex = layer_field(0, FULLMAG_FDM_OBSERVABLE_H_EX);
+    const auto centered_ex = layer_field(1, FULLMAG_FDM_OBSERVABLE_H_EX);
+    const auto full_dmi = layer_field(0, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI);
+    const auto centered_dmi = layer_field(1, FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI);
+
+    constexpr double tolerance = 1.0e-11;
+    check_close(full_ex[0] / exchange_scale, -4.0, tolerance,
+                "full layer corner has four lateral exchange neighbors");
+    check_close(full_ex[2] / exchange_scale, 0.0, tolerance,
+                "opposite wrapped exchange neighbors cancel at the full layer corner");
+    check_close(centered_ex[0] / exchange_scale, -2.0, tolerance,
+                "centered layer corner has only two lateral exchange neighbors");
+    check_close(centered_ex[2] / exchange_scale, 2.0, tolerance,
+                "centered layer exchange stays open along both axes");
+    check_close(full_dmi[0] / dmi_scale, 2.0, tolerance,
+                "full layer rotated DMI wraps X");
+    check_close(full_dmi[4] / dmi_scale, -2.0, tolerance,
+                "full layer rotated DMI wraps Y");
+    check_close(centered_dmi[0] / dmi_scale, 1.0, tolerance,
+                "centered layer rotated DMI keeps its open X surface");
+    check_close(centered_dmi[4] / dmi_scale, -1.0, tolerance,
+                "centered layer rotated DMI keeps its open Y surface");
+
+    // Each exchange bond contributes 2 A h. Each forward X rotated DMI
+    // bond contributes -D h^2, while Y bonds have zero energy (my = 0).
+    check_close(scalars[0] / (aex * pitch), 64.0, tolerance,
+                "full layer BB exchange energy includes both seams");
+    check_close(scalars[scalars_per_layer] / (aex * pitch), 8.0, tolerance,
+                "centered layer BB exchange energy stays open");
+    check_close(scalars[5] / (dmi * pitch * pitch), -16.0, tolerance,
+                "full layer BB rotated DMI energy includes the seam");
+    check_close(scalars[scalars_per_layer + 5] / (dmi * pitch * pitch), -2.0, tolerance,
+                "centered layer BB rotated DMI energy stays open");
+    check(scalars[19] == 0.0 && scalars[scalars_per_layer + 19] == 0.0,
+          "periodic XY BB evaluation must be finite on both layers");
+    check(fullmag_fdm_backend_set_multilayer_xy_periodic_v1(handle) == FULLMAG_FDM_ERR_INVALID,
+          "periodic XY setup must reject configuration after BB evaluation");
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_ERR_INVALID,
+          "periodic XY setup must reject a legacy multilayer timestep");
+    fullmag_fdm_backend_destroy(handle);
+
+    for (auto &kernel : kernels) {
+        kernel.fft_grid = {8, 8, 2, pitch, pitch, pitch};
+        kernel.kernel_len = 128;
+    }
+    handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "open multilayer fixture creation failed");
+    check_error_contains(handle, "prepared all FFT workspaces");
+    check(fullmag_fdm_backend_set_multilayer_xy_periodic_v1(handle) == FULLMAG_FDM_ERR_INVALID,
+          "periodic XY setup must reject open XY FFT padding");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void rotated_dmi_setter_requires_positive_boundary_aex() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("rotated-DMI boundary Aex setter check skipped: CUDA backend unavailable\n");
@@ -1710,6 +1851,7 @@ int main() {
     d07_batch_workspace_is_rejected_as_part_of_the_aggregate();
     synchronous_preview_reuses_setup_owned_workspace();
     centered_aligned_transfer_embeds_masks_and_pulls_native_fields();
+    periodic_xy_bb_wraps_only_axes_that_span_the_common_grid();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();

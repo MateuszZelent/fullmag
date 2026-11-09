@@ -342,7 +342,21 @@ pub(crate) fn resolve_default_planar_source_with_stops(
     default_slice: &DefaultPlanarSliceState,
     fem_stops: Option<&FemNodePlaneStops>,
 ) -> Result<ResolvedPlanarSamplingSource, ApiError> {
+    resolve_default_planar_source_at_position(domain, default_slice, fem_stops, None)
+}
+
+/// Exact physical positions deliberately bypass per-carrier cell/node snapping.
+/// This lets differently spaced carriers be sampled on one shared plane.
+pub(crate) fn resolve_default_planar_source_at_position(
+    domain: &DomainMeta,
+    default_slice: &DefaultPlanarSliceState,
+    fem_stops: Option<&FemNodePlaneStops>,
+    position_m: Option<f64>,
+) -> Result<ResolvedPlanarSamplingSource, ApiError> {
     validate_default_slice(default_slice)?;
+    if position_m.is_some_and(|position| !position.is_finite()) {
+        return Err(ApiError::bad_request("invalid_planar_position: position_m must be finite"));
+    }
     let bounds = &domain.bounds;
     if bounds
         .min
@@ -370,13 +384,21 @@ pub(crate) fn resolve_default_planar_source_with_stops(
         (bounds.min[1] + bounds.max[1]) * 0.5,
         (bounds.min[2] + bounds.max[2]) * 0.5,
     ];
-    let q = default_slice.position_fraction;
     let (plane_name, normal_axis) = match default_slice.plane {
         PlanarAxisPlane::Xy => ("xy", 2),
         PlanarAxisPlane::Xz => ("xz", 1),
         PlanarAxisPlane::Yz => ("yz", 0),
     };
-    let mut coordinate = default_slice_coordinate(domain, normal_axis, q)?;
+    let q = position_m.map_or(default_slice.position_fraction, |position| {
+        (position - bounds.min[normal_axis]) / lengths[normal_axis]
+    });
+    if !q.is_finite() {
+        return Err(ApiError::bad_request("invalid_planar_position: normalized coordinate must be finite"));
+    }
+    let mut coordinate = match position_m {
+        Some(position) => SliceCoordinate { requested: position, resolved: position, layer: None },
+        None => default_slice_coordinate(domain, normal_axis, q)?,
+    };
     // A slab is centred where it was requested: snapping its centre to a cell
     // or node plane would shift an object-thickness slab into its neighbours.
     let slab = matches!(
@@ -388,7 +410,7 @@ pub(crate) fn resolve_default_planar_source_with_stops(
         coordinate.layer = None;
     }
     let node_planes = match fem_stops {
-        Some(stops) if !slab && stops.axis == normal_axis && coordinate.layer.is_none() => {
+        Some(stops) if position_m.is_none() && !slab && stops.axis == normal_axis && coordinate.layer.is_none() => {
             let (snapped, layer) = snap_to_node_plane(coordinate, stops);
             coordinate = snapped;
             Some((stops, layer))
@@ -440,7 +462,10 @@ pub(crate) fn resolve_default_planar_source_with_stops(
         },
     };
     let operator = default_operator_to_ir(&default_slice.operator);
-    let source_hash = default_source_hash(domain, default_slice);
+    let source_hash = match position_m {
+        Some(position) => digest_json(&(default_source_hash(domain, default_slice), "position_m", position)),
+        None => default_source_hash(domain, default_slice),
+    };
     let source_revision = source_revision(&source_hash);
     Ok(ResolvedPlanarSamplingSource {
         identity: ResolvedPlanarSourceIdentity {
@@ -1112,3 +1137,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "source_absolute_position_tests.rs"]
+mod absolute_position_tests;

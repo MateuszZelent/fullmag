@@ -8,6 +8,7 @@
 #include "fem_common.hpp"
 #include "core/fem_mesh.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
+#include "core/fem_marker_map.hpp"
 #include "frequency_domain/canonical_digest.hpp"
 #include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
@@ -3507,7 +3508,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             return out_result->status;
         }
         std::unique_ptr<mfem::Mesh> mesh;
-        if (!fullmag::fem::build_mfem_mesh(source, mesh, error)) {
+        fullmag::fem::FemMarkerMaps marker_maps;
+        if (!fullmag::fem::build_mfem_mesh(source, mesh, error, &marker_maps)) {
             copy_error(out_result->error_message, error.c_str());
             return out_result->status;
         }
@@ -3589,15 +3591,14 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         std::vector<double> linearization_h_demag0_z(
             static_cast<std::size_t>(magnetic_node_count));
         mfem::Array<int> magnetic_attribute_marker(mesh->attributes.Max());
-        if (magnetic_attribute_marker.Size() < 1) {
+        const int magnetic_attribute = marker_maps.domain.attribute(1u);
+        if (magnetic_attribute_marker.Size() < 1 || magnetic_attribute == 0) {
             copy_error(out_result->error_message,
                        "shared-domain magnetic FE attribute is missing");
             return out_result->status;
         }
         magnetic_attribute_marker = 0;
-        // The imported shared-domain contract maps the magnetic cell marker 1
-        // to MFEM volume attribute 1; air cells receive a distinct attribute.
-        magnetic_attribute_marker[0] = 1;
+        magnetic_attribute_marker[magnetic_attribute - 1] = 1;
         mfem::ConstantCoefficient unit_density(1.0);
         mfem::LinearForm magnetic_lumped_mass_form(&scalar_space);
         magnetic_lumped_mass_form.AddDomainIntegrator(
@@ -3697,24 +3698,25 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         }
         mfem::Array<int> boundary_marker;
         if (std::strcmp(payload.boundary_kind, "pure_neumann") != 0) {
-            if (payload.boundary_marker == 0u ||
-                payload.boundary_marker > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+            if (payload.boundary_marker == 0u) {
                 copy_error(out_result->error_message,
                            "shared-domain Robin/Dirichlet payload requires a positive boundary marker");
                 return out_result->status;
             }
             const int maximum_marker = std::max(1, mesh->bdr_attributes.Max());
-            if (payload.boundary_marker > static_cast<std::uint32_t>(maximum_marker)) {
+            const int selected_attribute = marker_maps.boundary.attribute(payload.boundary_marker);
+            if (selected_attribute == 0) {
                 copy_error(out_result->error_message,
                            "shared-domain payload boundary marker is absent from the MFEM mesh");
                 return out_result->status;
             }
             boundary_marker.SetSize(maximum_marker);
             boundary_marker = 0;
-            boundary_marker[static_cast<int>(payload.boundary_marker) - 1] = 1;
+            boundary_marker[selected_attribute - 1] = 1;
             for (const std::uint32_t periodic_marker : source.periodic_boundary_marker_set) {
-                if (periodic_marker >= 1u && periodic_marker <= static_cast<std::uint32_t>(maximum_marker)) {
-                    boundary_marker[static_cast<int>(periodic_marker) - 1] = 0;
+                const int attribute = marker_maps.boundary.attribute(periodic_marker);
+                if (attribute > 0) {
+                    boundary_marker[attribute - 1] = 0;
                 }
             }
         }

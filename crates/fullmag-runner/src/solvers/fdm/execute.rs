@@ -64,12 +64,9 @@ pub(crate) fn execute_fdm_in_mode_with_terminal_context<'a>(
     outputs: &[OutputIR],
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
-    terminal: Option<cpu_reference::FdmTerminalContext<'a>>,
+    terminal: Option<crate::constraints::FdmTerminalContext<'a>>,
 ) -> Result<ExecutedRun, RunError> {
-    if terminal.is_some() && !matches!(engine, FdmEngine::CpuReference) {
-        return Err(RunError { message: "frozen terminal context requires the resolved CPU reference lane; fallback is forbidden".into() });
-    }
-    if terminal.is_some() {
+    if terminal.is_some() && matches!(engine, FdmEngine::CpuReference) {
         // Only the existing vector field recorder is realized in this path.
         // Refuse unsupported spatial scalar/tensor history before solving.
         let (_,fields)=crate::terminal_output_schedule_bindings(outputs)?;
@@ -96,6 +93,11 @@ pub(crate) fn execute_fdm_in_mode_with_terminal_context<'a>(
         });
     }
     if matches!(transport_route, PublicGpuTransportRoute::ChargeOnly) {
+        if terminal.is_some() {
+            return Err(RunError {
+                message: "CUDA frozen stage lifecycle cannot use the charge-only route".into(),
+            });
+        }
         if !matches!(engine, FdmEngine::CudaFdm) {
             return Err(RunError {
                 message: "public FDM GPU charge-only plan resolved to a non-CUDA engine; fallback is forbidden"
@@ -143,6 +145,7 @@ pub(crate) fn execute_fdm_in_mode_with_terminal_context<'a>(
             outputs,
             live,
             artifact_writer,
+            terminal,
         ),
     }?;
     if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(

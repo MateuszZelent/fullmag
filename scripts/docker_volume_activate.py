@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import inspect
 import json
+import math
 import os
 from collections.abc import Mapping
 from pathlib import Path, PurePath, PurePosixPath
@@ -349,6 +351,64 @@ def _activation_contract(startup_helper) -> tuple[float, str]:
     return float(timeout) + 60, marker
 
 
+def _require_solver_profile_support(startup_helper):
+    """Require a pinned helper that can bind the opt-in before admission."""
+    prepare = getattr(startup_helper, "prepare", None)
+    digest = getattr(startup_helper, "solver_profile_sha256", None)
+    if not callable(prepare) or not callable(digest):
+        raise BuildControlError("Selected startup helper cannot accept solver profile")
+    try:
+        parameters = inspect.signature(prepare).parameters.values()
+    except (TypeError, ValueError) as error:
+        raise BuildControlError("Selected startup helper cannot accept solver profile") from error
+    if not any(
+        parameter.name == "solver_profile"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        raise BuildControlError("Selected startup helper cannot accept solver profile")
+    return digest
+
+
+def _require_cuda_trace_support(startup_helper):
+    """Require a pinned helper that can bind CUPTI trace before admission."""
+    prepare = getattr(startup_helper, "prepare", None)
+    digest = getattr(startup_helper, "cuda_trace_sha256", None)
+    if not callable(prepare) or not callable(digest):
+        raise BuildControlError("Selected startup helper cannot accept cuda trace")
+    try:
+        parameters = inspect.signature(prepare).parameters.values()
+    except (TypeError, ValueError) as error:
+        raise BuildControlError("Selected startup helper cannot accept cuda trace") from error
+    if not any(
+        parameter.name == "cuda_trace"
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        raise BuildControlError("Selected startup helper cannot accept cuda trace")
+    return digest
+
+
+def _prepare_startup_authorization(
+    startup_helper,
+    source_root: Path,
+    script: Path,
+    *,
+    request_id: str,
+    source_commit: str | None,
+    solver_profile: bool,
+    cuda_trace: bool = False,
+):
+    kwargs = {"request_id": request_id, "source_commit": source_commit}
+    if solver_profile:
+        _require_solver_profile_support(startup_helper)
+        kwargs["solver_profile"] = True
+    if cuda_trace:
+        _require_cuda_trace_support(startup_helper)
+        kwargs["cuda_trace"] = True
+    return startup_helper.prepare(source_root, script, **kwargs)
+
+
 def _managed_activation_receipt_contract(startup_helper, request_id: str) -> tuple[str, str]:
     key = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
     path_for_key = getattr(startup_helper, "activation_receipt_path_for_key", None)
@@ -402,11 +462,18 @@ def _validate_running_group(
     *,
     source_root: str | None = None,
     require_healthy: bool = True,
+    frontend_required: bool = True,
 ) -> tuple[str, str]:
+    if type(frontend_required) is not bool:
+        raise BuildControlError("Frontend readiness policy must be boolean")
     if not isinstance(document, Mapping):
         raise BuildControlError("Retained Compose configuration is not an object")
     if not isinstance(terminal, Mapping):
         raise BuildControlError("Retained runtime terminal is not an object")
+    if not frontend_required and terminal.get("ui_mode") != "headless":
+        raise BuildControlError("Stopped frontend requires an explicit headless runtime receipt")
+    if frontend_required and terminal.get("ui_mode") == "headless":
+        raise BuildControlError("Headless runtime receipt does not qualify as a GUI group")
     if document.get("name") != control.project:
         raise BuildControlError("Retained Compose project differs from the selected group")
     if not IMAGE_ID_RE.fullmatch(image):
@@ -448,8 +515,21 @@ def _validate_running_group(
         recorded = terminal.get(service + "_container")
         if recorded is not None and recorded != observed.get("Id"):
             raise BuildControlError(f"Retained {service} incarnation differs")
+        recorded_started_at = terminal.get(service + "_started_at")
+        actual_started_at = observed.get("State", {}).get("StartedAt")
+        if terminal.get("ui_mode") == "headless":
+            if (not isinstance(recorded_started_at, str) or not recorded_started_at
+                    or recorded_started_at != actual_started_at):
+                raise BuildControlError(f"Retained {service} start-time pin differs")
         _validate_retained_service(document, observed, service, image_config)
-        if not observed.get("State", {}).get("Running"):
+        state = observed.get("State", {})
+        if service == "frontend" and not frontend_required:
+            if state.get("Running") is not False or state.get("Status") not in {"created", "exited"}:
+                raise BuildControlError("Headless runtime requires its exact frontend container to be stopped")
+            if (state.get("Status") == "exited"
+                    and (state.get("ExitCode") != 0 or state.get("OOMKilled") is not False)):
+                raise BuildControlError("Headless frontend has an unexpected exit or OOM outcome")
+        elif not state.get("Running"):
             raise BuildControlError(f"Retained {service} is not running")
         ids[service] = identifier
 
@@ -489,6 +569,14 @@ def _validate_running_group(
         != "healthy"
     ):
         raise BuildControlError("Retained backend is not healthy")
+    if not frontend_required:
+        from docker_dev_defaults import _document_port, _validate_live_network
+
+        _validate_live_network(
+            ids["backend"], ids["frontend"], control.project,
+            _document_port(document), frontend_required=False,
+            expected_network=identity.get("network_name"),
+        )
     return ids["backend"], ids["frontend"]
 
 
@@ -508,6 +596,8 @@ def _validate_linked_runtime_terminal(
         raise BuildControlError("Original runtime terminal is not an object")
     if terminal.get("phase") != phase or terminal.get("state") != "succeeded":
         raise BuildControlError("Linked runtime terminal is not a succeeded " + phase)
+    if terminal.get("ui_mode") not in (None, "gui", "headless"):
+        raise BuildControlError("Linked runtime terminal has an invalid UI mode")
     if terminal.get("compose_project") != original.get("compose_project"):
         raise BuildControlError("Linked runtime terminal belongs to another Compose group")
     linked_attempt = terminal.get("attempt")
@@ -546,8 +636,18 @@ def _validate_linked_runtime_terminal(
         value = terminal.get(key)
         if not isinstance(value, str) or not pattern.fullmatch(value):
             raise BuildControlError("Linked runtime terminal has an invalid " + key)
-        if key in original and value != original.get(key):
+        if (original.get("state") == "failed-confirmed"
+                and key in original and value != original.get(key)):
             raise BuildControlError("Linked runtime terminal " + key + " differs")
+
+    if terminal.get("ui_mode") in ("gui", "headless"):
+        if inputs.get("source_root") != source_root or inputs.get("image_id") != image:
+            raise BuildControlError("Linked mode-aware runtime terminal source or image pin differs")
+    if terminal.get("ui_mode") == "headless":
+        for key in ("backend_started_at", "frontend_started_at"):
+            value = terminal.get(key)
+            if not isinstance(value, str) or not value:
+                raise BuildControlError("Linked mode-aware runtime terminal has no " + key)
 
     for key in ("state_root", "backend_volumes", "frontend_volume"):
         if key in original and terminal.get(key) != original.get(key):
@@ -567,10 +667,11 @@ def _linked_runtime_terminals(
         raise BuildControlError("Original DEV terminal is not an object")
     state = original.get("state")
     if state == "succeeded":
-        return [original]
-    if state != "failed-confirmed":
+        linked: list[Mapping[str, object]] = [original]
+    elif state == "failed-confirmed":
+        linked = []
+    else:
         raise BuildControlError("Script activation requires a successful retained DEV start or linked recovery")
-    linked: list[Mapping[str, object]] = []
     for phase in ("resume", "iteration"):
         verified = control.read(phase + "/verified.json", optional=True)
         if verified is None:
@@ -583,6 +684,11 @@ def _linked_runtime_terminals(
         if not isinstance(verified_inputs, Mapping):
             raise BuildControlError("Linked " + phase + " verification inputs are missing")
         if verified_inputs.get("attempt") != original_attempt:
+            continue
+        if verified.get("idle_backend_stopped") is True:
+            # Stop-only iteration receipts do not represent a service pair that
+            # can accept activation. A subsequent successful resume supersedes
+            # them as the linked runtime proof.
             continue
         if verified.get("config_sha256") != config_sha256:
             raise BuildControlError("Linked " + phase + " verification/config pin differs")
@@ -610,6 +716,25 @@ def _linked_runtime_terminals(
         linked.append(terminal)
     if not linked:
         raise BuildControlError("No succeeded resume or iteration is linked to the retained DEV attempt")
+    mode_aware = [terminal for terminal in linked
+                  if terminal.get("ui_mode") in ("gui", "headless")]
+    if mode_aware:
+        ordered = []
+        for terminal in mode_aware:
+            finished_at = terminal.get("finished_at")
+            if (isinstance(finished_at, bool)
+                    or not isinstance(finished_at, (int, float))
+                    or not math.isfinite(finished_at)):
+                raise BuildControlError("Mode-aware runtime terminal has no numeric finish time")
+            ordered.append((finished_at, terminal))
+        # A mode-bearing receipt is authoritative for this retained group. Do
+        # not fall back to an older container pair or a receipt for the other
+        # UI mode if the latest incarnation cannot be validated by its caller.
+        latest_at = max(value[0] for value in ordered)
+        latest = [terminal for finished_at, terminal in ordered if finished_at == latest_at]
+        if any(canonical(terminal) != canonical(latest[0]) for terminal in latest[1:]):
+            raise BuildControlError("Conflicting mode-aware runtime terminals share the latest finish time")
+        return [latest[0]]
     return linked
 
 
@@ -787,9 +912,19 @@ def _activation_operation_inputs(
     backend_container: str,
     activation_receipt_key: str,
     activation_receipt_path: str,
+    solver_profile_sha256: str | None = None,
+    cuda_trace_sha256: str | None = None,
 ) -> dict[str, str]:
     """Build activation inputs without colliding with operation.attempt."""
-    return {
+    if (solver_profile_sha256 is not None
+            and (not isinstance(solver_profile_sha256, str)
+                 or SHA256_RE.fullmatch(solver_profile_sha256) is None)):
+        raise BuildControlError("Activation solver profile digest is invalid")
+    if (cuda_trace_sha256 is not None
+            and (not isinstance(cuda_trace_sha256, str)
+                 or SHA256_RE.fullmatch(cuda_trace_sha256) is None)):
+        raise BuildControlError("Activation cuda trace digest is invalid")
+    inputs = {
         "development_attempt": development_attempt,
         "config_sha256": config_sha256,
         "source_root": source_root,
@@ -802,6 +937,11 @@ def _activation_operation_inputs(
         "activation_receipt_key": activation_receipt_key,
         "activation_receipt_path": activation_receipt_path,
     }
+    if solver_profile_sha256 is not None:
+        inputs["solver_profile_sha256"] = solver_profile_sha256
+    if cuda_trace_sha256 is not None:
+        inputs["cuda_trace_sha256"] = cuda_trace_sha256
+    return inputs
 
 
 def _record_activation_result(operation: dict[str, object], result: Mapping[str, object]) -> None:
@@ -811,8 +951,27 @@ def _record_activation_result(operation: dict[str, object], result: Mapping[str,
     receipt = operation.get("receipt")
     if not isinstance(receipt, dict):
         raise BuildControlError("Activation operation receipt is missing")
-    operation["daemon_pending"] = False
     response = result.get("response")
+    inputs = receipt.get("inputs")
+    if (result["state"] == "activated" and isinstance(inputs, Mapping)
+            and "solver_profile_sha256" in inputs):
+        expected_profile_sha256 = inputs.get("solver_profile_sha256")
+        if (not isinstance(response, Mapping)
+                or response.get("solver_profile_sha256") != expected_profile_sha256):
+            raise BuildControlError("Backend activation response solver profile digest differs")
+    if result["state"] == "activated":
+        expected_cuda_trace_sha256 = (
+            inputs.get("cuda_trace_sha256") if isinstance(inputs, Mapping) else None
+        )
+        observed_cuda_trace_sha256 = (
+            response.get("cuda_trace_sha256") if isinstance(response, Mapping) else None
+        )
+        if expected_cuda_trace_sha256 is not None:
+            if observed_cuda_trace_sha256 != expected_cuda_trace_sha256:
+                raise BuildControlError("Backend activation response cuda trace digest differs")
+        elif isinstance(response, Mapping) and "cuda_trace_sha256" in response:
+            raise BuildControlError("Backend activation returned an unsolicited cuda trace digest")
+    operation["daemon_pending"] = False
     receipt.update(
         state="succeeded" if result["state"] == "activated" else "failed-confirmed",
         activation_state=result["state"],
@@ -892,6 +1051,16 @@ def _validate_activation_input_bindings(
     provenance_sha256 = inputs.get("provenance_sha256")
     if not isinstance(provenance_sha256, str) or SHA256_RE.fullmatch(provenance_sha256) is None:
         raise BuildControlError("Retained activation provenance digest is invalid")
+    solver_profile_sha256 = inputs.get("solver_profile_sha256")
+    if ("solver_profile_sha256" in inputs
+            and (not isinstance(solver_profile_sha256, str)
+                 or SHA256_RE.fullmatch(solver_profile_sha256) is None)):
+        raise BuildControlError("Retained activation solver profile digest is invalid")
+    cuda_trace_sha256 = inputs.get("cuda_trace_sha256")
+    if ("cuda_trace_sha256" in inputs
+            and (not isinstance(cuda_trace_sha256, str)
+                 or SHA256_RE.fullmatch(cuda_trace_sha256) is None)):
+        raise BuildControlError("Retained activation cuda trace digest is invalid")
     receipt_key = inputs.get("activation_receipt_key")
     if not isinstance(receipt_key, str) or SHA256_RE.fullmatch(receipt_key) is None:
         raise BuildControlError("Retained activation receipt key is invalid")
@@ -906,7 +1075,7 @@ def _validate_activation_input_bindings(
     expected_provenance_path = (
         CONTROL_ROOT + "/activation/attempts/" + operation_id + "/startup-provenance.json"
     )
-    return {
+    bindings = {
         "source_relative": source_relative,
         "source_sha256": source_sha256,
         "request_id": request_id,
@@ -915,6 +1084,11 @@ def _validate_activation_input_bindings(
         "activation_receipt_path": expected_path,
         "provenance_path": expected_provenance_path,
     }
+    if solver_profile_sha256 is not None:
+        bindings["solver_profile_sha256"] = solver_profile_sha256
+    if cuda_trace_sha256 is not None:
+        bindings["cuda_trace_sha256"] = cuda_trace_sha256
+    return bindings
 
 
 def _retirement_scope(value: object, label: str) -> str:
@@ -1662,6 +1836,12 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
     from docker_dev import _compose_identity, _select_source
     from docker_dev_host import require_host
 
+    solver_profile = getattr(args, "solver_profile", False)
+    if type(solver_profile) is not bool:
+        raise BuildControlError("Script activation solver profile opt-in must be a boolean")
+    cuda_trace = getattr(args, "cuda_trace", False)
+    if type(cuda_trace) is not bool:
+        raise BuildControlError("Script activation cuda trace opt-in must be a boolean")
     require_host()
     if not ATTEMPT_RE.fullmatch(args.attempt):
         raise BuildControlError("Script activation requires an exact attempt UUID")
@@ -1709,6 +1889,7 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
             backend_id, frontend_id = _validate_running_group(
                 control, identity, document, runtime_terminal, image,
                 source_root=str(selected),
+                frontend_required=not bool(getattr(args, "headless", False)),
             )
             break
         except BuildControlError as error:
@@ -1735,6 +1916,8 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
     from docker_volume_dev import _startup_helper
 
     startup_helper, helper_hashes = _startup_helper(control, selected, image)
+    profile_digest = _require_solver_profile_support(startup_helper) if solver_profile else None
+    trace_digest = _require_cuda_trace_support(startup_helper) if cuda_trace else None
     activation_timeout_seconds, _original_activation_receipt_path = _activation_contract(startup_helper)
     retained_retirement = _retained_retirement_context(
         control,
@@ -1762,24 +1945,40 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
         )
     source_commit = storage.git(selected, "rev-parse", "HEAD")
     probe_request_id = args.request_id or f"docker-volume-{args.attempt}-probe"
-    authorization = startup_helper.prepare(
+    authorization = _prepare_startup_authorization(
+        startup_helper,
         selected,
         args.script,
         request_id=probe_request_id,
         source_commit=source_commit,
+        solver_profile=solver_profile,
+        cuda_trace=cuda_trace,
     )
     request_id = _request_id(startup_helper, args.attempt, authorization.source_sha256, args.request_id)
+    from docker_volume_cancelled_activation_guard import assert_start_allowed
+    assert_start_allowed(control, request_id)
     if request_id != authorization.request_id:
-        authorization = startup_helper.prepare(
+        authorization = _prepare_startup_authorization(
+            startup_helper,
             selected,
             args.script,
             request_id=request_id,
             source_commit=source_commit,
+            solver_profile=solver_profile,
+            cuda_trace=cuda_trace,
         )
     activation_receipt_key, activation_receipt_path = _managed_activation_receipt_contract(
         startup_helper, authorization.request_id
     )
     authorization_document = authorization.as_dict()
+    solver_profile_digest = None
+    if solver_profile:
+        assert callable(profile_digest)
+        solver_profile_digest = profile_digest(authorization_document.get("solver_profile"))
+    cuda_trace_digest = None
+    if cuda_trace:
+        assert callable(trace_digest)
+        cuda_trace_digest = trace_digest(authorization_document.get("cuda_trace"))
     provenance = _authorization_bytes(startup_helper, authorization_document)
     provenance_sha256 = hashlib.sha256(provenance).hexdigest()
 
@@ -1795,6 +1994,8 @@ def activate(args: argparse.Namespace) -> dict[str, object]:
         backend_container=backend_id,
         activation_receipt_key=activation_receipt_key,
         activation_receipt_path=activation_receipt_path,
+        solver_profile_sha256=solver_profile_digest,
+        cuda_trace_sha256=cuda_trace_digest,
     )
     with control.operation("activation", inputs) as operation:
         operation["receipt"].update(inputs, state="preparing")
@@ -1883,6 +2084,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--script", type=Path, required=True)
     parser.add_argument("--request-id")
+    parser.add_argument("--solver-profile", action="store_true")
     return parser
 
 

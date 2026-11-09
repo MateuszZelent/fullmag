@@ -249,6 +249,86 @@ Nie zastępuj tego procedurą `down --volumes`, przejęciem obcej grupy ani rese
 ownera. Niepotwierdzone zatrzymanie wymaga kanonicznego recovery; nie jest zgodą
 na ponowne uruchomienie aktywnej symulacji. Zachowaj logi i receipty błędu.
 
+### Kontynuacja po potwierdzonym anulowaniu zadania i terminalnym ownerze Failed
+
+`recover-cancelled-volume` rozróżnia recovery ownera `Unknown` od kontynuacji
+autentycznego, terminalnego `Failed`. Ten drugi wariant wymaga poprawnego
+receiptu natywnego anulowania wskazanego zadania, zgodnych hashy requestu,
+ownera, konfiguracji, process receipt i katalogów oraz braku nieterminalnych
+zadań i aktywnych rezerwacji. Pod lease grupy ponownie sprawdza oba kontenery,
+źródła, storage i ich piny, a następnie usuwa wyłącznie wskazaną parę maintenance.
+Layout `group-volume-v1`, dane użytkownika i wyniki pozostają zachowane.
+
+Kontynuacja `Failed` korzysta z istniejącego jawnego pinu
+`FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256` oraz zwykłego `service-ensure`.
+Rotacja konfiguracji sprawdza poprzednie bajty i profil operatora; zmienia
+plik konfiguracji i zachowuje jego poprzednią wersję, bez edycji katalogów
+runów lub wyników. Native sprawdza terminalnego ownera i przejmuje jego lock
+przez normalny startup. Nie przepisujemy `Failed` na `Unknown`, nie tworzymy
+fikcyjnego receiptu native recovery i nie odtwarzamy anulowanego zadania.
+Start nie otrzymuje skryptu ani parametrów cancellation maintenance.
+Receipt `cancelled_failed_owner_continuation` zapisuje tryb i piny tej operacji.
+Nowy backend musi przejść zwykłą bramkę cgroup READY oraz admission API;
+testy źródeł nie potwierdzają wykonania tej ścieżki w runtime.
+
+### Odzyskiwanie po anulowaniu zaakceptowanego FDM GPU po przygotowaniu in-process
+
+Jeżeli zaakceptowany run FDM GPU strict double otrzymał kompletny receipt geometrii,
+siatki i przestrzeni, ale został anulowany przed Compute, użyj wyłącznie jawnego
+wariantu `in-process-fdm`. Domyślny `failed-external` nadal obsługuje wyłącznie
+przygotowanie zakończone błędem zewnętrznego procesu. Wariant in-process nie
+tworzy ani nie udaje rekordu nieudanego preparera.
+
+Podgląd wymaga dokładnych pinów development, iteracji i aktywacji. Zwiąże RunIntent
+z niezmienną definicją, StudyPlan i katalogiem ProblemIR w CAS, potwierdzi zgodną
+intencję FDM GPU strict double, komplet pięciu certyfikatów oraz zamkniętą bramkę
+manualnego startu. Odrzuci claim/admission/worker, lease solvera lub hosta,
+rezerwację, niepustą kolejkę, zewnętrzny launch/exit/lease preparera i receipt
+retry. Nie uruchamia Solve ani ponownego startu.
+
+Jeżeli działająca grupa pochodzi z pomyślnego `resume-volume`, podaj
+`--runtime-phase resume` oraz jego UUID w zachowanym dla zgodności argumencie
+`--iteration-attempt`. Domyślna faza to `iteration`. Plan i journal przypinają
+wybraną fazę razem z dokładnym receiptem; nie można podstawić receiptu innej
+kontynuacji lub instancji kontenera.
+
+Gdy grupa ma już wcześniejszy rekord recovery, domyślnie podgląd odmawia
+kolejnego drain. `--previous-recovery-sha256 <sha-surowego-rekordu>` pozwala
+zakwalifikować rotację wyłącznie po weryfikacji jego niezmiennego terminalu
+i trwałego archiwum. Plan przypina wcześniejsze dowody; historia nadal
+zabrania ponowienia poprzedniego request ID i wznowienia jego state root.
+Rekord v2 wymaga aktualnego kontrolera, który sprawdza tę historię. Przykład
+podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm
+```
+
+Po sprawdzeniu zwróconego planu zastosuj go tylko z dokładnym SHA planu z podglądu:
+
+```powershell
+python -B <repo>\scripts\docker_dev.py --repo-root <repo> recover-cancelled-activation `
+  --attempt <development-attempt> --iteration-attempt <iteration-attempt> `
+  --activation-attempt <activation-attempt> --config-sha256 <config-sha256> `
+  --source-root <repo> --port <port> --preparation-kind in-process-fdm `
+  --apply --expected-plan-sha256 <plan-sha256>
+```
+
+Odzyskanie zatrzymuje i uwierzytelnia drain tylko przypiętego backendu, zachowując
+SessionStore, historię, frontend i wszystkie wolumeny. Następny konsument może
+utworzyć archiwum i świeży runtime przez istniejącą ścieżkę recovery. To jest
+recreate z zachowanym archiwum, nie wznowienie tego samego runu ani podstawienie
+CPU za żądany GPU. Niezgodny CAS, zmieniona instancja, otwarta bramka albo
+jakikolwiek owner kończy podgląd błędem bez wykonania stopu.
+
+Wariant `in-process-fdm` wysyła do przypiętego backendu pojedynczy `SIGTERM`
+poleceniem `docker kill --signal=TERM <backend-id>` i obserwuje zatrzymanie do
+120 sekund. Po upływie terminu zachowuje journal i zasoby; nie eskaluje sygnału
+ani nie wysyła go ponownie przy wznowieniu.
+
 ### Anulowanie nieudanej próby przed startem workera
 
 Jeżeli natywny owner ma stan `Failed`, oba jego procesy potomne zakończyły się,
@@ -350,6 +430,41 @@ nie resetuje ownera, nie usuwa cache i nie tworzy nowej grupy. W razie błędu
 tożsamości, CAS, provenance lub storage pozostaje fail-closed, z zachowanym
 receiptem i diagnostyką. Stara recepta hostowego receipt DEV pozostaje ścieżką
 odrzuconą, a nie instrukcją kompatybilności.
+
+### Dokończenie przerwanego fresh-state archiwum
+
+Jeśli dokładnie przypięta operacja `recreate-services` zakończyła się stanem
+`outcome-unknown-resources-retained` przed archiwizacją, ale jej pierwotny helper
+nadal utrzymuje `/control/active`, użyj dedykowanej kontynuacji. Nie ponawia ona
+`docker stop`, `docker rm` ani Solve. Wymaga bieżącego procesu hostowego bez
+pierwotnego writera, potwierdzonego `READY`/`LOGGED` oryginalnego helpera,
+pełnego ID kontenera, obrazu helpera i ID silnika Docker. Weryfikuje także
+kanoniczny fence anulowania oraz historyczny snapshot pary usług; backend musi
+być zatrzymany z kodem 0. Snapshot frontendu może pochodzić sprzed jego
+zatrzymania i nie jest traktowany jako dowód jego kodu wyjścia.
+
+Najpierw uruchom preview bez `apply`; wypisany SHA jest wymagany przy apply:
+
+```powershell
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId
+
+just docker-dev-resume-interrupted-fresh-archive `
+  $priorAttempt $configSha256 $source $recreationAttempt `
+  $unknownReceiptSha256 $helperContainerId $helperImage $engineId `
+  $planSha256 true
+```
+
+Kontynuacja zachowuje bajty pierwotnego niepewnego receipt w niemutowalnym
+sidecarze, publikuje intent przed ruchem danych i korzysta z istniejącego
+archiwizatora runtime. Końcowe `receipt.json`, `current.json`, `verified.json`
+i `terminal.json` muszą zawierać identyczny succeeded receipt; terminal jest
+publikowany jako ostatni, aby pierwotny helper sam zwolnił marker aktywności.
+Po publikacji kontynuacja wykonuje odłączony readback i przypina archiwum do
+fence anulowania. Nie uruchamia usług ani nowej sesji. Jeśli obserwacja helpera,
+CAS, kontenerów lub inode zmieni się względem preview, niczego nie usuwa i
+kończy się błędem do ponownego inventory/review.
 
 ### Logi i gotowość
 
@@ -701,3 +816,106 @@ cyklu start/restart, zanim wcześniejsze dowody zostaną do niego przypisane.
 ### Wznowienie samego frontendu po udanym starcie
 
 `just docker-dev-resume <start-attempt> <config-sha256> <source-root> <port>` może wznowić zatrzymany frontend także wtedy, gdy historyczny start zakończył się `succeeded`. Launcher sprawdza dokładne incarnation ID, project, image, source i mounty obu usług oraz wymaga działającego backendu i zatrzymanego frontendu. Startuje wyłącznie frontend; nie zmienia historycznego receipt, nie restartuje backendu i nie powtarza aktywacji ani Solve. Ścieżkę odtworzono po błędzie V8 heap frontendu; wynik zapisywany jest jako nowa operacja `resume`.
+
+### Zatrzymanie diagnostyki po bezpośredniej awarii bootstrapu
+
+`scripts/docker_dev.py stop-bootstrap-volume` obsługuje dwa rozłączne źródła
+dowodów: istniejący `--resume-attempt` albo parę
+`--development-terminal-sha256` i `--process-receipt-sha256` dla bezpośredniego
+startu `development`. Pozostałe wymagane argumenty to `--repo-root`, `--source-root`,
+`--attempt`, `--config-sha256` i `--port`. `--repo-root` jest argumentem globalnym,
+umieszczanym przed nazwą polecenia. Parametry muszą pochodzić z konkretnej
+zachowanej próby, nie z bieżących ustawień innej grupy.
+
+Bezpośredni wariant wymaga stanu `failed-confirmed`, oryginalnych plików
+`process-failure.json` i `readiness-failure.json`, zgodności pierwszego z żywym
+receiptem procesu oraz koperty błędu rzeczywistego producenta. Zachowuje pełne
+kontrole startup fence, PID, cgroup, image, source, inkarnacji API, braku sesji
+i procesów historycznego ownera oraz konsumentów grupy/wolumenu pod blokadą.
+Opcjonalne `--stop-frontend` jest dostępne tylko dla tego wariantu i po
+potwierdzonym stopie backendu zatrzymuje dokładnie przypięty frontend tej grupy.
+Nie usuwa kontenerów ani danych. Brak potwierdzenia zatrzymania pozostawia
+wynik nieznany; operator nie powinien ponawiać sygnału na podstawie timeoutu.
+
+Wariant bezpośredni zapisuje receipt `fullmag.docker-bootstrap-api-stop.v2`
+z jawnym `failure_origin`; wariant resume zachowuje v1. Historyczny owner Ready,
+sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
+Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
+do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
+
+### Przygotowana, nieopublikowana awaria tworzenia sieci
+
+`scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
+zestaw `reconciliation/{prepared,result,network-failure-proof}.json`, jeśli
+poprzednia próba zatrzymała się przed CAS. Wymaga pary
+`--resume-prepared-sha256 <sha256>` i `--recovery-id <32 lowercase hex>` obok
+dotychczasowych pinów `--source-root`, `--attempt`, `--receipt-sha256`,
+`--compose-sha256` oraz `--engine-id`. Bez `--apply` wykonuje tylko kwalifikację.
+
+Oryginalny receipt i jego archiwum muszą pozostać identyczne. Obecność blokady
+CAS, terminalu lub wskaźników current/verified powoduje odmowę. Nowa operacja
+sprawdza pełne powiązanie wcześniejszego przygotowania, proof, result i helpera,
+a następnie wykonuje dwie obserwacje i trzecią bezpośrednio przed CAS, zachowując
+zakres group-local: logicznych konsumentów własnego projektu i wolumenu oraz
+bezpośrednich bindów, bez fizycznej analizy cudzych checkoutów Windows/WSL.
+Świeże dowody trafiają
+do `reconciliation/recoveries/<recovery-id>/`; stare pliki pozostają zachowane.
+CAS ponownie sprawdza ich hashe. Wynik wiąże nowy identyfikator z poprzednim
+SHA przygotowania. Wyłącznie oryginalny helper zwalnia active po terminalu.
+Dawne równoległe obserwacje fizycznych cudzych checkoutów nie są częścią
+tego kontraktu group-local; nie są wymagane do tej failure-only publikacji.
+Ścieżka nie obsługuje częściowo opublikowanej transakcji i nie publikuje
+historycznego proof jako świeżego dowodu. Wariant nie łączy się z
+`--recover-absent-helper`: przygotowana generacja nadal wymaga oryginalnego
+żywego helpera. Nowe pliki i terminal są publikowane pod wspólnymi blokadami
+transakcji, z ponownym sprawdzeniem hashy starej generacji przed zapisem.
+Testy źródłowe nie zastępują
+potwierdzenia konkretnej operacji na silniku Docker.
+
+### Pusty bootstrap po SIGABRT API, bez native ownera
+
+`stop-empty-api-abort-volume` obsługuje jawnie wybraną próbę development, która
+zbudowała i opublikowała pakiet, ale API zakończyło start przez SIGABRT (-6)
+przed powstaniem ownera i jakiegokolwiek runu. Wymaga `--attempt`,
+`--config-sha256`, `--source-root` i `--port`; `--preview` zapisuje plan bez
+zatrzymania, a `--apply --expected-plan-sha256 <sha256>` ponownie sprawdza
+ten sam plan pod blokadą operacji i zatrzymuje dokładnie przypiętą parę.
+
+Dowód obejmuje oba puste namespace runtime-services, pusty runs, brak API PID
+i otwartego portu, wyłącznie init i supervisor w backendzie, brak aktywacji,
+zwolnione rezerwacje i lease, zgodność publication/config oraz pełne tożsamości
+i czasy startu usług. Obecność dodatkowego konsumenta projektu lub control
+volume blokuje operację. Odczyty nie analizują fizycznie cudzych checkoutów.
+
+Po stopie backend ma exit 1, frontend exit 0, a process-tree zachowuje
+`shutdown_unknown`, przyczynę API -6 i brak ownera. Receipt potwierdza ten
+rzeczywisty stan; nie deklaruje drain. Oddzielna para
+`recreate-volume --fresh-state --empty-api-abort-stop <stop-attempt>
+--empty-api-abort-stop-sha256 <raw-terminal-sha256>` dopuszcza wyłącznie
+archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
+blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
+namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
+
+### Archiwizacja odrzuconej aktywacji bez Run
+
+`docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
+
+```text
+just docker-dev-archive-activation "<source-root>" "<activation-id>" false "" true
+just docker-dev-archive-activation "<source-root>" "<activation-id>" true "<preview-plan-sha256>" true
+```
+
+Profil wymaga potwierdzonego API400/422, identycznych receipt/terminal,
+niezmienionego źródła i pełnego eksportu oryginalnych rekordów obok pliku `.py`
+na ext4 WSL (`fullmag.activation-rejection-provenance-export.v1`, kontrakt
+`scripts/docker_activation_history.py::preserved_rejection`). Nie wolno
+odtwarzać eksportu z oszacowanych danych. Brak Run/session/reconciliation,
+brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
+Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
+kwalifikację. Nie pomija się poddrzew wyników ani historii.
+
+Preview i apply zachowują istniejące blokady, source/consumer pins oraz
+niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`
+z zachowaniem wszystkich bajtów i odczytu pod dawnymi ścieżkami. Nie usuwa
+rekordów, nie zwiększa limitu 64 i nie ponawia aktywacji ani Solve. Dla innych
+stanów nadal obowiązują ich osobne kwalifikowane recepty.

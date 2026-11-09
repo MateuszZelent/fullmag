@@ -74,6 +74,9 @@
     {"id": "v_i", "latex": "\\mathbf v_i", "meaning": "Prędkość tangent-plane", "si_unit": "\\mathrm{s^{-1}}"}
   ],
   "sources": [
+    {"id":"frozen-cuda-stage-entry","path":"crates/fullmag-runner/src/constraints/activation.rs","symbol":"cuda_frozen_stage_state","responsibility":"Walidacja aktywnej maski i dokładnego źródłowego stanu dla kontynuacji CUDA FP64.","evidence_status":"source_only_unqualified"},
+    {"id":"frozen-cuda-stage-exit","path":"crates/fullmag-runner/src/fdm/gpu/cuda/execute.rs","symbol":"frozen_spins_checkpoint","responsibility":"Budowa plan-bound checkpoint dla frozen lifecycle zaakceptowanego etapu.","evidence_status":"source_only_unqualified"},
+    {"id":"frozen-cuda-worker-output","path":"crates/fullmag-api/src/accepted_study_worker.rs","symbol":"collect_runner_study_outputs_with_lifecycle","responsibility":"Opakowanie zgodnego stanu i referencji istniejącym kodekiem wyjściowym.","evidence_status":"source_only_unqualified"},
     {"id":"terminal-clock-adapter","path":"crates/fullmag-application/src/study_artifact.rs","symbol":"materialize_study_state_at_terminal_clock","responsibility":"Nowy jawny adapter metadata M dla terminalnego clock; exact M niezależnie porównywany z primary.","evidence_status":"planned_contract"},
     {"id":"terminal-role-identity","path":"crates/fullmag-session/src/types.rs","symbol":"terminal_publication_artifact_id","responsibility":"Jedna istniejąca formuła owner+role+raw SHA współdzielona przez publisher i cold reader.","evidence_status":"planned_contract"},
 

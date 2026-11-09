@@ -5,11 +5,13 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
 from fullmag.model.output_storage import OutputStorage
 from fullmag.model.execution_profile import ExecutionProfile, ExecutionRequestLayer, _parallel_execution_lane
+from fullmag.runtime.fem_demag_accuracy import validate_fem_demag_accuracy_contract
 from fullmag.runtime.output_storage_lowering import (
     configure_scene_stage_autosaves,
     configure_study_pipeline_autosaves,
@@ -287,6 +289,64 @@ def _reject_unknown_fields(
     if unknown_fields:
         names = ", ".join(sorted(str(name) for name in unknown_fields))
         raise ValueError(f"{context} has unsupported fields: {names}")
+
+
+def validate_fem_domain_mesh_reference(
+    value: object,
+    *,
+    context: str = "SceneDocument.study.fem_domain_mesh",
+) -> dict[str, object]:
+    """Validate the portable, content-pinned reference to a native FEM mesh."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{context} must be an object")
+    entry = dict(value)
+    expected_fields = frozenset({"source", "sha256", "build_requested"})
+    if set(entry) != expected_fields:
+        missing = expected_fields - set(entry)
+        unknown = set(entry) - expected_fields
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(sorted(missing)))
+        if unknown:
+            details.append(
+                "unsupported " + ", ".join(sorted(str(key) for key in unknown))
+            )
+        raise ValueError(f"{context} has invalid fields: {'; '.join(details)}")
+
+    source = entry["source"]
+    if not isinstance(source, str) or not source or source.strip() != source:
+        raise ValueError(f"{context}.source must be a non-empty relative path")
+    components = source.split("/")
+    if (
+        source.startswith("/")
+        or "\\" in source
+        or ":" in source
+        or "\x00" in source
+        or any(component in {"", ".", ".."} for component in components)
+        or not source.endswith(".fullmag-mesh")
+    ):
+        raise ValueError(
+            f"{context}.source must be a normalized relative .fullmag-mesh path"
+        )
+
+    digest = entry["sha256"]
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError(
+            f"{context}.sha256 must be 64 lowercase hexadecimal characters"
+        )
+
+    build_requested = entry["build_requested"]
+    if not isinstance(build_requested, bool):
+        raise ValueError(f"{context}.build_requested must be a bool")
+    return {
+        "source": source,
+        "sha256": digest,
+        "build_requested": build_requested,
+    }
 
 
 def _finite_number(value: object, context: str) -> float:
@@ -1809,6 +1869,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_cpu_threads": builder.get("cpu_threads"),
             "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
+            "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+                builder.get("fem_demag_accuracy_contract"),
+                context="builder.fem_demag_accuracy_contract",
+            ),
             "exchange_enabled": bool(builder.get("exchange_enabled", True)),
             "demag_enabled": bool(builder.get("demag_enabled", True)),
             "demag_realization": builder.get("demag_realization"),
@@ -1851,9 +1915,20 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
     }
     if rotated_dmi_object_ids is not None:
         document["study"]["rotated_interfacial_dmi_object_ids"] = rotated_dmi_object_ids
+    if builder.get("fem_domain_mesh") is not None:
+        fem_domain_mesh = validate_fem_domain_mesh_reference(
+            builder["fem_domain_mesh"], context="builder.fem_domain_mesh"
+        )
+        if requested_backend.strip().lower() == "fdm":
+            raise ValueError("fem_domain_mesh requires the FEM backend")
+        document["study"]["fem_domain_mesh"] = fem_domain_mesh
+    if "thermal_noise" in builder:
+        document["study"]["thermal_noise"] = canonical_thermal_noise(builder["thermal_noise"])
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
+        "selections",
+        "magnetization_constraints",
         "antenna_port_modes",
         "antenna_field_solve_stages",
         "antenna_target_projections",
@@ -2174,6 +2249,10 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         **_execution_profile_fields(study, "SceneDocument.study"),
         **_compute_resources_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
+        "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+            study.get("fem_demag_accuracy_contract"),
+            context="SceneDocument.study.fem_demag_accuracy_contract",
+        ),
         "exchange_enabled": bool(study.get("exchange_enabled", True)),
         "demag_enabled": bool(study.get("demag_enabled", True)),
         "demag_realization": study.get("demag_realization"),
@@ -2193,6 +2272,19 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "current_modules": [*antenna_modules, *transports],
         "excitation_analysis": excitation_analysis,
     }
+    fem_domain_mesh = study.get("fem_domain_mesh")
+    if fem_domain_mesh is not None:
+        builder["fem_domain_mesh"] = validate_fem_domain_mesh_reference(
+            fem_domain_mesh
+        )
+        if any(
+            str(value).strip().lower() == "fdm"
+            for value in (builder.get("requested_backend"), builder.get("backend"))
+            if value is not None
+        ):
+            raise ValueError("fem_domain_mesh requires the FEM backend")
+    if "thermal_noise" in study:
+        builder["thermal_noise"] = canonical_thermal_noise(study["thermal_noise"])
     if "pbc" in study:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
@@ -2410,6 +2502,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             if isinstance(builder.get("fem_demag_solver_policy"), dict)
             else None
         ),
+        "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
+            builder.get("fem_demag_accuracy_contract"),
+            context="builder.fem_demag_accuracy_contract",
+        ),
         "exchange_enabled": bool(builder.get("exchange_enabled", True)),
         "demag_enabled": bool(builder.get("demag_enabled", True)),
         "demag_realization": builder.get("demag_realization"),
@@ -2473,8 +2569,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             {
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
-                "integrator": stage.get("integrator") or None,
-                "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                "integrator": stage.get("integrator") or stage.get("solver") or None,
+                "fixed_timestep": _number_or_none(stage.get("fixed_timestep", stage.get("dt"))),
                 **(
                     {
                         "adaptive_timestep": _stage_adaptive_timestep_override(
@@ -2487,8 +2583,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
-                "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
+                "torque_tolerance": _number_or_none(
+                    stage.get("torque_tolerance_apm", stage.get("torque_tolerance", stage.get("tol")))
+                ),
+                "energy_tolerance": _number_or_none(stage.get("energy_tolerance_j", stage.get("energy_tolerance"))),
+                "relax_alpha": _number_or_none(stage.get("relax_alpha")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
                 "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,
@@ -2544,7 +2643,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+    if builder.get("fem_domain_mesh") is not None:
+        overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "thermal_noise" in raw_study:
+        overrides["thermal_noise"] = canonical_thermal_noise(raw_study["thermal_noise"])
     if isinstance(raw_study, Mapping) and "visualization_hint" in raw_study:
         visualization_hint = raw_study.get("visualization_hint")
         if visualization_hint is not None:

@@ -46,11 +46,14 @@ void fullmag_cuda_add_field_inplace(
     int N,
     cudaStream_t stream = nullptr);
 
-/// h_eff_full = h_eff_magnetic + h_demag_full - h_demag_magnetic.
+/// Add the full-domain demag continuation to airbox nodes of staged H_eff only.
+/// Magnetic nodes retain the ordinary solver effective field; a null mask
+/// treats every node as magnetic.
 void fullmag_cuda_apply_full_domain_demag_correction(
     const double *h_demag_full,
     const double *h_demag_magnetic,
     double *h_eff_full,
+    const uint8_t *magnetic_node_mask,
     int N,
     cudaStream_t stream = nullptr);
 

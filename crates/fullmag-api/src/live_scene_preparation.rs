@@ -467,15 +467,19 @@ fn prepared_domain_publication(
         |error| ApiError::internal(format!("failed to encode prepared execution plan: {error}")),
     )?;
     metadata.insert("execution_plan".into(), execution_plan_metadata);
-    if matches!(
-        &read_model.execution_plan.backend_plan,
-        fullmag_ir::BackendPlanIR::FdmMultilayer(_)
-    ) {
-        let (_, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
-        // A previous multilayer run may have a valid-looking layout with
-        // different native grids. The pinned plan is the current authority;
-        // retaining that older layout would misroute native-layer offsets.
-        metadata.insert("artifact_layout".into(), layout);
+    match &read_model.execution_plan.backend_plan {
+        fullmag_ir::BackendPlanIR::Fdm(_) => {
+            let layout = fullmag_runner::study_magnetization_layout_for_plan(&read_model.execution_plan)
+                .map_err(|error| ApiError::conflict(error.message))?;
+            metadata.insert("artifact_layout".into(), layout);
+        }
+        fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
+            let (_, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
+            metadata.insert("artifact_layout".into(), layout);
+        }
+        _ => {
+            metadata.remove("artifact_layout");
+        }
     }
     if matches!(
         &read_model.execution_plan.backend_plan,
@@ -536,15 +540,35 @@ fn publish_prepared_initial_state(
     snapshot: &mut SessionStateResponse,
     read_model: &LiveScenePreparationReadModel,
 ) -> Result<(), ApiError> {
+    if let Some(carrier) = prepare_initial_magnetization(&read_model.execution_plan)? {
+        carrier.publish(
+            snapshot, &read_model.preparation_id, &read_model.plan_fingerprint,
+            read_model.scene_revision, serde_json::json!({"source_kind": "prepared_initial_state"}),
+        )?;
+    }
+    Ok(())
+}
+
+/// Dense payload encoded outside the live transition lock. Publication binds
+/// it to the actual session domain and the committed initial-state revision.
+pub(crate) struct PreparedInitialMagnetization {
+    start_time_s: f64,
+    values_sha256: String,
+    field: Value,
+}
+
+pub(crate) fn prepare_initial_magnetization(
+    execution_plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<Option<PreparedInitialMagnetization>, ApiError> {
     let (values, start_time_s, layout): (Vec<[f64; 3]>, f64, Value) =
-        match &read_model.execution_plan.backend_plan {
+        match &execution_plan.backend_plan {
             fullmag_ir::BackendPlanIR::Fdm(plan) => (
                 plan.initial_magnetization.clone(),
                 plan.time_stage.start_time_s,
                 serde_json::json!({"backend": "fdm", "grid_cells": plan.grid.cells}),
             ),
             fullmag_ir::BackendPlanIR::FdmMultilayer(_) => {
-                let (values, layout) = prepared_multilayer_initial_state(&read_model.execution_plan)?;
+                let (values, layout) = prepared_multilayer_initial_state(execution_plan)?;
                 (values, 0.0, layout)
             }
             fullmag_ir::BackendPlanIR::Fem(plan) => (
@@ -554,7 +578,7 @@ fn publish_prepared_initial_state(
                     plan.mesh.nodes.len(),
                 ),
             ),
-            _ => return Ok(()),
+            _ => return Ok(None),
         };
     if values.is_empty()
         || values.iter().flatten().any(|value| !value.is_finite())
@@ -566,41 +590,51 @@ fn publish_prepared_initial_state(
             "prepared plan has no finite initial magnetization at a valid stage origin",
         ));
     }
-    let frame = crate::session::accepted_observation_frame_ref(
-        snapshot,
-        0,
-        Some(start_time_s),
-    );
-    let mut fields = crate::types::LatestFields::default();
-    fields.insert(
-        "m".into(),
-        serde_json::json!({
-            "values": values,
-            "layout": layout,
-            "source_step": 0,
-            "source_time_seconds": start_time_s,
-            "source_revision": read_model.scene_revision,
-            "provenance": {
-                "source_kind": "prepared_initial_state",
-                "preparation_id": read_model.preparation_id,
-                "plan_fingerprint": read_model.plan_fingerprint,
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    for value in values.iter().flatten() {
+        digest.update(value.to_le_bytes());
+    }
+    Ok(Some(PreparedInitialMagnetization {
+        start_time_s,
+        values_sha256: format!("{:x}", digest.finalize()),
+        field: serde_json::json!({"values": values, "layout": layout}),
+    }))
+}
+
+impl PreparedInitialMagnetization {
+    pub(crate) fn publish(
+        self,
+        snapshot: &mut SessionStateResponse,
+        preparation_id: &str,
+        plan_fingerprint: &str,
+        scene_revision: u64,
+        mut provenance: Value,
+    ) -> Result<(), ApiError> {
+        let publication = crate::live_authored_initial_state::AuthoredInitialStatePublication::new(
+            snapshot,
+            crate::schemas::common::AuthoredInitialStateOrigin {
+                preparation_id: preparation_id.into(),
+                plan_fingerprint: plan_fingerprint.into(),
+                scene_revision,
+                initial_state_revision: snapshot.region_realization_revisions.initial_state,
+                values_sha256: self.values_sha256,
             },
-            "observation_frame": frame,
-        }),
-    );
-    let session_id = snapshot.session.session_id.clone();
-    crate::session::apply_current_live_accepted_field_frame(
-        snapshot,
-        crate::types::CurrentLiveFieldFrameRequest {
-            session_id,
-            latest_fields: Some(fields),
-            replace_latest_fields: false,
-            field_generation: None,
-            preview_fields: None,
-            clear_preview_cache: false,
-        },
-        frame,
-    )
+            self.start_time_s,
+        );
+        provenance["preparation_id"] = preparation_id.into();
+        provenance["plan_fingerprint"] = plan_fingerprint.into();
+        let mut field = self.field;
+        field["source_step"] = 0.into();
+        field["source_time_seconds"] = self.start_time_s.into();
+        field["source_revision"] = scene_revision.into();
+        field["provenance"] = provenance;
+        field["observation_frame"] = serde_json::to_value(&publication.frame)
+            .map_err(|error| ApiError::internal(format!("encode prepared magnetization frame: {error}")))?;
+        let mut fields = crate::types::LatestFields::default();
+        fields.insert("m".into(), field);
+        crate::session::apply_current_live_authored_initial_state(snapshot, publication, fields)
+    }
 }
 
 const ACCEPTED_LIVE_PREPARATION_WAIT_TIMEOUT: std::time::Duration =
@@ -947,6 +981,7 @@ pub(crate) async fn publish_accepted_frontier_preparation(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
     command_kind: &str,
+    mesh_command_id: Option<&str>,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     let run_id = {
         let current = state.current_live_state.read().await;
@@ -1190,12 +1225,14 @@ pub(crate) async fn publish_accepted_frontier_preparation(
         // The bridge holds the transition only for its initial identity
         // capture and final CAS/commit. Native preparation may take minutes;
         // Stop and session replacement remain available during store reads.
-        let publication = publish_accepted_task_preparation(
+        let publication = publish_accepted_task_preparation_with_mode(
             state,
             context,
             &run_id,
             &step_id,
             command_kind,
+            AcceptedPreparationPublicationMode::Active,
+            mesh_command_id,
         )
         .await;
         match publication {
@@ -1387,7 +1424,7 @@ pub(crate) async fn publish_accepted_task_preparation(
     command_kind: &str,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     publish_accepted_task_preparation_with_mode(
-        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active,
+        state, context, run_id, step_id, command_kind, AcceptedPreparationPublicationMode::Active, None,
     ).await
 }
 
@@ -1405,6 +1442,7 @@ pub(crate) async fn restore_terminal_task_domain(
     publish_accepted_task_preparation_with_mode(
         state, context, run_id, step_id, "accepted_projection_stage_preparation",
         AcceptedPreparationPublicationMode::TerminalObservation(identity),
+        None,
     ).await
 }
 
@@ -1415,6 +1453,7 @@ async fn publish_accepted_task_preparation_with_mode(
     step_id: &str,
     command_kind: &str,
     mode: AcceptedPreparationPublicationMode,
+    mesh_command_id: Option<&str>,
 ) -> Result<PublishedLiveScenePreparation, ApiError> {
     let terminal_observation = matches!(&mode, AcceptedPreparationPublicationMode::TerminalObservation(_));
     let (fence, scene_revision, display_projection, preparation_revision, existing_preparation) = {
@@ -1626,7 +1665,7 @@ async fn publish_accepted_task_preparation_with_mode(
         serde_json::to_value(&read_model.execution_plan).map_err(|error| {
             ApiError::internal(format!("failed to encode accepted execution plan: {error}"))
         })?;
-    let mesh_workspace = serde_json::json!({
+    let mut mesh_workspace = serde_json::json!({
         "schema_version": LIVE_SCENE_PREPARATION_READ_MODEL_SCHEMA,
         "preparation_id": &read_model.preparation_id,
         "source_scene_revision": read_model.scene_revision,
@@ -1644,6 +1683,15 @@ async fn publish_accepted_task_preparation_with_mode(
             "detail": "accepted task preparation receipt ready",
         }],
     });
+    if let Some(command_id) = mesh_command_id {
+        mesh_workspace["last_build_summary"] = serde_json::json!({
+            "command_id": command_id,
+            "build_id": format!("mesh:{command_id}"),
+            "status": "completed",
+            "source_scene_revision": read_model.scene_revision,
+            "preparation_id": &read_model.preparation_id,
+        });
+    }
     let mut completed_stages = canonical_completed_preparation_stages(
         now, "accepted task preparation receipt committed",
     );
@@ -1775,6 +1823,18 @@ async fn publish_accepted_task_preparation_with_mode(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
+    }
+    if let Some(command_id) = mesh_command_id {
+        let ledger = state.current_command_ledger.lock().await;
+        if !ledger.iter().any(|record| {
+            record.command.command_id == command_id
+                && record.status == crate::types::CommandLifecycleState::Accepted
+        }) {
+            return Err(ApiError::conflict_with_code(
+                "accepted_preparation_run_stopped",
+                "the command that requested this domain is no longer active",
+            ));
+        }
     }
     let durable_disposition = commit_live_preparation_receipt_for_context_under_transition_with_source_pin(
         state,
@@ -1954,8 +2014,22 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
     // different durable owners. Keep the roots explicit: legacy live
     // preparations use the current-live journal store, while an accepted run
     // keeps its catalog, RunIntent, anchor, task, and stage provenance in the
-    // accepted store.
-    let live_store = crate::session_persistence::open_store(state)?;
+    // accepted store. Do not open the live journal on the normal accepted-run
+    // path: opening it may itself need its writer, although this receipt is
+    // owned entirely by the accepted store.
+    let previous_live_receipt = state.current_live_preparation_receipt.read().await.clone();
+    let previous_legacy_replacement_needs_live_store = previous_live_receipt
+        .as_ref()
+        .filter(|previous| previous.run_id != durable_receipt.run_id)
+        .and_then(|previous| validated_live_preparation_payload(&previous.payload))
+        .is_some_and(|previous| live_preparation_accepted_source(&previous).is_none());
+    let live_store = if accepted_source_step.is_none()
+        || previous_legacy_replacement_needs_live_store
+    {
+        Some(crate::session_persistence::open_store(state)?)
+    } else {
+        None
+    };
     let accepted_store = if accepted_source_step.is_some() {
         let store_root = state.submit_store_root.as_ref().ok_or_else(|| {
             ApiError::with_status_and_code(
@@ -1974,12 +2048,16 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
     } else {
         None
     };
-    let previous_live_receipt = state.current_live_preparation_receipt.read().await.clone();
     let previous_durable_receipt = match accepted_store.as_ref() {
         Some(accepted_store) => {
             read_durable_preparation_anchor(accepted_store, &durable_receipt.run_id)?
         }
-        None => read_durable_preparation_anchor(&live_store, &durable_receipt.run_id)?,
+        None => {
+            let live_store = live_store.as_ref().ok_or_else(|| {
+                ApiError::internal("legacy preparation requires the current-live journal store")
+            })?;
+            read_durable_preparation_anchor(live_store, &durable_receipt.run_id)?
+        }
     };
     let disposition = if let Some(step_id) = accepted_source_step.as_deref() {
         let accepted_store = accepted_store.as_ref().ok_or_else(|| {
@@ -2020,7 +2098,7 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
         let stale_accepted_replacement = match previous_live_receipt.as_ref() {
             Some(previous) if previous.run_id != durable_receipt.run_id => {
                 prove_stale_accepted_replacement(
-                    &live_store,
+                    live_store.as_ref(),
                     accepted_store,
                     previous,
                     current_preparation_id.as_deref(),
@@ -2073,6 +2151,10 @@ async fn commit_live_preparation_receipt_for_context_under_transition_with_sourc
         }
     } else {
         live_store
+            .as_ref()
+            .ok_or_else(|| {
+                ApiError::internal("legacy preparation requires the current-live journal store")
+            })?
             .commit_preparation_receipt(&durable_receipt)
             .map_err(|error| ApiError::conflict(error.to_string()))?
     };
@@ -2315,7 +2397,7 @@ fn stale_replacement_durable_evidence_matches(
 /// immutable preparation for the run, so an accepted later-stage receipt is
 /// proven by its task/stage records instead of being compared to that anchor.
 fn prove_stale_accepted_replacement(
-    live_store: &fullmag_session::SessionStore,
+    live_store: Option<&fullmag_session::SessionStore>,
     accepted_store: &fullmag_session::SessionStore,
     previous: &fullmag_session::FmsPreparationReceipt,
     current_preparation_id: Option<&str>,
@@ -2339,7 +2421,9 @@ fn prove_stale_accepted_replacement(
     let anchor_store = if source.is_some() {
         accepted_store
     } else {
-        live_store
+        live_store.ok_or_else(|| {
+            ApiError::internal("stale legacy preparation requires the current-live journal store")
+        })?
     };
     let Some(anchor) = read_durable_preparation_anchor(anchor_store, &previous.run_id)?
     else {
@@ -2958,6 +3042,33 @@ mod tests {
         .unwrap()
     }
 
+    fn legacy_test_receipt(
+        specification: &RunSpecification,
+        preparation_id: &str,
+    ) -> PreparationReceipt {
+        let accepted_receipt = accepted_test_receipt(specification, "step-a", preparation_id);
+        let accepted_plan = accepted_receipt.plan;
+        let plan = PreparationPlan::new(
+            accepted_plan.problem_fingerprint.clone(),
+            1,
+            accepted_plan.requested_backend.clone(),
+            accepted_plan.resolved_backend.clone(),
+            accepted_plan.geometry.clone(),
+            accepted_plan.display.clone(),
+            accepted_plan.grid.clone(),
+            accepted_plan.mesh.clone(),
+            accepted_plan.space.clone(),
+        )
+        .unwrap();
+        PreparationReceipt::ready(
+            preparation_id,
+            plan,
+            accepted_receipt.certificates,
+            accepted_receipt.reuse,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn accepted_source_identity_accepts_exact_binding_and_rejects_stale_or_mismatched_input() {
         let source = accepted_source("run-accepted", 'a', 'b', "step-a");
@@ -3099,7 +3210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accepted_commit_uses_submit_store_for_anchor_and_stage_with_distinct_live_store() {
+    async fn accepted_commit_ignores_busy_live_journal_and_legacy_commit_still_uses_it() {
         let temporary = tempfile::tempdir().unwrap();
         let accepted_root = temporary.path().join("accepted-store");
         let live_root = temporary.path().join("live-store");
@@ -3198,17 +3309,26 @@ mod tests {
         let context = crate::capture_current_live_request_context(&state)
             .await
             .unwrap();
+        let live_store = fullmag_session::SessionStore::open(&live_root).unwrap();
         let contention_store =
             fullmag_session::SessionStore::open_existing(&accepted_root).unwrap();
+        let live_contention_store =
+            fullmag_session::SessionStore::open_existing(&live_root).unwrap();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (go_tx, go_rx) = std::sync::mpsc::channel();
         let contention_thread = std::thread::spawn(move || {
-            let Ok(lease) = contention_store.write_transaction() else {
+            let Ok(accepted_lease) = contention_store.write_transaction() else {
+                let _ = ready_tx.send(false);
+                return;
+            };
+            let Ok(live_lease) = live_contention_store.write_transaction() else {
+                drop(accepted_lease);
                 let _ = ready_tx.send(false);
                 return;
             };
             if ready_tx.send(true).is_err() {
-                drop(lease);
+                drop(live_lease);
+                drop(accepted_lease);
                 return;
             }
             if go_rx
@@ -3219,7 +3339,8 @@ mod tests {
                 // witnessed the native conflict and is about to call the API.
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
-            drop(lease);
+            drop(live_lease);
+            drop(accepted_lease);
         });
         let ready = ready_rx.recv_timeout(std::time::Duration::from_secs(5));
         let probe_error = match (
@@ -3242,9 +3363,29 @@ mod tests {
                 .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
                 && format!("{error:#}").contains("conflict=native descriptor")
         });
+        let live_probe_error = match (
+            &ready,
+            fullmag_session::SessionStore::open_existing(&live_root),
+        ) {
+            (Ok(true), Ok(probe)) => match probe.write_transaction() {
+                Ok(lease) => {
+                    drop(lease);
+                    None
+                }
+                Err(error) => Some(error),
+            },
+            (_, Err(error)) => Some(error),
+            _ => None,
+        };
+        let live_native_busy = live_probe_error.as_ref().is_some_and(|error| {
+            error
+                .chain()
+                .any(|cause| cause.is::<fullmag_session::StoreWriterBusy>())
+                && format!("{error:#}").contains("conflict=native descriptor")
+        });
         let _transition = state.current_live_session_transition.lock().await;
         let go_sent = go_tx.send(()).is_ok();
-        let disposition = if native_busy && go_sent {
+        let disposition = if native_busy && live_native_busy && go_sent {
             commit_live_preparation_receipt_for_context_under_transition(
                 &state,
                 &context,
@@ -3269,6 +3410,10 @@ mod tests {
             "test setup must observe native StoreWriterBusy before accepted commit: {probe_error:?}"
         );
         assert!(
+            live_native_busy,
+            "test setup must hold the live journal writer during accepted commit: {live_probe_error:?}"
+        );
+        assert!(
             go_sent,
             "contention thread was not ready to start its bounded hold"
         );
@@ -3291,7 +3436,6 @@ mod tests {
             .unwrap()
             .expect("accepted stage pointer must be in the accepted store");
         assert_eq!(stage.preparation_id, preparation_id);
-        let live_store = fullmag_session::SessionStore::open(&live_root).unwrap();
         assert!(
             live_store.read_preparation_receipt(run_id).unwrap().is_none(),
             "live journal store must not receive an accepted run anchor"
@@ -3388,6 +3532,52 @@ mod tests {
                 .unwrap()
                 .is_some(),
             "missing stage pointer must be rebuilt from the immutable task receipt"
+        );
+
+        // The legacy path publishes against a run already catalogued in the
+        // live journal. Set it up only after checking that accepted commits did
+        // not create any live-journal catalog or anchor.
+        live_store
+            .commit_run_catalog(&fullmag_session::FmsRunCatalog {
+                schema_version: fullmag_session::FMS_RUN_CATALOG_SCHEMA.into(),
+                run_id: run_id.into(),
+                revision: 1,
+                updated_at: chrono::Utc::now(),
+                tasks: Vec::new(),
+            })
+            .unwrap();
+        let legacy_receipt = legacy_test_receipt(&specification, "prep-live-legacy");
+        let legacy_disposition = commit_live_preparation_receipt_for_context_under_transition(
+            &state,
+            &context,
+            legacy_receipt,
+            None,
+            None,
+            Some(run_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            legacy_disposition,
+            fullmag_session::PreparationReceiptCommitDisposition::Accepted
+        );
+        assert_eq!(
+            live_store
+                .read_preparation_receipt(run_id)
+                .unwrap()
+                .unwrap()
+                .preparation_id,
+            "prep-live-legacy",
+            "unaccepted legacy receipt must continue to use the current-live journal store"
+        );
+        assert_eq!(
+            accepted_store
+                .read_preparation_receipt(run_id)
+                .unwrap()
+                .unwrap()
+                .preparation_id,
+            preparation_id,
+            "legacy receipt must not replace the accepted-store run anchor"
         );
     }
 
@@ -3959,6 +4149,10 @@ mod tests {
         assert_eq!(field["layout"]["layers"][1]["value_offset"], 2);
         assert_eq!(field["source_time_seconds"], 0.0);
         assert!(snapshot.scalar_rows.is_empty());
+        let bundle = snapshot.field_publication_bundles.get("m").expect("multilayer m0 bundle");
+        assert!(bundle.observation_frame.authored_initial_state.is_some());
+        assert!(bundle.field.carrier_id.starts_with("fdm-multilayer:sha256:"));
+        assert_eq!(bundle.field.scope_kind, "full");
     }
 
     #[test]
@@ -4025,6 +4219,9 @@ mod tests {
             "preparation must not fabricate solver observations"
         );
         assert!(snapshot.live_state.is_none());
+        let bundle = snapshot.field_publication_bundles.get("m").expect("FEM m0 bundle");
+        assert!(bundle.observation_frame.authored_initial_state.is_some());
+        assert_eq!(bundle.domain_generation_id, generation);
     }
 
     #[test]

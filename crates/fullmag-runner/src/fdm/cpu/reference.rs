@@ -50,6 +50,11 @@ use crate::relaxation::{
     execute_projected_gradient_bb, llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
     RelaxationTorqueConfirmation, NATIVE_LLG_TIME_INTEGRATOR_REALIZATION,
 };
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::relaxation::{
+    execute_nonlinear_cg_with_observer, execute_projected_gradient_bb_with_observer,
+    DirectMinimizerAcceptedSample, DirectMinimizerAcceptedStateObserver,
+};
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats_with_active_mask, scalar_outputs_request_average_m,
     scalar_row_due, single_object_scalars,
@@ -681,6 +686,7 @@ pub(crate) fn snapshot_vector_fields_from_state(
         oersted_field,
         antenna_field,
         None,
+        None,
     )
 }
 
@@ -694,6 +700,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
     oersted_field: Option<&[Vector3]>,
     antenna_field: Option<&[Vector3]>,
     additional_effective_field: Option<&[Vector3]>,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
         problem,
@@ -702,6 +709,7 @@ fn snapshot_vector_fields_from_state_with_additional_effective_field(
         antenna_field,
         additional_effective_field,
     );
+    direct_fields.observation_workspace = observation_workspace;
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -767,6 +775,7 @@ fn capture_full_active_cpu_fields(
     accepted_thermal_context: Option<(u64, f64)>,
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = field_materialization_quantity_ids();
     let quantities = crate::live_demand::retain_demanded_live_quantities(
@@ -783,6 +792,7 @@ fn capture_full_active_cpu_fields(
         spin_transport,
         config_revision,
         &quantities,
+        observation_workspace,
     )
 }
 
@@ -841,6 +851,7 @@ fn capture_one_active_cpu_field(
         spin_transport,
         config_revision,
         &[quantity],
+        None,
     )?;
     if fields.len() != 1 {
         return Err(RunError {
@@ -864,6 +875,7 @@ fn capture_cpu_fields_for_quantities(
     spin_transport: Option<&FdmSpinTransportWorkflow>,
     config_revision: u64,
     requested_quantities: &[&str],
+    observation_workspace: Option<&mut FftWorkspace>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     let quantities = active_fdm_preview_quantities(
         crate::dispatch::FdmEngine::CpuReference,
@@ -961,6 +973,7 @@ fn capture_cpu_fields_for_quantities(
             Some(&oersted_field),
             Some(&antenna_field),
             transport_oersted_field,
+            observation_workspace,
         )
     })();
     problem.terms.per_node_field = previous_per_node_field;
@@ -1552,12 +1565,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     )
 }
 
-pub(crate) struct FdmTerminalContext<'a> {
-    pub frozen: &'a crate::constraints::FrozenStageContextV1,
-    pub source_frozen_plan: Option<&'a fullmag_ir::ResolvedFrozenSpinsPlanIR>,
-    pub drain_writer: &'a mut (dyn FnMut() -> Result<(), RunError> + Send),
-}
-
 pub(crate) fn execute_reference_fdm_with_terminal_context(
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -1565,7 +1572,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
     coupled_checkpoint: Option<serde_json::Value>,
-    mut terminal: Option<FdmTerminalContext<'_>>,
+    mut terminal: Option<crate::constraints::FdmTerminalContext<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     if terminal.is_some() && coupled_checkpoint.is_some() {
         return Err(RunError { message: "terminal publication context cannot authorize checkpoint resume".into() });
@@ -2022,6 +2029,10 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         .map_err(|message| RunError { message })?;
     }
     let default_scalar_trace = scalar_schedules.is_empty();
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    let autosave_initial_field_names = artifacts.due_accepted_step_fields(step_count, false);
+    #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+    let autosave_initial_field_names: Vec<String> = Vec::new();
     if terminal.is_some() { artifacts.begin_terminal_history(outputs)?; }
 
 
@@ -2029,7 +2040,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         record_scalar_snapshot(
             &problem,
             &state,
-            0,
+            step_count,
             state.time_seconds,
             0,
             &mut steps,
@@ -2040,7 +2051,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             &problem,
             &state,
             Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
-            0,
+            step_count,
             0.0,
             0,
             None,
@@ -2050,9 +2061,31 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
             &mut artifacts,
         )?);
     }
+    // Stage autosave fields are captured from the real activation state before
+    // the solver advances or a minimizer mutates it. Merge these names with the
+    // initial OutputIR fields so a duplicate request is written only once.
+    if !autosave_initial_field_names.is_empty() {
+        scheduled_field_snapshot_metrics.add(record_due_outputs_with_extra_fields(
+            &problem,
+            &state,
+            Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+            step_count,
+            0.0,
+            0,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+            &autosave_initial_field_names,
+        )?);
+    }
 
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
+    // Observation FFTs must not rebuild Newell spectra every accepted step or
+    // contribute their counters to the integrator's workspace telemetry.
+    let mut observation_fft_workspace: Option<FftWorkspace> = None;
     let mut integrator_bufs = problem.create_integrator_buffers();
     let mut state_soa = if use_soa_state {
         Some(state.to_soa())
@@ -2068,6 +2101,8 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         last_solver_dt,
     )?;
     let mut direct_minimizer_completion: Option<StageCompletionIR> = None;
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    let mut direct_minimizer_terminal_fields = Vec::new();
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
@@ -2075,23 +2110,88 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
     let mut cancelled = false;
     let mut paused = false;
     let mut last_step_report: Option<StepReport> = None;
+    let mut latest_accepted_live_stats: Option<StepStats> = None;
 
     if is_direct_minimization {
         // Direct minimization: BB or NCG — bypasses LLG time-stepping
         let control = plan.relaxation.as_ref().unwrap();
         let wall_start = Instant::now();
 
-        let result = match control.algorithm {
-            RelaxationAlgorithmIR::ProjectedGradientBb => execute_projected_gradient_bb(
-                &problem,
-                state.magnetization(),
-                &mut fft_workspace,
-                control,
-            ),
-            RelaxationAlgorithmIR::NonlinearCg => {
-                execute_nonlinear_cg(&problem, state.magnetization(), &mut fft_workspace, control)
+        let direct_autosave_enabled =
+            !autosave_initial_field_names.is_empty() || artifacts.has_accepted_step_table();
+        let result = {
+            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+            {
+                if direct_autosave_enabled {
+                    let mut observer = FdmCpuDirectMinimizerAutosaveObserver::new(
+                        &problem,
+                        &state,
+                        Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+                        &mut artifacts,
+                        &mut steps,
+                    );
+                    let result = match control.algorithm {
+                        RelaxationAlgorithmIR::ProjectedGradientBb => {
+                            execute_projected_gradient_bb_with_observer(
+                                &problem,
+                                state.magnetization(),
+                                &mut fft_workspace,
+                                control,
+                                Some(&mut observer),
+                            )?
+                        }
+                        RelaxationAlgorithmIR::NonlinearCg => {
+                            execute_nonlinear_cg_with_observer(
+                                &problem,
+                                state.magnetization(),
+                                &mut fft_workspace,
+                                control,
+                                Some(&mut observer),
+                            )?
+                        }
+                        _ => unreachable!(),
+                    };
+                    direct_minimizer_terminal_fields = observer.take_terminal_fields();
+                    result
+                } else {
+                    match control.algorithm {
+                        RelaxationAlgorithmIR::ProjectedGradientBb => execute_projected_gradient_bb(
+                            &problem,
+                            state.magnetization(),
+                            &mut fft_workspace,
+                            control,
+                        ),
+                        RelaxationAlgorithmIR::NonlinearCg => {
+                            execute_nonlinear_cg(
+                                &problem,
+                                state.magnetization(),
+                                &mut fft_workspace,
+                                control,
+                            )
+                        }
+                        _ => unreachable!(),
+                    }
+                }
             }
-            _ => unreachable!(),
+            #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+            {
+                let _ = direct_autosave_enabled;
+                match control.algorithm {
+                    RelaxationAlgorithmIR::ProjectedGradientBb => execute_projected_gradient_bb(
+                        &problem,
+                        state.magnetization(),
+                        &mut fft_workspace,
+                        control,
+                    ),
+                    RelaxationAlgorithmIR::NonlinearCg => execute_nonlinear_cg(
+                        &problem,
+                        state.magnetization(),
+                        &mut fft_workspace,
+                        control,
+                    ),
+                    _ => unreachable!(),
+                }
+            }
         };
         artifacts.observe_energy_evaluation();
 
@@ -2142,7 +2242,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         direct_metrics.insert("rhs_evaluations".to_string(), result.rhs_evaluations as f64);
         direct_metrics.insert("accepted_steps".to_string(), result.steps_taken as f64);
 
-        steps.push(final_stats);
+        record_direct_minimizer_terminal_stats(final_stats, &mut steps, &mut artifacts)?;
         direct_minimizer_completion = Some(infer_direct_minimizer_completion(
             control,
             result.converged,
@@ -2347,6 +2447,14 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 &scalar_schedules,
                 live.as_ref(),
             );
+            let use_hard_endpoint_rk45_step = should_use_rk45_hard_endpoint_step(
+                plan.integrator,
+                plan.adaptive_timestep.as_ref(),
+                plan.relaxation.is_none() && spin_transport.is_none(),
+                transport_step_end.is_some(),
+                remaining,
+                dt_step,
+            );
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -2512,15 +2620,27 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                     })?
                 }
             } else {
-                let result = step_reference_fdm_problem(
-                    &problem,
-                    &mut state,
-                    &mut state_soa,
-                    dt_step,
-                    &mut fft_workspace,
-                    &mut integrator_bufs,
-                    step_evaluation,
-                );
+                let result = if use_hard_endpoint_rk45_step {
+                    step_reference_fdm_problem_to_hard_endpoint(
+                        &problem,
+                        &mut state,
+                        &mut state_soa,
+                        stage_end_time_s,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        step_evaluation,
+                    )
+                } else {
+                    step_reference_fdm_problem(
+                        &problem,
+                        &mut state,
+                        &mut state_soa,
+                        dt_step,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        step_evaluation,
+                    )
+                };
                 match result {
                     Ok((report, state_copy)) => {
                         if state_copy.full_field_copy_count > 0 {
@@ -2774,6 +2894,12 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                     heavy_payload_due && live.field_cadence.publishes_full_catalog();
                 let mut full_fields_capture_error = None;
                 let cached_preview_fields = if full_fields_due {
+                    let observation_workspace = if problem.terms.demag {
+                        Some(observation_fft_workspace
+                            .get_or_insert_with(|| problem.create_workspace()))
+                    } else {
+                        None
+                    };
                     match accepted_cpu_thermal_capture_context(
                         &problem,
                         report.dt_used,
@@ -2791,6 +2917,7 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                             thermal_context,
                             spin_transport.as_ref(),
                             config_revision,
+                            observation_workspace,
                         )
                     }) {
                         Ok(fields) => Some(fields),
@@ -2862,6 +2989,9 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                 live_field_snapshot_metrics.add(live_copy_metrics);
                 apply_step_field_copy_metrics(&mut update_stats, live_copy_metrics);
                 apply_step_field_copy_metrics(&mut latest_stats, live_copy_metrics);
+                // A live consumer forces full accepted-step evaluation. Retain
+                // its exact physical scalars for terminal materialization.
+                latest_accepted_live_stats = Some(update_stats.clone());
                 let action = (live.on_step)(StepUpdate {
                     coupled_checkpoint: final_frozen_checkpoint
                         .clone()
@@ -2988,6 +3118,32 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         }
     }
 
+    // Direct minimizers advance accepted steps without advancing physical
+    // time. The initial sample at t=0 therefore cannot stand in for the
+    // terminal state when a field schedule was already sampled at t=0.
+    let force_direct_final_fields = is_direct_minimization && step_count > 0;
+    if force_direct_final_fields {
+        for schedule in &mut field_schedules {
+            schedule.last_sampled_time = None;
+        }
+    }
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    // StageAutosave terminal cadence is deferred until the final state has
+    // been normalized. Merge those names with any still-due StageAutosave
+    // fields; record_final_outputs unions them with OutputIR terminal requests.
+    let autosave_final_field_names = if is_direct_minimization {
+        let mut names = artifacts.due_accepted_step_fields(step_count, true);
+        for name in std::mem::take(&mut direct_minimizer_terminal_fields) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+    let autosave_final_field_names: Vec<String> = Vec::new();
     let finalization_field_snapshot_metrics = record_final_outputs(
         &problem,
         &state,
@@ -2996,14 +3152,29 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
         last_solver_dt,
         default_scalar_trace,
         last_step_report.as_ref(),
+        &autosave_final_field_names,
         &field_schedules,
         &mut steps,
         &mut artifacts,
     )?;
+    if force_direct_final_fields {
+        for schedule in &mut field_schedules {
+            schedule.last_sampled_time = Some(state.time_seconds);
+        }
+    }
 
     if !paused && !cancelled {
         if let Some(live) = live.as_mut() {
-            if let Some(mut final_stats) = steps.last().cloned() {
+            {
+                let mut final_stats = terminal_live_stats_for_state(
+                    latest_accepted_live_stats.as_ref(),
+                    steps.last(),
+                    step_count,
+                    &state,
+                    last_solver_dt,
+                    &problem,
+                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
+                )?;
                 let display_selection = live.display_selection.map(|get| get());
                 let config_revision = display_selection
                     .as_ref()
@@ -3139,7 +3310,10 @@ pub(crate) fn execute_reference_fdm_with_terminal_context(
                         magnetization_carrier: None,
                     });
                 }
-                if let Some(stats) = steps.last_mut() {
+                if let Some(stats) = steps.last_mut().filter(|stats| {
+                    stats.step == step_count
+                        && stats.time.to_bits() == state.time_seconds.to_bits()
+                }) {
                     *stats = final_stats;
                 }
             }
@@ -3679,6 +3853,58 @@ fn step_reference_fdm_problem(
     }
 }
 
+fn should_use_rk45_hard_endpoint_step(
+    integrator: Option<IntegratorChoice>,
+    adaptive: Option<&AdaptiveTimeStepIR>,
+    is_physical_time_evolution: bool,
+    has_transport_step_end: bool,
+    remaining_s: f64,
+    dt_step_s: f64,
+) -> bool {
+    is_physical_time_evolution
+        && !has_transport_step_end
+        && integrator.unwrap_or(IntegratorChoice::Heun) == IntegratorChoice::Rk45
+        && remaining_s.is_finite()
+        && remaining_s > 0.0
+        && adaptive.is_some_and(|policy| remaining_s < policy.dt_min && dt_step_s == remaining_s)
+}
+
+fn step_reference_fdm_problem_to_hard_endpoint(
+    problem: &ExchangeLlgProblem,
+    state: &mut ExchangeLlgState,
+    state_soa: &mut Option<ExchangeLlgStateSoA>,
+    endpoint_time_s: f64,
+    fft_workspace: &mut FftWorkspace,
+    integrator_bufs: &mut IntegratorBuffers,
+    evaluation: EvaluationRequest,
+) -> Result<(StepReport, fullmag_engine::FdmCpuStateCopyTelemetry), EngineError> {
+    if state_soa.is_none() && problem.soa_fast_path_supported() {
+        *state_soa = Some(state.to_soa());
+    }
+
+    if let Some(soa) = state_soa.as_mut() {
+        let report = problem.step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+            soa,
+            endpoint_time_s,
+            fft_workspace,
+            integrator_bufs,
+            evaluation,
+        )?;
+        let state_copy = soa.publish_accepted_to(state);
+        Ok((report, state_copy))
+    } else {
+        problem
+            .step_rk45_to_hard_endpoint_with_buffers_evaluation(
+                state,
+                endpoint_time_s,
+                fft_workspace,
+                integrator_bufs,
+                evaluation,
+            )
+            .map(|report| (report, Default::default()))
+    }
+}
+
 fn infer_direct_minimizer_completion(
     control: &RelaxationControlIR,
     converged: bool,
@@ -3742,6 +3968,192 @@ impl FieldCopyMetrics {
     }
 }
 
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+struct PendingDirectMinimizerSample {
+    step: u64,
+    magnetization: Vec<Vector3>,
+    accepted_step_m_per_a: Option<f64>,
+    line_search_backtracks: u64,
+    energy_evaluations: u64,
+    field_evaluations: u64,
+    fields: Vec<String>,
+    scalar: bool,
+}
+
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+struct FdmCpuDirectMinimizerAutosaveObserver<'a> {
+    problem: &'a ExchangeLlgProblem,
+    source_state: ExchangeLlgState,
+    artifacts: &'a mut ArtifactRecorder,
+    steps: &'a mut Vec<StepStats>,
+    antenna_field: Option<Vec<Vector3>>,
+    pending: Option<PendingDirectMinimizerSample>,
+    next_fields: Vec<String>,
+    next_scalar: bool,
+    terminal_fields: Vec<String>,
+}
+
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+impl<'a> FdmCpuDirectMinimizerAutosaveObserver<'a> {
+    fn new(
+        problem: &'a ExchangeLlgProblem,
+        state: &ExchangeLlgState,
+        antenna_field: Option<Vec<Vector3>>,
+        artifacts: &'a mut ArtifactRecorder,
+        steps: &'a mut Vec<StepStats>,
+    ) -> Self {
+        Self {
+            problem,
+            source_state: state.clone(),
+            artifacts,
+            steps,
+            antenna_field,
+            pending: None,
+            next_fields: Vec::new(),
+            next_scalar: false,
+            terminal_fields: Vec::new(),
+        }
+    }
+
+    fn take_terminal_fields(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.terminal_fields)
+    }
+
+    fn publish_intermediate(
+        &mut self,
+        pending: PendingDirectMinimizerSample,
+    ) -> Result<(), RunError> {
+        let mut sampled_state = self.source_state.clone();
+        sampled_state
+            .restore_exact_checkpoint(
+                pending.magnetization,
+                self.source_state.time_seconds,
+            )
+            .map_err(|error| RunError {
+                message: format!("restoring accepted direct-minimizer sample: {error}"),
+            })?;
+        let observables = observe_state_with_antenna_field(
+            self.problem,
+            &sampled_state,
+            self.antenna_field.clone(),
+        )?;
+        let mut stats = make_step_stats(
+            pending.step,
+            sampled_state.time_seconds,
+            0.0,
+            0,
+            &observables,
+            self.problem,
+        );
+        stats.pseudo_time_s = None;
+        let direct_metrics = stats
+            .per_object_scalars
+            .entry("free".to_string())
+            .or_default();
+        if let Some(step_size) = pending.accepted_step_m_per_a {
+            direct_metrics.insert("accepted_step_m_per_A".to_string(), step_size);
+        }
+        direct_metrics.insert(
+            "line_search_backtracks".to_string(),
+            pending.line_search_backtracks as f64,
+        );
+        direct_metrics.insert(
+            "energy_evaluations".to_string(),
+            pending.energy_evaluations as f64,
+        );
+        direct_metrics.insert(
+            "field_evaluations".to_string(),
+            pending.field_evaluations as f64,
+        );
+        direct_metrics.insert("rhs_evaluations".to_string(), 0.0);
+        direct_metrics.insert("accepted_steps".to_string(), pending.step as f64);
+
+        let mut copy_metrics = FieldCopyMetrics::default();
+        for name in pending.fields {
+            let (values, metrics) = flatten_field_snapshot(select_state_observable_field(
+                &observables, &name, true,
+            )?);
+            copy_metrics.add(metrics);
+            self.artifacts.record_field_snapshot(FieldSnapshot {
+                name,
+                step: pending.step,
+                time: sampled_state.time_seconds,
+                solver_dt: 0.0,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: pending.step.saturating_add(1),
+                values,
+            })?;
+        }
+        apply_step_field_copy_metrics(&mut stats, copy_metrics);
+
+        if pending.scalar {
+            self.artifacts.record_scalar(&stats)?;
+            self.steps.push(stats);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+impl DirectMinimizerAcceptedStateObserver for FdmCpuDirectMinimizerAutosaveObserver<'_> {
+    fn wants_sample(&mut self, accepted_step: u64, final_sample: bool) -> bool {
+        self.next_fields.clear();
+        self.next_scalar = false;
+
+        // The activation state is captured by the ordinary initial-output
+        // path before the minimizer starts. Never ask it to resample step 0.
+        if final_sample {
+            return self.pending.is_some();
+        }
+        if accepted_step == 0 {
+            return self.pending.is_some();
+        }
+
+        self.next_fields = self.artifacts.due_accepted_step_fields(accepted_step, false);
+        let table_due = self.artifacts.has_accepted_step_table()
+            && self.artifacts.accepted_step_table_due(accepted_step);
+        let scalar_already_recorded = self.steps.last().is_some_and(|stats| {
+            stats.step == accepted_step && same_time(stats.time, self.source_state.time_seconds)
+        });
+        self.next_scalar = table_due && !scalar_already_recorded;
+        self.pending.is_some() || !self.next_fields.is_empty() || self.next_scalar
+    }
+
+    fn capture(&mut self, sample: DirectMinimizerAcceptedSample<'_>) -> Result<(), RunError> {
+        if sample.final_sample {
+            // The existing terminal path publishes the normalized final state.
+            // Preserve terminal cadence names for that path, but never publish
+            // the minimizer's pre-normalization terminal magnetization here.
+            if let Some(pending) = self.pending.take() {
+                self.terminal_fields = pending.fields;
+            }
+            self.next_fields.clear();
+            self.next_scalar = false;
+            return Ok(());
+        }
+
+        if let Some(pending) = self.pending.take() {
+            self.publish_intermediate(pending)?;
+        }
+        if !self.next_fields.is_empty() || self.next_scalar {
+            self.pending = Some(PendingDirectMinimizerSample {
+                step: sample.step,
+                magnetization: sample.magnetization.to_vec(),
+                accepted_step_m_per_a: sample.accepted_step_m_per_a,
+                line_search_backtracks: sample.line_search_backtracks,
+                energy_evaluations: sample.energy_evaluations,
+                field_evaluations: sample.field_evaluations,
+                fields: std::mem::take(&mut self.next_fields),
+                scalar: std::mem::take(&mut self.next_scalar),
+            });
+        }
+        Ok(())
+    }
+}
+
 fn flatten_field_snapshot(values: Vec<Vector3>) -> (Vec<f64>, FieldCopyMetrics) {
     let started = Instant::now();
     let values = FieldSnapshot::flatten_vec3(values);
@@ -3778,16 +4190,57 @@ fn record_due_outputs(
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
 ) -> Result<FieldCopyMetrics, RunError> {
+    record_due_outputs_with_extra_fields(
+        problem,
+        state,
+        antenna_field,
+        step,
+        solver_dt,
+        wall_time_ns,
+        step_report,
+        scalar_schedules,
+        field_schedules,
+        steps,
+        artifacts,
+        &[],
+    )
+}
+
+fn record_due_outputs_with_extra_fields(
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    antenna_field: Option<Vec<Vector3>>,
+    step: u64,
+    solver_dt: f64,
+    wall_time_ns: u64,
+    step_report: Option<&StepReport>,
+    scalar_schedules: &mut [OutputSchedule],
+    field_schedules: &mut [OutputSchedule],
+    steps: &mut Vec<StepStats>,
+    artifacts: &mut ArtifactRecorder,
+    extra_field_names: &[String],
+) -> Result<FieldCopyMetrics, RunError> {
     let mut copy_metrics = FieldCopyMetrics::default();
     let scalar_due = scalar_schedules
         .iter()
         .any(|schedule| is_due(state.time_seconds, schedule.next_time));
-    let due_field_names = field_schedules
+    let mut due_field_names = field_schedules
         .iter().enumerate()
         .filter(|(_, schedule)| is_due(state.time_seconds, schedule.next_time))
-        .map(|(index, schedule)| (index, schedule.name.clone()))
+        .map(|(index, schedule)| (Some(index), schedule.name.clone()))
         .collect::<Vec<_>>();
     let has_due_fields = !due_field_names.is_empty();
+    for name in extra_field_names {
+        let already_sampled = field_schedules.iter().any(|schedule| {
+            schedule.name == *name
+                && schedule
+                    .last_sampled_time
+                    .is_some_and(|sampled_time| same_time(sampled_time, state.time_seconds))
+        });
+        if !already_sampled && !due_field_names.iter().any(|(_, due_name)| due_name == name) {
+            due_field_names.push((None, name.clone()));
+        }
+    }
 
     if !scalar_due && due_field_names.is_empty() {
         return Ok(copy_metrics);
@@ -3813,9 +4266,22 @@ fn record_due_outputs(
             advance_due_schedules(scalar_schedules, state.time_seconds);
         }
 
-        let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
+        let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
+            problem,
+            state,
+            None,
+            antenna_field.as_deref(),
+            None,
+        );
         for (schedule_index, name) in due_field_names {
-            artifacts.record_history_field_cause(step, state.time_seconds, schedule_index, &name)?;
+            if let Some(schedule_index) = schedule_index {
+                artifacts.record_history_field_cause(
+                    step,
+                    state.time_seconds,
+                    schedule_index,
+                    &name,
+                )?;
+            }
             let (values, field_metrics) = flatten_field_snapshot(direct_fields.select(&name)?);
             copy_metrics.add(field_metrics);
             artifacts.record_field_snapshot(FieldSnapshot {
@@ -3861,7 +4327,14 @@ fn record_due_outputs(
 
     if !due_field_names.is_empty() {
         for (schedule_index, name) in due_field_names {
-            artifacts.record_history_field_cause(step, state.time_seconds, schedule_index, &name)?;
+            if let Some(schedule_index) = schedule_index {
+                artifacts.record_history_field_cause(
+                    step,
+                    state.time_seconds,
+                    schedule_index,
+                    &name,
+                )?;
+            }
             let (values, field_metrics) =
                 flatten_field_snapshot(select_state_observable_field(&observables, &name, true)?);
             copy_metrics.add(field_metrics);
@@ -3914,6 +4387,63 @@ fn record_scalar_snapshot(
     Ok(())
 }
 
+/// Publish the direct minimizer's terminal accepted state to the scalar
+/// artifact stream. When an accepted-step cadence already emitted this exact
+/// step, replace its in-memory summary instead of adding a duplicate terminal
+/// row; otherwise the accepted-step clock cannot be inferred from physical
+/// time by `record_final_outputs`.
+fn record_direct_minimizer_terminal_stats(
+    stats: StepStats,
+    steps: &mut Vec<StepStats>,
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let already_recorded = steps.last().is_some_and(|previous| {
+        previous.step == stats.step && same_time(previous.time, stats.time)
+    });
+    if already_recorded {
+        if let Some(previous) = steps.last_mut() {
+            *previous = stats;
+        }
+    } else {
+        artifacts.record_scalar(&stats)?;
+        steps.push(stats);
+    }
+    Ok(())
+}
+
+fn terminal_live_stats_for_state(
+    latest_accepted_live_stats: Option<&StepStats>,
+    recorded_stats: Option<&StepStats>,
+    accepted_step: u64,
+    state: &ExchangeLlgState,
+    solver_dt: f64,
+    problem: &ExchangeLlgProblem,
+    antenna_field: Option<Vec<Vector3>>,
+) -> Result<StepStats, RunError> {
+    for stats in [recorded_stats, latest_accepted_live_stats]
+        .into_iter()
+        .flatten()
+    {
+        if stats.step == accepted_step && stats.time.to_bits() == state.time_seconds.to_bits() {
+            return Ok(stats.clone());
+        }
+    }
+
+    // Output schedules deliberately coalesce clocks within tolerance. Terminal
+    // accepted-state publications must instead use the exact committed clock
+    // and recompute all physical scalars from the committed magnetization when
+    // no exact accepted-step scalar snapshot is available.
+    let observables = observe_state_with_antenna_field(problem, state, antenna_field)?;
+    Ok(make_step_stats(
+        accepted_step,
+        state.time_seconds,
+        solver_dt,
+        0,
+        &observables,
+        problem,
+    ))
+}
+
 fn record_final_outputs(
     problem: &ExchangeLlgProblem,
     state: &ExchangeLlgState,
@@ -3922,6 +4452,7 @@ fn record_final_outputs(
     solver_dt: f64,
     default_scalar_trace: bool,
     final_step_report: Option<&StepReport>,
+    autosave_final_field_names: &[String],
     field_schedules: &[OutputSchedule],
     steps: &mut Vec<StepStats>,
     artifacts: &mut ArtifactRecorder,
@@ -3939,7 +4470,7 @@ fn record_final_outputs(
                 .map(|stats| !same_time(stats.time, state.time_seconds))
                 .unwrap_or(true));
 
-    let requested_field_names = field_schedules
+    let mut requested_field_names = field_schedules
         .iter()
         .filter(|schedule| {
             schedule
@@ -3949,6 +4480,11 @@ fn record_final_outputs(
         })
         .map(|schedule| schedule.name.clone())
         .collect::<Vec<_>>();
+    for name in autosave_final_field_names {
+        if !requested_field_names.contains(name) {
+            requested_field_names.push(name.clone());
+        }
+    }
     let missing_field_names = requested_field_names
         .into_iter()
         .filter(|name| {
@@ -4454,6 +4990,7 @@ fn direct_scalar_values_available(name: &str) -> bool {
 struct DirectFieldSnapshotCache<'a> {
     problem: &'a ExchangeLlgProblem,
     state: &'a ExchangeLlgState,
+    observation_workspace: Option<&'a mut FftWorkspace>,
     magnetization: Option<Vec<Vector3>>,
     exchange_field: Option<Vec<Vector3>>,
     demag_field: Option<Vec<Vector3>>,
@@ -4485,6 +5022,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         Self {
             problem,
             state,
+            observation_workspace: None,
             magnetization: None,
             exchange_field: None,
             demag_field: None,
@@ -4621,9 +5159,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_demag" => {
                 if self.demag_field.is_none() {
+                    let field = match self.observation_workspace.as_deref_mut() {
+                        Some(workspace) => self.problem
+                            .observable_demag_field_with_workspace(self.state, workspace),
+                        None => self.problem.observable_demag_field(self.state),
+                    };
                     self.demag_field = Some(
-                        self.problem
-                            .observable_demag_field(self.state)
+                        field
                             .map_err(|error| RunError {
                                 message: format!(
                                     "CPU FDM snapshot '{}': demag field: {}",
@@ -4717,9 +5259,12 @@ impl<'a> DirectFieldSnapshotCache<'a> {
         if self.effective_field.is_none() {
             #[cfg(test)]
             increment_direct_h_eff_assembly_calls();
-            let mut effective_field = self
-                .problem
-                .observable_effective_field(self.state)
+            let field = match self.observation_workspace.as_deref_mut() {
+                Some(workspace) => self.problem
+                    .observable_effective_field_with_workspace(self.state, workspace),
+                None => self.problem.observable_effective_field(self.state),
+            };
+            let mut effective_field = field
                 .map_err(|error| RunError {
                     message: format!("CPU FDM snapshot '{}': effective field: {}", name, error),
                 })?;
@@ -4846,6 +5391,68 @@ mod tests {
             decide_coupled_adaptive_step(4.0, one_ulp_above, &adaptive),
             CoupledAdaptiveDecision::DtMinExhausted
         );
+    }
+
+    #[test]
+    fn only_subminimum_rk45_physical_endpoint_steps_use_endpoint_entrypoint() {
+        let adaptive = adaptive_test_policy();
+        let endpoint_interval = adaptive.dt_min * 0.5;
+        assert!(should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            adaptive.dt_min,
+            adaptive.dt_min,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval * 0.5,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Heun),
+            Some(&adaptive),
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            false,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            Some(&adaptive),
+            true,
+            true,
+            endpoint_interval,
+            endpoint_interval,
+        ));
+        assert!(!should_use_rk45_hard_endpoint_step(
+            Some(IntegratorChoice::Rk45),
+            None,
+            true,
+            false,
+            endpoint_interval,
+            endpoint_interval,
+        ));
     }
 
     fn make_test_plan() -> FdmPlanIR {
@@ -6068,6 +6675,118 @@ mod tests {
     }
 
     #[test]
+    fn cpu_snapshot_reuses_observation_fft_workspace_across_states() {
+        let mut plan = make_test_plan();
+        plan.enable_demag = true;
+        plan.active_mask = Some((0..16).map(|i| i != 5 && i != 6).collect());
+        plan.material.ms_field = Some((0..16).map(|i| if i < 8 { 4e5 } else { 8e5 }).collect());
+        plan.initial_magnetization = (0..16).map(|i| [1.0, (i as f64) * 0.07, 0.2]).collect();
+        let (problem, first) =
+            build_snapshot_problem_and_state(&plan).expect("demag snapshot problem");
+        let mut next_plan = plan.clone();
+        next_plan.initial_magnetization = (0..16).map(|i| [0.2, 1.0, -(i as f64) * 0.04]).collect();
+        let (_, mut second) = build_snapshot_problem_and_state(&next_plan).expect("second state");
+        second.time_seconds = 2e-14;
+        let mut workspace = problem.create_workspace();
+        let original_workspace = workspace.telemetry();
+        let solver_workspace = problem.create_workspace();
+        let solver_original = solver_workspace.telemetry();
+        let request = LivePreviewRequest {
+            quantity: "m".into(),
+            component: "3D".into(),
+            all_layers: true,
+            max_points: 0,
+            ..Default::default()
+        };
+        let quantities = [
+            "m",
+            "H_ex",
+            "H_demag",
+            "H_eff",
+            "torque",
+            "eden_ex",
+            "eden_demag",
+            "eden_total",
+        ];
+        let mut previous_forward_count = 0;
+        let mut previous_demag = None;
+        for state in [&first, &second] {
+            let fresh = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("fresh snapshot");
+            let reused = snapshot_vector_fields_from_state_with_additional_effective_field(
+                &problem,
+                state,
+                &quantities,
+                &request,
+                plan.grid.cells,
+                plan.active_mask.as_deref(),
+                None,
+                None,
+                None,
+                Some(&mut workspace),
+            )
+            .expect("reused snapshot");
+            assert_eq!(fresh.len(), quantities.len());
+            for (expected, actual) in fresh.iter().zip(&reused) {
+                assert_eq!(expected.quantity, actual.quantity);
+                assert_eq!(
+                    expected.vector_field_values, actual.vector_field_values,
+                    "workspace reuse changed {}",
+                    expected.quantity
+                );
+            }
+            let demag = reused
+                .iter()
+                .find(|field| field.quantity == "H_demag")
+                .unwrap();
+            assert!(
+                demag.vector_field_values[15..21]
+                    .iter()
+                    .any(|value| value.abs() > 0.0),
+                "inactive cells must retain their observable stray field"
+            );
+            if let Some(previous) = previous_demag {
+                assert_ne!(
+                    previous, demag.vector_field_values,
+                    "a new state must not reuse old fields"
+                );
+            }
+            previous_demag = Some(demag.vector_field_values.clone());
+            let telemetry = workspace.telemetry();
+            assert_eq!(
+                telemetry.lifecycle_revision,
+                original_workspace.lifecycle_revision
+            );
+            assert_eq!(
+                telemetry.lifecycle_key_sha256,
+                original_workspace.lifecycle_key_sha256
+            );
+            assert_eq!(
+                telemetry.plan_creation_time_ns,
+                original_workspace.plan_creation_time_ns
+            );
+            assert!(telemetry.forward_fft_count > previous_forward_count);
+            previous_forward_count = telemetry.forward_fft_count;
+        }
+        assert_eq!(
+            solver_workspace.telemetry(),
+            solver_original,
+            "observation FFT work must not enter solver workspace telemetry"
+        );
+    }
+
+    #[test]
     fn snapshot_preview_m_uses_direct_state_without_reobserving_state() {
         reset_observe_state_calls();
 
@@ -7118,6 +7837,510 @@ mod tests {
     }
 
     #[test]
+    fn direct_minimizer_publishes_terminal_artifacts_at_same_physical_time() {
+        let plan = FdmPlanIR {
+            initial_magnetization: fullmag_plan::generate_random_unit_vectors(42, 16),
+            relaxation: Some(direct_minimizer_test_control()),
+            ..make_test_plan()
+        };
+        let outputs = [
+            OutputIR::Scalar {
+                name: "E_total".to_string(),
+                every_seconds: 1e-12,
+            },
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1e-12,
+            },
+        ];
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-terminal-artifacts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-terminal-artifacts".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 16}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let executed = execute_reference_fdm(&plan, 1e-12, &outputs, None, Some(pipeline.sender()))
+            .expect("direct minimizer should complete");
+        let terminal_step = executed.result.steps.last().expect("terminal stats").step;
+        assert!(
+            terminal_step > 0,
+            "test must exercise accepted minimizer steps"
+        );
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let scalar_rows =
+            std::fs::read_to_string(output_dir.join("scalars.csv")).expect("scalar trace");
+        let terminal_step_text = terminal_step.to_string();
+        assert!(
+            scalar_rows
+                .lines()
+                .skip(1)
+                .any(|row| row.split(',').next() == Some(terminal_step_text.as_str())),
+            "terminal scalar row at accepted step {terminal_step} is missing: {scalar_rows}"
+        );
+        let frames: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("frames.json")).expect("field frame index"),
+        )
+        .expect("decode field frame index");
+        let frames = frames["frames"].as_array().expect("frame list");
+        assert_eq!(
+            frames.len(),
+            2,
+            "only initial and actual terminal fields exist"
+        );
+        assert_eq!(frames[0]["step"], 0);
+        assert_eq!(frames[1]["step"], terminal_step);
+        assert_eq!(frames[1]["quantity_ids"][0], "m");
+
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+    #[test]
+    fn direct_minimizer_drops_pending_terminal_sample_for_canonical_final_capture() {
+        let plan = make_test_plan();
+        let (problem, state) = build_snapshot_problem_and_state(&plan)
+            .expect("build deferred terminal fixture");
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        let mut steps = vec![StepStats {
+            step: 0,
+            time: state.time_seconds,
+            ..StepStats::default()
+        }];
+        let mut observer = FdmCpuDirectMinimizerAutosaveObserver::new(
+            &problem,
+            &state,
+            None,
+            &mut artifacts,
+            &mut steps,
+        );
+        let terminal_raw = state
+            .magnetization()
+            .iter()
+            .map(|m| [m[0] * 0.5, m[1] * 0.5, m[2] * 0.5])
+            .collect::<Vec<_>>();
+        observer.pending = Some(PendingDirectMinimizerSample {
+            step: 271,
+            magnetization: terminal_raw.clone(),
+            accepted_step_m_per_a: Some(1.0e-6),
+            line_search_backtracks: 2,
+            energy_evaluations: 40,
+            field_evaluations: 12,
+            fields: vec!["m".to_string()],
+            scalar: true,
+        });
+
+        assert!(observer.wants_sample(271, true));
+        observer
+            .capture(DirectMinimizerAcceptedSample {
+                step: 271,
+                magnetization: &terminal_raw,
+                accepted_step_m_per_a: Some(1.0e-6),
+                line_search_backtracks: 2,
+                energy_evaluations: 40,
+                field_evaluations: 12,
+                final_sample: true,
+            })
+            .expect("defer raw terminal sample to canonical final capture");
+
+        assert!(observer.pending.is_none());
+        assert_eq!(observer.take_terminal_fields(), vec!["m".to_string()]);
+        drop(observer);
+        assert_eq!(steps.len(), 1, "terminal table row is left to final publication");
+    }
+
+    #[test]
+    fn direct_minimizer_terminal_fields_union_output_and_deferred_autosave_requests() {
+        let plan = make_test_plan();
+        let (problem, state) = build_snapshot_problem_and_state(&plan)
+            .expect("build terminal field fixture");
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-terminal-field-union-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-terminal-field-union".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 16}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let mut artifacts =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        let outputs = [OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1.0e-12,
+        }];
+        let field_schedules = collect_field_schedules(&outputs).expect("OutputIR field schedule");
+        let terminal_step = 271;
+        let mut steps = vec![StepStats {
+            step: terminal_step,
+            time: state.time_seconds,
+            ..StepStats::default()
+        }];
+        let deferred_autosave_fields = vec!["m".to_string(), "H_eff".to_string()];
+
+        record_final_outputs(
+            &problem,
+            &state,
+            Some(resolved_antenna_zeeman_field(&plan, state.time_seconds)),
+            terminal_step,
+            0.0,
+            true,
+            None,
+            &deferred_autosave_fields,
+            &field_schedules,
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("record unioned terminal fields");
+        drop(artifacts);
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let frames: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(output_dir.join("frames.json")).expect("field frame index"),
+        )
+        .expect("decode field frame index");
+        let emitted_quantities = frames["frames"]
+            .as_array()
+            .expect("frame list")
+            .iter()
+            .flat_map(|frame| {
+                assert_eq!(frame["step"], terminal_step);
+                frame["quantity_ids"]
+                    .as_array()
+                    .expect("frame quantity list")
+                    .iter()
+                    .map(|quantity| quantity.as_str().expect("quantity name").to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(emitted_quantities.iter().filter(|name| *name == "m").count(), 1);
+        assert_eq!(
+            emitted_quantities.iter().filter(|name| *name == "H_eff").count(),
+            1
+        );
+        assert_eq!(emitted_quantities.len(), 2);
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn direct_minimizer_scalar_artifact_keeps_terminal_step_271_at_time_zero() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-step-271-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-step-271".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let mut artifacts =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        let initial = StepStats {
+            step: 0,
+            time: 0.0,
+            ..StepStats::default()
+        };
+        artifacts
+            .record_scalar(&initial)
+            .expect("initial scalar row");
+        let mut steps = vec![initial];
+        record_direct_minimizer_terminal_stats(
+            StepStats {
+                step: 271,
+                time: 0.0,
+                ..StepStats::default()
+            },
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("terminal direct-minimizer scalar row");
+        drop(artifacts);
+        pipeline.finish().expect("finish artifact pipeline");
+
+        let scalar_rows =
+            std::fs::read_to_string(output_dir.join("scalars.csv")).expect("scalar trace");
+        let steps = scalar_rows
+            .lines()
+            .skip(1)
+            .map(|row| row.split(',').next().expect("step column"))
+            .collect::<Vec<_>>();
+        assert_eq!(steps, ["0", "271"]);
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn direct_minimizer_terminal_scalar_deduplicates_a_cadence_row() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-direct-minimizer-cadence-dedup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "direct-minimizer-cadence-dedup".to_string(),
+            ir_version: "v0".to_string(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("artifact pipeline");
+        let mut artifacts =
+            ArtifactRecorder::streaming(ExecutionProvenance::default(), pipeline.sender());
+        let cadence_row = StepStats {
+            step: 10,
+            time: 0.0,
+            e_total: 1.0,
+            ..StepStats::default()
+        };
+        artifacts
+            .record_scalar(&cadence_row)
+            .expect("cadence row is accepted");
+        let mut steps = vec![cadence_row];
+
+        record_direct_minimizer_terminal_stats(
+            StepStats {
+                step: 10,
+                time: 0.0,
+                e_total: 2.0,
+                ..StepStats::default()
+            },
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("terminal row replaces the already emitted cadence row");
+        drop(artifacts);
+        pipeline.finish().expect("finish artifact pipeline");
+
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].step, 10);
+        assert_eq!(steps[0].e_total, 2.0);
+        let scalar_rows =
+            std::fs::read_to_string(output_dir.join("scalars.csv")).expect("scalar trace");
+        let rows = scalar_rows.lines().skip(1).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1, "terminal must not duplicate the cadence row");
+        assert_eq!(rows[0].split(',').next(), Some("10"));
+        std::fs::remove_dir_all(output_dir).expect("remove test output");
+    }
+
+    #[test]
+    fn autosave_only_direct_minimizer_field_uses_terminal_step_271() {
+        let plan = make_test_plan();
+        let (problem, state) = build_snapshot_problem_and_state(&plan)
+            .expect("build autosave-only field fixture");
+        let autosave_final_field_names = vec!["m".to_string()];
+        let mut steps = vec![StepStats {
+            step: 271,
+            time: 0.0,
+            ..StepStats::default()
+        }];
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+
+        record_final_outputs(
+            &problem,
+            &state,
+            None,
+            271,
+            0.0,
+            false,
+            None,
+            &autosave_final_field_names,
+            &[],
+            &mut steps,
+            &mut artifacts,
+        )
+        .expect("publish the terminal autosave field");
+
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 1);
+        assert_eq!(field_snapshots.len(), 1);
+        assert_eq!(field_snapshots[0].name, "m");
+        assert_eq!(field_snapshots[0].step, 271);
+        assert_eq!(field_snapshots[0].time, 0.0);
+        assert_eq!(
+            field_snapshots[0].values,
+            state
+                .magnetization()
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn checkpoint_initial_autosave_fields_use_restored_clock_and_real_antenna_field() {
+        let checkpoint_step = 6;
+        let checkpoint_time = 4e-12;
+        let mut plan = make_test_plan();
+        plan.antenna_zeeman_masks = vec![fullmag_ir::ResolvedAntennaZeemanMaskIR {
+            source: "initial-autosave-antenna".into(),
+            object: "magnet".into(),
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 0.0, 1.0],
+            spatial_profile: None,
+            waveform: None,
+            field_xyz: vec![[7.0, -3.0, 2.0]; 16],
+        }];
+        let (problem, mut state) = build_snapshot_problem_and_state(&plan)
+            .expect("build checkpoint autosave field fixture");
+        state
+            .restore_exact_checkpoint(plan.initial_magnetization.clone(), checkpoint_time)
+            .expect("restore accepted checkpoint state");
+        let antenna_field = resolved_antenna_zeeman_field(&plan, state.time_seconds);
+        assert!(antenna_field.iter().any(|value| *value != [0.0; 3]));
+        let initial_m = state
+            .magnetization()
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        let initial_observables = observe_state_with_antenna_field(
+            &problem,
+            &state,
+            Some(antenna_field.clone()),
+        )
+        .expect("observe restored initial state with its resolved antenna field");
+        let initial_h_eff = select_state_observable_field(&initial_observables, "H_eff", true)
+            .expect("initial effective field")
+            .into_iter()
+            .flat_map(|value| value.into_iter())
+            .collect::<Vec<_>>();
+        let outputs = [OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+        let mut field_schedules = collect_field_schedules(&outputs).expect("field schedule");
+        let mut scalar_schedules = Vec::new();
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        let autosave_initial_field_names =
+            vec!["m".to_string(), "H_ant".to_string(), "H_eff".to_string()];
+
+        record_due_outputs_with_extra_fields(
+            &problem,
+            &state,
+            Some(antenna_field.clone()),
+            checkpoint_step,
+            0.0,
+            0,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+            &autosave_initial_field_names,
+        )
+        .expect("publish restored-clock scheduled and autosave fields");
+
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 3);
+        assert_eq!(field_snapshots.len(), 3);
+        let m = field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "m")
+            .expect("initial magnetization field");
+        assert_eq!(m.step, checkpoint_step);
+        assert_eq!(m.time, checkpoint_time);
+        assert_eq!(m.values, initial_m);
+        let h_ant = field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "H_ant")
+            .expect("initial antenna field");
+        assert_eq!(h_ant.step, checkpoint_step);
+        assert_eq!(h_ant.time, checkpoint_time);
+        assert_eq!(h_ant.values, FieldSnapshot::flatten_vec3(antenna_field));
+        assert!(h_ant.values.iter().any(|value| *value != 0.0));
+        let h_eff = field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "H_eff")
+            .expect("initial effective field");
+        assert_eq!(h_eff.step, checkpoint_step);
+        assert_eq!(h_eff.time, checkpoint_time);
+        assert_eq!(h_eff.values, initial_h_eff);
+    }
+
+    #[test]
+    fn checkpoint_initial_autosave_without_a_cadence_match_does_not_add_a_field() {
+        let mut plan = make_test_plan();
+        plan.time_stage.start_time_s = 4e-12;
+        let (problem, mut state) = build_snapshot_problem_and_state(&plan)
+            .expect("build non-due checkpoint autosave fixture");
+        state
+            .restore_exact_checkpoint(plan.initial_magnetization.clone(), 4e-12)
+            .expect("restore off-cadence accepted checkpoint state");
+        let outputs = [OutputIR::Field {
+            name: "m".to_string(),
+            every_seconds: 1e-12,
+        }];
+        let mut field_schedules = collect_field_schedules(&outputs).expect("field schedule");
+        field_schedules[0].next_time = 9e-12;
+        let mut scalar_schedules = Vec::new();
+        let mut steps = Vec::new();
+        let mut artifacts = ArtifactRecorder::in_memory(ExecutionProvenance::default());
+        let no_fields_due_at_restored_step = Vec::new();
+
+        record_due_outputs_with_extra_fields(
+            &problem,
+            &state,
+            Some(resolved_antenna_zeeman_field(&plan, state.time_seconds)),
+            5,
+            0.0,
+            0,
+            None,
+            &mut scalar_schedules,
+            &mut field_schedules,
+            &mut steps,
+            &mut artifacts,
+            &no_fields_due_at_restored_step,
+        )
+        .expect("do not synthesize an off-cadence resumed field");
+
+        let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
+        assert_eq!(field_snapshot_count, 0);
+        assert!(field_snapshots.is_empty());
+    }
+
+    #[test]
     fn llg_terminal_update_contains_final_state_and_cached_fields() {
         let plan = FdmPlanIR {
             enable_demag: true,
@@ -7326,6 +8549,85 @@ mod tests {
                 .is_some_and(|stats| stats.step <= 1),
             "paused run should not advance to the requested final time"
         );
+    }
+
+    #[test]
+    fn terminal_live_stats_recompute_after_tolerant_scheduled_sample() {
+        let plan = FdmPlanIR {
+            external_field: Some([0.0, 0.0, 1.0]),
+            ..make_test_plan()
+        };
+        let (problem, mut state) =
+            build_snapshot_problem_and_state(&plan).expect("build terminal stats fixture");
+        state.time_seconds = 1.0e-9;
+        let scheduled = StepStats {
+            step: 5011,
+            time: 9.999999999999395e-10,
+            ..StepStats::default()
+        };
+        assert!(same_time(scheduled.time, state.time_seconds));
+        assert_ne!(scheduled.time.to_bits(), state.time_seconds.to_bits());
+
+        let antenna_field = Some(resolved_antenna_zeeman_field(&plan, state.time_seconds));
+        let exact_accepted = StepStats {
+            step: 5012,
+            time: state.time_seconds,
+            e_total: 4.25,
+            max_torque_Apm: 2.5,
+            ..StepStats::default()
+        };
+        let exact_recorded = StepStats {
+            step: 5012,
+            time: state.time_seconds,
+            e_total: 8.5,
+            max_torque_Apm: 5.0,
+            finalization_field_copy_bytes: 88,
+            ..StepStats::default()
+        };
+        let selected = terminal_live_stats_for_state(
+            Some(&exact_accepted),
+            Some(&exact_recorded),
+            5012,
+            &state,
+            1.0e-13,
+            &problem,
+            None,
+        )
+        .expect("prefer exact recorded terminal stats");
+        assert_eq!(selected.e_total, exact_recorded.e_total);
+        assert_eq!(selected.max_torque_Apm, exact_recorded.max_torque_Apm);
+        assert_eq!(
+            selected.finalization_field_copy_bytes,
+            exact_recorded.finalization_field_copy_bytes
+        );
+
+        let antenna_field = Some(resolved_antenna_zeeman_field(&plan, state.time_seconds));
+        let terminal = terminal_live_stats_for_state(
+            None,
+            Some(&scheduled),
+            5012,
+            &state,
+            1.0e-13,
+            &problem,
+            antenna_field.clone(),
+        )
+        .expect("recompute terminal live stats from committed state");
+        let expected_observables =
+            observe_state_with_antenna_field(&problem, &state, antenna_field)
+                .expect("observe terminal state");
+        let expected = make_step_stats(
+            5012,
+            state.time_seconds,
+            1.0e-13,
+            0,
+            &expected_observables,
+            &problem,
+        );
+
+        assert_eq!(terminal.step, 5012);
+        assert_eq!(terminal.time.to_bits(), state.time_seconds.to_bits());
+        assert_eq!(terminal.e_total, expected.e_total);
+        assert_eq!(terminal.max_torque_Apm, expected.max_torque_Apm);
     }
 
     #[test]
@@ -8553,6 +9855,7 @@ mod tests {
             1e-14,
             false,
             None,
+            &[],
             &field_schedules,
             &mut steps,
             &mut artifacts,
@@ -8622,6 +9925,7 @@ mod tests {
             1e-14,
             true,
             None,
+            &[],
             &field_schedules,
             &mut steps,
             &mut artifacts,

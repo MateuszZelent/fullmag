@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useLayoutEffect } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { createCommandContext } from "@/kernel/commands/commandContext";
@@ -16,7 +16,7 @@ import {
 import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import {
   InspectorEditSessionProvider,
-  useInspectorEditSession,
+  useInspectorEditSessionStore,
 } from "./InspectorEditSession";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
@@ -25,57 +25,36 @@ import { InspectorShell } from "./InspectorShell";
 import { SavedResultsPlaybackInspector } from "./panels/SavedResultsPlaybackInspector";
 
 function PendingFormBridge() {
-  const kernel = useKernel();
-  const session = useInspectorEditSession();
-  const owner = useMemo(() => Symbol("inspector-pending-form"), []);
-  const applying = session?.applying ?? false;
-  const dirty = session?.dirty ?? false;
-  const applyBlockReason = session?.applyBlockReason;
-  const lockReason = session?.lockReason;
-  const mode = session?.mode ?? "immediate";
-  const valid = session?.valid ?? true;
-  const form = useMemo(
-    () =>
-      session
-        ? {
-            apply: session.apply,
-            applying,
-            dirty,
-            lockReason,
-            mode,
-            applyBlockReason,
-            reset: session.reset,
-            valid,
-          }
-        : null,
-    [
-      session,
-      applying,
-      dirty,
-      applyBlockReason,
-      lockReason,
-      mode,
-      valid,
-    ],
-  );
+  const { pendingForms } = useKernel();
+  const store = useInspectorEditSessionStore();
 
-  useEffect(() => {
-    const registry = kernel.pendingForms;
-    if (!registry) return;
-    if (!form) {
-      registry.unregister(owner);
-      return;
-    }
-    registry.register(owner, form);
-    return () => registry.unregister(owner);
-  }, [form, kernel.pendingForms, owner]);
+  useLayoutEffect(() => {
+    if (!pendingForms || !store) return;
+    const owner = Symbol("inspector-pending-form");
+    const sync = () => {
+      const form = store.getCurrentSession();
+      if (!form) {
+        pendingForms.unregister(owner);
+      } else if (!pendingForms.update(owner, form)) {
+        pendingForms.register(owner, form);
+      }
+    };
+    const unsubscribe = store.subscribe(sync);
+    sync();
+    return () => {
+      unsubscribe();
+      pendingForms.unregister(owner);
+    };
+  }, [pendingForms, store]);
 
   return null;
 }
 
 export default function InspectorModule() {
   const savedPlayback = useSavedResultsPlaybackSelection();
-  return savedPlayback ? <SavedResultsPlaybackInspector /> : <LiveInspectorModule />;
+  return savedPlayback && !savedPlayback.studyResult
+    ? <SavedResultsPlaybackInspector />
+    : <LiveInspectorModule />;
 }
 
 function LiveInspectorModule() {

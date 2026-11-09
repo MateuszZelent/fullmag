@@ -75,6 +75,15 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                                            "gpu_preflight": "NOT_REQUIRED" if retained_policy == "disabled" else "PASS",
                                            "image_id": "sha256:" + "b" * 64}}
                     control = mock.Mock(project=project_name)
+                    byte_reads = []
+
+                    def read_bytes(path, *, optional=False):
+                        byte_reads.append((path, optional))
+                        if path == "prepared-unclaimed/current.json" and optional:
+                            return None
+                        raise AssertionError(f"unexpected control-volume byte read: {path}")
+
+                    control.read_bytes.side_effect = read_bytes
                     # Retained receipt, its Compose document, then no aborted preparation.
                     control.read.side_effect = [previous, document, None]
                     configuration = {"services": {"fem-gpu-toolchain": {"build": {"args": {
@@ -94,6 +103,7 @@ class VolumeReceiptTests(IsolatedReceiptTests):
                             with self.assertRaisesRegex(BuildControlError, "retained GPU access intent"):
                                 dev._retained_operation(args, recreate_services=True)
                             capture.assert_not_called()
+                    self.assertEqual(byte_reads, [("prepared-unclaimed/current.json", True)])
 
     def test_runtime_supervisor_accepts_only_fixed_provenance_locations(self):
         path = Path(__file__).resolve().parents[1] / 'docker/all-in-one/runtime_service.py'
@@ -1154,7 +1164,9 @@ class FrontendMetadataRefreshTests(IsolatedReceiptTests):
         self.assertFalse(any(Path(path).name in ('host-ledger.json','ledger-maintenance-compose.json')
                              for path in writes))
         from docker_volume_activate import _linked_runtime_terminals
-        self.assertEqual(_linked_runtime_terminals(mock.Mock(),terminal['attempt'],terminal,
+        retained_control = mock.Mock()
+        retained_control.read.return_value = None  # No later resume/iteration exists.
+        self.assertEqual(_linked_runtime_terminals(retained_control,terminal['attempt'],terminal,
             source_root='/selected',image='image',config_sha256=terminal['config_sha256']),[terminal])
         lifecycle=composed.call_args_list[0]
         self.assertEqual(lifecycle.args[1:],('up','--detach','--no-build','--pull','never','--no-deps','--force-recreate','frontend'))

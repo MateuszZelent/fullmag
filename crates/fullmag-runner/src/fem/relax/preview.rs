@@ -1787,16 +1787,61 @@ pub(crate) fn capture_native_fem_observables(
         active_fem_preview_quantities(engine, plan, &field_materialization_quantity_ids()),
     );
     let started = std::time::Instant::now();
+    let mut native_requests = Vec::with_capacity(quantities.len());
+    let mut prepared_fields = Vec::with_capacity(quantities.len());
+    for quantity in &quantities {
+        let request = native_fem_observable_request(engine, plan, quantity)?;
+        if engine == FemEngine::CpuNative && request.quantity == "H_ant" {
+            let started = std::time::Instant::now();
+            let field = build_fem_antenna_preview_field(
+                &request,
+                plan,
+                clock.accepted_step,
+                clock.time_seconds,
+            )?;
+            prepared_fields.push(Some(finish_native_fem_observable_field(
+                field,
+                &request.quantity,
+                node_count,
+                clock,
+                started,
+                0,
+            )?));
+        } else {
+            native_requests.push(request);
+            prepared_fields.push(None);
+        }
+    }
+    let copied = backend.copy_live_preview_fields_for_capture(&native_requests, node_count)?;
+    let mut copied = copied.into_iter();
+    let mut native_request_index = 0usize;
     let mut fields = Vec::with_capacity(quantities.len());
-    for quantity in quantities {
-        fields.push(capture_native_fem_observable_field(
-            backend,
-            engine,
-            plan,
+    for prepared in prepared_fields {
+        if let Some(field) = prepared {
+            fields.push(field);
+            continue;
+        }
+        let (field, copy_wall_time_ns) = copied.next().ok_or_else(|| RunError {
+            message: "native live observation batch omitted a requested field".into(),
+        })?;
+        let request = &native_requests[native_request_index];
+        native_request_index += 1;
+        let validation_started = std::time::Instant::now();
+        fields.push(finish_native_fem_observable_field(
+            field,
+            &request.quantity,
+            node_count,
             clock,
-            quantity,
+            validation_started,
+            copy_wall_time_ns,
         )?);
     }
+    if copied.next().is_some() {
+        return Err(RunError {
+            message: "native live observation batch returned an unexpected field".into(),
+        });
+    }
+
     let magnetization = fields.iter().find(|field| field.quantity == "m")
         .map(|field| field.vector_field_values.clone())
         .ok_or_else(|| RunError { message: "native live observation omitted m".into() })?;
@@ -1823,33 +1868,55 @@ pub(super) fn capture_native_fem_observable_field(
     clock: ObservationClock,
     quantity: &str,
 ) -> Result<LivePreviewField, RunError> {
-    clock.validate().map_err(|error| RunError { message: error.to_string() })?;
+    clock.validate().map_err(|error| RunError {
+        message: error.to_string(),
+    })?;
+    let request = native_fem_observable_request(engine, plan, quantity)?;
+    let started = std::time::Instant::now();
+    let field = if engine == FemEngine::CpuNative && request.quantity == "H_ant" {
+        build_fem_antenna_preview_field(&request, plan, clock.accepted_step, clock.time_seconds)?
+    } else {
+        build_fem_live_preview_field(backend, &request, plan.mesh.nodes.len())?
+    };
+    finish_native_fem_observable_field(
+        field,
+        &request.quantity,
+        plan.mesh.nodes.len(),
+        clock,
+        started,
+        0,
+    )
+}
+
+fn native_fem_observable_request(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    quantity: &str,
+) -> Result<LivePreviewRequest, RunError> {
     let quantity = crate::quantities::normalized_quantity_name(quantity)?;
     if !active_fem_preview_quantities(engine, plan, &[quantity]).contains(&quantity) {
         return Err(RunError {
             message: format!("native FEM terminal observation quantity '{quantity}' is inactive"),
         });
     }
-    let node_count = plan.mesh.nodes.len();
-    let request = LivePreviewRequest {
+    Ok(LivePreviewRequest {
         quantity: quantity.into(),
         all_layers: true,
         every_n: 1,
         auto_scale_enabled: false,
         max_points: u32::MAX,
         ..LivePreviewRequest::default()
-    };
-    let started = std::time::Instant::now();
-    let mut field = if engine == FemEngine::CpuNative && quantity == "H_ant" {
-        build_fem_antenna_preview_field(
-            &request,
-            plan,
-            clock.accepted_step,
-            clock.time_seconds,
-        )?
-    } else {
-        build_fem_live_preview_field(backend, &request, node_count)?
-    };
+    })
+}
+
+fn finish_native_fem_observable_field(
+    mut field: LivePreviewField,
+    quantity: &str,
+    node_count: usize,
+    clock: ObservationClock,
+    validation_started: std::time::Instant,
+    copy_wall_time_ns: u64,
+) -> Result<LivePreviewField, RunError> {
     let expected_components = quantity_spec(quantity).map_or(3, |spec| spec.n_comp as usize);
     let expected_values = node_count
         .checked_mul(expected_components)
@@ -1872,7 +1939,8 @@ pub(super) fn capture_native_fem_observable_field(
     field.source_time_seconds = Some(clock.time_seconds);
     field.source_revision = clock.accepted_step;
     field.materialized_at_unix_ms = unix_time_ms();
-    field.materialization_wall_time_ns = elapsed_ns(started);
+    field.materialization_wall_time_ns =
+        copy_wall_time_ns.saturating_add(elapsed_ns(validation_started));
     Ok(field)
 }
 

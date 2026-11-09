@@ -6394,6 +6394,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
         fdm_gpu_endpoint_cache_telemetry: None,
+        cpu_fixed_coupling: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution,
@@ -6517,6 +6518,7 @@ fn cuda_execution_provenance(
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
         fdm_gpu_endpoint_cache_telemetry: None,
+        cpu_fixed_coupling: None,
         fem_eigen_execution_resolution: None,
         fem_eigen_native_execution_attestation: None,
         fdm_cpu_step_transaction_telemetry: None,
@@ -6537,11 +6539,9 @@ fn cuda_execution_provenance(
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
             fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
         },
-        demag_operator_kind: if plan.enable_demag {
-            Some("tensor_fft_newell".to_string())
-        } else {
-            None
-        },
+        demag_operator_kind: crate::fdm::gpu::cuda::native::single_grid_demag_operator_kind(
+            plan,
+        )?,
         fft_backend: if plan.enable_demag {
             Some("cuFFT".to_string())
         } else {
@@ -6654,6 +6654,7 @@ fn fem_gpu_execution_provenance(
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
         fdm_gpu_endpoint_cache_telemetry: None,
+        cpu_fixed_coupling: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution: None,

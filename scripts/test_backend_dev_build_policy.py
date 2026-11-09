@@ -69,6 +69,167 @@ def test_direct_compose_keeps_native_fem_release_for_backend_dev():
     ).read_text(encoding="utf-8")
 
 
+@pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None,
+                    reason="The extracted Makefile recipe is a Linux-container regression")
+@pytest.mark.parametrize("contract_id", ["fem-demag-poisson", "fem-cuda-activity-trace"])
+def test_native_contract_prebuild_is_opt_in_validated_and_precedes_library_copy(tmp_path, contract_id):
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    recipe_start = makefile.index("install-cli install-cli-dev install-cli-static:\n")
+    recipe_end = makefile.index("\nshow-cli-path:", recipe_start)
+    recipe = makefile[recipe_start:recipe_end]
+
+    expansion = "$$"
+    guard_anchor = recipe.index("\tnative_contracts=")
+    guard_start = recipe.rfind("\t@set -e; \\", 0, guard_anchor)
+    guard_end = recipe.index("\n\t@set -e\n", guard_anchor)
+    guard = recipe[guard_start:guard_end].replace(expansion, "$").lstrip("\t@")
+    guard = guard.replace('"$@"', '"$MAKE_TARGET"')
+
+    def run_guard(selector=None, *, target="install-cli-dev", direct="1", profile="backend-dev"):
+        environment = os.environ.copy()
+        environment.update({
+            "MAKE_TARGET": target,
+            "FULLMAG_DIRECT_COMPOSE": direct,
+            "FULLMAG_BACKEND_CARGO_PROFILE": profile,
+        })
+        if selector is None:
+            environment.pop("FULLMAG_INTERNAL_NATIVE_CONTRACTS", None)
+        else:
+            environment["FULLMAG_INTERNAL_NATIVE_CONTRACTS"] = selector
+        return subprocess.run(
+            ["bash", "-c", guard],
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+
+    assert run_guard().returncode == 0
+    assert run_guard(contract_id).returncode == 0
+    assert run_guard("unknown-contract").returncode == 2
+    assert run_guard(contract_id, target="install-cli").returncode == 2
+    assert run_guard(contract_id, direct="0").returncode == 2
+    assert run_guard(contract_id, profile="release").returncode == 2
+
+    marker = '\tif [ -n "' + expansion + '{FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}" ]; then \\\n'
+    prebuild_start = recipe.index(marker)
+    prebuild_stop = recipe.index(
+        '\n\tmkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)/lib";', prebuild_start
+    )
+    prebuild_end = recipe.rfind("\n\tfi;", prebuild_start, prebuild_stop) + len("\n\tfi; \\")
+    package_start = recipe.index(
+        '\tif [ "$$build_mode" = "cuda-fem-gpu" ] || [ "$$build_mode" = "fem-cpu" ]; then \\\n',
+        prebuild_end,
+    )
+    prebuild = recipe[prebuild_start:prebuild_end].replace(expansion, "$")
+    package_end = recipe.index('\n\t@mkdir -p "$(FULLMAG_INTERNAL_INSTALL_ROOT)/bin"', package_start)
+    package_copy = recipe[package_start:package_end].replace(expansion, "$")
+    package_copy = package_copy.replace(
+        "$(FULLMAG_INTERNAL_INSTALL_ROOT)", '"$FULLMAG_INTERNAL_INSTALL_ROOT"'
+    )
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_cmake = fake_bin / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$FAKE_CMAKE_LOG\"\n"
+        "if [ \"$FAKE_CMAKE_FAIL\" = \"1\" ]; then exit 7; fi\n"
+        "printf 'post-prebuild-library' > \"$FAKE_FEM_LIBRARY\"\n",
+        encoding="utf-8",
+    )
+    fake_cmake.chmod(0o755)
+    real_python = shutil.which("python3")
+    assert real_python is not None
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"$FAKE_HELPER\" ]; then\n"
+        "  [ \"$2\" = \"prepare\" ] || exit 8\n"
+        "  \"$FULLMAG_CMAKE\" --build \"$FULLMAG_FEM_NATIVE_BUILD_ROOT\" "
+        "--target $FAKE_CONTRACT_TARGET --parallel \"$CARGO_BUILD_JOBS\"\n"
+        "elif [ \"$1\" = \"scripts/select_managed_fem_library.py\" ]; then\n"
+        "  printf '%s\\n' \"$FAKE_FEM_SELECTION\"\n"
+        "else\n"
+        f"  exec {shlex.quote(real_python)} \"$@\"\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    helper = tmp_path / "fake-native-contract-helper.py"
+    helper.write_text("# fixture helper invoked by the Make recipe\n", encoding="utf-8")
+
+    def run_build(case_root, *, selector, fail=False):
+        native_root = case_root / "native-root"
+        fem_build = native_root / "backends/fem"
+        fem_build.mkdir(parents=True)
+        build_library = fem_build / "libfullmag_fem.so.1"
+        build_library.write_bytes(b"pre-build-library")
+        install_root = case_root / "candidate"
+        (install_root / "lib").mkdir(parents=True)
+        capture = case_root / "cmake.log"
+        script = "\n".join((
+            "set -eu",
+            f"cmake_bin={shlex.quote(str(fake_cmake))}",
+            "build_mode=cuda-fem-gpu",
+            "cargo_profile_dir=backend-dev",
+            f"cargo_target_dir={shlex.quote(str(case_root / 'cargo-target'))}",
+            f"cargo_target_profile_dir={shlex.quote(str(case_root / 'cargo-target/backend-dev'))}",
+            prebuild,
+            package_copy,
+        ))
+        environment = os.environ.copy()
+        environment.update({
+            "PATH": str(fake_bin) + os.pathsep + environment["PATH"],
+            "FULLMAG_INTERNAL_NATIVE_CONTRACTS": selector,
+            "FULLMAG_INTERNAL_NATIVE_CONTRACT_HELPER": str(helper),
+            "FULLMAG_INTERNAL_NATIVE_CONTRACT_PREPARATION_ROOT": str(case_root / "preparation"),
+            "FULLMAG_INTERNAL_INSTALL_ROOT": str(install_root),
+            "FULLMAG_FEM_NATIVE_BUILD_ROOT": str(native_root),
+            "FULLMAG_SOURCE_SNAPSHOT_SHA256": "a" * 64,
+            "CARGO_BUILD_JOBS": "3",
+            "FAKE_HELPER": str(helper),
+            "FAKE_CONTRACT_TARGET": contract_id.replace("-", "_") + "_contract",
+            "FAKE_FEM_SELECTION": str(fem_build),
+            "FAKE_FEM_LIBRARY": str(build_library),
+            "FAKE_CMAKE_LOG": str(capture),
+            "FAKE_CMAKE_FAIL": "1" if fail else "0",
+        })
+        return subprocess.run(
+            ["bash", "-c", script],
+            cwd=case_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+        ), install_root / "lib/libfullmag_fem.so.1", capture
+
+    changed_root = tmp_path / "changed"
+    changed_root.mkdir()
+    result, packaged_library, cmake_log = run_build(
+        changed_root, selector=contract_id
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert packaged_library.read_bytes() == b"post-prebuild-library"
+    assert cmake_log.read_text(encoding="utf-8").strip() == (
+        f"--build {changed_root / 'native-root'} --target {contract_id.replace('-', '_')}_contract --parallel 3"
+    )
+
+    skipped_root = tmp_path / "skipped"
+    skipped_root.mkdir()
+    result, packaged_library, cmake_log = run_build(skipped_root, selector="")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert packaged_library.read_bytes() == b"pre-build-library"
+    assert not cmake_log.exists()
+
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir()
+    result, packaged_library, _ = run_build(
+        failed_root, selector=contract_id, fail=True
+    )
+    assert result.returncode == 7
+    assert not packaged_library.exists()
+
+
 @pytest.mark.skipif(
     os.name == "nt" or shutil.which("bash") is None,
     reason="The extracted Makefile recipe is a Linux-container regression",
@@ -78,7 +239,9 @@ def test_install_cli_dev_pins_fdm_package_to_explicit_native_root():
     start = makefile.index('\tif [ -n "$${FULLMAG_FDM_NATIVE_BUILD_ROOT:-}" ]; then')
     end = makefile.index('\tif [ "$$build_mode"', start)
     # Execute the recipe fragment itself after undoing Make's dollar escaping.
-    recipe = makefile[start:end].replace("$$", "$")
+    recipe = makefile[start:end].replace("$$", "$").replace(
+        "$(FULLMAG_INTERNAL_INSTALL_ROOT)", '"$FULLMAG_INTERNAL_INSTALL_ROOT"'
+    )
 
     def run_fragment(case_root, configured_root=None, create_destination=True):
         (case_root / ".fullmag/local").mkdir(parents=True, exist_ok=True)
@@ -86,6 +249,7 @@ def test_install_cli_dev_pins_fdm_package_to_explicit_native_root():
             (case_root / ".fullmag/local/lib").mkdir()
         environment = os.environ.copy()
         environment.pop("FULLMAG_FDM_NATIVE_BUILD_ROOT", None)
+        environment["FULLMAG_INTERNAL_INSTALL_ROOT"] = str(case_root / ".fullmag/local")
         if configured_root is not None:
             environment["FULLMAG_FDM_NATIVE_BUILD_ROOT"] = str(configured_root)
         script = "\n".join(

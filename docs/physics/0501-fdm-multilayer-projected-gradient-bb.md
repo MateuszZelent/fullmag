@@ -411,3 +411,68 @@ macierzy materiałów, geometrii, obsługi przerwań ani wydania produkcyjnego.
 | crates/fullmag-runner/src/relaxation/direct_minimizer.rs | projected_gradient_step_size_from_products | Shared scalar BB1/BB2 restart policy. |
 | crates/fullmag-runner/src/fdm/gpu/cuda/multilayer_bb.rs | snapshot_native_multilayer_bb_m | FDM GPU M-only accepted publication preserving resident scalar reductions. |
 | crates/fullmag-runner/src/autosave_storage.rs | append | Per-quantity payload rows with preserved logical stage and target ordinals. |
+| crates/fullmag-plan/src/fdm.rs | fdm_multilayer_cuda_projected_bb_error | Admit aligned FP64 CUDA PG-BB with periodic XY and open Z. |
+| crates/fullmag-fdm-demag/src/newell.rs | try_compute_periodic_xy_newell_kernels | Fold self and shifted image tensors into the circular XY grid. |
+| backends/fdm/api/c_api.cpp | fullmag_fdm_backend_set_multilayer_xy_periodic_v1 | Validate FFT shape and set layer-local seams. |
+| crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs | materialize_airbox_observation_snapshot_gpu | Evaluate the accepted state on a compatible open-Z target grid. |
+
+### Lateral periodic cells (FP64 CUDA PG-BB)
+
+The aligned three-dimensional solver uses one lateral lattice for every object.
+For common cell counts $N_x,N_y,N_z$ and cell pitches $h_x,h_y,h_z$ in metres,
+the periods are $L_x=N_x h_x$ and $L_y=N_y h_y$. The Z boundary is open.
+For each source–destination pair, the dimensionless Newell tensor is summed
+over the finite image rectangle $[-I_x,I_x]\times[-I_y,I_y]$ about the
+centred lateral lag. The pair's vertical displacement is retained in every
+image. Beyond 40 times the largest cell pitch, each image uses the shifted
+Newell kernel’s point-dipole approximation. For an even cell count, the two equivalent half-period lags are
+averaged to preserve reflection parity and pair reciprocity. The convolution
+uses $N_x\times N_y\times 2N_z$ FFT samples. This is a truncated lattice
+sum, whose image counts are part of the requested and resolved provenance.
+
+The exchange and rDMI stencils wrap on an axis only when the native object
+grid spans the full common period on that axis. Existing active-cell masks
+still apply. A smaller centred cylinder has open local surfaces and couples
+to its copies magnetostatically. Each field and its corresponding energy use
+the same boundary condition, so the line search compares consistent energies.
+
+The implementation scope is strict double CUDA with aligned grids and PG-BB.
+Validation compares shifted and self tensors against direct image sums,
+verifies local seam fields and energies, and exercises the coupled minimizer
+on CUDA. CPU execution, other multilayer integrators and periodic Z require
+their own qualification. See the pair-convolution formulation in
+[Lepadatu (2019)](https://doi.org/10.1063/1.5116754).
+
+### Airbox observation on the periodic cell
+
+For the same CUDA lane, a compatible Airbox spans one complete period in X and
+Y, has the common cell pitch, and contains the aligned source grids. Its Z
+extent may include additional layers of air. Each active source cell contributes
+its physical magnetization $M_{s,i}\mathbf m_i$ to the corresponding target
+lattice cell. The other lattice cells contribute zero magnetization.
+
+```{math}
+:label: eq-multilayer-bb-periodic-airbox
+\mathbf H^{\mathrm{obs}}_{\mathrm{demag},j}
+  = -\sum_i \mathbf N^{\mathrm{XY}}_{j-i}\, M_{s,i}\mathbf m_i .
+```
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $i$ | Active source cell index on the observation lattice | $1$ |
+| $j$ | Observation cell index | $1$ |
+| $\mathbf N^{\mathrm{XY}}_{j-i}$ | Cell-averaged tensor with the resolved finite XY images and open Z | $1$ |
+| $\mathbf H^{\mathrm{obs}}_{\mathrm{demag},j}$ | Demagnetizing field on the Airbox lattice | $\mathrm{A\,m^{-1}}$ |
+
+The observation uses cuFFT on the circular XY grid with doubled target Z
+extent. It consumes the accepted magnetization and publishes an independent
+target carrier through the existing field resource. It does not enter the
+minimizer or alter an accepted step. The carrier identifies the observation
+boundary, resolved image counts and FFT shape. An incompatible target produces
+an unavailable Airbox field. Python and ProblemIR use the existing universe
+and periodic boundary declarations.
+
+The numerical gate compares the observation values against the pair operator
+at active source cells and an independent finite-image reconstruction in air.
+Runtime acceptance also requires the selected accepted step, material masking
+and field presentation to agree in the 2D and 3D consumers.

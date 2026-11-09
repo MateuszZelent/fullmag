@@ -296,8 +296,13 @@ export interface StudyStageDraft {
   // Hysteresis expansion fields
   protocolKind: string;
   rawStage?: JsonObject;
+  stageMagnetizationAssignments?: JsonValue;
+  scriptMagnetizationAssignments?: JsonValue;
+  stageEnabled?: boolean;
   pipelineNodeId?: string;
   pipelineEnabled?: boolean;
+  pipelineNodeEnabled?: boolean;
+  pipelineAncestorsEnabled?: boolean;
   pipelineGroupIds?: readonly string[];
   initialStatePolicy: string;
   initialStateRef: string;
@@ -795,6 +800,11 @@ export function createStudyStageDraft(
   const kind = stageKind(record);
   const action = asRecord(record?.action);
   const payload = asRecord(record?.payload);
+  const physicalMetadata = {
+    stageMagnetizationAssignments: record?.stage_magnetization_assignments as JsonValue | undefined,
+    scriptMagnetizationAssignments: record?.magnetization_assignments as JsonValue | undefined,
+    stageEnabled: typeof record?.enabled === "boolean" ? record.enabled : undefined,
+  };
   if (kind === "unsupported" || kind === "antenna_field_solve") {
     return cloneStudyStageDraft({
       ...DEFAULT_RELAX_STAGE_DRAFT,
@@ -975,6 +985,7 @@ export function createStudyStageDraft(
   if (kind === "run") {
     return {
       ...DEFAULT_RUN_STAGE_DRAFT,
+      ...physicalMetadata,
       legacyRunFixedTimestep: scalarText(record?.fixed_timestep, ""),
       stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "run"),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
@@ -1212,6 +1223,7 @@ export function createStudyStageDraft(
       "",
     ),
     kind: "relax",
+    ...physicalMetadata,
     stageAutosave: stageAutosaveDraftFromValue(record?.autosave, "relax"),
     maxError: scalarText(
       toleranceMode === "max_error"
@@ -1295,6 +1307,47 @@ export function createDefaultStudyStageDraft(
     kind,
     stageId: `${kind}-${stageCount + 1}`,
   });
+}
+
+const STAGE_TEXTURE_ASSIGNMENTS_SCHEMA = "fullmag.magnetization-assignments.v1";
+
+export type StageTextureAssignment = JsonObject & {
+  object_id: string;
+  region_id: string | null;
+  initializer: JsonObject | null;
+};
+
+export function readStageTextureAssignments(value: JsonValue | undefined): StageTextureAssignment[] | null {
+  if (value === undefined) return [];
+  const batch = asRecord(value);
+  if (batch?.schema_version !== STAGE_TEXTURE_ASSIGNMENTS_SCHEMA || !Array.isArray(batch.assignments)
+      || batch.assignments.length === 0 || batch.assignments.length > 4096) return null;
+  return batch.assignments.every((item: unknown) => {
+    const assignment = asRecord(item);
+    return assignment && typeof assignment.object_id === "string" && assignment.object_id.trim()
+      && (assignment.region_id === null ||
+        (typeof assignment.region_id === "string" && assignment.region_id.trim()))
+      && (assignment.initializer === null || typeof asRecord(assignment.initializer)?.kind === "string");
+  }) ? batch.assignments as StageTextureAssignment[] : null;
+}
+
+export function stageTextureAssignmentsValue(assignments: StageTextureAssignment[]): JsonObject | undefined {
+  return assignments.length > 0 ? {
+    schema_version: STAGE_TEXTURE_ASSIGNMENTS_SCHEMA,
+    assignments,
+  } : undefined;
+}
+
+function physicalStageMetadata(draft: StudyStageDraft): JsonObject {
+  const result: JsonObject = {};
+  if (draft.stageMagnetizationAssignments !== undefined) {
+    result.stage_magnetization_assignments = structuredClone(draft.stageMagnetizationAssignments);
+  }
+  if (draft.scriptMagnetizationAssignments !== undefined) {
+    result.magnetization_assignments = structuredClone(draft.scriptMagnetizationAssignments);
+  }
+  if (draft.stageEnabled !== undefined) result.enabled = draft.stageEnabled;
+  return result;
 }
 
 export function studyStageDraftToSceneStage(
@@ -1416,6 +1469,7 @@ export function studyStageDraftToSceneStage(
   }
   if (draft.kind === "run") {
     const stage: JsonObject = {
+      ...physicalStageMetadata(draft),
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: requiredText(draft.stageId, "run"),
@@ -1607,16 +1661,18 @@ export function studyStageDraftToSceneStage(
   }
 
   const stage: JsonObject = {
+    ...physicalStageMetadata(draft),
     algorithm: requiredText(draft.algorithm, "llg_overdamped"),
     entrypoint_kind: "flat_relax",
     kind: "relax",
-    max_steps: String(requiredInteger(draft.maxSteps, "max_steps")),
     stage_id: requiredText(draft.stageId, "relax"),
-    torque_tolerance_apm: requiredNumber(
-      draft.torqueTolerance,
-      "torque_tolerance_apm",
-    ),
   };
+  if (!draft.pipelineNodeId || draft.maxSteps.trim()) {
+    stage.max_steps = String(requiredInteger(draft.maxSteps, "max_steps"));
+  }
+  if (!draft.pipelineNodeId || draft.torqueTolerance.trim()) {
+    stage.torque_tolerance_apm = requiredNumber(draft.torqueTolerance, "torque_tolerance_apm");
+  }
 
   setOptionalNumber(stage, "energy_tolerance_j", draft.energyTolerance);
   if (draft.algorithm === "llg_overdamped") {
@@ -1626,15 +1682,19 @@ export function studyStageDraftToSceneStage(
       draft.maxRelaxationTime,
       "time",
     );
-    setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
+    if (draft.pipelineNodeId) {
+      setOptionalNonnegativeNumber(stage, "relax_alpha", draft.relaxAlpha);
+    } else {
+      setOptionalNumber(stage, "relax_alpha", draft.relaxAlpha);
+    }
     setOptionalText(stage, "integrator", draft.solver);
     if (draft.timestepMode === "fixed" && draft.dt.trim()) {
       stage.fixed_timestep = String(requiredNumber(draft.dt, "Fixed dt", "time"));
     } else if (draft.timestepMode === "adaptive") {
       const adaptive: JsonObject = { tolerance_mode: draft.toleranceMode };
       if (draft.toleranceMode === "advanced") {
-        setOptionalNumber(adaptive, "atol", draft.atol);
-        setOptionalNumber(adaptive, "rtol", draft.rtol);
+        setOptionalNonnegativeNumber(adaptive, "atol", draft.atol);
+        setOptionalNonnegativeNumber(adaptive, "rtol", draft.rtol);
       } else {
         setOptionalNumber(adaptive, "atol", draft.maxError);
         adaptive.rtol = 0;
@@ -1666,7 +1726,9 @@ export function studyStageDraftToSceneStage(
     const fieldRefresh: JsonObject = {};
     const fieldEvery = optionalInteger(draft.fieldEvery);
     if (fieldEvery !== null) fieldRefresh.every_n = fieldEvery;
-    if (Object.keys(fieldRefresh).length > 0) stage.field_refresh = fieldRefresh;
+    if (!draft.pipelineNodeId && Object.keys(fieldRefresh).length > 0) {
+      stage.field_refresh = fieldRefresh;
+    }
     setOptionalNumber(stage, "demag_interval_s", draft.demagInterval, "time");
   }
 
@@ -1698,6 +1760,9 @@ export function validateStudyStageDraft(
   },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];
+  if (readStageTextureAssignments(draft.stageMagnetizationAssignments) === null) {
+    issues.push({ message: "This stage has an unreadable texture assignment list.", severity: "error" });
+  }
   if (!draft.stageId.trim()) {
     issues.push({ message: "Stage ID is required.", severity: "error" });
   }
@@ -1819,7 +1884,7 @@ export function validateStudyStageDraft(
   }
   if (draft.kind === "run") {
     validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true, "time");
-    if (draft.legacyRunFixedTimestep.trim()) {
+    if (!draft.pipelineNodeId && draft.legacyRunFixedTimestep.trim()) {
       issues.push({
         message:
           "Legacy Run-local fixed_timestep must be moved to the global Solver definition before this workflow can be saved.",
@@ -1965,8 +2030,8 @@ export function validateStudyStageDraft(
     return issues;
   }
 
-  validatePositiveNumber(issues, draft.torqueTolerance, "Torque tolerance", true);
-  validatePositiveInteger(issues, draft.maxSteps, "Max steps", true);
+  validatePositiveNumber(issues, draft.torqueTolerance, "Torque tolerance", !draft.pipelineNodeId);
+  validatePositiveInteger(issues, draft.maxSteps, "Max steps", !draft.pipelineNodeId);
   validatePositiveNumber(issues, draft.energyTolerance, "Energy tolerance", false);
   const availability = execution
     ? relaxationAlgorithmAvailability(draft.algorithm, execution)
@@ -1985,8 +2050,12 @@ export function validateStudyStageDraft(
       });
     }
     validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false, "time");
-    validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
-    if (draft.timestepMode === "auto") {
+    if (draft.pipelineNodeId && draft.relaxAlpha.trim()) {
+      validateNonnegativeNumber(issues, draft.relaxAlpha, "Relax alpha");
+    } else {
+      validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
+    }
+    if (draft.timestepMode === "auto" && !draft.pipelineNodeId) {
       issues.push({
         message: "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
         severity: "error",
@@ -2032,7 +2101,7 @@ export function validateStudyStageDraft(
       }
     }
     validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false, "time");
-    validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
+    if (!draft.pipelineNodeId) validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
     if (draft.timestepMode !== "auto" && draft.dt.trim()) {
       validatePositiveNumber(
         issues,
@@ -2177,15 +2246,217 @@ function joinOptions(options: readonly string[]): string {
   }`;
 }
 
+const RELAX_STOP_ALIASES = {
+  max_steps: [],
+  torque_tolerance_apm: ["torque_tolerance", "tol"],
+  energy_tolerance_j: ["energy_tolerance"],
+  max_relaxation_time_s: ["max_pseudotime_s", "max_physical_time_s"],
+} as const;
+
+const LEGACY_RELAX_TIMESTEP_FIELDS = ["dt", "max_error", "max_err", "dt_initial", "dt_min", "dt_max"] as const;
+const PIPELINE_RELAX_INTEGRATOR_ALIASES = new Map([
+  ["auto", "rk23"],
+  ["bs23", "rk23"],
+  ["dp54", "rk45"],
+  ["rk32", "rk23"],
+]);
+
+export function isEditablePipelineStage(
+  draft: StudyStageDraft | null | undefined,
+): boolean {
+  return Boolean(draft?.pipelineNodeId && draft.rawStage && (draft.kind === "run" || draft.kind === "relax"));
+}
+
+function hasExplicitRelaxStop(payload: JsonRecord): boolean {
+  return Object.entries(RELAX_STOP_ALIASES).some(([key, aliases]) =>
+    [key, ...aliases].some((field) => {
+      const value = payload[field];
+      return (typeof value === "number" || typeof value === "string") && Number(value) > 0;
+    }),
+  );
+}
+
+export function createPipelinePhysicalStageDraft(
+  payload: JsonRecord,
+  kind: "run" | "relax",
+  index: number,
+): StudyStageDraft {
+  if (kind === "run") return createStudyStageDraft({ ...payload, kind }, index);
+  const explicitStop = hasExplicitRelaxStop(payload);
+  const legacyMaxError = scalarText(payload.max_err, "").trim() ||
+    scalarText(payload.max_error, "").trim();
+  const fixedTimestep = scalarText(payload.fixed_timestep, "").trim() ||
+    scalarText(payload.dt, "").trim();
+  const integrator = (
+    scalarText(payload.integrator, "").trim() || scalarText(payload.solver, "").trim()
+  ).toLowerCase();
+  const adaptive = payload.adaptive_timestep ?? (
+    Number(legacyMaxError) > 0 ? {
+      tolerance_mode: "max_error",
+      atol: legacyMaxError,
+      rtol: 0,
+      dt_initial: payload.dt_initial,
+      dt_min: payload.dt_min,
+      dt_max: payload.dt_max,
+    } : null
+  );
+  return createStudyStageDraft({
+    ...payload,
+    kind,
+    fixed_timestep: adaptive && fixedTimestep.toLowerCase() === "auto"
+      ? undefined
+      : fixedTimestep || undefined,
+    adaptive_timestep: adaptive,
+    ...(integrator ? { integrator: PIPELINE_RELAX_INTEGRATOR_ALIASES.get(integrator) ?? integrator } : {}),
+    ...(explicitStop ? {
+      max_steps: Number(payload.max_steps) > 0 ? payload.max_steps : "",
+      torque_tolerance_apm: payload.torque_tolerance_apm ?? payload.torque_tolerance ?? payload.tol ?? "",
+    } : {}),
+  }, index);
+}
+
+/** Apply the editor's delta to the canonical payload, retaining fields it cannot edit. */
+function patchPipelineValue(raw: JsonValue | undefined, before: JsonValue | undefined, after: JsonValue): JsonValue {
+  if (Array.isArray(raw) && Array.isArray(before) && Array.isArray(after) &&
+      after.every((value) => typeof asRecord(value)?.quantity === "string")) {
+    return after.map((value) => {
+      const quantity = asRecord(value)?.quantity;
+      const original = raw.find((item) => asRecord(item)?.quantity === quantity);
+      const previous = before.find((item) => asRecord(item)?.quantity === quantity);
+      return patchPipelineValue(original, previous, value);
+    });
+  }
+
+  const previous = asRecord(before) as JsonObject | null;
+  const updated = asRecord(after) as JsonObject | null;
+  const original = asRecord(raw);
+  if (!original || !previous || !updated) return structuredClone(after);
+  const result = { ...original } as JsonObject;
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(updated)])) {
+    if (JSON.stringify(previous[key]) === JSON.stringify(updated[key])) continue;
+    if (updated[key] === undefined) delete result[key];
+    else result[key] = patchPipelineValue(result[key], previous[key], updated[key]);
+  }
+  return result;
+}
+
+export function buildStudyPipelineStageMergePatch(
+  draft: StudyStageDraft,
+  baseRevision: number,
+  scene: unknown,
+): AuthoringTransactionRequest {
+  if (!isEditablePipelineStage(draft) || draft.stageId !== draft.pipelineNodeId ||
+      (draft.kind !== "run" && draft.kind !== "relax")) {
+    throw new Error("The canonical pipeline stage identity or kind cannot be edited here.");
+  }
+  const study = asRecord(asRecord(scene)?.study);
+  const source = readStudyStageSource(study);
+  if (source.kind !== "pipeline") {
+    throw new Error(source.error ?? "The canonical Study pipeline is unavailable.");
+  }
+  const selected = source.entries.find((entry) => entry.queueId === draft.pipelineNodeId);
+  if (!selected || selected.stageKind !== draft.kind ||
+      selected.nodeEnabled !== draft.pipelineNodeEnabled ||
+      selected.ancestorsEnabled !== draft.pipelineAncestorsEnabled ||
+      JSON.stringify(selected.payload) !== JSON.stringify(draft.rawStage)) {
+    throw new Error("The canonical stage changed while editing. Review the current stage before saving.");
+  }
+
+  const original = selected.payload as JsonObject;
+  const baseline = createPipelinePhysicalStageDraft(original, draft.kind, 0);
+  const before = studyStageDraftToSceneStage({
+    ...baseline,
+    pipelineNodeId: draft.pipelineNodeId,
+    stageId: draft.stageId,
+  });
+  const after = studyStageDraftToSceneStage(draft);
+  for (const key of ["enabled", "entrypoint_kind", "kind", "stage_id"]) {
+    delete before[key];
+    delete after[key];
+  }
+
+  const payload = patchPipelineValue(original, before, after) as JsonObject;
+  const changed = (key: string) => JSON.stringify(before[key]) !== JSON.stringify(after[key]);
+  if (draft.kind === "relax") {
+    const aliases = {
+      ...RELAX_STOP_ALIASES,
+      algorithm: ["relax_algorithm"],
+      integrator: ["solver"],
+    };
+    for (const [key, legacy] of Object.entries(aliases)) {
+      if (changed(key)) for (const alias of legacy) delete payload[alias];
+    }
+    if (changed("fixed_timestep") || changed("adaptive_timestep")) {
+      for (const alias of LEGACY_RELAX_TIMESTEP_FIELDS) delete payload[alias];
+      if (after.fixed_timestep === undefined) delete payload.fixed_timestep;
+    }
+    if (changed("demag_interval_s")) {
+      const nested = asRecord(payload.field_refresh) as JsonObject | null;
+      if (nested) {
+        const { demag_interval_s: _interval, ...retained } = nested;
+        if (Object.keys(retained).length > 0) payload.field_refresh = retained;
+        else delete payload.field_refresh;
+      }
+    }
+    if (baseline.algorithm === "llg_overdamped" && draft.algorithm !== "llg_overdamped") {
+      for (const key of ["integrator", "solver", "fixed_timestep", "adaptive_timestep", "field_refresh", "demag_interval_s", "relax_alpha", ...LEGACY_RELAX_TIMESTEP_FIELDS]) {
+        delete payload[key];
+      }
+    }
+    if (!hasExplicitRelaxStop(original) && Object.keys(RELAX_STOP_ALIASES).some(changed)) {
+      // The runtime applies its legacy pair of defaults only when every stop
+      // criterion is absent. Preserve the remaining default on the first edit.
+      for (const key of ["max_steps", "torque_tolerance_apm"]) {
+        if (after[key] !== undefined) payload[key] = after[key];
+      }
+    }
+  }
+
+  const pipeline = study?.study_pipeline as JsonObject;
+  const replacePayload = (values: JsonValue[]): JsonValue[] => values.map((value) => {
+    const node = value as JsonObject;
+    if (node.id === draft.pipelineNodeId) return {
+      ...node,
+      ...(draft.stageEnabled !== undefined && draft.stageEnabled !== selected.nodeEnabled
+        ? { enabled: draft.stageEnabled } : {}),
+      payload,
+    };
+    if (node.node_kind === "group" && Array.isArray(node.children)) {
+      return { ...node, children: replacePayload(node.children) };
+    }
+    return node;
+  });
+  return {
+    kind: "merge_patch",
+    base_revision: baseRevision,
+    merge_patch: { study: { study_pipeline: {
+      ...pipeline,
+      ...(payload.stage_magnetization_assignments !== undefined ? { version: "study_pipeline.v2" } : {}),
+      nodes: replacePayload(pipeline.nodes as JsonValue[]),
+    } } },
+  };
+}
+
 export function buildStudyStagesMergePatch(
   stages: readonly StudyStageDraft[],
   baseRevision?: number | null,
   scene?: unknown,
 ): AuthoringTransactionRequest {
   const study = asRecord(asRecord(scene)?.study);
-  if (readStudyStageSource(study).kind !== "flat" || stages.some((stage) => stage.pipelineNodeId)) {
+  const source = readStudyStageSource(study);
+  if (source.kind !== "flat" || stages.some((stage) => stage.pipelineNodeId)) {
     throw new Error("Editing a canonical pipeline through the flat-stage editor is not supported; no dormant stages were written.");
   }
+  const persisted = new Map(source.entries.map(({ payload }, index) => {
+    const draft = createStudyStageDraft(payload, index);
+    return [draft.stageId, { draft, payload: payload as JsonObject }];
+  }));
+  const hasLocalEdits = stages.some((draft) => {
+    if (draft.kind !== "run" && draft.kind !== "relax") return false;
+    const original = persisted.get(draft.stageId)?.draft;
+    return JSON.stringify(original?.stageMagnetizationAssignments) !== JSON.stringify(draft.stageMagnetizationAssignments)
+      || original?.stageEnabled !== draft.stageEnabled;
+  });
   return {
     kind: "merge_patch",
     ...(baseRevision === undefined || baseRevision === null
@@ -2193,7 +2464,24 @@ export function buildStudyStagesMergePatch(
       : { base_revision: baseRevision }),
     merge_patch: {
       study: {
-        stages: stages.map(studyStageDraftToSceneStage),
+        stages: stages.map((draft) => {
+          const after = studyStageDraftToSceneStage(draft);
+          const original = hasLocalEdits ? persisted.get(draft.stageId) : undefined;
+          if (!original || original.draft.kind !== draft.kind ||
+              (draft.kind !== "run" && draft.kind !== "relax")) return after;
+          const before = studyStageDraftToSceneStage(original.draft);
+          const {
+            stage_magnetization_assignments: _previousTexture, enabled: _previousEnabled, ...previous
+          } = before;
+          const { stage_magnetization_assignments: texture, enabled, ...next } = after;
+          if (JSON.stringify(previous) !== JSON.stringify(next)) return after;
+          const payload: JsonObject = { ...original.payload, stage_id: after.stage_id };
+          if (texture === undefined) delete payload.stage_magnetization_assignments;
+          else payload.stage_magnetization_assignments = texture;
+          if (enabled === undefined) delete payload.enabled;
+          else payload.enabled = enabled;
+          return payload;
+        }),
       },
     },
   };
@@ -4201,6 +4489,11 @@ function setOptionalNumber(
   if (Number.isFinite(parsed) && parsed > 0) {
     target[key] = parsed;
   }
+}
+
+function setOptionalNonnegativeNumber(target: JsonObject, key: string, value: string): void {
+  const parsed = draftNumber(value);
+  if (Number.isFinite(parsed) && parsed >= 0) target[key] = parsed;
 }
 
 function setOptionalText(target: JsonObject, key: string, value: string): void {

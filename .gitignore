@@ -176,3 +176,5 @@ task-storage/
 .tmp*
 .codex*
 target-tracking-fix/
+*.jsonl
+examples/bimeron-cylinder-relax/

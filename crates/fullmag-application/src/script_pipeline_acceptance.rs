@@ -1,12 +1,12 @@
 //! Compile actual executions into accepted tasks; never reinterpret authored groups as work.
 use anyhow::{bail, Context, Result};
-use fullmag_authoring::{StudyAcceptancePolicy, StudyAcquisitionPolicy, StudyExecutionProfileReference, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPlan, StudyPortDataKind, StudyStep, StudyStepKind};
+use fullmag_authoring::{StudyAcceptancePolicy, StudyAcquisitionPolicy, StudyExecutionProfileReference, StudyInitialStateOverlay, StudyInputPort, StudyInputSource, StudyOutputPort, StudyPlan, StudyPortDataKind, StudyStep, StudyStepKind};
 use fullmag_ir::{ExecutionProfileIR, ExecutionRequestLayerIR};
 use fullmag_plan::{capture_study_input_references, StudyProblemCatalog, StudyProblemCatalogEntry};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use crate::{ImmutableAssetReference, RunSpecification, ScriptPipelineNodeKind};
-use crate::script_stage_contract::{ResolvedScriptStageAction, ScriptExecutionConfig};
+use crate::script_stage_contract::{ResolvedScriptStageAction, ScriptExecutionConfig, ScriptMagnetizationAssignment};
 use crate::script_stage_materialization::StageOutputPolicy;
 
 pub const SCRIPT_PIPELINE_SOURCE_ASSET_ID: &str = "script-pipeline-source";
@@ -53,45 +53,81 @@ pub fn compile_accepted_closed_loop_pipeline(
     }
     config.ir = captured.problem;
     let compiled = crate::materialize_script_pipeline_with_output_policy_bounded(config, output_policy, MAX_EXECUTIONS)?;
-    if compiled.executions.is_empty() { bail!("accepted script has no actual execution"); }
     let mut steps = Vec::new();
     let mut entries = Vec::new();
     let mut bindings = Vec::new();
     let mut previous = None;
     let mut previous_state:Option<String> = None;
+    let mut previous_physical = None;
+    let mut folded_inputs = BTreeSet::new();
     for execution in &compiled.executions {
         let source = execution.stage.provenance.as_ref().context("compiled execution has no authored identity")?;
-        let (kind,until_seconds,inputs,outputs)=match &execution.stage.action {
+        let node = crate::script_pipeline_compilation::authored_node(
+            &compiled.authored_pipeline.nodes, &source.authored_step_id,
+        ).context("compiled execution has no authored node")?;
+        if crate::script_pipeline_compilation::is_input_configuration_node(node) {
+            // The sequential producer already applied these declarations to
+            // the physical snapshots. They have no worker task or state port.
+            folded_inputs.insert(execution.execution_id.as_str());
+            continue;
+        }
+        if execution.stage.action.is_none() {
+            validate_physical_state_predecessor(previous_physical, &execution.stage.ir)?;
+        }
+        let (kind,until_seconds,mut inputs,initial_state_overlay,outputs)=match &execution.stage.action {
             Some(ResolvedScriptStageAction::AntennaClosedLoopInspection{input,requested_execution,output_id})=>{
                 let operation=fullmag_plan::validate_closed_loop_operation(&execution.stage.ir,&input.stage.id,&input.port.id,output_id)?;
                 let fullmag_plan::AntennaFieldSolveExecutionPlan::ClosedLoopInspection{input:replanned,requested_execution:request,output_id:selected}=operation else {bail!("compiled action is not a closed-loop inspection");};
                 if replanned!=*input || request!=*requested_execution || selected!=*output_id {bail!("compiled action differs from canonical operation planning");}
-                (StudyStepKind::ClosedLoopInspection{stage_id:input.stage.id.clone(),port_mode_id:input.port.id.clone(),output_id:output_id.clone()},None,vec![],vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}])
+                (StudyStepKind::ClosedLoopInspection{stage_id:input.stage.id.clone(),port_mode_id:input.port.id.clone(),output_id:output_id.clone()},None,vec![],None,vec![StudyOutputPort{port_id:"inspection".into(),data_kind:StudyPortDataKind::Artifact}])
             },
-            None=>physical_step_contract(crate::script_pipeline_compilation::authored_node(&compiled.authored_pipeline.nodes,&source.authored_step_id)
-                .context("physical execution authored node missing")?,&execution.stage.ir,execution.stage.until_seconds,previous_state.as_deref())?,
+            None=>physical_step_contract(node,&execution.stage.ir,execution.stage.until_seconds,previous_state.as_deref(),
+                compiled.magnetization_assignments.get(&source.authored_step_id).map(|batch| batch.ordered.as_slice()).unwrap_or_default())?,
             _=>bail!("unsupported enabled accepted script execution `{}`; no partial Submit",execution.execution_id),
         };
+        if compiled.authored_pipeline.version == "study_pipeline.v2"
+            && matches!(&kind, StudyStepKind::Primitive { .. })
+            && inputs.is_empty()
+        {
+            inputs.push(authored_initial_state_port(&execution.execution_id, &execution.stage.ir)?);
+        }
         let references = capture_study_input_references(&execution.execution_id, &execution.stage.ir)?;
         let step = StudyStep {
             step_id: execution.execution_id.clone(), label: source.label.clone(), enabled: true, notes: source.notes.clone(), source: None,
             kind,
             model: references.model, solver_config: references.solver_config, discretization: references.discretization,
-            execution_profile: profile.clone(), until_seconds, inputs, completion_dependencies: previous.into_iter().collect(),
+            execution_profile: profile.clone(), until_seconds, inputs, initial_state_overlay, completion_dependencies: previous.into_iter().collect(),
             outputs,
             acceptance: StudyAcceptancePolicy::Any, acquisition: StudyAcquisitionPolicy::Exclusive, legacy_payload: None,
         };
         let execution_binding=if explicit {snapshot_execution.get(&source.authored_step_id).context("physical snapshot lost its pinned execution profile")?} else {&captured.execution};
         entries.push(StudyProblemCatalogEntry::from_captured_materialized_step(&step, execution.stage.ir.clone(), execution_binding.clone(), references.identity.clone()).with_context(||format!("unsupported execution-intent mutation in authored step `{}`; accepted v4 never rebinds the captured profile", source.authored_step_id))?);
         bindings.push(json!({"execution_id":execution.execution_id,"authored_step_id":source.authored_step_id,"expansion_index":source.expansion_index,"ancestor_group_ids":source.ancestor_group_ids,"label":source.label,"notes":source.notes,"source":source.source,"problem_sha256":references.identity.problem_sha256}));
-        if matches!(&step.kind,StudyStepKind::Primitive{..}) {previous_state=Some(execution.execution_id.clone());}
+        if matches!(&step.kind,StudyStepKind::Primitive{..}) {previous_state=Some(execution.execution_id.clone());previous_physical=Some(&execution.stage.ir);}
         previous = Some(execution.execution_id.clone());
         steps.push(step);
     }
+    if steps.is_empty() { bail!("accepted script has no actual execution"); }
     let study = StudyPlan { schema_version: fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION_V4.into(), study_id, revision, source_pipeline_version: Some(compiled.authored_pipeline.version.clone()), steps };
     study.validate_for_execution()?;
     let catalog = StudyProblemCatalog::from_entries(&study, entries)?;
-    let nodes = compiled.nodes.iter().map(|node| json!({"authored_step_id":node.authored_step_id,"ancestor_group_ids":node.ancestor_group_ids,"kind":match node.kind { ScriptPipelineNodeKind::Primitive=>"primitive",ScriptPipelineNodeKind::Macro=>"macro",ScriptPipelineNodeKind::Group=>"group" },"effectively_enabled":node.effectively_enabled,"execution_ids":node.execution_ids})).collect::<Vec<_>>();
+    let nodes: Vec<_> = compiled.nodes.iter().map(|node| {
+        let kind = match node.kind {
+            ScriptPipelineNodeKind::Primitive => "primitive",
+            ScriptPipelineNodeKind::Macro => "macro",
+            ScriptPipelineNodeKind::Group => "group",
+        };
+        let execution_ids: Vec<_> = node.execution_ids.iter()
+            .filter(|id| !folded_inputs.contains(id.as_str()))
+            .collect();
+        json!({
+            "authored_step_id": node.authored_step_id,
+            "ancestor_group_ids": node.ancestor_group_ids,
+            "kind": kind,
+            "effectively_enabled": node.effectively_enabled,
+            "execution_ids": execution_ids,
+        })
+    }).collect();
     let source = json!({"schema_version":SCRIPT_PIPELINE_SOURCE_SCHEMA,"authored_pipeline":compiled.authored_pipeline,"authored_pipeline_sha256":compiled.authored_pipeline_sha256,"antenna_inventory":inventory,"nodes":nodes,"executions":bindings,"capture":source_capture});
     let source_bytes = crate::run_spec::canonical_json_bytes(&source);
     if source_bytes.len()>MAX_SOURCE_BYTES { bail!("accepted pipeline source exceeds capture limit"); }
@@ -100,9 +136,196 @@ pub fn compile_accepted_closed_loop_pipeline(
     Ok(AcceptedScriptPipeline { study,catalog,source_bytes,source_reference })
 }
 
+/// Bind the state and completion edges of an ordinary sequential physical
+/// Study after each authored ProblemIR has been materialized.
+pub fn bind_scene_study_physical_state_flow(
+    study: &mut StudyPlan,
+    pipeline: Option<&fullmag_authoring::StudyPipelineDocument>,
+    inputs: &[crate::StudyStepExecutionInput],
+) -> Result<()> {
+    use crate::script_stage_contract::{
+        parse_magnetization_assignment_batch, StageMagnetizationAssignments,
+        MAGNETIZATION_ASSIGNMENTS_KEY, STAGE_MAGNETIZATION_ASSIGNMENTS_KEY,
+    };
+    use fullmag_authoring::StudyPrimitiveStageKind;
+    let is_physical = |step: &StudyStep| matches!(
+        &step.kind,
+        StudyStepKind::Primitive {
+            stage_kind: StudyPrimitiveStageKind::Run | StudyPrimitiveStageKind::Relax
+        }
+    );
+    let assignments = if let Some(pipeline) = pipeline {
+        let document: crate::script_stage_contract::StudyPipelineDocument =
+            serde_json::from_value(serde_json::to_value(pipeline)?)?;
+        document.magnetization_assignments_by_stage()?
+    } else {
+        let mut assignments = BTreeMap::new();
+        let mut pending = Vec::new();
+        let mut count = 0;
+        for step in &study.steps {
+            let independent = step.legacy_payload.as_ref()
+                .and_then(|payload| payload.get(MAGNETIZATION_ASSIGNMENTS_KEY));
+            let local = step.legacy_payload.as_ref()
+                .and_then(|payload| payload.get(STAGE_MAGNETIZATION_ASSIGNMENTS_KEY));
+            if !is_physical(step) {
+                if independent.is_some() || local.is_some() {
+                    bail!("magnetization assignments require a Run or Relax stage");
+                }
+                continue;
+            }
+            if let Some(batch) = independent {
+                pending.extend(parse_magnetization_assignment_batch(batch, &mut count)?);
+            }
+            let local = local.map(|batch| parse_magnetization_assignment_batch(batch, &mut count))
+                .transpose()?.unwrap_or_default();
+            if step.enabled && (!pending.is_empty() || !local.is_empty()) {
+                assignments.insert(step.step_id.clone(), StageMagnetizationAssignments::new(
+                    std::mem::take(&mut pending), local,
+                ));
+            }
+        }
+        assignments
+    };
+    if !study.steps.iter().filter(|step| step.enabled).all(|step| {
+        is_physical(step) || matches!(&step.kind, StudyStepKind::Group { .. })
+    }) {
+        if !assignments.is_empty() {
+            bail!("magnetization assignments require an ordered physical Study");
+        }
+        return Ok(());
+    }
+    if study.steps.iter().filter(|step| step.enabled && is_physical(step)).count() < 2
+        && assignments.is_empty()
+    {
+        return Ok(());
+    }
+    let inputs_by_id: BTreeMap<_, _> =
+        inputs.iter().map(|input| (input.step_id.as_str(), &input.problem)).collect();
+    if inputs_by_id.len() != inputs.len() {
+        bail!("duplicate materialized input for physical Study");
+    }
+    let mut previous: Option<String> = None;
+    for step in study.steps.iter_mut().filter(|step| step.enabled && is_physical(step)) {
+        if !step.inputs.is_empty() || !step.completion_dependencies.is_empty() {
+            bail!("physical Study graph already has authored state or ordering edges");
+        }
+        let problem = inputs_by_id.get(step.step_id.as_str())
+            .with_context(|| format!("physical stage '{}' has no materialized input", step.step_id))?;
+        let resets = assignments.get(&step.step_id).map(|batch| batch.ordered.as_slice()).unwrap_or_default();
+        (step.inputs, step.initial_state_overlay) =
+            physical_state_input(problem, previous.as_deref(), resets)?;
+        step.completion_dependencies = previous.iter().cloned().collect();
+        if !step.outputs.iter().any(|port| port.port_id == "final_state") {
+            step.outputs.push(StudyOutputPort {
+                port_id: "final_state".into(),
+                data_kind: StudyPortDataKind::State,
+            });
+        }
+        previous = Some(step.step_id.clone());
+    }
+    study.schema_version = fullmag_authoring::STUDY_PLAN_SCHEMA_VERSION.into();
+    study.validate()?;
+    Ok(())
+}
+
+/// Attach authored-state references after binding the immutable ProblemIR.
+pub fn bind_scene_study_authored_initial_states(
+    study: &mut StudyPlan,
+    catalog: StudyProblemCatalog,
+) -> Result<StudyProblemCatalog> {
+    if bind_scene_study_authored_initial_state_ports(study, catalog.entries(), None)? {
+        Ok(StudyProblemCatalog::from_entries(study, catalog.into_entries())?)
+    } else {
+        Ok(catalog)
+    }
+}
+
+/// Bind authored v2 state ports without validating the unreduced execution graph.
+/// A selected-stage caller must rebind inherited inputs before graph validation.
+pub fn bind_scene_study_authored_initial_state_ports(
+    study: &mut StudyPlan,
+    entries: &[StudyProblemCatalogEntry],
+    selected_step_id: Option<&str>,
+) -> Result<bool> {
+    if study.source_pipeline_version.as_deref() != Some("study_pipeline.v2") {
+        return Ok(false);
+    }
+    let mut changed = false;
+    for step in study.steps.iter_mut().filter(|step| step.enabled && step.inputs.is_empty()
+        && selected_step_id.map_or(true, |id| step.step_id == id)) {
+        if !matches!(&step.kind, StudyStepKind::Primitive {
+            stage_kind: fullmag_authoring::StudyPrimitiveStageKind::Run
+                | fullmag_authoring::StudyPrimitiveStageKind::Relax,
+        }) {
+            continue;
+        }
+        let problem = entries.iter().find(|entry| entry.step_id() == step.step_id)
+            .with_context(|| format!("authored stage '{}' has no bound ProblemIR", step.step_id))?
+            .problem();
+        step.inputs.push(authored_initial_state_port(&step.step_id, problem)?);
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn authored_initial_state_port(step_id: &str, problem: &fullmag_ir::ProblemIR) -> Result<StudyInputPort> {
+    Ok(StudyInputPort {
+        port_id: "initial_state".into(),
+        data_kind: StudyPortDataKind::State,
+        required: true,
+        source: StudyInputSource::AuthoredInitialState {
+            reference: fullmag_plan::authored_initial_state_reference(step_id, problem)?,
+        },
+    })
+}
+
+fn physical_state_input(
+    problem: &fullmag_ir::ProblemIR,
+    previous_state: Option<&str>,
+    assignments: &[ScriptMagnetizationAssignment],
+) -> Result<(Vec<StudyInputPort>, Option<StudyInitialStateOverlay>)> {
+    let full_reset = ScriptMagnetizationAssignment::captures_full_reset(assignments, problem)?;
+    let Some(step_id) = previous_state.filter(|_| !full_reset) else {
+        return Ok((Vec::new(), None));
+    };
+    let overlay = if assignments.is_empty() {
+        None
+    } else {
+        let scopes = assignments.iter()
+            .map(|assignment| (&assignment.object_id, &assignment.region_id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|(object_id, region_id)| fullmag_ir::RegionRefIR {
+                object_id: object_id.clone(),
+                region_id: region_id.clone(),
+            })
+            .collect();
+        Some(StudyInitialStateOverlay::Scoped { scopes })
+    };
+    let input = StudyInputPort {
+        port_id: "initial_state".into(),
+        data_kind: StudyPortDataKind::State,
+        required: true,
+        source: StudyInputSource::StepOutput {
+            step_id: step_id.into(),
+            port: "final_state".into(),
+            case_id: "default".into(),
+        },
+    };
+    Ok((vec![input], overlay))
+}
+
+fn validate_physical_state_predecessor(previous: Option<&fullmag_ir::ProblemIR>, current: &fullmag_ir::ProblemIR) -> Result<()> {
+    if previous.is_some_and(|previous| !crate::script_stage_materialization::compatible_physical_state_topology(previous, current)) {
+        bail!("accepted physical state chain requires compatible runtime topology");
+    }
+    Ok(())
+}
+
 /// Physical ports reuse the existing State payload; the input name is not its data kind.
-fn physical_step_contract(node:&crate::script_stage_contract::StudyPipelineNode,problem:&fullmag_ir::ProblemIR,until:f64,previous_state:Option<&str>)
-    ->Result<(StudyStepKind,Option<f64>,Vec<StudyInputPort>,Vec<StudyOutputPort>)> {
+fn physical_step_contract(node:&crate::script_stage_contract::StudyPipelineNode,problem:&fullmag_ir::ProblemIR,until:f64,previous_state:Option<&str>,
+    assignments:&[ScriptMagnetizationAssignment])
+    ->Result<(StudyStepKind,Option<f64>,Vec<StudyInputPort>,Option<StudyInitialStateOverlay>,Vec<StudyOutputPort>)> {
     use crate::script_stage_contract::StudyPipelineNode;
     use fullmag_authoring::StudyPrimitiveStageKind;
     let StudyPipelineNode::Primitive{id,stage_kind,payload,..}=node else {bail!("accepted physical execution requires an authored primitive");};
@@ -122,9 +345,8 @@ fn physical_step_contract(node:&crate::script_stage_contract::StudyPipelineNode,
         },
         _=>bail!("accepted physical execution kind differs from its captured Relax/Run IR"),
     };
-    let inputs=previous_state.into_iter().map(|step_id|StudyInputPort{port_id:"initial_state".into(),data_kind:StudyPortDataKind::State,required:true,
-        source:StudyInputSource::StepOutput{step_id:step_id.into(),port:"final_state".into(),case_id:"default".into()}}).collect();
-    Ok((StudyStepKind::Primitive{stage_kind},horizon,inputs,vec![StudyOutputPort{port_id:"final_state".into(),data_kind:StudyPortDataKind::State}]))
+    let (inputs, overlay) = physical_state_input(problem, previous_state, assignments)?;
+    Ok((StudyStepKind::Primitive{stage_kind},horizon,inputs,overlay,vec![StudyOutputPort{port_id:"final_state".into(),data_kind:StudyPortDataKind::State}]))
 }
 
 fn strict_keys(value:&Value,expected:&[&str])->Result<()> {
@@ -187,7 +409,8 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
     validate_capture_shape(&source["capture"])?;
     let authored:crate::script_stage_contract::StudyPipelineDocument=serde_json::from_value(source["authored_pipeline"].clone())?;
     if serde_json::to_value(&authored)?!=source["authored_pipeline"] { bail!("authored pipeline has unknown or noncanonical fields"); }
-    if authored.version!="study_pipeline.v1" || study.source_pipeline_version.as_deref()!=Some(authored.version.as_str()) {
+    let magnetization_assignments = authored.magnetization_assignments_by_stage()?;
+    if study.source_pipeline_version.as_deref()!=Some(authored.version.as_str()) {
         bail!("accepted source pipeline version differs from its supported captured StudyPlan");
     }
     let mut expected_nodes=Vec::new();
@@ -207,6 +430,12 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
             Some(crate::script_stage_contract::StudyPipelineNode::Primitive{stage_kind,..}) if matches!(stage_kind.as_str(),"relax"|"run")) && ids.len()!=1 {
             bail!("enabled physical primitive must own exactly one captured execution");
         }
+        if crate::script_pipeline_compilation::authored_node(&authored.nodes, &expected.authored_step_id)
+            .is_some_and(crate::script_pipeline_compilation::is_input_configuration_node)
+            && !ids.is_empty()
+        {
+            bail!("pipeline input configuration cannot own an accepted worker task");
+        }
         all_execution_ids.extend(ids.iter().cloned());
     }
     if all_execution_ids!=executions.iter().map(|execution|execution["execution_id"].clone()).collect::<Vec<_>>() { bail!("execution inventory is not a total ordered bijection"); }
@@ -223,12 +452,15 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
     }
     let mut previous:Option<String>=None;
     let mut previous_state:Option<String>=None;
+    let mut previous_physical = None;
+    let mut physical_clock = None;
     for (step,execution) in study.steps.iter().zip(executions) {
         strict_keys(execution,&["execution_id","authored_step_id","expansion_index","ancestor_group_ids","label","notes","source","problem_sha256"])?;
         let node=nodes.iter().find(|n| n["authored_step_id"]==execution["authored_step_id"]).context("source execution owner missing")?;
         let index=execution["expansion_index"].as_u64().context("source macro index missing")?;
-        let expected=fullmag_ir::canonical_ir_json_sha256(&json!({"schema":"fullmag.script-execution-identity.v1","authored_step_id":execution["authored_step_id"],"expansion_index":index}))?;
-        if execution["execution_id"]!=step.step_id || step.step_id!=format!("script-execution-{expected}") || node["effectively_enabled"]!=true || node["kind"]=="group" || node["ancestor_group_ids"]!=execution["ancestor_group_ids"] || node["execution_ids"].as_array().and_then(|ids| usize::try_from(index).ok().and_then(|index|ids.get(index)))!=Some(&execution["execution_id"]) || step.completion_dependencies!=previous.clone().into_iter().collect::<Vec<_>>() { bail!("source execution identity, activation, macro ownership or completion sequence mismatch"); }
+        let authored_id = execution["authored_step_id"].as_str().context("source authored ID missing")?;
+        let expected = crate::script_pipeline_compilation::script_execution_id(authored_id, index)?;
+        if execution["execution_id"]!=step.step_id || step.step_id!=expected || node["effectively_enabled"]!=true || node["kind"]=="group" || node["ancestor_group_ids"]!=execution["ancestor_group_ids"] || node["execution_ids"].as_array().and_then(|ids| usize::try_from(index).ok().and_then(|index|ids.get(index)))!=Some(&execution["execution_id"]) || step.completion_dependencies!=previous.clone().into_iter().collect::<Vec<_>>() { bail!("source execution identity, activation, macro ownership or completion sequence mismatch"); }
         let entry=catalog.entries().iter().find(|entry| entry.step_id()==step.step_id).context("source catalog entry missing")?;
         let identity=entry.captured_input_identity().context("source catalog input not captured")?;
         if execution["problem_sha256"]!=identity.problem_sha256 || identity.source_id!=step.step_id { bail!("source captures another input or operation"); }
@@ -243,13 +475,27 @@ pub fn validate_accepted_script_pipeline_source(study:&StudyPlan,catalog:&StudyP
                 fullmag_plan::validate_closed_loop_operation(entry.problem(),stage_id,port_mode_id,output_id)?;
             },
             StudyStepKind::Primitive{..}=>{
-                let node=crate::script_pipeline_compilation::authored_node(&authored.nodes,execution["authored_step_id"].as_str().context("physical source ID missing")?).context("physical source node missing")?;
-                let (kind,horizon,inputs,outputs)=physical_step_contract(node,entry.problem(),step.until_seconds.unwrap_or(0.0),previous_state.as_deref())?;
-                if step.kind!=kind || step.until_seconds!=horizon || step.inputs!=inputs || step.outputs!=outputs
+                validate_physical_state_predecessor(previous_physical, entry.problem())?;
+                let authored_id = execution["authored_step_id"].as_str().context("physical source ID missing")?;
+                let node=crate::script_pipeline_compilation::authored_node(&authored.nodes,authored_id).context("physical source node missing")?;
+                let (kind,horizon,mut inputs,overlay,outputs)=physical_step_contract(node,entry.problem(),step.until_seconds.unwrap_or(0.0),previous_state.as_deref(),
+                    magnetization_assignments.get(authored_id).map(|batch| batch.ordered.as_slice()).unwrap_or_default())?;
+                if authored.version == "study_pipeline.v2" && inputs.is_empty() {
+                    inputs.push(authored_initial_state_port(&step.step_id, entry.problem())?);
+                }
+                if let Some(duration) = horizon {
+                    let start = crate::script_pipeline_compilation::read_physical_stage_start(entry.problem())?;
+                    if physical_clock.is_some_and(|expected| expected != start) {
+                        bail!("physical Run clock differs from its sequential predecessor");
+                    }
+                    physical_clock = Some(crate::script_pipeline_compilation::advance_physical_clock(start, duration)?);
+                }
+                if step.kind!=kind || step.until_seconds!=horizon || step.inputs!=inputs || step.initial_state_overlay!=overlay || step.outputs!=outputs
                     || !step.enabled || step.acceptance!=StudyAcceptancePolicy::Any || step.acquisition!=StudyAcquisitionPolicy::Exclusive || step.legacy_payload.is_some() {
                     bail!("physical source operation, horizon or exact predecessor state chain differs");
                 }
                 previous_state=Some(step.step_id.clone());
+                previous_physical=Some(entry.problem());
             },
             _=>bail!("unsupported accepted source operation"),
         }
@@ -306,6 +552,47 @@ mod tests {
             |_,_|Ok(profile.clone()),fullmag_ir::configure_project_autosave_policy)
     }
     #[test]
+    fn physical_runs_keep_cumulative_clock_and_saved_waveform_origin() {
+        let mut config = physical_config();
+        config.stages[0].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(4e-12));
+        config.stages[1].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), json!(5e-12));
+        config.stages[1].ir.problem_meta.runtime_metadata.insert("stage_waveform_origin_time_s".into(), json!(2e-12));
+        let compiled = compile_physical(config).unwrap();
+        let entries = compiled.catalog.entries();
+        assert_eq!(entries[0].problem().problem_meta.runtime_metadata["stage_start_time_s"], json!(4e-12));
+        assert_eq!(entries[1].problem().problem_meta.runtime_metadata["stage_start_time_s"], json!(4e-12 + 1e-12));
+        assert_eq!(entries[1].problem().problem_meta.runtime_metadata["stage_waveform_origin_time_s"], json!(2e-12));
+        validate_accepted_script_pipeline_source(&compiled.study, &compiled.catalog, &compiled.source_bytes).unwrap();
+    }
+    #[test]
+    fn physical_clock_rejects_invalid_seed_overflow_and_lost_increment() {
+        for seed in [json!(-1.0), json!("bad"), json!(1e300)] {
+            let mut config = physical_config();
+            config.stages[0].ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), seed);
+            assert!(compile_physical(config).is_err());
+        }
+        assert!(crate::script_pipeline_compilation::advance_physical_clock(1e308, 1e308).is_err());
+    }
+    #[test]
+    fn cold_source_refuses_reset_clock_even_with_valid_capture_hashes() {
+        let compiled=compile_physical(physical_config()).unwrap();
+        let mut study=compiled.study.clone();
+        let old=&compiled.catalog.entries()[1];
+        let mut problem=old.problem().clone();
+        problem.problem_meta.runtime_metadata.insert("stage_start_time_s".into(),json!(0.0));
+        let refs=capture_study_input_references(&study.steps[1].step_id,&problem).unwrap();
+        study.steps[1].model=refs.model;
+        study.steps[1].solver_config=refs.solver_config;
+        study.steps[1].discretization=refs.discretization;
+        let entry=StudyProblemCatalogEntry::from_captured_materialized_step(&study.steps[1],problem,
+            old.execution_materialization().unwrap().clone(),refs.identity.clone()).unwrap();
+        let catalog=StudyProblemCatalog::from_entries(&study,vec![compiled.catalog.entries()[0].clone(),entry]).unwrap();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        source["executions"][1]["problem_sha256"]=json!(refs.identity.problem_sha256);
+        let error=validate_accepted_script_pipeline_source(&study,&catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("physical Run clock"),"{error:#}");
+    }
+    #[test]
     fn physical_snapshots_bind_once_pinned_profile_and_exact_state_chain() {
         let profile=physical_profile();let calls=std::cell::Cell::new(0);
         let compiled=compile_accepted_closed_loop_pipeline(physical_config(),"physical-study".into(),0,
@@ -322,11 +609,527 @@ mod tests {
         validate_accepted_script_pipeline_source(&compiled.study,&compiled.catalog,&compiled.source_bytes).unwrap();
     }
     #[test]
+    fn repeated_authored_texture_breaks_only_the_immediate_state_dependency() {
+        use crate::script_stage_contract::StudyPipelineNode;
+
+        let mut config = physical_config();
+        let initializer = fullmag_ir::InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        };
+        for stage in &mut config.stages {
+            stage.ir.magnets[0].initial_magnetization = Some(initializer.clone());
+        }
+        let magnet = &config.stages[1].ir.magnets[0];
+        let object_id = magnet.object_id.as_deref().unwrap_or(&magnet.name).to_owned();
+        let mut third = config.stages[1].clone();
+        third.ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), json!("third"));
+        config.stages.push(third);
+
+        let pipeline = config.study_pipeline.as_mut().unwrap();
+        pipeline.version = "study_pipeline.v2".into();
+        let mut third_node = pipeline.nodes[1].clone();
+        let StudyPipelineNode::Primitive { id, label, .. } = &mut third_node else {
+            panic!("expected physical primitive");
+        };
+        *id = "third".into();
+        *label = "Third".into();
+        pipeline.nodes.push(third_node);
+        let StudyPipelineNode::Primitive { payload, .. } = &mut pipeline.nodes[1] else {
+            panic!("expected physical primitive");
+        };
+        payload.insert(
+            "magnetization_assignments".into(),
+            json!({
+                "schema_version": "fullmag.magnetization-assignments.v1",
+                "assignments": [{
+                    "object_id": object_id,
+                    "region_id": null,
+                    "initializer": initializer,
+                }],
+            }),
+        );
+
+        let compiled = compile_physical(config).unwrap();
+        let [first, second, third] = compiled.study.steps.as_slice() else {
+            panic!("expected exactly three physical stages");
+        };
+        assert_eq!(second.completion_dependencies, vec![first.step_id.clone()]);
+        assert_eq!(second.inputs.len(), 1);
+        assert!(second.inputs[0].required);
+        assert!(matches!(&second.inputs[0].source, StudyInputSource::AuthoredInitialState { .. }));
+        assert_eq!(third.completion_dependencies, vec![second.step_id.clone()]);
+        assert!(third.inputs.iter().any(|port| matches!(
+            &port.source, StudyInputSource::StepOutput { step_id, .. }
+                if step_id == &second.step_id
+        )));
+        validate_accepted_script_pipeline_source(&compiled.study, &compiled.catalog, &compiled.source_bytes)
+            .unwrap();
+    }
+
+    #[test]
+    fn table_configuration_preserves_snapshot_and_scene_reset_inputs() {
+        use crate::script_stage_contract::{ScriptExecutionStage, ScriptExecutionStageAction};
+
+        let mut config = physical_config();
+        let initial = fullmag_ir::InitialMagnetizationIR::Uniform { value: [1.0, 0.0, 0.0] };
+        let reset = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        let table: fullmag_ir::TableAutosaveIR = serde_json::from_value(json!({
+            "sample_period_s": 5e-14,
+            "quantities": ["mx", "my"],
+        })).unwrap();
+        config.ir.magnets[0].initial_magnetization = Some(initial.clone());
+        config.stages[0].ir.magnets[0].initial_magnetization = Some(initial.clone());
+        config.stages[0].ir.study.sampling_mut().table_autosave = None;
+        config.stages[1].ir.magnets[0].initial_magnetization = Some(reset.clone());
+        config.stages[1].ir.study.sampling_mut().table_autosave = Some(table.clone());
+        let magnet = &config.ir.magnets[0];
+        let object_id = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+        let pipeline = config.study_pipeline.as_mut().unwrap();
+        pipeline.version = "study_pipeline.v2".into();
+        let crate::script_stage_contract::StudyPipelineNode::Primitive { payload, .. } =
+            &mut pipeline.nodes[1] else { panic!("expected Run") };
+        payload.insert("magnetization_assignments".into(), json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{"object_id": object_id, "region_id": null, "initializer": reset}],
+        }));
+        pipeline.nodes.insert(1, serde_json::from_value(json!({
+            "node_kind": "primitive", "id": "table", "label": "Configure table",
+            "stage_kind": "table_autosave", "payload": {"table_autosave": table},
+        })).unwrap());
+        let mut before_configuration = config.stages[0].ir.clone();
+        before_configuration.problem_meta.runtime_metadata.insert("active_stage_id".into(), json!("table"));
+        config.stages.insert(1, ScriptExecutionStage {
+            ir: before_configuration,
+            default_until_seconds: None,
+            entrypoint_kind: "flat_table_autosave".into(),
+            action: Some(ScriptExecutionStageAction::TableAutosave {
+                enabled: true, table_autosave: Some(table.clone()),
+            }),
+        });
+
+        let mut different = config.clone();
+        different.stages[1].action = Some(ScriptExecutionStageAction::TableAutosave {
+            enabled: false, table_autosave: None,
+        });
+        assert!(format!("{:#}", compile_physical(different).err().unwrap())
+            .contains("differs from its authored payload"));
+        let mut unsupported = config.clone();
+        unsupported.study_pipeline.as_mut().unwrap().nodes[1] = serde_json::from_value(json!({
+            "node_kind": "primitive", "id": "table", "label": "Save state",
+            "stage_kind": "save_state",
+        })).unwrap();
+        unsupported.stages[1].action = Some(ScriptExecutionStageAction::SaveState {
+            artifact_name: "state_snapshot".into(), format: None, dataset: None,
+        });
+        assert!(format!("{:#}", compile_physical(unsupported).err().unwrap())
+            .contains("cannot mix explicit stages"));
+
+        let mut reconstructed = config.clone();
+        reconstructed.stages.clear();
+        for input in [config, reconstructed] {
+            let compiled = compile_physical(input).unwrap();
+            let [first, second] = compiled.study.steps.as_slice() else {
+                panic!("only the two Run stages should become worker tasks");
+            };
+            assert_eq!(second.completion_dependencies, vec![first.step_id.clone()]);
+            assert!(matches!(&second.inputs[0].source, StudyInputSource::AuthoredInitialState { .. }));
+            let before = compiled.catalog.entries()[0].problem();
+            let after = compiled.catalog.entries()[1].problem();
+            assert_eq!(before.magnets[0].initial_magnetization.as_ref(), Some(&initial));
+            assert_eq!(after.magnets[0].initial_magnetization.as_ref(), Some(&reset));
+            assert!(before.study.sampling().table_autosave.is_none());
+            assert_eq!(after.study.sampling().table_autosave.as_ref(), Some(&table));
+            let source = validate_accepted_script_pipeline_source(
+                &compiled.study, &compiled.catalog, &compiled.source_bytes,
+            ).unwrap();
+            assert_eq!(source["nodes"][1]["authored_step_id"], "table");
+            assert_eq!(source["nodes"][1]["execution_ids"], json!([]));
+        }
+    }
+
+    #[test]
+    fn scoped_script_reset_pins_one_predecessor_and_is_checked_on_cold_load() {
+        let mut config = physical_config();
+        let region_id = "strip:changed";
+        let mut region: fullmag_ir::ObjectRegionIR = serde_json::from_value(json!({
+            "region_id": region_id, "owner_object": "strip", "name": "changed",
+            "shape": {"kind": "box", "size": [80e-9, 20e-9, 6e-9], "center": [0.0, 0.0, 0.0]},
+        })).unwrap();
+        config.stages[0].ir.object_regions.push(region.clone());
+        let initializer = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        region.texture_override = Some(fullmag_ir::RegionTextureOverrideIR {
+            initial_magnetization: initializer.clone(),
+        });
+        config.stages[1].ir.object_regions.push(region);
+        let document = config.study_pipeline.as_mut().unwrap();
+        document.version = "study_pipeline.v2".into();
+        let crate::script_stage_contract::StudyPipelineNode::Primitive { payload, .. } = &mut document.nodes[1] else {
+            panic!("expected Run");
+        };
+        payload.insert("magnetization_assignments".into(), json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{"object_id": "strip", "region_id": region_id, "initializer": initializer}],
+        }));
+
+        let mut compiled = compile_physical(config).unwrap();
+        let step = &compiled.study.steps[1];
+        assert_eq!(step.inputs.len(), 1);
+        assert!(matches!(&step.inputs[0].source, StudyInputSource::StepOutput { .. }));
+        assert_eq!(step.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR { object_id: "strip".into(), region_id: Some(region_id.into()) },
+        ]);
+        validate_accepted_script_pipeline_source(&compiled.study, &compiled.catalog, &compiled.source_bytes)
+            .unwrap();
+        compiled.study.steps[1].initial_state_overlay = None;
+        assert!(validate_accepted_script_pipeline_source(
+            &compiled.study, &compiled.catalog, &compiled.source_bytes
+        ).is_err());
+    }
+
+    #[test]
+    fn scene_materialization_applies_ordered_resets_only_to_reachable_stages() {
+        let mut config = physical_config();
+        let first_m = fullmag_ir::InitialMagnetizationIR::Uniform { value: [1.0, 0.0, 0.0] };
+        let second_m = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        let skipped_m = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 0.0, 1.0] };
+        config.ir.magnets[0].initial_magnetization = Some(first_m.clone());
+        let magnet = &config.ir.magnets[0];
+        let object_id = magnet.object_id.as_deref().unwrap_or(&magnet.name);
+        let node = |id: &str, enabled: bool, initializer: Option<&fullmag_ir::InitialMagnetizationIR>| {
+            let mut payload = json!({"until_seconds": 1e-12});
+            if let Some(initializer) = initializer {
+                payload["magnetization_assignments"] = json!({
+                    "schema_version": "fullmag.magnetization-assignments.v1",
+                    "assignments": [{
+                        "object_id": object_id,
+                        "region_id": null,
+                        "initializer": initializer,
+                    }],
+                });
+            }
+            json!({
+                "node_kind": "primitive", "id": id, "label": id,
+                "stage_kind": "run", "enabled": enabled, "payload": payload,
+            })
+        };
+        config.study_pipeline = Some(serde_json::from_value(json!({
+            "version": "study_pipeline.v2",
+            "nodes": [
+                node("a", true, None),
+                node("b", false, Some(&second_m)),
+                {"node_kind": "group", "id": "disabled", "label": "Disabled",
+                 "enabled": false, "children": [node("skipped", true, Some(&skipped_m))]},
+                node("c", true, None),
+                node("d", true, None),
+            ],
+        })).unwrap());
+        config.stages.clear();
+
+        let stages = crate::script_stage_materialization::materialize_script_stages_with_output_policy(
+            config, fullmag_ir::configure_project_autosave_policy,
+        ).unwrap();
+        assert_eq!(
+            stages.iter().map(|stage| stage.provenance.as_ref().unwrap().authored_step_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "c", "d"],
+        );
+        assert_eq!(stages[0].ir.magnets[0].initial_magnetization.as_ref(), Some(&first_m));
+        for stage in &stages[1..] {
+            assert_eq!(stage.ir.magnets[0].initial_magnetization.as_ref(), Some(&second_m));
+        }
+    }
+
+    #[test]
+    fn stage_local_region_reset_stays_with_its_enabled_owner() {
+        let mut config = physical_config();
+        let independent = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        let local = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 0.0, 1.0] };
+        config.ir.object_regions.push(serde_json::from_value(json!({
+            "region_id": "strip:core", "owner_object": "strip", "name": "core",
+            "shape": {"kind": "box", "size": [80e-9, 20e-9, 6e-9], "center": [0.0, 0.0, 0.0]},
+        })).unwrap());
+        let batch = |initializer: &fullmag_ir::InitialMagnetizationIR| json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "strip", "region_id": "strip:core", "initializer": initializer,
+            }],
+        });
+        let node = |id: &str, payload| json!({
+            "id": id, "label": id, "node_kind": "primitive",
+            "stage_kind": "run", "payload": payload,
+        });
+        config.study_pipeline = Some(serde_json::from_value(json!({
+            "version": "study_pipeline.v2",
+            "nodes": [
+                node("a", json!({"until_seconds": 1e-12})),
+                node("b", json!({
+                    "until_seconds": 1e-12,
+                    "magnetization_assignments": batch(&independent),
+                    "stage_magnetization_assignments": batch(&local),
+                })),
+                node("c", json!({"until_seconds": 1e-12})),
+            ],
+        })).unwrap());
+        config.stages.clear();
+
+        let enabled = compile_physical(config.clone()).unwrap();
+        let [a, b, c] = enabled.study.steps.as_slice() else { panic!("expected A, B, C"); };
+        assert!(matches!(&b.inputs[0].source, StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id));
+        assert_eq!(b.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR { object_id: "strip".into(), region_id: Some("strip:core".into()) },
+        ]);
+        assert!(matches!(&c.inputs[0].source, StudyInputSource::StepOutput { step_id, .. } if step_id == &b.step_id));
+        assert!(c.initial_state_overlay.is_none());
+
+        let texture = |index: usize| enabled.catalog.entries()[index].problem()
+            .object_regions[0].texture_override.as_ref().unwrap().initial_magnetization.clone();
+        assert_eq!(texture(1), local);
+        assert_eq!(texture(2), independent);
+
+        // The reimported Python snapshots carry the independent setter and
+        // the canonical payload supplies the local override at materialization.
+        let mut captured = config.clone();
+        captured.stages = enabled.catalog.entries().iter().map(|entry| {
+            crate::script_stage_contract::ScriptExecutionStage {
+                ir: entry.problem().clone(),
+                default_until_seconds: Some(1e-12),
+                entrypoint_kind: "flat_run".into(),
+                action: None,
+            }
+        }).collect();
+        captured.stages[1].ir.object_regions[0].texture_override.as_mut().unwrap()
+            .initial_magnetization = independent.clone();
+        let reimported = compile_physical(captured).unwrap();
+        assert_eq!(
+            reimported.catalog.entries()[1].problem().object_regions[0]
+                .texture_override.as_ref().unwrap().initial_magnetization, local,
+        );
+        let crate::script_stage_contract::StudyPipelineNode::Primitive { enabled: enabled_b, .. } =
+            &mut config.study_pipeline.as_mut().unwrap().nodes[1] else { panic!("expected B"); };
+        *enabled_b = false;
+
+        let disabled = compile_physical(config).unwrap();
+        let [a, c] = disabled.study.steps.as_slice() else { panic!("expected A, C"); };
+        assert!(matches!(&c.inputs[0].source, StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id));
+        assert!(c.initial_state_overlay.is_some());
+        assert_eq!(
+            disabled.catalog.entries()[1].problem().object_regions[0]
+                .texture_override.as_ref().unwrap().initial_magnetization, independent,
+        );
+    }
+
+    #[test]
+    fn relax_region_reset_round_trip_keeps_local_and_independent_owners_distinct() {
+        use crate::script_stage_contract::StudyPipelineNode;
+
+        let mut config = physical_config();
+        config.ir = fullmag_ir::ProblemIR::bootstrap_example();
+        config.stages.clear();
+
+        let global = fullmag_ir::InitialMagnetizationIR::Uniform { value: [1.0, 0.0, 0.0] };
+        let independent = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 1.0, 0.0] };
+        let local = fullmag_ir::InitialMagnetizationIR::Uniform { value: [0.0, 0.0, 1.0] };
+        let region_id = "strip:core";
+        config.ir.magnets[0].initial_magnetization = Some(global.clone());
+        config.ir.object_regions.push(serde_json::from_value(json!({
+            "region_id": region_id,
+            "owner_object": "strip",
+            "name": "core",
+            "shape": {
+                "kind": "box",
+                "size": [80e-9, 20e-9, 6e-9],
+                "center": [0.0, 0.0, 0.0]
+            }
+        })).unwrap());
+
+        let batch = |initializer: &fullmag_ir::InitialMagnetizationIR| json!({
+            "schema_version": "fullmag.magnetization-assignments.v1",
+            "assignments": [{
+                "object_id": "strip",
+                "region_id": region_id,
+                "initializer": initializer,
+            }],
+        });
+        let relax_node = |id: &str, payload| json!({
+            "id": id,
+            "label": id,
+            "node_kind": "primitive",
+            "stage_kind": "relax",
+            "enabled": true,
+            "payload": payload,
+        });
+        let mut b_payload = json!({
+            "kind": "relax",
+            "algorithm": "llg_overdamped",
+            "max_steps": 2,
+        });
+        b_payload["magnetization_assignments"] = batch(&independent);
+        b_payload["stage_magnetization_assignments"] = batch(&local);
+        config.study_pipeline = Some(serde_json::from_value(json!({
+            "version": "study_pipeline.v2",
+            "nodes": [
+                relax_node("a", json!({"kind": "relax", "max_steps": 2})),
+                relax_node("b", b_payload),
+                relax_node("c", json!({"kind": "relax", "max_steps": 2})),
+            ],
+        })).unwrap());
+
+        // These checks cover authored/materialized ProblemIR and state-port
+        // semantics. They do not assert native grid-cell samples.
+        let assert_textures = |compiled: &AcceptedScriptPipeline,
+                               index: usize,
+                               expected_region: Option<&fullmag_ir::InitialMagnetizationIR>| {
+            let problem = compiled.catalog.entries()[index].problem();
+            assert_eq!(problem.magnets[0].initial_magnetization.as_ref(), Some(&global));
+            let region_texture = problem.object_regions[0]
+                .texture_override
+                .as_ref()
+                .map(|texture| &texture.initial_magnetization);
+            assert_eq!(region_texture, expected_region);
+        };
+
+        let enabled = compile_physical(config.clone()).unwrap();
+        let [a, b, c] = enabled.study.steps.as_slice() else {
+            panic!("expected Relax stages A, B, C");
+        };
+        assert!(matches!(
+            &b.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(b.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &b.step_id
+        ));
+        assert!(c.initial_state_overlay.is_none());
+        assert_textures(&enabled, 0, None);
+        assert_textures(&enabled, 1, Some(&local));
+        assert_textures(&enabled, 2, Some(&independent));
+        let enabled_source: Value = serde_json::from_slice(&enabled.source_bytes).unwrap();
+        assert_eq!(enabled_source["nodes"][1]["authored_step_id"], "b");
+        assert_eq!(enabled_source["nodes"][1]["execution_ids"], json!([b.step_id]));
+        validate_accepted_script_pipeline_source(
+            &enabled.study,
+            &enabled.catalog,
+            &enabled.source_bytes,
+        )
+        .unwrap();
+        let b_step_id = b.step_id.clone();
+        let c_step_id = c.step_id.clone();
+
+        let StudyPipelineNode::Primitive { enabled, .. } =
+            &mut config.study_pipeline.as_mut().unwrap().nodes[1]
+        else {
+            panic!("expected Relax B");
+        };
+        *enabled = false;
+
+        let disabled = compile_physical(config.clone()).unwrap();
+        let [a, c] = disabled.study.steps.as_slice() else {
+            panic!("expected A and C when B is disabled");
+        };
+        assert_eq!(c.step_id, c_step_id);
+        assert_eq!(c.completion_dependencies, vec![a.step_id.clone()]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(c.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert_textures(&disabled, 0, None);
+        assert_textures(&disabled, 1, Some(&independent));
+        let disabled_source: Value = serde_json::from_slice(&disabled.source_bytes).unwrap();
+        assert_eq!(disabled_source["nodes"][1]["authored_step_id"], "b");
+        assert_eq!(disabled_source["nodes"][1]["execution_ids"], json!([]));
+        validate_accepted_script_pipeline_source(
+            &disabled.study,
+            &disabled.catalog,
+            &disabled.source_bytes,
+        )
+        .unwrap();
+
+        let StudyPipelineNode::Primitive { enabled, .. } =
+            &mut config.study_pipeline.as_mut().unwrap().nodes[1]
+        else {
+            panic!("expected Relax B");
+        };
+        *enabled = true;
+
+        let reenabled = compile_physical(config).unwrap();
+        let [a, b, c] = reenabled.study.steps.as_slice() else {
+            panic!("expected Relax stages A, B, C after re-enabling B");
+        };
+        assert_eq!(b.step_id, b_step_id);
+        assert_eq!(c.step_id, c_step_id);
+        assert!(matches!(
+            &b.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &a.step_id
+        ));
+        assert_eq!(b.initial_state_overlay.as_ref().unwrap().scopes(), &[
+            fullmag_ir::RegionRefIR {
+                object_id: "strip".into(),
+                region_id: Some(region_id.into()),
+            },
+        ]);
+        assert!(matches!(
+            &c.inputs[0].source,
+            StudyInputSource::StepOutput { step_id, .. } if step_id == &b.step_id
+        ));
+        assert_textures(&reenabled, 1, Some(&local));
+        assert_textures(&reenabled, 2, Some(&independent));
+        validate_accepted_script_pipeline_source(
+            &reenabled.study,
+            &reenabled.catalog,
+            &reenabled.source_bytes,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn physical_chain_refuses_incompatible_topology_before_acceptance() {
+        let mut config=physical_config();
+        if let fullmag_ir::GeometryEntryIR::Box {size,..}=&mut config.stages[1].ir.geometry.entries[0] {
+            size[0] *= 2.0;
+        } else {panic!("expected box fixture");}
+        config.stages[1].ir.validate().unwrap();
+        config.ir=config.stages[1].ir.clone();
+        let error=compile_physical(config).err().expect("incompatible state chain must refuse");
+        assert!(error.to_string().contains("compatible runtime topology"),"{error:#}");
+    }
+    #[test]
+    fn cold_source_refuses_incompatible_physical_state_even_with_valid_capture_hashes() {
+        let compiled=compile_physical(physical_config()).unwrap();
+        let mut study=compiled.study.clone();
+        let old=&compiled.catalog.entries()[1];
+        let mut problem=old.problem().clone();
+        if let fullmag_ir::GeometryEntryIR::Box {size,..}=&mut problem.geometry.entries[0] {size[0]*=2.0;}
+        let refs=capture_study_input_references(&study.steps[1].step_id,&problem).unwrap();
+        study.steps[1].model=refs.model;
+        study.steps[1].solver_config=refs.solver_config;
+        study.steps[1].discretization=refs.discretization;
+        let entry=StudyProblemCatalogEntry::from_captured_materialized_step(&study.steps[1],problem,
+            old.execution_materialization().unwrap().clone(),refs.identity.clone()).unwrap();
+        let catalog=StudyProblemCatalog::from_entries(&study,vec![compiled.catalog.entries()[0].clone(),entry]).unwrap();
+        let mut source:Value=serde_json::from_slice(&compiled.source_bytes).unwrap();
+        source["executions"][1]["problem_sha256"]=json!(refs.identity.problem_sha256);
+        let error=validate_accepted_script_pipeline_source(&study,&catalog,&serde_json::to_vec(&source).unwrap()).unwrap_err();
+        assert!(error.to_string().contains("compatible runtime topology"),"{error:#}");
+    }
+    #[test]
     fn physical_contract_refuses_another_activation_identity() {
         let mut config=physical_config();
         config.stages[0].ir.problem_meta.runtime_metadata.insert("active_stage_id".into(),json!("another"));
         let node=crate::script_pipeline_compilation::authored_node(&config.study_pipeline.as_ref().unwrap().nodes,"first").unwrap();
-        assert!(physical_step_contract(node,&config.stages[0].ir,1e-12,None).is_err());
+        assert!(physical_step_contract(node,&config.stages[0].ir,1e-12,None,&[]).is_err());
     }
     #[test]
     fn cold_source_refuses_relabeling_physical_node_as_closed_loop() {

@@ -14,6 +14,7 @@ mod error;
 mod accepted_study_worker;
 use accepted_study_worker::accepted_solver_profile;
 mod accepted_project_storage;
+mod study_execution_contract;
 
 mod worker_startup_gate;
 

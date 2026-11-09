@@ -8,7 +8,7 @@ import type {
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
 
-export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer" | "region";
+export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer" | "region" | "object";
 
 /** The planar profile is the source of truth for scope identity. */
 export interface FieldMapViewScope {
@@ -28,6 +28,7 @@ export function planarScopeQuery(
 ): Pick<PlanarFieldQuery, "scope_id" | "scope_kind" | "scope_region_id"> {
   const scopeId = viewScope.kind === "mesh_part" ||
     viewScope.kind === "layer" ||
+    viewScope.kind === "object" ||
     viewScope.kind === "region"
     ? viewScope.scope_id ?? undefined
     : undefined;

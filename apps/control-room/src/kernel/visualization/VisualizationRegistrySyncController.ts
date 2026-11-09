@@ -19,6 +19,7 @@ import {
 type VisualizationRegistrySyncListener = () => void;
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarTargetOverride = NonNullable<PlanarState["target_overrides"]>[number];
+type PlanarFieldOverlay = NonNullable<PlanarState["field_overlays"]>[number];
 type PlanarWireframeStyle = PlanarState["wireframe_style"];
 
 export type PlanarTargetOverrideOperation =
@@ -51,6 +52,7 @@ export interface VisualizationRegistrySyncSnapshot {
   inflightPatch: VisualizationStatePatch | null;
   inflightTargetIds: readonly string[];
   inflightPlanarTargetIds: readonly string[];
+  inflightPlanarFieldOverlayIds: readonly string[];
   inflightTransactionIds: readonly string[];
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
@@ -59,9 +61,11 @@ export interface VisualizationRegistrySyncSnapshot {
   pendingPatch: VisualizationStatePatch | null;
   pendingTargetIds: readonly string[];
   pendingPlanarTargetIds: readonly string[];
+  pendingPlanarFieldOverlayIds: readonly string[];
   pendingTransactionIds: readonly string[];
   rejectedTargetIds: readonly string[];
   rejectedPlanarTargetIds: readonly string[];
+  rejectedPlanarFieldOverlayIds: readonly string[];
   version: number;
 }
 
@@ -112,6 +116,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   inflightPatch: null,
   inflightTargetIds: EMPTY_TARGET_IDS,
   inflightPlanarTargetIds: EMPTY_TARGET_IDS,
+  inflightPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
   inflightTransactionIds: EMPTY_TARGET_IDS,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
@@ -121,9 +126,11 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   pendingTargetIds: EMPTY_TARGET_IDS,
   rejectedTargetIds: EMPTY_TARGET_IDS,
   pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+  pendingPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
   pendingTransactionIds: EMPTY_TARGET_IDS,
   version: 0,
   rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
+  rejectedPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
 };
 
 export class VisualizationRegistrySyncController {
@@ -217,15 +224,17 @@ export class VisualizationRegistrySyncController {
       {
         patch: this.snapshot.inflightPatch,
         planarTargetIds: this.snapshot.inflightPlanarTargetIds,
+        planarFieldOverlayIds: this.snapshot.inflightPlanarFieldOverlayIds,
         targetIds: this.snapshot.inflightTargetIds,
       },
       {
         patch: this.snapshot.pendingPatch,
         planarTargetIds: this.snapshot.pendingPlanarTargetIds,
+        planarFieldOverlayIds: this.snapshot.pendingPlanarFieldOverlayIds,
         targetIds: this.snapshot.pendingTargetIds,
       },
     ];
-    for (const { patch, planarTargetIds, targetIds } of activePatches) {
+    for (const { patch, planarTargetIds, planarFieldOverlayIds, targetIds } of activePatches) {
       if (!patch) continue;
       if (isCameraOnlyPatch(patch)) {
         const projectionPatch = cameraProjectionPatch(patch);
@@ -242,6 +251,7 @@ export class VisualizationRegistrySyncController {
         patch,
         targetIds,
         planarTargetIds,
+        planarFieldOverlayIds,
       );
     }
     return optimistic;
@@ -284,6 +294,7 @@ export class VisualizationRegistrySyncController {
     if (!patch) return Promise.resolve();
     const targetIds = this.snapshot.pendingTargetIds;
     const planarTargetIds = this.snapshot.pendingPlanarTargetIds;
+    const planarFieldOverlayIds = this.snapshot.pendingPlanarFieldOverlayIds;
     const transactionIds = this.snapshot.pendingTransactionIds;
     const sessionScopeKey = this.sessionScopeKey;
     const sessionScopeGeneration = this.sessionScopeGeneration;
@@ -292,6 +303,7 @@ export class VisualizationRegistrySyncController {
       patch,
       targetIds,
       planarTargetIds,
+      planarFieldOverlayIds,
     );
     const renderAffectingPatch = !isCameraOnlyPatch(patch);
     if (!renderAffectingPatch) {
@@ -304,6 +316,9 @@ export class VisualizationRegistrySyncController {
       inflightPatch: mergeVisualizationStatePatch(
         this.snapshot.inflightPatch,
         patch,
+        targetIds,
+        planarTargetIds,
+        planarFieldOverlayIds,
       ),
       inflightTargetIds: mergeTargetIds(
         this.snapshot.inflightTargetIds,
@@ -313,6 +328,10 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightPlanarTargetIds,
         this.snapshot.pendingPlanarTargetIds,
       ),
+      inflightPlanarFieldOverlayIds: mergeTargetIds(
+        this.snapshot.inflightPlanarFieldOverlayIds,
+        this.snapshot.pendingPlanarFieldOverlayIds,
+      ),
       inflightTransactionIds: mergeTargetIds(
         this.snapshot.inflightTransactionIds,
         transactionIds,
@@ -321,6 +340,7 @@ export class VisualizationRegistrySyncController {
       pendingPatch: null,
       pendingTargetIds: EMPTY_TARGET_IDS,
       pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+      pendingPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
       pendingTransactionIds: EMPTY_TARGET_IDS,
       mutation: {
         attempts: 0,
@@ -384,6 +404,7 @@ export class VisualizationRegistrySyncController {
           rejectedTargetIds: EMPTY_TARGET_IDS,
           version: this.snapshot.version + 1,
           rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
+          rejectedPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
         };
         this.onAcknowledgedTargetPatches?.(state, targetIds, transactionIds);
       })
@@ -392,6 +413,7 @@ export class VisualizationRegistrySyncController {
         this.rejectedPatch = patch;
         const rejectedTargetIds = targetIds;
         const rejectedPlanarTargetIds = planarTargetIds;
+        const rejectedPlanarFieldOverlayIds = planarFieldOverlayIds;
         const normalizedError = error instanceof Error ? error : new Error(String(error));
         this.snapshot = {
           ...this.snapshot,
@@ -399,14 +421,17 @@ export class VisualizationRegistrySyncController {
           inflightPatch: null,
           inflightTargetIds: EMPTY_TARGET_IDS,
           inflightPlanarTargetIds: EMPTY_TARGET_IDS,
+          inflightPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
           inflightTransactionIds: EMPTY_TARGET_IDS,
           pendingFingerprint: null,
           pendingPatch: null,
           pendingTargetIds: EMPTY_TARGET_IDS,
           rejectedTargetIds,
           pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+          pendingPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
           pendingTransactionIds: EMPTY_TARGET_IDS,
           rejectedPlanarTargetIds,
+          rejectedPlanarFieldOverlayIds,
           mutation: this.snapshot.mutation
             ? {
                 ...this.snapshot.mutation,
@@ -513,6 +538,7 @@ export class VisualizationRegistrySyncController {
         this.snapshot.pendingPatch,
         this.snapshot.pendingTargetIds,
         this.snapshot.pendingPlanarTargetIds,
+        this.snapshot.pendingPlanarFieldOverlayIds,
       )
         ? null
         : this.snapshot.pendingPatch;
@@ -523,6 +549,7 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightPatch,
         this.snapshot.inflightTargetIds,
         this.snapshot.inflightPlanarTargetIds,
+        this.snapshot.inflightPlanarFieldOverlayIds,
       )
         ? null
         : this.snapshot.inflightPatch;
@@ -532,14 +559,23 @@ export class VisualizationRegistrySyncController {
     const pendingPlanarTargetIds = pendingPatch
       ? this.snapshot.pendingPlanarTargetIds
       : EMPTY_TARGET_IDS;
+    const pendingPlanarFieldOverlayIds = pendingPatch
+      ? this.snapshot.pendingPlanarFieldOverlayIds
+      : EMPTY_TARGET_IDS;
     const inflightTargetIds = inflightPatch
       ? this.snapshot.inflightTargetIds
       : EMPTY_TARGET_IDS;
     const inflightPlanarTargetIds = inflightPatch
       ? this.snapshot.inflightPlanarTargetIds
       : EMPTY_TARGET_IDS;
+    const inflightPlanarFieldOverlayIds = inflightPatch
+      ? this.snapshot.inflightPlanarFieldOverlayIds
+      : EMPTY_TARGET_IDS;
     const inflightTransactionIds = inflightPatch
       ? this.snapshot.inflightTransactionIds
+      : EMPTY_TARGET_IDS;
+    const pendingTransactionIds = pendingPatch
+      ? this.snapshot.pendingTransactionIds
       : EMPTY_TARGET_IDS;
     if (
       this.snapshot.lastRemoteRevision === state.revision &&
@@ -547,8 +583,11 @@ export class VisualizationRegistrySyncController {
       this.snapshot.inflightPatch === inflightPatch &&
       this.snapshot.pendingTargetIds === pendingTargetIds &&
       this.snapshot.pendingPlanarTargetIds === pendingPlanarTargetIds &&
+      this.snapshot.pendingPlanarFieldOverlayIds === pendingPlanarFieldOverlayIds &&
+      this.snapshot.pendingTransactionIds === pendingTransactionIds &&
       this.snapshot.inflightTargetIds === inflightTargetIds &&
       this.snapshot.inflightPlanarTargetIds === inflightPlanarTargetIds &&
+      this.snapshot.inflightPlanarFieldOverlayIds === inflightPlanarFieldOverlayIds &&
       this.snapshot.inflightTransactionIds === inflightTransactionIds
     ) {
       return;
@@ -559,12 +598,15 @@ export class VisualizationRegistrySyncController {
       inflightPatch,
       inflightTargetIds,
       inflightPlanarTargetIds,
+      inflightPlanarFieldOverlayIds,
       inflightTransactionIds,
       lastRemoteRevision: state.revision,
       pendingFingerprint: null,
       pendingPatch,
       pendingTargetIds,
       pendingPlanarTargetIds,
+      pendingPlanarFieldOverlayIds,
+      pendingTransactionIds,
       version: this.snapshot.version + 1,
     };
     if (!pendingPatch) {
@@ -579,7 +621,12 @@ export class VisualizationRegistrySyncController {
     patch: VisualizationStatePatch,
     targetIds: readonly string[] = [],
   ): VisualizationPatchReceipt {
-    return this.queuePatchForChannels(patch, targetIds, EMPTY_TARGET_IDS);
+    return this.queuePatchForChannels(
+      patch,
+      targetIds,
+      EMPTY_TARGET_IDS,
+      EMPTY_TARGET_IDS,
+    );
   }
 
   queuePlanarTargetOverride(operation: PlanarTargetOverrideOperation): VisualizationPatchReceipt | null {
@@ -605,6 +652,27 @@ export class VisualizationRegistrySyncController {
       { planar: { target_overrides: targetOverrides } },
       EMPTY_TARGET_IDS,
       [targetId],
+      EMPTY_TARGET_IDS,
+    );
+  }
+
+  queuePlanarFieldOverlayPatch(
+    patch: VisualizationStatePatch,
+    touchedProfileId: string,
+  ): VisualizationPatchReceipt {
+    if (
+      !touchedProfileId.trim() ||
+      !Array.isArray(patch.planar?.field_overlays)
+    ) {
+      throw new Error(
+        "A planar field overlay patch requires its touched profile id and profile list",
+      );
+    }
+    return this.queuePatchForChannels(
+      patch,
+      EMPTY_TARGET_IDS,
+      EMPTY_TARGET_IDS,
+      [touchedProfileId],
     );
   }
 
@@ -612,6 +680,7 @@ export class VisualizationRegistrySyncController {
     patch: VisualizationStatePatch,
     targetIds: readonly string[],
     planarTargetIds: readonly string[],
+    planarFieldOverlayIds: readonly string[],
   ): VisualizationPatchReceipt {
     const receipt = { transactionId: this.nextTransactionId() };
     if (!hasPatchKeys(patch)) return receipt;
@@ -619,6 +688,7 @@ export class VisualizationRegistrySyncController {
       targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
     );
     const effectivePlanarTargetIds = normalizeTargetIds(planarTargetIds);
+    const effectivePlanarFieldOverlayIds = normalizeTargetIds(planarFieldOverlayIds);
     if (
       this.snapshot.pendingPatch &&
       visualizationPatchSatisfiesPatch(
@@ -628,6 +698,8 @@ export class VisualizationRegistrySyncController {
         effectiveTargetIds,
         this.snapshot.pendingPlanarTargetIds,
         effectivePlanarTargetIds,
+        this.snapshot.pendingPlanarFieldOverlayIds,
+        effectivePlanarFieldOverlayIds,
       )
     ) {
       return receipt;
@@ -639,6 +711,7 @@ export class VisualizationRegistrySyncController {
       patch,
       effectiveTargetIds,
       effectivePlanarTargetIds,
+      effectivePlanarFieldOverlayIds,
     );
     const pendingTargetIds = mergeTargetIds(
       this.snapshot.pendingTargetIds,
@@ -647,6 +720,10 @@ export class VisualizationRegistrySyncController {
     const pendingPlanarTargetIds = mergeTargetIds(
       this.snapshot.pendingPlanarTargetIds,
       effectivePlanarTargetIds,
+    );
+    const pendingPlanarFieldOverlayIds = mergeTargetIds(
+      this.snapshot.pendingPlanarFieldOverlayIds,
+      effectivePlanarFieldOverlayIds,
     );
     const pendingTransactionIds = mergeTargetIds(
       this.snapshot.pendingTransactionIds,
@@ -662,6 +739,7 @@ export class VisualizationRegistrySyncController {
       pendingPatch,
       pendingTargetIds,
       pendingPlanarTargetIds,
+      pendingPlanarFieldOverlayIds,
       pendingTransactionIds,
       version: this.snapshot.version + 1,
     };
@@ -677,13 +755,20 @@ export class VisualizationRegistrySyncController {
     if (!patch || this.flushPromise) return Promise.resolve();
     const targetIds = this.snapshot.rejectedTargetIds;
     const planarTargetIds = this.snapshot.rejectedPlanarTargetIds;
+    const planarFieldOverlayIds = this.snapshot.rejectedPlanarFieldOverlayIds;
     this.snapshot = {
       ...this.snapshot,
       rejectedTargetIds: EMPTY_TARGET_IDS,
       rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
+      rejectedPlanarFieldOverlayIds: EMPTY_TARGET_IDS,
       version: this.snapshot.version + 1,
     };
-    this.queuePatchForChannels(patch, targetIds, planarTargetIds);
+    this.queuePatchForChannels(
+      patch,
+      targetIds,
+      planarTargetIds,
+      planarFieldOverlayIds,
+    );
     return this.flushNow();
   }
 
@@ -823,6 +908,7 @@ function applyVisualizationStatePatch<TState>(
   patch: VisualizationStatePatch | null | undefined,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
   planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): TState {
   if (!patch || !hasPatchKeys(patch)) return state;
   if (!isPlainObject(state)) return patch as TState;
@@ -831,6 +917,7 @@ function applyVisualizationStatePatch<TState>(
     patch as Record<string, unknown>,
     targetIds,
     planarTargetIds,
+    planarFieldOverlayIds,
   ) as TState;
 }
 
@@ -839,6 +926,7 @@ function mergeQueuedVisualizationPatch(
   next: VisualizationStatePatch | null | undefined,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
   planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): VisualizationStatePatch | null {
   if (!current && !next) return null;
   if (!current) return next ?? null;
@@ -848,6 +936,7 @@ function mergeQueuedVisualizationPatch(
     next as Record<string, unknown>,
     targetIds,
     planarTargetIds,
+    planarFieldOverlayIds,
   ) as VisualizationStatePatch;
 }
 
@@ -856,16 +945,19 @@ function rebaseVisualizationStatePatch(
   patch: VisualizationStatePatch,
   targetIds: readonly string[],
   planarTargetIds: readonly string[],
+  planarFieldOverlayIds: readonly string[],
 ): VisualizationStatePatch {
   const planarPatch = patch.planar;
   const hasTargetOverrides = Array.isArray(patch.overrides);
   const hasPlanarTargetOverrides = Array.isArray(
     planarPatch?.target_overrides,
   );
+  const hasPlanarFieldOverlays = Array.isArray(planarPatch?.field_overlays);
   if (
     !remote ||
     ((!hasTargetOverrides || targetIds.length === 0) &&
-      (!hasPlanarTargetOverrides || planarTargetIds.length === 0))
+      (!hasPlanarTargetOverrides || planarTargetIds.length === 0) &&
+      (!hasPlanarFieldOverlays || planarFieldOverlayIds.length === 0))
   ) {
     return patch;
   }
@@ -875,17 +967,22 @@ function rebaseVisualizationStatePatch(
     patch,
     targetIds,
     planarTargetIds,
+    planarFieldOverlayIds,
   );
+  const rebasedPlanar = {
+    ...planarPatch,
+    ...(hasPlanarTargetOverrides
+      ? { target_overrides: rebased.planar?.target_overrides ?? [] }
+      : {}),
+    ...(hasPlanarFieldOverlays
+      ? { field_overlays: rebased.planar?.field_overlays ?? [] }
+      : {}),
+  };
   return {
     ...patch,
     ...(hasTargetOverrides ? { overrides: rebased.overrides } : {}),
-    ...(hasPlanarTargetOverrides
-      ? {
-          planar: {
-            ...planarPatch,
-            target_overrides: rebased.planar?.target_overrides ?? [],
-          },
-        }
+    ...(hasPlanarTargetOverrides || hasPlanarFieldOverlays
+      ? { planar: rebasedPlanar }
       : {}),
   };
 }
@@ -895,6 +992,7 @@ function mergeQueuedPatchRecords(
   next: Record<string, unknown>,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
   planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): Record<string, unknown> {
   const output: Record<string, unknown> = { ...current };
   for (const [key, value] of Object.entries(next)) {
@@ -920,12 +1018,67 @@ function mergeQueuedPatchRecords(
       );
       continue;
     }
+    if (key === "field_overlays" && planarFieldOverlayIds.length > 0) {
+      output[key] = mergeQueuedPlanarFieldOverlays(
+        Array.isArray(previous) ? (previous as PlanarFieldOverlay[]) : [],
+        Array.isArray(value) ? (value as PlanarFieldOverlay[]) : [],
+        planarFieldOverlayIds,
+      );
+      continue;
+    }
+    if (
+      key === "planar" &&
+      isPlainObject(value) &&
+      planarFieldOverlayIds.length > 0
+    ) {
+      output[key] = mergeQueuedPatchRecords(
+        isPlainObject(previous) ? previous : {},
+        value,
+        targetIds,
+        planarTargetIds,
+        planarFieldOverlayIds,
+      );
+      continue;
+    }
     output[key] =
       isPlainObject(previous) && isPlainObject(value)
-        ? mergeQueuedPatchRecords(previous, value, targetIds, planarTargetIds)
+        ? mergeQueuedPatchRecords(
+            previous,
+            value,
+            targetIds,
+            planarTargetIds,
+            planarFieldOverlayIds,
+          )
         : value;
   }
   return output;
+}
+
+function mergeQueuedPlanarFieldOverlays(
+  current: readonly PlanarFieldOverlay[],
+  next: readonly PlanarFieldOverlay[],
+  profileIds: readonly string[],
+): PlanarFieldOverlay[] {
+  const touched = new Set(normalizeTargetIds(profileIds));
+  const nextById = new Map(next.map((profile) => [profile.id, profile]));
+  const currentIds = new Set(current.map((profile) => profile.id));
+  const result: PlanarFieldOverlay[] = [];
+
+  for (const profile of current) {
+    if (!touched.has(profile.id)) {
+      result.push(profile);
+      continue;
+    }
+    const replacement = nextById.get(profile.id);
+    if (replacement) result.push(replacement);
+  }
+
+  for (const profile of next) {
+    if (!currentIds.has(profile.id) && touched.has(profile.id)) {
+      result.push(profile);
+    }
+  }
+  return result;
 }
 
 function mergeQueuedPlanarTargetOverrides(
@@ -1057,6 +1210,9 @@ function visualizationOverrideTargetId(
 function mergeVisualizationStatePatch(
   current: VisualizationStatePatch | null | undefined,
   next: VisualizationStatePatch | null | undefined,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): VisualizationStatePatch | null {
   if (!current && !next) return null;
   if (!current) return next ?? null;
@@ -1064,6 +1220,9 @@ function mergeVisualizationStatePatch(
   return mergeQueuedPatchRecords(
     current as Record<string, unknown>,
     next as Record<string, unknown>,
+    targetIds,
+    planarTargetIds,
+    planarFieldOverlayIds,
   ) as VisualizationStatePatch;
 }
 
@@ -1072,13 +1231,23 @@ function visualizationStateSatisfiesPatch(
   patch: VisualizationStatePatch,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
   planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
   return Object.entries(patch).every(([key, patchValue]) => {
     if (key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0) {
       return targetOverridesSatisfyPatch(state.overrides, patchValue, targetIds);
     }
-    if (key === "planar" && isPlainObject(patchValue) && planarTargetIds.length > 0) {
-      return planarStateSatisfiesPatch(state.planar, patchValue, planarTargetIds);
+    if (
+      key === "planar" &&
+      isPlainObject(patchValue) &&
+      (planarTargetIds.length > 0 || planarFieldOverlayIds.length > 0)
+    ) {
+      return planarStateSatisfiesPatch(
+        state.planar,
+        patchValue,
+        planarTargetIds,
+        planarFieldOverlayIds,
+      );
     }
     return valueSatisfiesPatch(
       (state as Record<string, unknown>)[key],
@@ -1094,6 +1263,8 @@ function visualizationPatchSatisfiesPatch(
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
   currentPlanarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
   planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  currentPlanarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarFieldOverlayIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
   if (
     targetIds.length > 0 &&
@@ -1111,6 +1282,14 @@ function visualizationPatchSatisfiesPatch(
   ) {
     return false;
   }
+  if (
+    planarFieldOverlayIds.length > 0 &&
+    !normalizeTargetIds(planarFieldOverlayIds).every((profileId) =>
+      normalizeTargetIds(currentPlanarFieldOverlayIds).includes(profileId),
+    )
+  ) {
+    return false;
+  }
   return Object.entries(patch).every(([key, patchValue]) => {
     if (key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0) {
       return targetOverridesSatisfyPatch(
@@ -1122,12 +1301,13 @@ function visualizationPatchSatisfiesPatch(
     if (
       key === "planar" &&
       isPlainObject(patchValue) &&
-      planarTargetIds.length > 0
+      (planarTargetIds.length > 0 || planarFieldOverlayIds.length > 0)
     ) {
       return planarStateSatisfiesPatch(
         current.planar,
         patchValue,
         planarTargetIds,
+        planarFieldOverlayIds,
       );
     }
     return valueSatisfiesPatch(
@@ -1159,8 +1339,24 @@ function planarStateSatisfiesPatch(
   current: unknown,
   expected: Record<string, unknown>,
   targetIds: readonly string[],
+  overlayIds: readonly string[],
 ): boolean {
-  if (!isPlainObject(current)) return false;
+  if (!isPlainObject(current)) {
+    return Object.entries(expected).every(([key, patchValue]) => {
+      if (
+        key !== "field_overlays" ||
+        !Array.isArray(patchValue) ||
+        overlayIds.length === 0
+      ) {
+        return false;
+      }
+      return planarFieldOverlaysSatisfyPatch(
+        [],
+        patchValue as PlanarFieldOverlay[],
+        overlayIds,
+      );
+    });
+  }
   return Object.entries(expected).every(([key, patchValue]) => {
     if (
       key === "target_overrides" &&
@@ -1175,7 +1371,35 @@ function planarStateSatisfiesPatch(
         targetIds,
       );
     }
+    if (
+      key === "field_overlays" &&
+      Array.isArray(patchValue) &&
+      overlayIds.length > 0
+    ) {
+      return planarFieldOverlaysSatisfyPatch(
+        Array.isArray(current.field_overlays)
+          ? (current.field_overlays as PlanarFieldOverlay[])
+          : [],
+        patchValue as PlanarFieldOverlay[],
+        overlayIds,
+      );
+    }
     return valueSatisfiesPatch(current[key], patchValue);
+  });
+}
+
+function planarFieldOverlaysSatisfyPatch(
+  current: readonly PlanarFieldOverlay[],
+  expected: readonly PlanarFieldOverlay[],
+  profileIds: readonly string[],
+): boolean {
+  return normalizeTargetIds(profileIds).every((profileId) => {
+    const currentProfile = current.find((profile) => profile.id === profileId);
+    const expectedProfile = expected.find((profile) => profile.id === profileId);
+    return expectedProfile
+      ? currentProfile !== undefined &&
+          valueSatisfiesPatch(currentProfile, expectedProfile)
+      : currentProfile === undefined;
   });
 }
 

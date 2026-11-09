@@ -40,6 +40,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 #include "cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -76,6 +77,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 void fullmag_fem_set_global_error(const std::string &message);
@@ -789,28 +791,34 @@ bool schedule_gpu_snapshot_payload(
     if (compose_full_domain_h_eff) {
         const auto &h_demag_full = context.gpu_state.device.demag_poisson.poisson_gradient;
         const auto &h_demag_magnetic = context.gpu_state.device.fields.h_demag;
+        const auto *magnetic_node_mask =
+            context.gpu_state.device.mesh_regions.magnetic_node_mask;
         if (h_demag_full.x == nullptr || h_demag_full.y == nullptr ||
             h_demag_full.z == nullptr || h_demag_magnetic.x == nullptr ||
-            h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr) {
+            h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr ||
+            magnetic_node_mask == nullptr) {
             return fail_message(
-                "FEM GPU full-domain H_eff snapshot requires allocated demag component buffers");
+                "FEM GPU full-domain H_eff snapshot requires allocated demag and magnetic-mask buffers");
         }
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.x,
             h_demag_magnetic.x,
             snapshot.staging.x,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.y,
             h_demag_magnetic.y,
             snapshot.staging.y,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.z,
             h_demag_magnetic.z,
             snapshot.staging.z,
+            magnetic_node_mask,
             static_cast<int>(node_count),
             io_stream);
         err = cudaGetLastError();
@@ -4928,9 +4936,10 @@ fullmag_fem_backend *fullmag_fem_backend_create_v3(
     return handle;
 }
 
-fullmag_fem_backend *fullmag_fem_backend_create_v4(
+static fullmag_fem_backend *create_versioned_plan_backend(
     const fullmag_fem_plan_desc_v3 *plan,
-    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+    const fullmag_fem_adaptive_config_v2 *adaptive_config,
+    const uint32_t *canonical_boundary_marker)
 {
     if (plan == nullptr) {
         fullmag_fem_set_global_error("fullmag_fem_backend_create_v4 received null plan");
@@ -5010,7 +5019,8 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
             handle->context,
             native_plan,
             error,
-            plan->mixed_body_certificate_v2)) {
+            plan->mixed_body_certificate_v2,
+            canonical_boundary_marker)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;
@@ -5020,6 +5030,29 @@ fullmag_fem_backend *fullmag_fem_backend_create_v4(
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
     return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v4(
+    const fullmag_fem_plan_desc_v3 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    return create_versioned_plan_backend(plan, adaptive_config, nullptr);
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v5(
+    const fullmag_fem_plan_desc_v4 *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 received null plan");
+        return nullptr;
+    }
+    if (plan->abi_version != FULLMAG_FEM_PLAN_DESC_V4_ABI_VERSION ||
+        plan->struct_size != sizeof(fullmag_fem_plan_desc_v4) || plan->reserved != 0u) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v5 plan ABI version/size/reserved mismatch");
+        return nullptr;
+    }
+    return create_versioned_plan_backend(&plan->base, adaptive_config, &plan->poisson_boundary_marker);
 }
 
 int fullmag_fem_get_regional_field_drive_abi_layout(
@@ -5481,6 +5514,113 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_average_m_for_elements_f64(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
+    double *out_xyz,
+    uint64_t out_len
+) {
+    if (handle == nullptr) {
+        try {
+            fullmag_fem_set_global_error(
+                "fullmag_fem_backend_average_m_for_elements_f64 received null handle");
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    try {
+        if (out_xyz == nullptr || out_len < 3u) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires out_xyz[3]");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        if (element_count == 0u) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires a non-empty element set");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        if (element_indices == nullptr) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 received null element_indices");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+
+        handle->last_error.clear();
+        const auto &material_runtime = handle->context.material_fields.runtime;
+        if (!material_runtime.has_value() || !material_runtime->has_elementwise_ms()) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 requires element-DG0 Ms");
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+
+        const std::size_t available_elements =
+            material_runtime->realization().element_count();
+        std::vector<std::size_t> selected_elements;
+        if (element_count > selected_elements.max_size()) {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 element_count exceeds supported size");
+            return FULLMAG_FEM_ERR_INVALID;
+        }
+        selected_elements.reserve(static_cast<std::size_t>(element_count));
+        for (uint64_t i = 0; i < element_count; ++i) {
+            const std::size_t element = static_cast<std::size_t>(element_indices[i]);
+            if (element >= available_elements) {
+                fullmag_fem_set_handle_error(
+                    handle,
+                    "fullmag_fem_backend_average_m_for_elements_f64 received element index out of range");
+                return FULLMAG_FEM_ERR_INVALID;
+            }
+            selected_elements.push_back(element);
+        }
+
+        if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
+                handle->context,
+                handle->last_error)) {
+            fullmag_fem_set_handle_error(handle, handle->last_error);
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+
+        const fullmag::fem::MsWeightedAos3AverageReduction reduction =
+            material_runtime->ms_weighted_aos3_average_reduction_for_element_set(
+                handle->context.state.m_xyz,
+                std::move(selected_elements));
+        if (!(std::isfinite(reduction.denominator) && reduction.denominator > 0.0)) {
+            out_xyz[0] = 0.0;
+            out_xyz[1] = 0.0;
+            out_xyz[2] = 0.0;
+        } else {
+            const double inv = 1.0 / reduction.denominator;
+            out_xyz[0] = reduction.weighted_component_integrals[0] * inv;
+            out_xyz[1] = reduction.weighted_component_integrals[1] * inv;
+            out_xyz[2] = reduction.weighted_component_integrals[2] * inv;
+        }
+        return FULLMAG_FEM_OK;
+    } catch (const std::exception &exception) {
+        try {
+            fullmag_fem_set_handle_error(
+                handle,
+                std::string("fullmag_fem_backend_average_m_for_elements_f64 failed: ") +
+                    exception.what());
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INTERNAL;
+    } catch (...) {
+        try {
+            fullmag_fem_set_handle_error(
+                handle,
+                "fullmag_fem_backend_average_m_for_elements_f64 failed with an unknown exception");
+        } catch (...) {
+        }
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+}
+
 fullmag_fem_field_snapshot *fullmag_fem_backend_begin_field_snapshot(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable
@@ -5754,6 +5894,53 @@ int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_set_handle_error(handle, kUnavailableMessage);
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
+}
+
+int fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_cpu_fixed_coupling_v1 *out_telemetry)
+{
+    if (handle == nullptr || out_telemetry == nullptr) {
+        fullmag_fem_set_handle_error(handle, "CPU fixed coupling snapshot requires handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_telemetry = {};
+    out_telemetry->abi_version = FULLMAG_FEM_CPU_FIXED_COUPLING_V1_ABI_VERSION;
+    out_telemetry->struct_size = sizeof(*out_telemetry);
+#if FULLMAG_HAS_MFEM_STACK
+    const auto &ctx = handle->context;
+    if (fullmag::fem::mfem_device_requests_gpu(ctx) ||
+        ctx.gpu_state.device.lifecycle.allocated || !ctx.poisson_demag.ready) {
+        return FULLMAG_FEM_OK;
+    }
+    auto copy = [](const fullmag::fem::CpuPoissonTransferDiagnostics &source,
+                   fullmag_fem_cpu_transfer_diagnostics_v1 &target) {
+        if (source.state == "not-built") target.state = 0u;
+        else if (source.state == "ready") target.state = 1u;
+        else if (source.state == "quadrature") target.state = 2u;
+        else return false;
+        if (source.reason.size() >= sizeof(target.reason) ||
+            source.reason.find('\0') != std::string::npos) return false;
+        std::snprintf(target.reason, sizeof(target.reason), "%s", source.reason.c_str());
+        target.build_count = source.build_count;
+        target.reuse_count = source.reuse_count;
+        target.nnz = source.nnz;
+        target.persistent_bytes = source.persistent_bytes;
+        target.setup_wall_time_ns = source.setup_wall_time_ns;
+        target.setup_rss_baseline_bytes = source.setup_rss_baseline_bytes;
+        target.setup_observed_peak_rss_bytes = source.setup_observed_peak_rss_bytes;
+        target.setup_observed_peak_delta_bytes = source.setup_observed_peak_delta_bytes;
+        target.setup_estimated_peak_delta_bytes = source.setup_estimated_peak_delta_bytes;
+        return true;
+    };
+    if (!copy(ctx.poisson_demag.rhs_transfer, out_telemetry->rhs) ||
+        !copy(ctx.poisson_demag.recovery_transfer, out_telemetry->recovery)) {
+        fullmag_fem_set_handle_error(handle, "CPU fixed coupling diagnostics cannot be represented by ABI v1");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    out_telemetry->available = 1u;
+#endif
+    return FULLMAG_FEM_OK;
 }
 
 int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
@@ -6393,6 +6580,34 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
+    fullmag_fem_backend *handle,
+    int32_t *out_relax_type
+) {
+    if (out_relax_type == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null out_relax_type");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1 "
+            "received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    std::int32_t relax_type = -1;
+    std::string error;
+    if (!fullmag::fem::read_device_demag_amg_coarse_relax_type(
+            handle->context, relax_type, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    *out_relax_type = relax_type;
     return FULLMAG_FEM_OK;
 }
 

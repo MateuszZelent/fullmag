@@ -1,12 +1,16 @@
 # FEM demagnetization with P1 magnetization and P2 scalar potential
 
-- Status: implemented for nonperiodic Poisson-Robin CPU/GPU code paths; CPU SP4
-  fixed-mesh qualification complete; executed-device GPU and ST4 qualification pending
+- Status: the nonperiodic P1/P2 Poisson-Robin CPU/GPU realization is implemented;
+  the prior CPU SP4 fixed-mesh energy gate passed. The CPU fixed-coupling cache
+  passed native fixtures and short R2 CPU memory/performance A/B qualification.
+  Full SP4 trajectories and a full CUDA activity profile remain pending.
+  Small CPU/GPU contract fixtures and short runs do not qualify full trajectories.
 - Owners: Fullmag FEM demagnetization
-- Last updated: 2026-08-02
+- Last updated: 2026-11-04
 - Related physics: `docs/physics/0430-fem-dipolar-demag-mfem-gpu-foundations.md`
 - Related validation: `docs/physics/0980-mumag-standard-problem-4-fem-application-validation.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`
+- Related implementation plan: `docs/superpowers/plans/2026-11-04-sp4-cpu-fixed-coupling.md`
 
 (problem-statement)=
 ## 1. Problem statement
@@ -130,6 +134,25 @@ accurate scalar energy from being paired with an inconsistent LLG field.
 | $E_{\mathrm{demag},h}$ | discrete demagnetization energy | $\mathrm J$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $c$ | Cartesian component index | $1$ |
+| $C^d_{ij}$ | cached discrete RHS transfer coefficient for component $d$ | $\mathrm{A\,m}$ |
+| $\mathcal E_m$ | elements selected by the current magnetic mask | $1$ |
+| $Q_e$ | existing quadrature rule and points for element $e$ | $1$ |
+| $w_q$ | quadrature rule weight at point $q$ | $1$ |
+| $J_e(q)$ | `ElementTransformation::Weight` at point $q$ | $\mathrm{m^3}$ |
+| $M_{s,e}(q)$ | saturation magnetization evaluated on element $e$ at $q$ | $\mathrm{A\,m^{-1}}$ |
+| $\psi_{e,j}(q)$ | P1 state basis function $j$ on element $e$ | $1$ |
+| $s_{e,j}$ | sign attached to the returned state DOF $j$ | $1$ |
+| $\phi_{e,i}(q)$ | P1/P2 scalar-potential basis function $i$ on element $e$ | $1$ |
+| $s_{e,i}$ | sign attached to the returned potential DOF $i$ | $1$ |
+| $e$ | element index | $1$ |
+| $q$ | quadrature-point index | $1$ |
+| $i,j$ | local finite-element DOF indices | $1$ |
+| $\mathbf b_{\mathrm{local}}$ | local scalar-potential right-hand side | $\mathrm{A\,m}$ |
+| $\mathbf m_d$ | state coefficient vector for Cartesian component $d$ | $1$ |
+| $\mathcal S$ | magnetic-element or full-domain recovery set | $1$ |
+| $G^{d,\mathcal S}_{ji}$ | cached recovery numerator transfer coefficient | $\mathrm{m^2}$ |
+| $W^{\mathcal S}_j$ | cached recovery normalization weight | $\mathrm{m^3}$ |
+| $\mathbf u_{\mathrm{local}}$ | local potential coefficients after true-to-local mapping | $\mathrm A$ |
 
 (assumptions-and-validity)=
 ## 4. Assumptions and validity
@@ -304,6 +327,13 @@ separate realization remains P1.
   or report their explicit separately qualified P1 realization.
 - Table, telemetry, field artifacts, and solver diagnostics must report the
   same accepted state and the same `E_demag` contract.
+- The CPU MPI/Hypre owner must initialize MPI and `mfem::Hypre::Init()` before
+  constructing its first persistent `HypreParVector`. Initialization by a
+  later matrix constructor is too late for that vector workspace. Successful
+  setup, repeated solves, and teardown must not introduce a HYPRE error flag.
+  A controlled nonconvergence fixture may consume only its verified
+  `HYPRE_ERROR_CONV` after checking rejection and rollback; an unexplained
+  `HYPRE_ERROR_GENERIC` remains a failure, including before GPU policy setup.
 
 (discrete-realization)=
 ## 8. Discrete realization
@@ -326,6 +356,93 @@ MFEM owns separate P1 state and P2 potential spaces. The reusable P2
 P2 scalar system. Recovery projects the gradient into P1 magnetic and visual
 fields without equating potential DOFs with nodes. The direct scalar energy
 and field energy are checked independently.
+
+(planned-cpu-fixed-coupling)=
+#### CPU fixed-coupling cache (native fixtures and short R2 A/B verified)
+
+This is an internal representation change for the existing CPU quadrature
+operations. It introduces no new physics, Python parameter, `ProblemIR`
+field, mesh policy, solver tolerance, time step, or output cadence. The current
+quadrature assembly and recovery remain the executable oracle and the same-CPU
+fallback.
+
+For each spatial component, the cached RHS transfer is
+
+```{math}
+:label: fem-demag-cpu-cached-rhs-transfer
+
+C^{d}_{ij}=\sum_{e\in\mathcal E_m}\sum_{q\in Q_e}
+w_qJ_e(q)M_{s,e}(q)\psi_{e,j}(q)s_{e,j}
+\partial_d\phi_{e,i}(q)s_{e,i},
+\qquad
+\mathbf b_{\mathrm{local}}=\sum_{d\in\{x,y,z\}}C^d\mathbf m_d.
+```
+
+The first factor retains the current magnetic-element mask and exact
+`DomainLFGradIntegrator` quadrature, `IntRules.Get(geometry,
+2*potential_order)`. Keep the current $M_s$ precedence: elementwise runtime
+data (including DG0), then nodal $M_s$ interpolated with the state basis, then
+the scalar material value. The current nodal interpolation does not apply a
+state-DOF sign to $M_s$. After the local action, keep the existing
+`GetRestrictionMatrix()->Mult` mapping and essential-DOF treatment.
+
+Physical and visual recovery remain separate because their element sets and
+normalization differ:
+
+```{math}
+:label: fem-demag-cpu-cached-recovery
+
+G^{d,\mathcal S}_{ji}=-\sum_{e\in\mathcal S}\sum_{q\in Q_e}
+w_qJ_e(q)\psi_{e,j}(q)\partial_d\phi_{e,i}(q)s_{e,i},
+\qquad
+W^{\mathcal S}_{j}=\sum_{e\in\mathcal S}\sum_{q\in Q_e}
+w_qJ_e(q)\psi_{e,j}(q).
+```
+
+Use magnetic elements for physical $\mathbf H_{\mathrm{demag}}$ and the full
+domain for visual $\mathbf H_{\mathrm{demag}}$. Preserve current recovery row
+indexing, which does not multiply the state row by its signed-DOF sign. Map the
+solved potential through the existing `GridFunction::SetFromTrueDofs` before
+applying the local-potential operator. Continue with the existing weight
+normalization, periodic reduction, masks, and
+`finalize_demag_poisson_recovered_field` finalizer. Preserve the historical
+`potential_order == 1 && geometry == TETRAHEDRON` center-gradient branch,
+including `T.Weight()/6` and equal distribution across state DOFs; P2 and other
+geometries retain their present quadrature.
+
+The operators and component scratch belong to the existing
+`PoissonRhsWorkspace` and `DemagRecoveryWorkspace`. Stage setup with RAII and
+publish only complete, validated matrices; destroy them before their FE spaces
+and mesh. Do not copy immutable operators into RK snapshots. Cache identity
+must include vertices and `Mesh::GetNodes()` geometry, both FE spaces and their
+constraints/restrictions, signed DOFs, magnetic masks, effective $M_s$, and
+periodic maps. Changes to $\mathbf m$ or $u$ reuse the matrices; a dependency
+change follows the existing invalidate/refuse policy. The initial version may
+invalidate the whole workspace when $M_s$ changes.
+
+The experiment is bounded by 640 MiB of persistent cache and scratch and
+1.5 GiB of additional peak setup RSS on R2. These are maximum experiment
+budgets; measured R2 usage is recorded separately below. If optional cached setup is unsupported or exceeds
+the budget, record the reason and use the existing CPU quadrature realization
+for that same request. This is not a device fallback and does not permit
+relaxing any tolerance.
+
+The managed native contract below exercised P1/P2, mixed and curved geometry,
+scalar/nodal/elementwise $M_s$, two distinct input states, masks, periodic
+finalization, invalidation, budget refusal, and release after injected partial
+setup failure. Constrained or vector spaces and nontrivial DOF transformations
+retain the existing quadrature operation until separately qualified. These
+fixtures alone do not establish R2 memory usage or a CPU speedup; the separate
+production R2 A/B below supplies that bounded evidence.
+
+The append-only native getter `fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1` reports
+ABI version 1 independently of the existing step-statistics ABI. Its optional
+`metadata.demag_runtime.cpu_fixed_coupling` record and final execution provenance
+carry RHS/recovery readiness or refusal, build/reuse counts, nonzeros, persistent
+bytes including scratch, setup time, a common initial RSS baseline, observed
+process high-water RSS and delta, and the estimated peak delta. Other solver
+lanes omit this CPU-only record. Reading diagnostics does not advance the solver
+or create a scalar row.
 
 ### 8.4 FEM GPU
 
@@ -354,9 +471,13 @@ the magnetic-submesh identity.
 | CPU energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` + `demag_poisson_energy_from_field` | provide independent field-energy parity check |
 | GPU operators | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` + `build_p1_demag_operators` | become mixed-order rectangular operator construction |
 | GPU buffers | `backends/fem/gpu/cuda/state/gpu_state.cpp` + `gpu_state_initialize` | allocate by state-node and potential-DOF cardinalities |
-| GPU stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `gpu_demag_poisson_compute_stage` | execute device RHS, solve, recovery, and energy |
+| GPU stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `compute_device_demag_for_device_stage_impl` | execute device RHS, solve, recovery, and energy |
 | Mesh refinement | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` + `_build_perimeter_refinement_fields` | scope magnetic and near-air edge/corner targets |
 | SP4 scenario | `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` + module | author the ordinary public qualification workload |
+| CPU RHS transfer | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` + `assemble_demag_poisson_rhs` | cache the existing quadrature operation; preserve it as oracle and same-CPU fallback |
+| CPU recovery transfer | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` + `recover_demag_poisson_field` | preserve separate physical/visual paths and the existing finalizer |
+| CPU cache identity | `backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp` + `make_poisson_operator_dependency_key_impl` | include geometry, FE-space, constraint, and material identity in invalidation |
+
 
 (validation)=
 ## 10. Validation
@@ -382,6 +503,83 @@ Required gates are cumulative:
    total and component energies, torque stop, table, telemetry, and saved
    fields. The FEM result is not accepted solely because the initial uniform
    energy passes.
+7. **Native fixtures and short R2 A/B verified — CPU fixed-coupling cache:** compare RHS and both
+   recovery fields against the retained quadrature oracle on the same inputs.
+   Require relative L2 error at most $10^{-12}$ for nonzero fixtures; use an
+   absolute near-zero field scale of $10^{-12}M_s$ in $\mathrm{A\,m^{-1}}$.
+   Investigate any failure without loosening the threshold. Reuse one setup for
+   at least two distinct magnetizations and two potentials, with build count
+   one. Cover P1/P2, the P1 tetra center branch, mixed/curved meshes, scalar,
+   nodal and DG0 $M_s$, masks, periodic maps, and available signed/constrained
+   fixtures. Check the existing exact energy finalizers and torque. Change
+   geometry while retaining node count and require invalidation. Inject setup
+   failure and verify no partial publication or dangling FE references. Mark
+   unavailable fixtures explicitly and retain the oracle path for unsupported
+   inputs.
+8. **Native contract verified — Hypre initialization-order regression:** enter with a
+   clean library error flag, construct the first CPU vector workspace, and
+   require initialized HYPRE with a zero flag after every one of 100 repeated
+   solves and after teardown. Keep the same operator, RHS, requested solver
+   tolerances, independent residual certification, and rollback checks. The
+   subsequent strict GPU fixture must start without inherited CPU errors.
+
+Managed native contract `a7a0f16e751c446a8fd4a85bab1e54a8` passed on source
+snapshot `55ac22f0b0ed3f887a27fab6b4543bd65373bd33c42d4c4f34edd1f194946f44`.
+It exercised 100 error-free CPU solves and teardown, the scoped expected
+nonconvergence error, and strict CPU/GPU field, energy, and torque checks for
+Robin and Dirichlet fixtures. The later native contract
+`6f911508c30443eb871e0ae9ac41a189` also passed for commit
+`d34e1624673a49b47a2d2f456cc0a4d1a2f0ca69`, source snapshot
+`e311e62542c634e681a7e994895294fca1669b1e1d1cf6738f0826ad4268c6af`.
+That managed package reached a verified Ready owner/API and successful package
+maintenance before the R2 experiments below. Full SP4 trajectories remain a
+separate required gate.
+
+### Bounded R2 CPU A/B evidence, 2026-11-04
+
+Baseline commit `e3f38144cb63e5b76d90595df7d0d128e1345277` and the d34 feature
+package above used the same R2 mesh, active initial state, solver tolerances,
+integrator and output cadence, with explicit effective thread counts 1, 2 and
+6. Each run reached 500 fs and retained its original runtime Zarr. Compare
+only pairs with the same thread count. The table uses ten callback intervals
+per run, for steps at least 3; the ratios are descriptive short-window means.
+
+| Effective CPU threads | Baseline mean callback interval (s) | Feature mean callback interval (s) | Baseline/feature |
+|---:|---:|---:|---:|
+| 1 | 22.573906 | 8.677545 | 2.6014 |
+| 2 | 19.201084 | 5.729905 | 3.3510 |
+| 6 | 19.696684 | 5.714403 | 3.4468 |
+
+The retained cache and scratch totalled 115242692 bytes (109.9 MiB). Each
+RHS/recovery cache was built once and reused 76 times. Additional observed
+setup RSS was at most 150396928 bytes (143.5 MiB), measured from the same
+initial RSS baseline for both transfers. Setup itself took about 22 seconds;
+the steady-state table does not include that one-time cost. The Poisson solve
+did not become faster and dominates the remaining CPU cost.
+
+Across these same-thread pairs, maximum active-state component difference
+was $1.92\times10^{-13}$, and the largest absolute difference among all eight
+terminal energy components was $2.52\times10^{-33}\,\mathrm J$. Terminal
+torque differences were recorded in both $\mathrm{A\,m^{-1}}$ and
+$\mathrm T$ without inventing a new acceptance threshold. These measurements
+do not establish long-time stability, GPU speedup, GPU utilization, or the
+cause of historical CUDA 719.
+
+Feature run identities:
+
+| Effective CPU threads | Feature run |
+|---:|---|
+| 1 | `run-live-6e435b7d31dac4689315ac66a57a4b2823ca6281e0d703eae5ad99c9a026f583` |
+| 2 | `run-live-801936f41f49f92dd18d0ab5e4955cad298559b0660d111b834eb83e0f07aaa3` |
+| 6 | `run-live-f2602acef0f544e2da48721fb3b134a4f6c27617284895c891edd9e437bcaa0f` |
+
+The complete same-thread report is preserved as
+`fixed-coupling-ab-d34-20261104.json`/`.md` in the SP4 experiment diagnostics;
+[PR 394](https://github.com/MateuszZelent/fullmag/pull/394) records the scoped
+implementation and qualification. The next diagnostic increment is specified
+in `docs/superpowers/specs/2026-11-04-sp4-fem-accepted-profiling-design.md`.
+Accepted phase profiling and native CUDA activity capture remain separate
+implementation/runtime gates; neither is established by this A/B result.
 
 (limitations)=
 ## 11. Limitations
@@ -393,6 +591,11 @@ Required gates are cumulative:
   until independently implemented and qualified.
 - Dense FEM/BEM is a validation-scale alternative and is not substituted for
   this production sparse Poisson path.
+- The CPU fixed-coupling implementation passed the managed native oracle,
+  reuse, invalidation, budget-refusal, transient-RSS, and partial-setup-failure
+  fixtures and the bounded R2 CPU A/B above. Full SP4 trajectories and complete
+  CUDA activity profiling remain unqualified; this note makes no GPU
+  performance or long-time stability claim.
 
 (scientific-bibliography)=
 ## 12. Scientific bibliography
@@ -413,12 +616,25 @@ Required gates are cumulative:
 
 | Equation or claim | Source identity | Lane | Evidence status |
 |---|---|---|---|
+| Cache contract anchor | `docs/physics/0431-fem-demag-mixed-order-potential.md` + `DOC-ANCHOR:planned-cpu-fixed-coupling` | FEM CPU | preserved contract anchor; implementation evidence is listed separately |
+| CPU transfer ownership | `backends/fem/cpu/mfem/interactions/demag_poisson_transfer.hpp` + `class CpuTransferMatrix` | FEM CPU | RAII matrices and guarded setup-memory helpers; native failure-release fixtures passed |
+| CPU diagnostics ABI | `backends/fem/src/api.cpp` + `fullmag_fem_backend_snapshot_cpu_fixed_coupling_v1` | FEM CPU | version 1 snapshot getter implemented; package runtime verification pending |
+| CPU transfer regression | `backends/fem/tests/demag_poisson_contract.cpp` + `cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup` | FEM CPU test | cached/oracle field and energy comparisons and input reuse passed in managed native contract |
+| CPU RHS transfer cache | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` + `assemble_demag_poisson_rhs`; `DOC-ANCHOR:planned-cpu-fixed-coupling` | FEM CPU | implemented; native fixtures passed; existing quadrature remains the oracle |
+| CPU recovery transfer cache | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` + `recover_demag_poisson_field`; `DOC-ANCHOR:planned-cpu-fixed-coupling` | FEM CPU | implemented; native fixtures passed; physical and visual paths remain separate |
+| RHS oracle test | `backends/fem/tests/demag_poisson_contract.cpp` + `sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle` | FEM CPU test | current quadrature oracle; not a cache regression |
+| Recovery oracle test | `backends/fem/tests/demag_poisson_contract.cpp` + `demag_recovery_uses_negative_scalar_potential_gradient` | FEM CPU test | current recovery oracle; not a cache regression |
+| Native contract suite | `backends/fem/tests/demag_poisson_contract.cpp` + `main` | FEM CPU test | oracle fixtures and six fixed-transfer regressions passed in the managed native contract |
+| Dependency invalidation | `backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp` + `make_poisson_operator_dependency_key_impl` | FEM CPU | geometry, FE-space, constraint, material, and periodic identity implemented; invalidation fixtures passed |
+| Recovery finalizer | `backends/fem/cpu/mfem/interactions/demag_poisson_field.cpp` + `finalize_demag_poisson_recovered_field` | FEM CPU | existing exact finalizer retained after cached recovery |
 | Weak P2 potential form | `backends/fem/cpu/mfem/interactions/demag_poisson_lifecycle.cpp` + `context_initialize_poisson` | FEM CPU/shared setup | implemented for nonperiodic Poisson-Robin; CPU SP4 fixed-mesh qualified |
 | Outer boundary | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` + `initialize_demag_poisson_boundary_operator` | FEM CPU/shared setup | implemented shared P1/P2 boundary form |
 | P1-to-P2 source | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` + `MagnetizationCoefficient` | FEM CPU/shared algebra | implemented rectangular P1-state to P2-potential coupling |
 | P2-to-P1 field | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` + `recover_demag_poisson_field` | FEM CPU | implemented P2-gradient projection to the P1 physical field |
 | Field energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` + `demag_poisson_energy_from_field` | FEM CPU | implemented independent field form |
 | Solve orchestration | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` + `context_compute_demag_poisson` | FEM CPU | implemented direct variational and recovered-field energy telemetry |
+| Hypre initialization order | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` + `solve_demag_poisson_hypre` | FEM CPU | library initialization before persistent vectors; native contract passed |
+| Hypre lifecycle regression | `backends/fem/tests/demag_poisson_contract.cpp` + `nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves` | FEM CPU test | 100 error-free solves and teardown passed in the managed native contract |
 | Device mixed-order operators | `backends/fem/gpu/cuda/demag_poisson/operators.hpp` + `build_p1_demag_operators` | FEM GPU | P2 nonperiodic operator implementation compiled; executed-device qualification pending |
 | Device stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `compute_device_demag_for_device_stage` | FEM GPU | P2 nonperiodic stage implementation compiled; executed-device qualification pending |
 | Perimeter refinement | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` + `_build_perimeter_refinement_fields` | FEM meshing | implemented fields; near-air scoping correction pending |

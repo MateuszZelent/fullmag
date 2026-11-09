@@ -10,7 +10,7 @@ use fullmag_ir::{
     BackendTarget, ComputeResourcePatchIR, ComputeResourcesIR, CpuResourcePatchIR, ExecutionDevice,
     ExecutionFieldOriginIR, ExecutionMode, ExecutionOriginKindIR, ExecutionPrecision,
     ExecutionProfileIR, ExecutionRequestLayerIR, ExecutionRequestPatchIR, FieldPatch,
-    MaterializedExecutionRequestIR, MemoryResourcePatchIR, ProblemIR,
+    MaterializedExecutionRequestIR, MemoryResourcePatchIR, ProblemIR, RequestedThreads,
 };
 
 pub const LEGACY_LIVE_EXECUTION_PROFILE_ID: &str = "exec:default";
@@ -76,6 +76,10 @@ pub fn migrate_legacy_live_execution(
             );
         }
     }
+    let resources_patch = match resources.as_ref() {
+        Some(resources) => Some(resources_patch(resources)),
+        None => legacy_cpu_threads_patch(problem)?,
+    };
 
     let origin = ExecutionFieldOriginIR {
         kind: origin_kind,
@@ -89,9 +93,7 @@ pub fn migrate_legacy_live_execution(
             device: FieldPatch::Value(parse_device(&requested.device)?),
             precision: FieldPatch::Value(parse_precision(&requested.precision)?),
             mode: FieldPatch::Value(parse_mode(&requested.mode)?),
-            resources: resources
-                .as_ref()
-                .map(resources_patch)
+            resources: resources_patch
                 .map(FieldPatch::Value)
                 .unwrap_or(FieldPatch::Absent),
         },
@@ -165,6 +167,32 @@ fn resources_patch(resources: &ComputeResourcesIR) -> ComputeResourcePatchIR {
         parallelism: FieldPatch::Value(resources.parallelism.clone()),
         placement: FieldPatch::Value(resources.placement),
     }
+}
+
+fn legacy_cpu_threads_patch(problem: &ProblemIR) -> Result<Option<ComputeResourcePatchIR>, String> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|selection| selection.get("cpu_threads"))
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(None);
+    };
+    let threads = value
+        .as_u64()
+        .and_then(|threads| u32::try_from(threads).ok())
+        .filter(|threads| *threads > 0)
+        .ok_or_else(|| "runtime_selection.cpu_threads must be a positive u32".to_string())?;
+
+    Ok(Some(ComputeResourcePatchIR {
+        cpu: FieldPatch::Value(CpuResourcePatchIR {
+            threads: FieldPatch::Value(RequestedThreads::Count(threads)),
+            ..CpuResourcePatchIR::default()
+        }),
+        ..ComputeResourcePatchIR::default()
+    }))
 }
 
 fn validate_legacy_ordinal_constraints(problem: &ProblemIR) -> Result<(), String> {
@@ -294,7 +322,7 @@ mod tests {
         );
         problem.problem_meta.runtime_metadata.insert(
             "runtime_selection".into(),
-            json!({"device":"cuda", "gpu_count":1, "device_index":0}),
+            json!({"device":"cuda", "cpu_threads":4, "gpu_count":1, "device_index":0}),
         );
 
         let migration = migrate_legacy_live_execution(
@@ -314,10 +342,18 @@ mod tests {
             migration.materialized.origins["resources.gpu"].kind,
             ExecutionOriginKindIR::Script
         );
+        assert_eq!(
+            migration.materialized.origins["resources.cpu.threads"].kind,
+            ExecutionOriginKindIR::Script
+        );
         let bound = crate::bind_materialized_execution(&problem, &migration.materialized).unwrap();
         assert_eq!(
             bound.problem_meta.runtime_metadata["compute_resources"],
             serde_json::to_value(resources).unwrap()
+        );
+        assert_eq!(
+            bound.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"],
+            json!(4)
         );
     }
 
@@ -349,6 +385,199 @@ mod tests {
             migration.materialized.origins["device"].kind,
             ExecutionOriginKindIR::Script
         );
+    }
+
+    #[test]
+    fn migration_preserves_legacy_cpu_thread_intent_through_binding_and_admission() {
+        for (threads, origin_kind, location) in [
+            (1, ExecutionOriginKindIR::Study, "study.scene.study.threads"),
+            (2, ExecutionOriginKindIR::Script, "script:study.threads"),
+            (6, ExecutionOriginKindIR::Study, "study.scene.study.threads"),
+        ] {
+            let mut problem = ProblemIR::bootstrap_example();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .insert("runtime_selection".into(), json!({"cpu_threads": threads}));
+
+            let migration =
+                migrate_legacy_live_execution(&problem, &requested("cpu"), origin_kind, location)
+                    .unwrap();
+
+            assert_eq!(
+                migration
+                    .materialized
+                    .requested
+                    .resources
+                    .cpu
+                    .threads
+                    .count(),
+                Some(threads)
+            );
+            assert_eq!(
+                migration.materialized.origins["resources.cpu.threads"].kind,
+                origin_kind
+            );
+            assert_eq!(
+                migration.materialized.origins["resources.cpu.threads"].location,
+                location
+            );
+            assert!(migration.materialized.requested.resources.gpu.is_none());
+            assert_eq!(
+                migration.materialized.requested.resources.target,
+                ComputeTargetIR::Local
+            );
+            assert_eq!(
+                migration.materialized.requested.resources.cpu.core_policy,
+                None
+            );
+            assert_eq!(
+                migration.materialized.requested.resources.cpu.affinity,
+                CpuAffinityIR::Auto
+            );
+            assert_eq!(
+                migration
+                    .materialized
+                    .requested
+                    .resources
+                    .cpu
+                    .native_threads,
+                RequestedThreads::Auto(fullmag_ir::AutoThreads::Auto)
+            );
+            assert_eq!(
+                migration.materialized.requested.resources.cpu.blas_threads,
+                RequestedThreads::Auto(fullmag_ir::AutoThreads::Auto)
+            );
+            for path in [
+                "resources.target",
+                "resources.cpu.core_policy",
+                "resources.cpu.affinity",
+                "resources.cpu.native_threads",
+                "resources.cpu.blas_threads",
+                "resources.gpu",
+            ] {
+                assert_eq!(
+                    migration.materialized.origins[path].kind,
+                    ExecutionOriginKindIR::ProductDefault,
+                    "legacy thread migration must not author {path}"
+                );
+            }
+
+            let bound =
+                crate::bind_materialized_execution(&problem, &migration.materialized).unwrap();
+            let worker_resources = ComputeResourcesIR::from_problem(&bound)
+                .unwrap()
+                .expect("binding should materialize typed worker resources");
+            assert_eq!(worker_resources.cpu.threads.count(), Some(threads));
+            worker_resources.validate_legacy_selection(&bound).unwrap();
+            assert_eq!(
+                bound.problem_meta.runtime_metadata["runtime_selection"]["cpu_threads"],
+                json!(threads)
+            );
+
+            let mut run_request = requested("cpu");
+            run_request.minimum_resources = Some(crate::RequestedResourceBudget {
+                cpu_millis: u64::from(threads) * 1_000,
+                memory_bytes: 1,
+                gpu_memory_bytes: 0,
+                storage_bytes: 1,
+            });
+            run_request.validate_problem_resources(&bound).unwrap();
+            run_request.minimum_resources.as_mut().unwrap().cpu_millis -= 1;
+            assert!(run_request.validate_problem_resources(&bound).is_err());
+        }
+    }
+
+    #[test]
+    fn absent_and_null_legacy_cpu_threads_keep_auto_product_defaults() {
+        for runtime_selection in [None, Some(json!({"cpu_threads": null}))] {
+            let mut problem = ProblemIR::bootstrap_example();
+            if let Some(runtime_selection) = runtime_selection {
+                problem
+                    .problem_meta
+                    .runtime_metadata
+                    .insert("runtime_selection".into(), runtime_selection);
+            }
+
+            let migration = migrate_legacy_live_execution(
+                &problem,
+                &requested("cpu"),
+                ExecutionOriginKindIR::Study,
+                "study.scene.study.threads",
+            )
+            .unwrap();
+
+            assert_eq!(
+                migration.materialized.requested.resources.cpu.threads,
+                RequestedThreads::Auto(fullmag_ir::AutoThreads::Auto)
+            );
+            assert_eq!(
+                migration.materialized.origins["resources.cpu.threads"].kind,
+                ExecutionOriginKindIR::ProductDefault
+            );
+            assert!(migration.layer.request.resources.is_absent());
+
+            let bound =
+                crate::bind_materialized_execution(&problem, &migration.materialized).unwrap();
+            assert_eq!(
+                ComputeResourcesIR::from_problem(&bound)
+                    .unwrap()
+                    .unwrap()
+                    .cpu
+                    .threads
+                    .count(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_legacy_cpu_thread_counts_are_rejected() {
+        for value in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("3"),
+            json!(u64::from(u32::MAX) + 1),
+        ] {
+            let mut problem = ProblemIR::bootstrap_example();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .insert("runtime_selection".into(), json!({"cpu_threads": value}));
+
+            let error = migrate_legacy_live_execution(
+                &problem,
+                &requested("cpu"),
+                ExecutionOriginKindIR::Study,
+                "study.scene.study.threads",
+            )
+            .unwrap_err();
+            assert!(error.contains("runtime_selection.cpu_threads"), "{error}");
+        }
+    }
+
+    #[test]
+    fn explicit_typed_auto_still_conflicts_with_legacy_cpu_thread_count() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "compute_resources".into(),
+            json!({"schema_version":"compute_resources.v1", "cpu":{"threads":"auto"}}),
+        );
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), json!({"cpu_threads": 2}));
+
+        let error = migrate_legacy_live_execution(
+            &problem,
+            &requested("cpu"),
+            ExecutionOriginKindIR::Study,
+            "study.scene.study.threads",
+        )
+        .unwrap_err();
+        assert!(error.contains("execution_intent_conflict"));
+        assert!(error.contains("compute_resources.cpu.threads"));
     }
 
     #[test]

@@ -855,6 +855,7 @@ function sceneStudySnapshot(value: unknown): ModelTreeSnapshot["study"] {
       ...sceneStudyStageSnapshot(entry.payload, index),
       ...(entry.queueId ? {
         stageId: entry.queueId,
+        authoredStageId: entry.queueId,
         pipelineNodeId: entry.queueId,
         pipelineEnabled: entry.enabled,
         pipelineLabel: entry.label,
@@ -905,7 +906,9 @@ function sceneStudyStageSnapshot(
       kPathSamplingKind(stage.k_path) ??
       kPathSamplingKind(stage.eigen_k_path),
     maxSteps: scalarText(stage.max_steps),
+    authoredStageId: stringValue(stage.stage_id),
     stageId: stringValue(stage.stage_id) ?? stringValue(stage.id),
+    pipelineEnabled: stage.enabled === false ? false : undefined,
     torqueTolerance: stageTorqueToleranceApm(stage),
     untilSeconds: scalarText(stage.until_seconds),
   };

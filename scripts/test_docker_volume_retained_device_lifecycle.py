@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+import docker_dev_network
 import docker_dev
 import docker_volume_dev as dev
 import docker_volume_cancelled_activation_guard as cancelled
+import docker_volume_linux_supervision_stop as supervision_stop
 import fullmag_docker_runtime as runtime
 import test_docker_native_failed_recreate as completed_fixtures
 import test_docker_volume_pending_resume as resume_fixtures
@@ -18,6 +20,127 @@ import test_docker_volume_pre_admission_integration as recreate_fixtures
 
 
 class RetainedDeviceLifecycleTests(unittest.TestCase):
+    def _run_retained_subnet_entry(self, *, document, route, subnet_override=None):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            before = deepcopy(document)
+            previous = {
+                "state": "succeeded",
+                "compose_project": "fixture",
+                "inputs": {
+                    "image_id": "sha256:" + "a" * 64,
+                    "source_root": str(source),
+                    "gpu_access_requested": "auto",
+                },
+            }
+            identity = {"project_name": "fixture", "worktree_id": "worktree", "checkout_kind": "worktree"}
+            layout = {"storage_root": str(source), "runtime_root": str(source)}
+            control = mock.Mock(project="fixture")
+            control.read.side_effect = [previous, document]
+            args = SimpleNamespace(
+                capture_terminal_observation=False, quiesce_api=False, helper_source_root=None,
+                helper_source_commit=None, recovery_authorization=None, headless=False,
+                repo_root=source, source_root=source, attempt="b" * 32,
+                config_sha256=hashlib.sha256(dev.canonical(document)).hexdigest(),
+                network_subnet=subnet_override, fresh_state=route == "fresh", script=None,
+                native_contract=None, build_for_recovery=None, build_for_recovery_sha256=None,
+                saved_authoring_checkpoint=None, saved_authoring_checkpoint_sha256=None,
+                restart_backend=False, include_untracked=None, restart_idle_service=False,
+                stop_after_drain=False, refresh_frontend_service=False,
+                resume_recreation="c" * 32 if route == "resume" else None,
+                completed_recreation_attempt="d" * 32 if route == "fresh" else None,
+                completed_recreation_sha256="e" * 64 if route == "fresh" else None,
+                drained_successor_proof=None, drained_successor_proof_sha256=None,
+                terminal_observation_proof=None, terminal_observation_proof_sha256=None,
+                terminal_observation_stop=None,
+            )
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch.object(dev, "require_host"))
+                stack.enter_context(mock.patch.object(
+                    docker_dev, "_select_source", return_value=(source, layout)))
+                stack.enter_context(mock.patch.object(docker_dev, "_compose_identity", return_value=identity))
+                stack.enter_context(mock.patch(
+                    "docker_build_control.toolchain_configuration",
+                    return_value={"services": {"fem-gpu-toolchain": {"build": {"args": {
+                        "FULLMAG_CUDA_BASE_IMAGE": "cuda-base",
+                    }}}}},
+                ))
+                stack.enter_context(mock.patch.object(dev, "BuildControl", return_value=control))
+                stack.enter_context(mock.patch(
+                    "docker_volume_prelaunch_failure_stop.validate_options", return_value=(False, None)))
+                stack.enter_context(mock.patch(
+                    "docker_volume_native_terminal_stop.validate_options", return_value=(False, None)))
+                stack.enter_context(mock.patch(
+                    "docker_volume_empty_api_abort.fresh_pin", return_value=None))
+                fresh_recreation = stack.enter_context(mock.patch(
+                    "docker_volume_cancelled_activation_guard.require_fresh_recreation"))
+                fresh_archive = stack.enter_context(mock.patch(
+                    "docker_volume_preparation_abort.require_fresh_archive", return_value=None))
+                stack.enter_context(mock.patch(
+                    "docker_volume_linux_supervision_stop.require_prepared_fresh_archive", return_value=None))
+                stack.enter_context(mock.patch.object(dev, "_retained_prepared_fresh_contracts", return_value=[]))
+                stack.enter_context(mock.patch.object(dev, "_operator_probe_record_from_retained", return_value={}))
+                stack.enter_context(mock.patch.object(dev, "_retained_device_access", return_value="cpu"))
+                stack.enter_context(mock.patch.object(dev, "include_untracked_from_compose", return_value=[]))
+                start = stack.enter_context(mock.patch.object(dev, "start", return_value="started"))
+                if route == "fresh":
+                    stack.enter_context(mock.patch.object(dev, "_completed_recreation_start_context", return_value={}))
+                    try:
+                        result = dev._retained_operation(args, recreate_services=True)
+                    except dev.BuildControlError as error:
+                        result = error
+                else:
+                    stack.enter_context(mock.patch.object(
+                        dev, "_resume_recreated_operation",
+                        side_effect=lambda call_args, *_pos, **_kw: dev.start(call_args),
+                    ))
+                    try:
+                        result = dev._retained_operation(args, recreate_services=False,
+                                                        resume_recreation_id="c" * 32)
+                    except dev.BuildControlError as error:
+                        result = error
+                return result, args, start, fresh_recreation, fresh_archive, before
+
+    def test_retained_entry_passes_authenticated_subnet_to_fresh_and_resume_start(self):
+        for route in ("fresh", "resume"):
+            with self.subTest(route=route):
+                document = {
+                    "name": "fixture",
+                    "services": {"backend": {"environment": {}}, "frontend": {}},
+                    "networks": {"fullmag": {"name": "fixture-net", "driver": "bridge",
+                                                "ipam": {"driver": "default", "config": [
+                                                    {"subnet": "172.16.2.0/24"}]}}},
+                }
+                result, args, start, _fresh_recreation, _fresh_archive, before = (
+                    self._run_retained_subnet_entry(document=document, route=route))
+                self.assertEqual(result, "started")
+                self.assertEqual(args.network_subnet, "172.16.2.0/24")
+                self.assertEqual(start.call_args.args[0].network_subnet, "172.16.2.0/24")
+                self.assertEqual(document, before)
+
+    def test_retained_subnet_mismatch_fails_before_recreation_admission(self):
+        cases = (
+            ([{"subnet": "172.16.2.0/24"}], "172.16.3.0/24", "does not match"),
+            ([{"subnet": "172.16.2.0/24"}, {"subnet": "172.17.2.0/24"}], None, "exactly one"),
+            ([{"subnet": "172.16.2.1/24"}], None, "strict IPv4"),
+        )
+        for config, override, message in cases:
+            with self.subTest(config=config, override=override):
+                document = {
+                    "name": "fixture",
+                    "services": {"backend": {"environment": {}}, "frontend": {}},
+                    "networks": {"fullmag": {"name": "fixture-net", "driver": "bridge",
+                                                "ipam": {"driver": "default", "config": config}}},
+                }
+                result, _args, start, fresh_recreation, fresh_archive, _before = (
+                    self._run_retained_subnet_entry(
+                        document=document, route="fresh", subnet_override=override))
+                self.assertIsInstance(result, dev.BuildControlError)
+                self.assertIn(message, str(result))
+                fresh_recreation.assert_not_called()
+                fresh_archive.assert_not_called()
+                start.assert_not_called()
+
     def test_actual_recreate_gpu_failure_precedes_stop_and_removal(self):
         for failure in (docker_dev.DirectDockerError('GPU unavailable'),
                         docker_dev.DirectDockerOutcomeUnknown('probe ownership unknown')):
@@ -51,6 +174,8 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     with self.assertRaises(type(failure)):
                         caller._run(harness, helper=helper, device_probe=dev._probe_retained_device_access)
                 self.assertEqual(mutations, [])
+                self.assertIn((supervision_stop.PREPARED_QUARANTINE, True),
+                              harness.control.read_bytes_calls)
                 self.assertNotIn('rm', harness.events)
                 self.assertLess(harness.events.index('lease-enter'), harness.events.index('gpu-probe'))
                 self.assertLess(harness.events.index('gpu-probe'), harness.events.index('lease-exit'))
@@ -98,6 +223,7 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                 with ExitStack() as stack:
                     handles = [stack.enter_context(patch) for patch in patches]
                     args = caller._args()
+                    args.network_subnet = "172.16.2.0/24"
                     result = dev._resume_recreated_operation(
                         args, resume_fixtures._Control(), Path('/src/fullmag'),
                         {'runtime_root': '/runtime'},
@@ -106,6 +232,7 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                 self.assertEqual(result, 'started')
                 self.assertEqual(start.call_args.kwargs['retained_device_access'], access)
                 self.assertEqual(start.call_args.kwargs['recreation_resume_proof'], records['proof'])
+                self.assertEqual(start.call_args.args[0].network_subnet, "172.16.2.0/24")
                 self.assertEqual(args.gpu_access, 'auto')
                 self.assertEqual(records['previous']['inputs']['gpu_access_requested'], 'auto')
 
@@ -141,6 +268,7 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                     gpu_access='auto', script=None, fresh_state=False,
                     completed_recreation_attempt='a' * 32, completed_recreation_sha256='c' * 64)
                 control = mock.Mock(project='fixture', image='image')
+                control.read.return_value = None
                 operation = {'root': 'development/attempts/' + 'b' * 32,
                              'receipt': {'attempt': 'b' * 32}}
                 control.operation.return_value = nullcontext(operation)
@@ -181,7 +309,13 @@ class RetainedDeviceLifecycleTests(unittest.TestCase):
                             dev.start(args, reuse_state=reuse, retained_device_access='gpu')
                         handles[14].assert_not_called()
                 handles[15].assert_not_called()
-                handles[16].assert_called_once_with(control, cancelled.RECORD, optional=True)
+                control.read.assert_called_once_with(supervision_stop.PREPARED_QUARANTINE,
+                                                     optional=True)
+                self.assertEqual(handles[16].call_args_list, [
+                    mock.call(control, cancelled.replay_index_path('state', str(reuse['state'])),
+                              optional=True),
+                    mock.call(control, cancelled.RECORD, optional=True),
+                ])
                 control.write.assert_not_called()
                 self.assertEqual(args.gpu_access, 'auto')
 

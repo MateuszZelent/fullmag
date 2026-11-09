@@ -63,6 +63,12 @@ pub struct ExchangeLlgProblem {
     pub static_external_field: Option<Vec<Vector3>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StepEndpointPolicy {
+    Ordinary,
+    HardPhysicalEndpoint,
+}
+
 impl ExchangeLlgProblem {
     pub fn new(
         grid: GridShape,
@@ -389,6 +395,22 @@ impl ExchangeLlgProblem {
         })
     }
 
+    /// Full-domain stray field using a workspace created for this problem.
+    /// Observation callers may retain it across accepted states; it must not
+    /// be shared concurrently with an integrator evaluation.
+    pub fn observable_demag_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
+        Ok(if self.terms.demag {
+            self.observable_demag_field_from_vectors_ws(state.magnetization(), ws)
+        } else {
+            zero_vectors(self.grid.cell_count())
+        })
+    }
+
     pub fn external_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         Ok(self.external_field_vectors())
@@ -407,9 +429,20 @@ impl ExchangeLlgProblem {
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
+        self.observable_effective_field_with_workspace(state, &mut ws)
+    }
+
+    /// Evaluate the current observable field without rebuilding FFT plans or
+    /// Newell spectra. The workspace must have this problem's geometry/policy.
+    pub fn observable_effective_field_with_workspace(
+        &self,
+        state: &ExchangeLlgState,
+        ws: &mut FftWorkspace,
+    ) -> Result<Vec<Vector3>> {
+        self.ensure_state_matches_grid(state)?;
         Ok(self.observable_effective_field_from_vectors_ws_at_time(
             state.magnetization(),
-            &mut ws,
+            ws,
             state.time_seconds,
         ))
     }
@@ -564,6 +597,75 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.step_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::Ordinary,
+        )
+    }
+
+    /// Execute the final, sub-`dt_min` RK45 interval to the exact physical
+    /// endpoint supplied by the CPU reference runner. This is an internal
+    /// runtime seam, not a second public timestep policy.
+    #[doc(hidden)]
+    pub fn step_rk45_to_hard_endpoint_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgState,
+        endpoint_time_s: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let dt = self.rk45_hard_endpoint_interval(state.time_seconds, endpoint_time_s)?;
+        self.step_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::HardPhysicalEndpoint,
+        )
+    }
+
+    fn rk45_hard_endpoint_interval(
+        &self,
+        current_time_s: f64,
+        endpoint_time_s: f64,
+    ) -> Result<f64> {
+        if self.dynamics.integrator != TimeIntegrator::RK45 || !self.dynamics.adaptive_enabled {
+            return Err(EngineError::with_code(
+                EngineErrorCode::CapabilityUnavailable,
+                "hard-endpoint subminimum stepping is available only for adaptive RK45",
+            ));
+        }
+        let dt = endpoint_time_s - current_time_s;
+        if !current_time_s.is_finite()
+            || !endpoint_time_s.is_finite()
+            || !dt.is_finite()
+            || dt <= 0.0
+            || dt >= self.dynamics.adaptive.dt_min
+            || current_time_s + dt != endpoint_time_s
+        {
+            return Err(EngineError::with_code(
+                EngineErrorCode::InvalidTimestep,
+                "hard-endpoint RK45 interval must be positive, representable, and shorter than dt_min",
+            ));
+        }
+        Ok(dt)
+    }
+
+    fn step_with_buffers_evaluation_policy(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        endpoint_policy: StepEndpointPolicy,
+    ) -> Result<StepReport> {
         self.ensure_state_matches_grid(state)?;
         if !dt.is_finite() || dt <= 0.0 {
             return Err(EngineError::with_code(
@@ -579,27 +681,41 @@ impl ExchangeLlgProblem {
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 
-        let result = match self.dynamics.integrator {
-            TimeIntegrator::Heun if self.soa_fast_path_supported() => {
-                self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK4 if self.soa_fast_path_supported() => {
-                self.rk4_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK23 if self.soa_fast_path_supported() => {
-                self.rk23_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
-                self.rk45_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::ABM3 if self.soa_fast_path_supported() => {
-                self.abm3_step_soa_buf(state, dt, ws, bufs, evaluation)
-            }
-            TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
+        let result = match endpoint_policy {
+            StepEndpointPolicy::HardPhysicalEndpoint => match self.dynamics.integrator {
+                TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
+                    self.rk45_step_soa_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                _ => Err(EngineError::with_code(
+                    EngineErrorCode::CapabilityUnavailable,
+                    "hard-endpoint subminimum stepping requires adaptive RK45",
+                )),
+            },
+            StepEndpointPolicy::Ordinary => match self.dynamics.integrator {
+                TimeIntegrator::Heun if self.soa_fast_path_supported() => {
+                    self.heun_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::Heun => self.heun_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK4 if self.soa_fast_path_supported() => {
+                    self.rk4_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK4 => self.rk4_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK23 if self.soa_fast_path_supported() => {
+                    self.rk23_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK23 => self.rk23_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK45 if self.soa_fast_path_supported() => {
+                    self.rk45_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => self.rk45_step_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::ABM3 if self.soa_fast_path_supported() => {
+                    self.abm3_step_soa_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::ABM3 => self.abm3_step_buf(state, dt, ws, bufs, evaluation),
+            },
         };
         self.clear_thermal_dt_for_attempt();
         if result.is_ok() {
@@ -623,6 +739,47 @@ impl ExchangeLlgProblem {
         bufs: &mut IntegratorBuffers,
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
+        self.step_soa_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::Ordinary,
+        )
+    }
+
+    /// Persistent-SoA counterpart of
+    /// [`step_rk45_to_hard_endpoint_with_buffers_evaluation`].
+    #[doc(hidden)]
+    pub fn step_rk45_soa_to_hard_endpoint_with_buffers_evaluation(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        endpoint_time_s: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+    ) -> Result<StepReport> {
+        let dt = self.rk45_hard_endpoint_interval(state.time_seconds, endpoint_time_s)?;
+        self.step_soa_with_buffers_evaluation_policy(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            StepEndpointPolicy::HardPhysicalEndpoint,
+        )
+    }
+
+    fn step_soa_with_buffers_evaluation_policy(
+        &self,
+        state: &mut ExchangeLlgStateSoA,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        endpoint_policy: StepEndpointPolicy,
+    ) -> Result<StepReport> {
         self.ensure_soa_state_matches_grid(state)?;
         if !dt.is_finite() || dt <= 0.0 {
             return Err(EngineError::with_code(
@@ -643,12 +800,31 @@ impl ExchangeLlgProblem {
         bufs.begin_adaptive_step();
         self.set_thermal_dt_for_attempt(dt);
 
-        let result = match self.dynamics.integrator {
-            TimeIntegrator::Heun => self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK4 => self.rk4_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK23 => self.rk23_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::RK45 => self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation),
-            TimeIntegrator::ABM3 => self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+        let result = match endpoint_policy {
+            StepEndpointPolicy::HardPhysicalEndpoint => match self.dynamics.integrator {
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_soa_state_buf_at_hard_endpoint(state, dt, ws, bufs, evaluation)
+                }
+                _ => Err(EngineError::with_code(
+                    EngineErrorCode::CapabilityUnavailable,
+                    "hard-endpoint subminimum stepping requires adaptive RK45",
+                )),
+            },
+            StepEndpointPolicy::Ordinary => match self.dynamics.integrator {
+                TimeIntegrator::Heun => {
+                    self.heun_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK4 => self.rk4_step_soa_state_buf(state, dt, ws, bufs, evaluation),
+                TimeIntegrator::RK23 => {
+                    self.rk23_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::RK45 => {
+                    self.rk45_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+                TimeIntegrator::ABM3 => {
+                    self.abm3_step_soa_state_buf(state, dt, ws, bufs, evaluation)
+                }
+            },
         };
         self.clear_thermal_dt_for_attempt();
         if result.is_ok() {

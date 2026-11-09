@@ -10,6 +10,7 @@ import { useArtifactFieldOverlay } from "./hooks/useArtifactFieldOverlay";
 import { useAntennaFieldOverlay } from "./hooks/useAntennaFieldOverlay";
 import { antennaFieldDisplayLabel } from "@/kernel/visualization/antennaFieldIntent";
 
+import { observationSourceWorkspaceStore } from "@/kernel/workspace/observationSourceWorkspace";
 import { returnToCurrentFieldView } from "@/kernel/visualization/savedFieldPresentation";
 import { updateVisibleColorScales, type Viewport3DVisibleColorScaleReport, type Viewport3DVisibleColorScales } from "./model/viewport3DVisibleColorScale";
 import { useThree } from "@react-three/fiber";
@@ -1474,6 +1475,7 @@ interface Viewport3DFrameProps
   effectAntialias: boolean;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldPresentationFreshness: Viewport3DFieldPresentationFreshness | null;
+  preparedMagnetizationLabel: string | null;
   fieldRefresh: Viewport3DFieldRefreshState;
   fdmFieldIdentityCompatible: boolean;
   fdmSelectionCellOrdinal: number | null;
@@ -2134,6 +2136,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   effectAntialias,
   fieldDataIssue,
   fieldPresentationFreshness,
+  preparedMagnetizationLabel,
   fieldRefresh,
   fdmSelectionCellOrdinal,
   fdmSelectionAnnouncement,
@@ -2874,6 +2877,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     >
       <div className="fm-viewport-3d__hud" role="group" aria-label="3D view controls">
         <Viewport3DAppearanceHud onOpenSettings={() => { void kernel.commands.execute("viewport-3d.open-settings", { source: "menu", layout: kernel.layout, selection: kernel.selection }); }} />
+        {preparedMagnetizationLabel ? (
+          <div className="fm-viewport-3d__issue-banner">
+            <span className="fm-viewport-3d__issue-banner-text" role="status">{preparedMagnetizationLabel}</span>
+            <Button size="sm" type="button" variant="secondary" onClick={() => observationSourceWorkspaceStore.clear()}>
+              Return to live
+            </Button>
+          </div>
+        ) : null}
         {fieldDataIssue ? (
           <div className="fm-viewport-3d__issue-banner" role="status">
             <span

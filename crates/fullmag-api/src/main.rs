@@ -47,6 +47,7 @@ mod accepted_observation_spool;
 mod live_field_demand;
 mod accepted_field_binary;
 mod accepted_project_storage;
+mod study_execution_contract;
 mod analysis;
 mod artifacts;
 mod assets;
@@ -73,15 +74,18 @@ mod field_store;
 mod instance_discovery;
 mod imported_observation_retirement;
 mod live_command_journal;
+mod live_compute_request;
 mod live_execution_binding;
 mod live_geometry_mesh_build;
 mod accepted_field_materialization;
 mod accepted_field_materialization_worker;
 mod live_accepted_continuation;
+mod live_stage_initial_state;
 mod live_accepted_execution;
 mod live_retirement;
 mod live_accepted_projection;
 mod live_scene_preparation;
+mod live_authored_initial_state;
 mod prepared_observation_adoption;
 mod prepared_observation_bundle;
 mod docker_startup;
@@ -4647,6 +4651,8 @@ where
         None
     };
     let previous_preview = next.preview.clone();
+    let previous_preview_domain = previous_preview.as_ref()
+        .map(|_| crate::session::current_live_field_domain_identity(&next));
     let previous_revisions = match previous_snapshot.as_ref() {
         Some(snapshot) => Some(
             current_live_realtime_state_from_snapshot(&state, snapshot, display_selection.revision)
@@ -4684,6 +4690,9 @@ where
                 next.display_selection.selection.kind,
                 fullmag_runner::DisplayKind::GlobalScalar
             ) && (has_live_state_update || has_scalar_row_update)));
+    let previous_preview = previous_preview.filter(|_| {
+        previous_preview_domain.is_some_and(|domain| domain == crate::session::current_live_field_domain_identity(&next))
+    });
     let preview_start = std::time::Instant::now();
     next.preview = if should_rebuild_preview {
         let rebuilt = build_preview_state(&next, &next.display_selection, &preview_config);
@@ -5583,7 +5592,8 @@ pub(crate) async fn commit_current_live_scene_document(
     state: &Arc<AppState>,
     scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
-    commit_current_live_scene_document_with_context(state, None, scene_document).await
+    commit_current_live_scene_document_with_context(state, None, scene_document, None)
+        .await.map(|(scene, _)| scene)
 }
 
 pub(crate) async fn commit_current_live_scene_document_for_context(
@@ -5591,14 +5601,29 @@ pub(crate) async fn commit_current_live_scene_document_for_context(
     context: &CurrentLiveRequestContext,
     scene_document: SceneDocument,
 ) -> Result<SceneDocument, ApiError> {
-    commit_current_live_scene_document_with_context(state, Some(context), scene_document).await
+    commit_current_live_scene_document_with_context(state, Some(context), scene_document, None)
+        .await.map(|(scene, _)| scene)
+}
+
+pub(crate) async fn commit_current_live_magnetization_apply(
+    state: &Arc<AppState>,
+    context: &CurrentLiveRequestContext,
+    scene_document: SceneDocument,
+    apply: &crate::live_authored_initial_state::MagnetizationApply,
+) -> Result<(SceneDocument, crate::schemas::authoring::MagnetizationApplyReceiptResource), ApiError> {
+    let (scene, receipt) = commit_current_live_scene_document_with_context(
+        state, Some(context), scene_document, Some(apply),
+    ).await?;
+    let receipt = receipt.ok_or_else(|| ApiError::internal("magnetization apply has no receipt"))?;
+    Ok((scene, receipt))
 }
 
 async fn commit_current_live_scene_document_with_context(
     state: &Arc<AppState>,
     context: Option<&CurrentLiveRequestContext>,
     mut scene_document: SceneDocument,
-) -> Result<SceneDocument, ApiError> {
+    magnetization_apply: Option<&crate::live_authored_initial_state::MagnetizationApply>,
+) -> Result<(SceneDocument, Option<crate::schemas::authoring::MagnetizationApplyReceiptResource>), ApiError> {
     if let Some(context) = context {
         validate_current_live_request_context(state, context).await?;
     }
@@ -5606,6 +5631,33 @@ async fn commit_current_live_scene_document_with_context(
     normalize_scene_document_study_pipeline_labels(&mut scene_document);
     validate_scene_document_for_authoring(&scene_document)
         .map_err(|error| ApiError::bad_request(error.message))?;
+    let prepared_apply = if let Some((apply, context)) = magnetization_apply.zip(context) {
+        let snapshot = {
+            let current = state.current_live_state.read().await;
+            let snapshot = current.as_ref()
+                .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+            ensure_current_live_request_context(
+                snapshot, context, state.current_live_session_epoch.load(Ordering::Acquire),
+            )?;
+            if let Some((scene, receipt)) = snapshot.magnetization_applies.replay(
+                apply, context, snapshot.scene_document.as_ref(),
+            )? {
+                return Ok((scene, Some(receipt)));
+            }
+            let current_scene = snapshot.scene_document.as_ref()
+                .ok_or_else(|| ApiError::conflict("magnetization apply requires a committed scene"))?;
+            if scene_document.revision != current_scene.revision {
+                return Err(ApiError::conflict("scene_stale_revision"));
+            }
+            apply.validate_scopes(&scene_document)?;
+            snapshot.clone()
+        };
+        Some(crate::live_authored_initial_state::apply_preparation::prepare(
+            state, context.clone(), snapshot, scene_document.clone(), apply.clone(),
+        ).await?)
+    } else {
+        None
+    };
     let preset_texture_count = scene_document
         .magnetization_assets
         .iter()
@@ -5670,6 +5722,7 @@ async fn commit_current_live_scene_document_with_context(
         display_revision,
         preset_texture_change_logs,
         live_rebuild_stats,
+        apply_receipt,
     ) = {
         let _transition = state.current_live_session_transition.lock().await;
         let mut current = state.current_live_state.write().await;
@@ -5683,6 +5736,21 @@ async fn commit_current_live_scene_document_with_context(
                 state.current_live_session_epoch.load(Ordering::Acquire),
             )?;
         }
+        if let Some((apply, context)) = magnetization_apply.zip(context) {
+            if let Some((scene, receipt)) = snapshot.magnetization_applies.replay(
+                apply, context, snapshot.scene_document.as_ref(),
+            )? {
+                return Ok((scene, Some(receipt)));
+            }
+            if !crate::live_accepted_execution::docker_api_only_runtime()
+                && (snapshot.runtime_status.is_busy || snapshot.runtime_status.code == "paused")
+            {
+                return Err(ApiError::conflict_with_code(
+                    "accepted_execution_input_locked",
+                    "finish or stop the active run before applying magnetization",
+                ));
+            }
+        }
         if let Some(current_scene) = snapshot.scene_document.as_ref() {
             if scene_document.revision != current_scene.revision {
                 return Err(ApiError::conflict(format!(
@@ -5694,15 +5762,13 @@ async fn commit_current_live_scene_document_with_context(
         // Classify the actual version that will be committed. A v1 -> v2
         // migration is not silently treated as metadata-only for an active run.
         scene_document.version = "scene.v2".to_string();
-        crate::live_execution_binding::validate_active_scene_mutation(state, snapshot, &scene_document)
-            .await?;
         let previous_scene = snapshot.scene_document.clone();
-        let metadata_only = previous_scene.as_ref().is_some_and(|before| {
+        let metadata_only = magnetization_apply.is_none() && previous_scene.as_ref().is_some_and(|before| {
             fullmag_authoring::scene_execution_input_identity(before).ok()
                 .zip(fullmag_authoring::scene_execution_input_identity(&scene_document).ok())
                 .is_some_and(|(before, after)| before == after)
         });
-        let region_impact = previous_scene
+        let mut region_impact = previous_scene
             .as_ref()
             .map(|before| {
                 if metadata_only {
@@ -5717,6 +5783,7 @@ async fn commit_current_live_scene_document_with_context(
                 coefficients: true,
                 initial_state: true,
             });
+        region_impact.initial_state |= magnetization_apply.is_some();
         let previous_mesh_signature = previous_scene.as_ref().map(scene_mesh_signature);
         let next_revision = snapshot
             .scene_document
@@ -5749,12 +5816,58 @@ async fn commit_current_live_scene_document_with_context(
                 return Err(err);
             }
         };
-        snapshot.builder_adapter = builder_state;
+        let next_region_revisions = snapshot.region_realization_revisions.advance(region_impact);
+        // Validate the publication on a disposable snapshot before any
+        // supersession of an existing accepted run or current-scene mutation.
+        let (mut candidate, apply_receipt) = if let Some(((prepared, apply), context)) =
+            prepared_apply.zip(magnetization_apply).zip(context)
+        {
+            prepared.validate(snapshot)?;
+            let mut next = snapshot.clone();
+            next.scene_document = Some(scene_document.clone());
+            next.region_realization_revisions = next_region_revisions;
+            let (status, reason) = prepared.publish(&mut next, apply, next_revision)?;
+            let receipt = crate::schemas::authoring::MagnetizationApplyReceiptResource {
+                operation_id: apply.request.operation_id.clone(),
+                scene_revision: next_revision,
+                scopes: apply.request.scopes.clone(),
+                status,
+                reason: reason.map(str::to_owned),
+                prepared_initial_state: crate::live_authored_initial_state::describe_preview(&next),
+            };
+            let owner_run_id = next.session.run_id.clone();
+            let retired_run_id = next.run.as_ref().map(|run| run.run_id.clone())
+                .unwrap_or_else(|| owner_run_id.clone());
+            next.magnetization_applies.record(
+                apply, context, receipt.clone(), owner_run_id, retired_run_id,
+            );
+            (Some(next), Some(receipt))
+        } else {
+            (None, None)
+        };
+        let retired = crate::live_execution_binding::validate_active_scene_mutation(
+            state, snapshot, &scene_document, magnetization_apply.is_some(),
+        ).await?;
+        let target = candidate.as_mut().unwrap_or(&mut *snapshot);
+        if retired {
+            if let Some(run) = target.run.as_mut() {
+                run.status = "cancelled".into();
+            }
+            target.session.status = "awaiting_command".into();
+            target.session.finished_at_unix_ms = 0;
+            target.stage_execution = None;
+            target.simulation_preparation = None;
+            if let Some(live) = target.live_state.as_mut() {
+                live.status = "awaiting_command".into();
+            }
+            crate::session::refresh_runtime_status(target);
+        }
+        target.builder_adapter = builder_state;
         let next_mesh_signature = scene_mesh_signature(&scene_document);
-        snapshot.scene_document = Some(scene_document.clone());
-        snapshot.region_realization_revisions =
-            snapshot.region_realization_revisions.advance(region_impact);
-        let allow_live_magnetization_rebuild = !metadata_only && snapshot
+        target.scene_document = Some(scene_document.clone());
+        target.region_realization_revisions = next_region_revisions;
+        let allow_live_magnetization_rebuild = magnetization_apply.is_none()
+            && !metadata_only && region_impact.initial_state && target
             .live_state
             .as_ref()
             .map(|live_state| {
@@ -5765,32 +5878,34 @@ async fn commit_current_live_scene_document_with_context(
             })
             .unwrap_or(true);
         let live_rebuild_stats = if allow_live_magnetization_rebuild {
-            rebuild_live_scene_magnetization(snapshot)
+            rebuild_live_scene_magnetization(target)
         } else {
             None
         };
-        let previous_preview = snapshot.preview.clone();
-        snapshot.preview = build_preview_state(
-            snapshot,
-            &snapshot.display_selection,
-            &snapshot.preview_config,
-        )
-        .or(previous_preview);
-        // Polling clients gate updates on `state_version`, so scene-authoring
-        // changes must advance it just like solver publishes do.
-        snapshot.state_version = snapshot.state_version.wrapping_add(1);
+        let previous_preview = target.preview.clone();
+        target.preview = build_preview_state(
+            target, &target.display_selection, &target.preview_config,
+        ).or(previous_preview);
+        // Polling clients gate updates on `state_version`.
+        target.state_version = target.state_version.wrapping_add(1);
         if previous_mesh_signature.as_ref() != Some(&next_mesh_signature) {
-            snapshot.mesh_revision = snapshot.mesh_revision.wrapping_add(1).max(1);
-            snapshot.mesh_build_revision = snapshot.mesh_build_revision.wrapping_add(1).max(1);
+            target.mesh_revision = target.mesh_revision.wrapping_add(1).max(1);
+            target.mesh_build_revision = target.mesh_build_revision.wrapping_add(1).max(1);
         }
         let preset_texture_change_logs =
             detect_preset_texture_changes(previous_scene.as_ref(), &scene_document);
+        let realtime_snapshot = target.clone();
+        let display_revision = target.display_selection.revision;
+        if let Some(candidate) = candidate {
+            *snapshot = candidate;
+        }
         (
             scene_document,
-            snapshot.clone(),
-            snapshot.display_selection.revision,
+            realtime_snapshot,
+            display_revision,
             preset_texture_change_logs,
             live_rebuild_stats,
+            apply_receipt,
         )
     };
     if let Some(context) = context {
@@ -5850,7 +5965,7 @@ async fn commit_current_live_scene_document_with_context(
         summary = %scene_magnetization_summary(&scene_document),
         "frontend scene update committed"
     );
-    Ok(scene_document)
+    Ok((scene_document, apply_receipt))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -6493,8 +6608,16 @@ fn detect_preset_texture_changes(
     out
 }
 
-fn scene_mesh_signature(scene: &SceneDocument) -> Value {
-    json!({
+/// Authored inputs of topology and region markers, excluding material
+/// coefficients and magnetization. Solver support has its own revision.
+pub(crate) fn scene_mesh_signature(scene: &SceneDocument) -> Value {
+    let mut signature = json!({
+        "backend": scene.study.requested_backend,
+        "fdm_grid": scene.study.fdm.as_ref().map(|fdm| json!({
+            "default_cell": fdm.default_cell,
+            "per_object_grid": fdm.per_object_grid,
+        })),
+        "fdm_periodicity": scene.study.pbc,
         "universe": scene.universe,
         "study_universe_mesh": scene.study.universe_mesh,
         "shared_domain_mesh": scene.study.shared_domain_mesh,
@@ -6504,7 +6627,8 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "id": object.id,
             "geometry": object.geometry,
             "transform": object.transform,
-            "material_ref": object.material_ref,
+            "role": object.role,
+            "region_name": object.region_name,
             // Only region inputs consumed by FEM mesh marker/membership
             // realization belong to mesh identity. Metadata and material
             // overrides get their own realization revisions.
@@ -6525,7 +6649,11 @@ fn scene_mesh_signature(scene: &SceneDocument) -> Value {
             "object_mesh": object.object_mesh,
             "mesh_override": object.mesh_override,
         })).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
+        signature["fem_domain_mesh"] = json!(reference);
+    }
+    signature
 }
 
 async fn list_physics_docs(
@@ -6641,7 +6769,8 @@ fn build_spatial_preview_state(
         .live_state
         .as_ref()
         .and_then(|state| state.latest_step.preview_field.as_ref())
-        .filter(|field| field.config_revision == config.revision && field.quantity == quantity)
+        .filter(|field| field.config_revision == config.revision && field.quantity == quantity
+            && crate::session::preview_field_source_is_qualified(current, field))
     {
         return build_preview_state_from_live_field(
             current,
@@ -6658,7 +6787,8 @@ fn build_spatial_preview_state(
         .live_state
         .as_ref()
         .and_then(|state| state.latest_step.preview_field.as_ref())
-        .filter(|field| field.quantity == quantity)
+        .filter(|field| field.quantity == quantity
+            && crate::session::preview_field_source_is_qualified(current, field))
         .cloned()
     {
         field.config_revision = config.revision;
@@ -6673,7 +6803,9 @@ fn build_spatial_preview_state(
         );
     }
 
-    if let Some(mut field) = cached_preview_field_owned(current, &quantity) {
+    if let Some(mut field) = cached_preview_field_owned(current, &quantity)
+        .filter(|field| crate::session::preview_field_source_is_qualified(current, field))
+    {
         field.config_revision = config.revision;
         return build_preview_state_from_live_field(
             current,
@@ -7182,6 +7314,9 @@ fn resolve_global_scalar_quantity(
 }
 
 fn current_preview_source(current: &SessionStateResponse) -> (u64, f64) {
+    if let Some(publication) = crate::live_authored_initial_state::current_publication(current) {
+        return (publication.frame.source_step, publication.frame.source_time_seconds.unwrap_or(0.0));
+    }
     if let Some(live_state) = current
         .live_state
         .as_ref()

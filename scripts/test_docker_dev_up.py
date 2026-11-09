@@ -11,9 +11,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 import docker_dev_up
+import docker_dev
 
 
-def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request"):
+def _args(*, script=None, port=3197, port_explicit=False, request_id="test-request", headless=False,
+          cuda_trace=False):
     return argparse.Namespace(
         repo_root=Path("/repo"),
         source_root=Path("/repo"),
@@ -23,20 +25,24 @@ def _args(*, script=None, port=3197, port_explicit=False, request_id="test-reque
         request_id=request_id,
         profile="dev",
         gpu_access="auto",
+        cuda_trace=cuda_trace,
         image=None,
         toolchain_image=None,
         source_manifest=None,
         include_untracked=[],
+        headless=headless,
     )
 
 
-def _group(*, backend_running=True, frontend_running=True, healthy=True):
+def _group(*, backend_running=True, frontend_running=True, healthy=True, ui_mode=None):
     backend_state = {
         "Running": backend_running,
         "Health": {"Status": "healthy" if healthy else "unhealthy"},
     }
     backend_image_id = "sha256:" + "e" * 64
     toolchain_image_id = "sha256:" + "f" * 64
+    control = Mock()
+    control.read.return_value = None
     return docker_dev_up.RetainedGroup(
         repo_root=Path("/repo"),
         source_root=Path("/repo"),
@@ -48,7 +54,7 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
             "worktree_id": "master",
             "checkout_kind": "main-checkout",
         },
-        control=Mock(),
+        control=control,
         attempt="a" * 32,
         config_sha256="b" * 64,
         port=3297,
@@ -57,6 +63,8 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
             "state": "succeeded",
             "backend_container": "c" * 64,
             "frontend_container": "d" * 64,
+            **({"finished_at": 1.0} if ui_mode is not None else {}),
+            **({"ui_mode": ui_mode} if ui_mode is not None else {}),
         },
         backend_id="c" * 64,
         frontend_id="d" * 64,
@@ -77,6 +85,156 @@ def _group(*, backend_running=True, frontend_running=True, healthy=True):
 
 
 class DockerDevUpReconciliationTests(unittest.TestCase):
+    def test_lifecycle_recreation_preserves_the_pinned_explicit_network_subnet(self):
+        group = _group()
+        group.document["networks"] = {"fullmag": {"driver": "bridge", "ipam": {
+            "driver": "default", "config": [{"subnet": "172.16.1.0/24"}],
+        }}}
+        result = docker_dev_up._lifecycle_args(group, _args(), script=None)
+        self.assertEqual(result.network_subnet, "172.16.1.0/24")
+        self.assertEqual(group.document["networks"]["fullmag"]["ipam"]["config"],
+                         [{"subnet": "172.16.1.0/24"}])
+
+    def test_headless_cli_is_explicit_and_gui_remains_the_default(self):
+        parser = docker_dev._parser()
+        gui = parser.parse_args(["--repo-root", "/repo", "up"])
+        headless = parser.parse_args(["--repo-root", "/repo", "up", "--headless"])
+        run_script = parser.parse_args([
+            "--repo-root", "/repo", "run-script", "--script", "examples/model.py", "--headless",
+        ])
+        self.assertFalse(gui.headless)
+        self.assertTrue(headless.headless)
+        self.assertTrue(run_script.headless)
+
+    def test_solver_profile_cli_flag_is_opt_in_and_forwarded_by_both_commands(self):
+        parser = docker_dev._parser()
+        activate_base = [
+            "--repo-root", "/repo", "activate-script",
+            "--attempt", "a" * 32,
+            "--config-sha256", "b" * 64,
+            "--source-root", "/repo",
+            "--script", "examples/model.py",
+        ]
+        run_base = ["--repo-root", "/repo", "run-script", "--script", "examples/model.py"]
+        for base in (activate_base, run_base):
+            self.assertFalse(parser.parse_args(base).solver_profile)
+            self.assertTrue(parser.parse_args([*base, "--solver-profile"]).solver_profile)
+
+        with patch("docker_volume_activate.activate") as activate:
+            self.assertEqual(
+                docker_dev.main([*activate_base, "--solver-profile"]), 0
+            )
+        self.assertTrue(activate.call_args.args[0].solver_profile)
+
+        with patch(
+            "docker_dev_run_script.run_script", return_value={"exit_code": 0}
+        ) as run_script:
+            self.assertEqual(
+                docker_dev.main([*run_base, "--solver-profile"]), 0
+            )
+        self.assertTrue(run_script.call_args.kwargs["solver_profile"])
+
+    def test_cuda_trace_cli_flag_is_opt_in_and_forwarded_by_all_script_entrypoints(self):
+        parser = docker_dev._parser()
+        activate_base = [
+            "--repo-root", "/repo", "activate-script",
+            "--attempt", "a" * 32,
+            "--config-sha256", "b" * 64,
+            "--source-root", "/repo",
+            "--script", "examples/model.py",
+        ]
+        run_base = ["--repo-root", "/repo", "run-script", "--script", "examples/model.py"]
+        up_base = ["--repo-root", "/repo", "up", "--script", "examples/model.py"]
+        for base in (activate_base, run_base, up_base):
+            parsed = parser.parse_args(base)
+            self.assertFalse(getattr(parsed, "cuda_trace", False))
+            self.assertTrue(parser.parse_args([*base, "--cuda-trace"]).cuda_trace)
+
+        with patch("docker_volume_activate.activate") as activate:
+            self.assertEqual(docker_dev.main([*activate_base, "--cuda-trace"]), 0)
+        self.assertTrue(activate.call_args.args[0].cuda_trace)
+
+        with patch(
+            "docker_dev_run_script.run_script", return_value={"exit_code": 0}
+        ) as run_script:
+            self.assertEqual(docker_dev.main([*run_base, "--cuda-trace"]), 0)
+        self.assertTrue(run_script.call_args.kwargs["cuda_trace"])
+
+        with patch("docker_dev_host.require_host"), \
+                patch("docker_dev_defaults.resolve_defaults", return_value=SimpleNamespace(
+                    source_root=Path("/repo"), port=3197,
+                )), \
+                patch("docker_dev.up") as up:
+            self.assertEqual(docker_dev.main([*up_base, "--cuda-trace"]), 0)
+        self.assertTrue(up.call_args.args[0].cuda_trace)
+
+    def test_native_contract_cli_accepts_cuda_activity_gate_but_remains_single_select(self):
+        parser = docker_dev._parser()
+        commands = parser._subparsers._group_actions[0].choices
+        expected = {"fem-demag-poisson", "fem-cuda-activity-trace"}
+        for command_name in ("build", "up", "recreate-volume"):
+            with self.subTest(command=command_name):
+                command = commands[command_name]
+                option = next(
+                    action for action in command._actions
+                    if "--native-contract" in action.option_strings
+                )
+                self.assertEqual(set(option.choices), expected)
+                self.assertIsInstance(option, argparse._AppendAction)
+
+    def test_up_activation_namespace_preserves_cuda_trace_opt_in(self):
+        group = _group()
+        args = _args(script=Path("examples/model.py"), cuda_trace=True)
+        activation = docker_dev_up._activation_args(group, args)
+        self.assertTrue(activation.cuda_trace)
+
+    def test_stable_up_request_id_binds_trace_digest_and_preserves_disabled_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            script = source / "model.py"
+            script.write_text("VALUE = 1\n", encoding="utf-8")
+            group = docker_dev_up.RetainedGroup(
+                **{
+                    **vars(_group()),
+                    "repo_root": source,
+                    "source_root": source,
+                }
+            )
+            disabled = _args(script=Path("model.py"), request_id=None)
+            enabled = _args(script=Path("model.py"), request_id=None, cuda_trace=True)
+            with patch("fullmag_storage.git", return_value="a" * 40):
+                disabled_id = docker_dev_up._stable_activation_request_id(group, disabled)
+                enabled_id = docker_dev_up._stable_activation_request_id(group, enabled)
+
+        source_sha256 = hashlib.sha256(b"VALUE = 1\n").hexdigest()
+        old_material = b"\0".join(
+            value.encode("utf-8")
+            for value in (
+                group.attempt,
+                group.config_sha256,
+                "model.py",
+                source_sha256,
+                "a" * 40,
+            )
+        )
+        self.assertEqual(
+            disabled_id,
+            "docker-volume-up-" + hashlib.sha256(old_material).hexdigest(),
+        )
+        trace = {
+            "schema_version": "accepted_cuda_trace.v1",
+            "max_bytes": 536870912,
+            "max_duration_ms": 60000,
+        }
+        trace_sha256 = hashlib.sha256(
+            json.dumps(trace, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        expected_enabled = "docker-volume-up-" + hashlib.sha256(
+            old_material + b"\0cuda_trace\0" + trace_sha256.encode("ascii")
+        ).hexdigest()
+        self.assertEqual(enabled_id, expected_enabled)
+        self.assertNotEqual(disabled_id, enabled_id)
+
     def setUp(self):
         self._build_input_match_impl = docker_dev_up._build_inputs_match
         self._build_input_guard = patch.object(
@@ -419,18 +577,81 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         self.assertEqual(restart_args.attempt, group.attempt)
         activate.assert_called_once()
 
-    def test_frontend_only_reuse_starts_frontend_and_restarts_when_source_changed(self):
-        group = _group(frontend_running=False)
+    def test_headless_to_gui_transition_drains_then_resumes_both_services(self):
+        group = _group(frontend_running=False, ui_mode="headless")
         args = _args()
         with patch.object(docker_dev_up, "_discover_group", return_value=group), \
                 patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
-                patch.object(docker_dev_up, "_source_matches", return_value=False), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
                 patch("docker_volume_dev.resume") as resume, \
-                patch("docker_volume_dev.restart_idle") as restart:
+                patch("docker_dev_defaults.activate_discovered") as activate:
             docker_dev_up.ensure_up(args)
+        stop_idle.assert_called_once()
         resume.assert_called_once()
-        self.assertFalse(resume.call_args.args[0].restart_backend)
-        restart.assert_called_once()
+        self.assertTrue(resume.call_args.args[0].restart_backend)
+        self.assertFalse(resume.call_args.args[0].headless)
+        activate.assert_not_called()
+
+    def test_headless_to_gui_transition_blocks_when_idle_gate_is_unknown(self):
+        group = _group(frontend_running=False, ui_mode="headless")
+        args = _args(script=Path("examples/model.py"))
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle", side_effect=docker_dev_up.BuildControlError("active or unknown session")), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            with self.assertRaisesRegex(docker_dev_up.BuildControlError, "active or unknown"):
+                docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        activate.assert_not_called()
+
+    def test_headless_mode_transition_drains_gui_group_then_resumes_backend_only(self):
+        group = _group(ui_mode="gui")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            docker_dev_up.ensure_up(args)
+        stop_idle.assert_called_once()
+        resume.assert_called_once()
+        self.assertTrue(resume.call_args.args[0].restart_backend)
+        self.assertTrue(resume.call_args.args[0].headless)
+        activate.assert_called_once()
+        self.assertTrue(activate.call_args.args[0].headless)
+
+    def test_headless_mode_transition_stops_when_idle_gate_is_unknown(self):
+        group = _group(ui_mode="gui")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.stop_idle", side_effect=docker_dev_up.BuildControlError("active or unknown session")), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            with self.assertRaisesRegex(docker_dev_up.BuildControlError, "active or unknown"):
+                docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        activate.assert_not_called()
+
+    def test_headless_receipt_reuses_stopped_frontend_without_starting_it(self):
+        group = _group(frontend_running=False, ui_mode="headless")
+        args = _args(script=Path("examples/model.py"), headless=True)
+        with patch.object(docker_dev_up, "_discover_group", return_value=group), \
+                patch.object(docker_dev_up, "_script_output_mapping_matches", return_value=True), \
+                patch.object(docker_dev_up, "_source_matches", return_value=True), \
+                patch("docker_volume_dev.resume") as resume, \
+                patch("docker_volume_dev.stop_idle") as stop_idle, \
+                patch("docker_dev_defaults.activate_discovered") as activate:
+            docker_dev_up.ensure_up(args)
+        resume.assert_not_called()
+        stop_idle.assert_not_called()
+        activate.assert_called_once()
+        self.assertTrue(activate.call_args.args[0].headless)
 
     def test_stopped_backend_uses_retained_resume_and_preserves_cache(self):
         group = _group(backend_running=False, frontend_running=False)
@@ -783,6 +1004,46 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
             docker_dev_up._read_attempt(control, current)
         control.read.assert_not_called()
 
+
+
+class RetainedSemanticBuildReceiptTests(unittest.TestCase):
+    def fixtures(self):
+        token='9c4bc6be2de043d1b87c56648fa2f189'
+        payloads={
+            'toolchain':{'source_inputs':[{'path':'docker/fem-gpu/Dockerfile','sha256':'a'*64}],
+                         'build_args':{'FULLMAG_CUDA_BASE_IMAGE':'cuda@sha256:'+'b'*64},'target':'fem-gpu-dev'},
+            'image-dev':{'parent_image_id':'sha256:'+'c'*64,'files':[{'path':'Dockerfile.dev','sha256':'d'*64}]},
+            'image-backend':{'parent_image_id':'sha256:'+'e'*64,'files':[{'path':'Dockerfile.backend','sha256':'f'*64}]},
+        }
+        for phase,semantic in payloads.items():
+            yield phase,semantic,{'schema':'fullmag.docker-build-operation.v1','phase':phase,'state':'succeeded',
+                'compose_project':'fullmag-master','image_id':'sha256:'+'1'*64,
+                'source_digest':hashlib.sha256(docker_dev_up.canonical(semantic)).hexdigest(),
+                'inputs':{**semantic,'console_session_id':token}}
+    def test_legacy_console_receipts_for_all_three_phases_remain_authenticated(self):
+        for phase,semantic,receipt in self.fixtures():
+            with self.subTest(phase=phase):
+                group=_group();group.control.read.return_value=receipt
+                checked=docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase)
+                self.assertIs(checked,receipt)
+                self.assertEqual(checked['inputs']['console_session_id'],'9c4bc6be2de043d1b87c56648fa2f189')
+                group.control.write.assert_not_called()
+                receipt['inputs']=semantic
+                self.assertIs(docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase),receipt)
+    def test_malformed_token_mutated_source_and_unknown_keys_fail_closed(self):
+        import copy
+        for phase,semantic,receipt in self.fixtures():
+            variants=[]
+            malformed=copy.deepcopy(receipt);malformed['inputs']['console_session_id']='bad';variants.append(malformed)
+            mutated=copy.deepcopy(receipt);mutated['inputs'][next(iter(semantic))]='changed';variants.append(mutated)
+            extra=copy.deepcopy(receipt);extra['inputs']['unknown_build_input']=True;variants.append(extra)
+            prefix=copy.deepcopy(receipt);prefix['inputs']['console_session_id_extra']='2'*32;variants.append(prefix)
+            for variant in variants:
+                with self.subTest(phase=phase,inputs=variant['inputs']):
+                    group=_group();group.control.read.return_value=variant
+                    with self.assertRaises(docker_dev_up.BuildInputUnknown):
+                        docker_dev_up._verified_build_receipt(group,phase+'/verified.json',phase)
+                    group.control.write.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

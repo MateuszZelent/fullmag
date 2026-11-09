@@ -1,4 +1,37 @@
+import type { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
+import type { MagnetizationApplyReceipt, MagnetizationApplyTarget } from "@/kernel/api/apiTypes";
+import { runAuthoringMutationWithHistory } from "@/kernel/authoring/authoringHistoryMutation";
+
 import type { resolveObjectMagneticTexturePanelModel } from "./ObjectMagneticTexturePanelModel";
+
+export function commitMagneticTextureApply(
+  api: ControlRoomApi,
+  context: Parameters<typeof runAuthoringMutationWithHistory>[0],
+  target: MagnetizationApplyTarget,
+  baseRevision: number | null,
+) {
+  const sessionScopeKey = context.sessionScopeKey;
+  if (!sessionScopeKey || baseRevision === null) {
+    throw new Error("The saved scene and session are required to apply magnetization.");
+  }
+  const label = target.kind === "region" ? target.region_id : target.object_id;
+  return runAuthoringMutationWithHistory(context, `Apply magnetic texture ${label}`, (before) => {
+    if (before.baseRevision !== null && before.baseRevision !== baseRevision) {
+      throw new Error("The scene changed before Apply. Review the refreshed texture and try again.");
+    }
+    return api.model.applyMagnetization(target, { baseRevision, sessionScopeKey });
+  }, undefined, { expectedSceneRevision: baseRevision });
+}
+
+export function magneticTextureApplyMessage(
+  receipt: MagnetizationApplyReceipt,
+  syncWarning: string | null,
+): string {
+  const state = receipt.status === "initial_state_ready"
+    ? "Initial magnetization is ready."
+    : `Initial magnetization is pending. ${receipt.reason ?? "Prepare the current mesh or grid to preview it."}`;
+  return `Magnetic texture applied. ${state}${syncWarning ? ` Script sync skipped. ${syncWarning}` : ""}`;
+}
 
 interface AuthoringScriptSyncApi {
   model: {

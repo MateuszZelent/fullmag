@@ -9,6 +9,7 @@
 #include "cpu/mfem/interactions/demag_poisson_runtime.hpp"
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -57,6 +59,50 @@ void hash_vector(std::uint64_t &state, const std::vector<T> &values)
     }
 }
 
+void hash_sparse_matrix(std::uint64_t &state, const mfem::SparseMatrix *matrix)
+{
+    hash_scalar(state, matrix != nullptr);
+    if (matrix == nullptr) return;
+    hash_scalar(state, matrix->Height());
+    hash_scalar(state, matrix->Width());
+    mfem::Array<int> columns;
+    mfem::Vector values;
+    for (int row = 0; row < matrix->Height(); ++row) {
+        matrix->GetRow(row, columns, values);
+        hash_scalar(state, columns.Size());
+        for (int entry = 0; entry < columns.Size(); ++entry) {
+            hash_scalar(state, columns[entry]);
+            hash_scalar(state, values[entry]);
+        }
+    }
+}
+
+std::uint64_t hash_finite_element_space(const mfem::FiniteElementSpace *space)
+{
+    std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, space != nullptr);
+    if (space == nullptr) return state;
+    hash_scalar(state, space->GetNDofs());
+    hash_scalar(state, space->GetTrueVSize());
+    hash_scalar(state, space->GetVDim());
+    hash_scalar(state, space->GetOrdering());
+    hash_scalar(state, space->GetSequence());
+    const char *name = space->FEColl()->Name();
+    hash_bytes(state, name, std::strlen(name));
+    mfem::Array<int> dofs;
+    for (int element = 0; element < space->GetNE(); ++element) {
+        hash_scalar(state, space->GetFE(element)->GetOrder());
+        hash_scalar(state, space->GetFE(element)->GetGeomType());
+        const auto *transformation = space->GetElementDofs(element, dofs);
+        hash_scalar(state, transformation != nullptr);
+        hash_scalar(state, dofs.Size());
+        for (int dof : dofs) hash_scalar(state, dof);
+    }
+    hash_sparse_matrix(state, space->GetRestrictionMatrix());
+    hash_sparse_matrix(state, space->GetConformingProlongation());
+    return state;
+}
+
 std::uint64_t hash_mesh_topology(const Context &ctx, const mfem::Mesh &mesh)
 {
     std::uint64_t state = kFnvOffsetBasis;
@@ -77,10 +123,10 @@ std::uint64_t hash_mesh_topology(const Context &ctx, const mfem::Mesh &mesh)
 
     hash_scalar(state, mesh.GetNV());
     hash_scalar(state, mesh.GetNE());
+    mfem::Array<int> vertices;
     for (int element = 0; element < mesh.GetNE(); ++element) {
         hash_scalar(state, mesh.GetElementBaseGeometry(element));
         hash_scalar(state, mesh.GetAttribute(element));
-        mfem::Array<int> vertices;
         mesh.GetElementVertices(element, vertices);
         hash_scalar(state, vertices.Size());
         for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
@@ -102,6 +148,13 @@ std::uint64_t hash_mesh_geometry(const Context &ctx, const mfem::Mesh &mesh)
             mesh.GetVertex(vertex),
             static_cast<std::size_t>(mesh.SpaceDimension()));
     }
+    const auto *nodes = mesh.GetNodes();
+    hash_scalar(state, nodes != nullptr);
+    if (nodes != nullptr) {
+        hash_scalar(state, nodes->Size());
+        hash_bytes(state, nodes->HostRead(), static_cast<size_t>(nodes->Size()));
+        hash_scalar(state, hash_finite_element_space(nodes->FESpace()));
+    }
     return state;
 }
 
@@ -113,22 +166,28 @@ std::uint64_t hash_material_membership(const Context &ctx)
     hash_scalar(state, ctx.material_fields.material.saturation_magnetisation);
     hash_vector(state, ctx.material_fields.Ms_field);
     hash_vector(state, ctx.material_fields.Ms_element_field);
+    if (ctx.material_fields.runtime && ctx.material_fields.runtime->has_elementwise_ms()) {
+        for (size_t element = 0; element < ctx.mesh.n_elements; ++element) {
+            hash_scalar(state, ctx.material_fields.runtime->realization().ms_a_per_m(element));
+        }
+    }
     return state;
 }
 
 std::uint64_t hash_boundary_data(const Context &ctx, const mfem::Mesh &mesh)
 {
     std::uint64_t state = kFnvOffsetBasis;
+    hash_scalar(state, kFemCompactMarkerMapRevision);
     hash_scalar(state, ctx.poisson_demag.boundary_marker);
     hash_scalar(state, ctx.poisson_demag.robin_beta_mode);
     hash_scalar(state, ctx.poisson_demag.robin_beta_factor);
     hash_scalar(state, ctx.poisson_demag.robin_effective_beta);
     hash_vector(state, ctx.mesh.facet_markers);
     hash_scalar(state, mesh.GetNBE());
+    mfem::Array<int> vertices;
     for (int boundary = 0; boundary < mesh.GetNBE(); ++boundary) {
         hash_scalar(state, mesh.GetBdrElementGeometry(boundary));
         hash_scalar(state, mesh.GetBdrElement(boundary)->GetAttribute());
-        mfem::Array<int> vertices;
         mesh.GetBdrElementVertices(boundary, vertices);
         hash_scalar(state, vertices.Size());
         for (int vertex = 0; vertex < vertices.Size(); ++vertex) {
@@ -195,6 +254,8 @@ PoissonOperatorDependencyKey make_poisson_operator_dependency_key_impl(
     PoissonOperatorDependencyKey key;
     key.mesh_topology_revision = hash_mesh_topology(ctx, mesh);
     key.mesh_geometry_revision = hash_mesh_geometry(ctx, mesh);
+    key.state_space_revision = hash_finite_element_space(ctx.mfem_context.fes);
+    key.potential_space_revision = hash_finite_element_space(ctx.poisson_demag.potential_fes);
     key.potential_order = static_cast<std::uint32_t>(
         std::max(0, ctx.poisson_demag.potential_order));
     key.material_membership_revision = hash_material_membership(ctx);

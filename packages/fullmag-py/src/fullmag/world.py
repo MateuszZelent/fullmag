@@ -156,6 +156,7 @@ from fullmag.model.study import (
 )
 from fullmag.model.structure import (
     Ferromagnet,
+    MagnetizationAssignment,
     Material,
     MaterialParameterAssignment,
     MaterialParameterField,
@@ -642,7 +643,12 @@ class MagnetHandle:
 
     @m.setter
     def m(self, value: Any) -> None:  # type: ignore[assignment]
+        self._set_magnetization(value)
+
+    def _set_magnetization(self, value: Any) -> None:
+        self._assert_active_context()
         self._m_value = value
+        _record_magnetization_assignment(self._object_id or self._name, None, value)
 
     @property
     def alpha(self) -> AlphaControl:
@@ -719,6 +725,19 @@ class MagnetHandle:
             else None
         )
 
+        # Capture region data without retaining the editable DSL handles.
+        object_regions = tuple(
+            copy.deepcopy(
+                replace(
+                    region,
+                    _delete_callback=None,
+                    _context_guard=None,
+                    _texture_assignment_callback=None,
+                )
+            )
+            for region in self._object_regions
+        )
+
         return Ferromagnet(
             name=self._name,
             geometry=resolved_geometry,
@@ -726,7 +745,7 @@ class MagnetHandle:
             object_id=self._object_id,
             region=region,
             m0=m0,
-            object_regions=tuple(self._object_regions),
+            object_regions=object_regions,
             allocated_region_ids=tuple(self._allocated_region_ids),
             material_parameter_fields=tuple(self._material_parameter_assignments),
             absorbing_boundary=self._absorbing_boundary,
@@ -763,6 +782,7 @@ class MagnetHandle:
         )
         region._context_guard = self._assert_active_context
         region._delete_callback = lambda region_id=region.region_id: self.remove_region(region_id)
+        region._texture_assignment_callback = _record_region_texture_assignment
         self._object_regions.append(region)
         return region
 
@@ -771,6 +791,7 @@ class MagnetHandle:
         index, resolved = self._resolve_region_index(region)
         removed = self._object_regions.pop(index)
         removed._delete_callback = None
+        removed._texture_assignment_callback = None
         self._material_parameter_assignments = [
             assignment
             for assignment in self._material_parameter_assignments
@@ -1015,7 +1036,7 @@ class MagnetHandle:
                 f"field state contains quantity '{state.quantity_id}', expected '{quantity_id}'"
             )
         if mode in {"auto", "apply"} and quantity_id == "m":
-            self._m_value = state.as_sampled_magnetization()
+            self._set_magnetization(state.as_sampled_magnetization())
         elif mode == "apply":
             raise ValueError(f"quantity '{quantity_id}' cannot be applied to object state")
         self._field_states[quantity_id] = state
@@ -1083,12 +1104,12 @@ class MagnetizationHandle:
 
     def set(self, value: Any) -> Any:
         self._owner._assert_active_context()
-        self._owner._m_value = value
+        self._owner._set_magnetization(value)
         return value
 
     def clear(self) -> None:
         self._owner._assert_active_context()
-        self._owner._m_value = None
+        self._owner._set_magnetization(None)
 
     def loadfile(
         self,
@@ -1102,7 +1123,7 @@ class MagnetizationHandle:
         from fullmag.init import load_magnetization
 
         state = load_magnetization(path, format=format, dataset=dataset, sample=sample)
-        self._owner._m_value = state
+        self._owner._set_magnetization(state)
         return state
 
     def savefile(
@@ -2681,6 +2702,7 @@ class CapturedStage:
     output_every_seconds: float | None = None
     table_autosave: TableAutosave | None = None
     autosave: StageAutosave | None = None
+    magnetization_assignments: tuple[MagnetizationAssignment, ...] = ()
 
 
 @dataclass
@@ -2688,6 +2710,41 @@ class _CaptureState:
     enabled: bool = False
     skip_geometry_assets: bool = False
     stages: list[CapturedStage] = field(default_factory=list)
+    has_physical_stage: bool = False
+    pending_magnetization_assignments: list[MagnetizationAssignment] = field(default_factory=list)
+
+
+def _record_magnetization_assignment(object_id: str, region_id: str | None, initializer: Any) -> None:
+    capture = _capture_binding.current()
+    if capture.enabled:
+        if capture.has_physical_stage:
+            capture.pending_magnetization_assignments.append(
+                MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+            )
+        return
+    session = _state._live_session
+    if session is not None and not session.closed:
+        session.record_magnetization_assignment(
+            MagnetizationAssignment(object_id, region_id, copy.deepcopy(initializer))
+        )
+
+
+def _record_region_texture_assignment(region: ObjectRegion) -> None:
+    _record_magnetization_assignment(region.owner_object, region.region_id, region.texture)
+
+
+def _capture_magnetization_assignments(stage: CapturedStage) -> CapturedStage:
+    capture = _capture_binding.current()
+    if not capture.enabled or stage.entrypoint_kind not in {"flat_run", "flat_relax"}:
+        return stage
+    capture.has_physical_stage = True
+    if not capture.pending_magnetization_assignments:
+        return stage
+    captured = replace(
+        stage, magnetization_assignments=tuple(capture.pending_magnetization_assignments)
+    )
+    capture.pending_magnetization_assignments.clear()
+    return captured
 
 
 _ContextValue = TypeVar("_ContextValue")
@@ -4006,8 +4063,7 @@ def reset() -> None:
     if session is not None and not getattr(session, "closed", True) and not _capture_binding.current().enabled:
         _state._live_session = session
         _state._live_auto_attempted = True
-        session.state = _state.current()
-        session.baseline = None
+        session.reset_authored_world(_state.current())
 
 
 def begin_script_capture(source_root: str | Path | None = None) -> None:
@@ -4234,7 +4290,7 @@ class StudyStagesBuilder:
         merged_constraints: list[FrozenSpins],
     ) -> None:
         _state._magnetization_constraints = merged_constraints
-        _state._declared_stages.append(captured_stage)
+        _state._declared_stages.append(_capture_magnetization_assignments(captured_stage))
 
     def add_stage(
         self,
@@ -5636,14 +5692,38 @@ class StudyMeshHandle:
         )
         return saved
 
-    def load(self, path: str | Path) -> MeshPersistenceResult:
+    def load(
+        self,
+        path: str | Path,
+        *,
+        expected_sha256: str | None = None,
+        build_requested: bool | None = None,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import load_mesh_artifact
 
+        if build_requested is not None:
+            if not isinstance(build_requested, bool):
+                raise TypeError("build_requested must be a bool when provided")
+        previous_build_requested = _state._default_mesh_spec.build_requested
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        try:
+            expected_authoring_document = _current_mesh_authoring_document()
+        finally:
+            _state._default_mesh_spec.build_requested = previous_build_requested
         artifact = load_mesh_artifact(
             path,
-            expected_authoring_document=_current_mesh_authoring_document(),
+            expected_authoring_document=expected_authoring_document,
+            expected_sha256=expected_sha256,
+            _include_source_sha256=expected_sha256 is not None,
         )
-        _bind_mesh_artifact(artifact, Path(path))
+        if build_requested is not None:
+            _state._default_mesh_spec.build_requested = build_requested
+        _bind_mesh_artifact(
+            artifact,
+            Path(path),
+            canonical_scene_reference=expected_sha256 is not None,
+        )
         return MeshPersistenceResult(
             action="loaded",
             path=Path(path),
@@ -5651,7 +5731,10 @@ class StudyMeshHandle:
             authoring_fingerprint=artifact.authoring_fingerprint,
         )
 
-    def save_or_load(self, path: str | Path) -> MeshPersistenceResult:
+    def save_or_load(
+        self,
+        path: str | Path,
+    ) -> MeshPersistenceResult:
         from fullmag.meshing.persistence import (
             MeshConfigurationMismatch,
             load_mesh_artifact,
@@ -6707,12 +6790,14 @@ class StudyBuilder:
         *,
         every_steps: int | None = None,
         table_id: str = "default",
+        enabled: bool = True,
     ) -> "StudyBuilder":
         tableautosave(
             every,
             quantities=quantities,
             every_steps=every_steps,
             table_id=table_id,
+            enabled=enabled,
         )
         return self
 
@@ -8463,6 +8548,15 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_workflow["domain_mesh_mode"] = "explicit_shared_domain_mesh"
         mesh_workflow["domain_mesh_source"] = _state._domain_mesh_source
         mesh_workflow["domain_region_markers"] = list(_state._domain_region_markers or [])
+        reference = _state._extra_runtime_metadata.get("fem_domain_mesh")
+        if (
+            isinstance(reference, Mapping)
+            and Path(str(reference.get("source", ""))).resolve()
+            == Path(_state._domain_mesh_source).resolve()
+            and isinstance(reference.get("sha256"), str)
+            and _is_sha256_hex(reference["sha256"])
+        ):
+            mesh_workflow["domain_mesh_sha256"] = reference["sha256"]
         if _state._domain_object_region_markers is not None:
             mesh_workflow["domain_object_region_markers"] = list(
                 _state._domain_object_region_markers
@@ -8541,19 +8635,41 @@ def _boundary_semantic_map(mesh: object) -> dict[str, int]:
     return result
 
 
-def _bind_mesh_artifact(artifact: object, source: Path) -> None:
+def _bind_mesh_artifact(
+    artifact: object,
+    source: Path,
+    *,
+    canonical_scene_reference: bool = False,
+) -> None:
+    source_path = source.expanduser()
     _state._active_mesh_artifact = artifact
-    _state._domain_mesh_source = str(source)
+    _state._domain_mesh_source = str(source_path)
     _state._domain_region_markers = [dict(entry) for entry in artifact.region_markers]
     _state._domain_object_region_markers = [
         dict(entry) for entry in artifact.object_region_markers
     ]
     _state._extra_runtime_metadata["mesh_persistence"] = {
-        "source": str(source),
+        "source": str(source_path),
         "origin": (artifact.provenance or {}).get("origin", "native_load"),
         "topology_fingerprint": artifact.topology_fingerprint,
         "authoring_fingerprint": artifact.authoring_fingerprint,
     }
+    source_sha256 = getattr(artifact, "source_sha256", None)
+    if (
+        canonical_scene_reference
+        and source_path.suffix == ".fullmag-mesh"
+        and isinstance(source_sha256, str)
+        and _is_sha256_hex(source_sha256)
+    ):
+        reference = {
+            "source": str(source_path.resolve()),
+            "sha256": source_sha256,
+            "build_requested": bool(_state._default_mesh_spec.build_requested),
+        }
+        _state._extra_runtime_metadata["fem_domain_mesh"] = reference
+        _state._extra_runtime_metadata["mesh_persistence"]["sha256"] = source_sha256
+    else:
+        _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
 
 
 def _clear_bound_mesh_artifact() -> None:
@@ -8562,6 +8678,15 @@ def _clear_bound_mesh_artifact() -> None:
     _state._domain_region_markers = None
     _state._domain_object_region_markers = None
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
+    _state._extra_runtime_metadata.pop("fem_domain_mesh", None)
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _build_explicit_mesh_assets(
@@ -8630,6 +8755,7 @@ def _build_explicit_mesh_assets(
                 "anisotropy_axis": list(handle.anisU or (0.0, 0.0, 1.0)),
             }
             for handle in _state._magnets
+            if handle.Ms is not None and handle.Aex is not None
         },
         discretization=DiscretizationHints(**discretization_kwargs),
         study_universe=(
@@ -9472,13 +9598,23 @@ def tableautosave(
     *,
     every_steps: int | None = None,
     table_id: str = "default",
+    enabled: bool = True,
 ) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.
     ``quantities`` may use compatibility names such as ``time``, ``solver_dt``,
     and ``E_total``; the public table contract stores canonical quantity ids.
+    ``enabled=False`` clears the clock for subsequent declarations without
+    inserting a configuration stage. It cannot be combined with a cadence.
     """
+    if type(enabled) is not bool:
+        raise TypeError("tableautosave enabled must be a boolean")
+    if not enabled:
+        if every is not None or every_steps is not None or quantities is not None or table_id != "default":
+            raise ValueError("disabled tableautosave cannot specify cadence, quantities or table_id")
+        _state._table_autosave = None
+        return
     _state._table_autosave = TableAutosave(
         t_sampl=every,
         every_steps=every_steps,
@@ -10080,16 +10216,18 @@ def run(until: float) -> Any:
     live = _live_session_or_none()
     if live is not None:
         _require_live_timestep(problem)
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=until)
         )
-        return live.submit_stage("run", len(_state._live_stages) - 1, until_seconds=float(until))
+        return live.submit_stage("run", stage_index, until_seconds=float(until))
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_run",
-                default_until_seconds=until,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_run",
+                    default_until_seconds=until,
+                )
             )
         )
         return problem
@@ -10108,8 +10246,10 @@ def _append_live_loop_stage(*, relax: bool, chunk_time: float) -> int:
         problem = _build_problem(study_kind="time_evolution")
         stage = CapturedStage(problem=problem, entrypoint_kind="flat_run", default_until_seconds=chunk_time)
     _require_live_timestep(problem)
-    _state._live_stages.append(stage)
-    return len(_state._live_stages) - 1
+    live = _live_session_or_none()
+    if live is None:
+        raise RuntimeError("live loop stages require an active session")
+    return live.author_physical_stage(stage)
 
 
 def _require_live_timestep(problem: Any) -> None:
@@ -10446,12 +10586,12 @@ def relax(
 
     live = _live_session_or_none()
     if live is not None:
-        _state._live_stages.append(
+        stage_index = live.author_physical_stage(
             CapturedStage(problem=problem, entrypoint_kind="flat_relax", default_until_seconds=None)
         )
         return live.submit_stage(
             "relax",
-            len(_state._live_stages) - 1,
+            stage_index,
             **_drop_none_values(
                 {
                     "relax_algorithm": algorithm,
@@ -10468,10 +10608,12 @@ def relax(
 
     if _capture_binding.current().enabled:
         _capture_binding.current().stages.append(
-            CapturedStage(
-                problem=problem,
-                entrypoint_kind="flat_relax",
-                default_until_seconds=None,
+            _capture_magnetization_assignments(
+                CapturedStage(
+                    problem=problem,
+                    entrypoint_kind="flat_relax",
+                    default_until_seconds=None,
+                )
             )
         )
         return problem

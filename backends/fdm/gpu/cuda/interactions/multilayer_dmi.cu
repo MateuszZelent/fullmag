@@ -227,12 +227,14 @@ __global__ void rotated_interfacial_dmi_field_kernel(
     double inv_2dx,
     double inv_2dy,
     double inv_2dz,
-    double ms,
+    double ms_scalar,
+    const double *__restrict__ ms_field,
     int has_rotated_interfacial_dmi,
     double dmi_d_rotated_interfacial)
 {
     const uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    const double ms = ms_field ? ms_field[idx] : ms_scalar;
 
     if ((active_mask && active_mask[idx] == 0) ||
         ms <= 0.0 ||
@@ -359,9 +361,9 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
-            ctx.periodic_x ? 1 : 0,
-            ctx.periodic_y ? 1 : 0,
-            ctx.periodic_z ? 1 : 0,
+            layer.periodic_x ? 1 : 0,
+            layer.periodic_y ? 1 : 0,
+            0,
             0.5 / layer.native_grid.dx,
             0.5 / layer.native_grid.dy,
             0.5 / layer.native_grid.dz,
@@ -422,6 +424,7 @@ bool launch_rotated_interfacial_dmi_field_impl(Context &ctx, const char *operati
         ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.Ms,
+        ctx.ms_field,
         ctx.has_rotated_interfacial_dmi ? 1 : 0,
         ctx.D_rotated_interfacial);
     const cudaError_t err = cudaGetLastError();

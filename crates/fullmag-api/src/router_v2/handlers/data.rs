@@ -8,6 +8,7 @@ pub mod antenna;
 pub mod antenna_inspection;
 pub mod artifacts;
 pub mod domain;
+pub(crate) mod fdm_airbox_membership;
 pub(crate) mod fdm_multilayer_composite;
 pub mod fdm_region_membership;
 pub(crate) mod field_resolution;
@@ -22,6 +23,7 @@ pub mod quantities;
 pub(crate) mod resolved_spatial_field;
 pub(crate) mod resolved_vector_field;
 pub mod scalars;
+pub mod stage_results;
 pub mod tables;
 
 pub use antenna::*;

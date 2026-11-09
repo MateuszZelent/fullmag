@@ -45,7 +45,7 @@ describe("DedicatedInspectorRouteFrame", () => {
     expect(html).not.toContain('data-inspector-route-owner="object.magnetic-texture.asset"');
   });
 
-  it.each(["object.geometry", "builder.primitive"])(
+  it.each(["object.geometry", "builder.primitive", "fdm.cell"])(
     "leaves %s identity to the shared Inspector header",
     (owner) => {
       const html = renderToStaticMarkup(

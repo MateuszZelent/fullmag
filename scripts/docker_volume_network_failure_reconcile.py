@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Close one initial DEV attempt after Compose exhausted every network pool.
 
-Preview is read-only. Apply publishes only a failure receipt after the original
-BuildControl helper, source identity, compose failure, and absent resources have
-been re-observed. The original helper remains the sole owner that releases the
-active marker.
+Preview is read-only. Apply publishes only a failure receipt after the source
+identity, exact Compose failure, and absent resources have been re-observed.
+Normally the original BuildControl helper releases its active marker. Explicit
+absent-helper recovery instead requires a free operation lock and lets an
+image-owned failure transaction release only that exact orphaned marker.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 from copy import deepcopy
 import json
-import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 import re
-import stat
 import time
 
 from docker_build_control import (
@@ -25,24 +25,19 @@ from docker_build_control import (
     docker_capture,
     toolchain_configuration,
 )
-import docker_windows_absent_bind_isolation as absent_windows
-import docker_windows_bind_isolation as windows
 from docker_compose_identity import source_labels
-from docker_foreign_bind_identity import WSL_ALIAS
-from docker_linux_native_readmission import live_bind_path
 from docker_volume_activation_reconcile import (
     _probe_helper_absence,
     _validate_helper,
     _validate_helper_logged,
 )
-from docker_volume_reconcile import digest, fingerprint, read_raw, require, write_immutable
+from docker_volume_reconcile import digest, fingerprint, read_raw, require
 
 SCHEMA = "fullmag.docker-development-network-failure-reconciliation.v1"
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONTAINERS = 4096
 MAX_INSPECT_BATCH = 64
-WINDOWS_BIND = re.compile(r"^(?:[A-Za-z]:|/(?:run/desktop/mnt/host|host_mnt|mnt/host)/[A-Za-z](?:/|$))")
 POOL_ERROR = "all predefined address pools have been fully subnetted"
 
 
@@ -77,6 +72,12 @@ def validate_pool_failure(error: object, network_name: str, project: str) -> str
         f"Container {project}-backend-1 Creating",
         terminal,
     ]
+    # Compose may retire this same private network before retrying creation.
+    # Keep the removal prefix exact; resource absence is independently fenced
+    # by _observe before any failure-only reconciliation is published.
+    removed = [f"Network {network_name} Removing", f"Network {network_name} Removed"]
+    if lines[:2] == removed:
+        lines = lines[2:]
     require(lines == expected,
             "Original Compose output differs from the exact observed address-pool failure")
     require(not re.search(r"\b(?:Created|Started|Running|Done)\b", error, re.IGNORECASE),
@@ -144,15 +145,16 @@ def validate_initial_receipt(
 def validate_container_inventory(
     documents: list[dict[str, object]],
     *,
-    helper_id: str,
+    helper_id: str | None,
     helper_name: str,
     project: str,
     network_name: str,
     identity: dict[str, str],
     control_volume: str,
-    qualify_desktop_bind=None,
+    control_mountpoint: str,
 ) -> list[dict[str, object]]:
-    """Require the exact live helper to be the sole selected-group consumer."""
+    """Exclude consumers of the group metadata changed by this failure-only CAS."""
+    control_path = _control_mountpoint(control_mountpoint)
     labels_expected = source_labels(identity)
     observed: list[dict[str, object]] = []
     helper_matches = 0
@@ -183,7 +185,7 @@ def validate_container_inventory(
             or name.startswith(project + "_")
         )
         if is_helper:
-            require(identifier == helper_id and name == helper_name
+            require(helper_id is not None and identifier == helper_id and name == helper_name
                     and labels.get("com.docker.compose.project") == project
                     and labels.get("com.docker.compose.service") == "build-control"
                     and all(labels.get(key) == value for key, value in labels_expected.items())
@@ -197,29 +199,27 @@ def validate_container_inventory(
             mounts = document.get("Mounts")
             require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
                     "Foreign container mount inventory is incomplete")
-            source_path = PurePosixPath(identity["source_root"])
-            def overlaps_checkout(mount):
+            for mount in mounts:
+                require(mount.get("Name") != control_volume,
+                        "A foreign container consumes this group's control volume")
                 if mount.get("Type") != "bind":
-                    return False
+                    continue
                 source = mount.get("Source")
-                if isinstance(source, str) and (WINDOWS_BIND.match(source) or source.startswith(WSL_ALIAS)):
-                    require(qualify_desktop_bind is not None,
-                            "Foreign Desktop bind requires initial recovery isolation evidence")
-                    source, evidence = qualify_desktop_bind(document, source)
-                    observed.append(evidence)
-                    if source is None:
-                        return False
-                require(isinstance(source, str) and source.startswith("/")
-                        and not source.startswith("//") and chr(92) not in source
-                        and str(PurePosixPath(source)) == source
-                        and ".." not in PurePosixPath(source).parts,
-                        "Foreign bind mount source is not canonical")
-                path = PurePosixPath(source)
-                return (path == source_path or source_path in path.parents
-                        or path in source_path.parents)
-            require(not any(m.get("Name") == control_volume or overlaps_checkout(m) for m in mounts),
-                    "A foreign container consumes this group's control volume or checkout")
-    require(helper_matches == 1, "The exact BuildControl helper is not the sole selected-group container")
+                require(isinstance(source, str) and source and len(source) <= 32768
+                        and not any(ord(char) < 32 or ord(char) == 127 for char in source),
+                        "Foreign bind source metadata is incomplete")
+                # Only literal daemon paths can directly expose this local
+                # Docker volume. Other source binds are outside the records
+                # mutated here; checkout retirement has its own admission.
+                if source.startswith("/") and not source.startswith("//"):
+                    path = PurePosixPath(source)
+                    require(str(path) == source and ".." not in path.parts,
+                            "Foreign daemon bind source is not canonical")
+                    require(path != control_path and path not in control_path.parents
+                            and control_path not in path.parents,
+                            "A foreign daemon bind exposes this group's control volume")
+    require(helper_matches == (0 if helper_id is None else 1),
+            "The exact BuildControl helper is not the sole selected-group container")
     return sorted(observed, key=canonical)
 
 
@@ -290,142 +290,72 @@ def _inspect_inventory_snapshot() -> list[dict[str, object]]:
     return documents
 
 
-def _observe_present_windows_bind(source, distro, root_device):
-    mapping = windows._mapping(source)
-    native = windows._native(source, distro, allow_external_junctions=True)
-    kind = native["candidate"]["kind"]
-    require((kind == "file" and stat.S_ISREG(mapping["mode"]))
-            or (kind == "directory" and stat.S_ISDIR(mapping["mode"])),
-            "Windows and WSL candidate object types differ")
-    require(mapping["device"] != root_device, "Foreign Windows bind aliases the protected ext4 filesystem")
-
-    native_root = PureWindowsPath(native["candidate"]["path"])
-    root = Path(mapping["path"])
-    external = {}
-    for _, relative, link in windows._link_paths(native):
-        if link["tag"] != "0xa0000003":
-            continue
-        target = PureWindowsPath(link["target"])
-        if target == native_root or native_root in target.parents:
-            continue
-        path = root / relative
-        windows._link_parent_directories(root, path, mapping["device"])
-        link_identity = windows._file_identity(path)
-        require(stat.S_ISLNK(link_identity["mode"]) and link_identity["device"] == mapping["device"],
-                "External Windows junction is not the exact DrvFs link")
-        target_mapping = windows._mapping(str(target))
-        require(os.readlink(path) == target_mapping["path"]
-                and target_mapping["device"] != root_device
-                and stat.S_ISDIR(target_mapping["mode"]),
-                "External Windows junction target is not the exact disjoint DrvFs directory")
-        # An external target gets the full existing proof. Nested external
-        # junctions fail closed, keeping this initial recovery traversal bounded.
-        target_native = windows._native(str(target), distro)
-        require(target_native["candidate"]["kind"] == "directory",
-                "External Windows junction target is not an ordinary directory")
-        links = windows._qualify_links(target_mapping, target_native)
-        windows._link_parent_directories(root, path, mapping["device"])
-        require(windows._file_identity(path) == link_identity and os.readlink(path) == target_mapping["path"],
-                "External Windows junction changed during isolation proof")
-        external[relative] = {"link": link_identity, "mapping": target_mapping,
-                              "native": target_native, "contained_links": links}
-
-    return {"native": native, "mapping": mapping, "kind": "present",
-            "external_junctions": external,
-            "contained_links": windows._qualify_links(mapping, native, external_junctions=external)}
+def _control_mountpoint(value: object) -> PurePosixPath:
+    require(isinstance(value, str) and 1 < len(value) <= 4096
+            and value.startswith("/") and not value.startswith("//")
+            and chr(92) not in value
+            and not any(ord(char) < 32 or ord(char) == 127 for char in value),
+            "Control volume daemon mountpoint is invalid")
+    path = PurePosixPath(value)
+    require(str(path) == value and ".." not in path.parts,
+            "Control volume daemon mountpoint is not canonical")
+    return path
 
 
-def _wsl_kernel_bind_identity(source):
-    path = live_bind_path(source)
-    require(path is not None and path.resolve(strict=True) == path, "Foreign WSL source is not canonical")
-    return {"canonical_source": str(path), **windows._file_identity(path)}
-
-
-def _observe_windows_source(source, native_source, context, pin):
-    translated = windows._capture(["wslpath", "-u", native_source]).decode("utf-8", "strict").strip()
+def _control_volume_evidence(control: BuildControl) -> dict[str, object]:
+    inspected = docker_capture("volume", "inspect", control.volume)
     try:
-        Path(translated).lstat()
-    except FileNotFoundError:
-        absent_windows._stopped(pin)
-        native = absent_windows._native(source)
-        mapping = absent_windows._mapping(source, native)
-        require(mapping["device"] != context["linux"]["root_device"],
-                "Absent Windows bind aliases the protected ext4 filesystem")
-        return {"native": native, "mapping": mapping, "kind": "absent-stopped"}
-    return _observe_present_windows_bind(source, context["distro"], context["linux"]["root_device"])
+        volumes = json.loads(inspected.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BuildControlError("Control volume inspection is not valid JSON") from error
+    require(isinstance(volumes, list) and len(volumes) == 1 and isinstance(volumes[0], dict),
+            "Control volume identity is ambiguous")
+    volume = volumes[0]
+    require(volume.get("Name") == control.volume and volume.get("Driver") == "local"
+            and not volume.get("Options") and isinstance(volume.get("Labels"), dict)
+            and all(volume["Labels"].get(key) == value for key, value in control.shared_labels.items()),
+            "Control volume ownership or driver differs")
+    mountpoint = str(_control_mountpoint(volume.get("Mountpoint")))
+    return {"control_volume_fingerprint": digest(canonical(volume)),
+            "control_volume_mountpoint": mountpoint}
 
 
-def _initial_desktop_qualifier(identity, compose, engine_id):
-    """Collect read-only evidence for the authenticated pre-backend attempt."""
-    context = None
-    by_source = {}
-    pins = {}
-    wsl_sources = {}
-
-    def observe(container, source):
-        nonlocal context
-        pin = windows._container_pin(container)
-        pins[pin["id"]] = pin
-        if source.startswith(WSL_ALIAS):
-            evidence = _wsl_kernel_bind_identity(source)
-            wsl_sources[source] = evidence
-            return evidence["canonical_source"], {
-                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
-                "mapping": evidence, "kind": "wsl-kernel",
-            }
-        native_source = windows._windows_source_path(source)
-        if context is None:
-            mounts = compose["services"]["backend"].get("volumes")
-            require(isinstance(mounts, list) and all(isinstance(m, dict) for m in mounts),
-                    "Initial Compose backend mount inventory is incomplete")
-            roots = [m for m in mounts if m.get("target") == "/state"]
-            require(len(roots) == 1 and roots[0].get("type") == "bind"
-                    and isinstance(roots[0].get("source"), str),
-                    "Initial Compose has no exact native /state bind")
-            distro = os.environ.get("WSL_DISTRO_NAME", "")
-            require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", distro)
-                    and distro != "docker-desktop", "Current WSL distro identity is unavailable")
-            linux = windows._linux_identity(identity["source_root"], roots[0]["source"])
-            engine = windows._engine()
-            require(engine["ID"] == linux["engine_id"] == engine_id,
-                    "Initial native admission does not match the pinned Docker engine")
-            context = {"linux": linux, "engine": engine, "distro": distro}
-        if source not in by_source:
-            by_source[source] = (_observe_windows_source(source, native_source, context, pin), pin)
-        evidence, _ = by_source[source]
-        if evidence["kind"] == "absent-stopped":
-            absent_windows._stopped(pin)
-        return None, {"schema": "fullmag.initial-network-failure-windows-bind.v1",
-                "foreign": pin, "source_sha256": digest(source.encode("utf-8")),
-                "context_sha256": digest(canonical(context)),
-                "evidence_sha256": digest(canonical(evidence)), "kind": evidence["kind"]}
-
-    def verify(*, refresh_windows=False):
-        if refresh_windows:
-            # Recheck early sources last so the oldest Windows evidence is
-            # refreshed closest to the failure publication boundary.
-            for source, (evidence, pin) in reversed(by_source.items()):
-                require(_observe_windows_source(source, windows._windows_source_path(source), context, pin) == evidence,
-                        "Foreign Windows bind changed before failure publication")
-        for identifier, pin in pins.items():
-            require(windows._container_pin(windows._inspect(identifier)) == pin,
-                    "Foreign container changed during initial Desktop bind isolation")
-        for source, evidence in wsl_sources.items():
-            require(_wsl_kernel_bind_identity(source) == evidence, "Foreign WSL kernel mapping changed")
-        if context is None:
-            return
-        linux = context["linux"]
-        require(windows._engine() == context["engine"]
-                and windows._linux_identity(linux["source_root"], linux["reference_root"]) == linux,
-                "Initial Windows isolation context changed")
-
-    return observe, verify
+def _absent_helper_evidence(control: BuildControl, helper_name: str) -> dict[str, object]:
+    """Authenticate an orphan without replacing its owner or changing the volume."""
+    absence_sha = _probe_helper_absence(helper_name)
+    require(absence_sha is not None,
+            "Absent-helper recovery requires the original helper to be absent, including stopped containers")
+    volume_evidence = _control_volume_evidence(control)
+    operation_lock = control.path("operation.lock")
+    lock_probe = (
+        f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+        f"test $(stat -c %h '{operation_lock}') = 1; "
+        f"exec 8<'{operation_lock}'; flock -n 8; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        f"stat -Lc '%d:%i' '{operation_lock}'"
+    )
+    locked = bounded_capture(control.helper_args(lock_probe), data=b"", timeout=60)
+    require(locked.returncode == 0,
+            "Orphaned operation lock is occupied or cannot be authenticated; preserve the active marker")
+    lock_identity = locked.stdout.decode("utf-8", "strict").strip()
+    require(re.fullmatch(r"[0-9]+:[0-9]+", lock_identity) is not None,
+            "Orphaned operation lock identity is invalid")
+    return {
+        "helper_state": "absent-confirmed",
+        "helper_absence_probe_sha256": absence_sha,
+        **volume_evidence,
+        "operation_lock_identity": lock_identity,
+    }
 
 
 def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Namespace,
              *, allowed_archive: bytes | None = None) -> dict[str, object]:
     require(docker_capture("info", "--format", "{{.ID}}").stdout.decode().strip() == args.engine_id,
             "Docker engine identity differs from the operator pin")
+    helper_name = "fullmag-control-" + args.attempt
+    absent_evidence = (_absent_helper_evidence(control, helper_name)
+                       if getattr(args, "recover_absent_helper", False)
+                       else _control_volume_evidence(control))
     root = "development/attempts/" + args.attempt
     original_raw = read_raw(control, root + "/receipt.json")
     require(digest(original_raw) == args.receipt_sha256, "Original receipt digest differs from the operator pin")
@@ -459,11 +389,17 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
                 for key, value in source_labels(identity).items()),
                 "Compose source labels differ from the selected checkout")
 
-    helper_name = "fullmag-control-" + args.attempt
-    helper, helper_id = _validate_helper(control, helper_name, args.attempt, phase="development")
-    log_tail = _validate_helper_logged(helper_id)
-    require("READY\n" in log_tail and "LOGGED\n" in log_tail,
-            "Original helper has not durably acknowledged its log")
+    if getattr(args, "recover_absent_helper", False):
+        helper_id = None
+        helper_fingerprint = None
+        helper_log_sha = None
+    else:
+        helper, helper_id = _validate_helper(control, helper_name, args.attempt, phase="development")
+        log_tail = _validate_helper_logged(helper_id)
+        require("READY\n" in log_tail and "LOGGED\n" in log_tail,
+                "Original helper has not durably acknowledged its log")
+        helper_fingerprint = fingerprint(helper)
+        helper_log_sha = digest(log_tail.encode("utf-8"))
     active = read_raw(control, "active")
     require(active == (args.attempt + "\n").encode(), "Original helper no longer owns the active marker")
 
@@ -482,7 +418,6 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
             "Original unknown receipt archive is absent or differs from its immutable pin")
     absent = dict(publications)
     absent.pop(root + "/unknown-receipt.json")
-    validate_absent_publications(absent, args.attempt)
     attempts_result = bounded_capture(control.helper_args(_attempt_inventory_script(control)), data=b"", timeout=60)
     require(attempts_result.returncode == 0, "Development attempt inventory could not be read")
     try:
@@ -491,22 +426,30 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
     except UnicodeDecodeError as error:
         raise BuildControlError("Development attempt inventory is not UTF-8") from error
     require(all(len(item) == 2 for item in attempts), "Development attempt inventory is malformed")
-    validate_initial_artifacts(attempts, args.attempt)
+    retained_history = None
+    if getattr(args, "recreation_attempt", None):
+        from docker_volume_recreated_network_history import validate_recreated_history
+        retained_history = validate_recreated_history(
+            control, recreation_attempt=args.recreation_attempt,
+            recreation_sha256=args.recreation_sha256, failed_attempt=args.attempt,
+            original=original, publications=absent, attempts=attempts,
+        )
+    else:
+        validate_absent_publications(absent, args.attempt)
+        validate_initial_artifacts(attempts, args.attempt)
 
     network_result = docker_capture("network", "inspect", network_name, allow_failure=True)
     network_error = validate_network_absence(
         network_result.returncode, network_result.stdout, network_result.stderr, network_name)
     containers = _container_inventory()
-    qualify_desktop_bind, verify_desktop_binds = _initial_desktop_qualifier(identity, compose, args.engine_id)
     inventory = validate_container_inventory(
         containers, helper_id=helper_id, helper_name=helper_name, project=control.project,
         network_name=network_name, identity=identity, control_volume=control.volume,
-        qualify_desktop_bind=qualify_desktop_bind,
+        control_mountpoint=absent_evidence["control_volume_mountpoint"],
     )
-    verify_desktop_binds(refresh_windows=allowed_archive is not None)
-    # This failure-only transaction is group-local (ADR 0067). The authenticated
-    # original helper has closed its log input and still holds operation.lock;
-    # a new managed producer cannot enter this group before its terminal receipt.
+    # This failure-only transaction is group-local (ADR 0067). The original
+    # helper holds operation.lock, or the absent-helper CAS must acquire it
+    # before any mutation. Active remains pinned until terminal publication.
     # Global process liveness would incorrectly block independent DEV groups.
     active_again = read_raw(control, "active")
     require(active_again == active, "Active helper ownership changed during observation")
@@ -529,11 +472,14 @@ def _observe(control: BuildControl, identity: dict[str, str], args: argparse.Nam
         "network_absence_error": network_error,
         "network_name": network_name,
         "helper_id": helper_id,
-        "helper_fingerprint": fingerprint(helper),
-        "helper_log_sha256": digest(log_tail.encode("utf-8")),
+        "helper_fingerprint": helper_fingerprint,
+        "helper_log_sha256": helper_log_sha,
+        **absent_evidence,
         "container_inventory": inventory,
         "development_attempts": attempts,
-        "admission_scope": "initial-failure-only-group-local",
+        "admission_scope": ("recreated-failure-only-group-local" if retained_history
+                            else "initial-failure-only-group-local"),
+        **({"retained_history": retained_history} if retained_history else {}),
     }
 
 
@@ -555,7 +501,13 @@ def _proof_bytes(observation: dict[str, object], original: dict[str, object]) ->
         "container_inventory": observation["container_inventory"],
         "development_attempts": observation["development_attempts"],
         "admission_scope": observation["admission_scope"],
+        **({"retained_history": observation["retained_history"]}
+           if observation.get("retained_history") else {}),
         "original_error_sha256": digest(str(original["error"]).encode("utf-8")),
+        **{key: observation[key] for key in (
+            "helper_state", "helper_absence_probe_sha256", "control_volume_fingerprint",
+            "operation_lock_identity", "control_volume_mountpoint",
+        ) if key in observation},
     }) + b"\n"
 
 
@@ -578,8 +530,114 @@ def _failure_result(original_raw: bytes, proof_raw: bytes, observation: dict[str
     return canonical(result) + b"\n"
 
 
+def _publication_paths(attempt: str, recovery_id: str | None = None) -> dict[str, str]:
+    require(isinstance(attempt, str) and TOKEN.fullmatch(attempt) is not None,
+            "Invalid publication attempt")
+    root = "development/attempts/" + attempt + "/reconciliation"
+    if recovery_id is not None:
+        require(isinstance(recovery_id, str) and TOKEN.fullmatch(recovery_id) is not None,
+                "Recovery identity must be a complete lowercase token")
+        root += "/recoveries/" + recovery_id
+    return {"proof": root + "/network-failure-proof.json",
+            "result": root + "/result.json", "prepared": root + "/prepared.json"}
+
+
+
+def _load_prepared_recovery(control, args, original_raw) -> dict[str, object] | None:
+    previous_sha = getattr(args, "resume_prepared_sha256", None)
+    recovery_id = getattr(args, "recovery_id", None)
+    if previous_sha is None and recovery_id is None:
+        return None
+    _require_sha(previous_sha, "resume-prepared-sha256")
+    require(recovery_id is not None, "Prepared recovery requires an explicit recovery-id")
+    new_paths = _publication_paths(args.attempt, recovery_id)
+    root = "development/attempts/" + args.attempt
+    for relative in (root + "/network-failure-reconcile.lock", root + "/terminal.json",
+                     "development/current.json", "development/verified.json", *new_paths.values()):
+        require(read_raw(control, relative, optional=True) is None,
+                "Prepared recovery has a partial publication or occupied generation")
+    require(digest(original_raw) == args.receipt_sha256
+            and read_raw(control, root + "/unknown-receipt.json") == original_raw,
+            "Prepared recovery lost its exact original receipt archive")
+    old_paths = _publication_paths(args.attempt)
+    raw = {key: read_raw(control, path) for key, path in old_paths.items()}
+    require(all(isinstance(value, bytes) for value in raw.values()),
+            "Prepared recovery is incomplete")
+    require(digest(raw["prepared"]) == previous_sha, "Prepared recovery digest changed")
+    prepared = _json(raw["prepared"], "Previous preparation")
+    require(prepared == {"schema": SCHEMA, "attempt": args.attempt,
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "proof_sha256": digest(raw["proof"]), "result_sha256": digest(raw["result"])},
+            "Previous preparation does not bind its complete proof and result")
+    proof = _json(raw["proof"], "Previous proof")
+    original = _json(original_raw, "Original development receipt")
+    require(all(proof.get(key) == value for key, value in {
+            "schema": SCHEMA, "state": "failed-confirmed", "attempt": args.attempt,
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "engine_id": args.engine_id, "compose_project": control.project,
+            "original_error_sha256": digest(str(original["error"]).encode("utf-8")),
+            "admission_scope": "initial-failure-only-group-local"}.items()),
+            "Previous proof belongs to another attempt, engine or group")
+    require(isinstance(proof.get("helper_id"), str) and SHA.fullmatch(proof["helper_id"]) is not None
+            and isinstance(proof.get("helper_fingerprint"), str)
+            and SHA.fullmatch(proof["helper_fingerprint"]) is not None,
+            "Previous proof does not pin its original helper")
+    result = _json(raw["result"], "Previous result")
+    reconciliation = result.get("reconciliation")
+    require(isinstance(reconciliation, dict), "Previous result has no reconciliation")
+    observation_sha = _require_sha(reconciliation.get("observation_sha256"), "previous observation digest")
+    expected = deepcopy(original)
+    expected.update(state="failed-confirmed", finished_at=result.get("finished_at"),
+        reconciliation={"schema": SCHEMA, "state": "failed-confirmed",
+            "original_receipt_sha256": args.receipt_sha256, "compose_sha256": args.compose_sha256,
+            "proof_sha256": digest(raw["proof"]), "observation_sha256": observation_sha,
+            "resource_policy": "retained"}, build_data_qualification="NOT VERIFIED")
+    require(result == expected and type(result.get("finished_at")) in (int, float)
+            and 0 < result["finished_at"] < float("inf"),
+            "Previous result changed original evidence or its failure-only semantics")
+    return {"prepared_sha256": previous_sha, "recovery_id": recovery_id,
+            "helper_id": proof["helper_id"], "helper_fingerprint": proof["helper_fingerprint"],
+            "previous_files": {old_paths[key]: digest(value) for key, value in raw.items()}}
+
+
+
+def _prepared_input(documents: dict[str, bytes] | None) -> bytes:
+    return b"" if documents is None else b"".join(
+        base64.b64encode(payload) + b"\n" for payload in documents.values()
+    )
+
+
+def _retained_record_checks(control, records):
+    require(isinstance(records, dict) and 2 <= len(records) <= 32,
+            "Retained history record inventory is malformed")
+    require(all(path in records and isinstance(records[path], str)
+                for path in ("development/current.json", "development/verified.json")),
+            "Retained history must pin both prior pointers")
+    script = "history_record() { local p=\"$1\" h=\"$2\" q; q=$(dirname \"$p\"); "
+    script += "while test \"$q\" != /; do test ! -L \"$q\"; "
+    script += "if test -e \"$q\"; then test -d \"$q\"; else test \"$h\" = absent; fi; "
+    script += "q=$(dirname \"$q\"); done; "
+    script += "test ! -L \"$p\"; if test \"$h\" = absent; then test ! -e \"$p\"; else "
+    script += "test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
+    script += "test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = \"$h\"; fi; }; "
+    for path, value in sorted(records.items()):
+        require(isinstance(path, str) and re.fullmatch(r"[A-Za-z0-9_./-]+", path)
+                and str(PurePosixPath(path)) == path and not path.startswith("/")
+                and ".." not in PurePosixPath(path).parts,
+                "Retained history record path is not portable")
+        require(value is None or (isinstance(value, str) and SHA.fullmatch(value)),
+                "Retained history record digest is malformed")
+        script += f"history_record '{control.path(path)}' '{value if value is not None else 'absent'}'; "
+    return script
+
+
 def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_sha: str,
-                proof_sha: str, result_sha: str, prepared_sha: str) -> str:
+                proof_sha: str, result_sha: str, prepared_sha: str, *,
+                recover_absent_helper: bool = False, operation_lock_identity: str | None = None,
+                prepared_documents: dict[str, bytes] | None = None,
+                recovery: dict[str, object] | None = None,
+                retained_records: dict[str, str | None] | None = None) -> str:
+    history_checks = _retained_record_checks(control, retained_records) if retained_records is not None else ""
     root = control.path("development/attempts/" + attempt)
     current = control.path("development/current.json")
     verified = control.path("development/verified.json")
@@ -587,14 +645,19 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
     terminal = root + "/terminal.json"
     archive = root + "/unknown-receipt.json"
     compose = root + "/compose.json"
-    proof = root + "/reconciliation/network-failure-proof.json"
-    result = root + "/reconciliation/result.json"
-    prepared = root + "/reconciliation/prepared.json"
+    paths = _publication_paths(attempt, recovery["recovery_id"] if recovery else None)
+    proof, result, prepared = (control.path(paths[key]) for key in ("proof", "result", "prepared"))
+    previous_files = recovery["previous_files"] if recovery else {}
     lock = root + "/network-failure-reconcile.lock"
     active = control.path("active")
     operation_lock = control.path("operation.lock")
+    publish_targets = (receipt, terminal) if retained_records is not None else (receipt, current, terminal)
+    pointer_checks = history_checks if retained_records is not None else (
+        f"test ! -L '{current}'; test ! -e '{current}'; "
+        f"test ! -L '{verified}'; test ! -e '{verified}'; "
+    )
     inputs = (active, operation_lock, receipt, compose,
-              archive, proof, result, prepared)
+              archive, proof, result, prepared, *(control.path(path) for path in previous_files))
     parents = set("/".join(path.split("/")[:-1]) for path in (*inputs, current, verified, terminal, lock))
     parent_checks = " ".join(
         f"test ! -L '{parent}'; test -d '{parent}'; "
@@ -605,10 +668,96 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
         for path in inputs
     )
-    # Original BuildControl holds operation.lock for this entire transaction.
-    return (
-        "umask 027; " + parent_checks + " " + input_checks + " "
-        f"test ! -L '{lock}'; test ! -e '{lock}'; exec 7>'{lock}'; flock -n 7; "
+    # A missing owner is never impersonated. Its replacement acquires the
+    # existing lock without creating/truncating it, before the first write.
+    admission = (
+        f"test ! -L '{compose}'; test -f '{compose}'; test $(stat -c %h '{compose}') = 1; "
+        f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
+        f"exec 6<'{compose}'; flock -n 6; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/6)\" = \"$(stat -Lc '%d:%i' '{compose}')\"; "
+    )
+    release = ""
+    owner_check = (
+        f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+        f"test $(stat -c %h '{operation_lock}') = 1; exec 8<'{operation_lock}'; "
+        f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        'if flock -n -E 72 8; then exit 73; else test "$?" = 72; fi; '
+    )
+    if recover_absent_helper:
+        admission += (
+            f"test ! -L '{operation_lock}'; test -f '{operation_lock}'; "
+            f"test $(stat -c %h '{operation_lock}') = 1; "
+            f"exec 8<'{operation_lock}'; flock -n 8; "
+            f"test \"$(stat -Lc '%d:%i' /proc/self/fd/8)\" = \"$(stat -Lc '%d:%i' '{operation_lock}')\"; "
+        )
+        if operation_lock_identity is not None:
+            require(re.fullmatch(r"[0-9]+:[0-9]+", operation_lock_identity) is not None,
+                    "Invalid pinned orphan operation lock identity")
+            admission += f"test \"$(stat -Lc '%d:%i' '{operation_lock}')\" = '{operation_lock_identity}'; "
+        active_sha = digest((attempt + "\n").encode())
+        owner_check = f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
+        release = (
+            "; for p in " + " ".join("'" + p + "'" for p in publish_targets) + "; do "
+            "test ! -L \"$p\"; test -f \"$p\"; test $(stat -c %h \"$p\") = 1; "
+            f"test \"$(sha256sum \"$p\" | cut -d' ' -f1)\" = '{result_sha}'; done; "
+            f"test ! -L '{active}'; test -f '{active}'; test $(stat -c %h '{active}') = 1; "
+            f"test \"$(sha256sum '{active}' | cut -d' ' -f1)\" = '{active_sha}'; "
+            f"rm -- '{active}'; sync '{control.path('active').rsplit('/', 1)[0]}'"
+        )
+    previous_checks = " ".join(
+        f"test ! -L '{control.path(path)}'; test -f '{control.path(path)}'; "
+        f"test $(stat -c %h '{control.path(path)}') = 1; "
+        f"test \"$(sha256sum '{control.path(path)}' | cut -d' ' -f1)\" = '{value}';"
+        for path, value in previous_files.items())
+    if recovery:
+        previous_checks += (
+            f"test ! -L '{archive}'; test -f '{archive}'; test $(stat -c %h '{archive}') = 1; "
+            f"test \"$(sha256sum '{archive}' | cut -d' ' -f1)\" = '{original_sha}'; "
+        )
+    preparation = ""
+    if prepared_documents is not None:
+        expected = {proof: proof_sha, result: result_sha, prepared: prepared_sha}
+        if not recovery:
+            expected = {archive: original_sha, **expected}
+        require(set(prepared_documents) == set(expected)
+                and all(digest(prepared_documents[path]) == sha for path, sha in expected.items()),
+                "Prepared failure documents differ from their exact pins")
+        # Both routes serialize all journal writes. A live-helper preparation
+        # cannot overwrite the absent-helper transaction after losing its owner.
+        preparation = (
+            f"test ! -L '{root}'; test -d '{root}'; test \"$(readlink -f '{root}')\" = '{root}'; "
+            + " ".join(f"test ! -L '{path}'; test -f '{path}'; test $(stat -c %h '{path}') = 1;"
+                       for path in (active, receipt, compose)) + " "
+            + owner_check + previous_checks + pointer_checks + " "
+            + f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
+            + f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
+            + " ".join(f"test ! -L '{path}'; test ! -e '{path}';"
+                       for path in (*expected, *((current, verified) if retained_records is None else ()), terminal, lock)) + " "
+        )
+        reconciliation = prepared.rsplit("/", 1)[0]
+        preparation += (
+            f"test ! -L '{lock}'; test ! -e '{lock}'; set -C; exec 7>'{lock}'; set +C; flock -n 7; "
+            f"test ! -L '{reconciliation}'; "
+            f"if test -e '{reconciliation}'; then test -d '{reconciliation}'; "
+            f"test \"$(readlink -f '{reconciliation}')\" = '{reconciliation}'; fi; "
+            f"mkdir -p '{reconciliation}'; "
+        )
+        for path, payload in prepared_documents.items():
+            parent = path.rsplit("/", 1)[0]
+            preparation += (
+                "IFS= read -r payload; "
+                f"t=$(mktemp '{parent}/.network-proof.XXXXXXXX'); "
+                "printf '%s' \"$payload\" | base64 -d > \"$t\"; unset payload; "
+                f"test \"$(sha256sum \"$t\" | cut -d' ' -f1)\" = '{expected[path]}'; "
+                f"sync \"$t\"; ln -T -- \"$t\" '{path}'; rm -- \"$t\"; sync '{parent}'; "
+            )
+    transaction_lock = "" if prepared_documents is not None else (
+        f"test ! -L '{lock}'; test ! -e '{lock}'; set -C; exec 7>'{lock}'; set +C; flock -n 7; "
+    )
+    script = (
+        "umask 027; " + admission + preparation + parent_checks + " " + input_checks + " "
+        + transaction_lock + previous_checks + " " +
+
         f"test \"$(cat '{active}')\" = '{attempt}'; "
         f"test \"$(sha256sum '{receipt}' | cut -d' ' -f1)\" = '{original_sha}'; "
         f"test \"$(sha256sum '{compose}' | cut -d' ' -f1)\" = '{compose_sha}'; "
@@ -616,11 +765,9 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         f"test \"$(sha256sum '{proof}' | cut -d' ' -f1)\" = '{proof_sha}'; "
         f"test \"$(sha256sum '{result}' | cut -d' ' -f1)\" = '{result_sha}'; "
         f"test \"$(sha256sum '{prepared}' | cut -d' ' -f1)\" = '{prepared_sha}'; "
-        f"test ! -L '{current}'; test ! -e '{current}'; "
-        f"test ! -L '{verified}'; test ! -e '{verified}'; "
+        + pointer_checks +
         f"test ! -L '{terminal}'; test ! -e '{terminal}'; "
-        f"exec 8<>'{operation_lock}'; if flock -n 8; then exit 72; fi; "
-        "for p in " + " ".join("'" + p + "'" for p in (receipt, current, terminal)) + "; do "
+        + owner_check + "for p in " + " ".join("'" + p + "'" for p in publish_targets) + "; do "
         "test ! -L \"$p\"; parent=$(dirname \"$p\"); "
         "test \"$(readlink -f \"$parent\")\" = \"$parent\"; "
         f"if test \"$p\" = '{receipt}'; then "
@@ -629,8 +776,11 @@ def _cas_script(control: BuildControl, attempt: str, original_sha: str, compose_
         "else test ! -e \"$p\"; fi; "
         f"t=$(mktemp \"$parent/.network-failure.XXXXXXXX\"); "
         f"cat '{result}' > \"$t\"; sync \"$t\"; mv -T -- \"$t\" \"$p\"; sync \"$parent\"; "
-        "done"
+        "done" + release
     )
+    require(len(script.encode("utf-8")) <= 24 * 1024,
+            "Failure transaction exceeds the bounded helper command size")
+    return script
 
 
 def _identity_and_control(source_root: str) -> tuple[Path, dict[str, str], BuildControl]:
@@ -658,12 +808,35 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     require(isinstance(args.engine_id, str) and args.engine_id and len(args.engine_id) <= 256
             and "\x00" not in args.engine_id,
             "engine-id is not a bounded Docker engine identity")
+    recreated = getattr(args, "recreation_attempt", None)
+    recreated_sha = getattr(args, "recreation_sha256", None)
+    require(bool(recreated) == bool(recreated_sha), "Recreated recovery requires paired receipt pins")
+    if recreated:
+        require(isinstance(recreated, str) and TOKEN.fullmatch(recreated), "Invalid recreation attempt")
+        _require_sha(recreated_sha, "recreation-sha256")
+        require(not any(getattr(args, key, None) for key in (
+            "recover_absent_helper", "resume_prepared_sha256", "recovery_id")),
+            "Recreated recovery cannot combine with absent-owner or prepared recovery")
     selected, identity, control = _identity_and_control(args.source_root)
     require(identity["source_root"] == str(selected), "Selected checkout identity is not canonical")
 
-    first = _observe(control, identity, args)
+    require(not (getattr(args, "recover_absent_helper", False)
+                 and (getattr(args, "resume_prepared_sha256", None) is not None
+                      or getattr(args, "recovery_id", None) is not None)),
+            "Prepared recovery cannot replace an absent original owner")
+    recovery = None
+    observation_options = {}
+    if getattr(args, "resume_prepared_sha256", None) is not None or getattr(args, "recovery_id", None) is not None:
+        original_raw = read_raw(control, "development/attempts/" + args.attempt + "/receipt.json")
+        recovery = _load_prepared_recovery(control, args, original_raw)
+        observation_options = {"allowed_archive": original_raw}
+    first = _observe(control, identity, args, **observation_options)
+    if recovery:
+        require(first["helper_id"] == recovery["helper_id"]
+                and first["helper_fingerprint"] == recovery["helper_fingerprint"],
+                "Prepared recovery no longer belongs to the original helper")
     time.sleep(0.5)
-    second = _observe(control, identity, args)
+    second = _observe(control, identity, args, **observation_options)
     require(canonical(second) == canonical(first),
             "Full Docker/control observation changed during the stability window")
     root = "development/attempts/" + args.attempt
@@ -672,9 +845,13 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
     original = _json(original_raw, "Original development receipt")
     proof_raw = _proof_bytes(second, original)
     result_raw = _failure_result(original_raw, proof_raw, second)
-    proof_relative = root + "/reconciliation/network-failure-proof.json"
-    result_relative = root + "/reconciliation/result.json"
-    prepared_relative = root + "/reconciliation/prepared.json"
+    if recovery:
+        result = _json(result_raw, "Fresh recovery result")
+        result["reconciliation"].update(recovery_id=recovery["recovery_id"],
+            previous_prepared_sha256=recovery["prepared_sha256"])
+        result_raw = canonical(result) + b"\n"
+    paths = _publication_paths(args.attempt, recovery["recovery_id"] if recovery else None)
+    proof_relative, result_relative, prepared_relative = (paths[key] for key in ("proof", "result", "prepared"))
     prepared_raw = canonical({
         "schema": SCHEMA,
         "attempt": args.attempt,
@@ -694,38 +871,53 @@ def reconcile(args: argparse.Namespace) -> dict[str, object]:
         "proof_sha256": digest(proof_raw),
         "engine_id": args.engine_id,
         "apply": bool(args.apply),
+        "helper_state": second.get("helper_state", "running"),
     }
     if not args.apply:
         return summary
 
     # All paths must be pristine before the first write. Any partial transaction
     # is intentionally non-replayable and requires operator inspection.
-    for relative in (root + "/unknown-receipt.json", proof_relative, result_relative,
+    archive_paths = () if recovery else (root + "/unknown-receipt.json",)
+    for relative in (*archive_paths, proof_relative, result_relative,
                      prepared_relative, root + "/network-failure-reconcile.lock",
-                     "development/current.json", "development/verified.json", root + "/terminal.json"):
+                     *(("development/current.json", "development/verified.json") if not recreated else ()),
+                     root + "/terminal.json"):
         require(read_raw(control, relative, optional=True) is None,
                 "An earlier or partial failure reconciliation publication exists")
-    write_immutable(control, root + "/unknown-receipt.json", original_raw)
-    write_immutable(control, proof_relative, proof_raw)
-    write_immutable(control, result_relative, result_raw)
-    write_immutable(control, prepared_relative, prepared_raw)
+    absent_helper = bool(getattr(args, "recover_absent_helper", False))
+    publication_documents = [(proof_relative, proof_raw), (result_relative, result_raw),
+                             (prepared_relative, prepared_raw)]
+    if not recovery:
+        publication_documents.insert(0, (root + "/unknown-receipt.json", original_raw))
+    prepared_documents = {control.path(relative): payload for relative, payload in publication_documents}
 
-    # A complete second observation is taken after immutable proof preparation
-    # and immediately before the atomic pointer/terminal CAS.
-    final_observation = _observe(control, identity, args, allowed_archive=original_raw)
+    # Re-observe the exact group resources before the single journal/publication transaction.
+    final_observation = _observe(control, identity, args, allowed_archive=original_raw if recovery else None)
     require(canonical(final_observation) == canonical(second),
             "Resources or ownership changed immediately before failure publication")
     committed = bounded_capture(control.helper_args(_cas_script(
         control, args.attempt, args.receipt_sha256, args.compose_sha256,
         digest(proof_raw), digest(result_raw), digest(prepared_raw),
-    )), data=b"", timeout=90)
+        recover_absent_helper=absent_helper,
+        operation_lock_identity=second.get("operation_lock_identity"),
+        prepared_documents=prepared_documents,
+        **({"recovery": recovery} if recovery else {}),
+        **({"retained_records": second["retained_history"]["retained_records"]} if recreated else {}),
+    )), data=_prepared_input(prepared_documents), timeout=90)
     require(committed.returncode == 0,
             "Failure publication outcome is unknown; preserve exact attempt and inspect its receipts")
-    for relative in (root + "/receipt.json", "development/current.json", root + "/terminal.json"):
+    for relative in (root + "/receipt.json", *(("development/current.json",) if not recreated else ()), root + "/terminal.json"):
         require(read_raw(control, relative) == result_raw,
                 "Failure terminal publication differs from its exact prepared result")
-    require(read_raw(control, "development/verified.json", optional=True) is None,
-            "Failure reconciliation unexpectedly published a verified pointer")
+    if recreated:
+        for relative, expected in second["retained_history"]["retained_records"].items():
+            raw = read_raw(control, relative, optional=True)
+            require((digest(raw) if raw is not None else None) == expected,
+                    "Retained history changed during failure publication")
+    else:
+        require(read_raw(control, "development/verified.json", optional=True) is None,
+                "Failure reconciliation unexpectedly published a verified pointer")
     deadline = time.monotonic() + 30
     helper_name = "fullmag-control-" + args.attempt
     while time.monotonic() < deadline:
@@ -748,6 +940,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt-sha256", required=True)
     parser.add_argument("--compose-sha256", required=True)
     parser.add_argument("--engine-id", required=True)
+    parser.add_argument("--recover-absent-helper", action="store_true",
+                        help="explicitly recover an absent original helper under the existing operation lock")
+    parser.add_argument("--resume-prepared-sha256")
+    parser.add_argument("--recovery-id")
+    parser.add_argument("--recreation-attempt", help="Exact successful fresh-state recreation operation")
+    parser.add_argument("--recreation-sha256", help="SHA-256 of its raw terminal receipt")
     parser.add_argument("--apply", action="store_true", help="publish failure-only terminal after full re-observation")
     args = parser.parse_args(argv)
     try:

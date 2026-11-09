@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
@@ -28,6 +28,7 @@ import { useGeometryRealizationResource } from "@/kernel/resources/useGeometryRe
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
+import { sessionRequestScopeKey } from "@/kernel/resources/sessionResourceIdentity";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
 import {
@@ -45,13 +46,15 @@ import {
 import {
   objectSectionLayers,
   planarSectionAxes,
-  resolvePlanarSectionGeometry,
-  withSectionStops,
+  resolvePlanarSectionGeometryFromMeta,
 } from "@/kernel/visualization/planarSectionModel";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
 import { FieldMapToolbar, type FieldMapToolbarQuantity } from "./components/FieldMapToolbar";
 import { FieldMapAuxiliaryDiagnostics } from "./components/FieldMapAuxiliaryDiagnostics";
 import { PlanarColorLegend } from "./components/PlanarColorLegend";
+import { PlanarCompositionSurface } from "./components/PlanarCompositionSurface";
+import { registerFieldMapCapture } from "./fieldMapCaptureRegistry";
+import { captureVisibleFieldMapPng } from "./fieldMapPngCapture";
 import { PlanarMultisliceGrid } from "./components/PlanarMultisliceGrid";
 import { PlanarSnapshotNavigator } from "./components/PlanarSnapshotNavigator";
 import { PlanarPinnedProbe } from "./components/PlanarPinnedProbe";
@@ -641,15 +644,15 @@ function useFieldMapModuleController() {
     scalarIdentity: scalar.data?.etag,
     scalarStatus: scalar.status,
   });
-  const metaSection = meta.data?.section ?? null;
+  const metaSection = meta.status === "ready" ? meta.data?.section ?? null : null;
   const sectionGeometry = useMemo(
     () => canonicalPlanar?.source.kind === "default"
-      ? withSectionStops(
-          resolvePlanarSectionGeometry(domain.data, canonicalPlanar.default_slice.plane),
+      ? resolvePlanarSectionGeometryFromMeta(
           metaSection,
+          canonicalPlanar.default_slice.plane,
         )
       : null,
-    [canonicalPlanar, domain.data, metaSection],
+    [canonicalPlanar, metaSection],
   );
   // Publish derived facts for keyboard commands and the Inspector (one owner).
   useEffect(() => {
@@ -741,12 +744,14 @@ function useFieldMapModuleController() {
     scalar.status === "ready" || scalar.status === "error" || !plan.requestScalar;
 
   return {
+    active,
+    sessionScopeKey: sessionRequestScopeKey(sessionIdentity),
+    sampleMeta: sample?.meta ?? null,
     canonicalPlanar,
     sampleError,
     sampleErrorSuperseded,
     sampleSettled,
     canonicalSampleError,
-    domainMeta: domain.data,
     evidence,
     evidenceStatus,
     mask,
@@ -781,9 +786,12 @@ function useFieldMapModuleController() {
 }
 
 export default function FieldMapModule() {
+  const captureRootRef = useRef<HTMLElement | null>(null);
   const {
+    active,
+    sessionScopeKey,
+    sampleMeta,
     canonicalPlanar,
-    domainMeta,
     evidence,
     mask,
     meshOverlay,
@@ -817,10 +825,17 @@ export default function FieldMapModule() {
     multislice,
     multisliceClientComponent,
   } = useFieldMapModuleController();
+  useEffect(() => {
+    if (!active || !sessionScopeKey) return;
+    return registerFieldMapCapture(sessionScopeKey, async () => {
+      const root = captureRootRef.current;
+      if (!root) throw new Error("Field Map PNG export failed: the active 2D view is not mounted.");
+      return captureVisibleFieldMapPng(root);
+    });
+  }, [active, sessionScopeKey]);
   const sectionStrip = sectionDefaultSlice ? (
     <PlanarSectionStrip
       defaultSlice={sectionDefaultSlice}
-      domain={domainMeta}
       objectLayers={objectLayers}
       section={metaSection}
       shownCoordinate={shownCoordinateM}
@@ -888,7 +903,7 @@ export default function FieldMapModule() {
     : null;
 
   return (
-    <section className={activeProfileSegment ? "fm-field-map fm-field-map--with-profile" : "fm-field-map"}>
+    <section ref={captureRootRef} className={activeProfileSegment ? "fm-field-map fm-field-map--with-profile" : "fm-field-map"}>
       <output
         aria-label="Planar field evidence"
         data-planar-component={evidence.component}
@@ -940,7 +955,12 @@ export default function FieldMapModule() {
         ) : null}
       </header>
       <div className="fm-field-map__stage">
-        {multislice ? (
+        {multislice && presentationPlanar.field_overlays?.length ? (
+          <div role="status" className="fm-field-map__diagnostic">
+            Combined object fields require a single shared section.
+            <button type="button" onClick={() => onPlanarPatch({ multislice: { ...multislice, enabled: false } })}>Use single section</button>
+          </div>
+        ) : multislice ? (
           <PlanarMultisliceGrid
             baseQuery={plan.query}
             clientComponent={multisliceClientComponent}
@@ -956,6 +976,37 @@ export default function FieldMapModule() {
             requestVectors={plan.requestVectors}
             source={plan.source}
           />
+        ) : (
+        (presentationPlanar.field_overlays?.length && sampleMeta ? (
+        <PlanarCompositionSurface
+          model={renderModel}
+          active={active}
+          baseMeta={sampleMeta}
+          baseQuery={plan.query}
+          source={plan.source}
+          profiles={presentationPlanar.field_overlays ?? []}
+          targetLabels={Object.fromEntries((visualization.data?.targets?.objects ?? []).map((target) => [`object:${target.scope_id}`, target.label]))}
+          vectorBudget={canonicalPlanar?.resolution.vector_budget ?? 2000}
+          renderBaseLegend={(shownModel, shownMeta) => presentationPlanar.viewport_colorbar_visible !== false ? (
+            <PlanarColorLegend targetLabel={shownMeta.scope_kind === "airbox" ? "Airbox" : undefined} colormap={shownModel.colormap} component={shownModel.component}
+              legendUnit={shownModel.display.legendUnit} probeScale={shownModel.display.probeScale}
+              quantityId={shownMeta.quantity_id} range={shownModel.range}
+              rangeState={shownModel.range ? "current" : "unavailable"} />
+          ) : null}
+          onInteraction={onInteraction}
+          onPin={(u, v) => setPinned([u, v])}
+          onProfileSegment={onProfileSegment}
+          onRenderEvidence={onRenderEvidence}
+          profileSegment={activeProfileSegment}
+          probeOverlay={presentationPlanar.layers.probes && probeData ? (
+            <PlanarPinnedProbe
+              axisState={pinnedAxisState}
+              legendUnit={renderModel.display.legendUnit}
+              probe={probeData}
+              probeScale={renderModel.display.probeScale}
+            />
+          ) : null}
+        />
         ) : (
         <PlanarSurface
           model={renderModel}
@@ -973,8 +1024,9 @@ export default function FieldMapModule() {
             />
           ) : null}
         />
+        ))
         )}
-        {presentationPlanar.viewport_colorbar_visible !== false && !multislice ? (
+        {presentationPlanar.viewport_colorbar_visible !== false && !multislice && !presentationPlanar.field_overlays?.length ? (
           <PlanarColorLegend
             colormap={renderModel.colormap ?? presentationPlanar.colormap}
             component={presentationPlanar.component}

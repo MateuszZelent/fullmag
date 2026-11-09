@@ -60,9 +60,20 @@ pub fn classify_region_realization_impact(
 ) -> RegionRealizationImpact {
     let mut impact = RegionRealizationImpact::default();
 
+    if before.study.requested_backend != after.study.requested_backend
+        || before.study.pbc != after.study.pbc
+        || fdm_grid_inputs(before) != fdm_grid_inputs(after)
+    {
+        impact.topology = true;
+        impact.membership = true;
+        impact.coefficients = true;
+        impact.initial_state = true;
+    }
+
     if before.universe != after.universe
         || before.study.universe_mesh != after.study.universe_mesh
         || before.study.shared_domain_mesh != after.study.shared_domain_mesh
+        || before.study.fem_domain_mesh != after.study.fem_domain_mesh
         || before.study.mesh_defaults != after.study.mesh_defaults
         || before.study.mesh_interfaces != after.study.mesh_interfaces
     {
@@ -97,9 +108,41 @@ pub fn classify_region_realization_impact(
         let before_object = before_objects[object_id];
         let after_object = after_objects[object_id];
         classify_object_transition(before_object, after_object, &mut impact);
+        if has_active_magnetic_support(before, before_object)
+            != has_active_magnetic_support(after, after_object)
+        {
+            impact.membership = true;
+            impact.coefficients = true;
+            impact.initial_state = true;
+        }
     }
 
     impact
+}
+
+fn fdm_grid_inputs(
+    scene: &SceneDocument,
+) -> (
+    Option<[f64; 3]>,
+    Option<&BTreeMap<String, crate::ScriptBuilderFdmGridState>>,
+) {
+    match scene.study.fdm.as_ref() {
+        Some(fdm) => (fdm.default_cell, Some(&fdm.per_object_grid)),
+        None => (None, None),
+    }
+}
+
+// Active magnetic material slots in ProblemIR require a finite positive Ms.
+// Compare support classes, so switching between two active materials only
+// invalidates coefficients.
+fn has_active_magnetic_support(scene: &SceneDocument, object: &SceneObject) -> bool {
+    object.role == "magnet"
+        && scene
+            .materials
+            .iter()
+            .find(|material| material.id == object.material_ref)
+            .and_then(|material| material.properties.ms)
+            .is_some_and(|ms| ms.is_finite() && ms > 0.0)
 }
 
 fn objects_by_id(objects: &[SceneObject]) -> BTreeMap<&str, &SceneObject> {
@@ -114,7 +157,11 @@ fn classify_object_transition(
     after: &SceneObject,
     impact: &mut RegionRealizationImpact,
 ) {
-    if before.geometry != after.geometry || before.transform != after.transform {
+    if before.geometry != after.geometry
+        || before.transform != after.transform
+        || before.role != after.role
+        || before.region_name != after.region_name
+    {
         // Geometry and object transforms change the occupied domain.  Mesh
         // topology, region membership, material coefficients and initial
         // state masks must not continue to advertise the previous domain.
@@ -253,6 +300,41 @@ mod tests {
     }
 
     #[test]
+    fn changing_primary_region_key_invalidates_realization_lanes() {
+        let before = scene();
+        let mut after = before.clone();
+        after.objects[0].region_name = Some("another-primary-region".into());
+        assert_eq!(
+            classify_region_realization_impact(&before, &after),
+            RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            }
+        );
+    }
+
+    #[test]
+    fn replacing_native_mesh_archive_advances_topology_only() {
+        let mut before = scene();
+        before.study.fem_domain_mesh = Some(crate::SceneFemDomainMeshReference {
+            source: "film.fullmag-mesh".into(),
+            sha256: "a".repeat(64),
+            build_requested: true,
+        });
+        let mut after = before.clone();
+        after.study.fem_domain_mesh.as_mut().unwrap().sha256 = "b".repeat(64);
+        assert_eq!(
+            classify_region_realization_impact(&before, &after),
+            RegionRealizationImpact {
+                topology: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
     fn frozen_spins_authoring_does_not_advance_region_realization_lanes() {
         let before = scene();
         let mut after = before.clone();
@@ -275,6 +357,42 @@ mod tests {
             classify_region_realization_impact(&before, &after),
             RegionRealizationImpact::default()
         );
+    }
+
+    #[test]
+    fn material_coefficients_and_active_support_have_different_impacts() {
+        let mut before = scene();
+        before.materials = serde_json::from_value(json!([
+            {"id":"mat", "name":"First", "properties":{"Ms":800000.0,"Aex":1e-11,"alpha":0.2}},
+            {"id":"mat-2", "name":"Second", "properties":{"Ms":600000.0,"Aex":1e-11,"alpha":0.1}}
+        ]))
+        .unwrap();
+
+        let mut reassigned = before.clone();
+        reassigned.objects[0].material_ref = "mat-2".into();
+        assert_eq!(
+            classify_region_realization_impact(&before, &reassigned),
+            RegionRealizationImpact {
+                coefficients: true,
+                ..Default::default()
+            }
+        );
+
+        let mut missing = before.clone();
+        missing.materials[0].properties.ms = None;
+        assert_eq!(
+            classify_region_realization_impact(&before, &missing),
+            RegionRealizationImpact {
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+                ..Default::default()
+            }
+        );
+
+        let mut nonmagnetic = before.clone();
+        nonmagnetic.objects[0].role = "sampling".into();
+        assert!(classify_region_realization_impact(&before, &nonmagnetic).topology);
     }
 
     #[test]

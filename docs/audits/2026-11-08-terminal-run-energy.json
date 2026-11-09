@@ -1,0 +1,792 @@
+{
+  "schema": "fullmag.terminal-run-energy-diagnosis.v1",
+  "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+  "development_attempt": "1dd24b9d7f154589bcfbce453fe16b66",
+  "published_artifact_types": [
+    "accepted_quantity_bundle",
+    "accepted_quantity_payload",
+    "accepted_scalar_history_index",
+    "accepted_scalar_history_page",
+    "accepted_terminal_completion",
+    "accepted_terminal_magnetization_layout",
+    "accepted_terminal_scalar_stats",
+    "observation_state_snapshot",
+    "observation_terminal_state",
+    "state",
+    "study_output_manifest"
+  ],
+  "stage_terminal_stats": [
+    {
+      "task_id": "task-fce0e940fbdb92088ea98ab18625f6f582d86c9bb2e8b4c4730162c7352635fb",
+      "step_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+      "attempt_id": "attempt-379e6ae869db4308a7e1f0b964a62f5f",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+          "accepted_step": 10,
+          "clock_digest": "sha256:83fd66341b4a5295acc63eccc7da97c5d0f534b8eb124ad03c4eecc7fd25059b",
+          "state_digest": "sha256:1baec2e9f65ae04a4ef848b3e89cc545618d8a9d8165ba49ca4aa43de2973191",
+          "domain_digest": "sha256:ae01b6c1a89d2d6f36845309394e6b98b60106faa543442c1925e7c4a815224c",
+          "plan_digest": "sha256:456a07e93a4b096a795f9f9e1b2a8809131928495cc13465406bd7d1b9f0d99e"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 10
+        }
+      },
+      "state_object_ref": "81d029cf642428f5379cd9c97ad0069db8d2d5f1890b9205d3c1f94dbc73a3ec",
+      "stats_object_ref": "09f1a6d51a72341688d023d516e84c45280ae6fa2ee26aa584db8538d3e7b87d",
+      "stats": {
+        "step": 10,
+        "time": 1e-12,
+        "dt": 1e-13,
+        "e_total": -3.8091117500317753e-23,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -3.8091117500317753e-23,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    },
+    {
+      "task_id": "task-4d0b7814b4213fe09408474ae07e991b8dfe9029d199f4f309d16c2ad40b6ed2",
+      "step_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+      "attempt_id": "attempt-94f3107b3ccd43cba83b71c5b7fcbda5",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+          "accepted_step": 1,
+          "clock_digest": "sha256:fda40a2c34f255ad8255ba2ef5c0d05b7746752d01d7ffd297a5169f87fdc656",
+          "state_digest": "sha256:a2ef45844bf74d3bfd1612e072b27baa53d9401d95e27998bdf9b64628d91c9b",
+          "domain_digest": "sha256:3758617fe9cb9e3d7545ed9916a2de156a5340ea3243375e2371c520fb76725d",
+          "plan_digest": "sha256:e665a90d260de700b9025acfc5c26a55899ae4795b024bb5a8f3f1329646ea3a"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 1
+        }
+      },
+      "state_object_ref": "c6a29da0c4acec17503e2e8916b9c51507205856c6392576261aeb8f8d2b4176",
+      "stats_object_ref": "624f106724b42f8309267af2928f001e6597b57aeb82fd0b17faa93ebb0cef6f",
+      "stats": {
+        "step": 1,
+        "time": 0.0,
+        "dt": 0.0,
+        "e_total": -4.441013650519438e-22,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -4.441013650519438e-22,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    },
+    {
+      "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+      "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+      "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+      "ownership_epoch": 1,
+      "source": {
+        "id": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "stage_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+          "accepted_step": 1,
+          "clock_digest": "sha256:fda40a2c34f255ad8255ba2ef5c0d05b7746752d01d7ffd297a5169f87fdc656",
+          "state_digest": "sha256:4fd1323aa6f33e2b93e8bd2d773a65dc62f48e8195644a9ec8f31ee91cf5cc6b",
+          "domain_digest": "sha256:ae7141b09e8c0523f34537bb6cd805a49045fbc20fca28e8e2d190408dd26622",
+          "plan_digest": "sha256:9c41697bc83f99b81bd377b3518569371012ec9b66cf1cbb7a23502dd9395608"
+        },
+        "generation": {
+          "runtime_epoch": 1,
+          "accepted_revision": 1
+        }
+      },
+      "state_object_ref": "025959e1bb047f9aa0d704f494d49db7954e353976c16a2782ca2855f55bba17",
+      "stats_object_ref": "63aa9d37ba948475e1ede9e85f66adad328d857b9cf079207b4ce2238b22282f",
+      "stats": {
+        "step": 1,
+        "time": 0.0,
+        "dt": 0.0,
+        "e_total": -8.45818845777564e-22,
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -8.45818845777564e-22,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0
+      },
+      "checks": {
+        "stats_hash": true,
+        "state_hash": true,
+        "task_artifact_pin": true,
+        "task_attempt": true,
+        "task_epoch": true
+      }
+    }
+  ],
+  "current_run": {
+    "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+    "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "revision": 8,
+    "status": "completed",
+    "started_at": "1794161957943",
+    "total_steps": 3,
+    "solver_time_seconds": 0.0,
+    "artifact_dir": "/opt/fullmag/runtime-control/local-live/current/runs/run-docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "requested_backend": "fdm",
+    "requested_device": "cpu",
+    "requested_precision": "double",
+    "requested_mode": "strict",
+    "resolved_backend": "fdm",
+    "resolved_device": "cpu",
+    "resolved_precision": "double",
+    "resolved_mode": "strict",
+    "resolved_engine_id": "fdm_cpu_reference",
+    "total_stages": 3
+  },
+  "stage_execution": {
+    "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+    "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+    "request_scope_epoch": "193a3ec9-97af-4e1e-8c31-8cbd731d386b:1",
+    "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+    "revision": 8,
+    "runtime_state": "completed",
+    "total_stages": 3,
+    "completed_stage_indexes": [
+      0,
+      1,
+      2
+    ],
+    "stage_statuses": [
+      "completed",
+      "completed",
+      "completed"
+    ],
+    "stages": [
+      {
+        "stage_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+        "index": 0,
+        "label": "Stage 1",
+        "status": "completed",
+        "started_at_unix_ms": 1794162040373,
+        "completed_step": 10,
+        "completed_at_unix_ms": 1794162045984,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 10.0,
+        "threshold": 10.0
+      },
+      {
+        "stage_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+        "index": 1,
+        "label": "Stage 2",
+        "status": "completed",
+        "started_at_unix_ms": 1794162055242,
+        "completed_step": 1,
+        "completed_at_unix_ms": 1794162058937,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 1.0,
+        "threshold": 1.0
+      },
+      {
+        "stage_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+        "index": 2,
+        "label": "Stage 3",
+        "status": "completed",
+        "started_at_unix_ms": 1794162064747,
+        "completed_step": 1,
+        "completed_at_unix_ms": 1794162067236,
+        "reason": "max_steps",
+        "converged": false,
+        "metric_kind": "steps",
+        "metric_unit": "1",
+        "metric_name": "steps",
+        "metric_value": 1.0,
+        "threshold": 1.0
+      }
+    ]
+  },
+  "scalar_tail": {
+    "revision": 4,
+    "total_rows": 1,
+    "returned_rows": 1,
+    "columns": [
+      "step",
+      "e_total"
+    ],
+    "rows": [
+      [
+        1.0,
+        -8.45818845777564e-22
+      ]
+    ],
+    "observation_frames": [
+      {
+        "observation_frame_id": "obs:docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943:d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6:1:1:0000000000000000",
+        "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+        "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+        "topology_revision": "1",
+        "source_step": 1,
+        "source_time_seconds": 0.0
+      }
+    ],
+    "series": {
+      "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+      "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+      "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+      "case_id": "default",
+      "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+      "ownership_epoch": 1
+    },
+    "current_observation": {
+      "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+      "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+      "request_scope_epoch": "193a3ec9-97af-4e1e-8c31-8cbd731d386b:1",
+      "source_step": 1,
+      "scalar_revision": 4
+    }
+  },
+  "verification": {
+    "red": {
+      "head": "e289f23477bd0527889f095f00d0fcc712660901",
+      "workflow": 42521774859,
+      "rust_job": 128856617404,
+      "projector_passed": 49,
+      "projector_failed": 1,
+      "failure": "accepted_terminal_stats_populate_run_energy_summary_without_typed_total_energy: final_time None instead of Some(0.0)"
+    },
+    "green": {
+      "head": "72cdcff730415d59bcdfd4fb5f06826e32450b81",
+      "workflows": {
+        "bootstrap": 42523229951,
+        "contract_guard": 42523230005,
+        "documentation": 42523229928
+      },
+      "all_workflows": "success",
+      "rust_job": 128861081999,
+      "verified_test_names": [
+        "accepted_terminal_stats_override_or_fill_typed_total_energy_summary",
+        "terminal_stats_pin_requires_the_exact_succeeded_attempt_and_final_state",
+        "relax_region_reset_round_trip_keeps_local_and_independent_owners_distinct",
+        "selected_b_rebinds_compatible_predecessor_before_validation_and_compiles_only_b",
+        "required_authored_initial_state_reaches_prepare_without_a_cas_input"
+      ]
+    },
+    "cold_composition_ci": {
+      "head": "a9a74ad4e688099d37a01ed30e8de4095b4b9c6b",
+      "bootstrap": 42528065717,
+      "rust_job": 128875974453,
+      "python_job": 128875974956,
+      "contract_guard": 42528065535,
+      "documentation": 42528065510,
+      "artifact_consumers": 42528065500,
+      "all_workflows": "success"
+    },
+    "restored_api": {
+      "schema": "fullmag.terminal-run-energy-restored-verification.v1",
+      "state": "passed",
+      "api_instance": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+      "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+      "diagnosis_sha256": "2a7d14451e486958614c4e80c850f4d4cb21acb9a265fbee32e23b232d02e897",
+      "source": {
+        "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+        "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+        "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+        "ownership_epoch": 1
+      },
+      "energies": {
+        "e_ex": -0.0,
+        "e_demag": 0.0,
+        "e_ext": -8.45818845777564e-22,
+        "e_ani": 0.0,
+        "e_dmi": 0.0,
+        "e_rotated_dmi": 0.0,
+        "e_total": -8.45818845777564e-22
+      },
+      "clock": {
+        "step": 1.0,
+        "time": 0.0
+      },
+      "current_run": {
+        "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+        "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+        "revision": 3,
+        "status": "completed",
+        "started_at": "1794161957943",
+        "total_steps": 3,
+        "solver_time_seconds": 0.0,
+        "final_exchange_energy": -0.0,
+        "final_demag_energy": 0.0,
+        "final_zeeman_energy": -8.45818845777564e-22,
+        "final_anisotropy_energy": 0.0,
+        "final_dmi_energy": 0.0,
+        "final_rotated_dmi_energy": 0.0,
+        "final_total_energy": -8.45818845777564e-22,
+        "artifact_dir": "/opt/fullmag/runtime-control/local-live/current/runs/run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+        "requested_backend": "fdm",
+        "requested_device": "cpu",
+        "requested_precision": "double",
+        "requested_mode": "strict",
+        "resolved_backend": "fdm",
+        "resolved_device": "cpu",
+        "resolved_precision": "double",
+        "resolved_mode": "strict",
+        "resolved_engine_id": "fdm_cpu_reference",
+        "total_stages": 3
+      },
+      "scalars": {
+        "revision": 2,
+        "total_rows": 1,
+        "returned_rows": 1,
+        "columns": [
+          "step",
+          "e_ex",
+          "e_demag",
+          "e_ext",
+          "e_ani",
+          "e_dmi",
+          "e_rotated_dmi",
+          "e_total"
+        ],
+        "rows": [
+          [
+            1.0,
+            -0.0,
+            0.0,
+            -8.45818845777564e-22,
+            0.0,
+            0.0,
+            0.0,
+            -8.45818845777564e-22
+          ]
+        ],
+        "observation_frames": [
+          {
+            "observation_frame_id": "obs:docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943:d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6:1:1:0000000000000000",
+            "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+            "domain_generation_id": "d974cc344adaaeaa05ad3bf9b16c725a4456b64042aa2b0cc7dd6785d0a3b0f6",
+            "topology_revision": "1",
+            "source_step": 1,
+            "source_time_seconds": 0.0
+          }
+        ],
+        "series": {
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "task_id": "task-993312d0ad8a52ef40bff84557fb5c118be240cd2553ffa5869aba969624a20b",
+          "step_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+          "case_id": "default",
+          "attempt_id": "attempt-96e04e341a9c44d996fd3f925f0f8005",
+          "ownership_epoch": 1
+        },
+        "current_observation": {
+          "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+          "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+          "request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+          "source_step": 1,
+          "scalar_revision": 2
+        }
+      },
+      "stages": {
+        "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+        "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+        "request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+        "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+        "revision": 3,
+        "runtime_state": "completed",
+        "total_stages": 3,
+        "completed_stage_indexes": [
+          0,
+          1,
+          2
+        ],
+        "stage_statuses": [
+          "completed",
+          "completed",
+          "completed"
+        ],
+        "stages": [
+          {
+            "stage_id": "script-execution-e350dba3f254339f85f2ca61b71e0e8afd60d66e2b8263351053e07e2ceb04e4",
+            "index": 0,
+            "label": "Stage 1",
+            "status": "completed",
+            "started_at_unix_ms": 1794162040373,
+            "completed_step": 10,
+            "completed_at_unix_ms": 1794162045984,
+            "reason": "max_steps",
+            "converged": false,
+            "metric_kind": "steps",
+            "metric_unit": "1",
+            "metric_name": "steps",
+            "metric_value": 10.0,
+            "threshold": 10.0
+          },
+          {
+            "stage_id": "script-execution-55002234aa5e96128c4ef142dfca0fc879fa0a8723bdda6dedf7b47ac276c740",
+            "index": 1,
+            "label": "Stage 2",
+            "status": "completed",
+            "started_at_unix_ms": 1794162055242,
+            "completed_step": 1,
+            "completed_at_unix_ms": 1794162058937,
+            "reason": "max_steps",
+            "converged": false,
+            "metric_kind": "steps",
+            "metric_unit": "1",
+            "metric_name": "steps",
+            "metric_value": 1.0,
+            "threshold": 1.0
+          },
+          {
+            "stage_id": "script-execution-1ca405331a424bad2e148af43870fae8cc1b87faf16727c11347538f754521c9",
+            "index": 2,
+            "label": "Stage 3",
+            "status": "completed",
+            "started_at_unix_ms": 1794162064747,
+            "completed_step": 1,
+            "completed_at_unix_ms": 1794162067236,
+            "reason": "max_steps",
+            "converged": false,
+            "metric_kind": "steps",
+            "metric_unit": "1",
+            "metric_name": "steps",
+            "metric_value": 1.0,
+            "threshold": 1.0
+          }
+        ]
+      }
+    },
+    "durable_store": {
+      "cas_blobs_verified": 6,
+      "cas_unchanged": true,
+      "run_pins_unchanged": {
+        "run_intent.json": true,
+        "run_catalog.json": true
+      },
+      "worker_exit_receipts": 3
+    },
+    "browser": {
+      "attempt": "d7adaac858a74c77b1dcee59b6e302a6",
+      "state": "passed",
+      "url": "http://127.0.0.1:3243/session/p22-three-relax-stages",
+      "source_head": "a9a74ad4e688099d37a01ed30e8de4095b4b9c6b",
+      "browser_gpu_mode": "swiftshader-webgl-requested",
+      "terminal_telemetry": {
+        "after_reload": {
+          "api": {
+            "api_instance_id": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+            "current_run_energy_j": -8.45818845777564e-22,
+            "current_run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "current_run_session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "observation_request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+            "observation_run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "observation_session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+            "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "run_status": "completed",
+            "scalar_energy_j": -8.45818845777564e-22,
+            "scalar_revision": 2,
+            "scalar_row_step": 1,
+            "scalar_window_revision": 2,
+            "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+            "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "session_summary_energy_j": -8.45818845777564e-22,
+            "source_step": 1,
+            "status_solver_steps": 1
+          },
+          "api_requests": [
+            {
+              "api_instance_header_sent": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+              "method": "GET",
+              "path": "/v2/sessions/current/status",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            },
+            {
+              "api_instance_header_sent": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+              "method": "GET",
+              "path": "/v2/sessions/current/simulation/runs/current",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            },
+            {
+              "api_instance_header_sent": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+              "method": "GET",
+              "path": "/v2/sessions/current/data/scalars?columns=step,e_total&limit=1&tail=true",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            }
+          ],
+          "canvas": {
+            "context_lost": false,
+            "context_type": "WebGL2RenderingContext",
+            "css_height": 495.59375,
+            "css_width": 617.234375,
+            "drawing_buffer_height": 495,
+            "drawing_buffer_width": 617,
+            "visible": true
+          },
+          "field": {
+            "field_state": "data-ready",
+            "label_visible": true,
+            "quantity_id": "m",
+            "solver_family": "fdm"
+          },
+          "footer": {
+            "energy": {
+              "detail": "Total",
+              "label": "Energy",
+              "subdetail": "Session summary",
+              "title": "Energy: -8.458188e-22 J\nTotal\nSession summary",
+              "unit": "J",
+              "value": "-8.458188e-22",
+              "visible": true
+            },
+            "step": {
+              "detail": "Latest step",
+              "label": "Step",
+              "title": "Step: 1 steps\nLatest step\nPhysical time not applicable",
+              "unit": "steps",
+              "value": "1",
+              "visible": true
+            }
+          }
+        },
+        "api_identity_preserved": true,
+        "api_observation_methods": [
+          "GET",
+          "GET",
+          "GET",
+          "GET",
+          "GET",
+          "GET"
+        ],
+        "before_reload": {
+          "api": {
+            "api_instance_id": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+            "current_run_energy_j": -8.45818845777564e-22,
+            "current_run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "current_run_session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "observation_request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+            "observation_run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "observation_session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "request_scope_epoch": "32519ce2-d866-4d4d-b4b2-1229a04ad321:1",
+            "run_id": "run-live-80341a3d441dbbd46cc6e5b7ea93ab3186d3620fbc60e8cf4c8472af0aad911f",
+            "run_status": "completed",
+            "scalar_energy_j": -8.45818845777564e-22,
+            "scalar_revision": 2,
+            "scalar_row_step": 1,
+            "scalar_window_revision": 2,
+            "session_epoch": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e@1794161957943",
+            "session_id": "docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e",
+            "session_summary_energy_j": -8.45818845777564e-22,
+            "source_step": 1,
+            "status_solver_steps": 1
+          },
+          "api_requests": [
+            {
+              "api_instance_header_sent": null,
+              "method": "GET",
+              "path": "/v2/sessions/current/status",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            },
+            {
+              "api_instance_header_sent": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+              "method": "GET",
+              "path": "/v2/sessions/current/simulation/runs/current",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            },
+            {
+              "api_instance_header_sent": "32519ce2-d866-4d4d-b4b2-1229a04ad321",
+              "method": "GET",
+              "path": "/v2/sessions/current/data/scalars?columns=step,e_total&limit=1&tail=true",
+              "session_scope_header_sent": "session=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e&epoch=docker-startup-1390860c22887740112cecb05b293a1f55b7d3af591ee1230055bd38826eee7e%401794161957943&request_scope_epoch=32519ce2-d866-4d4d-b4b2-1229a04ad321%3A1",
+              "status": 200
+            }
+          ],
+          "canvas": {
+            "context_lost": false,
+            "context_type": "WebGL2RenderingContext",
+            "css_height": 527.59375,
+            "css_width": 617.234375,
+            "drawing_buffer_height": 527,
+            "drawing_buffer_width": 617,
+            "visible": true
+          },
+          "field": {
+            "field_state": "data-ready",
+            "label_visible": true,
+            "quantity_id": "m",
+            "solver_family": "fdm"
+          },
+          "footer": {
+            "energy": {
+              "detail": "Total",
+              "label": "Energy",
+              "subdetail": "Session summary",
+              "title": "Energy: -8.458188e-22 J\nTotal\nSession summary",
+              "unit": "J",
+              "value": "-8.458188e-22",
+              "visible": true
+            },
+            "step": {
+              "detail": "Latest step",
+              "label": "Step",
+              "title": "Step: 1 steps\nLatest step\nPhysical time not applicable",
+              "unit": "steps",
+              "value": "1",
+              "visible": true
+            }
+          }
+        },
+        "energy_format": "en-US:maxFractionDigits=6;scientific:toExponential(6)",
+        "non_mutating_client_ack_requests": 1,
+        "prohibited_mutations": [],
+        "reload": {
+          "count": 1,
+          "method": "page.reload",
+          "path": "/session/p22-three-relax-stages",
+          "response_status": 200
+        },
+        "schema": "fullmag.docker-dev-terminal-telemetry.v1",
+        "state": "passed"
+      },
+      "canvas_before": {
+        "context_lost": false,
+        "context_type": "WebGL2RenderingContext",
+        "depth_bits": 24,
+        "drawing_buffer_height": 527,
+        "drawing_buffer_width": 617,
+        "height": 527,
+        "preserve_drawing_buffer": false,
+        "rect": {
+          "height": 527.59375,
+          "width": 617.234375
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "topology_transfers": [],
+        "vendor": "Google Inc. (Google)",
+        "width": 617
+      },
+      "canvas_after": {
+        "context_lost": false,
+        "context_type": "WebGL2RenderingContext",
+        "depth_bits": 24,
+        "drawing_buffer_height": 527,
+        "drawing_buffer_width": 617,
+        "height": 527,
+        "preserve_drawing_buffer": false,
+        "rect": {
+          "height": 527.59375,
+          "width": 617.234375
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+        "topology_transfers": [],
+        "vendor": "Google Inc. (Google)",
+        "width": 617
+      },
+      "errors": {
+        "console_errors": 0,
+        "page_errors": 0,
+        "http_errors": [],
+        "request_failures": 0
+      },
+      "prior_failed_probe": {
+        "attempt": "dbff0ae6ef644624913d46b4dd8f7ebe",
+        "state": "failed-confirmed",
+        "reason": "host published loopback timed out before browser; frontend cold compilation",
+        "recovery": "frontend warmed; fresh managed QA passed with unchanged limits and without restart"
+      }
+    },
+    "cold_source_preflight_review_fix": {
+      "test": "ColdStoredBudgetObservation.test_revalidation_rejects_changed_or_missing_original_preflight",
+      "red": "Changed and missing source preflight both failed assertRaises before the production fix.",
+      "green": {
+        "fixture_tests": 109,
+        "state": "passed"
+      },
+      "historical_preflight_raw_sha256": "42c23f825fcc46617e0cf7840e58a8858e7afbc75d4f2344ebc2a125997e59a6",
+      "historical_preflight_canonical_sha256": "1b614015e35a6f20d59f8df7dc871cadfe0bc399ccb1098a47ca8b0572247d47",
+      "historical_pins_rechecked": true,
+      "scope": "Host-side guard after the managed runtime/browser qualification; no additional native rebuild or replay."
+    }
+  },
+  "managed_restore": {
+    "original_development": "1dd24b9d7f154589bcfbce453fe16b66",
+    "terminal_stop": "081b3bfe4d374c24ac07a3c03a7c933f",
+    "terminal_stop_sha256": "ba58fa19b2f86f81e33888c7f6356582c98da874ee09c21af05288eee09231ac",
+    "recreate": "e00dd429be8e44efbe18fdf97af45321",
+    "development": "f1cdcd2cc70144c18e860ce8a44eddb8",
+    "development_state": "failed-confirmed",
+    "compile": "completed; runtime refused group ledger policy after memory budget changed from 32 to 64 GiB",
+    "diagnostic_backend": "a402e9107065ec2be4273e77df2fbd6f9d041e56506082e20a872c3dd2481609",
+    "cold_stop": "a7315ac2d59b443697879b5c601ae0bb",
+    "cold_stop_state": "stopped-confirmed",
+    "cold_journal_relative": "verification/cold-stored-budget-stop-a402e9107065ec2be4273e77df2fbd6f9d041e56506082e20a872c3dd2481609.json",
+    "cold_journal_sha256": "4d689224414637cc372156589af63a66b2c46579a02e1edd5e05fad4bf04a6fb",
+    "restore_budget": {
+      "cpus": 8,
+      "memory_bytes": 34359738368
+    },
+    "ledger_sha256": "576a0219f388d72d7ba6a4e0299a7cf7c7bf7ca3be5b3abd13853a9fce8f641b",
+    "active_reservations": 0,
+    "remaining": "Pierwsza próba odtworzenia zachowana jako failed-confirmed; dalsza udana próba i dowody poniżej.",
+    "successful_restore": {
+      "source_head": "a9a74ad4e688099d37a01ed30e8de4095b4b9c6b",
+      "recreate_attempt": "121c7ce76ad640cbb32a14decb61818a",
+      "development_attempt": "1c4f1dba99fa4ac8b50528a9473adb7c",
+      "state": "succeeded",
+      "config_sha256": "df329b4b2c0c7da0ecaf58280d628c2078a11382ee660cb1ca68700077c5f9a7",
+      "terminal_sha256": "a86dbed24221f9b5af4d19f76d427118616188597e9ca5a16fdf7e5a67cd6861",
+      "backend_id": "18fd35319a90569c854b921d26acf8f201adbef0b6dfd8981ae04f88b14fa7e5",
+      "frontend_id": "15d5234e4d721b8d314f55b1c8fcfd4c650f827c731581bf479f06523b23cf56",
+      "image_id": "sha256:fe0d90beebb86bc46f1c19ab1fb5c2a5cd3b8e84839dc52b13c22f669ee70a7f",
+      "backend_budget": {
+        "cpus": 8,
+        "memory_gib": 32
+      },
+      "frontend_budget": {
+        "cpus": 2,
+        "memory_gib": 8
+      },
+      "observation_proof_sha256": "7191a41400f12ce6eb5f31bd29727b17b0712bdbf69ae301e39d686cf49396a7",
+      "new_solve_replayed": false
+    }
+  },
+  "qualification_limits": [
+    "Odbiór dotyczy projekcji energii i odzyskania tego samego ukończonego Study FDM CPU/double.",
+    "Trzy krótkie etapy kończą się max_steps, converged=false; to nie dowodzi konwergencji naukowej.",
+    "WebGL2 używa SwiftShader; nie jest to dowód wykonania solvera GPU.",
+    "S46 ma test IR, ale reset regionu, disable/enable i eksport/import przez UI pozostają NOT VERIFIED.",
+    "Pełna macierz S01-S46, FDM GPU, FEM CPU/GPU i multilayer pozostaje otwarta.",
+    "Chroniona grupa użytkownika na 3242 nie była restartowana i nie otrzymała nowych Solve/Stop."
+  ]
+}

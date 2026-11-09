@@ -18,6 +18,8 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/demag_poisson/demag_kernels.hpp"
 #include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -26,28 +28,95 @@
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 #include <HYPRE_utilities.h>
+#include <HYPRE_parcsr_ls.h>
+#if FULLMAG_HAS_CUDA_RUNTIME
+#include <HYPRE_parcsr_mv.h>
+#endif
 #endif
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace fullmag::fem {
 
 namespace {
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
+bool read_hypre_demag_amg_coarse_relax_type(
+    HYPRE_Solver amgraw,
+    HYPRE_Int &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+    const HYPRE_Int prior_status = HYPRE_GetError();
+    if ((prior_status & ~HYPRE_ERROR_CONV) != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType found pre-existing HYPRE status " +
+            std::to_string(static_cast<int>(prior_status));
+        return false;
+    }
+    HYPRE_Int observed_relax_type = -1;
+    const HYPRE_Int status =
+        HYPRE_BoomerAMGGetCycleRelaxType(amgraw, &observed_relax_type, 3);
+    const HYPRE_Int current_status = HYPRE_GetError();
+    const HYPRE_Int new_status = current_status & ~prior_status;
+    const HYPRE_Int unexpected_status = status & ~(prior_status & HYPRE_ERROR_CONV);
+    if (unexpected_status != 0 || new_status != 0) {
+        error = "HYPRE_BoomerAMGGetCycleRelaxType failed for GPU Poisson demag coarse cycle: status=" +
+            std::to_string(static_cast<int>(status)) +
+            " current=" + std::to_string(static_cast<int>(current_status)) +
+            " new=" + std::to_string(static_cast<int>(new_status));
+        return false;
+    }
+    relax_type = observed_relax_type;
+    return true;
+}
+
+bool validate_demag_amg_coarse_relax_type(HYPRE_Solver amgraw, std::string &error)
+{
+    HYPRE_Int relax_type = -1;
+    if (!read_hypre_demag_amg_coarse_relax_type(amgraw, relax_type, error)) {
+        return false;
+    }
+    if (relax_type != 18) {
+        error =
+            "GPU Poisson demag AMG coarse cycle must use relax type 18; "
+            "HYPRE reports " +
+            std::to_string(static_cast<int>(relax_type));
+        return false;
+    }
+    return true;
+}
+
+bool configure_demag_amg(
+    mfem::HypreBoomerAMG &amg,
+    const Context &ctx,
+    std::string &error)
 {
     const auto &policy = ctx.demag.amg_policy;
     amg.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
     amg.SetRelaxType(policy.relax_type);
+    const HYPRE_Solver amgraw = amg;
+    const HYPRE_Int cycle_relax_status =
+        HYPRE_BoomerAMGSetCycleRelaxType(amgraw, 18, 3);
+    if (cycle_relax_status != 0) {
+        error =
+            "HYPRE_BoomerAMGSetCycleRelaxType failed for GPU Poisson demag "
+            "coarse cycle with status " +
+            std::to_string(static_cast<int>(cycle_relax_status));
+        return false;
+    }
+    if (!validate_demag_amg_coarse_relax_type(amgraw, error)) {
+        return false;
+    }
     amg.SetCoarsening(policy.coarsening);
     amg.SetInterpolation(policy.interpolation);
     amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
     if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
+    return true;
 }
 
 bool configure_demag_poisson_hypre_preconditioner(
@@ -62,7 +131,9 @@ bool configure_demag_poisson_hypre_preconditioner(
     switch (ctx.demag.solver.preconditioner) {
     case FULLMAG_FEM_PRECONDITIONER_AMG: {
         auto amg = std::make_unique<mfem::HypreBoomerAMG>(*workspace.A_par);
-        configure_demag_amg(*amg, ctx);
+        if (!configure_demag_amg(*amg, ctx, error)) {
+            return false;
+        }
         workspace.preconditioner = std::move(amg);
         return true;
     }
@@ -137,6 +208,45 @@ bool configure_demag_poisson_hypre_solver(
 
 } // namespace
 
+bool read_device_demag_amg_coarse_relax_type(
+    const Context &ctx,
+    std::int32_t &relax_type,
+    std::string &error)
+{
+    relax_type = -1;
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!ctx.gpu_state.device.lifecycle.allocated ||
+        ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+        ctx.demag.solver.preconditioner != FULLMAG_FEM_PRECONDITIONER_AMG ||
+        !ctx.poisson_demag.gpu_workspace_ready) {
+        return true;
+    }
+    const GpuDemagPoissonWorkspace *workspace = workspace_ptr(ctx);
+    if (workspace == nullptr || !workspace->ready || workspace->preconditioner == nullptr) {
+        error = "GPU Poisson demag AMG context is marked initialized but has no "
+            "ready Hypre preconditioner";
+        return false;
+    }
+    const auto *amg = dynamic_cast<const mfem::HypreBoomerAMG *>(
+        workspace->preconditioner.get());
+    if (amg == nullptr) {
+        error = "GPU Poisson demag AMG context is marked ready with a non-AMG "
+            "Hypre preconditioner";
+        return false;
+    }
+    HYPRE_Int observed_relax_type = -1;
+    if (!read_hypre_demag_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*amg), observed_relax_type, error)) {
+        return false;
+    }
+    relax_type = static_cast<std::int32_t>(observed_relax_type);
+#else
+    (void)ctx;
+    (void)error;
+#endif
+    return true;
+}
+
 bool initialize_demag_poisson_hypre_device_solver(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
@@ -200,6 +310,11 @@ bool initialize_demag_poisson_hypre_device_solver(
     }
     const auto setup_start = FemSteadyClock::now();
     workspace.solver->Setup(*workspace.b_par, *workspace.x_par);
+    if (ctx.demag.solver.preconditioner == FULLMAG_FEM_PRECONDITIONER_AMG &&
+        !validate_demag_amg_coarse_relax_type(
+            static_cast<HYPRE_Solver>(*workspace.preconditioner), error)) {
+        return false;
+    }
     ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_start);
     workspace.solver_setup_count += 1;
     ctx.poisson_demag.setup_count = workspace.solver_setup_count;
@@ -346,7 +461,9 @@ bool validate_demag_poisson_hypre_device_solve(
     read_demag_poisson_hypre_solver_stats(
         ctx, workspace, iterations, residual, solver_reported_converged);
 
-    constexpr bool force_independent_validation = false;
+    // HYPRE CG can report a preconditioned residual. Certify the actual
+    // candidate independently, including solver-reported successes.
+    constexpr bool force_independent_validation = true;
     const auto validation_needs = resolve_hypre_residual_validation_needs(
         solver_reported_converged,
         ctx.demag.solver.has_absolute_tolerance != 0,
@@ -354,29 +471,97 @@ bool validate_demag_poisson_hypre_device_solve(
     bool residual_independently_certified = false;
     double absolute_residual = 0.0;
     double rhs_norm = 0.0;
-    if (validation_needs.rhs_norm && workspace.b_par != nullptr) {
-        rhs_norm = workspace.b_par->Norml2();
+    if (validation_needs.rhs_norm) {
+#if FULLMAG_HAS_CUDA_RUNTIME
+        const auto &interop = workspace.stream_interop;
+        if (!interop.ready || interop.hypre_stream == nullptr ||
+            workspace.b_par == nullptr || workspace.residual == nullptr ||
+            workspace.b_par->Size() <= 0 ||
+            workspace.b_par->Size() != workspace.residual->Size() ||
+            (validation_needs.independent_residual &&
+             (workspace.A_par == nullptr || workspace.x_par == nullptr))) {
+            error = "GPU Poisson demag residual validation requires initialized device vectors and HYPRE stream";
+            return false;
+        }
+        const cudaStream_t stream = interop.hypre_stream;
+        const auto reject_queued_work = [&](std::string message) {
+            // The stage may clear the candidate on the Fullmag stream after
+            // failure. A rejected matvec can still have queued HYPRE work.
+            const auto status = cudaStreamSynchronize(stream);
+            error = std::move(message);
+            if (status != cudaSuccess) {
+                error += std::string("; synchronize HYPRE validation stream failed: ") +
+                         cudaGetErrorString(status);
+            }
+            return false;
+        };
+
+        const int rows = workspace.b_par->Size();
+        const auto memory_class = mfem::GetHypreMemoryClass();
+        workspace.b_par->HypreRead();
+        const double *rhs_data = workspace.b_par->GetMemory().Read(memory_class, rows);
+        // The owned residual vector is private to validation. Its first
+        // entry can hold the scalar before the matvec overwrites the vector.
+        workspace.residual->HypreWrite();
+        double *scratch = workspace.residual->GetMemory().Write(memory_class, rows);
+        const auto read_validation_norm = [&](const double *values, const char *name,
+                                              double &norm) {
+            const auto status = fullmag_cuda_demag_validation_norm(
+                values, rows, scratch, norm, stream);
+            if (status != cudaSuccess) {
+                return reject_queued_work(std::string("GPU Poisson demag ") + name +
+                                          " norm failed: " + cudaGetErrorString(status));
+            }
+            record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(norm));
+            GpuPerformanceCounterDelta readback_delta{};
+            readback_delta.control_fences = 1;
+            readback_delta.control_d2h_bytes = sizeof(norm);
+            gpu_performance_note(ctx.gpu_state.performance_counters, readback_delta);
+            if (!std::isfinite(norm)) {
+                error = std::string("GPU Poisson demag ") + name + " norm is nonfinite";
+                return false;
+            }
+            return true;
+        };
+        if (!read_validation_norm(rhs_data, "RHS", rhs_norm)) {
+            return false;
+        }
         GpuPerformanceCounterDelta performance_delta{};
         performance_delta.demag_rhs_norm_evaluations = 1;
         performance_delta.demag_rhs_norm_sum = rhs_norm;
         gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
-    }
-    if (validation_needs.independent_residual &&
-        workspace.A_par != nullptr &&
-        workspace.x_par != nullptr &&
-        workspace.b_par != nullptr &&
-        workspace.residual != nullptr) {
-        workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
-#if FULLMAG_HAS_CUDA_RUNTIME
-        if (!mfem_default_stream_wait_for_hypre_validation(
-                workspace.stream_interop, error)) {
-            return false;
+
+        if (validation_needs.independent_residual) {
+            const HYPRE_Int prior_status = HYPRE_GetError();
+            if ((prior_status & ~HYPRE_ERROR_CONV) != 0) {
+                error = "GPU Poisson demag residual validation found HYPRE status " +
+                        std::to_string(prior_status);
+                return false;
+            }
+            const HYPRE_Int matvec_status =
+                workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
+            if (matvec_status != 0) {
+                return reject_queued_work("GPU Poisson demag residual matvec failed: HYPRE status " +
+                                          std::to_string(matvec_status));
+            }
+            const HYPRE_Int axpy_status = HYPRE_ParVectorAxpy(
+                -1.0, *workspace.b_par, *workspace.residual);
+            // AXPY returns the sticky HYPRE status, including an earlier
+            // nonconvergence bit. Certification must still detect new errors.
+            if ((axpy_status & ~(prior_status & HYPRE_ERROR_CONV)) != 0) {
+                return reject_queued_work("GPU Poisson demag residual AXPY failed: HYPRE status " +
+                                          std::to_string(axpy_status));
+            }
+            if (!read_validation_norm(scratch, "residual", absolute_residual)) {
+                return false;
+            }
+            residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
+            residual_independently_certified = true;
         }
+#else
+        error = "GPU Poisson demag residual validation requires CUDA stream interop";
+        return false;
 #endif
-        workspace.residual->Add(-1.0, *workspace.b_par);
-        absolute_residual = workspace.residual->Norml2();
-        residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
-        residual_independently_certified = std::isfinite(absolute_residual);
     }
 
     DemagLinearSolveResult result;

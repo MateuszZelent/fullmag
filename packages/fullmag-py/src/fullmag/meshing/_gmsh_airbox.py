@@ -1846,7 +1846,7 @@ def _extract_airbox_mesh_data(
             marker = 1 if vol_tag in mag_set else 0
             reindexed = reindex[tets.ravel()].reshape(-1, 4)
             all_elements.append(reindexed)
-            all_markers.append(np.full(n_tets, marker, dtype=np.int32))
+            all_markers.append(np.full(n_tets, marker, dtype=np.uint32))
 
     if not all_elements:
         raise RuntimeError("air-box mesh generation produced zero tetrahedra")
@@ -1872,14 +1872,14 @@ def _extract_airbox_mesh_data(
             # Check if this surface belongs to the outer boundary physical group
             phys_groups = gmsh.model.getPhysicalGroupsForEntity(2, surf_tag)
             bm = boundary_marker if boundary_marker in phys_groups else 1
-            all_bnd_markers.append(np.full(n_tris, bm, dtype=np.int32))
+            all_bnd_markers.append(np.full(n_tris, bm, dtype=np.uint32))
 
     if all_bnd_faces:
         boundary_faces = np.concatenate(all_bnd_faces, axis=0)
         boundary_markers_arr = np.concatenate(all_bnd_markers, axis=0)
     else:
         boundary_faces = np.zeros((0, 3), dtype=np.int32)
-        boundary_markers_arr = np.zeros(0, dtype=np.int32)
+        boundary_markers_arr = np.zeros(0, dtype=np.uint32)
 
     return MeshData.from_legacy_tet4(
         nodes=nodes,
