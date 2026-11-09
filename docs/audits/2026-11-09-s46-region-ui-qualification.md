@@ -780,3 +780,52 @@ Pełne session tests oraz kolejne filtry FMRM/staged bridge/replay nie są
 potwierdzone tym wynikiem; przerwany blok nie wykonał ich po pierwszej odmowie.
 Poprawka testu wymaga ponowienia CI. S46, aktualne cykle UI i pozostałe bramki
 planu pozostają otwarte.
+
+
+## Czysty build 139 i rzeczywisty błąd startu po Grid
+
+Czysty DEV `ffb83ff1cf064550b7e72c8e7872cd8d`, aplikacja i helper
+`139a85fd4a4e4f7496ece032c40d128eb3f9d358`, zakończył się succeeded.
+Config: `c1dfe5c881d81b5c5ddb7ac973623456de53292bf480d7ee015a45f0ec444f19`;
+source snapshot: `f6d78185395068abb9896516f880a5b5868a4e54def34d591920b35ccfb5679b`;
+terminal SHA: `3ea38df59be57b2633e7218d9c32bbe96bbfcf3153c73827353236bfd206d1b6`.
+API `0d69717d-b9b9-4ac6-ab08-f926788658d9` potwierdziło health/sessions 200
+z pustym stanem, następnie workspace/home 200 po warmup.
+
+Rzeczywisty profil `s46-local-export`, QA `a8d2464823da467ebdaf1336b00b80a5`,
+zakończył się failed-confirmed (exit 2). Kliknięta ścieżka produktu
+Build + Study ukończyła dokładny Grid `fm-b9682a8d-01ff-42c6-b36e-54921207e9a0`
+w 56 789 ms; następny, pojedynczy POST Solve otrzymał HTTP 409:
+`command_revision precondition failed: expected 1, got 2`.
+Raport nie zawiera timeoutów odczytu ani awarii proxy. To nie jest kwalifikowany
+S46 export i nie wolno użyć tej próby jako rodzica importu.
+
+Źródłowa przyczyna: UI buduje admission `command_revision` z długości listy
+kolejki, podczas gdy API sprawdza `command_ledger_revisions.commands_revision`.
+Poprawny licznik już publikuje `LiveStatusResource.resources.commands_revision`.
+`CommandQueueStatusResource.revision` ma semantykę kolejki, odmienną od rewizji
+admission w ścieżce RAM; nie jest uniwersalnym zamiennikiem. Poprawka produktu
+oraz niezależnego weryfikatora musi używać jawnego licznika statusu, zachować
+science pins i odmowę przy rzeczywiście nieaktualnym żądaniu. Nie wolno
+podmieniać payloadu w proxy ani automatycznie ponawiać Solve.
+
+Readback trwałego stanu potwierdził manual-held, wszystkie trzy taski accepted,
+brak `start_release.json` i zero `worker_execution_started`. Solver nie wystartował.
+Zarządzane zatrzymanie `70ac4b1436f141c5ac29a91528198f54` zakończyło się succeeded;
+inwentarz po zatrzymaniu potwierdził niezmienione 1962 pliki / 93 815 061 B,
+SHA baseline `8e5c38d2efd40a5ba4abd96a4e58dda45500f85037d57f1bcdc7622dceda0252`.
+Nie powtórzono odrzuconego Compute i nie zmieniano chronionej grupy 3242.
+
+CI 139: wszystkie workflow poza bootstrap zakończyły się success. W bootstrap
+przeszły kroki publikacji/read-model, pełne session reachability/archive,
+start-gate oraz frontend typecheck/lint/tests/build i browser fixture.
+Job Rust `129203434516` zatrzymał się dopiero podczas kompilacji wszystkich
+binarek dla kroku legacy Results. E0433 wskazał nowy test
+`staged_publication_revalidation_conflict_never_commits_an_intent` w
+`run_intent_persistence.rs`: odwołanie `crate::error::ApiError` nie istnieje
+w osobnej binarce schedulera, która również kompiluje ten współdzielony moduł.
+Nie jest to dowód awarii endpointu legacy Results: test endpointu nie wystartował.
+Test adaptera zmieniono na dokładne przekazanie błędu walidacji wywołującego,
+bez zależności HTTP; asercja braku RunIntent pozostaje. Ta korekta wymaga
+kompilacji testów wszystkich konsumentów i nowego CI. Dalsze kroki przerwanego
+joba nie są potwierdzone. Pełny odbiór P01–P22/S01–S46 pozostaje otwarty.

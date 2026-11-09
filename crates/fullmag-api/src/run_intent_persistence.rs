@@ -2692,9 +2692,11 @@ mod tests {
         let (definition, study, catalog, intent) = immutable_run_publication_fixture();
         let prepared = prepare_owned_run_intent_commit(intent, &definition, &study, &catalog, BTreeMap::new()).unwrap();
         let result = with_staged_prepared_run_intent(&store, &prepared, NonZeroUsize::new(2).unwrap(), |_commit| {
-            Ok(Err::<SubmitReceipt, _>(crate::error::ApiError::conflict("prepared scene changed")))
+            // This adapter is shared by HTTP and scheduler binaries; preserve
+            // the caller's typed rejection without depending on an HTTP module.
+            Ok(Err::<SubmitReceipt, _>("prepared scene changed"))
         }).unwrap();
-        assert_eq!(result.unwrap_err().status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(result.unwrap_err(), "prepared scene changed");
         assert!(store.read_run_intent(prepared.run_id.as_str()).unwrap().is_none());
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
