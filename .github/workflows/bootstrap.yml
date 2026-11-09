@@ -266,6 +266,15 @@ jobs:
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_preserves_analysis_definitions_and_opaque_settings ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
 
+      - name: Verify first FDM preparation source capture
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 16777216
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture -- --exact --nocapture | tee "$RUNNER_TEMP/first-fdm-source-capture.log"
+          grep -F "test live_accepted_execution::tests::imported_three_relax_scene_survives_generated_source_capture ... ok" "$RUNNER_TEMP/first-fdm-source-capture.log"
+
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:

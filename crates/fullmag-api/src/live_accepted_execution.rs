@@ -3931,6 +3931,28 @@ mod tests {
     }
 
     #[test]
+    fn imported_three_relax_scene_survives_generated_source_capture() {
+        // Regression fixture from the first Grid request in S46 (ad1688).
+        // Exercise source preparation only: no RunIntent, meshing or Solve.
+        let authored: fullmag_authoring::SceneDocument = serde_json::from_str(include_str!(
+            "test_fixtures/s46_first_grid_import_scene.json"
+        )).unwrap();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..").canonicalize().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let generated = crate::script::render_accepted_scene_source_bounded(
+            &root, workspace.path(), &authored,
+        ).unwrap();
+        let capture = crate::script::capture_startup_script_scene(
+            &root, workspace.path(), &generated.path,
+        ).unwrap();
+        let captured: fullmag_authoring::SceneDocument = serde_json::from_value(
+            capture.scene.expect("generated source must export a scene"),
+        ).unwrap();
+        super::validate_generated_scene_round_trip(&authored, &captured).unwrap();
+    }
+
+    #[test]
     fn generated_source_projection_keeps_revision_out_of_physics_without_weakening_commit_fence() {
         let authored = ui_source_scene();
         let mut captured = authored.clone();

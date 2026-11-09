@@ -1,0 +1,443 @@
+{
+  "version": "scene.v2",
+  "revision": 1,
+  "scene": {
+    "id": "scene",
+    "name": "P22 three Relax stages",
+    "source_of_truth": "repo_head",
+    "authoring_schema": "mesh-first-fem.v1"
+  },
+  "universe": {
+    "center": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "mode": "manual",
+    "padding": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "size": [
+      8e-09,
+      4e-09,
+      2e-09
+    ]
+  },
+  "objects": [
+    {
+      "id": "film",
+      "name": "film",
+      "role": "magnet",
+      "geometry": {
+        "bounds_max": [
+          4e-09,
+          2e-09,
+          1e-09
+        ],
+        "bounds_min": [
+          -4e-09,
+          -2e-09,
+          -1e-09
+        ],
+        "geometry_kind": "Box",
+        "geometry_params": {
+          "size": [
+            8e-09,
+            4e-09,
+            2e-09
+          ]
+        }
+      },
+      "transform": {
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "material_ref": "mat:film",
+      "region_name": "film",
+      "magnetization_ref": "mag:film",
+      "physics_stack": [
+        {
+          "enabled": true,
+          "kind": "exchange"
+        },
+        {
+          "enabled": false,
+          "kind": "demag"
+        }
+      ],
+      "regions": [
+        {
+          "region_id": "left-half",
+          "owner_object": "film",
+          "name": "left half",
+          "shape": {
+            "kind": "box",
+            "size": [
+              4e-09,
+              4e-09,
+              2e-09
+            ],
+            "center": [
+              -2e-09,
+              0.0,
+              0.0
+            ]
+          },
+          "frame": "object",
+          "enabled": true,
+          "priority": 0,
+          "realization_policy": "inherit"
+        }
+      ],
+      "allocated_region_ids": [
+        "left-half"
+      ],
+      "visible": true,
+      "locked": false
+    }
+  ],
+  "materials": [
+    {
+      "id": "mat:film",
+      "name": "film material",
+      "properties": {
+        "Aex": 1.3e-11,
+        "Ms": 800000.0,
+        "alpha": 0.5
+      }
+    }
+  ],
+  "magnetization_assets": [
+    {
+      "id": "mag:film",
+      "kind": "preset_texture",
+      "mapping": {
+        "clamp_mode": "none",
+        "projection": "object_local",
+        "space": "object"
+      },
+      "name": "film magnetization",
+      "preset_kind": "uniform",
+      "preset_params": {
+        "direction": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      "preset_version": 2,
+      "texture_transform": {
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "ui_label": "Uniform"
+    }
+  ],
+  "field_drives": {},
+  "monitors": {},
+  "current_modules": {},
+  "study": {
+    "backend": "fdm",
+    "demag_enabled": false,
+    "exchange_enabled": true,
+    "external_field": [
+      0.0,
+      0.1,
+      0.0
+    ],
+    "fdm": {
+      "default_cell": [
+        2e-09,
+        2e-09,
+        2e-09
+      ]
+    },
+    "mesh_defaults": {
+      "adaptive_convergence_metric": "energy_delta",
+      "adaptive_enabled": false,
+      "adaptive_error_tolerance": "",
+      "adaptive_h_max": "",
+      "adaptive_h_min": "",
+      "adaptive_indicator": "geometric_only",
+      "adaptive_max_passes": 2,
+      "adaptive_policy": "auto",
+      "adaptive_target_quantity": "auto",
+      "adaptive_theta": 0.3,
+      "algorithm_2d": 6,
+      "algorithm_3d": 1,
+      "calibrate_for": "",
+      "compute_quality": true,
+      "curvature_factor": "",
+      "growth_rate": "",
+      "hmax": "",
+      "hmin": "",
+      "interface_hmax": "",
+      "interface_thickness": "",
+      "maximum_element_growth_rate": "",
+      "maximum_element_size": "",
+      "minimum_element_size": "",
+      "narrow_region_resolution": "",
+      "narrow_regions": 0,
+      "optimize": "",
+      "optimize_iterations": 1,
+      "per_element_quality": true,
+      "resolved_growth_rate": "",
+      "size_factor": 1.0,
+      "size_from_curvature": 0,
+      "size_preset": "",
+      "smoothing_steps": 1,
+      "transition_distance": "",
+      "transition_growth": ""
+    },
+    "output_storage": {
+      "cleanup": "on_success",
+      "data_format": "zarr",
+      "existing_output": "timestamp",
+      "output_dir": "/state/runs/projects/p22-s46-local_2026-11-09_053455/results.zarr",
+      "temp_dir": "/state/runs/projects/.fullmag-tmp"
+    },
+    "parallel_execution": {
+      "max_cpu_percent": 90.0,
+      "max_memory_percent": 80.0,
+      "max_workers": null,
+      "memory_reserve_bytes": 1073741824,
+      "mode": "serial",
+      "threads_per_worker": 1
+    },
+    "pbc": null,
+    "requested_backend": "fdm",
+    "requested_device": "cpu",
+    "requested_mode": "strict",
+    "requested_precision": "double",
+    "shared_domain_mesh": {
+      "adaptive_convergence_metric": "energy_delta",
+      "adaptive_enabled": false,
+      "adaptive_error_tolerance": "",
+      "adaptive_h_max": "",
+      "adaptive_h_min": "",
+      "adaptive_indicator": "geometric_only",
+      "adaptive_max_passes": 2,
+      "adaptive_policy": "auto",
+      "adaptive_target_quantity": "auto",
+      "adaptive_theta": 0.3,
+      "algorithm_2d": 6,
+      "algorithm_3d": 1,
+      "calibrate_for": "",
+      "compute_quality": true,
+      "curvature_factor": "",
+      "growth_rate": "",
+      "hmax": "",
+      "hmin": "",
+      "interface_hmax": "",
+      "interface_thickness": "",
+      "maximum_element_growth_rate": "",
+      "maximum_element_size": "",
+      "minimum_element_size": "",
+      "narrow_region_resolution": "",
+      "narrow_regions": 0,
+      "optimize": "",
+      "optimize_iterations": 1,
+      "per_element_quality": true,
+      "resolved_growth_rate": "",
+      "size_factor": 1.0,
+      "size_from_curvature": 0,
+      "size_preset": "",
+      "smoothing_steps": 1,
+      "transition_distance": "",
+      "transition_growth": ""
+    },
+    "solver": {
+      "demag_interval_s": "",
+      "dt_initial": "",
+      "dt_max": "",
+      "dt_min": "",
+      "energy_tolerance": "",
+      "fixed_timestep": "1e-13",
+      "gamma": "233728.481992",
+      "integrator": "auto",
+      "max_err": "",
+      "max_relax_steps": "10",
+      "relax_algorithm": "llg_overdamped",
+      "torque_tolerance": "0.0001"
+    },
+    "stages": [
+      {
+        "algorithm": "llg_overdamped",
+        "demag_interval_s": "",
+        "eigen_damping_policy": "",
+        "eigen_equilibrium_source": "",
+        "eigen_include_demag": false,
+        "eigen_normalization": "",
+        "eigen_spin_wave_bc": "",
+        "eigen_target": "",
+        "entrypoint_kind": "flat_relax",
+        "fixed_timestep": 1e-13,
+        "integrator": "rk23",
+        "kind": "relax",
+        "max_relaxation_time_s": "",
+        "max_steps": 10,
+        "stage_id": "relax-a",
+        "torque_tolerance": 0.0001
+      },
+      {
+        "algorithm": "projected_gradient_bb",
+        "eigen_damping_policy": "",
+        "eigen_equilibrium_source": "",
+        "eigen_include_demag": false,
+        "eigen_normalization": "",
+        "eigen_spin_wave_bc": "",
+        "eigen_target": "",
+        "entrypoint_kind": "flat_relax",
+        "integrator": "",
+        "kind": "relax",
+        "max_steps": 1,
+        "stage_id": "relax-b",
+        "torque_tolerance": 0.0001
+      },
+      {
+        "algorithm": "nonlinear_cg",
+        "eigen_damping_policy": "",
+        "eigen_equilibrium_source": "",
+        "eigen_include_demag": false,
+        "eigen_normalization": "",
+        "eigen_spin_wave_bc": "",
+        "eigen_target": "",
+        "entrypoint_kind": "flat_relax",
+        "integrator": "",
+        "kind": "relax",
+        "max_steps": 1,
+        "stage_id": "relax-c",
+        "torque_tolerance": 0.0001
+      }
+    ],
+    "study_pipeline": {
+      "nodes": [
+        {
+          "enabled": true,
+          "id": "relax-a",
+          "label": "Relax 1",
+          "node_kind": "primitive",
+          "payload": {
+            "adaptive_timestep": null,
+            "demag_interval_s": "",
+            "energy_tolerance": "",
+            "entrypoint_kind": "flat_relax",
+            "fixed_timestep": "1e-13",
+            "integrator": "rk23",
+            "kind": "relax",
+            "max_relaxation_time_s": "",
+            "max_steps": "10",
+            "relax_algorithm": "llg_overdamped",
+            "stage_id": "relax-a",
+            "torque_tolerance": "0.0001",
+            "until_seconds": ""
+          },
+          "source": "script_imported",
+          "stage_kind": "relax"
+        },
+        {
+          "enabled": true,
+          "id": "relax-b",
+          "label": "Relax 2",
+          "node_kind": "primitive",
+          "payload": {
+            "energy_tolerance": "",
+            "entrypoint_kind": "flat_relax",
+            "kind": "relax",
+            "max_steps": "1",
+            "relax_algorithm": "projected_gradient_bb",
+            "stage_id": "relax-b",
+            "torque_tolerance": "0.0001",
+            "until_seconds": ""
+          },
+          "source": "script_imported",
+          "stage_kind": "relax"
+        },
+        {
+          "enabled": true,
+          "id": "relax-c",
+          "label": "Relax 3",
+          "node_kind": "primitive",
+          "payload": {
+            "energy_tolerance": "",
+            "entrypoint_kind": "flat_relax",
+            "kind": "relax",
+            "max_steps": "1",
+            "relax_algorithm": "nonlinear_cg",
+            "stage_id": "relax-c",
+            "torque_tolerance": "0.0001",
+            "until_seconds": ""
+          },
+          "source": "script_imported",
+          "stage_kind": "relax"
+        }
+      ],
+      "version": "study_pipeline.v1"
+    },
+    "thermal_noise": null,
+    "universe_mesh": {
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mode": "manual",
+      "padding": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "size": [
+        8e-09,
+        4e-09,
+        2e-09
+      ]
+    }
+  },
+  "outputs": {},
+  "editor": {
+    "air_mesh_opacity": 28.0,
+    "air_mesh_visible": true,
+    "object_view_mode": "context"
+  }
+}

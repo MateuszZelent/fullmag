@@ -270,3 +270,82 @@ Jej scena ma SHA-256 `b0153b155c8cbc363641f6717934bba9eee5751a23a8fc85c14267012f
 Starszego FMS nie uznano za równoważny: różnił się zapisaną ścieżką wyników.
 Nowa kopia oraz operator checkpoint zostały odczytowo zweryfikowane; sesja, scena,
 pusta kolejka i brak runu pozostały bez zmian. Nie wykonano Grid ani Compute.
+
+
+## DEV f897 i pierwsze żądanie budowy po imporcie
+
+Managed recreate/fresh-state `10e2f8c9c9964a568cab43f4d4e19caa` zachowało
+poprzedni runtime i ledger. Odczytowy verifier potwierdził przypięcie helper/app
+source do `f89756a1e36a8ce3e663f7bab6e42a31c8f56c09`, raw intent hash i odrębne
+inode archiwum oraz nowej generacji. Inwentarz pierwotnych wyników nadal ma
+4133 niezmienione pliki / 94 691 729 B.
+
+DEV `eff2d81c4f30437b8334c46de36fd2a4` zakończył build, pakietowanie i start
+stanem succeeded; config `e0783d822f5bfcbf20eea5a9970ad26981e6f4487c7c7454e2596dea31e91730`,
+snapshot `900848a83a3e54a561e9c5ab8cd69c439ef2c610c61586e0229c44fea41f55cc`.
+Log natywnej binarki potwierdza czysty commit f897. Nowe API
+`31d31b92-2ec9-4508-9fdb-17084b16de83` miało sessions=[] przed próbą.
+Backend ma 8 CPU / 32 GiB, frontend 2 CPU / 8 GiB. Chroniona grupa 3242
+zachowała wcześniejszy completed run i energię -6.063642418651386e-22 J.
+
+Browser QA `ad1688bc931a4d89b0f2ced87641e036` przeszło normalny import,
+fidelity=verified i ścisły ACK sceny 1. Dialog pokazał prawidłowe granice
+[-4,-2,-1] do [4,2,1] nm i pozwolił potwierdzić FDM Grid. Żądanie
+fdm_grid_refresh przeszło guard harnessu, ale odpowiedź API miała HTTP 409.
+Harness przerwał obserwację; nie wykonał Solve. Odczyt po próbie potwierdził
+sesję `session-18e649a9efef628400004a24`, scene=1, commands revision=0 i pustą
+kolejkę, CurrentRun=404. Readiness i kontrolka fdm_grid_refresh były dostępne.
+Nie ponowiono tej operacji. S46 pozostaje NOT VERIFIED.
+
+Body 409 nie zostało zapisane przez ówczesny runner. Przegląd źródeł wskazuje
+walidację capture/round-trip przed pierwszym RunIntent jako kandydata, lecz nie
+jest to ustalona przyczyna. Nie usunięto żadnego guarda. Runner zapisuje teraz
+bounded metadane odrzuconego zapisu, SHA/rozmiar odpowiedzi i do 16 KiB jej
+prefiksu; limit wynosi 32 obserwacje i 2 MiB na odpowiedź. Oryginalna zgodna
+odpowiedź trafia raz do UI, a odbiór nadal kończy się błędem. Obce API oraz
+przekroczenia limitów pozostają fail-closed. Regresje Node: 23 PASS; powiązane
+kontrakty parsera/kontrolera Python: 86 PASS, w tym trzy nowe przypadki RED/GREEN
+odrzucające raport PASS z rejected write. Focused ESLint przechodzi.
+
+## Pełny snapshot projektu i rewizja zapisu
+
+Niezależny przegląd wykazał osiągalną utratę analysis przy Save aktywowanego
+projektu oraz authoring undo/redo. SceneDocument przechowuje definicje Results,
+ale SceneResource i sceneDocumentPayload pomijały analysis, a pełne replace_scene
+traktowało brak jako pusty stan. Projection obejmuje teraz opaque analysis bez
+zmiany właściciela CRUD; snapshot, historia i saved-authoring proof zachowują
+definicje, ich identyfikatory, referencje i zagnieżdżone settings. Legacy brak pola
+pozostaje zgodny, jawne analysis={} pozostaje jawne w payloadzie.
+
+Project Save wiąże osobno rewizję każdego odczytanego snapshotu. Zmiana wspólnego
+scene_revision podczas odczytu, synchronizacji archiwum lub host Save blokuje
+potwierdzenie aktualności i pozostawia projekt dirty. Następny jawny Save może
+odczytać nowszą rewizję; API/session/epoch fence pozostają aktywne. Regresje
+wykryły także błędne współdzielenie rewizji między równoległymi odczytami oraz
+fałszywy clean po zakończeniu host I/O. Końcowe testy persistence: 61 PASS;
+projection/history: 9 PASS; saved-authoring: 23 PASS; kontrakty workflow: 15 PASS.
+Managed typecheck i focused ESLint przechodzą. Dwie nowe regresje Rust mają
+osobny krok CI z kontrolą obecności obu nazw; ich wykonanie i managed regeneracja
+API wymagają jeszcze weryfikacji na nowym backendzie.
+
+Hook React Doctor dla Save zakończył dodatkowy lint błędem pluginu oxlint
+Maximum call stack size exceeded; nie jest to PASS tego narzędzia. Osobne
+managed ESLint/typecheck/testy są podane wyżej. W pozostałych fragmentach hook
+zgłosił istniejące sekwencyjne await w runnerze oraz istniejący JSON transport
+clone; nie dodano suppressions ani nie zmieniono semantyki dla uciszenia ostrzeżeń.
+Powyższe regresje źródłowe nie zastępują nowego odbioru UI, S46 ani pełnej macierzy
+P01–P22/S01–S46, FEM/GPU/multilayer i kwalifikacji naukowej.
+
+
+Czysty test SDK w tej samej binarnej generacji f897 wykonał render-scene-document,
+niezależny inventory oraz scene-only capture wygenerowanego źródła. Nie powstał
+RunIntent ani komenda API. Interpreter /usr/local/bin/python3 i SDK z przypiętego
+/build/workspace były zgodne z runtime. Inventory przed/po jest identyczne;
+źródło ma SHA-256 `26f2f2ae07ef3bf48000661b76cfb811919082c95ed2b3cfa87c9b1f6d6cc753`.
+Artefakty techniczne zachowano w prywatnym control/backend/diagnostics pod
+`p22-s46-roundtrip-5fec3e53bc9347f0bfd210620a30f7c1`. Pythonowe projekcje surowych
+scen różnią się 27 wpisami, głównie absent/null/puste listy i domyślne pola etapów.
+Nie jest to dowód różnicy po typowanej normalizacji Rust ani przyczyna 409.
+Dodano rzeczywistą scenę jako fixture oraz test Rust przechodzący przez render,
+capture i dokładny validator round-trip, z osobnym krokiem CI wymuszającym nazwę
+testu. Wynik tego testu pozostaje do odczytania; guard nie został osłabiony.
