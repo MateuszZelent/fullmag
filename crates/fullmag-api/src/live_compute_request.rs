@@ -560,6 +560,103 @@ mod tests {
         })).unwrap()
     }
 
+    fn stale_compute_request(client_intent_id: Option<&str>, current_run: &str) -> serde_json::Value {
+        let mut body = json!({
+            "kind": "solve",
+            "target": {"kind": "study"},
+            "precondition": {
+                "scene_revision": 12,
+                "mesh_revision": 0,
+                "current_run": {"kind": "run", "run_id": current_run}
+            }
+        });
+        if let Some(client_intent_id) = client_intent_id {
+            body["client_intent_id"] = json!(client_intent_id);
+        }
+        body
+    }
+
+    async fn compute_http_test_state(
+        submit_store_root: Option<std::path::PathBuf>,
+        missing_solve_material: bool,
+    ) -> Arc<AppState> {
+        let mut state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let state_mut = Arc::get_mut(&mut state).expect("test AppState must be uniquely owned");
+        state_mut.submit_store_root = submit_store_root;
+        state_mut
+            .current_live_session_epoch
+            .store(8, std::sync::atomic::Ordering::Release);
+
+        let mut scene = crate::router_v2::handlers::sessions::create::create_empty_scene_document(
+            &crate::schemas::sessions::CreateSessionRequest {
+                name: "retry-disposition-test".into(),
+                backend: "fdm".into(),
+                device: "cpu".into(),
+                precision: "double".into(),
+                replace_current: false,
+                output_storage: None,
+            },
+        )
+        .expect("canonical empty scene fixture");
+        scene.revision = 12;
+        if missing_solve_material {
+            scene.objects.push(
+                serde_json::from_value(json!({
+                    "id": "body",
+                    "name": "Body",
+                    "geometry": {
+                        "geometry_kind": "Box",
+                        "geometry_params": {"size": [1.0, 1.0, 1.0]}
+                    },
+                    "material_ref": "missing-material"
+                }))
+                .expect("scene object with unresolved material fixture"),
+            );
+        }
+
+        let mut current = state.current_live_state.write().await;
+        let snapshot = current.as_mut().expect("live session fixture");
+        snapshot.session.session_id = "session-a".into();
+        snapshot.scene_document = Some(scene);
+        snapshot.run = None;
+        snapshot.mesh_revision = 0;
+        drop(current);
+        state
+    }
+
+    async fn post_compute_http(
+        state: Arc<AppState>,
+        body: serde_json::Value,
+        idempotency_key: Option<&str>,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use axum::body::{to_bytes, Body};
+        use axum::http::{header, Request};
+        use tower::ServiceExt;
+
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v2/sessions/current/simulation/commands")
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(idempotency_key) = idempotency_key {
+            request = request.header("idempotency-key", idempotency_key);
+        }
+        let response = crate::router_v2::build_v2_router()
+            .with_state(state)
+            .oneshot(
+                request
+                    .body(Body::from(body.to_string()))
+                    .expect("request fixture"),
+            )
+            .await
+            .expect("HTTP command route should respond");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("HTTP error body should be readable");
+        let body = serde_json::from_slice(&bytes).expect("HTTP error body should be JSON");
+        (status, body)
+    }
+
     fn manual_direct_intent(
         run_id: &str,
         receipt: &LiveComputeRequestReceipt,
@@ -597,6 +694,140 @@ mod tests {
                 }
             }),
         )
+    }
+
+    #[tokio::test]
+    #[ignore = "launched in a subprocess to isolate process-global runtime configuration"]
+    async fn keyed_stale_compute_http_error_has_only_a_linearized_not_accepted_disposition_child() {
+        // No key cannot prove a keyed durable miss, even when the stale-input
+        // error itself is otherwise identical.
+        let unkeyed_dir = tempfile::tempdir().unwrap();
+        let unkeyed_store_root = unkeyed_dir.path().join("submit-store");
+        SessionStore::open(&unkeyed_store_root).unwrap();
+        let state = compute_http_test_state(Some(unkeyed_store_root), false).await;
+        let (status, body) = post_compute_http(
+            state,
+            stale_compute_request(None, "previous-run"),
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["code"], "command_current_run_changed");
+        assert!(body.get("intent_disposition").is_none());
+
+        // Without a configured store, an apparent replay miss is not a
+        // completed owner-scoped durable scan and must stay unresolved.
+        let state = compute_http_test_state(None, false).await;
+        let (status, body) = post_compute_http(
+            state,
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["code"], "command_current_run_changed");
+        assert!(body.get("intent_disposition").is_none());
+
+        // A matching key used for another body is positive evidence of a
+        // prior acceptance; it must not be collapsed into a no-acceptance
+        // response.
+        let conflict_dir = tempfile::tempdir().unwrap();
+        let conflict_store_root = conflict_dir.path().join("submit-store");
+        let owner = context("session-a");
+        let changed_body = serde_json::from_value(stale_compute_request(
+            Some("compute-intent"),
+            "another-run",
+        ))
+        .unwrap();
+        let changed_request = LiveComputeRequest::capture(
+            &owner,
+            &changed_body,
+            Some("compute-intent"),
+            Some("request-first".into()),
+        )
+        .unwrap()
+        .unwrap();
+        let receipt = changed_request.receipt("command-first".into());
+        let intent = manual_direct_intent("run-first", &receipt);
+        SessionStore::open(&conflict_store_root)
+            .unwrap()
+            .commit_run_intent(&intent)
+            .unwrap();
+        let state = compute_http_test_state(Some(conflict_store_root), false).await;
+        let (status, body) = post_compute_http(
+            state,
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["code"], "live_compute_idempotency_conflict");
+        assert!(body.get("intent_disposition").is_none());
+
+        // The material error is returned before the current implementation's
+        // second replay. The future typed no-acceptance marker must retain the
+        // old HTTP status/code after a successful keyed scan finds no receipt.
+        let material_dir = tempfile::tempdir().unwrap();
+        let material_store_root = material_dir.path().join("submit-store");
+        SessionStore::open(&material_store_root).unwrap();
+        let state = compute_http_test_state(Some(material_store_root), true).await;
+        let (status, body) = post_compute_http(
+            state,
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "bad_request");
+        let material_disposition = body
+            .get("intent_disposition")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+
+        // This request reaches the locked stale-run precondition after its
+        // second exact replay. It has the same intended disposition while
+        // preserving its established conflict status and code.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty_store_root = empty_dir.path().join("submit-store");
+        SessionStore::open(&empty_store_root).unwrap();
+        let state = compute_http_test_state(Some(empty_store_root), false).await;
+        let (status, body) = post_compute_http(
+            state,
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["code"], "command_current_run_changed");
+        let stale_run_disposition = body
+            .get("intent_disposition")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+
+        // The current implementation's semantic RED is only these missing
+        // machine dispositions; status, code, no-key/root, and body-conflict
+        // contracts above already pass against today's production code.
+        assert_eq!(
+            [material_disposition, stale_run_disposition],
+            [Some("not_accepted".into()), Some("not_accepted".into())],
+        );
+    }
+
+    #[test]
+    fn keyed_stale_compute_http_error_has_only_a_linearized_not_accepted_disposition() {
+        let child_test_name =
+            "live_compute_request::tests::keyed_stale_compute_http_error_has_only_a_linearized_not_accepted_disposition_child";
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("test harness executable is available"),
+        )
+        .args(["--ignored", "--exact", child_test_name, "--nocapture"])
+        .env("FULLMAG_RUNTIME_SERVICE_CONFIG", "test-runtime-service-config")
+        .status()
+        .expect("isolated HTTP regression child process should start");
+        assert!(
+            status.success(),
+            "isolated HTTP regression child process failed with {status}"
+        );
     }
 
     #[test]
