@@ -26,9 +26,12 @@ import {
   useMeshSummaryResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import { resolveActiveLaneOperation } from "@/kernel/resources/useActiveLaneCapabilities";
+import {
+  resolveActiveLaneOperation,
+  type ActiveLaneCapabilitySnapshot,
+} from "@/kernel/resources/useActiveLaneCapabilities";
 import { resolveSessionAuthoringDiscretization } from "@/kernel/resources/sessionDiscretization";
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type { DomainMetaResource, JsonObject } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
 import { diffMeshPolicies } from "@/shared/domain/mesh/meshPolicyDiff";
 import { buildMeshSnapshotRows } from "@/shared/domain/mesh/meshBuildSnapshots";
@@ -77,6 +80,74 @@ type MeshBuildDialogSnapshot = {
   };
 };
 
+function resolveMeshBuildOperation(
+  lane: MeshCommandLane,
+  activeLane: ActiveLaneCapabilitySnapshot | null,
+) {
+  if (lane === "fdm") return resolveActiveLaneOperation(activeLane, "grid_build");
+  if (lane === "fem") return resolveActiveLaneOperation(activeLane, "shared_mesh_build");
+  return resolveActiveLaneOperation(null, "grid_build");
+}
+
+const FEM_MESH_BUILD_COMMAND_IDS = new Set([
+  "mesh.build-selected",
+  "mesh.build-shared-domain",
+  "mesh.refine-worst-quality-element",
+]);
+
+function meshBuildRequestMatchesLane(
+  lane: MeshCommandLane,
+  commandId: string | null | undefined,
+): boolean {
+  if (lane === "fdm") return commandId === "grid.build-fdm";
+  if (lane === "fem") return commandId != null && FEM_MESH_BUILD_COMMAND_IDS.has(commandId);
+  return false;
+}
+
+function tuple3(values: readonly number[] | null | undefined): [number, number, number] | null {
+  if (!values || values.length < 3) return null;
+  const tuple = [values[0], values[1], values[2]];
+  return tuple.every((value) => typeof value === "number" && Number.isFinite(value))
+    ? (tuple as [number, number, number])
+    : null;
+}
+
+function resolveFdmGeometryBounds(
+  domain: Pick<DomainMetaResource, "bounds" | "counts"> | null | undefined,
+  objects: unknown,
+): { max: [number, number, number]; min: [number, number, number] } | null {
+  const reportedBounds = domain?.counts.cells === 0 ? null : domain?.bounds;
+  const domainMin = tuple3(reportedBounds?.min);
+  const domainMax = tuple3(reportedBounds?.max);
+  if (domainMin && domainMax) return { min: domainMin, max: domainMax };
+
+  const sceneObjects = Array.isArray(objects) ? objects : [];
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  let found = false;
+  for (const object of sceneObjects) {
+    const bounds = authoredObjectBounds(object);
+    if (!bounds) continue;
+    found = true;
+    minX = Math.min(minX, bounds.min[0]);
+    minY = Math.min(minY, bounds.min[1]);
+    minZ = Math.min(minZ, bounds.min[2]);
+    maxX = Math.max(maxX, bounds.max[0]);
+    maxY = Math.max(maxY, bounds.max[1]);
+    maxZ = Math.max(maxZ, bounds.max[2]);
+  }
+  return found
+    ? {
+        min: [minX, minY, minZ],
+        max: [maxX, maxY, maxZ],
+      }
+    : null;
+}
+
 export function resolveMeshBuildDialogLane(
   discretization: unknown,
 ): MeshCommandLane {
@@ -120,9 +191,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   const lane = resolveMeshBuildDialogLane(
     resolveSessionAuthoringDiscretization(runtimeStatus),
   );
-  const buildOperation = resolveActiveLaneOperation(
+  const buildOperation = resolveMeshBuildOperation(
+    lane,
     runtimeStatus?.capabilities.active_lane ?? null,
-    "shared_mesh_build",
   );
   const explicitFemLane = shouldLoadMeshBuildDialogFemResources(
     state.open,
@@ -132,6 +203,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     lane,
     runtimeStatus?.capabilities.active_lane?.operations.grid_build.reason,
   );
+  const preBuildRequestFamilyMismatch = state.phase === "pre-build" &&
+    state.request !== null &&
+    !meshBuildRequestMatchesLane(lane, state.request.commandId);
   const activeBuild = useMeshBuildCurrent({
     enabled: explicitFemLane,
   });
@@ -187,7 +261,13 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     : universePolicy.status === "ready" && sharedPolicy.status === "ready";
   const computedSnapshot = useMemo(() => {
     if (lane === "fdm") {
-      if (!state.request?.requestId || sceneRevision == null || !runtimeStatus) {
+      if (
+        !state.request?.requestId ||
+        sceneRevision == null ||
+        !runtimeStatus ||
+        resourceSceneRevision == null ||
+        resourceSceneRevision !== runtimeStatus.resources.scene_revision
+      ) {
         return null;
       }
       return {
@@ -256,6 +336,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     policyLoaded,
     sceneRevision,
     runtimeStatus,
+    resourceSceneRevision,
     summary,
     latestBuild,
     manifest,
@@ -264,8 +345,12 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     requestedPolicy,
     requestedPolicyKey,
   ]);
+  const fdmSceneDataMatchesRuntimeStatus =
+    typeof statusSceneRevision === "number" &&
+    resourceSceneRevision === statusSceneRevision;
   const stableSnapshotBefore = snapshotBefore ?? computedSnapshot;
   const snapshotCurrent = stableSnapshotBefore !== null
+    && (lane !== "fdm" || fdmSceneDataMatchesRuntimeStatus)
     && stableSnapshotBefore.sceneRevision === sceneRevision
     && stableSnapshotBefore.meshRevision === runtimeStatus?.resources.mesh_revision
     && stableSnapshotBefore.policyKey === requestedPolicyKey;
@@ -277,47 +362,10 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
     scope: objectId ? "object" : "shared-domain",
   });
 
-  const tuple3 = (values: readonly number[] | null | undefined): [number, number, number] | null => {
-    if (!values || values.length < 3) return null;
-    const t = [values[0], values[1], values[2]];
-    return t.every((v) => typeof v === "number" && Number.isFinite(v))
-      ? (t as [number, number, number])
-      : null;
-  };
-
-  const geometryBounds = useMemo(() => {
-    const bounds = fdmDomain.data?.bounds;
-    const min = tuple3(bounds?.min);
-    const max = tuple3(bounds?.max);
-    if (min && max) return { min, max };
-    const objects = scene.data?.objects;
-    if (!objects || objects.length === 0) return null;
-    let minX = Infinity;
-    let minY = Infinity;
-    let minZ = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    let maxZ = -Infinity;
-    let found = false;
-    for (const obj of objects) {
-      const b = authoredObjectBounds(obj);
-      if (b) {
-        found = true;
-        minX = Math.min(minX, b.min[0]);
-        minY = Math.min(minY, b.min[1]);
-        minZ = Math.min(minZ, b.min[2]);
-        maxX = Math.max(maxX, b.max[0]);
-        maxY = Math.max(maxY, b.max[1]);
-        maxZ = Math.max(maxZ, b.max[2]);
-      }
-    }
-    return found
-      ? {
-          min: [minX, minY, minZ] as [number, number, number],
-          max: [maxX, maxY, maxZ] as [number, number, number],
-        }
-      : null;
-  }, [fdmDomain.data?.bounds, scene.data?.objects]);
+  const geometryBounds = useMemo(
+    () => resolveFdmGeometryBounds(fdmDomain.data, scene.data?.objects),
+    [fdmDomain.data, scene.data?.objects],
+  );
 
   const gridSpacing = tuple3(fdmDomain.data?.grid?.spacing);
   const gridShape = tuple3(fdmDomain.data?.grid?.shape);
@@ -400,7 +448,14 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
   }
 
   function confirmBuild(): void {
-    if (!state.request?.requestId || !stableSnapshotBefore || !snapshotCurrent || !buildOperation.enabled || state.phase !== "pre-build") return;
+    if (
+      !state.request?.requestId ||
+      !meshBuildRequestMatchesLane(lane, state.request.commandId) ||
+      !stableSnapshotBefore ||
+      !snapshotCurrent ||
+      !buildOperation.enabled ||
+      state.phase !== "pre-build"
+    ) return;
     dispatch({ type: "submitting" });
     kernel.bus.emit("mesh:build-confirm-resolved", { requestId: state.request.requestId, confirmed: true, precondition: { scene_revision: stableSnapshotBefore.sceneRevision, mesh_revision: stableSnapshotBefore.meshRevision } });
   }
@@ -416,7 +471,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
       >
         <DialogHeader>
           <DialogTitle>
-            {lane === "fdm" && (state.request?.commandId === "grid.build-fdm" || state.acceptedCommandId === "grid.build-fdm")
+            {preBuildRequestFamilyMismatch
+              ? "Build Confirmation Needs Refresh"
+              : lane === "fdm" && (state.request?.commandId === "grid.build-fdm" || state.acceptedCommandId === "grid.build-fdm")
               ? state.phase === "post-build"
                 ? "FDM Grid Build Complete"
                 : state.phase === "error"
@@ -433,7 +490,9 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
                 : "Mesh Build Confirmation"}
           </DialogTitle>
           <DialogDescription id="fm-mesh-build-dialog-description">
-            {lane === "fdm" && (state.request?.commandId === "grid.build-fdm" || state.acceptedCommandId === "grid.build-fdm")
+            {preBuildRequestFamilyMismatch
+              ? "This build confirmation was prepared for a different simulation method (FDM/FEM). Cancel it and request a build for the currently selected method."
+              : lane === "fdm" && (state.request?.commandId === "grid.build-fdm" || state.acceptedCommandId === "grid.build-fdm")
               ? "Confirm the structured grid resolution and source scene geometry before execution."
               : explicitFemLane
               ? "Confirm the mesh target and parameter changes. Mesh Jobs tracks the long build log and pipeline."
@@ -441,7 +500,25 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
           </DialogDescription>
         </DialogHeader>
         <div className="fm-dialog__body">
-          {explicitFemLane ? (
+          {preBuildRequestFamilyMismatch ? (
+            <section
+              aria-label="Build confirmation needs refresh"
+              className="fm-mesh-build-confirm__section fm-mesh-build-confirm__banner"
+            >
+              <h3 className="fm-mesh-build-confirm__section-title">
+                Build Confirmation Needs Refresh
+              </h3>
+              <p className="fm-mesh-build-confirm__empty">
+                This request was prepared for a different simulation method (FDM/FEM). Cancel it and open
+                a new build confirmation for the currently selected method.
+              </p>
+              <div className="fm-mesh-build-confirm__actions">
+                <Button size="sm" type="button" variant="ghost" onClick={closeDialog}>
+                  Cancel confirmation
+                </Button>
+              </div>
+            </section>
+          ) : explicitFemLane ? (
             <MeshBuildConfirmDialogContent
               commandId={state.acceptedCommandId ?? state.request?.commandId ?? null}
               commandStatus={state.lastCommandStatus}
@@ -494,6 +571,7 @@ export function MeshBuildDialog({ kernel }: { kernel: KernelApi }) {
               sceneRevision={sceneRevision}
               stale={stableSnapshotBefore !== null && !snapshotCurrent}
               totalCells={gridTotalCells}
+              unavailableReason={snapshotCurrent && !buildOperation.enabled ? buildOperation.reason : null}
             />
           ) : (
             <section

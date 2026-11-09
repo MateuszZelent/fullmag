@@ -448,6 +448,7 @@ class RegionResetQaTests(unittest.TestCase):
             "start_screen": "apps/control-room/src/modules/start/StartScreen.tsx",
             "start_screen_state": "apps/control-room/src/modules/start/model/startScreenState.ts",
             "start_screen_host_adapter": "apps/control-room/src/modules/start/model/startScreenHostAdapter.ts",
+            "mesh_build_dialog": "apps/control-room/src/modules/overlay/MeshBuildDialog.tsx",
             "start_commands": "apps/control-room/src/modules/start/model/startCommands.ts",
             "start_rail": "apps/control-room/src/modules/start/rail/StartRail.tsx",
         }.items():

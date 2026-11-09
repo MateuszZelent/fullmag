@@ -60,6 +60,7 @@ _SOURCE_PATHS = {
     "build_study_commands": "apps/control-room/src/kernel/runtime/buildStudyCommands.ts",
     "geometry_lifecycle_commands": "apps/control-room/src/kernel/authoring/geometryLifecycleCommandContributions.ts",
     "grid_confirm": "apps/control-room/src/modules/overlay/mesh-build/FdmGridBuildConfirmContent.tsx",
+    "mesh_build_dialog": "apps/control-room/src/modules/overlay/MeshBuildDialog.tsx",
     "shell_commands": "apps/control-room/src/kernel/layout/shellCommands.ts",
     "script_project_activation": "apps/control-room/src/kernel/persistence/ScriptProjectActivation.ts",
     "api_instance_pin": "apps/control-room/src/kernel/api/apiInstancePin.ts",

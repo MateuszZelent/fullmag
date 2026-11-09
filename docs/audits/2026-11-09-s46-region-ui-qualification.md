@@ -204,3 +204,69 @@ Control Room CI dla `879111602c18de8f5790ca179233f38945667a30`, job
 Jednorazowy producent trwałej kopii i jego wykonanie są nadal wymagane przed
 managed stop oraz fresh-state/build. Runner zapisuje fazę i przypięcia API/sesji
 również dla nieoczekiwanych błędów transportu; pozostają one blokujące.
+
+## Przebudowa fb9 i rzeczywisty preflight budowy FDM
+
+Przed przebudową zapisano na hoście FMS 6085 B, SHA-256
+`4f84f09a9dbeb94a0fff7585b2d9a8ece13c29abeaec64dd3e6f02f1a0790558`, z dokładną
+sceną 1 i kanonicznym `project/source.py`. Pierwszy producent błędnie oczekiwał
+persisted_revision=null także po otwarciu archiwum; rzeczywista odpowiedź ma
+poprzednią rewizję archiwum 1 i jawne durability=memory_only. Użyto zachowanych,
+zahashowanych odpowiedzi dwóch zakończonych wywołań, bez kolejnego POST.
+Kontrola live przed i po potwierdziła niezmienioną sesję, scenę i pustą kolejkę.
+
+Managed saved-authoring stop `d3a179221a5b479b871f0cb9306a2ab3` zakończył się
+sukcesem. Recreate/fresh-state `b5037c7ed4724be1873f59978c6ffa4a` zachowało stary
+runtime i ledger; inode, owner, hashe, generacja oraz helper/app source root i commit
+zostały odczytowo potwierdzone. Wszystkie 4133 pliki wcześniejszych wyników są
+niezmienione. Chroniony API 3242 zachował ten sam run i energię.
+
+DEV `98740c85721642beb946f114bc79db12` zbudował pakiet z czystego
+`fb9af4f4595fb0850b2349b1e0ea73dbbd10f495`; receipt succeeded, config
+`b74337ea7809e07c452e74f44e151146bb0f4481c436a622c6d14d384fee23d1`, budżety
+8 CPU/32 GiB i 2 CPU/8 GiB. API `93a720ac-4e89-4083-8dfd-045df17139d2` było
+puste. Wszystkie cztery workflowy CI fb9 zakończyły się sukcesem, w tym wymuszone
+trzy regresje Rust kanonicznej aktywacji. Zimna kompilacja Next /home trwała 59 s;
+po odczytowym rozgrzaniu /workspace i /home zwracały 200.
+
+Rzeczywista próba `3d9be33fe5a2440fba5db1897a8b3d33` przeszła Import i ścisły
+ACK sceny, potwierdzając naprawę ui_label w działającym backendzie. Utworzyła
+sesję `session-18e645ed67a5be0f00004a47`, scena 1. Zatrzymała się dopiero na
+wyłączonym przycisku Build Grid & Materialize Masks; Grid i Compute nie zostały
+wysłane, command ledger pozostał pusty, CurrentRun 404. Nie ponowiono importu.
+
+API readiness miało wszystkie checks complete, ready_to_run/export=true i brak
+blockerów. Status publikował grid_build=supported oraz shared_mesh_build=unsupported
+na FDM CPU/double/strict. Dialog błędnie sprawdzał zawsze shared_mesh_build,
+wyłączając zarówno przycisk, jak i confirm handler. Ten sam fałszywy gate wyświetlał
+komunikat Loading current scene geometry baseline. Osobno zerowe granice pustego
+domain/meta przesłaniały poprawne granice autorskiego Box 8×4×2 nm. Naprawa tego
+dialogu i jej regresje są w toku; manifest odbioru przypina również MeshBuildDialog
+(32 pliki, limit 32). Anulowane GET-y ze scope i fazą pozostają dowodem do diagnozy,
+a nie zaliczonym odbiorem ani usprawiedliwieniem odblokowania błędnych zapisów.
+
+## Regresje dialogu budowy po próbie 3d9
+
+Dialog wybiera teraz grid_build dla FDM i shared_mesh_build dla FEM. Mismatch
+rodziny żądania i aktualnej metody (w tym opóźniony grid.build-fdm dostarczony pod
+FEM oraz FDM→FEM bez zmian rewizji) daje widok wymagający nowego potwierdzenia;
+confirm nie może autoryzować starego żądania uprawnieniem nowej metody. Preflight
+FDM wymaga rzeczywiście odczytanych danych sceny z rewizją równą statusowi.
+Brak danych, mismatch i zmiana po capture blokują potwierdzenie; zgodna last-good
+scena pozostaje używalna podczas refetcha. Nieobsługiwana capability pokazuje
+swój powód. Pusta domena o cells=0 nie przesłania granic autorskich obiektów;
+materializowana domena z legalnym początkiem [0,0,0] zachowuje swoje granice.
+
+Zamontowane testy na prawdziwym EventBus odtworzyły błędne zachowania przed
+poprawką. Potwierdzenie dodatnie pinuje scene_revision=17 i mesh_revision=9;
+ujemne ścieżki nie emitują confirmed=true. Końcowe managed testy pięciu plików
+mają **29 PASS**, focused ESLint czterech zmienionych plików i typecheck mają
+kod 0. Testy kontrolera z pełnymi 32 pinami źródeł mają **86 PASS**. Nadal
+wymagany jest rzeczywisty odbiór tej poprawki w S46.
+
+Przed kolejną generacją zachowano dokładnie aktualną scenę sesji 18e645:
+FMS 6087 B, SHA-256 `bd8ea41d227b1a89063635c6ff83b7100f74fcf0664e56943d1ae8ca0406ac29`.
+Jej scena ma SHA-256 `b0153b155c8cbc363641f6717934bba9eee5751a23a8fc85c14267012f94ece5`.
+Starszego FMS nie uznano za równoważny: różnił się zapisaną ścieżką wyników.
+Nowa kopia oraz operator checkpoint zostały odczytowo zweryfikowane; sesja, scena,
+pusta kolejka i brak runu pozostały bez zmian. Nie wykonano Grid ani Compute.
