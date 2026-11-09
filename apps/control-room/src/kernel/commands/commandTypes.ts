@@ -4,6 +4,7 @@ import type { ControlRoomApi } from "../api/ControlRoomApi";
 import type { RuntimeCommandPrecondition } from "../api/apiTypes";
 import type { LayoutController } from "../layout/LayoutController";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import type { ResourceStatus } from "../resources/resourceTypes";
 import type { SelectionController } from "../selection/SelectionController";
 import type { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
 import type { ChartViewportHandoffController } from "../visualization/ChartViewportHandoffController";
@@ -50,6 +51,8 @@ export interface CommandContext {
   objectMoveTool?: ObjectMoveToolController;
   projectDocument?: ProjectDocumentController;
   resourceData?: Readonly<Record<string, unknown>>;
+  /** Freshness of the Study command queue projection shown by its owning panel. */
+  commandQueueResourceStatus?: ResourceStatus;
   resources?: ResourceInvalidationController;
   /** Session identity used to partition current-session API request coalescing. */
   sessionScopeKey?: string | null;

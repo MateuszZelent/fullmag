@@ -26,6 +26,7 @@ export function createCommandContext(
     objectMoveTool: kernel.objectMoveTool,
     projectDocument: kernel.projectDocument,
     resourceData: patch.resourceData,
+    commandQueueResourceStatus: patch.commandQueueResourceStatus,
     resources: kernel.resources,
     sessionScopeKey,
     isCurrentSessionScope: patch.isCurrentSessionScope ?? (sessionScopeKey

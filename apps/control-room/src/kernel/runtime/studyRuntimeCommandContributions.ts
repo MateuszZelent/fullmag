@@ -298,6 +298,10 @@ const ACTIVE_RUNTIME_COMMAND_STATUSES = new Set([
   "running",
 ]);
 
+const TERMINAL_RUNTIME_COMMAND_STATUSES: ReadonlySet<string> = new Set([
+  "cancelled", "completed", "failed", "rejected",
+]);
+
 // Runtime states in which no durable run can be stopped any more.
 const TERMINAL_RUNTIME_STATES: ReadonlySet<string> = new Set([
   "cancelled",
@@ -348,8 +352,32 @@ function runtimeCommandDisabledReason(
   if (apiReason) return apiReason;
 
   if (isStudyCompute(kind)) {
+    const status = resourceData<LiveStatusResource>(
+      context,
+      SESSION_STATUS_RESOURCE_KEY,
+    );
+    if (!status) return "Session status is unavailable.";
+    const captured = runtimeCommandPrecondition(context, kind);
+    if (
+      !Number.isSafeInteger(status.resources.commands_revision) ||
+      status.resources.commands_revision < 0 ||
+      numericRevision(status.resources.scene_revision) === null ||
+      numericRevision(status.resources.mesh_revision) === null ||
+      !captured?.current_run
+    ) {
+      return "The current Study model and run status are unavailable. Refresh them before Compute.";
+    }
     const draftReason = studyComputeDraftBlockedReason(context);
     if (draftReason) return draftReason;
+  }
+
+  if (
+    isStudyCompute(kind) &&
+    context.sourceDetail !== "build-and-study" &&
+    context.commandQueueResourceStatus !== undefined &&
+    context.commandQueueResourceStatus !== "ready"
+  ) {
+    return "The current Study command status is not ready. Wait for it to refresh before Compute.";
   }
 
   const queue = resourceData<CommandQueueStatusResource>(
@@ -970,11 +998,14 @@ function runtimeState(context: CommandContext): string | null {
 function commandRevisionPrecondition(
   context: CommandContext,
 ): number | undefined {
-  const queue = resourceData<CommandQueueStatusResource>(
+  const status = resourceData<LiveStatusResource>(
     context,
-    SIMULATION_COMMANDS_PATH,
+    SESSION_STATUS_RESOURCE_KEY,
   );
-  return queue ? queue.commands.length : undefined;
+  const revision = status?.resources?.commands_revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : undefined;
 }
 
 function activeStageId(stage: StageExecutionResource | null | undefined): string | null {
@@ -1790,6 +1821,7 @@ async function refreshRuntimeCommandPrecondition(
   const requestOptions = sessionRequestOptions(context);
   const pinsComputeInput = isStudyCompute(command.kind);
   const readsStatus = pinsComputeInput ||
+    original.command_revision !== undefined ||
     original.region_topology_revision !== undefined ||
     original.region_membership_revision !== undefined ||
     original.region_coefficients_revision !== undefined ||
@@ -1802,6 +1834,66 @@ async function refreshRuntimeCommandPrecondition(
       readsStatus ? api.sessions?.current?.status?.(requestOptions) : undefined,
     ]);
   const status = sessionStatusResult.status === "fulfilled" ? sessionStatusResult.value : undefined;
+  const commandRevision = status?.resources?.commands_revision;
+  const validCommandRevision = typeof commandRevision === "number" &&
+    Number.isSafeInteger(commandRevision) && commandRevision >= 0;
+  const queue = queueResult.status === "fulfilled" ? queueResult.value : undefined;
+  const validCommandQueue = Boolean(
+    queue &&
+    Array.isArray(queue.commands) &&
+    typeof queue.revision === "number" &&
+    Number.isSafeInteger(queue.revision) &&
+    queue.revision >= 0,
+  );
+  const solver = solverResult.status === "fulfilled" ? solverResult.value : undefined;
+  const validSolverState = typeof solver?.runtime_state === "string" &&
+    solver.runtime_state.length > 0;
+  if (pinsComputeInput && (!status || !validCommandRevision)) {
+    return { result: {
+      message:
+        "The current command revision could not be confirmed. Refresh Study status before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && !validCommandQueue) {
+    return { result: {
+      message:
+        "The current Study command queue could not be confirmed. Refresh it before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && !validSolverState) {
+    return { result: {
+      message:
+        "The current solver state could not be confirmed. Refresh it before Compute.",
+      status: "failed",
+    } };
+  }
+  if (pinsComputeInput && queue) {
+    // Queue availability is checked on its own terms, never by comparing its
+    // aggregate revision with the admission revision published by status.
+    const activeCounts = [queue.pending_count, queue.accepted_count, queue.dispatched_count, queue.running_count];
+    if (activeCounts.some((count) => count !== 0) ||
+        queue.commands.some((entry) => !TERMINAL_RUNTIME_COMMAND_STATUSES.has(entry?.status))) {
+      return { result: {
+        message: "A runtime command is active or its outcome is not yet terminal. Wait for it to finish before Compute.",
+        status: "failed",
+      } };
+    }
+    const control = queue.runtime_controls?.find((entry) => entry.kind === command.kind);
+    if (control?.enabled === false) {
+      return { result: {
+        message: control.reason ?? "Study Compute is currently unavailable.",
+        status: "failed",
+      } };
+    }
+    if (solver?.runtime_state === "running" || solver?.runtime_state === "paused") {
+      return { result: {
+        message: "Runtime is already active.",
+        status: "failed",
+      } };
+    }
+  }
   if (pinsComputeInput && context.sourceDetail === "build-and-study") {
     const builtDomain = resourceData<LiveStatusResource>(context, SESSION_STATUS_RESOURCE_KEY)
       ?.resources.domain_generation_id;
@@ -1840,14 +1932,8 @@ async function refreshRuntimeCommandPrecondition(
       precondition.stage_execution_revision = revision;
     }
   }
-  if (queueResult.status === "fulfilled") {
-    const queue = queueResult.value;
-    const commandRevision = Array.isArray(queue?.commands)
-      ? queue.commands.length
-      : null;
-    if (commandRevision !== null && Number.isFinite(commandRevision)) {
-      precondition.command_revision = commandRevision;
-    }
+  if (validCommandRevision) {
+    precondition.command_revision = commandRevision;
   }
   if (!pinsComputeInput && status) {
     const resources = status.resources;

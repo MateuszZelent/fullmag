@@ -864,3 +864,66 @@ fixture i prepared Grid summary. Producent został uzupełniony przez wspólny
 `studyStageRunSummary`; dodatkowa regresja wywołuje rzeczywisty helper i
 sprawdza cały zwrócony kształt z rewizją 8. Po tej poprawce ponownie wykonano
 73 testy Python i 32 Node — PASS. Nie zalicza to żadnej próby solvera.
+
+
+## Admission Study po Grid — poprawka produktu i pełna regresja frontendu
+
+UI bierze początkowy i przedwysyłkowy `command_revision` wyłącznie z istniejącego
+`LiveStatusResource.resources.commands_revision`. Nie rozszerzono API/OpenAPI
+ani nie użyto liczby wpisów lub agregatowej rewizji kolejki. Solve, Run i Relax
+wymagają uchwyconych pinów modelu oraz świeżego statusu, kolejki i solvera.
+Świeży odczyt aktualizuje dostępność, zachowując uchwyconą scenę, mesh, domenę,
+regiony i bieżący run. Brak odczytu/pinu, nieterminalne polecenie, aktywne
+liczniki, wyłączone sterowanie danego rodzaju lub aktywny solver zatrzymują
+Compute przed POST. Stop/Pause zachowują odrębne reguły.
+
+Inspector przekazuje status swojej projekcji kolejki przez rzeczywisty
+`createCommandContext`; stan inny niż ready blokuje Compute. Build + Study
+korzysta ze świeżego proof i własnego preflight, więc stary status projekcji
+sprzed Grid nie zatrzymuje poprawnej kontynuacji. Przegląd nie wykazał obcinania
+kanonicznej rewizji przez rzeczywiste selektory Explorer/Ribbon/provider.
+Uzupełniono ich niepełne fixture, zachowując asercje targetów i powodów odmowy.
+
+Weryfikacja w dokładnej stałej usłudze frontendowej grupy zadania:
+
+- `a194864240d0466fab6c9b699cacaee1`: 308 testów w sześciu bezpośrednich
+  plikach PASS, typecheck PASS, ESLint dziesięciu zmienionych plików PASS.
+- `cf403cd4584541f2a135c117f984d9b5`: pełny Vitest 9683/9683 PASS,
+  925/925 plików; pełny ESLint `--max-warnings=0`, architecture hygiene i
+  API hygiene PASS. Source hashes, kontenery, techniczne wolumeny oraz
+  metadane frontendu pozostały zgodne przed i po kontroli. Logi i receipt
+  pozostają w `verification/p22-command-revision/<attempt>` wolumenu grupy.
+- Dziewięć regresji świeżej gotowości najpierw odmówiło
+  (`a9fc3741f04745e69f8f2a4ac75600f7`), potwierdzając dodatkowy POST mimo
+  aktywnego/wyłączonego świeżego stanu. Po poprawce PASS. Trzy regresje
+  rzeczywistego konstruktora kontekstu najpierw wykazały utratę pola
+  (`e490f208a001424298242bf36df97dd1`), a po forwardzie PASS
+  (`e120fbef80ca4623a1f382b62171426e`). Nie usunięto asercji braku POST.
+- Ograniczony niezależny source review domknął znalezione luki gotowości oraz
+  producent–konsument; nie zgłoszono dalszego P1/P2 w tym fragmencie.
+
+Osobny nadal otwarty przypadek S21: lokalny, nierozstrzygnięty intent Compute
+jest zapisywany, ale nie stanowi jeszcze bramki kolejnego kliknięcia w tej samej
+karcie. Należy wykorzystać istniejący CommandFeedbackController i jego store,
+z pamięciowym śledzeniem lokalnego started oraz odczytem zakresowym w kontekście
+komend. Nie tworzyć drugiego store ani automatycznego retry. Ustalenie źródłowe
+nie dowodzi zaakceptowania drugiego runu. Ten przypadek wymaga osobnego fragmentu
+oraz regresji utraty ACK. S46, cykl rzeczywistego UI i FDM Cell Physics pozostają
+otwarte; powyższe testy nie zastępują solvera ani odbioru wizualnego.
+
+Backend/helper `b9658c1fedbedff1e86624fc15202e69da51af4a` przeszedł native
+build/start w `ac4efcc4b2bf457081755eb045853400`, config
+`a2339e15196d619a630d5a656e79eac8677e82019b66408c82bf210472bb5fe8`,
+snapshot `2014b1ef2575cee2c2938c6a631cf56a1cffa52cd9773da0f918bce65089188f`,
+terminal SHA `6a5e70387cc16fc3a6c56b87c80605294f4d7fb19091024680dd6c1b5bb7f3c9`.
+API `2f967af3-f156-43ae-8b0a-6babdff8e1a6` zwróciło health/sessions 200
+z pustym stanem. Nie wysłano Grid/Compute. Frontend był wtedy live widokiem
+jeszcze niezacommitowanej poprawki; jest to dowód backendu, nie kwalifikacja
+finalnego wspólnego commita UI. Recreate `dcf19c28010440d2ba43519ba3bbd3bc`
+zachował wszystkie 1962 pliki poprzedniej próby (93 815 061 B). Chronione 3242
+zachowało kontenery, PID 40953/41010 oraz StartedAt z 8 listopada.
+
+Wszystkie sześć workflow dla commita 729 zakończyło się success, w tym
+[bootstrap 42637988126](https://github.com/MateuszZelent/fullmag/actions/runs/42637988126).
+To potwierdza naprawę E0433 w kompilacji wszystkich binarek. Nie jest dowodem CI
+późniejszej poprawki UI ani nowego wczesnego filtra scheduler tests.

@@ -1010,6 +1010,7 @@ export function useStudyInspectorPanelController(
   ]);
   const activeStageIndex = scopedStageExecutionData?.active_stage_index ?? null;
   const commandContext = createCommandContext("inspector", kernel, {
+    commandQueueResourceStatus: commandQueue.status,
     resourceData: {
       ...buildRuntimeCommandControlResourceData({
         commandQueue: commandQueue.data,

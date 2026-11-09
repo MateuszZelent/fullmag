@@ -200,6 +200,10 @@ function runtimeResourceData({
   binaryFields = true,
   commands = null,
   commandCount = 0,
+  commandsRevision = 0,
+  commandCompletionRevision = 0,
+  domainGenerationId,
+  runId,
   discretization = "fdm",
   eigenModes = false,
   explicitTopology = false,
@@ -234,6 +238,10 @@ function runtimeResourceData({
     status: string;
   }> | null;
   commandCount?: number;
+  commandsRevision?: number;
+  commandCompletionRevision?: number;
+  domainGenerationId?: string;
+  runId?: string | null;
   discretization?: string;
   eigenModes?: boolean;
   explicitTopology?: boolean;
@@ -318,6 +326,9 @@ function runtimeResourceData({
         generation_id: 1,
       },
       resources: {
+        commands_revision: commandsRevision,
+        command_completion_revision: commandCompletionRevision,
+        ...(domainGenerationId === undefined ? {} : { domain_generation_id: domainGenerationId }),
         mesh_revision: meshRevision,
         ...(regionCoefficientsRevision === undefined
           ? {}
@@ -333,6 +344,7 @@ function runtimeResourceData({
           : { region_topology_revision: regionTopologyRevision }),
         scene_revision: sceneRevision,
       },
+      ...(runId === undefined ? {} : { run: runId === null ? null : { run_id: runId } }),
     },
     [SIMULATION_COMMANDS_PATH]: {
       accepted_count: 0,
@@ -370,6 +382,49 @@ function runtimeResourceData({
   };
 }
 
+function freshRuntimeQueue(commands: unknown[] = [], revision = 0) {
+  return {
+    accepted_count: 0,
+    can_accept_commands: true,
+    commands,
+    completed_count: 0,
+    dispatched_count: 0,
+    failed_count: 0,
+    pending_count: 0,
+    rejected_count: 0,
+    revision,
+    running_count: 0,
+    runtime_controls: [] as Array<{ kind: string; enabled: boolean; reason?: string | null }>,
+  };
+}
+
+function freshRuntimeAdmissionReads({
+  queue = freshRuntimeQueue(),
+  solverState = "awaiting_command",
+  status = runtimeResourceData({ commandsRevision: 0 })[SESSION_STATUS_RESOURCE_KEY],
+}: {
+  queue?: ReturnType<typeof freshRuntimeQueue>;
+  solverState?: string;
+  status?: unknown;
+} = {}) {
+  return {
+    list: vi.fn(async () => queue),
+    solverStatus: vi.fn(async () => ({ runtime_state: solverState })),
+    status: vi.fn(async () => status),
+  };
+}
+
+function runtimeAdmissionApi(
+  submit: unknown,
+  reads = freshRuntimeAdmissionReads(),
+) {
+  return {
+    commands: { list: reads.list, submit },
+    sessions: { current: { status: reads.status } },
+    simulation: { solver: { status: reads.solverStatus } },
+  };
+}
+
 describe("study runtime command contributions", () => {
   it.each(["run", "relax"] as const)("executes only the clicked authored %s stage", async (kind) => {
     const registry = registryWithStudyRuntimeCommands();
@@ -381,15 +436,17 @@ describe("study runtime command contributions", () => {
     selection.set(studyStageSelection(0, "another-stage").get() as never, "explorer");
     const resources = runtimeResourceData({ sceneRevision: 9, meshRevision: 4 });
     const status = resources[SESSION_STATUS_RESOURCE_KEY] as { resources: object };
+    const capturedStatus = {
+      ...status,
+      resources: { ...status.resources, domain_generation_id: "grid-a" },
+    };
+    const reads = freshRuntimeAdmissionReads({ status: capturedStatus });
     const context = {
-      api: { commands: { submit } } as never,
+      api: runtimeAdmissionApi(submit, reads) as never,
       input: { stageId: "clicked-stage" },
       resourceData: {
         ...resources,
-        [SESSION_STATUS_RESOURCE_KEY]: {
-          ...status,
-          resources: { ...status.resources, domain_generation_id: "grid-a" },
-        },
+        [SESSION_STATUS_RESOURCE_KEY]: capturedStatus,
         [MODEL_SCENE_PATH]: {
           scene_revision: 9,
           study: {
@@ -425,10 +482,11 @@ describe("study runtime command contributions", () => {
   it("uses the exact prepared publication and rejects its replacement before submission", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-stage" }));
-    const api = { commands: { submit } } as unknown as ControlRoomApi;
     const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
     const choice = { kind: "prepared", scene_revision: 9, initial_state_revision: 7, publication_id: "preview-a" } as const;
     const base = runtimeResourceData({ sceneRevision: 9, meshRevision: 4 });
+    const reads = freshRuntimeAdmissionReads({ status: base[SESSION_STATUS_RESOURCE_KEY] });
+    const admissionApi = runtimeAdmissionApi(submit, reads) as unknown as ControlRoomApi;
     const resources = (publicationId: string) => ({
       ...base,
       [MODEL_SCENE_PATH]: {
@@ -444,10 +502,10 @@ describe("study runtime command contributions", () => {
       },
     });
     const context = {
-      api, input: { stageId: "clicked-stage" }, sessionScopeKey, source: "explorer" as const,
+      api: admissionApi, input: { stageId: "clicked-stage" }, sessionScopeKey, source: "explorer" as const,
       resourceData: resources("preview-a"),
     };
-    setStageInitialStateChoice(api, sessionScopeKey, "clicked-stage", 9, choice);
+    setStageInitialStateChoice(admissionApi, sessionScopeKey, "clicked-stage", 9, choice);
 
     await expect(registry.execute("study.execute-stage", context)).resolves.toMatchObject({ status: "pending" });
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
@@ -464,7 +522,6 @@ describe("study runtime command contributions", () => {
   it("uses the selected artifact for the clicked stage and rejects a stale source pin", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-stage" }));
-    const api = { commands: { submit } } as unknown as ControlRoomApi;
     const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
     const initialState = {
       kind: "stage_result", run_id: "relax-a", step_id: "step-a", case_id: "nominal",
@@ -477,9 +534,14 @@ describe("study runtime command contributions", () => {
         study: { stages: [{ kind: "relax", stage_id: "clicked-stage" }] },
       },
     });
+    const initialResources = resources(9);
+    let currentStatus = initialResources[SESSION_STATUS_RESOURCE_KEY];
+    const reads = freshRuntimeAdmissionReads({ status: currentStatus });
+    reads.status.mockImplementation(async () => currentStatus);
+    const api = runtimeAdmissionApi(submit, reads) as unknown as ControlRoomApi;
     const context = {
       api, input: { stageId: "clicked-stage" }, sessionScopeKey, source: "explorer" as const,
-      resourceData: resources(9),
+      resourceData: initialResources,
     };
     setStageInitialStateChoice(api, sessionScopeKey, "clicked-stage", 9, initialState);
 
@@ -494,6 +556,7 @@ describe("study runtime command contributions", () => {
     await expect(registry.execute("study.execute-stage", newer)).resolves.toMatchObject({ status: "failed" });
     expect(submit).toHaveBeenCalledOnce();
 
+    currentStatus = resources(10)[SESSION_STATUS_RESOURCE_KEY];
     await expect(registry.execute("study.execute-stage", newer, {
       stageId: "clicked-stage", initialState: { kind: "authored_study" },
     })).resolves.toMatchObject({ status: "pending" });
@@ -517,18 +580,25 @@ describe("study runtime command contributions", () => {
     const original = {
       ...(resources[SESSION_STATUS_RESOURCE_KEY] as object),
       run: { run_id: "previous-run" },
-      resources: { scene_revision: 9, mesh_revision: 4, domain_generation_id: "grid-a", region_initial_state_revision: 18 },
+      resources: {
+        commands_revision: 1,
+        scene_revision: 9,
+        mesh_revision: 4,
+        domain_generation_id: "grid-a",
+        region_initial_state_revision: 18,
+      },
     };
     const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
 
     const result = await registry.execute("study.execute-stage", {
       api: {
-        commands: { submit },
+        commands: { list: vi.fn(async () => freshRuntimeQueue([], 8)), submit },
         sessions: { current: { status: vi.fn(async () => ({
           ...original,
           resources: { ...original.resources, ...changed },
           run: runId ? { run_id: runId } : null,
         })) } },
+        simulation: { solver: { status: vi.fn(async () => ({ runtime_state: "awaiting_command" })) } },
       } as never,
       input: { stageId: "relax-b" },
       resourceData: {
@@ -576,20 +646,25 @@ describe("study runtime command contributions", () => {
         ? new ControlRoomApiError("Connection lost", 0, null, "API_UNAVAILABLE")
         : new ControlRoomApiError("Response publication failed", status, "request-a", "INTERNAL_ERROR");
     });
-    const list = vi.fn(async () => ({ commands: entry ? [entry] : [] }));
+    const list = vi.fn(async () => freshRuntimeQueue(entry ? [entry] : [], 8));
     const detail = vi.fn(async () => entry);
+    const resourceData = {
+      ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+      [MODEL_SCENE_PATH]: {
+        scene_revision: 9,
+        study: { stages: [{ kind, stage_id: "chosen-stage" }] },
+      },
+    };
 
     const result = await registry.execute("study.execute-stage", {
-      api: { commands: { submit, list, detail } } as never,
+      api: {
+        commands: { submit, list, detail },
+        sessions: { current: { status: vi.fn(async () => resourceData[SESSION_STATUS_RESOURCE_KEY]) } },
+        simulation: { solver: { status: vi.fn(async () => ({ runtime_state: "awaiting_command" })) } },
+      } as never,
       bus,
       input: { stageId: "chosen-stage" },
-      resourceData: {
-        ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
-        [MODEL_SCENE_PATH]: {
-          scene_revision: 9,
-          study: { stages: [{ kind, stage_id: "chosen-stage" }] },
-        },
-      },
+      resourceData,
       sessionScopeKey,
       source: "explorer",
     });
@@ -622,13 +697,17 @@ describe("study runtime command contributions", () => {
     const submit = vi.fn(async () => {
       throw new ControlRoomApiError("Compute is not ready.", status, "request-a", code);
     });
-    const list = vi.fn(async () => ({ commands: [] }));
+    const list = vi.fn(async () => freshRuntimeQueue([], 8));
     const detail = vi.fn();
     const bus = new EventBus<KernelEventMap>();
     const observe = vi.fn();
     bus.on("study:compute-observation", observe);
     const result = await registry.execute("study.execute-stage", {
-      api: { commands: { submit, list, detail } } as never,
+      api: {
+        commands: { submit, list, detail },
+        sessions: { current: { status: vi.fn(async () => runtimeResourceData({ sceneRevision: 9, meshRevision: 4 })[SESSION_STATUS_RESOURCE_KEY]) } },
+        simulation: { solver: { status: vi.fn(async () => ({ runtime_state: "awaiting_command" })) } },
+      } as never,
       bus,
       input: { stageId: "chosen-stage" },
       resourceData: {
@@ -657,9 +736,13 @@ describe("study runtime command contributions", () => {
     const submit = vi.fn(async () => {
       throw new ControlRoomApiError("API instance changed; reopen Fullmag", 409, "request-a", "API_INSTANCE_MISMATCH");
     });
-    const list = vi.fn(async () => ({ commands: [] }));
+    const list = vi.fn(async () => freshRuntimeQueue([], 8));
     const result = await registry.execute("study.execute-stage", {
-      api: { commands: { submit, list } } as never,
+      api: {
+        commands: { submit, list },
+        sessions: { current: { status: vi.fn(async () => runtimeResourceData({ sceneRevision: 9, meshRevision: 4 })[SESSION_STATUS_RESOURCE_KEY]) } },
+        simulation: { solver: { status: vi.fn(async () => ({ runtime_state: "awaiting_command" })) } },
+      } as never,
       bus,
       input: { stageId: "chosen-stage" },
       resourceData: {
@@ -736,7 +819,7 @@ describe("study runtime command contributions", () => {
     objectEditSession.beginSceneMutation("another-session", "other-object");
     const submit = vi.fn();
     const context = {
-      api: { commands: { submit } } as never,
+      api: runtimeAdmissionApi(submit) as never,
       objectEditSession,
       resourceData: runtimeResourceData(),
       sessionScopeKey,
@@ -762,11 +845,16 @@ describe("study runtime command contributions", () => {
         apply: async () => false, applying: false, dirty: true, mode: "staged",
         reset: () => undefined, valid: true,
       });
-      return { commands: [] };
+      return freshRuntimeQueue([], 4);
     });
+    const reads = freshRuntimeAdmissionReads();
 
     const result = await registry.execute("study.run", {
-      api: { commands: { list, submit } } as never,
+      api: {
+        commands: { list, submit },
+        sessions: { current: { status: reads.status } },
+        simulation: { solver: { status: reads.solverStatus } },
+      } as never,
       pendingForms,
       resourceData: runtimeResourceData(),
       source: "ribbon",
@@ -2214,9 +2302,7 @@ describe("study runtime command contributions", () => {
     resources.subscribe(`${DATA_SCALARS_PATH}?limit=100`, scalarWindowListener);
 
     const result = await registry.execute("study.compute-fields", {
-      api: {
-        commands: { submit },
-      } as never,
+      api: runtimeAdmissionApi(submit) as never,
       resourceData: runtimeResourceData(),
       resources,
       source: "test",
@@ -2267,9 +2353,7 @@ describe("study runtime command contributions", () => {
     resources.subscribe(`${DATA_SCALARS_PATH}?limit=100`, scalarWindowListener);
 
     const result = await registry.execute("study.compute-energies", {
-      api: {
-        commands: { submit },
-      } as never,
+      api: runtimeAdmissionApi(submit) as never,
       resourceData: runtimeResourceData(),
       resources,
       source: "test",
@@ -2318,9 +2402,7 @@ describe("study runtime command contributions", () => {
     resources.subscribe(SIMULATION_RUN_CURRENT_PATH, currentRunListener);
 
     const result = await registry.execute("study.run", {
-      api: {
-        commands: { submit },
-      } as never,
+      api: runtimeAdmissionApi(submit) as never,
       resourceData: runtimeResourceData(),
       resources,
       source: "test",
@@ -2433,22 +2515,25 @@ describe("study runtime command contributions", () => {
       order.push("compute");
       return { accepted: true, command_id: "cmd-fem-solve" };
     });
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      explicitTopology: true,
+      meshRevision: 12,
+      meshSourceSceneRevision: 3,
+      sceneRevision: 3,
+    });
+    const reads = freshRuntimeAdmissionReads({ status: resourceData[SESSION_STATUS_RESOURCE_KEY] });
+    const admissionApi = runtimeAdmissionApi(submit, reads);
 
     const result = await registry.execute("study.run", {
       api: {
-        commands: { submit },
+        ...admissionApi,
         meshing: { sharedDomainManifest },
         model: { scene },
-        simulation: { preparation, materializePreparation },
+        simulation: { ...admissionApi.simulation, preparation, materializePreparation },
       } as never,
       resourceData: {
-        ...runtimeResourceData({
-          discretization: "fem",
-          explicitTopology: true,
-          meshRevision: 12,
-          meshSourceSceneRevision: 3,
-          sceneRevision: 3,
-        }),
+        ...resourceData,
         [SIMULATION_PREPARATION_PATH]: {
           preparation_id: "prep-fem",
           status: "ready",
@@ -2502,14 +2587,23 @@ describe("study runtime command contributions", () => {
       command_id: "cmd-fem-solve",
     }));
     let current = true;
+    const resourceData = runtimeResourceData({
+      discretization: "fem",
+      explicitTopology: true,
+      meshRevision: 12,
+      meshSourceSceneRevision: 3,
+      sceneRevision: 3,
+    });
+    const reads = freshRuntimeAdmissionReads({ status: resourceData[SESSION_STATUS_RESOURCE_KEY] });
+    const admissionApi = runtimeAdmissionApi(submit, reads);
     const pending = registry.execute("study.run", {
       api: {
-        commands: { submit },
+        ...admissionApi,
         meshing: {
           sharedDomainManifest: async () => ({ source_scene_revision: 3 }),
         },
         model: { scene: async () => ({ revision: 3 }) },
-        simulation: {
+        simulation: { ...admissionApi.simulation,
           materializePreparation,
           preparation: async () => ({
             preparation_id: "prep-fem",
@@ -2519,13 +2613,7 @@ describe("study runtime command contributions", () => {
       } as never,
       isCurrentSessionScope: () => current,
       resourceData: {
-        ...runtimeResourceData({
-          discretization: "fem",
-          explicitTopology: true,
-          meshRevision: 12,
-          meshSourceSceneRevision: 3,
-          sceneRevision: 3,
-        }),
+        ...resourceData,
         [SIMULATION_PREPARATION_PATH]: {
           preparation_id: "prep-fem",
           status: "ready",
@@ -2577,9 +2665,10 @@ describe("study runtime command contributions", () => {
     const submit = vi.fn(() => new Promise<{ accepted: boolean; command_id: string }>((resolve) => {
       completeSubmit = resolve;
     }));
+    const reads = freshRuntimeAdmissionReads();
     let current = true;
     const pending = registry.execute("study.run", {
-      api: { commands: { submit } } as never,
+      api: runtimeAdmissionApi(submit, reads) as never,
       isCurrentSessionScope: () => current,
       resourceData: runtimeResourceData(),
       resources,
@@ -4050,6 +4139,7 @@ describe("study runtime command contributions", () => {
       resourceData: runtimeResourceData({
         activeStageIndex: 1,
         commandCount: 2,
+        commandsRevision: 2,
         runtimeState: "paused",
         stageRevision: 9,
       }),
@@ -4100,6 +4190,7 @@ describe("study runtime command contributions", () => {
       resourceData: runtimeResourceData({
         activeStageIndex: 1,
         commandCount: 3,
+        commandsRevision: 3,
         runtimeState: "running",
         stageRevision: 11,
       }),
@@ -4125,7 +4216,7 @@ describe("study runtime command contributions", () => {
     );
   });
 
-  it("refreshes pause, stop, and skip preconditions from the command ledger count", async () => {
+  it("refreshes pause, stop, and skip preconditions from the canonical status revision", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const cases = [
       ["study.pause", "pause"],
@@ -4162,6 +4253,9 @@ describe("study runtime command contributions", () => {
         revision: 31,
         runtime_state: "running",
       }));
+      const currentStatus = runtimeResourceData({ commandsRevision: 1 })[
+        SESSION_STATUS_RESOURCE_KEY
+      ];
       const execution = vi.fn(async () => ({
         active_stage_index: 1,
         revision: 22,
@@ -4176,6 +4270,7 @@ describe("study runtime command contributions", () => {
       const result = await registry.execute(commandId, {
         api: {
           commands: { list, submit },
+          sessions: { current: { status: vi.fn(async () => currentStatus) } },
           simulation: {
             solver: { status },
             stages: { execution },
@@ -4184,6 +4279,7 @@ describe("study runtime command contributions", () => {
         resourceData: runtimeResourceData({
           activeStageIndex: 1,
           commandCount: 3,
+          commandsRevision: 4,
           runtimeState: "running",
           stageRevision: 11,
         }),
@@ -4211,7 +4307,7 @@ describe("study runtime command contributions", () => {
     }
   });
 
-  it("refreshes runtime command preconditions from the command ledger count before submit", async () => {
+  it("uses the authoritative command revision for a durable journal with one retained row", async () => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => ({
       accepted: true,
@@ -4221,15 +4317,15 @@ describe("study runtime command contributions", () => {
     const list = vi.fn(async () => ({
       accepted_count: 0,
       can_accept_commands: true,
-      commands: [],
+      commands: [{ command_id: "cmd-grid", kind: "fdm_grid_refresh", status: "completed" }],
       completed_count: 0,
       dispatched_count: 0,
       failed_count: 0,
       pending_count: 0,
       rejected_count: 0,
-      revision: 12,
+      revision: 2,
       running_count: 0,
-      runtime_controls: [],
+      runtime_controls: [{ enabled: true, kind: "solve" }],
     }));
     const status = vi.fn(async () => ({
       revision: 31,
@@ -4241,23 +4337,42 @@ describe("study runtime command contributions", () => {
       runtime_state: "awaiting_command",
       stages: [{ stage_id: "stage-000" }],
     }));
+    const currentStatus = runtimeResourceData({
+      commandCompletionRevision: 0,
+      commandsRevision: 2,
+      domainGenerationId: "domain-current",
+      meshRevision: 4,
+      regionCoefficientsRevision: 17,
+      regionInitialStateRevision: 18,
+      regionMembershipRevision: 16,
+      regionTopologyRevision: 15,
+      runId: "run-current",
+      runtimeState: "awaiting_command",
+      sceneRevision: 3,
+    })[SESSION_STATUS_RESOURCE_KEY];
 
     const result = await registry.execute("study.run", {
       api: {
         commands: { list, submit },
+        sessions: { current: { status: vi.fn(async () => currentStatus) } },
         simulation: {
           solver: { status },
           stages: { execution },
         },
       } as never,
       resourceData: runtimeResourceData({
-        commandCount: 3,
+        commandCount: 1,
+        commandsRevision: 1,
+        domainGenerationId: "domain-current",
+        meshRevision: 4,
         regionCoefficientsRevision: 17,
         regionInitialStateRevision: 18,
         regionMembershipRevision: 16,
         regionTopologyRevision: 15,
+        runId: "run-current",
         runtimeState: "cancelled",
         stageRevision: 9,
+        sceneRevision: 3,
       }),
       source: "test",
     });
@@ -4271,9 +4386,10 @@ describe("study runtime command contributions", () => {
       expect.objectContaining({
         kind: "solve",
         precondition: {
-          command_revision: 0,
-          current_run: { kind: "none" },
-          mesh_revision: 0,
+          command_revision: 2,
+          current_run: { kind: "run", run_id: "run-current" },
+          domain_generation_id: "domain-current",
+          mesh_revision: 4,
           region_coefficients_revision: 17,
           region_initial_state_revision: 18,
           region_membership_revision: 16,
@@ -4283,7 +4399,243 @@ describe("study runtime command contributions", () => {
         },
       }),
     );
+    expect(list).toHaveBeenCalledOnce();
   });
+
+  it("uses commands_revision rather than the aggregate queue revision for a RAM ledger", async () => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "cmd-run" }));
+    const list = vi.fn(async () => ({
+      accepted_count: 0,
+      can_accept_commands: true,
+      commands: [{ command_id: "cmd-a", kind: "solve", status: "completed" }],
+      completed_count: 1,
+      dispatched_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 7,
+      running_count: 0,
+      runtime_controls: [{ enabled: true, kind: "solve" }],
+    }));
+    const currentStatus = runtimeResourceData({
+      commandCompletionRevision: 5,
+      commandsRevision: 2,
+      runtimeState: "awaiting_command",
+    })[SESSION_STATUS_RESOURCE_KEY];
+
+    await registry.execute("study.run", {
+      api: {
+        commands: { list, submit },
+        sessions: { current: { status: vi.fn(async () => currentStatus) } },
+        simulation: { solver: { status: vi.fn(async () => ({ runtime_state: "awaiting_command" })) } },
+      } as never,
+      resourceData: runtimeResourceData({
+        commandCount: 3,
+        commandsRevision: 1,
+        runtimeState: "awaiting_command",
+      }),
+      source: "test",
+    });
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "solve",
+      precondition: expect.objectContaining({ command_revision: 2 }),
+    }));
+    expect(submit.mock.calls[0]?.[0]).not.toMatchObject({
+      precondition: expect.objectContaining({ command_revision: 7 }),
+    });
+  });
+
+  it.each([
+    "status missing",
+    "status read failed",
+    "status revision missing",
+    "queue read failed",
+    "solver read failed",
+  ] as const)(
+    "fails Study Compute closed when the fresh %s is unavailable",
+    async (failure) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
+      const status = vi.fn(async () => runtimeResourceData({ commandsRevision: 2 })[SESSION_STATUS_RESOURCE_KEY]);
+      const list = vi.fn(async () => ({
+        accepted_count: 0,
+        can_accept_commands: true,
+        commands: [],
+        completed_count: 0,
+        dispatched_count: 0,
+        failed_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        revision: 2,
+        running_count: 0,
+        runtime_controls: [{ enabled: true, kind: "solve" }],
+      }));
+      const solverStatus = vi.fn(async () => ({ runtime_state: "awaiting_command" }));
+      const api = {
+        commands: { list, submit },
+        sessions: { current: failure === "status missing" ? {} : { status } },
+        simulation: { solver: { status: solverStatus } },
+      };
+      if (failure === "status read failed") status.mockRejectedValueOnce(new Error("status unavailable"));
+      if (failure === "status revision missing") {
+        const missingRevision = runtimeResourceData({ commandsRevision: 2 })[
+          SESSION_STATUS_RESOURCE_KEY
+        ] as { resources: Record<string, unknown> };
+        delete missingRevision.resources.commands_revision;
+        status.mockResolvedValueOnce(missingRevision as never);
+      }
+      if (failure === "queue read failed") list.mockRejectedValueOnce(new Error("commands unavailable"));
+      if (failure === "solver read failed") solverStatus.mockRejectedValueOnce(new Error("solver unavailable"));
+
+      const result = await registry.execute("study.run", {
+        api: api as never,
+        resourceData: runtimeResourceData({ commandsRevision: 1, runtimeState: "awaiting_command" }),
+        source: "test",
+      });
+
+      expect(result).toMatchObject({ status: "failed" });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "pending count", "running count", "accepted count", "dispatched count",
+    "accepted command", "unknown command", "disabled runtime control", "running solver", "paused solver",
+  ] as const)("does not submit Compute when the fresh queue reports %s", async (blocked) => {
+    const registry = registryWithStudyRuntimeCommands();
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
+    const resourceData = runtimeResourceData({ runtimeState: "awaiting_command" });
+    const queue = freshRuntimeQueue();
+    if (blocked === "pending count") queue.pending_count = 1;
+    if (blocked === "running count") queue.running_count = 1;
+    if (blocked === "accepted count") queue.accepted_count = 1;
+    if (blocked === "dispatched count") queue.dispatched_count = 1;
+    if (blocked === "accepted command") queue.commands.push({ status: "accepted", command_id: "other" });
+    if (blocked === "unknown command") queue.commands.push({ status: "unknown", command_id: "other" });
+    if (blocked === "disabled runtime control") queue.runtime_controls.push({
+      kind: "solve", enabled: false, reason: "Study preparation is unavailable.",
+    });
+    const reads = freshRuntimeAdmissionReads({
+      queue,
+      solverState: blocked === "running solver" ? "running" : blocked === "paused solver" ? "paused" : "awaiting_command",
+      status: resourceData[SESSION_STATUS_RESOURCE_KEY],
+    });
+    const context = { api: runtimeAdmissionApi(submit, reads) as never, resourceData, source: "test" as const };
+
+    expect(registry.isEnabled("study.run", context)).toBe(true);
+    expect(await registry.execute("study.run", context)).toMatchObject({ status: "failed" });
+    expect(reads.list).toHaveBeenCalledOnce();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it.each(["idle", "loading", "stale", "error"] as const)(
+    "disables Inspector Study Compute while command projection status is %s",
+    async (commandQueueResourceStatus) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const submit = vi.fn();
+      const context = {
+        api: { commands: { submit } } as never,
+        commandQueueResourceStatus,
+        resourceData: runtimeResourceData({ commandsRevision: 2, runtimeState: "awaiting_command" }),
+        source: "inspector" as const,
+      };
+
+      expect(registry.isEnabled("study.run", context)).toBe(false);
+      expect(await registry.execute("study.run", context)).toMatchObject({ status: "failed" });
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["run", "relax"] as const)(
+    "fails a selected %s stage closed when its fresh admission read fails",
+    async (kind) => {
+      for (const failedRead of ["status", "queue", "solver"] as const) {
+        const registry = registryWithStudyRuntimeCommands();
+        const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
+        const initialStatus = runtimeResourceData({
+          commandsRevision: 1,
+          runtimeState: "awaiting_command",
+          sceneRevision: 9,
+          meshRevision: 4,
+        })[SESSION_STATUS_RESOURCE_KEY];
+        const status = vi.fn(async () => initialStatus);
+        const list = vi.fn(async () => freshRuntimeQueue([], 8));
+        const solverStatus = vi.fn(async () => ({ runtime_state: "awaiting_command" }));
+        if (failedRead === "status") status.mockRejectedValueOnce(new Error("status unavailable"));
+        if (failedRead === "queue") list.mockRejectedValueOnce(new Error("queue unavailable"));
+        if (failedRead === "solver") solverStatus.mockRejectedValueOnce(new Error("solver unavailable"));
+
+        const result = await registry.execute("study.execute-stage", {
+          api: {
+            commands: { list, submit },
+            sessions: { current: { status } },
+            simulation: { solver: { status: solverStatus } },
+          } as never,
+          input: { stageId: "selected-stage" },
+          resourceData: {
+            ...runtimeResourceData({
+              commandsRevision: 1,
+              runtimeState: "awaiting_command",
+              sceneRevision: 9,
+              meshRevision: 4,
+            }),
+            [MODEL_SCENE_PATH]: {
+              revision: 9,
+              study: { stages: [{ kind, stage_id: "selected-stage" }] },
+            },
+          },
+          source: "explorer",
+        });
+
+        expect(result).toMatchObject({ status: "failed" });
+        expect(submit).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["status", "commands revision", "scene revision", "mesh revision"] as const)(
+    "does not replace missing captured Study %s with a fresh status read",
+    async (missingField) => {
+      const registry = registryWithStudyRuntimeCommands();
+      const submit = vi.fn(async () => ({ accepted: true, command_id: "unexpected" }));
+      const reads = freshRuntimeAdmissionReads({
+        status: runtimeResourceData({
+          commandsRevision: 2,
+          runtimeState: "awaiting_command",
+          sceneRevision: 9,
+          meshRevision: 4,
+        })[SESSION_STATUS_RESOURCE_KEY],
+      });
+      const resourceData = runtimeResourceData({
+        commandsRevision: 1,
+        runtimeState: "awaiting_command",
+        sceneRevision: 9,
+        meshRevision: 4,
+      });
+      if (missingField === "status") {
+        delete resourceData[SESSION_STATUS_RESOURCE_KEY];
+      } else {
+        const currentStatus = resourceData[SESSION_STATUS_RESOURCE_KEY] as {
+          resources: Record<string, unknown>;
+        };
+        if (missingField === "commands revision") delete currentStatus.resources.commands_revision;
+        if (missingField === "scene revision") delete currentStatus.resources.scene_revision;
+        if (missingField === "mesh revision") delete currentStatus.resources.mesh_revision;
+      }
+      const context = {
+        api: runtimeAdmissionApi(submit, reads) as never,
+        resourceData,
+        source: "test" as const,
+      };
+
+      expect(registry.isEnabled("study.run", context)).toBe(false);
+      expect(await registry.execute("study.run", context)).toMatchObject({ status: "failed" });
+      expect(reads.status).not.toHaveBeenCalled();
+      expect(submit).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not attach stage revision preconditions to study-level compute commands", async () => {
     const registry = registryWithStudyRuntimeCommands();

@@ -4,6 +4,17 @@ import { CommandRegistry } from "./CommandRegistry";
 import { createCommandContext } from "./commandContext";
 
 describe("createCommandContext session ownership", () => {
+  it.each(["ready", "stale", "error"] as const)("forwards the Inspector command queue status %s", (status) => {
+    const resources = { commands: { revision: 9 } };
+    const context = createCommandContext("inspector", {} as never, {
+      commandQueueResourceStatus: status,
+      resourceData: resources,
+    });
+
+    expect(context.commandQueueResourceStatus).toBe(status);
+    expect(context.resourceData).toBe(resources);
+  });
+
   it("captures ownership when the UI context is created rather than rebinding old inputs", () => {
     const commands = new CommandRegistry();
     let scope = "session=a&epoch=1";
