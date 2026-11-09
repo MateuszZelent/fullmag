@@ -554,9 +554,6 @@ export class ProjectDocumentController {
             client_intent_id: `control-room-${Date.now()}`,
           },
         });
-        // Host I/O may overlap a scene edit. Keep the document dirty if the
-        // written snapshot can no longer represent the current workspace.
-        if (verifySavedScene) await verifySavedScene();
         const revision =
           typeof result.revision === "number"
             ? result.revision
@@ -565,14 +562,14 @@ export class ProjectDocumentController {
           typeof result.revision === "number"
             ? result.revision
             : snapshot.resource.persisted_revision ?? snapshot.resource.revision;
-        this.snapshot = {
+        const acknowledgedSnapshot = {
           ...snapshot,
           error: null,
-          state: "ready",
+          state: "ready" as const,
           hostPath: result.path,
           resource: {
             ...snapshot.resource,
-            dirty: false,
+            dirty: verifySavedScene !== null,
             persisted_revision: persistedRevision,
             project_id: result.project_id ?? snapshot.resource.project_id,
             revision,
@@ -582,8 +579,19 @@ export class ProjectDocumentController {
                 : result.source_hash,
           },
         };
-        this.notify();
+        // The host ACK is durable even if a scene edit makes this copy stale.
+        // Keep its path/revision for the next CAS while checking currentness.
+        this.snapshot = acknowledgedSnapshot;
         savedToHost = true;
+        if (verifySavedScene) {
+          this.notify();
+          await verifySavedScene();
+          this.snapshot = {
+            ...acknowledgedSnapshot,
+            resource: { ...acknowledgedSnapshot.resource, dirty: false },
+          };
+        }
+        this.notify();
         return;
       }
       downloadProjectArchive(bytes, snapshot.fileName);

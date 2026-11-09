@@ -76,29 +76,50 @@ describe("project Save scene revision fence", () => {
     await expect(f.binding.verifyCurrent(41)).rejects.toThrow(/connection changed/i);
   });
 
-  it("does not mark a desktop copy current when Analysis changes during host Save", async () => {
+  it("retains an acknowledged desktop copy and retries with its revision after a scene edit", async () => {
     const f = fixture();
     const resource: ProjectDocumentResource = {
       archive_base64: bytesToBase64(new Uint8Array([80, 75, 3, 4])),
       dirty: false, durability: "memory_only", name: "Project", project_id: "project",
-      revision: 0, persisted_revision: 0, schema_version: "fullmag.project.v1",
+      revision: 1, persisted_revision: 1, schema_version: "fullmag.project.v1",
       mode: { kind: "read_write" }, migration: { can_write: true, migrated: false,
         preserved_paths: [], source_schema: "fullmag.project.v1", target_schema: "fullmag.project.v1", warnings: [] },
     };
+    const savedPath = "C:/projects/project.fms";
+    const archive2 = bytesToBase64(new Uint8Array([80, 75, 3, 4, 2]));
+    const archive3 = bytesToBase64(new Uint8Array([80, 75, 3, 4, 3]));
+    const authoringUpdate = vi.fn()
+      .mockResolvedValueOnce({ ...resource, archive_base64: archive2, revision: 2, dirty: true })
+      .mockResolvedValueOnce({ ...resource, archive_base64: archive3, revision: 3, persisted_revision: 2, dirty: true });
     const persistence = { projects: {
       create: vi.fn(async () => resource), open: vi.fn(async () => resource),
-      fromScript: vi.fn(), authoringUpdate: vi.fn(async () => resource),
+      fromScript: vi.fn(), authoringUpdate,
     } };
     const controller = new ProjectDocumentController({ persistence });
     await controller.create("Project"); controller.bindAuthoringSession(f.binding);
-    const invoke = vi.fn(async () => {
-      f.state.revision = 42;
-      return { path: "C:\\projects\\project.fms", project_id: "project", revision: 0 };
-    });
+    const invoke = vi.fn()
+      .mockImplementationOnce(async () => {
+        f.state.revision = 42;
+        return { path: savedPath, project_id: "project", revision: 2, source_hash: "sha:copy2" };
+      })
+      .mockResolvedValueOnce({ path: savedPath, project_id: "project", revision: 3, source_hash: "sha:copy3" });
     vi.stubGlobal("window", { __TAURI__: { core: { invoke } } });
     await expect(controller.save()).rejects.toThrow(/scene changed/i);
     expect(invoke).toHaveBeenCalledOnce();
     expect(controller.getSnapshot().resource?.dirty).toBe(true);
-    expect(controller.getSnapshot().resource?.archive_base64).toBe(resource.archive_base64);
+    expect(controller.getSnapshot().resource?.archive_base64).toBe(archive2);
+    expect(controller.getSnapshot().hostPath).toBe(savedPath);
+    expect(controller.getSnapshot().resource?.persisted_revision).toBe(2);
+    expect(controller.getSnapshot().resource?.source_hash).toBe("sha:copy2");
+
+    f.state.sceneRevision = 42;
+    await expect(controller.save()).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[1]).toEqual(["save_project_archive", {
+      request: expect.objectContaining({ target_path: savedPath, expected_revision: 2, archive_base64: archive3 }),
+    }]);
+    expect(controller.getSnapshot().resource?.dirty).toBe(false);
+    expect(controller.getSnapshot().resource?.persisted_revision).toBe(3);
+    expect(controller.getSnapshot().resource?.archive_base64).toBe(archive3);
   });
 });
