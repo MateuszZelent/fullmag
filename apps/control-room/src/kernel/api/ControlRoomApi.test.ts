@@ -3564,6 +3564,46 @@ describe("ControlRoomApi", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, null, "unknown", "not_accepted"])("decodes Compute intent disposition %s without changing the existing error", async (disposition) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({
+      code: "conflict", error: "Original input changed", message: "Original input changed",
+      ...(disposition === undefined ? {} : { intent_disposition: disposition }),
+    }, { status: 409, headers: { "content-type": "application/json" } }));
+    const api = new ControlRoomApi({ fetchImpl });
+
+    await expect(api.commands.submit({ kind: "solve", client_intent_id: "original-intent" }))
+      .rejects.toMatchObject({
+        status: 409, code: "conflict", message: "Original input changed",
+        intentDisposition: disposition === "not_accepted" ? "not_accepted" : null,
+      });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact Compute body and key for a user-initiated retry without an automatic POST retry", async () => {
+    const bodies: string[] = [];
+    const keys: (string | null)[] = [];
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(await new Response(init?.body).text());
+      keys.push(new Headers(init?.headers).get("Idempotency-Key"));
+      if (bodies.length === 1) throw new TypeError("Network response lost");
+      return jsonResponse({ accepted: true, command_id: "original-command" });
+    });
+    const api = new ControlRoomApi({ fetchImpl, maxGetRetries: 2 });
+    const command = {
+      kind: "solve" as const, client_intent_id: "original-intent",
+      target: { kind: "study" as const },
+      precondition: { scene_revision: 9, mesh_revision: 4, command_revision: 2, current_run: { kind: "none" as const } },
+    };
+    await expect(api.commands.submit(command)).rejects.toMatchObject({ code: "API_UNAVAILABLE" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+
+    await expect(api.commands.submit(JSON.parse(bodies[0]) as typeof command))
+      .resolves.toMatchObject({ command_id: "original-command" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(keys).toEqual(["original-intent", "original-intent"]);
+  });
+
   it("submits structured commands through the v2 simulation command resource", async () => {
     const diagnostics = new RequestDiagnosticsController();
     let observedInit: RequestInit | undefined;

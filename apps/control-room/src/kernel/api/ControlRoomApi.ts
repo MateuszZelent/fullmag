@@ -1141,6 +1141,7 @@ export class ControlRoomApiError extends Error {
     readonly status: number,
     readonly requestId: string | null = null,
     readonly code: string | null = null,
+    readonly intentDisposition: "not_accepted" | null = null,
   ) {
     super(message);
     this.name = "ControlRoomApiError";
@@ -4867,6 +4868,7 @@ export class ControlRoomApi {
             response.status,
             response.headers.get("x-request-id"),
             apiError.code,
+            apiError.intentDisposition,
           );
         }
 
@@ -5600,6 +5602,7 @@ function readOpenApiResult<T>(result: {
       response.status,
       response.headers.get("x-request-id"),
       apiError.code,
+      apiError.intentDisposition,
     );
   }
 
@@ -5609,42 +5612,44 @@ function readOpenApiResult<T>(result: {
 interface ParsedOpenApiError {
   code: string | null;
   message: string;
+  intentDisposition: "not_accepted" | null;
 }
 
 function parseOpenApiError(error: unknown, status?: number): ParsedOpenApiError {
   if (error == null) {
-    return { code: null, message: "Request failed" };
+    return { code: null, message: "Request failed", intentDisposition: null };
   }
 
   if (error instanceof ArrayBuffer) {
     const text = new TextDecoder().decode(error);
     if (!text) {
-      return { code: null, message: "Request failed" };
+      return { code: null, message: "Request failed", intentDisposition: null };
     }
     try {
       return parseOpenApiError(JSON.parse(text), status);
     } catch {
-      return { code: null, message: formatPlainErrorBody(status ?? 0, text) };
+      return { code: null, message: formatPlainErrorBody(status ?? 0, text), intentDisposition: null };
     }
   }
 
   if (typeof error === "string") {
-    return { code: null, message: formatPlainErrorBody(status ?? 0, error) };
+    return { code: null, message: formatPlainErrorBody(status ?? 0, error), intentDisposition: null };
   }
 
   if (typeof error === "object") {
     const record = error as Record<string, unknown>;
     const code = typeof record.code === "string" ? record.code : null;
+    const intentDisposition = record.intent_disposition === "not_accepted" ? "not_accepted" : null;
     if (typeof record.message === "string") {
-      return { code, message: record.message };
+      return { code, message: record.message, intentDisposition };
     }
     if (typeof record.error === "string") {
-      return { code, message: record.error };
+      return { code, message: record.error, intentDisposition };
     }
-    return { code, message: "Request failed" };
+    return { code, message: "Request failed", intentDisposition };
   }
 
-  return { code: null, message: "Request failed" };
+  return { code: null, message: "Request failed", intentDisposition: null };
 }
 
 function formatOpenApiError(error: unknown): string {
