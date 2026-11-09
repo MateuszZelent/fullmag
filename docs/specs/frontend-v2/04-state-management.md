@@ -156,6 +156,14 @@ exact intent ID. Once resolved, it becomes inactive; a subsequent explicit
 Build + Study click rechecks the normal model, draft and Compute guards. An
 empty command queue alone never resolves the original submission.
 
+A rendered recovery action captures its original client intent ID and session
+scope. `study.retry-compute` accepts an optional exact `clientIntentId` target;
+a stale or malformed explicit target never falls back to another pending
+intent. Untargeted palette invocation still requires a single retryable intent.
+The Study Runtime inspector presents the recovery action only when the original
+request and its captured identity are available. Rendering, dismissal, reload,
+and changes to model drafts never submit that request automatically.
+
 ### Viewport 3D appearance preferences
 
 `viewport3dStore` owns the viewport's client-side appearance preferences. The

@@ -1136,6 +1136,7 @@ export function useStudyInspectorPanelController(
       ? null
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
+  const retryComputeIntentId = kernel.commandFeedback?.getRetryableStudyCompute(sessionScopeKey)?.clientIntentId ?? null;
   const buildStudyProgress = commands.isActive("study.build-and-run", commandContext)
     ? commandDisabledReason("study.build-and-run") ?? "An existing Build + Study is pending. Check it again to continue."
     : null;
@@ -1741,6 +1742,7 @@ export function useStudyInspectorPanelController(
     model,
     modelReadiness,
     runtimeStatus,
+    retryComputeIntentId,
     runCommand,
     runStage,
     stageRunDisabledReason,
@@ -1790,6 +1792,7 @@ export function StudyInspectorPanel({
     k0ModalReadinessFor,
     model,
     runtimeStatus,
+    retryComputeIntentId,
     runCommand,
     scene,
     sceneHasPayload,
@@ -1964,6 +1967,7 @@ export function StudyInspectorPanel({
             onOpenCommand={(commandId) =>
               dispatch({ type: "setSelectedCommandId", commandId })
             }
+            retryComputeIntentId={retryComputeIntentId}
             runCommand={runCommand}
             stageExecution={stageExecution}
             stepValue={
@@ -2224,6 +2228,7 @@ export function StudyRuntimeSection({
   commandDisabledReason,
   model,
   onOpenCommand,
+  retryComputeIntentId,
   runCommand,
   stageExecution,
   stepValue,
@@ -2232,11 +2237,14 @@ export function StudyRuntimeSection({
   commandDisabledReason: StudyCommandDisabledReason;
   model: StudyInspectorModel;
   onOpenCommand: (commandId: string) => void;
+  retryComputeIntentId?: string | null;
   runCommand: StudyCommandRunner;
   stageExecution?: StageExecutionResourceState | null;
   stepValue: ReactNode;
 }) {
   const telemetryFeedback = stageExecutionFeedback(stageExecution);
+  const retryReason = commandDisabledReason("study.retry-compute");
+  const canRetryCompute = Boolean(retryComputeIntentId) && retryReason === null;
   return (
     <InspectorGroup title="Runtime" badge={model.runtime.state}>
       {telemetryFeedback ? (
@@ -2343,7 +2351,27 @@ export function StudyRuntimeSection({
         label="Current study progress"
         value={model.runtime.progressPercent}
       />
-      <div className="fm-inspector-toolbar">
+      <div key="compute-recovery" className="grid min-w-0 gap-fm-inspector-control" hidden={!canRetryCompute}>
+        {canRetryCompute ? (
+          <>
+            <FeedbackBanner
+              kind="warning"
+              message="Compute confirmation is pending. Retry checks the original request using its saved inputs."
+            />
+            <div className="fm-inspector-toolbar">
+              <StudyCommandButton
+                commandId="study.retry-compute"
+                disabledReason={retryReason}
+                icon={<RotateCcw size={13} aria-hidden="true" />}
+                label="Retry original Compute"
+                onRun={() => runCommand("study.retry-compute", { clientIntentId: retryComputeIntentId })}
+                variant="secondary"
+              />
+            </div>
+          </>
+        ) : null}
+      </div>
+      <div key="runtime-controls" className="fm-inspector-toolbar">
         <StudyCommandButton
           commandId="study.run"
           disabledReason={commandDisabledReason("study.run")}

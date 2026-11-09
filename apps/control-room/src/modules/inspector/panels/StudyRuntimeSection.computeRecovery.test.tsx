@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { StudyRuntimeSection } from "./StudyInspectorPanel";
 import { resolveStudyInspectorModel, studySnapshotFromScene } from "./StudyInspectorPanelModel";
 
-function recoveryMarkup(retryReason: string | null) {
+function recoveryMarkup(retryReason: string | null, clientIntentId: string | null = "unconfirmed-compute") {
   const runCommand = vi.fn();
   const html = renderToStaticMarkup(
     <StudyRuntimeSection
@@ -17,6 +17,7 @@ function recoveryMarkup(retryReason: string | null) {
         stageExecution: null,
       })}
       onOpenCommand={() => undefined}
+      retryComputeIntentId={clientIntentId}
       runCommand={runCommand}
       stepValue="unavailable"
     />,
@@ -36,6 +37,13 @@ describe("Study Runtime Compute recovery affordance", () => {
     expect(compute).toBeDefined();
     expect(compute![1]).toContain("disabled");
     expect(html).toContain("confirmation");
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not render an unbound retry without the captured intent identity", () => {
+    const { html, runCommand } = recoveryMarkup(null, null);
+
+    expect(html).not.toContain("Retry original Compute");
     expect(runCommand).not.toHaveBeenCalled();
   });
 

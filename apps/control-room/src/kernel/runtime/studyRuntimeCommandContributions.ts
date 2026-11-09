@@ -2647,9 +2647,20 @@ function studyNavigationCommand(
   };
 }
 
+function retryableComputeForContext(context: CommandContext) {
+  const input = asRecord(context.input);
+  const targeted = input && Object.prototype.hasOwnProperty.call(input, "clientIntentId");
+  const clientIntentId = targeted ? nonEmptyString(input?.clientIntentId) : undefined;
+  // An old rendered recovery action must never select a newer pending intent.
+  if (targeted && !clientIntentId) return null;
+  return context.commandFeedback?.getRetryableStudyCompute(
+    context.sessionScopeKey, clientIntentId ?? undefined,
+  ) ?? null;
+}
+
 function retryComputeDisabledReason(context: CommandContext): string | null {
   if (!context.api) return "Control-room API is unavailable.";
-  return context.commandFeedback?.getRetryableStudyCompute(context.sessionScopeKey)
+  return retryableComputeForContext(context)
     ? null
     : "No single unresolved Compute with its original request is available to retry.";
 }
@@ -2663,7 +2674,7 @@ const retryComputeCommand: CommandContribution = {
   isEnabled: (context) => retryComputeDisabledReason(context) === null,
   disabledReason: retryComputeDisabledReason,
   run: (context) => {
-    const original = context.commandFeedback?.getRetryableStudyCompute(context.sessionScopeKey);
+    const original = retryableComputeForContext(context);
     const request = original && parseStudyComputeRequestJson(original.requestJson, original);
     if (!request) {
       return { status: "failed", message: "The original Compute request is unavailable; no command was sent." };

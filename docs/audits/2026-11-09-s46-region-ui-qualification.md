@@ -1191,3 +1191,45 @@ po późniejszej zmianie schematu bez ręcznej edycji SDK.
 Dodano niewykonane jeszcze regresje widocznej akcji retry w Study Runtime
 (SSR, nie odbiór przeglądarki) oraz starej akcji wskazującej inny clientIntentId.
 Produktowy przycisk i dokładne targetowanie komendy czekają na ich RED.
+
+
+## Druga próba hosted CI i widoczna akcja recovery
+
+HEAD `508b84157d86b6cc557e6c4538612700d98e4b34` jest wypchnięty.
+[Bootstrap 42709412911](https://github.com/MateuszZelent/fullmag/actions/runs/42709412911),
+frontend job `129474665206`: typecheck/lint przeszły; **9725 PASS / 2 FAIL /
+13 skipped**. Wcześniejsze cztery regresje zostały zamknięte: Controller ma
+21 PASS, Build + Study 15 PASS, Registry 18 PASS; rzeczywisty Runtime race nie
+występuje już w zbiorze błędów. Nowe FAIL prawidłowo wskazują brak przycisku
+retry oraz ignorowanie targetu starej akcji recovery. Nie jest to pełny GREEN.
+
+Następna poprawka pokazuje w Study Runtime wspólny przycisk i banner design
+systemu, bez nowego store, własnego transportu lub automatycznego POST. Kontroler
+Inspectora przechwytuje clientIntentId tego samego ownera i przekazuje go przy
+kliknięciu. Komenda odrzuca stary lub malformed target zamiast wybierać inny
+pending request. Dodano kontrolki dokładnego poprawnego targetu, malformed ID
+i braku przechwyconego ID. Istniejące wywołania bez targetu, także z kontekstem
+wybranego Stage, zachowują dotychczasowe wybieranie jednego oryginalnego intentu.
+Te zmiany wymagają GREEN i rzeczywistego browser finish gate; SSR nie kwalifikuje
+układu, fokusu, kliknięcia ani aktywnej sesji solvera.
+
+W bieżącym Rust job `129474665005` krok przechwycenia prawdziwego source identity
+zakończył się success. Generator job `129474665122` również zakończył się success.
+Wynik zamierzonego backend HTTP RED pozostaje do odczytu.
+
+Ponowny odczyt dokładnego lokalnego exec potwierdził Running i ten sam PID37569;
+API 3243 nadal HTTP200/degraded, active_session=false. Przygotowano odczytowy
+inwentarz 27 działających kontenerów oraz plan opcjonalnego restartu Docker
+Desktop. Dotyczyłby on także chronionej grupy 3242 i innych projektów, a 8
+kontenerów Fullmaga ma restart_policy=no. Osobne pytanie o zgodę pozostaje
+oczekujące; brak restartu, replay i usuwania danych.
+
+
+Log trwającego Rust job 129474665005 stał się dostępny przed końcem workflow.
+Wskazał E0382 w fixture: parametr submit_store_root został przeniesiony do
+AppState, a następnie pożyczony do skonfigurowania testowego runtime. Korekta
+odczytuje ścieżkę z AppState; brak klonowania ani zmian produkcji. To błąd
+kompilacji fixture, nie oczekiwany semantic RED markera. Błędy późniejszych
+kontraktów z tego samego powodu nie są osobnymi problemami runtime. Następny
+push może zastąpić tę już diagnostycznie rozstrzygniętą próbę CI; test HTTP
+nadal musi rzeczywiście dotrzeć do swoich asercji.

@@ -461,6 +461,38 @@ function unconfirmedComputeRecoveryFixture(kind: "solve" | "run" | "relax" = "so
 }
 
 describe("study runtime command contributions", () => {
+  it("retries an explicitly targeted current intent using exactly its saved request", async () => {
+    const f = unconfirmedComputeRecoveryFixture("relax");
+    try {
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+      const original = f.submit.mock.calls[0][0] as { client_intent_id: string };
+      const target = { ...f.context, input: { clientIntentId: original.client_intent_id } };
+      expect(f.registry.isEnabled("study.retry-compute", target)).toBe(true);
+
+      expect(await f.registry.execute("study.retry-compute", target)).toMatchObject({
+        status: "pending", commandId: "confirmed-original", clientIntentId: original.client_intent_id,
+      });
+      expect(f.submit).toHaveBeenCalledTimes(2);
+      expect(f.submit.mock.calls[1][0]).toEqual(original);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it("refuses a malformed explicit retry target without selecting another pending request", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+      const target = { ...f.context, input: { clientIntentId: 42 } };
+
+      expect(await f.registry.execute("study.retry-compute", target)).toMatchObject({ status: "failed" });
+      expect(f.submit).toHaveBeenCalledOnce();
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
   it("does not retry the current intent through a stale recovery action targeting another intent", async () => {
     const f = unconfirmedComputeRecoveryFixture();
     try {
