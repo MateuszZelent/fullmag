@@ -739,7 +739,7 @@ mod tests {
             .store(8, std::sync::atomic::Ordering::Release);
         if connected_runtime_service {
             configure_connected_runtime_service(
-                submit_store_root
+                state_mut.submit_store_root
                     .as_deref()
                     .expect("connected runtime fixture requires an accepted-store root"),
             );
