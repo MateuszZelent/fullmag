@@ -292,6 +292,48 @@ export function regionResetHealthResponseMatches(row, apiInstance) {
     typeof apiInstance === "string" && apiInstance.length > 0 && row.api_instance_id === apiInstance;
 }
 
+const recoverableResourceReadPaths = new Set([
+  base + "model/readiness", base + "model/planar-monitors",
+  base + "simulation/stages/execution", base + "data/fdm-region-memberships",
+]);
+
+export function regionResetResourceReadCancellationAllowed(row, { apiInstance, session, observedCount }) {
+  return row.method === "GET" && recoverableResourceReadPaths.has(row.path) &&
+    row.failure === "net::ERR_ABORTED" &&
+    ["import", "build-study", "observe", "region-reset", "disable", "enable", "export", "stage-b", "reload"].includes(row.phase) &&
+    typeof apiInstance === "string" && apiInstance.length > 0 && row.api_instance_id === apiInstance &&
+    Boolean(session) && row.session_scope === scope(session) &&
+    Number.isSafeInteger(row.event_sequence) && row.event_sequence > 0 &&
+    Number.isSafeInteger(observedCount) && observedCount >= 0 && observedCount < 32;
+}
+
+export function regionResetResourceReadResponseMatches(row, apiInstance, session) {
+  return row.method === "GET" && recoverableResourceReadPaths.has(row.path) && row.status === 200 &&
+    typeof apiInstance === "string" && apiInstance.length > 0 && row.api_instance_id === apiInstance &&
+    row.request_api_instance_id === apiInstance && Boolean(session) && row.session_scope === scope(session) &&
+    Number.isSafeInteger(row.event_sequence) && row.event_sequence > 0;
+}
+
+/** A canceled subscription is never success; require a fully received replacement in the same scope. */
+export function regionResetAssertResourceReadRecovery(report, apiInstance, session) {
+  const cancellations = report.resource_read_cancellations, responses = report.successful_resource_read_responses;
+  assert(Array.isArray(cancellations) && cancellations.length <= 32);
+  assert(Array.isArray(responses) && responses.length <= recoverableResourceReadPaths.size);
+  assert.equal(new Set(responses.map((row) => row.path)).size, responses.length, "Duplicate resource response path");
+  for (const row of responses) assert(regionResetResourceReadResponseMatches(row, apiInstance, session),
+    "Completed resource read belongs to another API, session or path");
+  for (const [index, row] of cancellations.entries()) {
+    assert(regionResetResourceReadCancellationAllowed(row, { apiInstance, session, observedCount: index }),
+      "Resource cancellation is outside its fixed read-only scope");
+    assert(responses.some((response) => response.path === row.path && response.session_scope === row.session_scope &&
+      response.event_sequence > row.event_sequence), "Canceled resource has no completed later same-scope response");
+  }
+  for (const path of recoverableResourceReadPaths) {
+    const count = cancellations.filter((row) => row.path === path).length + responses.filter((row) => row.path === path).length;
+    if (count) assert(count <= (report.request_counts["GET " + path] ?? 0), "Resource observations exceed their request count");
+  }
+}
+
 export function regionResetPinnedHomeUrl(publicUrl, apiInstance) {
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(apiInstance),
     "The workspace must pin the observed API incarnation");
@@ -373,14 +415,14 @@ export async function runRegionResetBrowserQa() {
     command_count: 0, command_attempt_count: 0, grid_command_count: 0, request_counts: {},
     violations: [], failed_write_observations: [], read_timeout_observations: [],
     errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
-    expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [], read_cancellations: [], successful_read_responses: [] };
+    expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [], read_cancellations: [], successful_read_responses: [], resource_read_cancellations: [], successful_resource_read_responses: [], loopback_proxy_failures: [] };
   const gate = { phase: "preflight", session: null, apiInstance: null, sourceName, sourceText,
     importAttempts: 0, createAttempts: 0, replaceAttempts: 0, editAttempts: 0, syncAttempts: 0,
     solverAttempts: 0, gridAttempts: 0, cameraAttempts: 0, clientAckAttempts: 0 };
   let proxy, browser, context, page, writes = [], editAck = null, sync = null, importedScene = null;
   let attemptedWrite = false, origin, total = 0, cleanupStarted = false;
   const emptyRequests = new WeakSet();
-  const pendingHealthObservations = new Set();
+  const pendingReadObservations = new Set();
   const emptyPaths = new Set([base.slice(0, -1), base + "status", base + "simulation/runs/current",
     base + "simulation/stages/execution", base + "simulation/solver/status",
     base + "simulation/preparation"]);
@@ -530,7 +572,7 @@ export async function runRegionResetBrowserQa() {
     return result;
   }
   try {
-    proxy = await startBrowserQaLoopbackProxy(report.public_url, report.probe_url); origin = proxy.origin;
+    proxy = await startBrowserQaLoopbackProxy(report.public_url, report.probe_url, { requestTimeoutMs: Math.min(600000, remaining()) }); origin = proxy.origin;
     const require = createRequire(import.meta.url);
     assert.equal(require("playwright/package.json").version, process.env.CONTROL_ROOM_EXPECTED_PLAYWRIGHT_VERSION);
     const { chromium } = await import("playwright");
@@ -553,20 +595,39 @@ export async function runRegionResetBrowserQa() {
         report.expected_empty_404.push(path);
       } else report.errors.http.push({ path, status: response.status() });
     });
+    let resourceReadEventSequence = 0;
     page.on("requestfinished", (request) => {
-      const path = new URL(request.url()).pathname;
-      if (request.method() !== "GET" || path !== "/v2/platform/health") return;
+      const url = new URL(request.url()), path = url.pathname + url.search;
+      const resourceRead = recoverableResourceReadPaths.has(path);
+      if (request.method() !== "GET" || (!resourceRead && path !== "/v2/platform/health")) return;
+      const eventSequence = ++resourceReadEventSequence;
       // requestfinished requires a fully received response; aborted bodies never qualify as positive proof.
       const observation = request.response().then((response) => {
         if (!response || response.status() !== 200) return;
+        if (resourceRead) {
+          const row = { method: "GET", path, status: 200, event_sequence: eventSequence,
+            api_instance_id: response.headers()["x-fullmag-api-instance"],
+            request_api_instance_id: request.headers()["x-fullmag-api-instance"],
+            session_scope: request.headers()["x-fullmag-session-scope"] };
+          if (!regionResetResourceReadResponseMatches(row, gate.apiInstance, gate.session)) {
+            report.errors.http.push({ path, failure: "Resource response belongs to another API or session" });
+          } else {
+            const previous = report.successful_resource_read_responses.findIndex((value) => value.path === path);
+            if (previous < 0) report.successful_resource_read_responses.push(row);
+            else if (report.successful_resource_read_responses[previous].event_sequence < eventSequence) {
+              report.successful_resource_read_responses[previous] = row;
+            }
+          }
+          return;
+        }
         const row = { method: "GET", path, status: 200,
           api_instance_id: response.headers()["x-fullmag-api-instance"] };
         if (!regionResetHealthResponseMatches(row, gate.apiInstance)) {
           report.errors.http.push({ path, failure: "Health response belongs to another API incarnation" });
         } else if (report.successful_read_responses.length < 16) report.successful_read_responses.push(row);
       }).catch((error) => report.errors.http.push({ path, failure: String(error.message).slice(0,512) }));
-      pendingHealthObservations.add(observation);
-      void observation.finally(() => pendingHealthObservations.delete(observation));
+      pendingReadObservations.add(observation);
+      void observation.finally(() => pendingReadObservations.delete(observation));
     });
     page.on("requestfailed", (request) => {
       const path = new URL(request.url()).pathname;
@@ -575,12 +636,21 @@ export async function runRegionResetBrowserQa() {
         if (report.cleanup_cancellations.length < 32) report.cleanup_cancellations.push({ method: request.method(), path, failure });
         return;
       }
-      const cancellation = { method: request.method(), path, failure, phase: gate.phase,
-        api_instance_id: request.headers()["x-fullmag-api-instance"] };
+      const cancellation = { method: request.method(), path: path + new URL(request.url()).search,
+        failure, phase: gate.phase, event_sequence: ++resourceReadEventSequence,
+        api_instance_id: request.headers()["x-fullmag-api-instance"],
+        session_scope: request.headers()["x-fullmag-session-scope"] };
+      if (regionResetResourceReadCancellationAllowed(cancellation, {
+        apiInstance: gate.apiInstance, session: gate.session, observedCount: report.resource_read_cancellations.length,
+      })) {
+        report.resource_read_cancellations.push(cancellation);
+        return;
+      }
       if (regionResetReadCancellationAllowed(cancellation, {
         apiInstance: gate.apiInstance, observedCount: report.read_cancellations.length,
       })) {
-        report.read_cancellations.push(cancellation);
+        report.read_cancellations.push({ method: cancellation.method, path: cancellation.path,
+          failure: cancellation.failure, phase: cancellation.phase, api_instance_id: cancellation.api_instance_id });
         return;
       }
       // Aborted route violations are already evidence; all other failed requests are unexpected.
@@ -783,11 +853,13 @@ export async function runRegionResetBrowserQa() {
     assert.deepEqual(report.violations, []);
     assert(report.expected_empty_404.length <= 12 &&
       report.expected_console_404.length <= report.expected_empty_404.length, "Uncorrelated empty-workspace errors");
-    await Promise.all([...pendingHealthObservations]);
+    await Promise.all([...pendingReadObservations]);
     assert(report.read_cancellations.length === 0 || report.successful_read_responses.some((row) =>
       regionResetHealthResponseMatches(row, gate.apiInstance)), "Canceled health read has no completed same-API response");
     assert(report.read_cancellations.length + report.successful_read_responses.length <=
       (report.request_counts["GET /v2/platform/health"] ?? 0), "Health observations exceed their request count");
+    regionResetAssertResourceReadRecovery(report, gate.apiInstance, gate.session);
+    assert.deepEqual(proxy.failures, [], "Loopback proxy reported a transport failure");
     assert.deepEqual(report.errors, { page: [], console: [], http: [] });
     report.source_hashes_after = await sourceHashes(paths); assert.deepEqual(report.source_hashes_after, beforeHashes);
     report.state = "passed"; report.phase = "complete";
@@ -825,8 +897,16 @@ export async function runRegionResetBrowserQa() {
       try { await resource?.close(); }
       catch (error) { report.cleanup_errors.push(name + ": " + String(error.message).slice(0,512)); }
     }
-    await Promise.allSettled([...pendingHealthObservations]);
-    if (report.state === "passed" && (report.cleanup_errors.length ||
+    await Promise.allSettled([...pendingReadObservations]);
+    report.loopback_proxy_failures = [...(proxy?.failures ?? [])];
+    if (report.state === "passed") {
+      try { regionResetAssertResourceReadRecovery(report, gate.apiInstance, gate.session); }
+      catch (error) {
+        report.state = "failed"; report.outcome = "unknown";
+        report.failure = String(error?.message ?? error).slice(0, 512); process.exitCode = 1;
+      }
+    }
+    if (report.state === "passed" && (report.cleanup_errors.length || report.loopback_proxy_failures.length ||
         Object.values(report.errors).some((errors) => errors.length) || report.violations.length)) {
       report.state = "failed"; report.outcome = "unknown"; report.failure = "Browser cleanup or a late response is unconfirmed";
       process.exitCode = 1;

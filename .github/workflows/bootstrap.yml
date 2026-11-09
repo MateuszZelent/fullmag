@@ -764,6 +764,7 @@ jobs:
           apps/control-room/scripts/lib/study-texture-browser-qa.node-test.mjs
           apps/control-room/scripts/lib/study-region-reset-browser-qa.node-test.mjs
           apps/control-room/scripts/lib/study-region-reset-runner.node-test.mjs
+          apps/control-room/scripts/lib/browser-qa-loopback-proxy.node-test.mjs
 
       - name: Typecheck, lint and test Control Room
         run: ./scripts/ci/run_frontend3d_required_gate.sh control-room-typecheck-lint-test

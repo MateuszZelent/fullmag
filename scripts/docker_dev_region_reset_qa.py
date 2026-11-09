@@ -886,6 +886,45 @@ def _validate_health_read_observations(report: Mapping[str, object]) -> None:
              "Region reset health-read cancellation lacks a matching successful probe")
 
 
+def _validate_resource_read_observations(report: Mapping[str, object], expected_scope: str) -> None:
+    """A canceled subscription requires a later fully received same-scope replacement."""
+    cancellations = report.get("resource_read_cancellations", [])
+    successes = report.get("successful_resource_read_responses", [])
+    paths = {"/v2/sessions/current/" + suffix for suffix in (
+        "model/readiness", "model/planar-monitors", "simulation/stages/execution", "data/fdm-region-memberships")}
+    _require(isinstance(cancellations, list) and len(cancellations) <= 32
+             and isinstance(successes, list) and len(successes) <= len(paths),
+             "Region reset resource read observations exceed their fixed budgets")
+    api = report.get("api_instance_id")
+    common = {"method", "path", "api_instance_id", "session_scope", "event_sequence"}
+    def valid_common(row):
+        return (isinstance(row, Mapping) and row.get("method") == "GET" and isinstance(row.get("path"), str) and row["path"] in paths
+                and row.get("api_instance_id") == api and row.get("session_scope") == expected_scope
+                and _safe_int(row.get("event_sequence")) and row["event_sequence"] > 0)
+    phases = {"import", "build-study", "observe", "region-reset", "disable", "enable", "export", "stage-b", "reload"}
+    for row in cancellations:
+        _require(valid_common(row) and set(row) == common | {"failure", "phase"}
+                 and row.get("failure") == "net::ERR_ABORTED" and isinstance(row.get("phase"), str) and row["phase"] in phases,
+                 "Region reset resource cancellation is outside its exact read-only scope")
+    for row in successes:
+        _require(valid_common(row) and set(row) == common | {"status", "request_api_instance_id"}
+                 and type(row.get("status")) is int and row["status"] == 200
+                 and row.get("request_api_instance_id") == api,
+                 "Region reset resource response is not a completed same-scope read")
+    _require(len({row["path"] for row in successes}) == len(successes),
+             "Region reset resource read responses contain duplicate paths")
+    for row in cancellations:
+        _require(any(response["path"] == row["path"] and response["event_sequence"] > row["event_sequence"]
+                     for response in successes),
+                 "Region reset resource cancellation has no later completed replacement")
+    counts = report.get("request_counts", {})
+    for path in paths:
+        count = sum(row["path"] == path for row in cancellations + successes)
+        observed = counts.get("GET " + path, 0)
+        _require(_safe_int(observed) and count <= observed,
+                 "Region reset resource read receipts exceed the observed request count")
+
+
 def parse_result(output: bytes, public_url: str, browser_url: str,
                  expected_sources: Mapping[str, str], mode: str,
                  parent_evidence: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -944,6 +983,9 @@ def parse_result(output: bytes, public_url: str, browser_url: str,
     _validate_expected_404s(payload)
     _validate_cleanup(payload)
     _validate_health_read_observations(payload)
+    _validate_resource_read_observations(payload, expected_scope)
+    _require(payload.get("loopback_proxy_failures", []) == [],
+             "Region reset loopback proxy reported an upstream transport failure")
 
     expected_edit_kinds = (["enable"] if phase == "import" else
                            ["region-reset", "disable"] if variant == "local" else ["disable"])

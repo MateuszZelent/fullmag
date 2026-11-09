@@ -470,3 +470,57 @@ test("read-timeout observations are count-bounded and preserve the original time
     (error) => error === original);
   assert.equal(report.read_timeout_observations.length, 32);
 });
+
+test("only bounded same-session resource GET cancellations qualify for later recovery proof", async () => {
+  const { regionResetResourceReadCancellationAllowed } = await import("../check-study-region-reset-browser.mjs");
+  const row = { method: "GET", path: "/v2/sessions/current/model/readiness", failure: "net::ERR_ABORTED",
+    phase: "build-study", api_instance_id: "api", session_scope: scope, event_sequence: 1 };
+  const guard = { apiInstance: "api", session, observedCount: 0 };
+  for (const path of ["model/readiness", "model/planar-monitors", "simulation/stages/execution", "data/fdm-region-memberships"]) {
+    assert.equal(regionResetResourceReadCancellationAllowed({ ...row, path: "/v2/sessions/current/" + path }, guard), true);
+  }
+  for (const patch of [{ method: "POST" }, { failure: "net::ERR_FAILED" }, { path: commandsPath },
+    { path: row.path + "?foreign=1" }, { phase: "preflight" }, { api_instance_id: "foreign" },
+    { session_scope: "foreign" }, { session_scope: undefined }, { event_sequence: 0 }, { event_sequence: 0.5 }]) {
+    assert.equal(regionResetResourceReadCancellationAllowed({ ...row, ...patch }, guard), false);
+  }
+  for (const observedCount of [-1, 32, NaN, 0.5]) {
+    assert.equal(regionResetResourceReadCancellationAllowed(row, { ...guard, observedCount }), false);
+  }
+});
+
+test("a canceled resource requires a fully completed later response with exact path, API and session", async () => {
+  const { regionResetAssertResourceReadRecovery } = await import("../check-study-region-reset-browser.mjs");
+  const canceled = { method: "GET", path: "/v2/sessions/current/model/readiness", failure: "net::ERR_ABORTED",
+    phase: "build-study", api_instance_id: "api", session_scope: scope, event_sequence: 2 };
+  const completed = { method: "GET", path: canceled.path, status: 200, api_instance_id: "api",
+    request_api_instance_id: "api", session_scope: scope, event_sequence: 3 };
+  const report = { resource_read_cancellations: [canceled], successful_resource_read_responses: [completed],
+    request_counts: { ["GET " + canceled.path]: 2 } };
+  regionResetAssertResourceReadRecovery(report, "api", session);
+  for (const patch of [{ path: "/v2/platform/health" }, { path: "/v2/sessions/current/model/planar-monitors" },
+    { status: 500 }, { api_instance_id: "foreign" }, { request_api_instance_id: "foreign" },
+    { session_scope: "foreign" }, { event_sequence: 1 }, { event_sequence: 2 }]) {
+    assert.throws(() => regionResetAssertResourceReadRecovery({ ...report,
+      successful_resource_read_responses: [{ ...completed, ...patch }] }, "api", session));
+  }
+  assert.throws(() => regionResetAssertResourceReadRecovery({ ...report,
+    successful_resource_read_responses: [] }, "api", session));
+  assert.throws(() => regionResetAssertResourceReadRecovery({ ...report,
+    request_counts: { ["GET " + canceled.path]: 1 } }, "api", session));
+});
+
+test("resource recovery is count-bounded and must follow the last cancellation of that resource", async () => {
+  const { regionResetAssertResourceReadRecovery } = await import("../check-study-region-reset-browser.mjs");
+  const canceled = { method: "GET", path: "/v2/sessions/current/simulation/stages/execution", failure: "net::ERR_ABORTED",
+    phase: "build-study", api_instance_id: "api", session_scope: scope, event_sequence: 1 };
+  const completed = { method: "GET", path: canceled.path, status: 200, api_instance_id: "api",
+    request_api_instance_id: "api", session_scope: scope, event_sequence: 2 };
+  const report = { resource_read_cancellations: [canceled, { ...canceled, event_sequence: 3 }],
+    successful_resource_read_responses: [completed], request_counts: { ["GET " + canceled.path]: 4 } };
+  assert.throws(() => regionResetAssertResourceReadRecovery(report, "api", session));
+  regionResetAssertResourceReadRecovery({ ...report,
+    successful_resource_read_responses: [{ ...completed, event_sequence: 4 }] }, "api", session);
+  assert.throws(() => regionResetAssertResourceReadRecovery({ ...report,
+    resource_read_cancellations: Array.from({ length: 33 }, () => canceled) }, "api", session));
+});

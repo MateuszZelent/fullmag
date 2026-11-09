@@ -558,3 +558,46 @@ poszczególnych faz. Przyszła poprawka musi zachować pojedynczą writer lease,
 revalidation bieżącej sceny/kontekstu i atomową publikację przyjętego runu,
 także po anulowaniu żądania HTTP. Wydłużenie budżetu testu nie zamyka tego
 wymagania produkcyjnego.
+
+
+## Native a49 i drugi limit proxy testu
+
+Commit `a49bf958b38bcdc4ad694690b3b41cd7469ff6aa` został wypchnięty.
+Managed stop `3ad2914fcac6497bbe83c44662af4404` zakończył się succeeded;
+3915 plików ce8 zachowało hashe. Fresh-state
+`f7b0483f7f3a44c19e2d006c6d7bc99f` zachował archiwum; DEV
+`e6ead5d2996749e983ea96e31dba0df2` uruchomił native API/helper a49.
+API `f3fd20b5-d289-4e3a-8ea9-379e3ca57344`, pusta kolekcja sesji i warmup
+/workspace 200 (47,14 s) oraz /home 200 zostały potwierdzone przed próbą.
+Rzeczywiste limity nowego renderu wynoszą backend 8 CPU/64 GiB i frontend
+4 CPU/16 GiB; różnią się od poprzedniej konfiguracji. Nie zmieniono ich
+ręcznie podczas kompilacji. Trzy zachowane store: 4133 + 3915 + 3915 plików
+zachowały wszystkie hashe; chroniona grupa 3242 zachowała PID i StartedAt.
+
+QA `b4532bf3543e4226b615ba2ceca0f2dd` jest failed-confirmed, nie eksportem.
+Import/fidelity/ACK przeszły. Write fetch nie przekroczył już własnego limitu
+30 s; odpowiedź nie miała jednak nagłówka API. Źródłem jest odrębny limit
+`forwarded.setTimeout(30_000)` pomocniczego loopback proxy. Jego 502 nie jest
+odpowiedzią przypiętego API i prawidłowo nie kwalifikuje ACK. Produkcyjny
+Next proxy miał już budżet 1 920 250 ms. Scoped readback potwierdził późniejsze
+completed Grid `fm-2b6eb3be-200d-4f46-ba2d-a63372fed752` (89 627 ms), run
+`run-live-4e824c432ffbacfadd4162bd7ec11df13c794abb71f51e0827f8bbc644cad190`,
+waiting_for_solve, zero kroków i brak Compute. Nie ponowiono komendy.
+Zabezpieczono nowy store: 3915 plików / 94 031 799 B.
+
+Próba ujawniła także anulowane odczyty subskrypcji po zmianie sceny. Nowy
+kontrakt dopuszcza jedynie GET ERR_ABORTED dla czterech dokładnych zasobów
+(readiness, planar-monitors, stage execution, FDM region memberships),
+z właściwym API i session scope oraz licznikiem do 32. Każdy taki zapis wymaga
+późniejszej, w pełni odebranej odpowiedzi 200 dla identycznego zasobu i scope;
+przechowywany jest najnowszy numer zdarzenia. Obcy API/scope, inna ścieżka,
+transport failure, wcześniejsza odpowiedź i brak pokrycia nie kwalifikują PASS.
+Błędy proxy są jawne i fatalne. Niezależny parser hosta weryfikuje te same
+warunki. Dotychczasowy ścisły kontrakt pięciu pól anulowania health zachowano.
+
+Regresje Node: 32 PASS. Parser Python: 14 PASS; nowy test negatywny przed
+poprawką wykazał 14 przypadków fałszywego PASS, po poprawce wszystkie odmowy
+przeszły. Dwa testy proxy przeszły RED/GREEN: skonfigurowany timeout i odmowa przed listen.
+Końcowy wspólny zestaw Node: 34 PASS; focused ESLint czterech plików: exit 0.
+Nowy test proxy dodano do istniejącej bramki CI.
+Żaden z tych wyników nie potwierdza pełnego S46 ani responsywności backendu.

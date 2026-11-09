@@ -846,5 +846,45 @@ class RegionResetQaTests(unittest.TestCase):
                                    "s46-independent-import", _parent_evidence("s46-independent-import"))
 
 
+    def test_resource_cancellation_requires_later_same_scope_completed_response(self):
+        report = _report("s46-local-export")
+        path = "/v2/sessions/current/model/readiness"
+        canceled = {"method": "GET", "path": path, "failure": "net::ERR_ABORTED",
+                    "phase": "build-study", "api_instance_id": report["api_instance_id"],
+                    "session_scope": SCOPE, "event_sequence": 1}
+        completed = {"method": "GET", "path": path, "status": 200,
+                     "api_instance_id": report["api_instance_id"],
+                     "request_api_instance_id": report["api_instance_id"],
+                     "session_scope": SCOPE, "event_sequence": 2}
+        report.update(resource_read_cancellations=[canceled], successful_resource_read_responses=[completed],
+                      loopback_proxy_failures=[])
+        report["request_counts"]["GET " + path] = 2
+        region_qa.parse_result(_encoded(report), report["public_url"], report["probe_url"], HASHES, "s46-local-export")
+        changes = [
+            lambda q: q.update(successful_resource_read_responses=[]),
+            lambda q: q["successful_resource_read_responses"][0].update(event_sequence=1),
+            lambda q: q["successful_resource_read_responses"][0].update(session_scope="foreign"),
+            lambda q: q["successful_resource_read_responses"][0].update(api_instance_id="foreign"),
+            lambda q: q["successful_resource_read_responses"][0].update(request_api_instance_id="foreign"),
+            lambda q: q["successful_resource_read_responses"][0].update(path="/v2/platform/health"),
+            lambda q: q["successful_resource_read_responses"][0].update(status=500),
+            lambda q: q["resource_read_cancellations"][0].update(method="POST"),
+            lambda q: q["resource_read_cancellations"][0].update(phase="preflight"),
+            lambda q: q["resource_read_cancellations"][0].update(event_sequence=True),
+            lambda q: q["request_counts"].update({"GET " + path: 1}),
+            lambda q: q.update(resource_read_cancellations=[canceled] * 33),
+            lambda q: q.update(loopback_proxy_failures=["QA frontend proxy timed out"]),
+            lambda q: q.update(loopback_proxy_failures=None),
+            lambda q: q["resource_read_cancellations"][0].update(path=[]),
+            lambda q: q["resource_read_cancellations"][0].update(phase={}),
+            lambda q: q.update(successful_resource_read_responses=[completed, completed]),
+        ]
+        for mutate in changes:
+            value = deepcopy(report)
+            mutate(value)
+            with self.subTest(mutate=mutate), self.assertRaises(BuildControlError):
+                region_qa.parse_result(_encoded(value), value["public_url"], value["probe_url"], HASHES, "s46-local-export")
+
+
 if __name__ == "__main__":
     unittest.main()
