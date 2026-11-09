@@ -190,6 +190,15 @@ impl Writer {
         })
     }
 
+    /// Inspect ownership without acquiring a writer or updating its record.
+    /// A synchronous immutable read can reuse the caller's existing lease.
+    pub(crate) fn current_thread_has_lease(&self) -> Result<bool> {
+        let held = self.held.lock().map_err(|_| anyhow::anyhow!("writer mutex poisoned"))?;
+        Ok(held.as_ref().is_some_and(|active| {
+            active.depth > 0 && active.thread == std::thread::current().id()
+        }))
+    }
+
     pub(crate) fn acquire(self: &Arc<Self>) -> Result<WriteTransaction> {
         let mut held = self
             .held

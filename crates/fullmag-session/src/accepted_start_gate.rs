@@ -134,6 +134,14 @@ impl AcceptedRunStartRelease {
         {
             bail!("accepted run start release differs from its immutable manual RunSpec");
         }
+        if let Some(value) = intent.specification.pointer("/parameters/live_workspace/request_receipt") {
+            let expected: LiveComputeRequestReceipt = serde_json::from_value(value.clone())
+                .context("parse immutable direct Compute request receipt")?;
+            expected.validate()?;
+            if self.live_request.as_ref() != Some(&expected) {
+                bail!("accepted run start release differs from its immutable direct Compute request receipt");
+            }
+        }
         Ok(())
     }
 }
@@ -148,7 +156,37 @@ impl SessionStore {
         if !manual_policy(&intent)? {
             return Ok(true);
         }
-        Ok(self.read_start_release_for_intent(&intent)?.is_some())
+        if self.read_start_release_for_intent(&intent)?.is_none() {
+            return Ok(false);
+        }
+        // Confirm immutable publication under a stable fence. Inspection may
+        // already hold a shared reader, while queue/claim paths own WRITER.
+        // Reusing either avoids promoting a read into a writer or touching its
+        // owner record. A concurrent publisher keeps the reader out until done.
+        let _read = if self.writer.current_thread_has_lease()? {
+            None
+        } else {
+            Some(self.read_transaction()?)
+        };
+        let intent = self.read_run_intent(run_id)?
+            .context("accepted start gate lost its immutable run intent")?;
+        let Some(release) = self.read_start_release_for_intent(&intent)? else {
+            return Ok(false);
+        };
+        let intent_path = checked_path(self.root(), &format!("runs/{run_id}/run_intent.json"))?;
+        if self.read_run_intent_bytes_unlocked(run_id)? != super::serialize_run_intent(&intent)? {
+            bail!("accepted start intent differs from its exact canonical record");
+        }
+        let relative = format!("runs/{run_id}/start_release.json");
+        let release_path = checked_path(self.root(), &relative)?;
+        if read_bounded_regular_file(self.root(), &relative, MAX_RELEASE_BYTES)?
+            != serde_json::to_vec_pretty(&release)?
+        {
+            bail!("accepted start release differs from its exact canonical record");
+        }
+        crate::durability::confirm_publication(&intent_path)?;
+        crate::durability::confirm_publication(&release_path)?;
+        Ok(true)
     }
 
     /// Read the immutable start grant without changing run readiness.
@@ -222,12 +260,18 @@ impl SessionStore {
         if expected_specification_sha256 != intent.payload_sha256 || !manual_policy(&intent)? {
             bail!("start release does not match an immutable manual RunSpec");
         }
+        // A visible RunIntent left by an uncertain rename is insufficient to
+        // authorize execution. Re-establish its exact durable publication while
+        // this same writer lease prevents replacement or concurrent release.
+        self.confirm_run_intent_publication(&intent)?;
         if let Some(existing) = self.read_start_release_for_intent(&intent)? {
             if let Some(receipt) = live_request {
                 if existing.request_id != request_id || existing.live_request.as_ref() != Some(receipt) {
                     bail!("accepted run start was released by a different request");
                 }
             }
+            let path = checked_path(self.root(), &format!("runs/{run_id}/start_release.json"))?;
+            crate::durability::confirm_publication(&path)?;
             return Ok(existing);
         }
         // The immutable cancellation is written before its catalog revision.
@@ -309,6 +353,57 @@ mod tests {
     }
 
     #[test]
+    fn accepted_start_gate_rejects_persistently_uncertain_release_until_confirmed() {
+        let (_directory, store, intent) = fixture(manual());
+        let path = store.root().join("runs/run-held/start_release.json");
+        // Both publisher barriers and the scheduler gate's next barrier fail.
+        crate::durability::fail_directory_barriers_for(&path, 3);
+        let error = store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap_err();
+        assert!(error.is::<crate::PublicationUncertain>());
+        assert!(path.exists(), "the uncertain grant is visible after rename");
+        let error = store.accepted_run_start_permitted("run-held").unwrap_err();
+        assert!(error.is::<crate::PublicationUncertain>());
+        assert!(store.read_run_catalog("run-held").unwrap().is_none());
+        assert!(store.accepted_run_start_permitted("run-held").unwrap());
+    }
+
+    #[test]
+    fn accepted_start_gate_confirmation_reuses_shared_reader_without_owner_writes() {
+        let (_directory, store, intent) = fixture(manual());
+        store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap();
+        let owner = store.root().join("WRITER.owner.json");
+        let before = std::fs::read(&owner).unwrap();
+        let _read = store.read_transaction().unwrap();
+        assert!(store.accepted_run_start_permitted("run-held").unwrap());
+        assert_eq!(std::fs::read(&owner).unwrap(), before);
+    }
+
+    #[test]
+    fn accepted_start_gate_never_releases_an_unconfirmed_run_intent() {
+        let (_directory, store, intent) = fixture(manual());
+        let path = store.root().join("runs/run-held/run_intent.json");
+        crate::durability::fail_directory_barrier_for(&path);
+        let error = store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap_err();
+        assert!(error.is::<crate::PublicationUncertain>());
+        assert!(!store.root().join("runs/run-held/start_release.json").exists());
+        assert!(!store.accepted_run_start_permitted("run-held").unwrap());
+        store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap();
+        assert!(store.accepted_run_start_permitted("run-held").unwrap());
+    }
+
+    #[test]
+    fn accepted_start_gate_replay_confirms_its_existing_release() {
+        let (_directory, store, intent) = fixture(manual());
+        let first = store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap();
+        let path = store.root().join("runs/run-held/start_release.json");
+        crate::durability::fail_directory_barrier_for(&path);
+        let error = store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap_err();
+        assert!(error.is::<crate::PublicationUncertain>());
+        let replay = store.release_accepted_run_start("run-held", &intent.payload_sha256, "compute-first").unwrap();
+        assert_eq!(replay, first);
+    }
+
+    #[test]
     fn accepted_start_gate_release_is_exact_immutable_and_survives_reopen() {
         let (directory, store, intent) = fixture(manual());
         let released = store
@@ -322,6 +417,47 @@ mod tests {
         drop(store);
         let reopened = SessionStore::open_existing(directory.path()).unwrap();
         assert!(reopened.accepted_run_start_permitted("run-held").unwrap());
+    }
+
+    #[test]
+    fn accepted_start_gate_requires_the_exact_immutable_direct_compute_receipt() {
+        let receipt = LiveComputeRequestReceipt {
+            key_sha256: "a".repeat(64),
+            request_sha256: "b".repeat(64),
+            command_id: "compute-stage-a".into(),
+            request_id: Some("trace-stage-a".into()),
+            command_kind: Some("relax".into()),
+            client_intent_id: Some("stage-a-intent".into()),
+            requested_target: Some(json!({"kind": "stage_id", "stage_id": "stage-a"})),
+        };
+        let mut parameters = manual();
+        parameters["live_workspace"] = json!({"request_receipt": receipt});
+        let (directory, store, intent) = fixture(parameters);
+        let mut other = receipt.clone();
+        other.request_sha256 = "c".repeat(64);
+        other.command_id = "compute-whole-study".into();
+        other.requested_target = Some(json!({"kind": "study"}));
+        assert!(store.release_accepted_run_start_for_live_request(
+            "run-held", &intent.payload_sha256, "request-whole-study", &other,
+        ).is_err());
+        assert!(store.release_accepted_run_start(
+            "run-held", &intent.payload_sha256, "request-without-receipt",
+        ).is_err());
+        let path = store.root().join("runs/run-held/start_release.json");
+        assert!(!path.exists());
+        assert!(!store.accepted_run_start_permitted("run-held").unwrap());
+        let grant = store.release_accepted_run_start_for_live_request(
+            "run-held", &intent.payload_sha256, "request-stage-a", &receipt,
+        ).unwrap();
+        assert_eq!(grant.live_request.as_ref(), Some(&receipt));
+        drop(store);
+        let store = SessionStore::open_existing(directory.path()).unwrap();
+        assert!(store.accepted_run_start_permitted("run-held").unwrap());
+        // The shared gate must also reject an already-visible foreign grant.
+        let mut foreign_grant = grant;
+        foreign_grant.live_request = Some(other);
+        std::fs::write(&path, serde_json::to_vec_pretty(&foreign_grant).unwrap()).unwrap();
+        assert!(store.accepted_run_start_permitted("run-held").is_err());
     }
 
     #[test]

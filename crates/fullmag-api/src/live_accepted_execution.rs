@@ -7,6 +7,8 @@
 //! submit routes.  This module never starts a solver and never allocates a
 //! host resource.
 
+mod publication;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -171,8 +173,8 @@ pub(crate) async fn submit_live_command(
     if scene_missing {
         crate::get_or_load_current_live_scene_document_for_context(state, context).await?;
     }
-    let _transition = state.current_live_session_transition.lock().await;
-    submit_live_command_with_transition(state, command, context, request_idempotency_key, None)
+    let mut transition = Some(Arc::clone(&state.current_live_session_transition).lock_owned().await);
+    submit_live_command_with_transition(state, command, context, request_idempotency_key, None, &mut transition)
         .await
         .map(|accepted| accepted.map(|(execution, _)| execution))
 }
@@ -186,6 +188,7 @@ pub(crate) async fn submit_live_command_with_transition(
     context: &CurrentLiveRequestContext,
     request_idempotency_key: Option<String>,
     request_receipt: Option<fullmag_session::LiveComputeRequestReceipt>,
+    transition: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<Option<(AcceptedLiveExecution, SessionStateResponse)>, ApiError> {
     let (scene, source_script_path, previous_run_id, geometry_reuse, prepared_capture) = {
         let current = state.current_live_state.read().await;
@@ -374,6 +377,8 @@ pub(crate) async fn submit_live_command_with_transition(
     let backlog_limit = state.submit_backlog_limit;
     let captured_context = context.clone();
     let command = command.clone();
+    let release_request_id = command.command_id.clone();
+    let release_receipt = request_receipt.clone();
     let prepared_fence = prepared_capture.clone();
     let domain_fence = command.precondition.as_ref()
         .and_then(|precondition| precondition.domain_generation_id.clone());
@@ -420,7 +425,7 @@ pub(crate) async fn submit_live_command_with_transition(
         crate::router_v2::handlers::simulation::commands::validate_command_domain_precondition(
             snapshot, domain_fence.as_deref(),
         )?;
-        if let Some(fence) = prepared_fence {
+        if let Some(fence) = prepared_fence.as_ref() {
             fence.validate(snapshot)?;
         }
     }
@@ -430,54 +435,48 @@ pub(crate) async fn submit_live_command_with_transition(
         ).await?;
         validate_live_scene_for_context(state, context, &prepared.scene).await?;
     }
-    let step_id = prepared.step_ids.first().cloned()
-        .ok_or_else(|| ApiError::internal("accepted live command has no materialized step"))?;
-    let mut current = state.current_live_state.write().await;
-    let snapshot = current.as_mut()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    crate::router_v2::handlers::simulation::commands::validate_command_domain_precondition(
-        snapshot, domain_fence.as_deref(),
-    )?;
-    let mut next = crate::router_v2::handlers::simulation::commands::prepare_accepted_live_compute_snapshot(
-        snapshot,
-        context,
-        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
-        &prepared.run_id,
-        &prepared.step_ids,
-    )?;
-    let accepted = commit_prepared_live_accepted(&prepared)?;
-    // The projector must follow the committed run even if the HTTP future is
-    // dropped or journal publication fails. Install the prevalidated view
-    // under the same guards as the durable commit, before the next await.
+    if prepared.step_ids.is_empty() {
+        return Err(ApiError::internal("accepted live command has no materialized step"));
+    }
+    let selected_step_id = prepared.selected_step_id.clone();
+    let accepted = publication::commit_prepared(
+        state, context, prepared,
+        publication::SnapshotPublication::Compute { domain: domain_fence, prepared_state: prepared_fence },
+        transition,
+    ).await?;
     if let Some(preparation_error) = accepted.preparation_error.as_ref() {
-        next.metadata = Some(accepted_preparation_failure_metadata(
-            &next, &accepted.run_id, &accepted.step_ids, preparation_error,
-        ).into());
-        let realtime_snapshot = next.clone();
-        *snapshot = next;
-        drop(current);
-        if let Err(error) = publish_preparation_failure_realtime(state, &realtime_snapshot).await {
-            tracing::warn!(run_id = %accepted.run_id, error = %error, "failed to publish Compute recovery status");
-        }
         return Err(ApiError::unprocessable_with_code(
             "accepted_run_recovery_required",
-            format!(
-                "accepted run `{}` is durable but preparation is incomplete; no solve or retry was started: {}: {}",
-                accepted.run_id, preparation_error.code, preparation_error.message
-            ),
+            format!("accepted run `{}` is durable but preparation is incomplete; no solve or retry was started: {}: {}",
+                accepted.run_id, preparation_error.code, preparation_error.message),
         ));
     }
-    *snapshot = next;
+    let accepted_context = CurrentLiveRequestContext {
+        run_id: Some(accepted.run_id.clone()), ..context.clone()
+    };
+    // This command has already authorized Compute. The new immutable intent
+    // stays held until confirmed publication and catalog materialization; the
+    // existing release owner retains request identity and schedules the frontier.
+    let released = release_accepted_live_study_with_request(
+        state, &accepted_context, &release_request_id, release_receipt,
+    ).await?.ok_or_else(|| ApiError::internal("confirmed live Compute did not release its start gate"))?;
     Ok(Some((AcceptedLiveExecution {
-        run_id: accepted.run_id,
-        step_id,
-        selected_step_id: prepared.selected_step_id,
+        run_id: released.run_id,
+        step_id: released.step_id,
+        selected_step_id,
     }, admission)))
 }
 
-fn accepted_preparation_recovery_error(
+pub(crate) fn accepted_preparation_recovery_error(
     snapshot: &crate::types::SessionStateResponse,
 ) -> Option<ApiError> {
+    if let Some(publication) = snapshot.metadata.as_ref().and_then(|metadata| metadata.get("accepted_publication")) {
+        if publication.get("durability_status").and_then(Value::as_str) == Some("unconfirmed") {
+            let run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str())
+                .unwrap_or(snapshot.session.run_id.as_str());
+            return Some(unconfirmed_run_intent_error(run_id));
+        }
+    }
     let startup = snapshot.metadata.as_ref().and_then(|metadata| {
         metadata
             .pointer("/docker_startup")
@@ -796,6 +795,9 @@ async fn release_accepted_live_study_with_request(
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
+        if let Some(error) = accepted_preparation_recovery_error(snapshot) {
+            return Err(error);
+        }
         let Some(run) = snapshot.run.as_ref() else {
             return Ok(None);
         };
@@ -933,6 +935,7 @@ pub(crate) async fn submit_live_study_with_transition(
     request_id: String,
     source_sha256: String,
     auto_run: bool,
+    transition: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<AcceptedLiveStudyExecution, ApiError> {
     submit_live_study_with_transition_with_asset_root(
         state,
@@ -942,6 +945,7 @@ pub(crate) async fn submit_live_study_with_transition(
         source_sha256,
         auto_run,
         None,
+        transition,
     )
     .await
 }
@@ -956,6 +960,7 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
     source_sha256: String,
     auto_run: bool,
     asset_root: Option<PathBuf>,
+    transition: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<AcceptedLiveStudyExecution, ApiError> {
     let source_script_path = {
         let current = state.current_live_state.read().await;
@@ -987,38 +992,8 @@ pub(crate) async fn submit_live_study_with_transition_with_asset_root(
         None,
     )
     .await?;
-    // The existing command path already owns the transition fence. The
-    // preparation above writes no accepted durable state; its bounded mesh/cache
-    // artifacts are not a RunIntent. Revalidate and prepare the replacement view
-    // before the synchronous commit so publication cannot orphan a RunIntent.
     validate_live_scene_for_context(state, context, &prepared.scene).await?;
-    let mut current = state.current_live_state.write().await;
-    let session_epoch = state
-        .current_live_session_epoch
-        .load(std::sync::atomic::Ordering::Acquire);
-    let accepted = commit_prepared_live_study_with_snapshot(
-        current.as_mut(),
-        context,
-        session_epoch,
-        &prepared.run_id,
-        &prepared.step_ids,
-        || commit_prepared_live_accepted(&prepared),
-    )?;
-    let realtime_snapshot = current
-        .as_ref()
-        .expect("successful accepted Study commit keeps the current snapshot bound")
-        .clone();
-    drop(current);
-
-    let display_revision = state.current_display_selection.read().await.revision;
-    let realtime_state = crate::current_live_realtime_state_from_snapshot(
-        state,
-        &realtime_snapshot,
-        display_revision,
-    )
-    .await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await?;
-    Ok(accepted)
+    publication::commit_prepared(state, context, prepared, publication::SnapshotPublication::Study, transition).await
 }
 
 /// Prepare a startup or live Study without publishing a durable RunIntent.
@@ -1154,12 +1129,20 @@ pub(crate) async fn validate_live_scene_for_context(
     let snapshot = current
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    validate_live_snapshot_scene(snapshot, context,
+        state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire), scene)
+}
+
+fn validate_live_snapshot_scene(
+    snapshot: &SessionStateResponse,
+    context: &CurrentLiveRequestContext,
+    session_epoch: u64,
+    scene: &fullmag_authoring::SceneDocument,
+) -> Result<(), ApiError> {
     crate::ensure_current_live_request_context(
         snapshot,
         context,
-        state
-            .current_live_session_epoch
-            .load(std::sync::atomic::Ordering::Acquire),
+        session_epoch,
     )?;
     let current_scene = snapshot
         .scene_document
@@ -1207,6 +1190,7 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     state: &Arc<AppState>,
     context: &CurrentLiveRequestContext,
     command_id: &str,
+    transition: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
 ) -> Result<CurrentLiveRequestContext, ApiError> {
     let (scene, current_run_id, current_run_terminal) = {
         let current = state.current_live_state.read().await;
@@ -1314,6 +1298,7 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
         format!("live-preparation-{command_id}"),
         source_sha256,
         false,
+        transition,
     )
     .await?;
     if let Some(preparation_error) = accepted.preparation_error.as_ref() {
@@ -1333,6 +1318,35 @@ pub(crate) async fn ensure_live_accepted_study_with_transition(
     };
     crate::validate_current_live_request_context(state, &accepted_context).await?;
     Ok(accepted_context)
+}
+
+fn unconfirmed_run_intent_error(run_id: &str) -> ApiError {
+    ApiError::unprocessable_with_code(
+        "run_intent_durability_unconfirmed",
+        format!("run `{run_id}` is visible but its RunIntent durability is unconfirmed; recovery is required before Compute or retry; no start release was published"),
+    )
+}
+
+fn unconfirmed_run_intent_metadata(
+    snapshot: &SessionStateResponse,
+    run_id: &str,
+    step_ids: &[String],
+) -> Value {
+    let mut metadata = snapshot.metadata.as_deref().cloned().unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({ "previous_metadata": metadata });
+    }
+    metadata.as_object_mut().expect("publication metadata must be an object").insert(
+        "accepted_publication".into(),
+        json!({
+            "run_id": run_id,
+            "step_ids": step_ids,
+            "durability_status": "unconfirmed",
+            "recovery_required": true,
+            "error_code": "run_intent_durability_unconfirmed",
+        }),
+    );
+    metadata
 }
 
 fn accepted_preparation_failure_metadata(
@@ -1360,16 +1374,6 @@ fn accepted_preparation_failure_metadata(
         }),
     );
     metadata
-}
-
-async fn publish_preparation_failure_realtime(
-    state: &AppState,
-    snapshot: &SessionStateResponse,
-) -> Result<(), ApiError> {
-    let display_revision = state.current_display_selection.read().await.revision;
-    let realtime_state =
-        crate::current_live_realtime_state_from_snapshot(state, snapshot, display_revision).await;
-    crate::publish_current_live_realtime_batch_changed(state, &realtime_state, false, 0).await
 }
 
 /// Persist a Docker live Stop against the exact accepted run. Running or
@@ -1943,7 +1947,9 @@ fn prepare_live_accepted(
         asset_root
     };
     let queue_tasks = match &submission {
-        LiveAcceptedSubmission::Command { .. } => true,
+        // The live finalizer must confirm publication and derived catalogs
+        // before explicit Compute opens the existing durable start gate.
+        LiveAcceptedSubmission::Command { .. } => false,
         LiveAcceptedSubmission::Startup { auto_run, .. } => *auto_run,
     };
     let requested_execution = fullmag_application::RequestedExecution {
@@ -2659,13 +2665,10 @@ fn prepare_live_accepted(
     })
 }
 
-/// Commit one already prepared accepted Study.  This function is deliberately
-/// synchronous: callers invoke it only after acquiring the live transition
-/// fence, so cancellation cannot abandon a `spawn_blocking` future while its
-/// closure continues writing RunIntent/CAS in the background.
-pub(crate) fn commit_prepared_live_accepted(
+/// Publish any prepared legacy profile before either acceptance path stages its inputs.
+fn open_prepared_live_store(
     prepared: &PreparedLiveAcceptedStudy,
-) -> Result<AcceptedLiveStudyExecution, ApiError> {
+) -> Result<fullmag_session::SessionStore, ApiError> {
     let store = open_submit_store(&prepared.store_root)?;
     if let Some(profile) = prepared.migrated_profile_to_publish.as_ref() {
         let profile_catalog = store
@@ -2682,6 +2685,22 @@ pub(crate) fn commit_prepared_live_accepted(
             ));
         }
     }
+    Ok(store)
+}
+
+fn accepted_run_commit_error(error: anyhow::Error) -> ApiError {
+    ApiError::unprocessable_with_code(
+        "accepted_run_commit_failed",
+        format!("durable accepted RunIntent commit failed: {error:#}"),
+    )
+}
+
+/// Startup compatibility path: its finalizer already owns the transition and
+/// performs this blocking commit outside the live snapshot write lock.
+pub(crate) fn commit_prepared_live_accepted(
+    prepared: &PreparedLiveAcceptedStudy,
+) -> Result<AcceptedLiveStudyExecution, ApiError> {
+    let store = open_prepared_live_store(prepared)?;
     // A successful return is the typed commit boundary: the opaque payload
     // was fully validated during preparation, and this helper writes its
     // pinned CAS bytes and RunIntent under one lease. Do not add a fallible
@@ -2698,8 +2717,18 @@ pub(crate) fn commit_prepared_live_accepted(
             format!("durable accepted RunIntent commit failed: {error:#}"),
         )
     })?;
-    let preparation_error = match crate::run_intent_persistence::materialize_accepted_run_catalog(
-        &store,
+    let preparation_error = materialize_prepared_live_catalog(&store, prepared);
+    Ok(AcceptedLiveStudyExecution {
+        run_id: prepared.run_id.clone(), step_ids: prepared.step_ids.clone(), preparation_error,
+    })
+}
+
+fn materialize_prepared_live_catalog(
+    store: &fullmag_session::SessionStore,
+    prepared: &PreparedLiveAcceptedStudy,
+) -> Option<AcceptedLiveStudyPreparationError> {
+    match crate::run_intent_persistence::materialize_accepted_run_catalog(
+        store,
         &prepared.run_id,
         &prepared.project_id,
     ) {
@@ -2719,13 +2748,7 @@ pub(crate) fn commit_prepared_live_accepted(
                 message,
             })
         }
-    };
-
-    Ok(AcceptedLiveStudyExecution {
-        run_id: prepared.run_id.clone(),
-        step_ids: prepared.step_ids.clone(),
-        preparation_error,
-    })
+    }
 }
 
 const MAX_RECOVERY_ERROR_CHARS: usize = 1024;

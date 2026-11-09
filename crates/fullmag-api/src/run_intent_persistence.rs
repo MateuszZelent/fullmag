@@ -24,7 +24,7 @@ use fullmag_session::{
     FmsBatchExpansionProgress, FmsBatchExpansionState, FmsBatchIntent, FmsRunCatalog,
     FmsRunIntent, FmsTaskCatalogEntry, FmsTaskLifecycle, FmsTaskPreparationReceipt,
     FmsTaskReadiness, PreparationReceiptCommitDisposition, RunBacklogFull,
-    RunIntentCommitDisposition, SessionStore,
+    RunIntentCommitDisposition, SessionStore, StagedRunIntentCommitDisposition,
     FMS_BATCH_OUTPUT_STORAGE_SNAPSHOT_SCHEMA, FMS_BATCH_SUBMIT_SNAPSHOT_LEGACY_SCHEMA,
     FMS_BATCH_SUBMIT_SNAPSHOT_SCHEMA, FMS_RUN_CATALOG_SCHEMA,
 };
@@ -398,6 +398,100 @@ pub(crate) fn commit_prepared_run_intent_with_backlog_limit(
     )
 }
 
+/// A same-thread, scoped commit capability. Its staged objects remain protected
+/// by the single writer lease until the publication callback returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreparedRunIntentPublication {
+    Confirmed(SubmitReceipt),
+    VisibleUnconfirmed { run_id: RunId },
+}
+
+pub(crate) type PreparedRunIntentFinalCommit<'stage> =
+    Box<dyn FnOnce() -> Result<PreparedRunIntentPublication> + 'stage>;
+
+fn prepared_run_intent_publication(
+    disposition: StagedRunIntentCommitDisposition,
+    expected_run_id: RunId,
+    payload_fingerprint: String,
+) -> Result<PreparedRunIntentPublication> {
+    let confirmed = |disposition| {
+        PreparedRunIntentPublication::Confirmed(SubmitReceipt {
+            disposition,
+            run_id: expected_run_id.clone(),
+            payload_fingerprint: payload_fingerprint.clone(),
+        })
+    };
+
+    match disposition {
+        StagedRunIntentCommitDisposition::Accepted => {
+            Ok(confirmed(SubmitDisposition::Accepted))
+        }
+        StagedRunIntentCommitDisposition::Replayed { run_id } => {
+            if run_id != expected_run_id.as_str() {
+                bail!("replayed staged run identity differs from the prepared specification");
+            }
+            Ok(confirmed(SubmitDisposition::Replayed))
+        }
+        StagedRunIntentCommitDisposition::VisibleUnconfirmed { run_id } => {
+            if run_id != expected_run_id.as_str() {
+                bail!("visible unconfirmed staged run identity differs from the prepared specification");
+            }
+            Ok(PreparedRunIntentPublication::VisibleUnconfirmed {
+                run_id: expected_run_id,
+            })
+        }
+    }
+}
+
+/// Stage immutable bytes before the caller takes its live snapshot write lock.
+/// Only the final commit capability may cross into that short critical section.
+/// The higher-ranked callback cannot return or move the capability to another
+/// task. Acquisition is retryable; staging/publication is never replayed.
+pub(crate) fn with_staged_prepared_run_intent<T, F>(
+    store: &SessionStore,
+    prepared: &PreparedRunIntentCommit<'_>,
+    backlog_limit: NonZeroUsize,
+    publish: F,
+) -> Result<T>
+where
+    F: for<'stage> FnOnce(PreparedRunIntentFinalCommit<'stage>) -> Result<T>,
+{
+    let _publication_lease =
+        fullmag_runtime_control::retry_store_writer_busy(|| store.write_transaction())?;
+    let payloads = prepared.asset_payloads.as_map();
+    let mut items = vec![prepared.definition_bytes.as_slice(), prepared.study_bytes.as_slice(),
+        prepared.catalog_bytes.as_slice()];
+    items.extend(payloads.values().map(Vec::as_slice));
+    store.with_staged_cas_objects(&items, |objects| {
+        let refs = objects.object_refs();
+        if refs.len() != items.len()
+            || refs[0] != prepared.definition_sha256
+            || refs[1] != prepared.study_sha256
+            || refs[2] != prepared.catalog_sha256
+        {
+            bail!("staged run documents differ from prepared immutable digests");
+        }
+        let mut durable = prepared.durable_intent.clone();
+        durable.accepted_at = Utc::now();
+        durable.definition_object_ref = Some(refs[0].clone());
+        durable.study_object_ref = Some(refs[1].clone());
+        durable.study_catalog_object_ref = Some(refs[2].clone());
+        durable.asset_object_refs = payloads.keys().cloned().zip(refs[3..].iter().cloned()).collect();
+        if durable.payload_sha256 != prepared.payload_fingerprint {
+            bail!("application and staged run specification fingerprints differ");
+        }
+        // Own the receipt data: the higher-ranked capability must not capture
+        // an outer borrow of the prepared input or store. The token already
+        // verifies exact specification/ref equality in the shared commit owner.
+        let expected_run_id = prepared.run_id.clone();
+        let payload_fingerprint = prepared.payload_fingerprint.clone();
+        publish(Box::new(move || {
+            let disposition = objects.commit_run_intent(&durable, Some(backlog_limit))?;
+            prepared_run_intent_publication(disposition, expected_run_id, payload_fingerprint)
+        }))
+    })
+}
+
 enum CommitAssetPayloads<'a> {
     Borrowed(&'a BTreeMap<String, Vec<u8>>),
     Owned(BTreeMap<String, Vec<u8>>),
@@ -438,6 +532,21 @@ pub(crate) struct PreparedRunIntentCommit<'a> {
     study_bytes: Vec<u8>,
     catalog_bytes: Vec<u8>,
     asset_payloads: CommitAssetPayloads<'a>,
+}
+
+pub(crate) fn prepared_run_intent_is_manual(
+    prepared: &PreparedRunIntentCommit<'_>,
+) -> Result<bool> {
+    let Some(policy) = prepared
+        .durable_intent
+        .specification
+        .get("parameters")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|parameters| parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY))
+    else {
+        return Ok(false);
+    };
+    fullmag_session::accepted_run_start_policy_is_manual(policy)
 }
 
 /// Prepare the expensive accepted RunIntent checks outside the live-session
@@ -747,6 +856,16 @@ fn commit_prepared_run_intent_with_optional_backlog_limit(
         Some(limit) => store.commit_run_intent_with_backlog_limit(&durable, limit)?,
         None => store.commit_run_intent(&durable)?,
     };
+    prepared_run_intent_receipt(store, prepared, &durable, disposition)
+}
+
+fn prepared_run_intent_receipt(
+    store: &SessionStore,
+    prepared: &PreparedRunIntentCommit<'_>,
+    durable: &FmsRunIntent,
+    disposition: RunIntentCommitDisposition,
+) -> Result<SubmitReceipt> {
+    let payload_fingerprint = prepared.payload_fingerprint.as_str();
     let (disposition, run_id) = match disposition {
         RunIntentCommitDisposition::Accepted => (
             SubmitDisposition::Accepted,
@@ -756,18 +875,18 @@ fn commit_prepared_run_intent_with_optional_backlog_limit(
             let original = store
                 .read_run_intent(&run_id)?
                 .context("replayed run intent is missing")?;
-            if original.definition_object_ref.as_deref() != Some(definition_object_ref.as_str()) {
+            if original.definition_object_ref.as_deref() != durable.definition_object_ref.as_deref() {
                 bail!("replayed run definition object differs from submitted snapshot");
             }
-            if original.study_object_ref.as_deref() != Some(study_object_ref.as_str()) {
+            if original.study_object_ref.as_deref() != durable.study_object_ref.as_deref() {
                 bail!("replayed run study object differs from submitted plan");
             }
             if original.study_catalog_object_ref.as_deref()
-                != Some(study_catalog_object_ref.as_str())
+                != durable.study_catalog_object_ref.as_deref()
             {
                 bail!("replayed run study catalog differs from submitted planner inputs");
             }
-            if original.asset_object_refs != asset_object_refs {
+            if original.asset_object_refs != durable.asset_object_refs {
                 bail!("replayed run assets differ from submitted immutable payloads");
             }
             let original_specification: RunSpecification =
@@ -2369,14 +2488,7 @@ mod tests {
             .expect("accepted batch submit seeds durable expansion progress")
     }
 
-    /// A competing writer must never be able to wedge in between the CAS blob
-    /// writes and the intent publication of one Submit.  A busy result is only
-    /// legitimate before the submission has published anything.
-    #[test]
-    fn submit_publication_is_one_writer_lease_under_competing_writer() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
+    fn immutable_run_publication_fixture() -> (ProjectEnvelope, StudyPlan, StudyProblemCatalog, RunIntent) {
         let definition =
             ProjectEnvelope::blank(ProjectId::parse("project-lease").unwrap(), "Lease").unwrap();
         let study = StudyPlan::from_pipeline(
@@ -2448,6 +2560,155 @@ mod tests {
             },
         );
         let intent = RunIntent::new("submit-lease", specification);
+        (definition, study, catalog, intent)
+    }
+
+    #[test]
+    fn staged_publication_mapping_preserves_confirmation_and_checks_run_identity() {
+        let expected_run_id = RunId::parse("run-staged-publication").unwrap();
+        let payload_fingerprint = "sha256:fixture".to_string();
+
+        let accepted = prepared_run_intent_publication(
+            StagedRunIntentCommitDisposition::Accepted,
+            expected_run_id.clone(),
+            payload_fingerprint.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            accepted,
+            PreparedRunIntentPublication::Confirmed(SubmitReceipt {
+                disposition: SubmitDisposition::Accepted,
+                ..
+            })
+        ));
+
+        let replayed = prepared_run_intent_publication(
+            StagedRunIntentCommitDisposition::Replayed {
+                run_id: expected_run_id.as_str().to_string(),
+            },
+            expected_run_id.clone(),
+            payload_fingerprint.clone(),
+        )
+        .unwrap();
+        assert!(matches!(
+            replayed,
+            PreparedRunIntentPublication::Confirmed(SubmitReceipt {
+                disposition: SubmitDisposition::Replayed,
+                ..
+            })
+        ));
+
+        let unconfirmed = prepared_run_intent_publication(
+            StagedRunIntentCommitDisposition::VisibleUnconfirmed {
+                run_id: expected_run_id.as_str().to_string(),
+            },
+            expected_run_id.clone(),
+            payload_fingerprint.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            unconfirmed,
+            PreparedRunIntentPublication::VisibleUnconfirmed {
+                run_id: expected_run_id.clone(),
+            }
+        );
+
+        assert!(prepared_run_intent_publication(
+            StagedRunIntentCommitDisposition::VisibleUnconfirmed {
+                run_id: "run-foreign".to_string(),
+            },
+            expected_run_id.clone(),
+            payload_fingerprint.clone(),
+        )
+        .is_err());
+        assert!(prepared_run_intent_publication(
+            StagedRunIntentCommitDisposition::Replayed {
+                run_id: "run-foreign".to_string(),
+            },
+            expected_run_id,
+            payload_fingerprint,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn staged_prepared_intent_keeps_exact_assets_and_replays_across_publication_paths() {
+        let root = std::env::temp_dir().join(format!("fullmag-staged-intent-{}", uuid::Uuid::new_v4().simple()));
+        let store = SessionStore::open(&root).unwrap();
+        let (mut definition, study, catalog, intent) = immutable_run_publication_fixture();
+        let bytes = b"staged accepted asset".to_vec();
+        definition.assets.push(OpaqueAsset::new("project/assets/staged.bin", bytes.clone(), None).unwrap());
+        let mut specification = intent.specification;
+        specification.snapshot = ProjectSnapshot::from_envelope(&definition).unwrap();
+        specification.immutable_assets = vec![ImmutableAssetReference {
+            asset_id: "asset-test".into(), content_sha256: fullmag_session::hex_sha256(&bytes),
+        }];
+        let intent = RunIntent::new("staged-submit", specification);
+        let payloads = BTreeMap::from([("asset-test".into(), bytes.clone())]);
+        let prepared = prepare_owned_run_intent_commit(intent, &definition, &study, &catalog, payloads).unwrap();
+        let limit = NonZeroUsize::new(2).unwrap();
+        with_staged_prepared_run_intent(&store, &prepared, limit, |_commit| Ok(())).unwrap();
+        assert!(store.read_run_intent(prepared.run_id.as_str()).unwrap().is_none());
+        let accepted = with_staged_prepared_run_intent(&store, &prepared, limit, |commit| {
+            assert!(store.read_run_intent(prepared.run_id.as_str())?.is_none());
+            match commit()? {
+                PreparedRunIntentPublication::Confirmed(receipt) => Ok(receipt),
+                PreparedRunIntentPublication::VisibleUnconfirmed { .. } => {
+                    bail!("fixture staged publication should be confirmed")
+                }
+            }
+        })
+        .unwrap();
+        assert_eq!(accepted.disposition, SubmitDisposition::Accepted);
+        let durable = store.read_run_intent(accepted.run_id.as_str()).unwrap().unwrap();
+        assert_eq!(durable.asset_object_refs["asset-test"], fullmag_session::hex_sha256(&bytes));
+        assert_eq!(durable.definition_object_ref.as_deref(), Some(prepared.definition_sha256.as_str()));
+        assert_eq!(durable.study_object_ref.as_deref(), Some(prepared.study_sha256.as_str()));
+        assert_eq!(durable.study_catalog_object_ref.as_deref(), Some(prepared.catalog_sha256.as_str()));
+        let staged_replay = with_staged_prepared_run_intent(&store, &prepared, limit, |commit| {
+            match commit()? {
+                PreparedRunIntentPublication::Confirmed(receipt) => Ok(receipt),
+                PreparedRunIntentPublication::VisibleUnconfirmed { .. } => {
+                    bail!("fixture replay should be confirmed")
+                }
+            }
+        })
+        .unwrap();
+        let legacy_replay =
+            commit_prepared_run_intent_with_backlog_limit(&store, &prepared, limit).unwrap();
+        for replay in [staged_replay, legacy_replay] {
+            assert_eq!(replay.disposition, SubmitDisposition::Replayed);
+            assert_eq!(replay.run_id, accepted.run_id);
+            assert_eq!(replay.payload_fingerprint, accepted.payload_fingerprint);
+        }
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staged_publication_revalidation_conflict_never_commits_an_intent() {
+        let root = std::env::temp_dir().join(format!("fullmag-staged-conflict-{}", uuid::Uuid::new_v4().simple()));
+        let store = SessionStore::open(&root).unwrap();
+        let (definition, study, catalog, intent) = immutable_run_publication_fixture();
+        let prepared = prepare_owned_run_intent_commit(intent, &definition, &study, &catalog, BTreeMap::new()).unwrap();
+        let result = with_staged_prepared_run_intent(&store, &prepared, NonZeroUsize::new(2).unwrap(), |_commit| {
+            Ok(Err::<SubmitReceipt, _>(crate::error::ApiError::conflict("prepared scene changed")))
+        }).unwrap();
+        assert_eq!(result.unwrap_err().status, axum::http::StatusCode::CONFLICT);
+        assert!(store.read_run_intent(prepared.run_id.as_str()).unwrap().is_none());
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A competing writer must never be able to wedge in between the CAS blob
+    /// writes and the intent publication of one Submit.  A busy result is only
+    /// legitimate before the submission has published anything.
+    #[test]
+    fn submit_publication_is_one_writer_lease_under_competing_writer() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let (definition, study, catalog, intent) = immutable_run_publication_fixture();
         let definition_ref = intent.specification.snapshot.definition_sha256.clone();
         let mut accepted_count = 0;
         for attempt in 0..60u64 {

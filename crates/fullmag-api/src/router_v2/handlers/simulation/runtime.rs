@@ -497,9 +497,8 @@ pub async fn get_run_by_id(
     State(state): State<Arc<AppState>>,
     Path(run_id): Path<String>,
 ) -> Result<Json<CurrentRunResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let current = get_current_run(State(Arc::clone(&state))).await?;
-    let _transition = state.current_live_session_transition.lock().await;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -531,7 +530,7 @@ pub async fn get_run_by_id(
 pub async fn get_stage_execution(
     State(state): State<Arc<AppState>>,
 ) -> Result<axum::response::Response, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let Some(snapshot) = guard.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -953,7 +952,7 @@ pub async fn get_hysteresis_plan(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisStagePlanSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let site_count = current_hysteresis_storage_site_count(&state).await;
     let storage_estimate = estimate_hysteresis_storage(&stage.value, site_count);
@@ -1134,7 +1133,7 @@ pub async fn get_hysteresis_protocol(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisProtocolSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let resource = HysteresisProtocolSchema {
         revision: stage.revision,
@@ -1165,7 +1164,7 @@ pub async fn get_hysteresis_stage_saturation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisStageSaturationSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let saturation =
         crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_saturation_result(
@@ -1211,7 +1210,7 @@ pub async fn get_hysteresis_orientation(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisOrientationSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let resource = HysteresisOrientationSchema {
         revision: stage.revision,
@@ -1241,7 +1240,7 @@ pub async fn get_hysteresis_settle_pipeline(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisSettlePipelineSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let resolved_steps = build_hysteresis_resolved_settle_steps(&stage);
     let resolved_branch_ids = build_hysteresis_resolved_branch_ids(&stage);
@@ -1357,7 +1356,7 @@ pub async fn get_hysteresis_execution_tree(
     Path(stage_id): Path<String>,
     Query(query): Query<HysteresisExecutionTreeQuery>,
 ) -> Result<Json<HysteresisExecutionTreeResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let stage = resolve_hysteresis_scene_stage(&state, &stage_id).await?;
     let progress = resolve_hysteresis_stage_progress(&state, &stage.stage_id).await?;
     let points = read_hysteresis_points_if_available(&state, &stage.stage_id).await?;
@@ -1404,7 +1403,7 @@ pub async fn get_hysteresis_progress(
     State(state): State<Arc<AppState>>,
     Path(stage_id): Path<String>,
 ) -> Result<Json<HysteresisProgressSchema>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let mut progress = resolve_hysteresis_stage_progress(&state, &stage_id).await?;
     if let Ok(stage) = resolve_hysteresis_scene_stage(&state, &progress.stage_id).await {
         enrich_hysteresis_progress_counts(&mut progress, &stage);
@@ -1762,7 +1761,7 @@ fn infer_hysteresis_active_point_index(
 pub async fn get_solver_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SolverStatusResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -1884,7 +1883,7 @@ pub async fn get_solver_status(
 pub async fn get_solver_energies_current(
     State(state): State<Arc<AppState>>,
 ) -> Result<axum::response::Response, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -1958,7 +1957,7 @@ pub async fn get_solver_energies_history(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EnergyHistoryQuery>,
 ) -> Result<Json<SolverEnergyHistoryResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -2018,7 +2017,7 @@ pub async fn get_object_metrics(
     State(state): State<Arc<AppState>>,
     Path(object_id): Path<String>,
 ) -> Result<Json<ObjectMetricsResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -2510,7 +2509,7 @@ pub async fn get_command_detail(
     State(state): State<Arc<AppState>>,
     Path(command_id): Path<String>,
 ) -> Result<Json<CommandDetailResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     ensure_workspace(&state).await?;
     let record = {
         let ledger = state.current_command_ledger.lock().await;

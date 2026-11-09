@@ -601,3 +601,149 @@ przeszły. Dwa testy proxy przeszły RED/GREEN: skonfigurowany timeout i odmowa 
 Końcowy wspólny zestaw Node: 34 PASS; focused ESLint czterech plików: exit 0.
 Nowy test proxy dodano do istniejącej bramki CI.
 Żaden z tych wyników nie potwierdza pełnego S46 ani responsywności backendu.
+
+
+## Kandydat poprawki responsywności publikacji live
+
+Inwentarz e6ead rozdziela 3915 plików na 1954 obiekty CAS (93 063 574 B),
+1954 piny (216 894 B) i 7 plików runu (751 331 B). Nie są to 3915
+niezależne payloady. Nie zmierzono dotąd czasu osobnych faz pierwszego Grid.
+
+Kandydat etapuje i weryfikuje obiekty CAS poza snapshot write-lockiem,
+zachowując jedną writer lease. Scoped token HRTB, który nie jest Send,
+przyjmuje tylko dokładny zestaw referencji staged intentu. Piny tymczasowe
+nie stają się stałymi korzeniami GC: po akceptacji korzeniami są RunIntent refs;
+po odmowie zostają nieprzypięte obiekty do zwykłego GC. RAII phase blokuje
+reentrant Store GC także na tym samym wątku. Istniejące publiczne put i zwykły
+commit intentu zachowują dotychczasowe kontrole. Staged ścieżka nie powtarza
+pełnego odczytu payloadów podczas końcowej publikacji.
+
+Owned transition pozostaje w finalizerze po anulowaniu HTTP. Krótki callback
+pod snapshot RW sprawdza aktualny kontekst, transport scope, pełną scenę,
+domenę i jawnie wybrany prepared state, buduje widok z najnowszego snapshotu,
+commit i swap wykonuje bez await. Katalog powstaje potem poza RW; jego błąd
+pozostawia przyjęty run i kwalifikowane metadata recovery. Scope jest jawnie
+przechwytywany przed spawn: Tokio task-local nie jest dziedziczony.
+
+Dodatkowo odczyty readiness, monitorów, stage execution, solvera, energii,
+historii, wybranego runu, command detail i hysteresis korzystają z read-context,
+zachowując końcowe sprawdzenie właściciela/epoki. Połączony command status
+nadal zachowuje transition dla spójnej pary snapshot–ledger; nie przedstawiamy
+go jako odczytu niezależnego od trwającej mutacji. Osobna poprawka FMRM przenosi
+I/O poza snapshot guard i wymaga ponownej zgodności kontekstu, domeny,
+fingerprintu, rewizji membership oraz źródłowego artifact dir przed odpowiedzią.
+
+Przegląd źródłowy nie wykazał cyklu writer→snapshot write przy zachowanym
+owned transition. Dodatkowy przegląd nie znalazł także cyklu snapshot read→Store lease w sprawdzonych
+produkcyjnych ścieżkach. Część pozostałych field GET czyta surowy CAS pod read-lockiem:
+może opóźnić write przy dużym pliku, ale nie czeka na Store lease. Nie kwalifikujemy
+tym przeglądem wydajności dużych domen. Nowe regresje
+obejmują CAS/GC/replay/admission/backlog, odmowę rewalidacji, własność finalizera,
+anulowanie HTTP i rzeczywiste czyste GET pod zajętym transition. Ich wykonanie
+Rust oraz kompilacja kandydata pozostają NIEZWERYFIKOWANE. Parser Rust i 15
+regresji kontraktu workflow przeszły. Nie jest to jeszcze odbiór runtime/UI.
+
+
+## Kompilacja kandydata i domknięcie niepewnej publikacji
+
+Zarządzany DEV `cd705f16bc014bdba34dc9f9e56d9a18` zakończył się `succeeded`.
+To build dirty HEAD `24aade012402f1cbd19503baa2d1186b8f95cdb8`, snapshot
+`645521b4677a8184187456603d63046d2875bc693f24b15746963082b1a37ca4`,
+source digest `d12910b9c13304ad3a2cf5e0572a43b0b508034d79119474fa48f2587f0e17d7`.
+SHA surowego terminala:
+`a582535d729bf3f3b392a0d1d206d04697397451d2322d8567116e2cec21524f`.
+Kompilacja produkcyjna oraz handoff/start API przeszły; nie uruchomiono
+nowych testów Rust ani S46. API potwierdziło pustą listę sesji. Następnie
+zwykły managed stop z drain `21eaaa7ea27946f0a069773ae6a8fefc` zakończył się
+`succeeded`. Chroniona grupa 3242 zachowała API
+`0089cc71-246f-4920-81df-915cc81bc93d`; store oryginalny (4133 pliki) i e6ead
+(3915 plików) zachowały wszystkie hashe. Archiwum refresh 5006 zweryfikowano.
+Wszystkie sześć workflow dla 24aade012 zakończyło się success; ten wynik
+nie obejmuje opisanych poniżej nowych poprawek.
+
+Review wykryło dwie istotne luki: `atomic_write` może zwrócić błąd bariery
+już po widocznym rename RunIntent, a replay receiptu mógł potwierdzić Compute
+bez potwierdzonego zapisu lub po błędzie materializacji katalogu. Nowa ścieżka
+staged rozróżnia potwierdzone Accepted/Replayed i `VisibleUnconfirmed`.
+Ten ostatni wynik wymaga dokładnych bajtów kanonicznego rekordu pod writer
+lease; publikuje tę samą tożsamość runu z osobnym kodem
+`run_intent_durability_unconfirmed`, bez fałszywej deklaracji trwałości.
+Nie materializuje katalogu ani nie otwiera bramki Compute.
+
+Wszystkie staged live intents wymagają immutable manual gate. Jawny Compute
+otwiera istniejący StartRelease dopiero po potwierdzeniu RunIntent i katalogu;
+Study/Grid pozostaje wstrzymane. Ponowienie identycznego żądania wymaga
+potwierdzenia RunIntent, a manual direct receipt bez release wymaga recovery,
+zamiast tworzyć drugi run lub zwracać pozorny sukces. Metadata błędów
+przygotowania i publikacji blokują również wcześniejszą ścieżkę replay.
+
+Dodane regresje dotyczą transient/persistent błędów bariery, exact readback,
+replay, braku publikacji przed rename, widocznej tożsamości i odmowy Compute.
+Aktualne poprawki po cd705 wymagają nowej kompilacji i wykonania testów Rust;
+nie przypisujemy im wcześniejszego dowodu buildu ani odbioru UI. Kontrakt
+workflow ma nadal 15/15 PASS. Pełny S46 i pozostałe bramki planu pozostają otwarte.
+
+
+Review objęło także widoczny, lecz niepotwierdzony StartRelease. Wspólna bramka
+`accepted_run_start_permitted` po znalezieniu manual grantu ponownie odczytuje
+kanoniczny RunIntent i grant pod stabilnym fence, a przed `true` potwierdza obie
+bariery. Wykorzystuje istniejący writer na bieżącym wątku lub shared reader;
+nie wymusza writer lease na read-only projekcji ani nie zapisuje WRITER.owner.
+Brak grantu pozostaje bezpiecznym `false`. Dodano regresje trzech kolejnych
+błędów bariery oraz nested shared reader z niezmienionymi bajtami owner record.
+Przegląd źródłowy tego domknięcia nie wykazał kolejnego P1/P2; nie zastępuje
+testów i nie potwierdza bramek fizycznych. Końcowy parser 17 plików Rust i
+`git diff --check` przeszły; testy Rust nadal czekają na wykonanie.
+
+
+Kolejny dirty kandydat `317207a2b2ec4c6a93c5e1f2c67028bb` zakończył się
+`failed-confirmed`, CLI exit 2, przed startem API. Native make trwał 430 476 ms;
+Rust zgłosił E0599 dla `RunId::to_string` w nowej gałęzi niepewnej publikacji.
+Zmieniono wywołanie na `run_id.as_str().to_owned()`. SHA terminala:
+`085922781c109f2f623fd0ca29e94ecb890f545a0f411f6c4a9077bb340dce6e`.
+Config przypięty do dokładnego compose.json tej próby:
+`8431879e98cf0820542f19fa04978a258793a8f6c07c732dfd5d40e19b25c0e2`.
+Nie wysłano Grid/Compute ani nie uruchomiono testów Rust lub odbioru UI.
+
+Końcowy review replay wykrył dwa dodatkowe przypadki i poprawki:
+
+- Grant musi zawierać dokładny typed receipt osadzony w direct-Compute
+  RunIntent. Inne żądanie nie może zwolnić przygotowanego stage A jako całego
+  Study B. Walidacja działa przed zapisem i przy późniejszym odczycie grantu.
+  Startup bez direct receiptu zachowuje dotychczasową możliwość nowego Compute.
+  Regresja obejmuje brak receiptu, inne żądanie/payload, brak grantu po odmowie,
+  exact success/reopen oraz odmowę już zapisanego obcego grantu.
+- `PublicationUncertain` dla `start_release.json` ma odrębny kod
+  `start_release_durability_unconfirmed`; nie jest błędnie opisywany jako
+  niepotwierdzony RunIntent. Nieznany destination ma ogólny kod publikacji.
+
+Obie poprawki po failed 317207 wymagają nowej kompilacji i testów. Aktualny
+kontrakt workflow: 15/15 PASS. Źródła zawierają gotowy read-only profil odbioru
+inspektora komórki: `--canvas-only --expect-live-field m --expect-fdm-cell-physics`.
+Profil używa rzeczywistego pointer pick, porównuje liczby z publicznym probe,
+sprawdza zakładki z klawiatury, energię density×volume oraz zrzuty light/dark
+przy szerokościach panelu 380/300 px. Jego istnienie nie oznacza wykonania;
+pozostaje do uruchomienia na kwalifikowanym, czystym buildzie.
+
+
+Poprawiony kandydat `a843427be7a246a083ab4b0a6b86893f` zakończył się
+`succeeded` (CLI exit 0). Recreate po błędzie kompilacji
+`e0852c7ddcee4ec3b54badac467d26bc` również succeeded; nie wymagał uruchomienia
+starego solvera ani zmiany chronionej grupy. Native proof dotyczy dirty HEAD
+`24aade012402f1cbd19503baa2d1186b8f95cdb8`, source snapshot
+`2891ea9ad7e92c3e111e9dc4077d37f3fbe6f241371b2c4128cc0d2bf88e18a6`,
+source digest `7a19390c2a8ec7662c3de1182754b65f9425a5636643819319e2872bb2daf718`.
+SHA surowego terminala:
+`e0ae1074adc9d1f538f6117861ee898067053cf83e0b83672297196853344b91`;
+config `988e3097095d4c92fdae8ae178e6c6729859752fed1b0df82c37d433788a79d2`.
+Wszystkie 19 zamrożonych plików zachowały dokładne hashe podczas buildu.
+API `560c72ad-5048-4555-af95-36652f841bc4` zwróciło health 200 bez aktywnej
+sesji i sessions 200 z pustą listą. Nie wysłano Grid/Compute.
+
+Kod produkcyjny kompiluje się; nowych testów Rust jeszcze nie wykonano.
+Zakończony source review obejmuje pierwotne i dodatkowe ustalenia oraz ich
+poprawki; nie zgłoszono pozostałego actionable problemu w tym zakresie.
+Przed odbiorem UI pozostają wykonanie nowych regresji oraz czysty native
+build commita. Oryginalne 4133 pliki i trzy zachowane zbiory po 3915 plików
+ponownie potwierdziły wszystkie hashe. Chronione kontenery 3242 zachowały
+PID 40953/41010 oraz StartedAt z 2026-11-08 12:36:17 UTC.

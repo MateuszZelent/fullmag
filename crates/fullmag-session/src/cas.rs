@@ -131,6 +131,60 @@ impl CasStore {
         Ok(hashes)
     }
 
+    /// Stage objects under the caller's existing writer lease without creating
+    /// durable pins. This is intentionally crate-private: only a scoped store
+    /// publication may rely on these references before it publishes a root.
+    pub(crate) fn stage_unpinned_batch(&self, items: &[&[u8]]) -> Result<Vec<String>> {
+        let mut hashes = Vec::with_capacity(items.len());
+        let mut new_objects: Vec<(String, &[u8])> = Vec::new();
+        let mut pending = std::collections::HashMap::<String, &[u8]>::new();
+
+        for data in items {
+            let hash = hex_sha256(data);
+            if let Some(existing_length) = self.verified_length(&hash)? {
+                let expected_length = u64::try_from(data.len())?;
+                if existing_length != expected_length {
+                    anyhow::bail!("CAS object {hash} length differs from the supplied bytes");
+                }
+            } else if let Some(previous) = pending.get(&hash) {
+                if *previous != *data {
+                    anyhow::bail!("different bytes produced the same staged CAS digest {hash}");
+                }
+            } else {
+                pending.insert(hash.clone(), data);
+                new_objects.push((hash.clone(), data));
+            }
+            hashes.push(hash);
+        }
+
+        for (hash, data) in &new_objects {
+            crate::durability::atomic_write_deferring_directory_barrier(
+                &self.object_path(hash)?,
+                data,
+            )?;
+        }
+        // Seal the directory even when all objects already exist: they may
+        // have survived an earlier attempt whose rename barrier was uncertain.
+        if !hashes.is_empty() {
+            let objects = self.root.join("sha256");
+            crate::durability::sync_directory(&objects).map_err(|error| {
+                anyhow::Error::new(crate::durability::PublicationUncertain::new(objects, error))
+            })?;
+        }
+
+        // Re-read newly published objects through the bounded verifier before
+        // exposing their refs to the scoped publication token.
+        for (hash, data) in &new_objects {
+            let actual_length = self
+                .verified_length(hash)?
+                .with_context(|| format!("staged CAS object {hash} disappeared"))?;
+            if actual_length != u64::try_from(data.len())? {
+                anyhow::bail!("staged CAS object {hash} has an unexpected length");
+            }
+        }
+        Ok(hashes)
+    }
+
     /// Store a verified file without materializing its contents in memory.
     ///
     /// The source is fingerprinted before pinning and verified again while it

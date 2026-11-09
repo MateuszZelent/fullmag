@@ -95,6 +95,24 @@ impl LiveComputeRequest {
         if current.session_id != expected.session_id || current.session_epoch != expected.session_epoch {
             return Err(ApiError::conflict("request_context_stale"));
         }
+        {
+            let snapshot = state.current_live_state.read().await;
+            let snapshot = snapshot
+                .as_ref()
+                .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+            crate::ensure_current_live_request_context(
+                snapshot,
+                &current,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )?;
+            if let Some(error) =
+                crate::live_accepted_execution::accepted_preparation_recovery_error(snapshot)
+            {
+                return Err(error);
+            }
+        }
         let Some(root) = state.submit_store_root.clone() else {
             return Ok(None);
         };
@@ -130,34 +148,101 @@ impl LiveComputeRequest {
             {
                 continue;
             }
-            if let Some(receipt) = receipt_from_intent(&intent)? {
-                self.match_receipt(&intent, receipt, false, &mut response)?;
-            } else if intent.idempotency_key == legacy_intent_key {
+
+            let manual_start = run_intent_requires_manual_start(&intent)?;
+            let direct_receipt = receipt_from_intent(&intent)?;
+            let direct_matches = direct_receipt
+                .as_ref()
+                .map(|receipt| self.receipt_matches_request(receipt))
+                .transpose()?
+                .unwrap_or(false);
+
+            if manual_start && direct_receipt.is_some() {
+                if direct_matches {
+                    let permitted = store
+                        .accepted_run_start_permitted(&intent.run_id)
+                        .map_err(|error| publication_or_store_error(error, &intent.run_id))?;
+                    if !permitted {
+                        return Err(accepted_compute_release_required());
+                    }
+                    let release = store
+                        .read_accepted_run_start_release(&intent.run_id)
+                        .map_err(store_error)?
+                        .ok_or_else(accepted_compute_release_required)?;
+                    let Some(release_receipt) = release.live_request else {
+                        return Err(accepted_compute_release_required());
+                    };
+                    if Some(&release_receipt) != direct_receipt.as_ref() {
+                        return Err(store_error(
+                            "manual live Compute receipt does not match its verified start release",
+                        ));
+                    }
+                    self.match_receipt(
+                        store,
+                        &intent,
+                        direct_receipt.expect("manual direct receipt was present"),
+                        false,
+                        &mut response,
+                    )?;
+                    continue;
+                }
+
+                let release = store
+                    .read_accepted_run_start_release(&intent.run_id)
+                    .map_err(store_error)?;
+                if let Some(release_receipt) =
+                    release.as_ref().and_then(|grant| grant.live_request.as_ref())
+                {
+                    if self.receipt_matches_request(release_receipt)? {
+                        return Err(store_error(
+                            "manual live Compute receipt does not match its verified start release",
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            if direct_receipt.is_none() && intent.idempotency_key == legacy_intent_key {
                 return Err(ApiError::conflict_with_code(
                     "live_compute_legacy_idempotency_unverifiable",
                     "This Compute key was previously accepted without a request digest. Inspect the existing run.",
                 ));
             }
 
-            if let Some(release) = store.read_accepted_run_start_release(&intent.run_id).map_err(store_error)? {
+            if let Some(receipt) = direct_receipt {
+                self.match_receipt(store, &intent, receipt, false, &mut response)?;
+            }
+            if let Some(release) = store
+                .read_accepted_run_start_release(&intent.run_id)
+                .map_err(store_error)?
+            {
                 if let Some(receipt) = release.live_request {
-                    self.match_receipt(&intent, receipt, true, &mut response)?;
+                    if manual_start {
+                        if self.receipt_matches_request(&receipt)? {
+                            let permitted = store
+                                .accepted_run_start_permitted(&intent.run_id)
+                                .map_err(|error| publication_or_store_error(error, &intent.run_id))?;
+                            if !permitted {
+                                return Err(accepted_compute_release_required());
+                            }
+                            self.match_receipt(store, &intent, receipt, true, &mut response)?;
+                        }
+                    } else {
+                        self.match_receipt(store, &intent, receipt, true, &mut response)?;
+                    }
                 }
             }
         }
         Ok(response)
     }
 
-    fn match_receipt(
+    fn receipt_matches_request(
         &self,
-        intent: &fullmag_session::FmsRunIntent,
-        receipt: LiveComputeRequestReceipt,
-        released_study: bool,
-        response: &mut Option<CommandResponse>,
-    ) -> Result<(), ApiError> {
+        receipt: &LiveComputeRequestReceipt,
+    ) -> Result<bool, ApiError> {
         receipt.validate().map_err(store_error)?;
         if receipt.key_sha256 != self.key_sha256 {
-            return Ok(());
+            return Ok(false);
         }
         if receipt.request_sha256 != self.request_sha256 {
             return Err(ApiError::conflict_with_code(
@@ -165,6 +250,21 @@ impl LiveComputeRequest {
                 "This Compute key has already been used for a different request in this session.",
             ));
         }
+        Ok(true)
+    }
+
+    fn match_receipt(
+        &self,
+        store: &SessionStore,
+        intent: &fullmag_session::FmsRunIntent,
+        receipt: LiveComputeRequestReceipt,
+        released_study: bool,
+        response: &mut Option<CommandResponse>,
+    ) -> Result<(), ApiError> {
+        if !self.receipt_matches_request(&receipt)? {
+            return Ok(());
+        }
+        confirm_run_intent_publication(store, intent)?;
         if response.is_some() {
             return Err(ApiError::conflict_with_code(
                 "live_compute_receipt_ambiguous",
@@ -246,6 +346,7 @@ pub(crate) fn accepted_command_readback(
     run_status: &str,
 ) -> Result<Option<TrackedCommandRecord>, ApiError> {
     let direct_receipt = receipt_from_intent(intent)?;
+    let manual_start = run_intent_requires_manual_start(intent)?;
     let live = intent.specification.pointer("/parameters/live_workspace");
     let direct_command = live.and_then(|live| {
         let command = live.get("command")?;
@@ -255,6 +356,39 @@ pub(crate) fn accepted_command_readback(
             && live.get("command_id").and_then(serde_json::Value::as_str) == Some(id))
             .then_some(command)
     });
+    let start_permitted = if manual_start {
+        Some(
+            store
+                .accepted_run_start_permitted(&intent.run_id)
+                .map_err(|error| publication_or_store_error(error, &intent.run_id))?,
+        )
+    } else {
+        None
+    };
+    let release = if !manual_start || start_permitted == Some(true) || direct_command.is_none() {
+        store
+            .read_accepted_run_start_release(&intent.run_id)
+            .map_err(store_error)?
+    } else {
+        None
+    };
+    if manual_start && direct_command.is_some() {
+        if start_permitted != Some(true) {
+            return Ok(None);
+        }
+        let Some(receipt) = direct_receipt.as_ref() else {
+            return Ok(None);
+        };
+        let Some(release_receipt) = release.as_ref().and_then(|grant| grant.live_request.as_ref()) else {
+            return Ok(None);
+        };
+        if release_receipt != receipt {
+            return Err(store_error(
+                "manual live Compute receipt does not match its verified start release",
+            ));
+        }
+    }
+
     let (mut command, request_id, execution_binding) = if let Some(value) = direct_command {
         let command: SessionCommand = serde_json::from_value(value.clone()).map_err(store_error)?;
         if direct_receipt.as_ref().is_some_and(|receipt| {
@@ -270,7 +404,7 @@ pub(crate) fn accepted_command_readback(
         if direct_receipt.is_some() {
             return Err(store_error("live Compute RunIntent has no command readback"));
         }
-        let Some(grant) = store.read_accepted_run_start_release(&intent.run_id).map_err(store_error)? else {
+        let Some(grant) = release else {
             return Ok(None);
         };
         let Some(receipt) = grant.live_request else {
@@ -351,6 +485,54 @@ pub(crate) async fn retained_command_binding(
     .map_err(store_error)?
 }
 
+fn run_intent_requires_manual_start(
+    intent: &fullmag_session::FmsRunIntent,
+) -> Result<bool, ApiError> {
+    let Some(parameters) = intent
+        .specification
+        .get("parameters")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(false);
+    };
+    let Some(policy) = parameters.get(fullmag_session::ACCEPTED_RUN_START_POLICY_KEY) else {
+        return Ok(false);
+    };
+    fullmag_session::accepted_run_start_policy_is_manual(policy).map_err(store_error)
+}
+
+fn accepted_compute_release_required() -> ApiError {
+    ApiError::conflict_with_code(
+        "accepted_compute_release_required",
+        "This Compute request was accepted but its manual start release is not present; inspect the existing run before retrying.",
+    )
+}
+
+fn publication_or_store_error(error: anyhow::Error, run_id: &str) -> ApiError {
+    if let Some(uncertain) = error.downcast_ref::<fullmag_session::PublicationUncertain>() {
+        let (code, record) = match uncertain.destination().file_name().and_then(|name| name.to_str()) {
+            Some("run_intent.json") => ("run_intent_durability_unconfirmed", "RunIntent"),
+            Some("start_release.json") => ("start_release_durability_unconfirmed", "start release"),
+            _ => ("accepted_publication_durability_unconfirmed", "accepted publication"),
+        };
+        ApiError::unprocessable_with_code(
+            code,
+            format!("run `{run_id}` has unconfirmed {record} durability; inspect the existing run before retrying"),
+        )
+    } else {
+        store_error(error)
+    }
+}
+
+fn confirm_run_intent_publication(
+    store: &SessionStore,
+    intent: &fullmag_session::FmsRunIntent,
+) -> Result<(), ApiError> {
+    store
+        .confirm_run_intent_publication(intent)
+        .map_err(|error| publication_or_store_error(error, &intent.run_id))
+}
+
 fn store_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::internal(format!("reading durable live Compute receipt: {error}"))
 }
@@ -378,6 +560,45 @@ mod tests {
         })).unwrap()
     }
 
+    fn manual_direct_intent(
+        run_id: &str,
+        receipt: &LiveComputeRequestReceipt,
+    ) -> fullmag_session::FmsRunIntent {
+        let target = receipt
+            .requested_target
+            .clone()
+            .unwrap_or_else(|| json!({"kind": "study"}));
+        let kind = receipt.command_kind.as_deref().unwrap_or("relax");
+        fullmag_session::FmsRunIntent::new(
+            run_id,
+            format!("live-http-v2-{}", receipt.key_sha256),
+            json!({
+                "run_id": run_id,
+                "parameters": {
+                    (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                        "schema_version": "accepted_run_start_policy.v1",
+                        "mode": "manual"
+                    },
+                    "live_workspace": {
+                        "session_id": "session-a",
+                        "session_epoch": 8,
+                        "command_id": receipt.command_id,
+                        "request_receipt": receipt.clone(),
+                        "step_id": "canonical-relax-a",
+                        "command": {
+                            "seq": 0,
+                            "command_id": receipt.command_id,
+                            "kind": kind,
+                            "created_at_unix_ms": 123,
+                            "client_intent_id": receipt.client_intent_id,
+                            "target": target
+                        }
+                    }
+                }
+            }),
+        )
+    }
+
     #[test]
     fn unkeyed_compute_records_a_private_acceptance_without_public_replay() {
         let owner = context("session-a");
@@ -389,6 +610,115 @@ mod tests {
         assert!(first.legacy_intent_key.is_none());
         let receipt = first.receipt("command-first".into());
         assert_eq!(receipt.requested_target, Some(json!({"kind":"study"})));
+    }
+
+    #[test]
+    fn manual_direct_receipt_requires_verified_release_and_replays_one_exact_ack() {
+        let owner = context("session-a");
+        let submitted = request("relax-a");
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let first = LiveComputeRequest::capture(
+            &owner,
+            &submitted,
+            Some("compute-intent"),
+            Some("trace-first".into()),
+        )
+        .unwrap()
+        .unwrap();
+        let receipt = first.receipt("command-first".into());
+        let intent = manual_direct_intent("run-manual-direct", &receipt);
+        store.commit_run_intent(&intent).unwrap();
+        drop(store);
+
+        let store = SessionStore::open_existing(directory.path()).unwrap();
+        let retry = LiveComputeRequest::capture(
+            &owner,
+            &submitted,
+            Some("compute-intent"),
+            Some("trace-retry".into()),
+        )
+        .unwrap()
+        .unwrap();
+        let held_error = retry.replay(&store, &owner).unwrap_err();
+        assert_eq!(
+            held_error.code.as_deref(),
+            Some("accepted_compute_release_required")
+        );
+        assert!(accepted_command_readback(&store, &intent, "running")
+            .unwrap()
+            .is_none());
+
+        store
+            .release_accepted_run_start_for_live_request(
+                &intent.run_id,
+                &intent.payload_sha256,
+                "start-manual-direct",
+                &receipt,
+            )
+            .unwrap();
+        drop(store);
+
+        let store = SessionStore::open_existing(directory.path()).unwrap();
+        let response = retry.replay(&store, &owner).unwrap().unwrap();
+        assert!(response.accepted);
+        assert_eq!(response.command_id, "command-first");
+        assert_eq!(response.request_id.as_deref(), Some("trace-first"));
+        let binding = response.execution_binding.as_ref().unwrap();
+        assert_eq!(binding.run_id, "run-manual-direct");
+        assert_eq!(
+            binding.requested_target,
+            Some(RuntimeCommandTarget::StageId {
+                stage_id: "relax-a".into()
+            })
+        );
+        assert_eq!(binding.step_id.as_deref(), Some("canonical-relax-a"));
+        let record = accepted_command_readback(&store, &intent, "running")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.command.execution_binding.as_ref(), Some(binding));
+
+        let changed_body = LiveComputeRequest::capture(
+            &owner,
+            &request("relax-b"),
+            Some("compute-intent"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            changed_body
+                .replay(&store, &owner)
+                .unwrap_err()
+                .code
+                .as_deref(),
+            Some("live_compute_idempotency_conflict")
+        );
+
+        let duplicate = manual_direct_intent("run-manual-duplicate", &receipt);
+        let duplicate_path = store
+            .root()
+            .join("runs")
+            .join(&duplicate.run_id)
+            .join("run_intent.json");
+        std::fs::create_dir_all(duplicate_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &duplicate_path,
+            serde_json::to_vec_pretty(&duplicate).unwrap(),
+        )
+        .unwrap();
+        store
+            .release_accepted_run_start_for_live_request(
+                &duplicate.run_id,
+                &duplicate.payload_sha256,
+                "start-manual-duplicate",
+                &receipt,
+            )
+            .unwrap();
+        assert_eq!(
+            retry.replay(&store, &owner).unwrap_err().code.as_deref(),
+            Some("live_compute_receipt_ambiguous")
+        );
     }
 
     #[test]

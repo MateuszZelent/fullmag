@@ -81,22 +81,35 @@ pub(super) struct ResolvedFdmMembership {
 pub async fn get_fdm_region_memberships(
     State(state): State<Arc<AppState>>,
 ) -> Result<axum::response::Response, ApiError> {
-    let guard = state.current_live_state.read().await;
-    let snapshot = guard
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    if !is_fdm_snapshot(snapshot) {
-        return Ok(StatusCode::NO_CONTENT.into_response());
-    }
-    let descriptor = if has_membership_descriptor_artifact(snapshot) {
-        load_descriptor(snapshot)?.0
-    } else if !has_fdm_execution_plan(snapshot) {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+    let context = crate::capture_current_live_read_context(&state).await?;
+    let snapshot = capture_fdm_membership_read_snapshot(&state, Some(&context)).await?;
+    let (captured_snapshot, response) = tokio::task::spawn_blocking(move || {
+        build_fdm_region_memberships_response(snapshot)
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(format!("FDM membership descriptor read task failed: {error}"))
+    })??;
+    revalidate_fdm_membership_read_snapshot(&state, &captured_snapshot, &context).await?;
+    Ok(response)
+}
+
+fn build_fdm_region_memberships_response(
+    snapshot: SessionStateResponse,
+) -> Result<(SessionStateResponse, axum::response::Response), ApiError> {
+    let response = if !is_fdm_snapshot(&snapshot) {
+        StatusCode::NO_CONTENT.into_response()
+    } else if has_membership_descriptor_artifact(&snapshot) {
+        let descriptor = load_descriptor(&snapshot)?.0;
+        Json(to_resource(&snapshot, descriptor)).into_response()
+    } else if !has_fdm_execution_plan(&snapshot) {
+        StatusCode::NO_CONTENT.into_response()
     } else {
-        let resolved = load_resolved_fdm_membership(snapshot)?;
-        descriptor_from_resolved_membership(snapshot, &resolved)?
+        let resolved = load_resolved_fdm_membership(&snapshot)?;
+        let descriptor = descriptor_from_resolved_membership(&snapshot, &resolved)?;
+        Json(to_resource(&snapshot, descriptor)).into_response()
     };
-    Ok(Json(to_resource(snapshot, descriptor)).into_response())
+    Ok((snapshot, response))
 }
 
 #[utoipa::path(
@@ -128,7 +141,7 @@ pub async fn get_fdm_region_membership_binary(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    let context = crate::capture_current_live_request_context(&state).await?;
+    let context = crate::capture_current_live_read_context(&state).await?;
     serve_fdm_region_membership_binary_with_context(state, headers, None, Some(&context)).await
 }
 
@@ -165,7 +178,7 @@ pub async fn get_fdm_region_membership_binary_scoped(
     Query(query): Query<FdmRegionMembershipScopeQuery>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    let context = crate::capture_current_live_request_context(&state).await?;
+    let context = crate::capture_current_live_read_context(&state).await?;
     serve_fdm_region_membership_binary_with_context(
         state,
         headers,
@@ -181,27 +194,25 @@ pub(crate) async fn serve_fdm_region_membership_binary_with_context(
     region_scope: Option<(Option<String>, String)>,
     context: Option<&crate::types::CurrentLiveRequestContext>,
 ) -> Result<axum::response::Response, ApiError> {
-    let snapshot = {
-        let _transition = if context.is_some() {
-            Some(state.current_live_session_transition.lock().await)
-        } else {
-            None
-        };
-        let guard = state.current_live_state.read().await;
-        let snapshot = guard
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-        if let Some(context) = context {
-            crate::ensure_current_live_request_context(
-                snapshot,
-                context,
-                state
-                    .current_live_session_epoch
-                    .load(std::sync::atomic::Ordering::Acquire),
-            )?;
-        }
-        snapshot.clone()
-    };
+    let snapshot = capture_fdm_membership_read_snapshot(&state, context).await?;
+    let (captured_snapshot, response) = tokio::task::spawn_blocking(move || {
+        build_fdm_region_membership_binary_response(snapshot, headers, region_scope)
+    })
+    .await
+    .map_err(|error| {
+        ApiError::internal(format!("FDM membership binary read task failed: {error}"))
+    })??;
+    if let Some(context) = context {
+        revalidate_fdm_membership_read_snapshot(&state, &captured_snapshot, context).await?;
+    }
+    Ok(response)
+}
+
+fn build_fdm_region_membership_binary_response(
+    snapshot: SessionStateResponse,
+    headers: HeaderMap,
+    region_scope: Option<(Option<String>, String)>,
+) -> Result<(SessionStateResponse, axum::response::Response), ApiError> {
     let (descriptor, original) = if has_membership_descriptor_artifact(&snapshot) {
         let (descriptor, artifact_dir) = load_descriptor(&snapshot)?;
         let binary_path = resolve_artifact_path(&artifact_dir, &descriptor.binary_path)?;
@@ -297,21 +308,71 @@ pub(crate) async fn serve_fdm_region_membership_binary_with_context(
         "x-fullmag-region-membership-revision",
         &snapshot.region_realization_revisions.membership.to_string(),
     );
+    Ok((snapshot, response))
+}
+
+async fn capture_fdm_membership_read_snapshot(
+    state: &Arc<AppState>,
+    context: Option<&crate::types::CurrentLiveRequestContext>,
+) -> Result<SessionStateResponse, ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
     if let Some(context) = context {
-        let _transition = state.current_live_session_transition.lock().await;
-        let current = state.current_live_state.read().await;
-        let current = current
-            .as_ref()
-            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
         crate::ensure_current_live_request_context(
-            current,
+            snapshot,
             context,
             state
                 .current_live_session_epoch
                 .load(std::sync::atomic::Ordering::Acquire),
         )?;
     }
-    Ok(response)
+    Ok(snapshot.clone())
+}
+
+async fn revalidate_fdm_membership_read_snapshot(
+    state: &Arc<AppState>,
+    captured: &SessionStateResponse,
+    context: &crate::types::CurrentLiveRequestContext,
+) -> Result<(), ApiError> {
+    let current = state.current_live_state.read().await;
+    let current = current.as_ref().ok_or_else(|| {
+        ApiError::conflict_with_code(
+            "fdm_region_membership_stale",
+            "the current live workspace changed while reading FDM membership",
+        )
+    })?;
+    validate_fdm_membership_read_snapshot(
+        captured,
+        current,
+        context,
+        state
+            .current_live_session_epoch
+            .load(std::sync::atomic::Ordering::Acquire),
+    )
+}
+
+fn validate_fdm_membership_read_snapshot(
+    captured: &SessionStateResponse,
+    current: &SessionStateResponse,
+    context: &crate::types::CurrentLiveRequestContext,
+    current_session_epoch: u64,
+) -> Result<(), ApiError> {
+    crate::ensure_current_live_request_context(current, context, current_session_epoch)?;
+    if crate::router_v2::handlers::sessions::status::domain_generation_id(captured)
+        != crate::router_v2::handlers::sessions::status::domain_generation_id(current)
+        || fdm_grid_fingerprint(captured) != fdm_grid_fingerprint(current)
+        || captured.region_realization_revisions.membership
+            != current.region_realization_revisions.membership
+        || current_artifact_dir(captured) != current_artifact_dir(current)
+    {
+        return Err(ApiError::conflict_with_code(
+            "fdm_region_membership_stale",
+            "the FDM domain or membership changed while resolving its artifact",
+        ));
+    }
+    Ok(())
 }
 
 fn load_descriptor(
@@ -1072,9 +1133,12 @@ fn insert_header(response: &mut axum::response::Response, name: &'static str, va
 #[cfg(test)]
 mod tests {
     use super::{
-        serialize_resolved_membership_payload, validate_descriptor_summary, validate_fmrm_payload,
+        build_fdm_region_membership_binary_response, capture_fdm_membership_read_snapshot,
+        serialize_resolved_membership_payload, validate_descriptor_summary,
+        validate_fdm_membership_read_snapshot, validate_fmrm_payload,
         ResolvedFdmMembership, FMRM_HEADER_LEN,
     };
+    use axum::http::StatusCode;
     use crate::schemas::mesh::{
         FdmMagneticSupportSemanticRole, FdmMagneticSupportSummaryResource,
         FdmRegionLegendEntryResource,
@@ -1113,6 +1177,235 @@ mod tests {
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
         bytes
+    }
+
+    fn write_scoped_membership_fixture(artifact_dir: &std::path::Path) {
+        let mesh_dir = artifact_dir.join("mesh");
+        std::fs::create_dir_all(&mesh_dir).unwrap();
+        let fingerprint = "ab".repeat(32);
+        let descriptor = serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "domain_generation_id": null,
+            "grid_fingerprint": fingerprint,
+            "region_legend_fingerprint": null,
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 2, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 4,
+            "magnetic_support": null,
+            "object_ids": ["body", "body-b"],
+            "region_legend": [
+                {"numeric_id": 1, "object_id": "body", "region_id": "shared", "priority": 0},
+                {"numeric_id": 2, "object_id": "body-b", "region_id": "shared", "priority": 0}
+            ],
+            "encoding": "FMRM:u32_membership_le"
+        });
+        std::fs::write(
+            mesh_dir.join("fdm_region_membership.v2.json"),
+            serde_json::to_vec(&descriptor).unwrap(),
+        )
+        .unwrap();
+
+        let mut binary = vec![0_u8; FMRM_HEADER_LEN + 4 * 4];
+        binary[..4].copy_from_slice(b"FMRM");
+        binary[4..6].copy_from_slice(&[2, 2]);
+        binary[8..12].copy_from_slice(&2_u32.to_le_bytes());
+        binary[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        binary[16..20].copy_from_slice(&1_u32.to_le_bytes());
+        binary[20..24].copy_from_slice(&4_u32.to_le_bytes());
+        binary[24..28].copy_from_slice(&2_u32.to_le_bytes());
+        binary[28..60].fill(0xab);
+        for (index, value) in [1_u32, 2, 1, u32::MAX].into_iter().enumerate() {
+            let offset = FMRM_HEADER_LEN + index * 4;
+            binary[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        std::fs::write(mesh_dir.join("fdm_region_membership.v2.bin"), binary).unwrap();
+    }
+
+    fn assert_domain_change_rejected(
+        captured: &crate::types::SessionStateResponse,
+        current: &crate::types::SessionStateResponse,
+        context: &crate::types::CurrentLiveRequestContext,
+    ) {
+        let error = validate_fdm_membership_read_snapshot(
+            captured,
+            current,
+            context,
+            context.session_epoch,
+        )
+        .expect_err("a changed FDM membership identity must reject the response");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(
+            error.code.as_deref(),
+            Some("fdm_region_membership_stale")
+        );
+    }
+
+    #[tokio::test]
+    async fn descriptor_get_returns_no_content_while_transition_is_held() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let artifact_dir = tempfile::tempdir().unwrap();
+        if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+            snapshot.session.artifact_dir = artifact_dir.path().to_string_lossy().into_owned();
+            snapshot.metadata = None;
+        }
+
+        let _transition = state.current_live_session_transition.lock().await;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::get_fdm_region_memberships(axum::extract::State(state.clone())),
+        )
+        .await
+        .expect("descriptor GET must not wait for the live-session transition")
+        .expect("descriptor GET should complete");
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn final_revalidation_rejects_membership_domain_and_artifact_changes() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        state.current_live_state.write().await.as_mut().unwrap().metadata = Some(
+            serde_json::json!({"artifact_layout": {
+                "backend": "fdm", "grid_cells": [2, 2, 1],
+                "origin_m": [0.0, 0.0, 0.0], "cell_size": [1.0, 1.0, 1.0]
+            }}).into(),
+        );
+        let context = crate::capture_current_live_read_context(&state)
+            .await
+            .expect("captured read context");
+        let captured = capture_fdm_membership_read_snapshot(&state, Some(&context))
+            .await
+            .expect("captured snapshot");
+
+        let mut membership_changed = captured.clone();
+        membership_changed.region_realization_revisions.membership += 1;
+        assert_domain_change_rejected(&captured, &membership_changed, &context);
+
+        let mut artifact_changed = captured.clone();
+        artifact_changed.session.artifact_dir = "replacement-artifacts".to_string();
+        assert_domain_change_rejected(&captured, &artifact_changed, &context);
+
+        let mut domain_changed = captured.clone();
+        domain_changed.metadata = Some(
+            serde_json::json!({
+                "artifact_layout": {
+                    "backend": "fdm",
+                    "grid_cells": [2, 2, 1],
+                    "origin_m": [1.0, 0.0, 0.0],
+                    "cell_size": [1.0, 1.0, 1.0]
+                }
+            })
+            .into(),
+        );
+        assert_eq!(super::fdm_grid_shape(&captured, None), super::fdm_grid_shape(&domain_changed, None));
+        assert_domain_change_rejected(&captured, &domain_changed, &context);
+
+        let mut fingerprint_changed = captured.clone();
+        fingerprint_changed.metadata = Some(
+            serde_json::json!({
+                "execution_plan": {
+                    "backend_plan": {
+                        "grid_certificate": {
+                            "grid_fingerprint": "11".repeat(32)
+                        }
+                    }
+                }
+            })
+            .into(),
+        );
+        assert_domain_change_rejected(&captured, &fingerprint_changed, &context);
+    }
+
+    #[tokio::test]
+    async fn final_revalidation_still_rejects_a_stale_live_owner() {
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let context = crate::capture_current_live_read_context(&state)
+            .await
+            .expect("captured read context");
+        let captured = capture_fdm_membership_read_snapshot(&state, Some(&context))
+            .await
+            .expect("captured snapshot");
+        let mut replacement = captured.clone();
+        replacement.session.session_id = "replacement-session".to_string();
+
+        let error = validate_fdm_membership_read_snapshot(
+            &captured,
+            &replacement,
+            &context,
+            context.session_epoch,
+        )
+        .expect_err("a replacement live owner must reject the response");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.message, "request_context_stale");
+
+        let error = validate_fdm_membership_read_snapshot(
+            &captured,
+            &captured,
+            &context,
+            context.session_epoch + 1,
+        )
+        .expect_err("a replacement live epoch must reject the response");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.message, "request_context_stale");
+    }
+
+    #[tokio::test]
+    async fn scoped_membership_still_rejects_ambiguous_regions_without_owner() {
+        let artifact_dir = tempfile::tempdir().unwrap();
+        write_scoped_membership_fixture(artifact_dir.path());
+        let state = crate::router_v2::tests::test_app_state_with_live_session().await;
+        let snapshot = {
+            let mut current = state.current_live_state.write().await;
+            let snapshot = current.as_mut().expect("live test snapshot");
+            snapshot.session.artifact_dir = artifact_dir.path().to_string_lossy().into_owned();
+            snapshot.metadata = Some(
+                serde_json::json!({
+                    "artifact_layout": {
+                        "backend": "fdm",
+                        "grid_cells": [2, 2, 1],
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "cell_size": [1.0, 1.0, 1.0]
+                    }
+                })
+                .into(),
+            );
+            snapshot.clone()
+        };
+
+        let error = match build_fdm_region_membership_binary_response(
+            snapshot.clone(),
+            Default::default(),
+            Some((None, "shared".to_string())),
+        ) {
+            Ok(_) => panic!("a duplicate region ID without an owner must reject"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert!(error.message.contains("ambiguous"));
+
+        let (_, response) = build_fdm_region_membership_binary_response(
+            snapshot.clone(),
+            Default::default(),
+            Some((Some("body-b".to_string()), "shared".to_string())),
+        )
+        .expect("an explicit owner should resolve the duplicate region");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(
+            u32::from_le_bytes(bytes[FMRM_HEADER_LEN + 4..FMRM_HEADER_LEN + 8].try_into().unwrap()),
+            2
+        );
+
+        let error = match build_fdm_region_membership_binary_response(
+            snapshot,
+            Default::default(),
+            Some((Some("missing-owner".to_string()), "shared".to_string())),
+        ) {
+            Ok(_) => panic!("an unknown region owner must reject"),
+            Err(error) => error,
+        };
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
     }
 
     #[test]

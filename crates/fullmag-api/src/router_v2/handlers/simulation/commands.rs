@@ -219,7 +219,7 @@ async fn submit_new_structured_command(
         if !matches!(command.kind.as_str(), "remesh" | "fdm_grid_refresh") {
             crate::get_or_load_current_live_scene_document_for_context(&state, context).await?;
         }
-        let transition_guard = state.current_live_session_transition.lock().await;
+        let mut transition_guard = Some(Arc::clone(&state.current_live_session_transition).lock_owned().await);
         if let Some(request) = durable_request {
             if let Some(response) = request.replay_under_transition(&state, context).await? {
                 return Ok(response);
@@ -249,6 +249,7 @@ async fn submit_new_structured_command(
                     &state,
                     context,
                     &command.command_id,
+                    &mut transition_guard,
                 )
                 .await?;
             command.target = Some(RuntimeCommandTarget::Run {
@@ -379,6 +380,7 @@ async fn submit_new_structured_command(
                     context,
                     request_key,
                     receipt,
+                    &mut transition_guard,
                 )
                 .await?
             {

@@ -94,7 +94,7 @@ pub const fn durability_capability() -> DurabilityCapability {
 #[cfg(test)]
 thread_local! {
     static FAIL_PUBLICATION_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
-    static FAIL_DIRECTORY_BARRIER_FOR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static FAIL_DIRECTORY_BARRIER_FOR: std::cell::RefCell<Option<(PathBuf, usize)>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -107,22 +107,37 @@ pub(crate) fn fail_publication_after(successful_publications: usize) {
 /// contract without claiming to reproduce an actual power loss.
 #[cfg(test)]
 pub(crate) fn fail_directory_barrier_for(destination: &Path) {
+    fail_directory_barriers_for(destination, 1);
+}
+
+/// Inject a fixed number of failures for one exact destination. Each failed
+/// barrier consumes one count, including confirmation attempts.
+#[cfg(test)]
+pub(crate) fn fail_directory_barriers_for(destination: &Path, failures: usize) {
     FAIL_DIRECTORY_BARRIER_FOR.with(|value| {
-        *value.borrow_mut() = Some(destination.to_path_buf());
+        *value.borrow_mut() = (failures > 0)
+            .then(|| (destination.to_path_buf(), failures));
     });
 }
 
 #[cfg(test)]
 fn take_directory_barrier_failure(destination: &Path) -> bool {
     FAIL_DIRECTORY_BARRIER_FOR.with(|value| {
-        let matches = value
-            .borrow()
-            .as_deref()
-            .is_some_and(|expected| expected == destination);
-        if matches {
-            *value.borrow_mut() = None;
+        let mut value = value.borrow_mut();
+        let remaining = value
+            .as_ref()
+            .and_then(|(expected, remaining)| (expected == destination).then_some(*remaining));
+        match remaining {
+            Some(remaining) => {
+                if remaining <= 1 {
+                    *value = None;
+                } else if let Some((_, remaining)) = value.as_mut() {
+                    *remaining -= 1;
+                }
+                true
+            }
+            None => false,
         }
-        matches
     })
 }
 
@@ -157,8 +172,9 @@ pub(crate) fn sync_directory(path: &Path) -> Result<()> {
 }
 
 /// Re-establish the available durability barriers for an already visible
-/// immutable record. Call only while holding its store writer lease and after
-/// verifying exact payload identity. Visibility alone is not confirmation.
+/// immutable record. Call only under a stable store fence (the writer lease,
+/// or a shared read transaction for an immutable record) and after verifying
+/// exact payload identity. Visibility alone is not confirmation.
 pub(crate) fn confirm_publication(dest: &Path) -> Result<()> {
     let result = (|| {
         File::options()
