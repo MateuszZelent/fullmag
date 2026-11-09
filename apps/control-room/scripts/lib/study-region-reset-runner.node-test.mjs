@@ -258,7 +258,7 @@ test("same-API HTTP failure is bounded, forwarded once, and then rejected", asyn
     });
   await regionResetHandleWriteFailure(route, report, failure);
   assert.equal(route.fetchCalls, 1);
-  assert.deepEqual(route.fetchOptions, { timeout: 1234 });
+  assert.deepEqual(route.fetchOptions, { timeout: 1234, maxRetries: 0, maxRedirects: 0 });
   assert.equal(route.fulfillCalls.length, 1);
   assert.equal(route.abortCalls, 0);
   assert.deepEqual(report.violations, ["UI write failed HTTP409 " + transactionPath]);
@@ -270,6 +270,56 @@ test("same-API HTTP failure is bounded, forwarded once, and then rejected", asyn
     response_bytes: responseBody.length, response_body_prefix_base64: prefix.toString("base64"),
     response_body_prefix_bytes: prefix.length, response_body_truncated: true,
   }]);
+});
+
+test("authorized UI writes pass the remaining long timeout without route retries or redirects", async () => {
+  const { regionResetFetchWriteResponse } = await import("../check-study-region-reset-browser.mjs");
+  const response = { ok: () => true, status: () => 200,
+    headers: () => ({ "x-fullmag-api-instance": "api" }) };
+  const route = { fetchCalls: 0, fetchOptions: null,
+    async fetch(options) { this.fetchCalls++; this.fetchOptions = options; return response; } };
+  const report = { violations: [], failed_write_observations: [] };
+  const actual = await regionResetFetchWriteResponse({ route,
+    request: { method: "POST", path: commandsPath, body: { kind: "fdm_grid_refresh" },
+      headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 45000 });
+  assert.strictEqual(actual, response);
+  assert.equal(route.fetchCalls, 1);
+  assert.deepEqual(route.fetchOptions, { timeout: 45000, maxRetries: 0, maxRedirects: 0 });
+});
+
+test("route fetch network timeout is propagated unchanged after exactly one write attempt", async () => {
+  const { regionResetFetchWriteResponse, regionResetHandleWriteFailure } =
+    await import("../check-study-region-reset-browser.mjs");
+  const timeout = new Error("Route.fetch: Timeout 60000ms exceeded.");
+  const route = { fetchCalls: 0, fetchOptions: null, fulfillCalls: 0, abortCalls: 0,
+    async fetch(options) { this.fetchCalls++; this.fetchOptions = options; throw timeout; },
+    async fulfill() { this.fulfillCalls++; }, async abort() { this.abortCalls++; } };
+  const report = { violations: [], failed_write_observations: [] };
+  let failure;
+  await assert.rejects(regionResetFetchWriteResponse({ route,
+    request: { method: "PATCH", path: "/v2/sessions/current/visualization/state", body: {},
+      headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 60000 }), (error) => { failure = error; return error === timeout; });
+  await regionResetHandleWriteFailure(route, report, failure);
+  assert.equal(route.fetchCalls, 1);
+  assert.deepEqual(route.fetchOptions, { timeout: 60000, maxRetries: 0, maxRedirects: 0 });
+  assert.equal(route.fulfillCalls, 0);
+  assert.equal(route.abortCalls, 1);
+  assert.deepEqual(report.violations, [timeout.message]);
+  assert.deepEqual(report.failed_write_observations, []);
+});
+
+test("invalid route fetch timeouts fail before dispatching a UI write", async () => {
+  const { regionResetFetchWriteResponse } = await import("../check-study-region-reset-browser.mjs");
+  for (const timeout of [0, Infinity, 600001, NaN]) {
+    const route = { fetchCalls: 0, async fetch() { this.fetchCalls++; } };
+    await assert.rejects(regionResetFetchWriteResponse({ route,
+      request: { method: "POST", path: commandsPath, body: {},
+        headers: { "x-fullmag-api-instance": "api" } },
+      apiInstance: "api", report: { failed_write_observations: [] }, timeout }));
+    assert.equal(route.fetchCalls, 0);
+  }
 });
 
 test("foreign API failure responses fail closed without body reads or forwarding", async () => {

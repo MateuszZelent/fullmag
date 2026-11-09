@@ -166,11 +166,14 @@ export function regionResetWriteAllowed(request, gate) {
 const failedWriteResponseByteLimit = 2 * 1024 * 1024;
 const failedWriteResponsePrefixByteLimit = 16 * 1024;
 const failedWriteObservationCountLimit = 32;
+const failedWriteFetchTimeoutLimitMs = 600000;
 
 /** Fetch one already-authorized UI write and preserve bounded same-API HTTP failures for the UI. */
 export async function regionResetFetchWriteResponse({ route, request, apiInstance, report, timeout }) {
+  assert(Number.isFinite(timeout) && timeout > 0 && timeout <= failedWriteFetchTimeoutLimitMs,
+    "UI write timeout is outside the bounded fetch window");
   assert.equal(request?.headers?.["x-fullmag-api-instance"], apiInstance, "Write request from another API");
-  const response = await route.fetch({ timeout });
+  const response = await route.fetch({ timeout, maxRetries: 0, maxRedirects: 0 });
   const responseHeaders = response.headers();
   assert.equal(responseHeaders["x-fullmag-api-instance"], apiInstance, "Write response from another API");
   if (response.ok()) return response;
@@ -630,7 +633,7 @@ export async function runRegionResetBrowserQa() {
         else if (url.pathname === commandsPath) { gate.solverAttempts++; report.command_attempt_count++; }
         const response = await regionResetFetchWriteResponse({ route,
           request: { method, path: url.pathname + url.search, body, headers },
-          apiInstance: gate.apiInstance, report, timeout: Math.min(30000, remaining()) });
+          apiInstance: gate.apiInstance, report, timeout: Math.min(600000, remaining()) });
         const raw = await response.body();
         assert(raw.length <= 2 * 1024 * 1024, "UI acknowledgment exceeds its byte bound");
         const payload = JSON.parse(raw.toString("utf8"));

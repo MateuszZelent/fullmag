@@ -513,3 +513,48 @@ tej wersji recovery oraz kolejny odbiór UI nadal wymagają wykonania.
 
 Końcowe dwa moduły fixture recovery: 47 PASS (runtime state oraz terminal
 prestart recovery), po korekcie rzeczywistego wariantu synchronicznego Grid.
+
+
+## Rzeczywisty drain i druga obserwacja Grid na 3f1
+
+Managed stop `6006aac041ee4401b17c639d5bee92b8` zakończył się succeeded:
+preflight zachował ukończony Grid i potwierdził manualny Held gate bez
+start_release. Porównanie hashów zachowało 3915 plików przyjętych wejść oraz
+4133 pliki wcześniejszych wyników. Fresh-state `14e23063b77640fd86c785369f857442`
+zachował poprzedni store i uruchomił DEV `ce8c805051b44e0d9eac9cc76b717f48`.
+Helper i native API odpowiadają commitowi
+`3f1d7c3e527445caf8c21b4b3d8312e184a27a41`; API ma tożsamość
+`b44ce02d-2536-45e6-a6d2-a72836e3cd70`. Warmup /workspace i /home zwrócił 200.
+
+QA `813bfe48a67240f69d0844f5806d2abd` przeszło import, fidelity i ACK,
+lecz NIE przeszło pełnego S46. CurrentRun GET nadal przekroczył 20 s;
+nowy obserwator zapisał ten timeout. Następnie route.fetch dla POST komendy
+oraz PATCH wizualizacji przekroczył niezależny limit 30 s. Scoped readback
+potwierdził później completed Grid `fm-72f07c99-098c-4a41-9987-fd19a28b35be`
+(83 028 ms), run
+`run-live-5d2dba0a7fd68f37293885882668625a955f2761be2de7ac5be4eea301e336fa`,
+waiting_for_solve, steps=0 i brak Compute. Nie ponowiono komendy.
+Ta próba nie jest kwalifikowanym rodzicem eksportu.
+
+Harness przekazuje teraz pojedynczemu autoryzowanemu write pozostały budżet,
+z limitem 600 000 ms. Globalny limit próby nie zmienia się; timeout musi być
+skończony i dodatni. Jawne maxRetries=0 i maxRedirects=0 wykluczają ponawianie
+lub przekierowanie mutacji. Błąd transportu nadal kończy próbę; odmowa HTTP
+zachowuje dotychczasowy bounded body i kontrolę tożsamości API. Nowe regresje
+obejmują dłuższy budżet, dokładnie jeden fetch po timeout oraz odmowę błędnego
+budżetu przed wysłaniem. Managed Node: 29 PASS; focused ESLint: exit 0.
+Rzeczywiste wykonanie tej wersji obserwatora wymaga nowej próby na pustym API.
+
+CI pełnego commita 3f1: wszystkie sześć workflow zakończyło się success,
+w tym bootstrap 42590728750, Rust 129071532013, Control Room 129071531825
+oraz generated API 129071531941. Sam sukces CI nie kwalifikuje S46 ani
+pozostałych realizacji FEM/GPU/multilayer.
+
+Pozostaje również problem responsywności backendu: commit przyjętego Study
+wykonuje synchroniczny zapis CAS i RunIntent pod snapshot write-lockiem.
+Odczyt CurrentRun bez mutation transition usunął jedną zależność, ale nie
+zapewnił odczytu w czasie tego zapisu. Nie zmierzono jeszcze czasu jego
+poszczególnych faz. Przyszła poprawka musi zachować pojedynczą writer lease,
+revalidation bieżącej sceny/kontekstu i atomową publikację przyjętego runu,
+także po anulowaniu żądania HTTP. Wydłużenie budżetu testu nie zamyka tego
+wymagania produkcyjnego.
