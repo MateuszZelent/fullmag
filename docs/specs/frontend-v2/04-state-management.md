@@ -124,6 +124,25 @@ Only user preferences and layout state persist locally:
 
 Canonical simulation state, session state, field state, mesh state, command state, and provenance do not persist through browser local storage.
 
+### Non-authoritative Compute observation hints
+
+`CommandFeedbackController` owns unresolved Compute observation in memory. The
+existing API-scoped browser-tab store may retain up to 16 small hints keyed by
+logical session identity (session ID and session epoch). A hint is never a
+canonical command, acceptance record, simulation snapshot, or result. Only the
+backend command ledger and durable accepted-run store can establish acceptance
+and completion.
+
+A hint may include the first immutable request JSON for an explicit user retry
+with the same client intent and idempotency key. It never causes an automatic
+POST after reload or reconnect and never reconstructs inputs from the current
+model. The body must match the hint's kind and client intent. Per-body storage
+is limited to 16,384 characters and the entire record to 32,768 characters;
+overflow retains identity hints without bodies. Unavailable browser storage
+leaves in-memory observation usable. A legacy, invalid, or absent body disables
+retry; it does not prove rejection or authorize a new Compute. Hints must remain
+isolated by API authority and logical session even when transport scope changes.
+
 ### Viewport 3D appearance preferences
 
 `viewport3dStore` owns the viewport's client-side appearance preferences. The
