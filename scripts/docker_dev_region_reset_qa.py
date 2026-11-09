@@ -939,6 +939,8 @@ def parse_result(output: bytes, public_url: str, browser_url: str,
     _validate_requests(payload.get("request_counts"), mode)
     _validate_auxiliary_writes(payload, expected_scope)
     _require(payload.get("violations") == [], "Region reset helper reported a forbidden or unrelated write")
+    _require(payload.get("failed_write_observations", []) == [],
+             "Region reset helper reported a rejected UI write")
     _validate_expected_404s(payload)
     _validate_cleanup(payload)
     _validate_health_read_observations(payload)

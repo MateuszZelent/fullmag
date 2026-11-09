@@ -129,6 +129,55 @@ export function regionResetWriteAllowed(request, gate) {
     studyStageRerunClientAckAllowed({ method, path, body, scope: headers["x-fullmag-session-scope"] }, gate.session));
 }
 
+const failedWriteResponseByteLimit = 2 * 1024 * 1024;
+const failedWriteResponsePrefixByteLimit = 16 * 1024;
+const failedWriteObservationCountLimit = 32;
+
+/** Fetch one already-authorized UI write and preserve bounded same-API HTTP failures for the UI. */
+export async function regionResetFetchWriteResponse({ route, request, apiInstance, report, timeout }) {
+  assert.equal(request?.headers?.["x-fullmag-api-instance"], apiInstance, "Write request from another API");
+  const response = await route.fetch({ timeout });
+  const responseHeaders = response.headers();
+  assert.equal(responseHeaders["x-fullmag-api-instance"], apiInstance, "Write response from another API");
+  if (response.ok()) return response;
+  assert(Array.isArray(report.failed_write_observations), "Missing bounded write-failure observations");
+  assert(report.failed_write_observations.length < failedWriteObservationCountLimit,
+    "UI write failure observation count exceeds its bound");
+
+  const contentLength = responseHeaders["content-length"];
+  if (contentLength !== undefined) {
+    const declaredBytes = Number(contentLength);
+    assert(/^(0|[1-9]\d*)$/.test(contentLength) && Number.isSafeInteger(declaredBytes) &&
+      declaredBytes <= failedWriteResponseByteLimit, "UI write failure response exceeds its byte bound");
+  }
+  const raw = await response.body();
+  assert(Buffer.isBuffer(raw) && raw.byteLength <= failedWriteResponseByteLimit,
+    "UI write failure response exceeds its byte bound");
+  const prefix = raw.subarray(0, failedWriteResponsePrefixByteLimit);
+  report.failed_write_observations.push({
+    method: request.method,
+    path: request.path,
+    request_body: request.body,
+    session_scope: request.headers["x-fullmag-session-scope"] ?? null,
+    api_instance_id: apiInstance,
+    http_status: response.status(),
+    response_sha256: hash(raw),
+    response_bytes: raw.byteLength,
+    response_body_prefix_base64: prefix.toString("base64"),
+    response_body_prefix_bytes: prefix.byteLength,
+    response_body_truncated: raw.byteLength > prefix.byteLength,
+  });
+  await route.fulfill({ response });
+  const error = new Error("UI write failed HTTP" + response.status() + " " + request.path);
+  error.regionResetResponseForwarded = true;
+  throw error;
+}
+
+export async function regionResetHandleWriteFailure(route, report, error) {
+  report.violations.push(String(error?.message ?? error).slice(0,512));
+  if (error?.regionResetResponseForwarded !== true) await route.abort().catch(() => {});
+}
+
 export function regionResetCommandBindingMatches(binding, target, runId, previousRun) {
   return record(binding) && binding.run_id === runId && runId !== previousRun &&
     same(binding.requested_target, target) &&
@@ -285,7 +334,7 @@ export async function runRegionResetBrowserQa() {
     phase: "preflight", public_url: process.env.CONTROL_ROOM_PUBLIC_URL, probe_url: process.env.CONTROL_ROOM_URL,
     source_hashes_before: beforeHashes, source_hashes_after: null, api_instance_id: null, session: null,
     command_count: 0, command_attempt_count: 0, grid_command_count: 0, request_counts: {},
-    violations: [], errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
+    violations: [], failed_write_observations: [], errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
     expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [], read_cancellations: [], successful_read_responses: [] };
   const gate = { phase: "preflight", session: null, apiInstance: null, sourceName, sourceText,
     importAttempts: 0, createAttempts: 0, replaceAttempts: 0, editAttempts: 0, syncAttempts: 0,
@@ -526,9 +575,9 @@ export async function runRegionResetBrowserQa() {
         else if (url.pathname === base + "model/syncs") gate.syncAttempts++;
         else if (url.pathname === commandsPath && body.kind === "fdm_grid_refresh") gate.gridAttempts++;
         else if (url.pathname === commandsPath) { gate.solverAttempts++; report.command_attempt_count++; }
-        const response = await route.fetch({ timeout: Math.min(30000, remaining()) });
-        assert.equal(response.headers()["x-fullmag-api-instance"], gate.apiInstance, "Write response from another API");
-        assert(response.ok(), "UI write failed HTTP" + response.status() + " " + url.pathname);
+        const response = await regionResetFetchWriteResponse({ route,
+          request: { method, path: url.pathname + url.search, body, headers },
+          apiInstance: gate.apiInstance, report, timeout: Math.min(30000, remaining()) });
         const raw = await response.body();
         assert(raw.length <= 2 * 1024 * 1024, "UI acknowledgment exceeds its byte bound");
         const payload = JSON.parse(raw.toString("utf8"));
@@ -564,8 +613,7 @@ export async function runRegionResetBrowserQa() {
           session_scope: headers["x-fullmag-session-scope"], api_instance_id: gate.apiInstance, status: response.status() });
         await route.fulfill({ response });
       } catch (error) {
-        report.violations.push(String(error.message).slice(0,512));
-        await route.abort().catch(() => {});
+        await regionResetHandleWriteFailure(route, report, error);
       }
     });
     const collection = await get("/v2/sessions", { scoped: false });

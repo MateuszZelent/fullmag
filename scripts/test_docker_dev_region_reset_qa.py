@@ -696,6 +696,9 @@ class RegionResetQaTests(unittest.TestCase):
             lambda x: x["request_counts"].update({"PATCH /v2/sessions/current/visualization/state": 5}),
             lambda x: x["request_counts"].update({"POST /v2/sessions/current/visualization/client-acks": 17}),
             lambda x: x.update(grid_command_count=2),
+            lambda x: x.update(failed_write_observations=[{"http_status": 409}]),
+            lambda x: x.update(failed_write_observations=None),
+            lambda x: x.update(failed_write_observations={}),
             lambda x: x["canvas"].update(context_lost=True),
             lambda x: x["import"].update(scene_revision=9),
             lambda x: x["baseline"]["execution_binding"].update(

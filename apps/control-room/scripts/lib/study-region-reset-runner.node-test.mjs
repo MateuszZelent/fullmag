@@ -222,3 +222,145 @@ test("a successful health proof requires the completed GET response from the exa
     assert.equal(regionResetHealthResponseMatches({ ...row, ...patch }, "api-owned"), false);
   }
 });
+
+test("same-API HTTP failure is bounded, forwarded once, and then rejected", async () => {
+  const { regionResetFetchWriteResponse, regionResetHandleWriteFailure } =
+    await import("../check-study-region-reset-browser.mjs");
+  assert.equal(typeof regionResetFetchWriteResponse, "function");
+  assert.equal(typeof regionResetHandleWriteFailure, "function");
+
+  const responseBody = Buffer.alloc(20 * 1024, 0x61);
+  const response = {
+    ok: () => false,
+    status: () => 409,
+    headers: () => ({ "x-fullmag-api-instance": "api", "content-length": String(responseBody.length) }),
+    body: async () => responseBody,
+  };
+  const requestBody = { kind: "replace_scene", base_revision: 41, scene: { version: "scene.v2" } };
+  const requestMetadata = { method: "POST", path: transactionPath, body: requestBody,
+    headers: { "x-fullmag-api-instance": "api", "x-fullmag-session-scope": scope } };
+  const report = { violations: [], failed_write_observations: [] };
+  const route = { fetchCalls: 0, fulfillCalls: [], abortCalls: 0,
+    async fetch(options) { this.fetchCalls++; this.fetchOptions = options; return response; },
+    async fulfill(options) {
+      this.fulfillCalls.push(options);
+      assert.strictEqual(options.response, response);
+      assert.deepEqual(await options.response.body(), responseBody);
+    },
+    async abort() { this.abortCalls++; },
+  };
+
+  let failure;
+  await assert.rejects(regionResetFetchWriteResponse({ route, request: requestMetadata,
+    apiInstance: "api", report, timeout: 1234 }), (error) => {
+      failure = error;
+      return /UI write failed HTTP409/.test(error.message);
+    });
+  await regionResetHandleWriteFailure(route, report, failure);
+  assert.equal(route.fetchCalls, 1);
+  assert.deepEqual(route.fetchOptions, { timeout: 1234 });
+  assert.equal(route.fulfillCalls.length, 1);
+  assert.equal(route.abortCalls, 0);
+  assert.deepEqual(report.violations, ["UI write failed HTTP409 " + transactionPath]);
+  const prefix = responseBody.subarray(0, 16 * 1024);
+  assert.deepEqual(report.failed_write_observations, [{
+    method: "POST", path: transactionPath, request_body: requestBody, session_scope: scope,
+    api_instance_id: "api", http_status: 409,
+    response_sha256: createHash("sha256").update(responseBody).digest("hex"),
+    response_bytes: responseBody.length, response_body_prefix_base64: prefix.toString("base64"),
+    response_body_prefix_bytes: prefix.length, response_body_truncated: true,
+  }]);
+});
+
+test("foreign API failure responses fail closed without body reads or forwarding", async () => {
+  const { regionResetFetchWriteResponse, regionResetHandleWriteFailure } =
+    await import("../check-study-region-reset-browser.mjs");
+  assert.equal(typeof regionResetFetchWriteResponse, "function");
+  assert.equal(typeof regionResetHandleWriteFailure, "function");
+  let bodyReads = 0;
+  const response = { ok: () => false, status: () => 409,
+    headers: () => ({ "x-fullmag-api-instance": "foreign", "content-length": "2" }),
+    async body() { bodyReads++; return Buffer.from("no"); } };
+  const route = { fetchCalls: 0, fulfillCalls: 0, abortCalls: 0,
+    async fetch() { this.fetchCalls++; return response; },
+    async fulfill() { this.fulfillCalls++; }, async abort() { this.abortCalls++; } };
+  const report = { violations: [], failed_write_observations: [] };
+  let failure;
+  await assert.rejects(regionResetFetchWriteResponse({ route,
+    request: { method: "POST", path: transactionPath, body: {}, headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 1000 }), (error) => { failure = error; return /another API/.test(error.message); });
+  await regionResetHandleWriteFailure(route, report, failure);
+  assert.equal(route.fetchCalls, 1);
+  assert.equal(bodyReads, 0);
+  assert.equal(route.fulfillCalls, 0);
+  assert.equal(route.abortCalls, 1);
+  assert.equal(report.violations.length, 1);
+  assert.deepEqual(report.failed_write_observations, []);
+});
+
+test("oversized write failure response fails closed before body read or forwarding", async () => {
+  const { regionResetFetchWriteResponse, regionResetHandleWriteFailure } =
+    await import("../check-study-region-reset-browser.mjs");
+  assert.equal(typeof regionResetFetchWriteResponse, "function");
+  assert.equal(typeof regionResetHandleWriteFailure, "function");
+  let bodyReads = 0;
+  const response = { ok: () => false, status: () => 500,
+    headers: () => ({ "x-fullmag-api-instance": "api", "content-length": String(2 * 1024 * 1024 + 1) }),
+    async body() { bodyReads++; throw new Error("oversized response body must not be read"); } };
+  const route = { fetchCalls: 0, fulfillCalls: 0, abortCalls: 0,
+    async fetch() { this.fetchCalls++; return response; },
+    async fulfill() { this.fulfillCalls++; }, async abort() { this.abortCalls++; } };
+  const report = { violations: [], failed_write_observations: [] };
+  let failure;
+  await assert.rejects(regionResetFetchWriteResponse({ route,
+    request: { method: "POST", path: transactionPath, body: {}, headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 1000 }), (error) => { failure = error; return /byte bound/.test(error.message); });
+  await regionResetHandleWriteFailure(route, report, failure);
+  assert.equal(route.fetchCalls, 1);
+  assert.equal(bodyReads, 0);
+  assert.equal(route.fulfillCalls, 0);
+  assert.equal(route.abortCalls, 1);
+  assert.equal(report.violations.length, 1);
+  assert.deepEqual(report.failed_write_observations, []);
+});
+
+test("successful write response remains available to the existing ACK path", async () => {
+  const { regionResetFetchWriteResponse } = await import("../check-study-region-reset-browser.mjs");
+  assert.equal(typeof regionResetFetchWriteResponse, "function");
+  const response = { ok: () => true, status: () => 200,
+    headers: () => ({ "x-fullmag-api-instance": "api" }),
+    async body() { return Buffer.from("{\"accepted\":true}"); } };
+  const route = { fetchCalls: 0, fulfillCalls: 0,
+    async fetch() { this.fetchCalls++; return response; }, async fulfill() { this.fulfillCalls++; } };
+  const report = { violations: [], failed_write_observations: [] };
+  const actual = await regionResetFetchWriteResponse({ route,
+    request: { method: "POST", path: commandsPath, body: { kind: "solve" }, headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 1000 });
+  assert.strictEqual(actual, response);
+  assert.equal(route.fetchCalls, 1);
+  assert.equal(route.fulfillCalls, 0);
+  assert.deepEqual(report.failed_write_observations, []);
+});
+
+test("write-failure observations are count-bounded before reading or forwarding", async () => {
+  const { regionResetFetchWriteResponse, regionResetHandleWriteFailure } =
+    await import("../check-study-region-reset-browser.mjs");
+  const response = { ok: () => false, status: () => 409,
+    headers: () => ({ "x-fullmag-api-instance": "api", "content-length": "2" }),
+    async body() { throw new Error("body must not be read after observation cap"); } };
+  const route = { fetchCalls: 0, fulfillCalls: 0, abortCalls: 0,
+    async fetch() { this.fetchCalls++; return response; },
+    async fulfill() { this.fulfillCalls++; }, async abort() { this.abortCalls++; } };
+  const report = { violations: [], failed_write_observations: Array.from({ length: 32 }, () => ({})) };
+  let failure;
+  await assert.rejects(regionResetFetchWriteResponse({ route,
+    request: { method: "POST", path: transactionPath, body: {}, headers: { "x-fullmag-api-instance": "api" } },
+    apiInstance: "api", report, timeout: 1000 }),
+  (error) => { failure = error; return /observation count exceeds its bound/.test(error.message); });
+  await regionResetHandleWriteFailure(route, report, failure);
+  assert.equal(route.fetchCalls, 1);
+  assert.equal(route.fulfillCalls, 0);
+  assert.equal(route.abortCalls, 1);
+  assert.equal(report.failed_write_observations.length, 32);
+  assert.equal(report.violations.length, 1);
+});
