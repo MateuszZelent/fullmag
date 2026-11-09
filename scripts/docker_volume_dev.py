@@ -4917,7 +4917,7 @@ def _saved_authoring_validate_request(request, *, project, attempt, config_sha25
     if empty_authoring:
         _saved_authoring_require(archive['source_entry'] is None, 'empty UI authoring cannot bind a source file')
     else:
-        _saved_authoring_require(archive['source_entry'] == 'project/source/script.py'
+        _saved_authoring_require(archive['source_entry'] in {'project/source.py', 'project/source/script.py'}
             or re.fullmatch(r'project/source-history/[0-9a-f]{64}\.py', archive['source_entry']),
             'UI authoring/source archive binding differs')
     hashes = [archive[k] for k in ('sha256', 'scene_sha256')]

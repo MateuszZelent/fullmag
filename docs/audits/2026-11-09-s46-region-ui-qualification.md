@@ -180,3 +180,27 @@ każdego kernela. Testy właściciela i SSR pozostały aktywne. Manifest odbioru
 przypina również nowy model (31 plików, limit 32). Managed ESLint dla trzech
 zmienionych plików przeszedł bez błędów i ostrzeżeń; 28 testów Home/commands/state
 nadal przechodzi. Ponowne CI aktualnego commita pozostaje wymagane.
+
+## Zachowanie zaimportowanej sceny bez uruchomień
+
+Aktualna sesja jest authoring-only: scena 1, script null, pusta kolejka i ledger,
+CurrentRun 404. Zwykły stop-only nie przyjmuje aktywnej sesji w takim stanie;
+istniejąca ścieżka saved-authoring wymaga trwałego projektu `.fms` i dokładnych
+pinów sceny, źródła, pakietu, ownera oraz obu kontenerów. Reimport i Solve nie
+są potrzebne do utworzenia tej kopii.
+
+Istniejące `POST /v2/persistence/projects` i `/projects/authoring` operują na
+lokalnych instancjach ProjectApplication i przekazanym archiwum. Zwracają kanoniczny
+projekt z `project/source.py`; nie zmieniają bieżącej sesji wykonawczej. Request
+validator saved-authoring pomijał tę ścieżkę, mimo że archive validator już ją
+dopuszczał. Dodano wyłącznie dokładną ścieżkę `project/source.py`. Regresja najpierw
+odtworzyła odmowę `UI authoring/source archive binding differs`; po poprawce cała
+klasa SavedAuthoringRestartTests ma **22 PASS**. Nieznana ścieżka, traversal, brak
+źródła/hashu i hash drift nadal są odrzucane. Hashy, ownership/drain i kontroli
+braku wykonania nie osłabiono.
+
+Control Room CI dla `879111602c18de8f5790ca179233f38945667a30`, job
+`128960462732`, zakończyło się sukcesem po przeniesieniu adaptera poza render.
+Jednorazowy producent trwałej kopii i jego wykonanie są nadal wymagane przed
+managed stop oraz fresh-state/build. Runner zapisuje fazę i przypięcia API/sesji
+również dla nieoczekiwanych błędów transportu; pozostają one blokujące.

@@ -618,6 +618,70 @@ class SavedAuthoringRestartTests(IsolatedReceiptTests):
                 pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
                 self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
 
+    def test_accepts_full_checkpoint_with_canonical_generated_source_path(self):
+        import hashlib, json
+        from docker_build_control import canonical
+        dev, pin, scene, _, files, pack, _, _ = self.fixture()
+        source = b'# Canonical source rendered from the committed scene\n'
+        files.pop('project/source/script.py')
+        files.pop('project/source/script.json')
+        files['project/source.py'] = source
+        manifest = json.loads(files['manifest/project.json'])
+        manifest.update(source='project/source.py', opaque_documents=['project/provenance.json'])
+        files['manifest/project.json'] = canonical(manifest)
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+            source_entry='project/source.py', source_sha256=hashlib.sha256(source).hexdigest())
+
+        self.assertEqual(dev._saved_authoring_validate_archive(raw, pin['archive']), scene)
+        dev._saved_authoring_validate_request(pin, project='fullmag-test', attempt='b' * 32,
+            config_sha256='c' * 64, selected='/selected')
+
+    def test_generated_source_binding_remains_exact_and_content_addressed(self):
+        import copy, hashlib, json
+        from docker_build_control import canonical
+        dev, pin, _, _, files, pack, _, _ = self.fixture()
+        source = b'# Canonical source rendered from the committed scene\n'
+        files.pop('project/source/script.py')
+        files.pop('project/source/script.json')
+        files['project/source.py'] = source
+        manifest = json.loads(files['manifest/project.json'])
+        manifest.update(source='project/source.py', opaque_documents=['project/provenance.json'])
+        files['manifest/project.json'] = canonical(manifest)
+        raw = pack(files)
+        pin['archive'].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(),
+            source_entry='project/source.py', source_sha256=hashlib.sha256(source).hexdigest())
+
+        for source_entry in ('project/foreign.py', '../project/source.py'):
+            with self.subTest(source_entry=source_entry):
+                candidate = copy.deepcopy(pin)
+                candidate['archive']['source_entry'] = source_entry
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+        for entry, digest in ((None, pin['archive']['source_sha256']),
+                              ('project/source.py', None)):
+            with self.subTest(entry=entry, digest=digest):
+                candidate = copy.deepcopy(pin)
+                candidate['archive'].update(source_entry=entry, source_sha256=digest)
+                with self.assertRaises(BuildControlError):
+                    dev._saved_authoring_validate_request(candidate, project='fullmag-test', attempt='b' * 32,
+                        config_sha256='c' * 64, selected='/selected')
+
+        wrong_hash = copy.deepcopy(pin)
+        wrong_hash['archive']['source_sha256'] = 'f' * 64
+        with self.assertRaises(BuildControlError):
+            dev._saved_authoring_validate_archive(raw, wrong_hash['archive'])
+
+        missing_source = dict(files)
+        del missing_source['project/source.py']
+        missing_raw = pack(missing_source)
+        missing_pin = copy.deepcopy(pin['archive'])
+        missing_pin.update(bytes=len(missing_raw), sha256=hashlib.sha256(missing_raw).hexdigest())
+        with self.assertRaises(BuildControlError):
+            dev._saved_authoring_validate_archive(missing_raw, missing_pin)
+
     def test_refuses_missing_or_foreign_manifest_authoring_source(self):
         import hashlib, json
         from docker_build_control import canonical

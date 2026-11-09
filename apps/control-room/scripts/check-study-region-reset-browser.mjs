@@ -479,7 +479,11 @@ export async function runRegionResetBrowserQa() {
         return;
       }
       // Aborted route violations are already evidence; all other failed requests are unexpected.
-      if (!report.violations.length) report.errors.http.push({ path, failure });
+      if (!report.violations.length) report.errors.http.push({
+        path, method: request.method(), failure, phase: gate.phase,
+        api_instance_id: request.headers()["x-fullmag-api-instance"] ?? null,
+        session_scope: request.headers()["x-fullmag-session-scope"] ?? null,
+      });
     });
     await context.route("**/*", async (route) => {
       const request = route.request(), url = new URL(request.url()), method = request.method();
