@@ -20,6 +20,7 @@ import type { ObjectEditSessionController } from "../authoring/object-edit/Objec
 import type { GeometryObjectDraft } from "../authoring/object-edit/objectEditTypes";
 import type { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 import type { ProjectDocumentController } from "../persistence/ProjectDocumentController";
+import type { CommandFeedbackController } from "./CommandFeedbackController";
 
 export type CommandId = string;
 type CommandGroupId = string;
@@ -53,6 +54,8 @@ export interface CommandContext {
   resourceData?: Readonly<Record<string, unknown>>;
   /** Freshness of the Study command queue projection shown by its owning panel. */
   commandQueueResourceStatus?: ResourceStatus;
+  /** Existing session owner of unresolved Study Compute submissions. */
+  commandFeedback?: Pick<CommandFeedbackController, "hasUnresolvedStudyCompute" | "getRetryableStudyCompute">;
   resources?: ResourceInvalidationController;
   /** Session identity used to partition current-session API request coalescing. */
   sessionScopeKey?: string | null;

@@ -7,24 +7,49 @@ import {
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { GEOMETRY_LIFECYCLE_COMMANDS } from "../authoring/geometryLifecycleCommandContributions";
 import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
+import { CommandFeedbackController } from "../commands/CommandFeedbackController";
 import { CommandRegistry } from "../commands/CommandRegistry";
 import type { CommandContext } from "../commands/commandTypes";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
+import { sessionRequestScopeKey } from "../resources/sessionResourceIdentity";
 import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
 import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 import { createBuildStudyCommands } from "./buildStudyCommands";
 import { STUDY_RUNTIME_COMMANDS } from "./studyRuntimeCommandContributions";
 
-function fixture(lane: "fem" | "fdm") {
+function fixture(lane: "fem" | "fdm", trackStudyCompute = false) {
+  const bus = new EventBus<KernelEventMap>();
   const registry = new CommandRegistry();
-  registry.attach(new EventBus());
+  registry.attach(bus);
+  const sessionScopeKey = trackStudyCompute
+    ? sessionRequestScopeKey({
+      sessionId: "build-study-test-session",
+      sessionEpoch: "build-study-test-epoch",
+      requestScopeEpoch: "build-study-test-api",
+    })!
+    : "scope";
+  const commandFeedback = trackStudyCompute
+    ? new CommandFeedbackController(bus, {
+      getSessionScopeKey: () => sessionScopeKey,
+      subscribeSessionScope: () => () => {},
+    })
+    : undefined;
+  if (trackStudyCompute) {
+    bus.on("mesh:build-confirm-requested", ({ requestId }) => {
+      if (!requestId) return;
+      bus.emit("mesh:build-confirm-resolved", {
+        requestId, confirmed: true, precondition: { scene_revision: 7, mesh_revision: 4 },
+      });
+    });
+  }
   for (const command of [...GEOMETRY_LIFECYCLE_COMMANDS, ...STUDY_RUNTIME_COMMANDS, ...createBuildStudyCommands(registry)]) {
     registry.register(command);
   }
   const state = {
     revision: 7, meshRevision: 4, runId: "old", meshOwner: "build-a",
-    commandsRevision: 1, statusReads: 0, failSolvePreflight: false,
+    commandsRevision: 1, statusReads: 0, queueReads: 0, solveSubmitCount: 0,
+    failSolvePreflight: false, retrySolveError: null as ControlRoomApiError | null,
     loseBuildRead: false, loseSolveAck: false, solveIntent: undefined as string | undefined,
     revealSolve: false,
   };
@@ -74,7 +99,13 @@ function fixture(lane: "fem" | "fdm") {
   });
   const submit = vi.fn(async (command: Record<string, unknown>) => {
     if (command.kind === "solve") {
+      state.solveSubmitCount += 1;
       state.solveIntent = command.client_intent_id as string;
+      if (state.retrySolveError) {
+        const error = state.retrySolveError;
+        state.retrySolveError = null;
+        throw error;
+      }
       if (state.loseSolveAck) throw new ControlRoomApiError("Lost ACK", 0, null, "API_UNAVAILABLE");
       return { accepted: true, command_id: "solve-a" };
     }
@@ -99,22 +130,25 @@ function fixture(lane: "fem" | "fdm") {
     },
     commands: {
       submit, detail,
-      list: async () => ({
-        accepted_count: 0,
-        can_accept_commands: true,
-        commands: [
-          ...(postedBuild ? [await detail()] : []),
-          ...(state.revealSolve ? [{ command_id: "solve-a", kind: "solve", client_intent_id: state.solveIntent, seq: 2, status: "accepted" }] : []),
-        ],
-        completed_count: 0,
-        dispatched_count: 0,
-        failed_count: 0,
-        pending_count: 0,
-        rejected_count: 0,
-        revision: state.commandsRevision + 11,
-        running_count: 0,
-        runtime_controls: [],
-      }),
+      list: async () => {
+        state.queueReads += 1;
+        return {
+          accepted_count: 0,
+          can_accept_commands: true,
+          commands: [
+            ...(postedBuild ? [await detail()] : []),
+            ...(state.revealSolve ? [{ command_id: "solve-a", kind: "solve", client_intent_id: state.solveIntent, seq: 2, status: "accepted" }] : []),
+          ],
+          completed_count: 0,
+          dispatched_count: 0,
+          failed_count: 0,
+          pending_count: 0,
+          rejected_count: 0,
+          revision: state.commandsRevision + 11,
+          running_count: 0,
+          runtime_controls: [],
+        };
+      },
     },
     simulation: {
       solver: { status: async () => solver },
@@ -129,7 +163,8 @@ function fixture(lane: "fem" | "fdm") {
   const context: CommandContext = {
     api: api as unknown as CommandContext["api"], source: "test",
     commandQueueResourceStatus: "stale",
-    sessionScopeKey: "scope", isCurrentSessionScope: () => true,
+    ...(commandFeedback ? { bus, commandFeedback, feedback: "local" as const } : {}),
+    sessionScopeKey, isCurrentSessionScope: () => true,
     resourceData: {
       [SESSION_STATUS_RESOURCE_KEY]: status(), [MODEL_SCENE_PATH]: { revision: 7 },
       [MODEL_READINESS_PATH]: { scene_revision: 7, ready_to_run: true },
@@ -137,10 +172,123 @@ function fixture(lane: "fem" | "fdm") {
       [SIMULATION_SOLVER_STATUS_PATH]: solver,
     },
   };
-  return { registry, state, context, readiness, submit };
+  return { registry, state, context, readiness, submit, bus, commandFeedback, sessionScopeKey };
 }
 
 describe("Build + Study command", () => {
+  it.each(["fem", "fdm"] as const)("does not start a new %s build while another Compute is unconfirmed", async (lane) => {
+    const { registry, context, submit } = fixture(lane);
+    context.commandFeedback = { hasUnresolvedStudyCompute: () => true, getRetryableStudyCompute: () => null };
+
+    expect(await registry.execute("study.build-and-run", context)).toMatchObject({
+      status: "failed", message: expect.stringContaining("confirmation"),
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("retires a retained Build + Study Solve after explicit retry proves it was not accepted", async () => {
+    const { registry, state, context, submit, commandFeedback, sessionScopeKey } = fixture("fdm", true);
+    try {
+      state.loseSolveAck = true;
+      const initial = await registry.execute("study.build-and-run", context);
+      expect(initial).toMatchObject({ status: "pending", observation: "publication-unconfirmed" });
+      const originalIntent = initial.clientIntentId!;
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+      const queueBeforeRetry = await context.api!.commands.list({ sessionScopeKey });
+      expect(queueBeforeRetry.commands.filter((entry) => entry.client_intent_id === originalIntent)).toEqual([]);
+
+      state.retrySolveError = new ControlRoomApiError(
+        "Original precondition no longer matches.", 409, null, "command_current_run_changed", "not_accepted",
+      );
+      expect(await registry.execute("study.retry-compute", context)).toMatchObject({ status: "failed" });
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(false);
+      expect(state.solveSubmitCount).toBe(2);
+      expect(submit.mock.calls[2][0]).toEqual(submit.mock.calls[1][0]);
+      expect(submit.mock.calls[2][0]).toMatchObject({ client_intent_id: originalIntent });
+      // The Build, original Solve, and one explicit retry are the only POSTs
+      // before the user chooses what to do next.
+      expect(submit).toHaveBeenCalledTimes(3);
+
+      const next = await registry.execute("study.build-and-run", context);
+
+      if (next.status === "pending") {
+        expect(next.clientIntentId).toBeTruthy();
+        expect(next.clientIntentId).not.toBe(originalIntent);
+        expect(state.solveSubmitCount).toBeGreaterThan(2);
+      } else {
+        expect(registry.isActive("study.build-and-run", context)).toBe(false);
+      }
+    } finally {
+      commandFeedback?.dispose();
+    }
+  });
+
+  it("keeps a retained Build + Study Solve unresolved after an ambiguous explicit retry", async () => {
+    const { registry, state, context, submit, commandFeedback, sessionScopeKey } = fixture("fdm", true);
+    try {
+      state.loseSolveAck = true;
+      const initial = await registry.execute("study.build-and-run", context);
+      const originalIntent = initial.clientIntentId!;
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+
+      state.retrySolveError = new ControlRoomApiError("Retry response is uncertain.", 503, null, "INTERNAL_ERROR");
+      const retry = await registry.execute("study.retry-compute", context);
+      expect(retry).toMatchObject({
+        status: "pending", observation: "publication-unconfirmed", clientIntentId: originalIntent,
+      });
+      expect(state.solveSubmitCount).toBe(2);
+      expect(submit.mock.calls[2][0]).toEqual(submit.mock.calls[1][0]);
+      expect(submit.mock.calls[2][0]).toMatchObject({ client_intent_id: originalIntent });
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+      const submitsBeforeBuildStudyReconcile = submit.mock.calls.length;
+      const queueReadsBeforeBuildStudyReconcile = state.queueReads;
+
+      const next = await registry.execute("study.build-and-run", context);
+
+      expect(next).toMatchObject({ status: "pending", clientIntentId: originalIntent });
+      expect(submit).toHaveBeenCalledTimes(submitsBeforeBuildStudyReconcile);
+      expect(state.queueReads).toBe(queueReadsBeforeBuildStudyReconcile + 1);
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+    } finally {
+      commandFeedback?.dispose();
+    }
+  });
+
+  it("does not retire its Build + Study Solve for another intent or session rejection", async () => {
+    const { registry, state, context, submit, bus, commandFeedback, sessionScopeKey } = fixture("fdm", true);
+    try {
+      state.loseSolveAck = true;
+      const initial = await registry.execute("study.build-and-run", context);
+      const originalIntent = initial.clientIntentId!;
+      const otherSessionScopeKey = sessionRequestScopeKey({
+        sessionId: "other-build-study-session",
+        sessionEpoch: "other-build-study-epoch",
+        requestScopeEpoch: "build-study-test-api",
+      })!;
+
+      bus.emit("study:compute-observation", {
+        clientIntentId: "another-intent", kind: "solve", sessionScopeKey, state: "rejected",
+      });
+      bus.emit("study:compute-observation", {
+        clientIntentId: originalIntent, kind: "solve", sessionScopeKey: otherSessionScopeKey, state: "rejected",
+      });
+
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+      expect(commandFeedback!.getRetryableStudyCompute(sessionScopeKey, originalIntent)?.clientIntentId).toBe(originalIntent);
+      const submitsBeforeReconcile = submit.mock.calls.length;
+      const queueReadsBeforeReconcile = state.queueReads;
+
+      const next = await registry.execute("study.build-and-run", context);
+
+      expect(next).toMatchObject({ status: "pending", clientIntentId: originalIntent });
+      expect(submit).toHaveBeenCalledTimes(submitsBeforeReconcile);
+      expect(state.queueReads).toBe(queueReadsBeforeReconcile + 1);
+      expect(commandFeedback!.hasUnresolvedStudyCompute(sessionScopeKey)).toBe(true);
+    } finally {
+      commandFeedback?.dispose();
+    }
+  });
+
   it.each(["fem", "fdm"] as const)("starts the whole Study after verifying the %s build", async (lane) => {
     const { registry, context, state, submit } = fixture(lane);
     expect(await registry.execute("study.build-and-run", context)).toMatchObject({
@@ -193,6 +341,7 @@ describe("Build + Study command", () => {
     state.loseSolveAck = true;
     expect(await registry.execute("study.build-and-run", context)).toMatchObject({ status: "pending" });
     state.revealSolve = true;
+    context.commandFeedback = { hasUnresolvedStudyCompute: () => true, getRetryableStudyCompute: () => null };
     expect(await registry.execute("study.build-and-run", context)).toMatchObject({ commandId: "solve-a" });
     expect(submit).toHaveBeenCalledTimes(2);
   });

@@ -27,6 +27,7 @@ export function createCommandContext(
     projectDocument: kernel.projectDocument,
     resourceData: patch.resourceData,
     commandQueueResourceStatus: patch.commandQueueResourceStatus,
+    commandFeedback: kernel.commandFeedback,
     resources: kernel.resources,
     sessionScopeKey,
     isCurrentSessionScope: patch.isCurrentSessionScope ?? (sessionScopeKey

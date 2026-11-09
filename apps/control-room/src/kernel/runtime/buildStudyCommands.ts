@@ -11,6 +11,7 @@ import type { CommandQueueStatusResource, LiveStatusResource, SceneResource } fr
 import { awaitMeshCommandTerminal } from "../authoring/geometryLifecycleCommands";
 import { resumeMeshBuildObservation } from "../authoring/geometryLifecycleCommandContributions";
 import { studyComputeDraftBlockedReason } from "../authoring/studyComputeDraftGuard";
+import { studyComputeConfirmationBlockedReason } from "./studyComputeConfirmation";
 import type { CommandRegistry } from "../commands/CommandRegistry";
 import { obsoleteSessionResult } from "../commands/commandSessionScope";
 import type { CommandContext, CommandContribution, CommandResult } from "../commands/commandTypes";
@@ -182,6 +183,8 @@ export function createBuildStudyCommands(registry: CommandRegistry): CommandCont
     const operation = operationFor(context);
     if (operation?.busy) return PHASE_LABELS[operation.phase];
     if (operation) return null;
+    const confirmation = studyComputeConfirmationBlockedReason(context);
+    if (confirmation) return confirmation;
     const draft = studyComputeDraftBlockedReason(context);
     if (draft) return draft;
     const build = buildFor(statusFrom(context));

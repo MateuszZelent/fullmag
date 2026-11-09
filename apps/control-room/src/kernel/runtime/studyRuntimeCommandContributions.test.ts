@@ -35,6 +35,9 @@ import { PendingFormRegistry } from "../authoring/PendingFormRegistry";
 import { ObjectEditSessionController } from "../authoring/object-edit/ObjectEditSessionController";
 import type { GeometryObjectDraft } from "../authoring/object-edit/objectEditTypes";
 import { CommandRegistry } from "../commands/CommandRegistry";
+import { CommandFeedbackController } from "../commands/CommandFeedbackController";
+import type { CommandContext } from "../commands/commandTypes";
+import { createCommandContext } from "../commands/commandContext";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { LayoutController } from "../layout/LayoutController";
@@ -61,9 +64,9 @@ import {
 } from "./studyRuntimeCommandContributions";
 
 
-function registryWithStudyRuntimeCommands(): CommandRegistry {
+function registryWithStudyRuntimeCommands(bus = new EventBus<KernelEventMap>()): CommandRegistry {
   const registry = new CommandRegistry();
-  registry.attach(new EventBus<KernelEventMap>());
+  registry.attach(bus);
   for (const command of STUDY_RUNTIME_COMMANDS) {
     registry.register(command);
   }
@@ -425,7 +428,248 @@ function runtimeAdmissionApi(
   };
 }
 
+function unconfirmedComputeRecoveryFixture(kind: "solve" | "run" | "relax" = "solve") {
+  const bus = new EventBus<KernelEventMap>();
+  const registry = registryWithStudyRuntimeCommands(bus);
+  const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+  registry.attachSessionScopeSource({ getScopeKey: () => sessionScopeKey, subscribe: () => () => {} });
+  const controller = new CommandFeedbackController(bus, {
+    getSessionScopeKey: () => registry.getSessionScopeKey(),
+    subscribeSessionScope: (listener) => registry.subscribeSessionScope(listener),
+  });
+  const resourceData = {
+    ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+    [MODEL_SCENE_PATH]: {
+      scene_revision: 9,
+      study: { stages: [{ kind: kind === "solve" ? "relax" : kind, stage_id: "chosen-stage" }] },
+    },
+  };
+  const submit = vi.fn(async (_request: unknown) => ({ accepted: true, command_id: "confirmed-original" }));
+  submit.mockRejectedValueOnce(new ControlRoomApiError("Lost ACK", 0, null, "API_UNAVAILABLE"));
+  const reads = freshRuntimeAdmissionReads({ status: resourceData[SESSION_STATUS_RESOURCE_KEY] });
+  const api = runtimeAdmissionApi(submit, reads);
+  const context = createCommandContext("inspector", {
+    api, bus, commands: registry, commandFeedback: controller,
+  } as never, {
+    feedback: "local", sessionScopeKey, resourceData,
+    input: kind === "solve" ? undefined : { stageId: "chosen-stage" },
+  });
+  return {
+    bus, registry, controller, sessionScopeKey, resourceData, submit, reads, context,
+    initialCommand: kind === "solve" ? "study.run" : "study.execute-stage",
+  };
+}
+
 describe("study runtime command contributions", () => {
+  it.each(["solve", "run", "relax"] as const)("retries only the original %s request after a user click, preserving its ID and input pins", async (kind) => {
+    const f = unconfirmedComputeRecoveryFixture(kind);
+    try {
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+      const original = f.submit.mock.calls[0][0] as { client_intent_id: string; kind: string };
+      f.reads.status.mockRejectedValue(new Error("A retry must not refresh original input pins"));
+      f.reads.status.mockClear();
+      f.reads.list.mockClear();
+      f.reads.solverStatus.mockClear();
+      f.context.resourceData = runtimeResourceData({ sceneRevision: 99, meshRevision: 21, commandsRevision: 45 });
+
+      const retry = await f.registry.execute("study.retry-compute", { ...f.context, input: undefined });
+
+      expect(retry).toMatchObject({
+        status: "pending", commandId: "confirmed-original",
+        clientIntentId: original.client_intent_id, clientIntentKind: kind,
+      });
+      expect(f.submit).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(f.submit.mock.calls[1][0])).toBe(JSON.stringify(original));
+      expect(f.reads.status).not.toHaveBeenCalled();
+      expect(f.reads.list).not.toHaveBeenCalled();
+      expect(f.reads.solverStatus).not.toHaveBeenCalled();
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it.each([
+    [400, "bad_request"],
+    [409, "command_current_run_changed"],
+    [409, "live_compute_idempotency_conflict"],
+    [422, "accepted_run_commit_failed"],
+    [503, "accepted_preparation_pending"],
+    [503, "accepted_execution_store_unavailable"],
+    [503, "accepted_held_supersession_pending"],
+  ] as const)("retains an initial Compute after %s/%s without a no-acceptance proof", async (status, code) => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      f.submit.mockReset();
+      f.submit.mockRejectedValueOnce(new ControlRoomApiError("Acceptance is unknown", status, null, code));
+
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({
+        status: "pending", observation: "publication-unconfirmed",
+      });
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+      expect(f.submit).toHaveBeenCalledOnce();
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it("releases an original retry only after the server proves it was not accepted", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      await f.registry.execute(f.initialCommand, f.context);
+      f.submit.mockRejectedValueOnce(new ControlRoomApiError(
+        "Original mesh has changed", 409, null, "command_mesh_changed", "not_accepted",
+      ));
+
+      expect(await f.registry.execute("study.retry-compute", f.context)).toMatchObject({
+        status: "failed", message: "Original mesh has changed",
+      });
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(false);
+      expect(f.submit).toHaveBeenCalledTimes(2);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it("does not construct a retry from a legacy observation without the original request", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      f.bus.emit("study:compute-observation", {
+        clientIntentId: "legacy-intent", kind: "solve", sessionScopeKey: f.sessionScopeKey, state: "started",
+      });
+
+      expect(await f.registry.execute("study.retry-compute", f.context)).toMatchObject({
+        status: "failed", message: expect.stringContaining("original"),
+      });
+      expect(f.submit).not.toHaveBeenCalled();
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it("keeps the original unresolved intent when an explicit retry also loses its response", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    try {
+      expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+      const original = f.submit.mock.calls[0][0] as { client_intent_id: string };
+      f.submit.mockRejectedValueOnce(new ControlRoomApiError("Lost retry ACK", 503, null, "INTERNAL_ERROR"));
+
+      expect(await f.registry.execute("study.retry-compute", f.context)).toMatchObject({
+        status: "pending", clientIntentId: original.client_intent_id, observation: "publication-unconfirmed",
+      });
+      expect(f.submit).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(f.submit.mock.calls[1][0])).toBe(JSON.stringify(original));
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+    } finally {
+      f.controller.dispose();
+    }
+  });
+
+  it.each([
+    [409, "live_compute_idempotency_conflict"],
+    [422, "accepted_run_commit_failed"],
+    [409, "accepted_compute_release_required"],
+  ] as const)(
+    "preserves observation after replay returns %s/%s because the original may already be accepted", async (status, code) => {
+      const f = unconfirmedComputeRecoveryFixture();
+      const rejected: KernelEventMap["study:compute-observation"][] = [];
+      f.bus.on("study:compute-observation", (event) => { if (event.state === "rejected") rejected.push(event); });
+      try {
+        expect(await f.registry.execute(f.initialCommand, f.context)).toMatchObject({ status: "pending" });
+        f.submit.mockRejectedValueOnce(new ControlRoomApiError("Original acceptance is unresolved", status, null, code));
+
+        await f.registry.execute("study.retry-compute", f.context);
+
+        expect(f.submit).toHaveBeenCalledTimes(2);
+        expect(rejected).toEqual([]);
+        expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+      } finally {
+        f.controller.dispose();
+      }
+    },
+  );
+
+  it.each(["solve", "run", "relax"] as const)("blocks another %s POST while a local submission remains unconfirmed", async (kind) => {
+    const bus = new EventBus<KernelEventMap>();
+    const registry = registryWithStudyRuntimeCommands(bus);
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const commandFeedback = new CommandFeedbackController(bus, {
+      getSessionScopeKey: () => sessionScopeKey,
+      subscribeSessionScope: () => () => {},
+    });
+    const submit = vi.fn(async () => {
+      throw new ControlRoomApiError("Lost ACK", 0, null, "API_UNAVAILABLE");
+    });
+    const resourceData = {
+      ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+      [MODEL_SCENE_PATH]: {
+        scene_revision: 9,
+        study: { stages: [{ kind: kind === "solve" ? "relax" : kind, stage_id: "chosen-stage" }] },
+      },
+    };
+    const context: CommandContext = {
+      api: runtimeAdmissionApi(submit, freshRuntimeAdmissionReads({
+        status: resourceData[SESSION_STATUS_RESOURCE_KEY],
+      })) as never,
+      bus, commandFeedback, feedback: "local", source: "inspector", sessionScopeKey,
+      input: kind === "solve" ? undefined : { stageId: "chosen-stage" },
+      resourceData,
+    };
+    const id = kind === "solve" ? "study.run" : "study.execute-stage";
+    try {
+      expect(await registry.execute(id, context)).toMatchObject({
+        status: "pending", observation: "publication-unconfirmed", clientIntentKind: kind,
+      });
+      expect(await registry.execute(id, context)).toMatchObject({
+        status: "failed", message: expect.stringContaining("confirmation"),
+      });
+      expect(submit).toHaveBeenCalledOnce();
+      expect(commandFeedback.getSnapshot()).toEqual([]);
+    } finally {
+      commandFeedback.dispose();
+    }
+  });
+
+  it("admits only one Compute when two fresh preflights finish together", async () => {
+    const bus = new EventBus<KernelEventMap>();
+    const registry = registryWithStudyRuntimeCommands(bus);
+    const sessionScopeKey = "session=A&epoch=A%401&request_scope_epoch=api%3A1";
+    const commandFeedback = new CommandFeedbackController(bus, {
+      getSessionScopeKey: () => sessionScopeKey,
+      subscribeSessionScope: () => () => {},
+    });
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const resourceData = {
+      ...runtimeResourceData({ sceneRevision: 9, meshRevision: 4 }),
+      [MODEL_SCENE_PATH]: {
+        scene_revision: 9,
+        study: { stages: [{ kind: "relax", stage_id: "chosen-stage" }] },
+      },
+    };
+    const reads = freshRuntimeAdmissionReads({ status: resourceData[SESSION_STATUS_RESOURCE_KEY] });
+    reads.status.mockImplementation(async () => {
+      await ready;
+      return resourceData[SESSION_STATUS_RESOURCE_KEY];
+    });
+    const submit = vi.fn(async () => ({ accepted: true, command_id: "original-compute" }));
+    const context: CommandContext = {
+      api: runtimeAdmissionApi(submit, reads) as never,
+      bus, commandFeedback, feedback: "local", source: "inspector", sessionScopeKey, resourceData,
+    };
+    try {
+      const first = registry.execute("study.run", context);
+      const second = registry.execute("study.run", context);
+      release();
+      const results = await Promise.all([first, second]);
+      expect(results.filter((result) => result.status === "pending")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "failed")).toHaveLength(1);
+      expect(submit).toHaveBeenCalledOnce();
+    } finally {
+      commandFeedback.dispose();
+    }
+  });
+
   it.each(["run", "relax"] as const)("executes only the clicked authored %s stage", async (kind) => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async (_command: unknown) => ({
@@ -633,7 +877,7 @@ describe("study runtime command contributions", () => {
     let entry: { client_intent_id: string; command_id: string; kind: string } | undefined;
     const submit = vi.fn(async (request: { client_intent_id: string; kind: string }) => {
       expect(observe).toHaveBeenCalledWith({
-        clientIntentId: request.client_intent_id, kind, sessionScopeKey, state: "started",
+        clientIntentId: request.client_intent_id, kind, sessionScopeKey, state: "started", requestJson: JSON.stringify(request),
       });
       if (published) {
         entry = {
@@ -689,13 +933,10 @@ describe("study runtime command contributions", () => {
 
   it.each([
     [409, "command_current_run_changed"],
-    [503, "accepted_preparation_pending"],
-    [503, "accepted_execution_store_unavailable"],
-    [503, "accepted_held_supersession_pending"],
-  ] as const)("keeps a definitive admission response (%s, %s) separate from a lost Compute response", async (status, code) => {
+  ] as const)("keeps an authoritative not-accepted response (%s, %s) separate from a lost Compute response", async (status, code) => {
     const registry = registryWithStudyRuntimeCommands();
     const submit = vi.fn(async () => {
-      throw new ControlRoomApiError("Compute is not ready.", status, "request-a", code);
+      throw new ControlRoomApiError("Compute is not ready.", status, "request-a", code, "not_accepted");
     });
     const list = vi.fn(async () => freshRuntimeQueue([], 8));
     const detail = vi.fn();

@@ -68,6 +68,7 @@ import {
 } from "../commands/commandSessionScope";
 import { runAuthoringMutationWithHistory } from "../authoring/authoringHistoryMutation";
 import { studyComputeDraftBlockedReason } from "../authoring/studyComputeDraftGuard";
+import { studyComputeConfirmationBlockedReason } from "./studyComputeConfirmation";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -96,7 +97,10 @@ import {
 } from "../resources/useActiveLaneCapabilities";
 
 import { resolveArtifactAssessment } from "@/shared/domain/mesh/artifactAssessment";
-import { isStudyComputeKind as isStudyCompute } from "../commands/studyComputeObservations";
+import {
+  isStudyComputeKind as isStudyCompute,
+  parseStudyComputeRequestJson,
+} from "../commands/studyComputeObservations";
 
 import {
   buildAuthoredStudyStageCommand,
@@ -352,6 +356,8 @@ function runtimeCommandDisabledReason(
   if (apiReason) return apiReason;
 
   if (isStudyCompute(kind)) {
+    const confirmationReason = studyComputeConfirmationBlockedReason(context);
+    if (confirmationReason) return confirmationReason;
     const status = resourceData<LiveStatusResource>(
       context,
       SESSION_STATUS_RESOURCE_KEY,
@@ -1646,13 +1652,33 @@ async function submitRuntimeCommand(
   if ("result" in refresh) return refresh.result;
   const refreshedCommand = refresh.command;
   if (isStudyCompute(refreshedCommand.kind)) {
+    const confirmationReason = studyComputeConfirmationBlockedReason(context);
+    if (confirmationReason) return { message: confirmationReason, status: "failed" };
     const draftReason = studyComputeDraftBlockedReason(context);
     if (draftReason) return { message: draftReason, status: "failed" };
   }
+  return postRuntimeCommand(context, refreshedCommand, successMessage);
+}
+
+/** An explicit retry passes the immutable original DTO without a new preflight. */
+async function postRuntimeCommand(
+  context: CommandContext,
+  command: StructuredCommandRequest,
+  successMessage: string,
+  retry = false,
+): Promise<CommandResult> {
+  if (!context.api) return { message: "Control-room API is unavailable.", status: "failed" };
+  assertCurrentSessionScope(context);
+  const requestJson = isStudyCompute(command.kind) ? JSON.stringify(command) : undefined;
+  // Snapshot before emitting or awaiting so draft/resource changes cannot alter
+  // the body retained for a later, user-requested idempotent retry.
+  const refreshedCommand: StructuredCommandRequest = requestJson
+    ? JSON.parse(requestJson) as StructuredCommandRequest
+    : command;
   const requestOptions = sessionRequestOptions(context);
   const clientIntentId = nonEmptyString(refreshedCommand.client_intent_id);
   const submission = clientIntentId && requestOptions?.sessionScopeKey && isStudyCompute(refreshedCommand.kind)
-    ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey }
+    ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey, requestJson }
     : null;
   if (submission) context.bus?.emit("study:compute-observation", { ...submission, state: "started" });
 
@@ -1703,11 +1729,20 @@ async function submitRuntimeCommand(
       status: "pending",
     };
   }
-  if (submission && !response.accepted) {
+  if (submission && !response.accepted && !retry) {
     context.bus?.emit("study:compute-observation", { ...submission, state: "rejected" });
   }
   const obsoleteAfterSubmit = obsoleteSessionResult(context);
   if (obsoleteAfterSubmit) return obsoleteAfterSubmit;
+  if (!response.accepted && retry) {
+    return {
+      status: "pending",
+      clientIntentId: clientIntentId ?? undefined,
+      clientIntentKind: refreshedCommand.kind,
+      observation: "publication-unconfirmed",
+      message: "Original submission confirmation is pending. Its acceptance has not been disproved.",
+    };
+  }
   if (!response.accepted) {
     return {
       message: response.error ?? `${successMessage} rejected.`,
@@ -1795,15 +1830,15 @@ async function reconcileRuntimeCommandSubmission(
 }
 
 function isAmbiguousRuntimeCommandSubmitError(error: unknown, kind: string): boolean {
-  if (error instanceof Error && error.name === "AbortError") return isStudyCompute(kind);
-  if (!(error instanceof ControlRoomApiError)) return false;
-  if (error.code === "API_UNAVAILABLE" || error.status === 0) return true;
-  // Compute can be durable even when the API fails to publish its response.
-  // Preserve explicit pre-admission errors so the user can resolve them.
-  return isStudyCompute(kind) && error.status >= 500 && error.status < 600 &&
-    error.code !== "accepted_preparation_pending" &&
-    error.code !== "accepted_execution_store_unavailable" &&
-    error.code !== "accepted_held_supersession_pending";
+  if (isStudyCompute(kind)) {
+    // Status codes and an empty live ledger cannot disprove durable acceptance.
+    // Only the server's owner-scoped, serialized no-acceptance proof releases
+    // the intent. An API-instance change keeps its existing reconnect flow.
+    return !(error instanceof ControlRoomApiError &&
+      (error.intentDisposition === "not_accepted" || error.code === "API_INSTANCE_MISMATCH"));
+  }
+  return error instanceof ControlRoomApiError &&
+    (error.code === "API_UNAVAILABLE" || error.status === 0);
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -2608,7 +2643,38 @@ function studyNavigationCommand(
   };
 }
 
+function retryComputeDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Control-room API is unavailable.";
+  return context.commandFeedback?.getRetryableStudyCompute(context.sessionScopeKey)
+    ? null
+    : "No single unresolved Compute with its original request is available to retry.";
+}
+
+const retryComputeCommand: CommandContribution = {
+  id: "study.retry-compute",
+  title: "Retry original Compute",
+  category: "Study",
+  group: "study-runtime",
+  scope: "runtime",
+  isEnabled: (context) => retryComputeDisabledReason(context) === null,
+  disabledReason: retryComputeDisabledReason,
+  run: (context) => {
+    const original = context.commandFeedback?.getRetryableStudyCompute(context.sessionScopeKey);
+    const request = original && parseStudyComputeRequestJson(original.requestJson, original);
+    if (!request) {
+      return { status: "failed", message: "The original Compute request is unavailable; no command was sent." };
+    }
+    return postRuntimeCommand(
+      context,
+      request as StructuredCommandRequest,
+      "Original Compute confirmed; waiting for the backend result.",
+      true,
+    );
+  },
+};
+
 export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
+  retryComputeCommand,
   addAntennaFieldSolveStudyCommand,
   studyNavigationCommand(
     "study.open-overview",

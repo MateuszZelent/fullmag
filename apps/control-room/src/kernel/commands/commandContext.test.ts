@@ -4,6 +4,13 @@ import { CommandRegistry } from "./CommandRegistry";
 import { createCommandContext } from "./commandContext";
 
 describe("createCommandContext session ownership", () => {
+  it("uses the existing kernel owner of unresolved Study submissions", () => {
+    const commandFeedback = { hasUnresolvedStudyCompute: () => true, getRetryableStudyCompute: () => null };
+    const context = createCommandContext("inspector", { commandFeedback } as never);
+
+    expect(context.commandFeedback).toBe(commandFeedback);
+  });
+
   it.each(["ready", "stale", "error"] as const)("forwards the Inspector command queue status %s", (status) => {
     const resources = { commands: { revision: 9 } };
     const context = createCommandContext("inspector", {} as never, {
