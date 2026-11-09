@@ -2062,6 +2062,42 @@
       "latex": "$\\mathbf H_n$",
       "meaning": "Pełny wektor natywny przy tym samym podpisanym prądzie.",
       "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "rt0_stored_point_positions",
+      "latex": "$\\mathbf x_i,x_{i,a},c_a$",
+      "meaning": "zapisane wierzchołki i składowa zapisanego środka",
+      "si_unit": "$\\mathrm m$"
+    },
+    {
+      "id": "rt0_stored_point_determinant",
+      "latex": "$D_K$",
+      "meaning": "dodatni dokładny wyznacznik krawędzi Tet4",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "rt0_stored_point_flux",
+      "latex": "$\\Phi_i^{\\mathrm{out}}$",
+      "meaning": "kanoniczny moment ściany po konwersji sorted-ID na outward, naprzeciw i",
+      "si_unit": "$\\mathrm A$"
+    },
+    {
+      "id": "rt0_stored_point_values",
+      "latex": "$J^\\star_a,\\widehat J_{i,a},\\widehat J_{c,a}$",
+      "meaning": "kanoniczne RT0 i zachowane próbki",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0_stored_point_scale",
+      "latex": "$s_a,\\tau_a$",
+      "meaning": "dotychczasowa skala osiowa i budżet porównania",
+      "si_unit": "$\\mathrm{A\\,m^{-2}}$"
+    },
+    {
+      "id": "rt0_stored_point_indices",
+      "latex": "$i,a,\\varepsilon_{64}$",
+      "meaning": "indeksy wierzchołka/osi i epsilon binary64",
+      "si_unit": "$1$"
     }
   ],
   "equations": [
@@ -3858,6 +3894,37 @@
       "sources": [
         "gsg-reference-global-sum",
         "gsg-reference-global-sum-tests"
+      ]
+    },
+    {
+      "id": "antenna-rt0-stored-point-reference",
+      "symbols": [
+        "rt0_stored_point_positions",
+        "rt0_stored_point_determinant",
+        "rt0_stored_point_flux",
+        "rt0_stored_point_values",
+        "rt0_stored_point_scale",
+        "rt0_stored_point_indices"
+      ],
+      "sources": [
+        "rt0-stored-point-export",
+        "rt0-stored-point-native",
+        "rt0-stored-point-arithmetic"
+      ]
+    },
+    {
+      "id": "antenna-rt0-stored-point-gate",
+      "symbols": [
+        "rt0_stored_point_positions",
+        "rt0_stored_point_determinant",
+        "rt0_stored_point_flux",
+        "rt0_stored_point_values",
+        "rt0_stored_point_scale",
+        "rt0_stored_point_indices"
+      ],
+      "sources": [
+        "rt0-stored-point-verifier",
+        "rt0-stored-point-arithmetic"
       ]
     }
   ],
@@ -9325,6 +9392,34 @@
       "symbol": "class GsgFieldReferenceSumTests",
       "responsibility": "11 regresji na małych danych matematycznych; niepełny/nadmiarowy nośnik, sumy błędów, cancellation i postęp.",
       "evidence_status": "interpreted_tests_passed"
+    },
+    {
+      "id": "rt0-stored-point-export",
+      "path": "backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp",
+      "symbol": "export_closed_loop_source_snapshot",
+      "responsibility": "Próbkuje RT0 w zapisanym środku i wiąże bity.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-native",
+      "path": "backends/fem/cpu/mfem/transport/affine_rt0_element.cpp",
+      "symbol": "AffineRt0Element::retained_current_at",
+      "responsibility": "Dokładna ocena RT0 w fizycznym punkcie.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-verifier",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "verify_center_current",
+      "responsibility": "Punkt zatwierdzonej naprawy; oczekuje odbioru GREEN/runtime.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-arithmetic",
+      "path": "examples/sushruth_2020_closed_gsg/stored_point_validation_20261108/stored_point_policy_audit.py",
+      "symbol": "exact_field",
+      "responsibility": "Wykonany dokładny odczyt komórki, bez solvera.",
+      "evidence_status": "source_only"
     }
   ],
   "public_api": {

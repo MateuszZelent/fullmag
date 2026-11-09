@@ -325,3 +325,49 @@ fn center_current_failure_diagnostic_preserves_earlier_nonfinite_vertex_refusal(
     cell.center_current_xyz_apm2[0] = 9.0;
     assert_eq!(owned_center_failure(cell).message, "closed-loop identity refused: nonfinite flux");
 }
+
+fn actual_stored_point_cell() -> (
+    super::super::closed_loop_v2::ClosedLoopCurrentCellV2,
+    BTreeMap<[u64; 3], f64>,
+) {
+    let value: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/sushruth_2020_closed_gsg/rt0_center_diagnostic_20261108/offline-analysis/fixtures/actual-first-center-refusal.json",
+    ))).unwrap();
+    let integer = |v: &serde_json::Value| u64::from_str_radix(v.as_str().unwrap(), 16).unwrap();
+    let scalar = |v: &serde_json::Value| f64::from_bits(integer(v));
+    let mut cell = center_current_cell();
+    cell.source_element_index = integer(&value["element"]);
+    cell.vertex_ids = std::array::from_fn(|i| integer(&value["vertex_ids"][i]));
+    cell.vertex_xyz_m = std::array::from_fn(|i| scalar(&value["vertex_xyz_bits"][i]));
+    cell.vertex_current_xyz_apm2 = std::array::from_fn(|i| scalar(&value["vertex_j_bits"][i]));
+    cell.center_xyz_m = std::array::from_fn(|i| scalar(&value["center_xyz_bits"][i]));
+    cell.center_current_xyz_apm2 = std::array::from_fn(|i| scalar(&value["center_j_bits"][i]));
+    let faces = (0..4).map(|opposite| {
+        let mut ids = [0; 3];
+        let mut index = 0;
+        for local in 0..4 {
+            if local != opposite {
+                ids[index] = cell.vertex_ids[local];
+                index += 1;
+            }
+        }
+        ids.sort_unstable();
+        (ids, scalar(&value["face_flux_bits"][opposite]))
+    }).collect();
+    (cell, faces)
+}
+
+#[test]
+fn stored_point_center_accepts_actual_28881() {
+    let (cell, faces) = actual_stored_point_cell();
+    assert_eq!(cell.source_element_index, 28881);
+    let points = std::array::from_fn(|i|
+        std::array::from_fn(|axis| cell.vertex_xyz_m[3 * i + axis]));
+    assert!(verify_rt0_sample_moments(&points, &cell.vertex_ids,
+        &cell.vertex_current_xyz_apm2, &faces).is_ok());
+    for axis in 0..3 {
+        let result = super::verify_center_current(&cell, &points, axis, &faces);
+        assert!(result.is_ok(), "stored point axis {axis}: {result:?}");
+    }
+}

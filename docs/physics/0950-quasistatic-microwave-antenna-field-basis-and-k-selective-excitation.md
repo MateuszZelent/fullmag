@@ -10157,6 +10157,78 @@ kompilacji. Dowody w wolumenie grupy:
 | old-RED i wspólny slope | `crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs` + `rounded_rt0_samples_survive_an_ill_conditioned_pivot` | parser i Fraction model PASS; Rust NOT COMPILED/NOT EXECUTED |
 
 (antenna-source-code-index)=
+
+### Walidacja retained J w zapisanym środku — zatwierdzona poprawka 09.11.2026
+
+Próbka środka oznacza wartość pola RT0 w rzeczywiście zapisanej współrzędnej
+binary64, nie w nieprzedstawialnym dokładnym barycentrum. Natywny eksport
+wywołuje retained_current_at(center) i wiąże te współrzędne oraz J w tym samym
+source-state preimage. Weryfikator musi ocenić tę samą funkcję w tym samym punkcie.
+
+```{math}
+:label: antenna-rt0-stored-point-reference
+D_K=\det[\mathbf x_1-\mathbf x_0,\mathbf x_2-\mathbf x_0,\mathbf x_3-\mathbf x_0]>0,
+\qquad J^\star_a(c_a)=
+\frac{2\sum_{i=0}^3\Phi_i^{\mathrm{out}}(c_a-x_{i,a})}{D_K}.
+```
+
+```{math}
+:label: antenna-rt0-stored-point-gate
+s_a=\max_i|\widehat J_{i,a}|,\qquad
+\tau_a=128\,\varepsilon_{64}s_a,\qquad
+|\widehat J_{c,a}-J^\star_a(c_a)|\le\tau_a,\qquad
+\varepsilon_{64}=2^{-52}.
+```
+
+| Token | Znaczenie | SI |
+|---|---|---|
+| $\mathbf x_i,x_{i,a},c_a$ | zapisane wierzchołki i składowa zapisanego środka | $\mathrm m$ |
+| $D_K$ | dodatni dokładny wyznacznik krawędzi Tet4 | $\mathrm{m^3}$ |
+| $\Phi_i^{\mathrm{out}}$ | kanoniczny moment ściany po konwersji sorted-ID na outward, naprzeciw i | $\mathrm A$ |
+| $J^\star_a,\widehat J_{i,a},\widehat J_{c,a}$ | kanoniczne RT0 i zachowane próbki | $\mathrm{A\,m^{-2}}$ |
+| $s_a,\tau_a$ | dotychczasowa skala osiowa i budżet porównania | $\mathrm{A\,m^{-2}}$ |
+| $i,a,\varepsilon_{64}$ | indeksy wierzchołka/osi i epsilon binary64 | $1$ |
+
+Wzór wynika z tej samej bazy RT0 i kanonicznych momentów co w rozdziale cold-load.
+Jest dokładny dla dodatniego afinicznego Tet4; nie dotyczy zakrzywionych elementów
+wyższego rzędu. Porównanie używa dokładnej arytmetyki dyadycznej i iloczynów
+całkowitych; referencji nie wolno zaokrąglać do f64 przed nierównością.
+Bez absolutnego floor, zwiększenia 128epsilon lub użycia normy całego J.
+Dotychczasowe 64epsilon nodalnych momentów, geometria środka, affinity,
+bilans oraz certificate/binding pozostają. J nie jest nadpisywane referencją.
+
+To korekta walidacji próbki, nie nowa fizyka lub parametr authoringu. Python →
+ProblemIR → planner nie otrzymuje nowych pól. Accepted source v2, sampling_policy
+cell_center_and_cell_local_vertices.v1 i surowe bity danych pozostają. Wersja
+binary i snapshot identyfikuje kontrolę; starszy runtime może nadal odrzucić
+tę samą poprawną próbkę. Nie jest to deklaracja zgodnego rollback.
+
+Geometry(a) nadal poprzedza current(a); wcześniejsze użycie momentów może ujawnić
+brak/niefinitywność momentu przed późniejszą odmową próbki. Prywatny
+fullmag.rt0_center_failure.v2 identyfikuje canonical_rt0_at_stored_point.v1
+i przenosi ograniczone tablice bitów, nie wielkie liczniki ułamków. Czytnik v1
+zachowuje znaczenie dawnego mean i jego predykatu. Niekompletność lub NaN
+pozostaje odmową, nigdy próbką zerową.
+
+| Realizacja | Interpretacja i dowód |
+|---|---|
+| FEM CPU | zatwierdzony kontrakt; arytmetyka jednej komórki 15/15 PASS; wdrożenie i managed odbiór oczekują |
+| FEM GPU | brak zmiany i kwalifikacji; precompute nie staje się GPU |
+| FDM CPU | brak nowej kontroli lub kwalifikacji konsumenta bazy |
+| FDM GPU | brak zmiany, fallback i kwalifikacji urządzenia |
+
+Plan walidacji: komórka 28881, granica inkluzywna i następne f64, zero/subnormal,
+skrajne wykładniki, uszkodzony moment/sample, kolejność odmów, pełny transport
+v1/v2 i porównanie 12 nodalnych kontroli z referencją dokładną. Jedna próba V/J/H
+na zachowanej siatce po zielonym CI/buildzie nie kwalifikuje automatycznie źródła,
+LLG lub zgodności z publikacją.
+
+Indeks źródeł:
+- backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp::export_closed_loop_source_snapshot — zapis rzeczywistego punktu.
+- backends/fem/cpu/mfem/transport/affine_rt0_element.cpp::AffineRt0Element::retained_current_at — dokładne native RT0.
+- crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs::verify_center_current i verify_rt0_sample_moments — punkt wdrożenia i nodalne momenty, do odbioru GREEN.
+- examples/sushruth_2020_closed_gsg/stored_point_validation_20261108/stored_point_policy_audit.py::exact_field / proposed_gate — wykonana arytmetyka, bez C++.
+
 ### 13.1 Source-code index
 
 Uzupełnienie E9b (mapping implementacji; build Windows i API50 nie stanowią kwalifikacji naukowej ani pełnego przepływu runtime):
