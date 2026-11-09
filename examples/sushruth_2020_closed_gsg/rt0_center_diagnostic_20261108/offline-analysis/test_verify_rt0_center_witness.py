@@ -72,6 +72,43 @@ def v2(w):
  return w
 
 class StoredPointWitnessTests(unittest.TestCase):
+ def actual_v2(self):
+  import json
+  from pathlib import Path
+  w=json.loads((Path(__file__).parent/"fixtures/actual-first-center-refusal.json").read_text())
+  w=v2(w)
+  w["axis_scale_bits"]=bits(max(abs(struct.unpack(">d",bytes.fromhex(w["vertex_j_bits"][3*i+w["axis"]]))[0]) for i in range(4)))
+  w["center_j_bits"][1]="3e363893a7151338"
+  return w
+ def test_v2_earlier_axis_survives_later_nonfinite_vertex_sample(self):
+  import json
+  w=self.actual_v2();w["vertex_j_bits"][2]="7ff8123456789abc"
+  r=analyze(w)
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertTrue(r["gate_replay"]["exact_reference_available"])
+  self.assertFalse(r["moment_reconstruction"]["all_vertex_samples_match"])
+  self.assertEqual(r["witness"],w)
+  json.dumps(r,allow_nan=False)
+ def test_v2_earlier_axis_survives_later_nonfinite_center_coordinate(self):
+  import json
+  w=self.actual_v2();w["center_xyz_bits"][2]="7ff8123456789abc"
+  r=analyze(w)
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertTrue(r["gate_replay"]["exact_reference_available"])
+  self.assertIsNone(r["centroid_error_m"][2])
+  self.assertIsNone(r["moment_reconstruction"]["center_j_bits"][2])
+  self.assertFalse(r["moment_reconstruction"]["all_center_samples_match"])
+  self.assertEqual(r["witness"],w)
+  json.dumps(r,allow_nan=False)
+ def test_v2_exact_refusal_survives_unrepresentable_display_reference(self):
+  import json
+  w=self.actual_v2();w["face_flux_bits"][0]="7fefffffffffffff"
+  r=analyze(w)
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertTrue(r["gate_replay"]["exact_reference_available"])
+  self.assertTrue(any(x is None for x in r["moment_reconstruction"]["center_j_bits"]))
+  self.assertEqual(r["witness"],w)
+  json.dumps(r,allow_nan=False)
  def test_v2_replays_stored_point_instead_of_exact_centroid(self):
   r=analyze(v2(fixture(float(2**52))))
   self.assertTrue(r["gate_replay"]["passes"])

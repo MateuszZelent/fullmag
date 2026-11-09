@@ -66,7 +66,7 @@ def analyze(witness):
     if v2:
         scale = max(abs(current[3*i+axis]) for i in range(4))
         observed = number(witness["axis_scale_bits"])
-        if not all(math.isfinite(x) for x in current) or not math.isfinite(observed) or observed < 0 or bits(scale) != witness["axis_scale_bits"]:
+        if not all(math.isfinite(current[3*i+axis]) for i in range(4)) or not math.isfinite(observed) or observed < 0 or bits(scale) != witness["axis_scale_bits"]:
             raise ValueError("invalid or inconsistent axis scale")
         replay = {"passes": False, "comparison_policy": witness["comparison_policy"],
                   "exact_reference_available": False}
@@ -83,13 +83,25 @@ def analyze(witness):
                   "derived_bits": derived,
                   "derived_bits_match": all(witness[k] == v for k, v in derived.items())}
     coords, center, fluxes = values["vertex_xyz_bits"], values["center_xyz_bits"], values["face_flux_bits"]
-    if not all(math.isfinite(x) for x in coords + center):
+    if not all(math.isfinite(x) for x in coords + ([center[axis]] if v2 else center)):
         raise ValueError("nonfinite witnessed geometry")
     points = [[Q(coords[3*i+a]) for a in range(3)] for i in range(4)]
     exact_center = [sum(p[a] for p in points)/4 for a in range(3)]
-    delta = [Q(center[a])-exact_center[a] for a in range(3)]
+    delta = [Q(center[a])-exact_center[a] if math.isfinite(center[a]) else None for a in range(3)]
+    def display(value):
+        if v2 and value is None:
+            return None
+        try:
+            return float(value)
+        except OverflowError:
+            if not v2:
+                raise
+            return None
+    def display_bits(value):
+        shown = display(value)
+        return None if shown is None else bits(shown)
     result = {"schema": "fullmag.rt0_center_offline_audit.v2" if v2 else "fullmag.rt0_center_offline_audit.v1", "witness": witness,
-              "gate_replay": replay, "centroid_error_m": [float(x) for x in delta],
+              "gate_replay": replay, "centroid_error_m": [display(x) for x in delta],
               "moment_reconstruction": {"available": False},
               "reconstruction_rounding": "exact rational moments followed by binary64 nearest-even",
               "native_cpp_executed": False, "solver_executed": False,
@@ -108,22 +120,9 @@ def analyze(witness):
         face_ids = [ids[i] for i in face]
         inversions = sum(face_ids[i] > face_ids[j] for i in range(3) for j in range(i+1,3))
         outward.append(Q(flux) * (-1 if inversions % 2 else 1))
-    def field(point):
-        return [2*sum(outward[i]*(point[a]-points[i][a]) for i in range(4))/determinant
-                for a in range(3)]
-    vertex_predicted = [float(v) for p in points for v in field(p)]
-    center_exact = field([Q(x) for x in center])
-    center_predicted = [float(v) for v in center_exact]
-    slope = 2*sum(outward)/determinant
-    result["moment_reconstruction"] = {
-        "available": True,
-        "vertex_j_bits": [bits(v) for v in vertex_predicted],
-        "center_j_bits": [bits(v) for v in center_predicted],
-        "all_vertex_samples_match": all(bits(v) == x for v,x in zip(vertex_predicted,witness["vertex_j_bits"])),
-        "all_center_samples_match": all(bits(v) == x for v,x in zip(center_predicted,witness["center_j_bits"])),
-        "centroid_shift_delta_j_apm2": [float(slope*x) for x in delta],
-        "coefficient_provenance": "canonical face moments, not unpublished MFEM coefficient bytes",
-    }
+    def component(coordinate, axis):
+        return 2*sum(outward[i]*(coordinate-points[i][axis]) for i in range(4))/determinant
+    center_exact = [component(Q(center[a]),a) if math.isfinite(center[a]) else None for a in range(3)]
     if v2:
         replay["exact_reference_available"] = True
         budget = Q(scale) / (1 << 45)
@@ -132,6 +131,21 @@ def analyze(witness):
             difference = abs(Q(center_j[axis])-center_exact[axis])
             replay["exact_difference_apm2"] = str(difference)
             replay["passes"] = difference <= budget
+    vertex_predicted_bits = [display_bits(component(p[a],a)) for p in points for a in range(3)]
+    center_predicted_bits = [display_bits(v) for v in center_exact]
+    slope = 2*sum(outward)/determinant
+    result["moment_reconstruction"] = {
+        "available": True,
+        "vertex_j_bits": vertex_predicted_bits,
+        "center_j_bits": center_predicted_bits,
+        "all_vertex_samples_match": all(v == x for v,x in zip(vertex_predicted_bits,witness["vertex_j_bits"])),
+        "all_center_samples_match": all(v == x for v,x in zip(center_predicted_bits,witness["center_j_bits"])),
+        "centroid_shift_delta_j_apm2": [display(slope*x if x is not None else None) for x in delta],
+        "coefficient_provenance": "canonical face moments, not unpublished MFEM coefficient bytes",
+    }
+    if v2:
+        result["moment_reconstruction"]["unavailable_value_policy"] = (
+            "null denotes a nonfinite unvisited coordinate or an exact value outside binary64; raw witness is preserved")
     return result
 
 def unique_pairs(pairs):
