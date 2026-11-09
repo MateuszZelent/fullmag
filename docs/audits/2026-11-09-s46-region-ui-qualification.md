@@ -927,3 +927,208 @@ Wszystkie sześć workflow dla commita 729 zakończyło się success, w tym
 [bootstrap 42637988126](https://github.com/MateuszZelent/fullmag/actions/runs/42637988126).
 To potwierdza naprawę E0433 w kompilacji wszystkich binarek. Nie jest dowodem CI
 późniejszej poprawki UI ani nowego wczesnego filtra scheduler tests.
+
+
+## Bieżące ograniczenia odbioru i regresje S21 — 9 listopada
+
+Po powyższej kontroli backend tej samej próby zamknął admission: supervisor
+nie potwierdził liveness usługi native przez 124 s. Odczyt publicznego
+`/v2/platform/health` nadal zwraca HTTP 200, ale `status: degraded`, tę samą
+instancję API i `active_session: false`; `/v2/sessions` zwraca pustą listę.
+Nie jest to gotowy runtime do odbioru. Nie odtworzono żadnej symulacji.
+
+Przygotowano testy pamięciowego śledzenia lokalnego started, deduplikacji ACK,
+wiązań sesji i dokładnego odrzucenia. Dodatkowe regresje wywołują rzeczywisty
+CommandRegistry z istniejącym CommandFeedbackController: utrata ACK dla
+Solve/Run/Relax, dwa kończące się równocześnie preflighty, przekazanie tego
+samego właściciela przez createCommandContext oraz bramka nowego Build + Study
+z zachowaniem odczytowej kontynuacji własnego wcześniejszego zamiaru.
+Kod produkcyjny tej korekty nie został jeszcze zmieniony. **Testy nie zostały
+uruchomione:** driver zatrzymuje się w konstruktorze BuildControl przy odczycie
+`namespaces/current.json`, po 60 s, przed nadaniem próbie testowej ID i przed
+Docker exec. Tak samo kończy się odczyt poza sandboxem. Nie jest to RED ani
+GREEN; wcześniejsze 9683 PASS dotyczą wyłącznie wcześniejszego zestawu źródeł.
+
+Odczytowy inwentarz WSL wykazał 72 kanoniczne katalogi buildów (36 z wpisem
+completed), łącznie 1 249 280 B, głównie metadane. Dodatkowo znaleziono sześć
+odtwarzalnych cache Go/npm/Node: 953 843 712 B unikalnych bloków, bez twardych
+linków poza tymi katalogami. Nie stwierdzono ich bindów w 79 sprawdzonych
+kontenerach ani pasujących widocznych cwd/fd procesów; część procesów systemowych
+pozostaje niedostępna do inspekcji. Zgoda użytkownika obejmowała inwentarz;
+nie wykonano usuwania. Pełne drzewo źródeł z run_output (457 752 576 B),
+historyczny runtime local (648 011 776 B), sesje, wyniki i control są zachowane.
+Pomiar dotyczy WSL, bez doliczania Docker/Windows. Przy około 209 MiB wolnego
+wymagany 1 GiB dla zachowanego eksportu/importu S46 pozostaje niedostępny.
+
+Pozostają otwarte: S21 z potwierdzonym trwałym wynikiem i wariantami macierzy,
+cztery kwalifikowane kroki S46, rzeczywisty cykl UI, wizualny odbiór FDM Cell
+Physics oraz pozostałe bramki P01–P22/S01–S46. Ograniczenia środowiska nie
+zmieniają kryteriów ukończenia ani nie zastępują odbioru produkcyjnymi testami
+źródeł. Następny krok to przywrócenie zarządzanego odczytu kontrolnego,
+wykonanie RED przed implementacją S21 i zwolnienie zatwierdzonego miejsca
+przed odbiorem wymagającym zachowania kolejnych wyników.
+
+
+## Aktualizacja S21 po wykonaniu regresji — 9 listopada, dalszy ciąg
+
+Poprzedni akapit „Kod produkcyjny tej korekty nie został jeszcze zmieniony”
+opisuje wcześniejszy checkpoint. Poniżej stan po kolejnych zmianach; dotychczasowe
+wyniki i ograniczenia pozostają zachowane jako historia, nie bieżące GREEN.
+
+Istniejący CommandFeedbackController śledzi lokalny started także w pamięci,
+bramkuje następny Compute w tej samej sesji i zachowuje pierwszy niezmienny JSON
+żądania. CommandContext otrzymuje tego samego właściciela. Ponowna kontrola
+bezpośrednio przed POST zatrzymuje dwa równoległe preflighty. Nowy Build + Study
+jest blokowany przy nierozstrzygniętym Compute; własna odczytowa kontynuacja
+wcześniejszego Build + Study pozostaje dostępna.
+
+Zarejestrowano ręczną komendę `study.retry-compute` („Retry original Compute”).
+Ponawia pierwotne body i client_intent_id, bez nowego UUID i bez odświeżania
+preconditions z aktualnie edytowanego modelu. Legacy hint bez body nie pozwala
+zrekonstruować żądania. Nie dodano automatycznego ponawiania POST. Komenda jest
+na razie dostępna przez rejestr/paletę; stały przycisk Inspectora i akcja toastu
+nie zostały jeszcze dodane ani odebrane wizualnie.
+
+Klient API dekoduje opcjonalny płaski `intent_disposition: "not_accepted"`.
+Brak pola nie jest dowodem odrzucenia. Błędy HTTP, także 400, 409, 422 i 503,
+bez takiego dowodu zachowują nierozstrzygnięty Compute. Backend nie publikuje
+jeszcze tego nowego kontraktu: pozostaje do wdrożenia właścicielski, trwały
+odczyt pod transition fence oraz finalny replay także dla dynamicznych błędów
+materiału. Nowa regresja HTTP backendu jest przygotowana, lecz nie była wykonana.
+Próba hostowego Cargo była błędem procedury i zatrzymała się przed kompilacją;
+nie jest zaliczona jako RED i nie jest ponawiana.
+
+Weryfikacja źródeł w istniejącym frontendzie właściwej grupy Compose:
+
+- Core S21: potwierdzony RED 12 FAIL / 165 PASS; następnie 179/179 PASS.
+- Zapis oryginalnego body i ręczne ponowienie: RED 21 FAIL / 178 PASS;
+  po implementacji 200/200 PASS w `01f3605bc4314054a5fad574301c22c1`.
+- Zachowanie odpowiedzi bez dowodu odrzucenia: RED 7 FAIL / 198 PASS
+  w `a6e1ee679d5d42929d03a6e989c002fe`; następnie **205/205 PASS**
+  w `bb571520409d49e69c7cc8bbe92da498` (5 plików). SHA raportu Vitest:
+  `c955588d5426ee976aa4b879eaa6b72d32475649d13fd6cbbbff804f0b115056`.
+- Klient API: **178/178 PASS**, `6e347bd4626a4eb8965a155a152830fd`.
+
+Próby diagnostyczne mają rzeczywiste kody zakończenia i raporty Vitest w
+prywatnym wolumenie frontendu oraz sprawdzone przed/po wejścia źródeł, tożsamość
+usług, mounty i provenance backendu. **Nie opublikowały pełnego receiptu** i nie
+zastępują wymaganych bramek. Wcześniejsza atomowa publikacja receiptu RED oraz
+logu typecheck pozostaje nierozstrzygnięta: należące do niej procesy czekają
+na I/O; pliki tymczasowe zachowano. Odczyt logu ujawnił TS18048 w hooku
+KernelProvider; optional chaining poprawiono, ale bieżący typecheck, lint
+oraz bramki architektury/API nadal oczekują wyniku osobnej próby
+`f2a3d57c2d6e44598b45193691324b9e`.
+
+Czytelny inwentarz zakończonych buildów: `/tmp/p22-inwentarz-buildow.md`.
+Sześć cache nadal czeka na osobne zatwierdzenie; nic nie usunięto. Cache
+Context7 był od pomiaru używany, więc przed ewentualnym usuwaniem trzeba
+ponowić kontrolę rozmiarów i konsumentów. Pomiary WSL nie są pomiarami Windows
+ani filesystemu Dockera. S46, działający backend i rzeczywisty odbiór UI
+pozostają otwarte; zmiany nie są jeszcze scalone na master.
+
+
+Próba statyczna `f2a3d57c2d6e44598b45193691324b9e` zakończyła obserwację po
+600 s jako **outcome-unknown**, nie jako potwierdzony błąd TypeScript. Dokładny
+Docker exec `5e3a4b847b6a400927f66e70b1ed4df4fc34b02225d02381c7ebdb688f94a6aa`
+nadal jest Running (VM PID 37569); jego `next typegen` ma wątek w stanie D,
+`folio_wait_bit_common`. Nie ponowiono operacji i nie zwolniono jej blokady.
+ESLint oraz bramki architektury/API nie zostały w tej próbie rozpoczęte.
+Odczyt health portu 3243 o 19:02 UTC nadal pokazał `degraded`.
+Test HTTP backendu odizolowano w osobnym procesie testowym: zmienna konfiguracji
+runtime jest ustawiana wyłącznie w środowisku dziecka, bez mutacji procesu
+uruchamiającego równolegle inne testy. Parser Rust nie zastępuje kompilacji;
+regresja backendu pozostaje niewykonana. Żaden z tych wyników nie kwalifikuje
+merge ani runtime/UI.
+
+
+## Oddzielny pomiar WSL i filesystemu Dockera
+
+Kolejny odczyt potwierdził około 195 MiB wolnego na WSL. Jednocześnie
+istniejąca usługa frontend zwróciła przez statvfs **198 087 086 080 B**
+(około 184 GiB) dostępnych zarówno dla prywatnego cache, jak i codegen.
+Windows C: zgłosił około 17 GiB wolnego. To trzy odrębne pomiary;
+nie należy przypisywać zawieszenia fsync/typegen brakowi miejsca w wolumenie
+Dockera na podstawie zapełnienia WSL. Przyczyna oczekiwania I/O pozostaje
+nierozstrzygnięta. Ewentualne zatwierdzone zwolnienie sześciu cache WSL
+rozwiązuje wymóg miejsca na zachowane wyniki S46, ale nie jest dowodem
+naprawy I/O Dockera. Nie wykonano restartu globalnego ani zmian cudzych grup.
+Odczyt Engine API dokładnego exec kontroli typów o 19:04 UTC nadal potwierdzał
+Running, bez kodu zakończenia.
+
+
+## Niezależny review S21 — retencja Build + Study po odrzuceniu
+
+Przegląd nowego diffu potwierdził dodatkową lukę P2, której dotychczasowe
+205 testów nie obejmuje. Build + Study zachowuje `operation.solve`, gdy Solve
+zwróci pending bez command ID. Późniejszy jawny retry może otrzymać dowód
+`not_accepted` i wyczyścić tracker w CommandFeedbackController, ale nie usuwa
+zachowanej kontynuacji Build + Study. Kolejny odczyt pustej kolejki zwraca
+znowu ten stary pending, a anulowanie pozostaje niedostępne, bo operation.solve
+istnieje. To ustalenie ze źródeł, jeszcze bez wykonanej regresji RED.
+
+Wymagane domknięcie: po takim dokładnym rozstrzygnięciu kontynuacja musi zostać
+bezpiecznie zakończona albo kolejne jawne kliknięcie użytkownika rozpoczyna nowy
+cykl z aktualnymi warunkami. Sam brak wpisu w kolejce, błąd bez dowodu albo
+odrzucenie obcego intentu/sesji nie mogą wyczyścić własnego nierozstrzygniętego
+Compute. Nie wolno dodać automatycznego POST. Przygotowanie regresji należy
+wyłącznie do testów Build + Study; kod produkcyjny tej kolejnej korekty nie
+został zmieniony. Jej RED/GREEN nadal wymaga zwolnienia istniejącej blokady
+przez rozstrzygnięcie tej samej działającej próby, bez nowego testu równolegle.
+
+
+Dodano trzy regresje źródłowe Build + Study: dokładne `not_accepted`,
+markerless 503 oraz odrzucenie obcego intentu/sesji. Fixture korzysta z tego
+samego bus/controller i kanonicznego zakresu, odpowiada na dokładny requestId
+potwierdzenia budowy i sprawdza zgodność ponowionego body/intent oraz brak
+automatycznej mutacji. Poprawiono fixture przed uruchomieniem: samo dodanie bus
+bez respondera zawieszałoby test na dialogu zamiast wykazać regresję produktu.
+Testy pozostają **niewykonane**, produkcyjna naprawa tej luki nadal otwarta.
+Po trzeciej kolejnej turze z potwierdzonym żywym exec i blokadą I/O zapisano
+worktree jako blocked; nic nie scalono ani nie wycofano. Punkt wznowienia:
+`/tmp/p22-wznowienie-po-io.md`. Sam wzrost wolnego miejsca WSL nie zastępuje
+potwierdzenia działającego I/O Dockera ani wymaganego odbioru UI.
+
+
+## Wznowienie i wykorzystanie istniejącej bramki hosted CI
+
+Po ponownym uruchomieniu celu zachowane źródła miały identyczne hashe, a ten
+sam exec nadal był Running i trzymał blokadę testów. Nie uruchomiono drugiej
+próby ani restartu Dockera. Windows CLI potwierdził tę samą tożsamość silnika
+co WSL i stan Desktop running; brak odpowiedzi Linux Desktop CLI nie oznacza
+awarii Engine. Inwentarz pokazał 27 działających kontenerów, w tym 8 Fullmaga
+z restart_policy=no. Globalny restart nie został zatwierdzony ani wykonany.
+
+Zapisano dwa niezależne fragmenty: klient API
+`922ec4b49fc0a18fe222014952d42548e1ec3060` oraz właściciel obserwacji
+`3b8285f565dbcc2315ba88ae214ac46f854727b6`. Niezmienione testy tych fragmentów
+miały odpowiednio 178 PASS i 24 PASS. Wszystkie sześć workflow commita 3b8285f56
+zakończyło się success, w tym
+[bootstrap 42694394674](https://github.com/MateuszZelent/fullmag/actions/runs/42694394674).
+Job frontendowy 129422235986 potwierdził typecheck, lint, architekturę,
+pełny zestaw 9696 PASS / 13 skipped (925 plików PASS / 1 skipped), dodatkowe
+3 testy performance i produkcyjny build Next. To dowód źródeł tego commita,
+nie nowego runtime, S46 ani odbioru wizualnego.
+
+Istniejący nieblokujący hook React Doctor został wykonany z już zainstalowanym
+narzędziem, bez pobierania pakietów i bez zmiany hooka. Dla API i kontrolera
+sam analizator zgłosił wewnętrzny błąd oxlint `Unexpected discriminant 7 for
+TSTypeName`; tego wyniku nie zaliczono jako PASS. Wymagane projektowe lint i
+typecheck później rzeczywiście przeszły w hosted CI.
+
+Kolejne jawne checkpointy WIP szkicu PR zawierają brakujące regresje do
+wykonania RED w tej samej istniejącej bramce. Obejmują retencję Build + Study,
+HTTP not_accepted oraz późny foreground pending po odrzuceniu/terminalnym
+ledgerze. Dodano także przypadek przez rzeczywisty CommandRegistry i helper
+runtime: oryginalny POST pozostaje w toku, jawny retry potwierdza odrzucenie,
+a dopiero potem kończy się oryginalna utracona odpowiedź. Nie wolno z niej
+odtworzyć blokady Compute. Regresje są na tym etapie **niewykonane**; produkcyjna
+naprawa tych konkretnych luk czeka na ich rzeczywisty RED. WIP nie oznacza
+ukończonego etapu ani gotowości do merge.
+
+Review kontraktu backendu wykazało, że sam domain_generation_id jest
+fingerprintem i może wrócić do wcześniejszej wartości; nie stanowi dowodu
+nieodwracalnego odrzucenia. Także wrapping_add mesha wymaga ostrożności przy
+wnioskowaniu o monotoniczności. Marker musi wynikać z potwierdzonego trwałego
+missu we właściwym ownerze i terminalnej niezgodności przypiętych wejść,
+a nie z samego kodu HTTP, pustej kolejki lub przejściowego mismatchu domeny.
+Żadnego kodu produkcyjnego tej korekty backendu jeszcze nie zmieniono.

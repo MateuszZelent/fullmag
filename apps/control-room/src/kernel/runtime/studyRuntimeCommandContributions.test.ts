@@ -461,6 +461,40 @@ function unconfirmedComputeRecoveryFixture(kind: "solve" | "run" | "relax" = "so
 }
 
 describe("study runtime command contributions", () => {
+  it("does not reopen Compute when its original foreground response follows an explicit retry rejection", async () => {
+    const f = unconfirmedComputeRecoveryFixture();
+    let rejectOriginal: (error: unknown) => void = () => undefined;
+    const firstResponse = new Promise<{ accepted: boolean; command_id: string }>((_resolve, reject) => {
+      rejectOriginal = reject;
+    });
+    f.submit.mockReset();
+    f.submit.mockImplementationOnce(() => firstResponse);
+    const context = { ...f.context, feedback: "foreground" as const, source: "explorer" as const };
+    const original = f.registry.execute(f.initialCommand, context);
+    try {
+      await vi.waitFor(() => expect(f.submit).toHaveBeenCalledOnce());
+      const intent = (f.submit.mock.calls[0][0] as { client_intent_id: string }).client_intent_id;
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(true);
+      f.submit.mockRejectedValueOnce(new ControlRoomApiError(
+        "Original input changed", 409, null, "command_current_run_changed", "not_accepted",
+      ));
+      expect(await f.registry.execute("study.retry-compute", context)).toMatchObject({ status: "failed" });
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(false);
+
+      rejectOriginal(new ControlRoomApiError("Original response lost", 0, null, "API_UNAVAILABLE"));
+      expect(await original).toMatchObject({ status: "pending", clientIntentId: intent });
+
+      expect(f.controller.hasUnresolvedStudyCompute(f.sessionScopeKey)).toBe(false);
+      expect(f.controller.hasPendingBackendCommands()).toBe(false);
+      expect(f.submit).toHaveBeenCalledTimes(2);
+      expect(f.submit.mock.calls[1][0]).toEqual(f.submit.mock.calls[0][0]);
+    } finally {
+      if (f.submit.mock.calls.length > 0) rejectOriginal(new Error("test cleanup"));
+      await original;
+      f.controller.dispose();
+    }
+  });
+
   it.each(["solve", "run", "relax"] as const)("retries only the original %s request after a user click, preserving its ID and input pins", async (kind) => {
     const f = unconfirmedComputeRecoveryFixture(kind);
     try {
