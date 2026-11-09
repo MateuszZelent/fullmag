@@ -1233,3 +1233,58 @@ kompilacji fixture, nie oczekiwany semantic RED markera. Błędy późniejszych
 kontraktów z tego samego powodu nie są osobnymi problemami runtime. Następny
 push może zastąpić tę już diagnostycznie rozstrzygniętą próbę CI; test HTTP
 nadal musi rzeczywiście dotrzeć do swoich asercji.
+
+
+## Pełny GREEN źródeł frontendu f0650c2a9
+
+Job `129487644325` w [bootstrap 42713138167](https://github.com/MateuszZelent/fullmag/actions/runs/42713138167)
+zakończył się success dla HEAD `f0650c2a9b1e52f3c7505716ad9088b39873fae0`.
+Typecheck, lint bez ostrzeżeń, architecture/API hygiene, performance i produkcyjny
+build Next przeszły. Vitest: **9730 PASS / 13 skipped**, **926 plików PASS /
+1 skipped**; dodatkowe testy performance **3 PASS**. Bezpośredni Runtime ma
+168 PASS, Controller21 PASS, Build15 PASS, Inspector recovery3 PASS. Zamknięto
+oba nowe RED dotyczące widocznej akcji i dokładnego targetowania.
+
+To kwalifikacja źródeł tego commita. Nowa browser fixture nadal wymaga wykonania,
+a backendowy proof HTTP, natywny runtime, S46, FDM Cell i pełna macierz odbioru
+pozostają otwarte. Recovery ma własny stały keyed slot i toolbar; dotychczasowy
+Runtime toolbar zachowuje swoje dzieci. Kontrola dokumentacji React przez
+Context7 potwierdziła regułę tożsamości przez pozycję/klucz, lecz nie zastępuje
+testu rzeczywistego DOM i fokusu. Nie potwierdzono reprodukcją obawy remountu
+pierwszej wersji ze statycznymi warunkowymi slotami JSX.
+
+
+## Potwierdzony backend semantic RED i pełniejszy kontrakt materiału
+
+Bezpośredni odczyt GitHub job `129487643164` potwierdził zakończenie failure.
+Log z 22:49:41 UTC dla PR HEAD f0650c2a9 przeszedł kompilację oraz wcześniejsze
+asercje status/code, no-key, no-root i body-conflict. Dopiero końcowy assert
+`live_compute_request.rs:968` otrzymał `[None, None]` zamiast dwóch
+`Some("not_accepted")`. To właściwy semantic RED producenta dowodu. Niezmienione
+trzy inne testy modułu przeszły; child pozostaje celowo ignorowany i uruchamiany
+przez parent. CI skompilowało PR merge candidate
+`8863f53021f50d6a9884534188fac60d0c90442b`, source snapshot
+`e06f620ef2eb0990ba535e29fb711adf16cac59a53e6e25bd70a8eb37a4899c7`.
+Migawka łącza GitHub opóźniała numer kroku; dokładne czasy i terminalność
+potwierdzono bezpośrednim API GitHub, zamiast interpretować brak logu jako stop.
+
+Dodatkowy przegląd wykazał, że material400 występuje przed sprawdzeniem pinów,
+a obecny test ma także nieaktualny current_run. Sam nie dowodzi czystego przypadku
+błędnego materiału przy zgodnych pinach. Resolver czyta wyłącznie
+SceneDocument.materials i wymagane aex/ms; brak fallbacku do zewnętrznego cache
+lub katalogu. Naprawa przez wspierane ścieżki commit zmienia rewizję sceny,
+z wyjątkiem saturacji u64::MAX. Producent musi zachować typowany błąd i spójną
+podstawę odrzucenia, pod transition ponownie sprawdzić kontekst i tę podstawę
+oraz potwierdzić zakończony trwały keyed miss. Zgodny, jawny finite scene pin
+jest konieczny do tej podstawy; brak/future/MAX pin nie dostaje takiego markera.
+Nie zmieniamy globalnego kontraktu rewizji. Wdrożenie i odpowiednie regresje
+pozostają w toku; nowego backendowego producenta jeszcze nie zakwalifikowano.
+
+Rozszerzono istniejącą Inspector actions fixture o produkcyjny StudyRuntimeSection.
+Smoke zachowuje Object/Airbox i dodaje dokładny callback klik/Enter, sesję i brak
+oryginalnego body, stabilność DOM/fokusu oraz dark/light 300/380 px. Przed każdym
+zrzutem Retry ma być faktycznie widoczne w Radix viewport, a overflow obejmuje
+również wnętrze Inspectora i normalny toolbar. Kontrola no-body czeka na dokładny
+stan, nie tylko wcześniejsze null. Parser Node i diff check przechodzą; właściwe
+browser wykonanie oraz obejrzenie nowych zrzutów są nadal wymagane. Raport jasno
+ogranicza ten dowód do synthetic callback, przy zerowych mutacjach API.

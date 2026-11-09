@@ -10,6 +10,11 @@ import {
 } from "@/modules/inspector/InspectorEditSession";
 import { InspectorShell } from "@/modules/inspector/InspectorShell";
 import { InspectorGroup } from "@/modules/inspector/primitives/InspectorGroup";
+import { StudyRuntimeSection } from "@/modules/inspector/panels/StudyInspectorPanel";
+import {
+  resolveStudyInspectorModel,
+  studySnapshotFromScene,
+} from "@/modules/inspector/panels/StudyInspectorPanelModel";
 import {
   resolveInspectorDescriptor,
   type InspectorDescriptor,
@@ -18,6 +23,19 @@ import {
 type Target = "object" | "airbox";
 type Mode = InspectorEditMode | null;
 type BreadcrumbSelection = NonNullable<InspectorDescriptor["breadcrumbs"][number]["selection"]>;
+
+interface RetryFixtureState {
+  currentSession: string;
+  hasOriginalRequest: boolean;
+  intentId: string | null;
+  intentSession: string | null;
+  isPending: boolean;
+}
+
+interface StudyCommandCall {
+  commandId: string;
+  input: unknown | null;
+}
 
 interface Snapshot {
   applying: boolean;
@@ -30,6 +48,9 @@ interface Snapshot {
   pending: boolean;
   reactCommits: number;
   resetCalls: number;
+  retryableIntentId: string | null;
+  retryState: RetryFixtureState;
+  studyCommandCalls: StudyCommandCall[];
   target: Target;
   valid: boolean;
 }
@@ -38,6 +59,7 @@ interface FixtureDriver {
   read: () => Snapshot;
   setDescriptor: (target: Target) => void;
   setMode: (mode: Mode) => void;
+  setRetryState: (state: RetryFixtureState) => void;
   setValid: (valid: boolean) => void;
   settleApply: (accepted: boolean) => void;
 }
@@ -56,6 +78,8 @@ function InspectorActionsPanel({
   onBreadcrumb,
   onFocus,
   onReset,
+  onStudyCommand,
+  retryState,
   selection,
   valid,
 }: {
@@ -66,11 +90,31 @@ function InspectorActionsPanel({
   onBreadcrumb: (selection: BreadcrumbSelection) => void;
   onFocus: () => void;
   onReset: () => void;
+  onStudyCommand: (commandId: string, input?: unknown) => void;
+  retryState: RetryFixtureState;
   selection: Selection;
   valid: boolean;
 }) {
   const descriptor = useMemo(() => resolveInspectorDescriptor(selection), [selection]);
   const reset = useCallback(() => onReset(), [onReset]);
+  const studyModel = useMemo(() => resolveStudyInspectorModel({
+    currentRun: null,
+    snapshot: studySnapshotFromScene(null),
+    solverStatus: null,
+    stageExecution: null,
+  }), []);
+  const retryComputeIntentId = retryState.isPending &&
+      retryState.hasOriginalRequest &&
+      retryState.currentSession === retryState.intentSession &&
+      retryState.intentId?.trim()
+    ? retryState.intentId
+    : null;
+  const commandDisabledReason = (commandId: string) =>
+    commandId === "study.retry-compute" && retryComputeIntentId
+      ? null
+      : commandId === "study.retry-compute"
+        ? "No original Compute request is available."
+        : "Study commands are disabled in this controlled fixture.";
 
   useRegisterInspectorEditSession(
     mode,
@@ -115,6 +159,14 @@ function InspectorActionsPanel({
             </div>
           ))}
         </InspectorGroup>
+        <StudyRuntimeSection
+          commandDisabledReason={commandDisabledReason}
+          model={studyModel}
+          onOpenCommand={() => undefined}
+          retryComputeIntentId={retryComputeIntentId}
+          runCommand={onStudyCommand}
+          stepValue="Unavailable"
+        />
       </div>
     </InspectorShell>
   );
@@ -129,6 +181,14 @@ export default function InspectorActionsPage() {
   const [applyCalls, setApplyCalls] = useState(0);
   const [resetCalls, setResetCalls] = useState(0);
   const [focusCalls, setFocusCalls] = useState(0);
+  const [retryState, setRetryState] = useState<RetryFixtureState>({
+    currentSession: "session-a@1",
+    hasOriginalRequest: true,
+    intentId: "study-compute-a",
+    intentSession: "session-a@1",
+    isPending: false,
+  });
+  const [studyCommandCalls, setStudyCommandCalls] = useState<StudyCommandCall[]>([]);
   const [lastApplyAck, setLastApplyAck] = useState<boolean | null>(null);
   const [lastResetMode, setLastResetMode] = useState<Mode>(null);
   const reactCommitCount = useRef(0);
@@ -152,6 +212,13 @@ export default function InspectorActionsPage() {
     [target],
   );
 
+  const retryableIntentId = retryState.isPending &&
+      retryState.hasOriginalRequest &&
+      retryState.currentSession === retryState.intentSession &&
+      retryState.intentId?.trim()
+    ? retryState.intentId
+    : null;
+
   const read = useCallback(
     () => ({
       applying,
@@ -164,10 +231,27 @@ export default function InspectorActionsPage() {
       pending: pendingResolve.current !== null,
       reactCommits: reactCommitCount.current,
       resetCalls,
+      retryableIntentId,
+      retryState,
+      studyCommandCalls,
       target,
       valid,
     }),
-    [applying, applyCalls, dirty, focusCalls, lastApplyAck, lastResetMode, mode, resetCalls, target, valid],
+    [
+      applying,
+      applyCalls,
+      dirty,
+      focusCalls,
+      lastApplyAck,
+      lastResetMode,
+      mode,
+      resetCalls,
+      retryableIntentId,
+      retryState,
+      studyCommandCalls,
+      target,
+      valid,
+    ],
   );
 
   const apply = useCallback(async () => {
@@ -193,6 +277,10 @@ export default function InspectorActionsPage() {
     setFocusCalls((count) => count + 1);
   }, []);
 
+  const recordStudyCommand = useCallback((commandId: string, input?: unknown) => {
+    setStudyCommandCalls((calls) => [...calls, { commandId, input: input ?? null }]);
+  }, []);
+
   const selectBreadcrumb = useCallback((next: BreadcrumbSelection) => {
     if (next.kind === "airbox.root") setTarget("airbox");
     if (next.kind === "object.root") setTarget("object");
@@ -216,6 +304,7 @@ export default function InspectorActionsPage() {
       read,
       setDescriptor: setTarget,
       setMode: setFixtureMode,
+      setRetryState,
       setValid,
       settleApply,
     };
@@ -225,7 +314,7 @@ export default function InspectorActionsPage() {
         delete window.__fullmagInspectorActionsFixture;
       }
     };
-  }, [read, setFixtureMode, settleApply]);
+  }, [read, setFixtureMode, setRetryState, settleApply]);
 
   return (
     <main
@@ -263,6 +352,8 @@ export default function InspectorActionsPage() {
             onBreadcrumb={selectBreadcrumb}
             onFocus={focus}
             onReset={reset}
+            onStudyCommand={recordStudyCommand}
+            retryState={retryState}
             selection={selection}
             valid={valid}
           />
