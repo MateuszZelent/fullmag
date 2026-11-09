@@ -169,3 +169,14 @@ Cztery pełne profile S46, porównania masek i początkowych pól, pozostałe re
 FDM GPU/FEM/multilayer oraz pełna macierz P01–P22 pozostają otwarte. Nowe poprawki
 wymagają przypiętego commita, CI, zachowującego stary stan przejścia DEV i rzeczywistego
 odbioru; zielone fixture testy nie zamykają tych bramek.
+
+## Poprawka kontraktu React po CI 5414a34c
+
+CI `42554204279`, job Control Room `128956185349`, odrzuciło mutowalną komórkę
+adaptera utworzoną wewnątrz renderu (`react-hooks/immutability`). Reguła pozostała
+włączona. Model właściciela przeniesiono do `model/startScreenHostAdapter.ts`;
+commit i invalidate nadal działają dopiero w fazie layoutu, z osobną komórką dla
+każdego kernela. Testy właściciela i SSR pozostały aktywne. Manifest odbioru S46
+przypina również nowy model (31 plików, limit 32). Managed ESLint dla trzech
+zmienionych plików przeszedł bez błędów i ostrzeżeń; 28 testów Home/commands/state
+nadal przechodzi. Ponowne CI aktualnego commita pozostaje wymagane.

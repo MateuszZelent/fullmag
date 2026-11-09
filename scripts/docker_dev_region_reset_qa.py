@@ -67,6 +67,7 @@ _SOURCE_PATHS = {
     "tab_routes": "apps/control-room/src/kernel/layout/tabRoutes.ts",
     "start_screen": "apps/control-room/src/modules/start/StartScreen.tsx",
     "start_screen_state": "apps/control-room/src/modules/start/model/startScreenState.ts",
+    "start_screen_host_adapter": "apps/control-room/src/modules/start/model/startScreenHostAdapter.ts",
     "start_commands": "apps/control-room/src/modules/start/model/startCommands.ts",
     "start_rail": "apps/control-room/src/modules/start/rail/StartRail.tsx",
     "import_section": "apps/control-room/src/modules/start/sections/ImportSection.tsx",

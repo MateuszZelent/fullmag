@@ -42,6 +42,7 @@ import { useWorkspaceSource } from "./model/useWorkspaceSource";
 import { workspaceHostAvailable } from "./model/workspaceHost";
 import { startActionDisabledReason } from "./model/startCommands";
 import { startScreenStore, type StartScreenHost } from "./model/startScreenState";
+import { createStartScreenHostAdapter } from "./model/startScreenHostAdapter";
 import { startSettings } from "./model/startSettings";
 import type { RecentEntry } from "./model/types";
 import { StartRail } from "./rail/StartRail";
@@ -76,6 +77,21 @@ function getStartInspectorLayout(): boolean {
   return typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
     window.matchMedia(START_INSPECTOR_MEDIA_QUERY).matches;
+}
+
+function createStartScreenHost(
+  kernel: ModuleProps["kernel"],
+  canCreateProblem: boolean,
+  desktop: boolean,
+): StartScreenHost {
+  return {
+    createProblemDisabledReason: canCreateProblem ? null : SESSION_UNCONFIRMED,
+    openScriptDisabledReason: desktop ? null : OPEN_SCRIPT_NEEDS_DESKTOP,
+    disabledReason: (commandId, context) =>
+      kernel.commands.get(commandId)?.disabledReason?.(context) ?? null,
+    execute: (commandId, context) => kernel.commands.execute(commandId, context),
+    isEnabled: (commandId, context) => kernel.commands.isEnabled(commandId, context),
+  };
 }
 
 /**
@@ -168,52 +184,13 @@ export function StartScreen({ kernel }: ModuleProps) {
     (sessions.state === "ready" && sessionIdentity !== null);
 
   const host = useMemo<StartScreenHost>(
-    () => ({
-      createProblemDisabledReason: canCreateProblem ? null : SESSION_UNCONFIRMED,
-      openScriptDisabledReason: desktop ? null : OPEN_SCRIPT_NEEDS_DESKTOP,
-      disabledReason: (commandId, context) =>
-        kernel.commands.get(commandId)?.disabledReason?.(context) ?? null,
-      execute: (commandId, context) => kernel.commands.execute(commandId, context),
-      isEnabled: (commandId, context) => kernel.commands.isEnabled(commandId, context),
-    }),
-    [canCreateProblem, desktop, kernel, kernel.commands],
+    () => createStartScreenHost(kernel, canCreateProblem, desktop),
+    [canCreateProblem, desktop, kernel],
   );
   // The store's owner identity should survive capability refreshes. Keep the
   // latest values private until their render commits, then let this stable
   // adapter forward command reads and calls to that committed host.
-  const hostAdapter = useMemo(() => {
-    let committedHost: StartScreenHost | null = null;
-    let committedCommands: typeof kernel.commands | null = null;
-    const currentHost = () => {
-      if (!committedHost) throw new Error("The start-screen host is detached.");
-      return committedHost;
-    };
-    const host: StartScreenHost = {
-      get createProblemDisabledReason() {
-        return currentHost().createProblemDisabledReason;
-      },
-      get openScriptDisabledReason() {
-        return currentHost().openScriptDisabledReason;
-      },
-      disabledReason: (commandId, context) => currentHost().disabledReason(commandId, context),
-      execute: (commandId, context) => currentHost().execute(commandId, context),
-      isEnabled: (commandId, context) => currentHost().isEnabled(commandId, context),
-    };
-    return {
-      host,
-      commit: (nextHost: StartScreenHost, commands: typeof kernel.commands) => {
-        committedHost = nextHost;
-        committedCommands = commands;
-      },
-      refresh: () => committedCommands?.refresh(),
-      invalidate: () => {
-        const commands = committedCommands;
-        committedHost = null;
-        committedCommands = null;
-        return commands ? () => commands.refresh() : undefined;
-      },
-    };
-  }, [kernel]);
+  const hostAdapter = useMemo(() => createStartScreenHostAdapter(kernel), [kernel]);
   const [readyOwner, setReadyOwner] = useState<StartScreenHost | null>(null);
   const hostReady = readyOwner === hostAdapter.host && attachedHost === hostAdapter.host;
 
