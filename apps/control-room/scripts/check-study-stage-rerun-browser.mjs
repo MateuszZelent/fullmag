@@ -834,7 +834,9 @@ export function studyStageComputePrecondition(status, currentRun, solverStatus, 
     "Solver status is not awaiting a command before submission");
   precondition.runtime_state = solverStatus.runtime_state;
   assert(Array.isArray(commands?.commands), "Command queue resource is malformed");
-  precondition.command_revision = commands.commands.length;
+  assert(Number.isSafeInteger(resources.commands_revision) && resources.commands_revision >= 0,
+    "The P22 status omitted the command revision precondition");
+  precondition.command_revision = resources.commands_revision;
   return precondition;
 }
 
@@ -878,8 +880,6 @@ export function studyStagePreparedGridPrecondition({
     }
   }
   assertNoInflightCommands(commands);
-  assert.equal(commands.revision, status.resources.commands_revision,
-    "Held FDM command revision differs from status");
   if (expectedGridCommandId !== null) {
     const lastCommand = commands.commands.at(-1);
     assert(lastCommand?.command_id === expectedGridCommandId && lastCommand?.kind === "fdm_grid_refresh"
@@ -1060,6 +1060,27 @@ function assertNoInflightCommands(queue) {
     "The command queue contains an in-flight or unknown command state");
 }
 
+export function studyStageRunSummary(snapshot) {
+  const commandRevision = snapshot?.status?.resources?.commands_revision;
+  assert(Number.isSafeInteger(commandRevision) && commandRevision >= 0,
+    "The P22 status omitted the canonical command revision");
+  return {
+    run_id: snapshot.currentRun.run_id,
+    run_status: snapshot.currentRun.status,
+    solver_state: snapshot.solverStatus.runtime_state,
+    execution_state: snapshot.execution.runtime_state,
+    stage_ids: snapshot.stageIds,
+    authored_stage_ids: snapshot.sceneStageIds,
+    stage_statuses: snapshot.execution.stage_statuses,
+    completed_stage_indexes: snapshot.execution.completed_stage_indexes,
+    scene_profile: snapshot.sceneProfile,
+    profile: snapshot.profile,
+    result_identities: snapshot.resultIdentities,
+    precondition: snapshot.precondition,
+    resources: { commands_revision: commandRevision },
+  };
+}
+
 function stableProjection(snapshot) {
   return {
     session: snapshot.session,
@@ -1113,6 +1134,7 @@ export function studyStagePreparedGridSummary(snapshot) {
     profile: snapshot.profile,
     scene_revision: snapshot.scene.revision ?? snapshot.scene.scene_revision,
     precondition: snapshot.precondition,
+    resources: { commands_revision: snapshot.status.resources.commands_revision },
     commands: { resource_revision: snapshot.commands.revision,
       count: snapshot.commands.commands.length,
       last_command_id: snapshot.commands.commands.at(-1)?.command_id ?? null,
@@ -1336,8 +1358,6 @@ export async function runStudyStageRerun() {
     assert.equal(statusAfter.run?.run_id, currentRun.run_id,
       "Status and owning current-run resource disagree");
     if (requireIdle) assertNoInflightCommands(commands);
-    assert.equal(commands.revision, statusAfter.resources.commands_revision,
-      "Command queue revision differs from current status");
     assert.equal(solverStatus?.runtime_state, "awaiting_command",
       "Owning solver status is not awaiting a command");
     const profile = currentProfile(statusAfter, currentRun, currentSession, expectedSources, expectedDomainCellCount);
@@ -1415,8 +1435,6 @@ export async function runStudyStageRerun() {
     }
     assert.equal(statusAfter.run?.run_id, currentRun.run_id,
       "Prepared FDM status and current run disagree");
-    assert.equal(commands.revision, statusAfter.resources.commands_revision,
-      "Prepared FDM command queue differs from status");
     const sceneRevision = scene.revision ?? scene.scene_revision;
     assert.equal(sceneRevision, cellReceipt.scene_revision,
       "Prepared FDM scene differs from the acknowledged default-cell revision");
@@ -1463,20 +1481,7 @@ export async function runStudyStageRerun() {
 
 
   function summary(snapshot) {
-    const value = {
-      run_id: snapshot.currentRun.run_id,
-      run_status: snapshot.currentRun.status,
-      solver_state: snapshot.solverStatus.runtime_state,
-      execution_state: snapshot.execution.runtime_state,
-      stage_ids: snapshot.stageIds,
-      authored_stage_ids: snapshot.sceneStageIds,
-      stage_statuses: snapshot.execution.stage_statuses,
-      completed_stage_indexes: snapshot.execution.completed_stage_indexes,
-      scene_profile: snapshot.sceneProfile,
-      profile: snapshot.profile,
-      result_identities: snapshot.resultIdentities,
-      precondition: snapshot.precondition,
-    };
+    const value = studyStageRunSummary(snapshot);
     if (isGridMode) value.material_state = studyStageMaterialState(snapshot.scene);
     if (["texture-stage-b", "texture-study"].includes(mode)) {
       value.texture_state = studyStageTextureSceneProfile(snapshot.scene, {

@@ -83,8 +83,10 @@ export function regionResetExpectedComputePrecondition(status, solver, queue) {
   result.current_run = status.run ? { kind: "run", run_id: status.run.run_id } : { kind: "none" };
   assert(typeof solver?.runtime_state === "string" && solver.runtime_state, "Missing solver state");
   assert(Array.isArray(queue?.commands), "Missing command ledger");
+  assert(Number.isSafeInteger(status?.resources?.commands_revision) && status.resources.commands_revision >= 0,
+    "Missing command revision");
   result.runtime_state = solver.runtime_state;
-  result.command_revision = queue.commands.length;
+  result.command_revision = status.resources.commands_revision;
   return result;
 }
 
@@ -258,7 +260,6 @@ export function regionResetGridIsReady({ status, queue, preparation, run, execut
   assert(last?.command_id === gridCommandId && last.kind === "fdm_grid_refresh" && last.status === "completed",
     "Study Compute requires its exact successfully completed grid command");
   assert.equal(queue.pending_count, 0); assert.equal(queue.running_count, 0);
-  assert.equal(queue.revision, status?.resources?.commands_revision);
   assert.equal(status.resources.scene_revision, sceneRevision);
   assert.equal(status.domain?.discretization, "fdm");
   assert.equal(status.domain?.cell_count, 8);

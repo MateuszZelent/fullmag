@@ -829,3 +829,38 @@ Test adaptera zmieniono na dokładne przekazanie błędu walidacji wywołująceg
 bez zależności HTTP; asercja braku RunIntent pozostaje. Ta korekta wymaga
 kompilacji testów wszystkich konsumentów i nowego CI. Dalsze kroki przerwanego
 joba nie są potwierdzone. Pełny odbiór P01–P22/S01–S46 pozostaje otwarty.
+
+
+## Kanoniczna rewizja w niezależnym odbiorze
+
+Weryfikatory S46 i podstawowego cyklu ponowień pobierają admission
+`command_revision` z publicznego `status.resources.commands_revision`.
+Nie zmieniają wychodzącego żądania ani nie ponawiają POST. Usunięto wyłącznie
+nieprawidłowe równości queue revision/admission revision i count/admission;
+liczba poleceń pozostaje metadanymi, sprawdzanymi względem liczby wpisów.
+Gotowość nadal wymaga dokładnego ukończonego Grid, pustych liczników pracy,
+zgodnego runu, sceny, domeny, sesji, etapów oraz preparation z receipt.
+Podsumowanie prepared Grid jawnie zachowuje rewizję statusu, a niezależny
+walidator Python porównuje z nią precondition. Regresje obejmują durable
+revision 8 przy czterech wpisach, fallback z osobną agregatową rewizją kolejki,
+brak canonical revision, nieaktualny precondition i błędy gotowości.
+
+Wykonano lekkie, interpretowane kontrole bez instalacji i bez kompilacji
+aplikacji na hoście: 32 testy Node weryfikatora S46, 73 unittest walidatora
+browser QA oraz 15 testów workflow — wszystkie PASS. Wczesna bramka CI
+uruchamia staged adapter tests także w `fullmag-api-accepted-scheduler`,
+żeby ponownie sprawdzać konsumenta, w którym ujawniono E0433.
+Te wyniki nie są odbiorem produktu ani solvera.
+
+Próba recreate z helperem przypiętym do 729 zakończyła się exit 2 przed startem:
+zmieniony `scripts/docker_dev_browser_qa.py` nie odpowiadał temu helper commit.
+Nie omijano weryfikacji; kolejny build wymaga nowego commita obejmującego
+spójnego producenta i konsumenta raportu. Zachowany run a8d nie jest odtwarzany.
+
+
+Przegląd producent–konsument wykrył brak `resources.commands_revision` w
+bazowym `summary(snapshot)` starszego runnera, mimo poprawnego pola w ręcznych
+fixture i prepared Grid summary. Producent został uzupełniony przez wspólny
+`studyStageRunSummary`; dodatkowa regresja wywołuje rzeczywisty helper i
+sprawdza cały zwrócony kształt z rewizją 8. Po tej poprawce ponownie wykonano
+73 testy Python i 32 Node — PASS. Nie zalicza to żadnej próby solvera.

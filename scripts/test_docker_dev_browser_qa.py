@@ -3854,7 +3854,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                 "mesh_revision": 2,
                 "domain_generation_id": "fdm-domain-16",
                 "current_run": {"kind": "run", "run_id": new_run},
-                "command_revision": 4,
+                "command_revision": 8,
                 "region_topology_revision": 1,
                 "region_membership_revision": 1,
                 "region_coefficients_revision": 2,
@@ -3918,6 +3918,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                             "script_sha256": sources["fixture"]},
                 "result_identities": before_results,
                 "precondition": precondition,
+                "resources": {"commands_revision": 3 if mode == "fdm-cell-study" else 0},
             },
             "command_receipt": {
                 "method": "POST",
@@ -4107,6 +4108,7 @@ assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_ta
                     "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
                     "script_sha256": sources["fixture"]},
                 "scene_revision": 3, "precondition": deepcopy(command_precondition),
+                "resources": {"commands_revision": 8},
                 "commands": {"resource_revision": 8, "count": 4, "pending_count": 0, "running_count": 0,
                     "terminal_statuses": ["completed", "completed", "completed", "completed"],
                     "last_command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"},
@@ -4377,6 +4379,11 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     requested_device="cuda")),
                 ("wrong scope", lambda item: item["command_receipt"].update(scope_header="session=foreign")),
                 ("stale precondition", lambda item: item["command_receipt"]["payload"]["precondition"].update(mesh_revision=17)),
+                ("precondition command revision differs from captured status", lambda item: (
+                    item["before"]["precondition"].update(
+                        command_revision=item["before"]["precondition"]["command_revision"] + 1),
+                    item["command_receipt"]["payload"]["precondition"].update(
+                        command_revision=item["command_receipt"]["payload"]["precondition"]["command_revision"] + 1))),
                 ("changed old history", lambda item: item["after"]["preserved_prior_result_identities"][0].update(
                     artifact_sha256="f" * 64)),
                 ("incomplete terminal", lambda item: item["after"].update(run_status="running")),
@@ -4421,6 +4428,10 @@ assert.throws(()=>scope(wrong,ids,['relax-b']));
                     ("held run aliases old A", lambda item: item["prepared_grid_run"].update(run_id="run-before")),
                     ("held precondition has stale scene revision", lambda item: item["prepared_grid_run"]
                      ["precondition"].update(scene_revision=31)),
+                    ("held precondition command revision differs from status", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(command_revision=7)),
+                    ("held status command revision differs from precondition", lambda item: item["prepared_grid_run"]
+                     ["resources"].update(commands_revision=7)),
                     ("held run receipt belongs to another run", lambda item: item["prepared_grid_run"]
                      ["preparation"]["receipt"].update(run_id="foreign-run")),
                     ("held preparation revision is stale", lambda item: item["prepared_grid_run"]
@@ -4648,7 +4659,8 @@ assert.equal(disposed, 1);
             "stageIds": prepared["stage_ids"], "sceneStageIds": prepared["authored_stage_ids"],
             "sceneProfile": prepared["scene_profile"], "profile": prepared["profile"],
             "scene": {"revision": prepared["scene_revision"]}, "precondition": prepared["precondition"],
-            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"]}},
+            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"],
+                                       "commands_revision": prepared["resources"]["commands_revision"]}},
             "commands": {"revision": commands["resource_revision"], "pending_count": 0, "running_count": 0,
                          "commands": [{"status": state, "command_id": commands["last_command_id"]}
                                       for state in commands["terminal_statuses"]]},
@@ -5220,22 +5232,40 @@ assert.throws(() => runner.validateStudyStageScene(extraNode));
 const session = {name:'P22 three Relax stages', session_id:'s', session_epoch:'s@1', request_scope_epoch:'api:1'};
 const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
 const precondition = {scene_revision:31, mesh_revision:18, domain_generation_id:'fdm-domain-8',
-  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:0,
+  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:8,
   region_topology_revision:3, region_membership_revision:4,
   region_coefficients_revision:5, region_initial_state_revision:6};
-const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,
-  domain_generation_id:'fdm-domain-8',region_topology_revision:3,region_membership_revision:4,
-  region_coefficients_revision:5,region_initial_state_revision:6}};
+const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,commands_revision:8,
+  command_completion_revision:8,domain_generation_id:'fdm-domain-8',region_topology_revision:3,
+  region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6}};
 assert.deepEqual(runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
-  {runtime_state:'awaiting_command'},{commands:[]}),precondition);
+  {runtime_state:'awaiting_command'},{revision:8,commands:[{status:'completed'},{status:'completed'},
+    {status:'completed'},{status:'completed'}]}),precondition);
+assert.throws(() => runner.studyStageComputePrecondition({run:{run_id:'old'},resources:{
+  ...computeStatus.resources,commands_revision:undefined}},{run_id:'old'},
+  {runtime_state:'awaiting_command'},{commands:[]}));
 assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'foreign'},
   {runtime_state:'awaiting_command'},{commands:[]}));
 assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
   {runtime_state:'paused'},{commands:[]}));
+const beforeSummary = runner.studyStageRunSummary({
+  currentRun:{run_id:'old',status:'completed'}, solverStatus:{runtime_state:'awaiting_command'},
+  execution:{runtime_state:'completed',stage_statuses:['completed'],completed_stage_indexes:[0]},
+  stageIds:['relax-a'], sceneStageIds:['relax-a','relax-b','relax-c'],
+  sceneProfile:{pipeline_version:'study_pipeline.v1'}, profile:{domain_generation_id:'fdm-domain-8'},
+  resultIdentities:[], precondition, status:computeStatus,
+});
+assert.deepEqual(beforeSummary, {
+  run_id:'old',run_status:'completed',solver_state:'awaiting_command',execution_state:'completed',
+  stage_ids:['relax-a'],authored_stage_ids:['relax-a','relax-b','relax-c'],
+  stage_statuses:['completed'],completed_stage_indexes:[0],scene_profile:{pipeline_version:'study_pipeline.v1'},
+  profile:{domain_generation_id:'fdm-domain-8'},result_identities:[],precondition,
+  resources:{commands_revision:8},
+});
 const heldStatus = {run:{run_id:'held'},solver:{state:'awaiting_command'},
   domain:{discretization:'fdm',cell_count:16,generation_id:'fdm-domain-16'},
   resources:{scene_revision:32,mesh_revision:19,domain_generation_id:'fdm-domain-16',
-    commands_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
+    commands_revision:8,command_completion_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
     region_membership_revision:5,region_coefficients_revision:6,region_initial_state_revision:7}};
 const heldRun = {run_id:'held',status:'waiting_for_solve',session_id:'s'};
 const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1',
@@ -5262,7 +5292,17 @@ const heldPrecondition = runner.studyStagePreparedGridPrecondition({status:heldS
 assert.equal(heldPrecondition.current_run.run_id,'held');
 assert.equal(heldPrecondition.scene_revision,32);
 assert.equal(heldPrecondition.domain_generation_id,'fdm-domain-16');
-assert.equal(heldPrecondition.command_revision,4);
+assert.equal(heldPrecondition.command_revision,8);
+const fallbackStatus={...heldStatus,resources:{...heldStatus.resources,commands_revision:4,
+  command_completion_revision:1000}};
+const fallbackCommands={...heldCommands,revision:1004};
+const fallbackPrecondition=runner.studyStagePreparedGridPrecondition({status:fallbackStatus,currentRun:heldRun,
+  execution:heldExecution,solverStatus:{runtime_state:'awaiting_command'},commands:fallbackCommands,
+  preparation:heldPreparation,session:heldSession,previousRunId:'old',
+  previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+  expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'});
+assert.equal(fallbackPrecondition.command_revision,4);
 const resumeSession={name:'P22 three Relax stages',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
 const resumeBefore={run_id:'old',run_status:'completed',stage_ids:['relax-a'],completed_stage_indexes:[0],
   profile:{domain_cell_count:8},precondition:{scene_revision:2,current_run:{kind:'run',run_id:'old'}},
@@ -5294,7 +5334,6 @@ for (const altered of [
   {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:3}}},
   {currentRun:{...heldRun,status:'waiting_for_compute'}},
   {preparation:{...heldPreparation,stages:heldPreparation.stages.map(({id,status})=>({stage_id:id,status}))}},
-  {commands:{...heldCommands,revision:7}},
   {commands:{...heldCommands,commands:[...heldCommands.commands.slice(0,-1),
     {...heldCommands.commands.at(-1),command_id:'foreign-grid'}]}},
 ]) {

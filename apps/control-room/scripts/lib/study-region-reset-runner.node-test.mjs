@@ -93,15 +93,26 @@ test("canonical copy uses the acknowledged revision once", () => {
   r.body.expected_scene_revision=40;assert.equal(regionResetWriteAllowed(r,g),false);
   r.body.expected_scene_revision=41;g.syncAttempts=1;assert.equal(regionResetWriteAllowed(r,g),false);
 });
-test("compute precondition covers absence of a run and all current revisions", () => {
+test("compute precondition uses the canonical status command revision, not command count", () => {
   const resources={scene_revision:41,mesh_revision:2,region_topology_revision:1,region_membership_revision:2,
-    region_coefficients_revision:3,region_initial_state_revision:4};
-  const actual=regionResetExpectedComputePrecondition({resources},{runtime_state:"awaiting_command"},{commands:[]});
+    region_coefficients_revision:3,region_initial_state_revision:4,commands_revision:2,command_completion_revision:2};
+  const queue={revision:2,commands:[{command_id:"grid-1"}]};
+  const actual=regionResetExpectedComputePrecondition({resources},{runtime_state:"awaiting_command"},queue);
   assert.deepEqual(actual.current_run,{kind:"none"});
   assert.equal(actual.scene_revision,41);
-  assert.equal(actual.command_revision,0);
+  assert.equal(actual.command_revision,2);
+
+  const g=gate("build-study");g.expectedComputePrecondition=actual;
+  g.gridAcknowledged=true;g.gridReady=true;
+  const valid=request(commandsPath,{kind:"solve",target:{kind:"study"},precondition:actual,
+    client_intent_id:"study:solve:fixed",reason:"user_requested",requested_at_unix_ms:12345});
+  assert.equal(regionResetWriteAllowed(valid,g),true);
+  const stale=structuredClone(valid);stale.body.precondition.command_revision=1;
+  assert.equal(regionResetWriteAllowed(stale,g),false);
+  assert.throws(()=>regionResetExpectedComputePrecondition({resources:{...resources,commands_revision:undefined}},
+    {runtime_state:"awaiting_command"},queue),/Missing command revision/);
   assert.throws(()=>regionResetExpectedComputePrecondition({resources:{...resources,mesh_revision:undefined}},
-    {runtime_state:"awaiting_command"},{commands:[]}),/Missing revision/);
+    {runtime_state:"awaiting_command"},queue),/Missing revision/);
 });
 
 test("terminal run evidence must belong to the acknowledged command target and a new run", () => {
@@ -144,14 +155,18 @@ test("canonical source acknowledgement must pin the exact exported revision", ()
   assert.throws(()=>regionResetValidateSync({source:"foreign",scene_revision:41},"source",41),/Downloaded source/);
 });
 
-test("grid readiness binds the completed command, held run, preparation and domain", () => {
+test("grid readiness uses exact completed build and held-run proof, not aggregate queue revision", () => {
   const x={
     session,sceneRevision:41,gridCommandId:"grid-1",
-    status:{resources:{scene_revision:41,commands_revision:2,domain_generation_id:"domain",
-      simulation_preparation_revision:3},domain:{discretization:"fdm",cell_count:8,generation_id:"domain"},
+    status:{resources:{scene_revision:41,commands_revision:2,command_completion_revision:1794233902315,
+      domain_generation_id:"domain",simulation_preparation_revision:3},
+      domain:{discretization:"fdm",cell_count:8,generation_id:"domain"},
       run:{run_id:"held"},solver:{state:"awaiting_command"}},
-    queue:{pending_count:0,running_count:0,revision:2,
-      commands:[{command_id:"grid-1",kind:"fdm_grid_refresh",status:"completed"}]},
+    queue:{pending_count:0,running_count:0,revision:1794233902317,
+      commands:[
+        {command_id:"grid-0",kind:"fdm_grid_refresh",status:"completed"},
+        {command_id:"grid-1",kind:"fdm_grid_refresh",status:"completed"},
+      ]},
     solver:{runtime_state:"awaiting_command"},
     execution:{run_id:"held",...session,runtime_state:"awaiting_command",
       stage_statuses:["pending","pending","pending"],completed_stage_indexes:[]},
@@ -160,11 +175,21 @@ test("grid readiness binds the completed command, held run, preparation and doma
       receipt:{schema_version:"preparation_receipt.v1",preparation_id:"prep-1",run_id:"held",
         plan_fingerprint:"sha256:"+"1".repeat(64),payload_sha256:"2".repeat(64)}},
   };
+  // In the ledger fallback, the queue revision aggregates command and completion revisions.
+  assert.equal(x.queue.revision, x.status.resources.commands_revision + x.status.resources.command_completion_revision);
+  assert.notEqual(x.queue.revision, x.status.resources.commands_revision);
   assert.equal(regionResetGridIsReady(x),true);
+  // Durable-journal mode publishes the same value for both revisions instead.
+  const durable=structuredClone(x);
+  durable.status.resources.command_completion_revision=durable.status.resources.commands_revision;
+  durable.queue.revision=durable.status.resources.commands_revision;
+  assert.equal(regionResetGridIsReady(durable),true);
   for(const mutate of [
-    q=>{q.queue.commands[0].status="failed";},q=>{q.queue.commands[0].command_id="foreign";},
-    q=>{q.preparation.receipt.run_id="foreign";},q=>{q.execution.session_epoch="foreign";},
-    q=>{q.status.resources.scene_revision=40;},
+    q=>{q.queue.commands.at(-1).status="failed";},q=>{q.queue.commands.at(-1).command_id="foreign";},
+    q=>{q.queue.pending_count=1;},q=>{q.queue.running_count=1;},
+    q=>{q.preparation.receipt.run_id="foreign";},q=>{q.preparation.status="pending";},
+    q=>{q.execution.session_epoch="foreign";},q=>{q.status.resources.scene_revision=40;},
+    q=>{q.status.domain.generation_id="foreign";},q=>{q.run.run_id="foreign";},
   ]) {const bad=structuredClone(x);mutate(bad);assert.throws(()=>regionResetGridIsReady(bad));}
 });
 

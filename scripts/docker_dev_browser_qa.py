@@ -3431,6 +3431,14 @@ def _validate_study_fdm_request_inventory(payload, expected_grid_posts, expected
         raise BuildControlError("FDM-cell-study request inventory exceeded its fixed budget")
 
 
+def _validate_study_stage_precondition_revision(precondition, resources, label):
+    if (not isinstance(precondition, Mapping) or not isinstance(resources, Mapping)
+            or type(resources.get("commands_revision")) is not int
+            or resources["commands_revision"] < 0
+            or precondition.get("command_revision") != resources["commands_revision"]):
+        raise BuildControlError(f"{label} command revision differs from its canonical status revision")
+
+
 def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser_url, expected_sources):
     if (payload.get("state") != "outcome-unknown" or payload.get("outcome") != "unknown"
             or not isinstance(payload.get("failure"), str) or not 1 <= len(payload["failure"]) <= 512
@@ -3491,6 +3499,8 @@ def _validate_fdm_cell_study_unknown_before_compute(payload, public_url, browser
                 "region_coefficients_revision", "region_initial_state_revision",
             )) or "stage_execution_revision" in precondition):
         raise BuildControlError("FDM-cell-study unknown outcome omitted its exact current precondition")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "FDM-cell-study baseline")
     results = before.get("result_identities")
     if (not isinstance(results, list) or len(results) != 1
             or not isinstance(results[0], Mapping)
@@ -3908,7 +3918,7 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
     if (not isinstance(value, Mapping)
             or set(value) != {"run_id", "run_status", "solver_state", "execution_state", "stage_ids",
                 "authored_stage_ids", "stage_statuses", "completed_stage_indexes", "scene_profile", "profile",
-                "scene_revision", "precondition", "commands", "preparation"}):
+                "scene_revision", "precondition", "resources", "commands", "preparation"}):
         raise BuildControlError("FDM-cell-study held-run proof has an unexpected shape")
     run_id = value.get("run_id")
     profile = value.get("profile")
@@ -3935,6 +3945,7 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
             or profile.get("script_path") != "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py"):
         raise BuildControlError("FDM-cell-study did not retain the pending 16-cell accepted frontier")
     precondition = value.get("precondition")
+    resources = value.get("resources")
     commands = value.get("commands")
     preparation = value.get("preparation")
     if (not isinstance(precondition, Mapping)
@@ -3956,13 +3967,16 @@ def _validate_study_fdm_prepared_grid_run(value, *, previous_run, previous_domai
                    or precondition.get(key) != previous_precondition[key] + 1
                    for key in region_revision_keys)):
         raise BuildControlError("FDM-cell-study grid refresh did not advance exactly the cell-policy region revisions")
+    if (not isinstance(resources, Mapping) or set(resources) != {"commands_revision"}
+            or type(resources.get("commands_revision")) is not int or resources["commands_revision"] < 0):
+        raise BuildControlError("FDM-cell-study held-run proof omitted its canonical command revision")
+    _validate_study_stage_precondition_revision(precondition, resources, "FDM-cell-study held run")
     terminal_command_states = {"completed", "failed", "cancelled", "rejected"}
     if (not isinstance(commands, Mapping)
             or set(commands) != {"resource_revision", "count", "pending_count", "running_count",
                                  "terminal_statuses", "last_command_id"}
             or type(commands.get("resource_revision")) is not int or commands["resource_revision"] < 0
             or type(commands.get("count")) is not int or commands["count"] < 0
-            or commands.get("count") != precondition.get("command_revision")
             or type(commands.get("pending_count")) is not int or commands["pending_count"] != 0
             or type(commands.get("running_count")) is not int or commands["running_count"] != 0
             or not isinstance(commands.get("terminal_statuses"), list)
@@ -4046,6 +4060,8 @@ def _validate_material_stage_a_unknown_payload(payload, public_url, browser_url,
             or precondition.get("current_run") != {"kind": "run", "run_id": previous_run}
             or type(precondition.get("scene_revision")) is not int or precondition["scene_revision"] < 0):
         raise BuildControlError("Material-stage-A unknown outcome omitted its completed ABC baseline")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "Material-stage-A baseline")
     receipt = _validate_study_material_receipt(payload, session)
     if (receipt.get("acknowledged") is True
             and precondition.get("scene_revision") not in (receipt["before_scene_revision"], receipt["scene_revision"])):
@@ -4178,6 +4194,9 @@ def _validate_study_stage_rerun_unknown_payload(payload, public_url, browser_url
                 "region_coefficients_revision", "region_initial_state_revision",
             ))):
         raise BuildControlError("Study stage rerun unknown outcome omitted its exact command precondition")
+    revision_snapshot = prepared_grid_run if isinstance(prepared_grid_run, Mapping) else before
+    _validate_study_stage_precondition_revision(precondition, revision_snapshot.get("resources"),
+                                                "Study stage rerun")
     if expected_mode == "material-stage-a":
         receipt = _validate_study_material_receipt(
             payload, session, precondition.get("scene_revision"),
@@ -4632,6 +4651,8 @@ def _validate_study_texture_unknown_payload(payload, public_url, browser_url, ex
             or not isinstance(precondition.get("domain_generation_id"), str)
             or not precondition["domain_generation_id"]):
         raise BuildControlError("Texture unknown outcome did not retain the exact sixteen-cell prior run")
+    _validate_study_stage_precondition_revision(precondition, before.get("resources"),
+                                                "Texture baseline")
     baseline = payload.get("texture_baseline_state")
     if (not isinstance(baseline, Mapping) or before.get("texture_baseline_state") != baseline
             or baseline.get("default_cell") != [1e-9, 2e-9, 2e-9]
@@ -5073,6 +5094,9 @@ def _parse_study_stage_rerun_result(output, public_url, browser_url, expected_so
             or type(precondition.get("command_revision")) is not int
             or precondition["command_revision"] < 0):
         raise BuildControlError("Study stage rerun precondition is stale or incomplete")
+    revision_snapshot = prepared_grid_run if isinstance(prepared_grid_run, Mapping) else before
+    _validate_study_stage_precondition_revision(precondition, revision_snapshot.get("resources"),
+                                                "Study stage rerun result")
     region_revision_keys = (
         "region_topology_revision", "region_membership_revision",
         "region_coefficients_revision", "region_initial_state_revision",

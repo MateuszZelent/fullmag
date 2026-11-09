@@ -187,6 +187,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api live_accepted_execution::publication::tests:: -- --nocapture
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::fdm_region_membership::tests:: -- --nocapture
           cargo test --locked -p fullmag-api --bin fullmag-api run_intent_persistence::tests::staged_ -- --nocapture
+          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-scheduler run_intent_persistence::tests::staged_ -- --nocapture
           cargo test --locked -p fullmag-api --bin fullmag-api live_compute_request::tests:: -- --nocapture
           FULLMAG_FDM_EXECUTION=cpu cargo test --locked -p fullmag-runtime-control --lib study::tests::relaxation_worker_binds_the_previous_final_samples_or_the_explicit_authored_reset -- --exact
           cargo test --locked -p fullmag-api --bin fullmag-api openapi_v2::tests::openapi_exposes_interactive_study_commands_and_exact_result_reads -- --exact
