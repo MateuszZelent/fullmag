@@ -14691,6 +14691,9 @@ export interface components {
             precision: components["schemas"]["SceneTransportPrecision"];
         };
         SceneResource: {
+            analysis?: {
+                [key: string]: unknown;
+            } | null;
             antenna_field_solve_stages?: components["schemas"]["AntennaFieldSolveStageResource"][];
             antenna_port_modes?: components["schemas"]["AntennaPortModeResource"][];
             antenna_spectrum_requests?: components["schemas"]["AntennaSpectrumRequestResource"][];

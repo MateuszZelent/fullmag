@@ -37645,6 +37645,13 @@
       },
       "SceneResource": {
         "properties": {
+          "analysis": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "antenna_field_solve_stages": {
             "items": {
               "$ref": "#/components/schemas/AntennaFieldSolveStageResource"
