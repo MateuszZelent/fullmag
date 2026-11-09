@@ -8,6 +8,7 @@ import re
 import struct
 
 SCHEMA = "fullmag.rt0_center_failure.v1"
+SCHEMA_V2 = "fullmag.rt0_center_failure.v2"
 MARKER = " " + SCHEMA + "="
 KEYS = {"schema", "element", "axis", "vertex_ids", "vertex_xyz_bits", "vertex_j_bits",
         "center_xyz_bits", "center_j_bits", "mean_bits", "scale_bits", "difference_bits",
@@ -36,12 +37,19 @@ def compensated(values):
     return result
 
 def analyze(witness):
-    if not isinstance(witness, dict) or set(witness) != KEYS or witness["schema"] != SCHEMA:
+    schema = witness.get("schema") if isinstance(witness,dict) else None
+    v2 = schema == SCHEMA_V2
+    expected_keys = (KEYS - {"mean_bits","scale_bits","difference_bits","budget_bits"}
+                     | {"comparison_policy","axis_scale_bits"}) if v2 else KEYS
+    if not isinstance(witness,dict) or set(witness) != expected_keys or schema not in {SCHEMA,SCHEMA_V2}:
         raise ValueError("unsupported or incomplete witness")
+    if v2 and witness["comparison_policy"] != "canonical_rt0_at_stored_point.v1":
+        raise ValueError("unsupported comparison policy")
     axis = witness["axis"]
     if type(axis) is not int or axis not in range(3):
         raise ValueError("invalid axis")
-    for key in ["element", "mean_bits", "scale_bits", "difference_bits", "budget_bits"]:
+    for key in (["element","axis_scale_bits"] if v2 else
+                ["element","mean_bits","scale_bits","difference_bits","budget_bits"]):
         number(witness[key])
     expected_lengths = {"vertex_ids": 4, "vertex_xyz_bits": 12, "vertex_j_bits": 12,
                         "center_xyz_bits": 3, "center_j_bits": 3, "face_flux_bits": 4}
@@ -55,23 +63,32 @@ def analyze(witness):
     if len(set(ids)) != 4:
         raise ValueError("duplicate stable vertex IDs")
     current = values["vertex_j_bits"]
-    mean = compensated(current[3*i+axis] * .25 for i in range(4))
-    scale = max(abs(current[3*i+axis]) for i in range(4))
-    center_j = values["center_j_bits"]
-    difference = abs(mean-center_j[axis])
-    budget = 128.0 * 2.0**-52 * scale
-    derived = dict(mean_bits=bits(mean), scale_bits=bits(scale),
-                   difference_bits=bits(difference), budget_bits=bits(budget))
-    replay = {"passes": math.isfinite(center_j[axis]) and difference <= budget,
-              "derived_bits": derived,
-              "derived_bits_match": all(witness[k] == v for k, v in derived.items())}
+    if v2:
+        scale = max(abs(current[3*i+axis]) for i in range(4))
+        observed = number(witness["axis_scale_bits"])
+        if not all(math.isfinite(x) for x in current) or not math.isfinite(observed) or observed < 0 or bits(scale) != witness["axis_scale_bits"]:
+            raise ValueError("invalid or inconsistent axis scale")
+        replay = {"passes": False, "comparison_policy": witness["comparison_policy"],
+                  "exact_reference_available": False}
+        center_j = values["center_j_bits"]
+    else:
+        mean = compensated(current[3*i+axis] * .25 for i in range(4))
+        scale = max(abs(current[3*i+axis]) for i in range(4))
+        center_j = values["center_j_bits"]
+        difference = abs(mean-center_j[axis])
+        budget = 128.0 * 2.0**-52 * scale
+        derived = dict(mean_bits=bits(mean), scale_bits=bits(scale),
+                       difference_bits=bits(difference), budget_bits=bits(budget))
+        replay = {"passes": math.isfinite(center_j[axis]) and difference <= budget,
+                  "derived_bits": derived,
+                  "derived_bits_match": all(witness[k] == v for k, v in derived.items())}
     coords, center, fluxes = values["vertex_xyz_bits"], values["center_xyz_bits"], values["face_flux_bits"]
     if not all(math.isfinite(x) for x in coords + center):
         raise ValueError("nonfinite witnessed geometry")
     points = [[Q(coords[3*i+a]) for a in range(3)] for i in range(4)]
     exact_center = [sum(p[a] for p in points)/4 for a in range(3)]
     delta = [Q(center[a])-exact_center[a] for a in range(3)]
-    result = {"schema": "fullmag.rt0_center_offline_audit.v1", "witness": witness,
+    result = {"schema": "fullmag.rt0_center_offline_audit.v2" if v2 else "fullmag.rt0_center_offline_audit.v1", "witness": witness,
               "gate_replay": replay, "centroid_error_m": [float(x) for x in delta],
               "moment_reconstruction": {"available": False},
               "reconstruction_rounding": "exact rational moments followed by binary64 nearest-even",
@@ -95,7 +112,8 @@ def analyze(witness):
         return [2*sum(outward[i]*(point[a]-points[i][a]) for i in range(4))/determinant
                 for a in range(3)]
     vertex_predicted = [float(v) for p in points for v in field(p)]
-    center_predicted = [float(v) for v in field([Q(x) for x in center])]
+    center_exact = field([Q(x) for x in center])
+    center_predicted = [float(v) for v in center_exact]
     slope = 2*sum(outward)/determinant
     result["moment_reconstruction"] = {
         "available": True,
@@ -106,6 +124,14 @@ def analyze(witness):
         "centroid_shift_delta_j_apm2": [float(slope*x) for x in delta],
         "coefficient_provenance": "canonical face moments, not unpublished MFEM coefficient bytes",
     }
+    if v2:
+        replay["exact_reference_available"] = True
+        budget = Q(scale) / (1 << 45)
+        replay["exact_budget_apm2"] = str(budget)
+        if math.isfinite(center_j[axis]):
+            difference = abs(Q(center_j[axis])-center_exact[axis])
+            replay["exact_difference_apm2"] = str(difference)
+            replay["passes"] = difference <= budget
     return result
 
 def unique_pairs(pairs):
@@ -121,12 +147,20 @@ def read_witness(path):
     if len(raw) > 65536:
         raise ValueError("witness input exceeds 64 KiB")
     value = json.loads(raw, object_pairs_hook=unique_pairs)
-    if isinstance(value,dict) and value.get("schema") == SCHEMA:
+    if isinstance(value,dict) and value.get("schema") in {SCHEMA,SCHEMA_V2}:
         return value, raw
     reason = value.get("failure_reason") if isinstance(value,dict) else value
-    if not isinstance(reason,str) or MARKER not in reason:
+    if not isinstance(reason,str):
         raise ValueError("no complete RT0 center witness in the failure report")
-    witness, _ = json.JSONDecoder(object_pairs_hook=unique_pairs).raw_decode(reason.split(MARKER,1)[1])
+    frames = [(reason.find(" "+schema+"="),schema) for schema in [SCHEMA,SCHEMA_V2]
+              if " "+schema+"=" in reason]
+    if not frames:
+        raise ValueError("no complete RT0 center witness in the failure report")
+    index,schema = min(frames)
+    payload = reason[index+len(" "+schema+"="):]
+    witness,_ = json.JSONDecoder(object_pairs_hook=unique_pairs).raw_decode(payload)
+    if not isinstance(witness,dict) or witness.get("schema") != schema:
+        raise ValueError("witness schema does not match its frame")
     return witness, raw
 
 if __name__ == "__main__":

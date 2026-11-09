@@ -183,8 +183,20 @@ fn center_current_cell() -> super::super::closed_loop_v2::ClosedLoopCurrentCellV
     }
 }
 
+
+fn check_center(
+    cell: &super::super::closed_loop_v2::ClosedLoopCurrentCellV2,
+    points: &[[f64;3];4], axis:usize, faces:&BTreeMap<[u64;3],f64>,
+) -> Result<(),crate::types::RunError> {
+    super::verify_center_current(cell,points,axis,faces,&mut None)
+}
+
+fn constant_vector_faces() -> BTreeMap<[u64;3],f64> {
+    BTreeMap::from([([2,3,4],12.0),([1,3,4],4.0),([1,2,4],-4.0),([1,2,3],4.0)])
+}
+
 fn center_failure_witness(error: &crate::types::RunError) -> serde_json::Value {
-    let (reason, witness) = error.message.split_once(" fullmag.rt0_center_failure.v1=")
+    let (reason, witness) = error.message.split_once(" fullmag.rt0_center_failure.v2=")
         .expect("the original J refusal must carry the complete diagnostic");
     assert_eq!(reason, "closed-loop identity refused: cell-local J interpolation mismatch");
     assert!(error.message.is_ascii());
@@ -210,10 +222,11 @@ fn center_current_failure_diagnostic_preserves_bits_and_bound() {
         ([5, 9, u64::MAX], f64::MAX),
         ([9, 17, u64::MAX], f64::from_bits(1)),
     ]);
-    let error = super::verify_center_current(&cell, &points, 0, &faces).unwrap_err();
+    let error = check_center(&cell, &points, 0, &faces).unwrap_err();
     let hex = |value: f64| format!("{:016x}", value.to_bits());
     let expected = serde_json::json!({
-        "schema": "fullmag.rt0_center_failure.v1",
+        "schema": "fullmag.rt0_center_failure.v2",
+        "comparison_policy": "canonical_rt0_at_stored_point.v1",
         "element": "ffffffffffffffff",
         "axis": 0,
         "vertex_ids": cell.vertex_ids.map(|id| format!("{id:016x}")),
@@ -221,10 +234,7 @@ fn center_current_failure_diagnostic_preserves_bits_and_bound() {
         "vertex_j_bits": cell.vertex_current_xyz_apm2.map(hex),
         "center_xyz_bits": cell.center_xyz_m.map(hex),
         "center_j_bits": cell.center_current_xyz_apm2.map(hex),
-        "mean_bits": hex(8.0),
-        "scale_bits": hex(8.0),
-        "difference_bits": hex((8.0 - cell.center_current_xyz_apm2[0]).abs()),
-        "budget_bits": hex(128.0 * f64::EPSILON * 8.0),
+        "axis_scale_bits": hex(8.0),
         "face_flux_bits": [Some(hex(-0.0)), Some(hex(f64::MAX)),
             Some(hex(f64::from_bits(1))), None::<String>],
     });
@@ -237,13 +247,13 @@ fn center_current_failure_diagnostic_keeps_gate() {
     let budget = 128.0 * f64::EPSILON * 8.0;
     let boundary = 8.0 + budget;
     cell.center_current_xyz_apm2[0] = boundary;
-    assert!(super::verify_center_current(&cell, &UNIT_TET, 0, &BTreeMap::new()).is_ok());
+    assert!(check_center(&cell, &UNIT_TET, 0, &constant_vector_faces()).is_ok());
     cell.center_current_xyz_apm2[0] = f64::from_bits(boundary.to_bits() + 1);
-    let error = super::verify_center_current(&cell, &UNIT_TET, 0, &BTreeMap::new()).unwrap_err();
+    let error = check_center(&cell, &UNIT_TET, 0, &constant_vector_faces()).unwrap_err();
     let witness = center_failure_witness(&error);
     assert_eq!(witness["axis"], 0);
-    assert_eq!(witness["budget_bits"], format!("{:016x}", budget.to_bits()));
-    assert_eq!(witness["face_flux_bits"], serde_json::json!([null, null, null, null]));
+    assert_eq!(witness["axis_scale_bits"], format!("{:016x}", 8.0_f64.to_bits()));
+    assert_eq!(witness["comparison_policy"], "canonical_rt0_at_stored_point.v1");
 }
 
 // These fields only let the real owned-geometry verifier reach its first cell gate.
@@ -295,7 +305,7 @@ fn owned_center_failure(
 ) -> crate::types::RunError {
     let source = center_geometry_source(cell);
     let by_id = BTreeMap::from([(1, 0), (2, 1), (3, 2), (4, 3)]);
-    super::verify_owned_geometry(&source, &by_id, &BTreeMap::new(), &BTreeMap::new(), &[])
+    super::verify_owned_geometry(&source, &by_id, &constant_vector_faces(), &BTreeMap::new(), &[])
         .unwrap_err()
 }
 
@@ -367,7 +377,210 @@ fn stored_point_center_accepts_actual_28881() {
     assert!(verify_rt0_sample_moments(&points, &cell.vertex_ids,
         &cell.vertex_current_xyz_apm2, &faces).is_ok());
     for axis in 0..3 {
-        let result = super::verify_center_current(&cell, &points, axis, &faces);
+        let result = check_center(&cell, &points, axis, &faces);
         assert!(result.is_ok(), "stored point axis {axis}: {result:?}");
     }
+}
+
+fn constant_x_cell() -> (
+    super::super::closed_loop_v2::ClosedLoopCurrentCellV2,
+    BTreeMap<[u64; 3], f64>,
+) {
+    let mut cell = center_current_cell();
+    cell.vertex_current_xyz_apm2 = std::array::from_fn(|i| if i % 3 == 0 { 8.0 } else { 0.0 });
+    cell.center_current_xyz_apm2 = [8.0, 0.0, 0.0];
+    (cell, BTreeMap::from([([2, 3, 4], 4.0), ([1, 3, 4], 4.0),
+        ([1, 2, 4], 0.0), ([1, 2, 3], 0.0)]))
+}
+
+#[test]
+fn stored_point_center_preserves_boundary_and_zero() {
+    let (cell, faces) = constant_x_cell();
+    let field = super::ExactRt0MomentCell::from_cell(&UNIT_TET, &cell.vertex_ids, &faces).unwrap();
+    let boundary = 8.0 + 128.0 * f64::EPSILON * 8.0;
+    assert!(field.matches_center_axis(0.25, boundary, 0, 8.0).unwrap());
+    assert!(!field.matches_center_axis(0.25, f64::from_bits(boundary.to_bits()+1), 0, 8.0).unwrap());
+    assert!(field.matches_center_axis(0.25, -0.0, 1, 0.0).unwrap());
+    assert!(!field.matches_center_axis(0.25, f64::from_bits(1), 1, 0.0).unwrap());
+}
+
+#[test]
+fn stored_point_center_rejects_wrong_samples_and_moments() {
+    let (mut cell, mut faces) = actual_stored_point_cell();
+    let points = std::array::from_fn(|i|
+        std::array::from_fn(|axis| cell.vertex_xyz_m[3*i+axis]));
+    let field = super::ExactRt0MomentCell::from_cell(&points, &cell.vertex_ids, &faces).unwrap();
+    let scale = (0..4).map(|i| cell.vertex_current_xyz_apm2[3*i+1].abs()).fold(0.0_f64, f64::max);
+    let old_mean = super::compensated_sum((0..4).map(|i| cell.vertex_current_xyz_apm2[3*i+1]*0.25)).unwrap();
+    assert!(!field.matches_center_axis(cell.center_xyz_m[1], old_mean, 1, scale).unwrap());
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(!field.matches_center_axis(cell.center_xyz_m[1], value, 1, scale).unwrap());
+    }
+    let mut first_face = [cell.vertex_ids[1], cell.vertex_ids[2], cell.vertex_ids[3]];
+    first_face.sort_unstable();
+    *faces.get_mut(&first_face).unwrap() *= -1.0;
+    let changed = super::ExactRt0MomentCell::from_cell(&points, &cell.vertex_ids, &faces).unwrap();
+    assert!(changed.verify_vertex_samples(&cell.vertex_current_xyz_apm2).is_err());
+    faces.remove(&first_face);
+    assert!(super::ExactRt0MomentCell::from_cell(&points, &cell.vertex_ids, &faces).is_err());
+    assert!(super::ExactRt0MomentCell::from_cell(&[[0.0;3];4], &cell.vertex_ids, &faces).is_err());
+    cell.vertex_current_xyz_apm2[0] = f64::NAN;
+    assert!(field.verify_vertex_samples(&cell.vertex_current_xyz_apm2).is_err());
+}
+
+#[test]
+fn stored_point_center_power_of_two_scales_and_exact_translation() {
+    let (cell, faces) = actual_stored_point_cell();
+    let points = std::array::from_fn(|i|
+        std::array::from_fn(|axis| cell.vertex_xyz_m[3*i+axis]));
+    for power in [-500, 500] {
+        let factor = 2.0_f64.powi(power);
+        let moments = faces.iter().map(|(k,v)| (*k, *v*factor)).collect();
+        let field = super::ExactRt0MomentCell::from_cell(&points, &cell.vertex_ids, &moments).unwrap();
+        for axis in 0..3 {
+            let scale = (0..4).map(|i| cell.vertex_current_xyz_apm2[3*i+axis].abs()*factor)
+                .fold(0.0_f64, f64::max);
+            assert!(field.matches_center_axis(cell.center_xyz_m[axis],
+                cell.center_current_xyz_apm2[axis]*factor, axis, scale).unwrap());
+        }
+    }
+    let (cell, moments) = constant_x_cell();
+    let translated = UNIT_TET.map(|p| [p[0]+8.0,p[1]-4.0,p[2]+2.0]);
+    let field = super::ExactRt0MomentCell::from_cell(&translated, &cell.vertex_ids, &moments).unwrap();
+    assert!(field.matches_center_axis(8.25,8.0,0,8.0).unwrap());
+    assert!(field.matches_center_axis(-3.75,0.0,1,0.0).unwrap());
+    assert!(field.matches_center_axis(2.25,0.0,2,0.0).unwrap());
+}
+
+#[test]
+fn stored_point_moment_context_matches_rational_reference() {
+    let (actual, actual_faces) = actual_stored_point_cell();
+    let actual_points = std::array::from_fn(|i|
+        std::array::from_fn(|axis| actual.vertex_xyz_m[3*i+axis]));
+    let cases = [
+        (actual_points, actual.vertex_ids, actual.vertex_current_xyz_apm2, actual_faces),
+        (MOMENT_POINTS, [1,2,3,4], MOMENT_J, golden_moments()),
+    ];
+    for (points, ids, currents, faces) in cases {
+        for geometry_power in [-250,0,250] {
+            for current_power in [-200,0,200] {
+                let geometry = 2.0_f64.powi(geometry_power);
+                let current = 2.0_f64.powi(current_power);
+                let flux = 2.0_f64.powi(current_power+2*geometry_power);
+                let points = points.map(|p| p.map(|v| v*geometry));
+                let mut samples = currents.map(|v|v*current);
+                let faces = faces.iter().map(|(k,v)|(*k,*v*flux)).collect();
+                let field = super::ExactRt0MomentCell::from_cell(&points,&ids,&faces).unwrap();
+                for _ in 0..2 {
+                    assert_eq!(field.verify_vertex_samples(&samples).is_ok(),
+                        reference_verify_rt0_sample_moments(&points,&ids,&samples,&faces).is_ok());
+                    samples[1] = f64::from_bits(1);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn stored_point_geometry_payload_cannot_change_under_retained_preimage() {
+    let source = center_geometry_source(center_current_cell());
+    let mut preimage = super::NamedFieldsBuilder::new("test.retained_mesh.v1");
+    preimage.add_u64("vertex_count",4);
+    for i in 0..4 {
+        preimage.add_u64("vertex_id",source.stable_vertex_ids[i]);
+        for axis in 0..3 {
+            preimage.add_u64(["vertex_x_bits","vertex_y_bits","vertex_z_bits"][axis],
+                source.vertex_xyz_m[i][axis].to_bits());
+        }
+    }
+    preimage.add_u64("element_count",1);
+    for i in 0..4 { preimage.add_u64(
+        ["cell_vertex_0_id","cell_vertex_1_id","cell_vertex_2_id","cell_vertex_3_id"][i],
+        source.cells[0].vertex_ids[i]); }
+    preimage.add_u64("conductivity_spm_bits",1.0_f64.to_bits());
+    let digest=preimage.sha256_hex();
+    let mut fields=super::Fields::new(&preimage.payload,&digest,"test.retained_mesh.v1").unwrap();
+    super::verify_mesh(&mut fields,&source,false).unwrap();
+    fields.finish().unwrap();
+    let mut changed=source;
+    changed.vertex_xyz_m[1][0]=f64::from_bits(1.0_f64.to_bits()+1);
+    let mut fields=super::Fields::new(&preimage.payload,&digest,"test.retained_mesh.v1").unwrap();
+    assert_eq!(super::verify_mesh(&mut fields,&changed,false).unwrap_err().message,
+        "closed-loop identity refused: binary64 binding mismatch");
+}
+
+fn reference_verify_rt0_sample_moments(
+    points: &[[f64; 3]; 4],
+    vertex_ids: &[u64; 4],
+    currents: &[f64; 12],
+    fluxes: &BTreeMap<[u64; 3], f64>,
+) -> Result<(), crate::types::RunError> {
+    use num_rational::BigRational;
+    use num_bigint::BigInt;
+    use super::{require,invalid};
+    let zero = BigRational::from_integer(BigInt::from(0));
+    let two = BigRational::from_integer(BigInt::from(2));
+    let budget = BigRational::new(BigInt::from(64), BigInt::from(1) << 52_usize);
+    let mut coordinates: [[BigRational; 3]; 4] =
+        std::array::from_fn(|_| std::array::from_fn(|_| zero.clone()));
+    for local in 0..4 {
+        for axis in 0..3 {
+            coordinates[local][axis] = BigRational::from_float(points[local][axis])
+                .ok_or_else(|| invalid("nonfinite RT0 moment coordinate"))?;
+        }
+    }
+    let edges: [[BigRational; 3]; 3] = std::array::from_fn(|i|
+        std::array::from_fn(|k| &coordinates[i + 1][k] - &coordinates[0][k]));
+    let determinant = &edges[0][0] * (&edges[1][1] * &edges[2][2] - &edges[1][2] * &edges[2][1])
+        - &edges[0][1] * (&edges[1][0] * &edges[2][2] - &edges[1][2] * &edges[2][0])
+        + &edges[0][2] * (&edges[1][0] * &edges[2][1] - &edges[1][1] * &edges[2][0]);
+    require(determinant > zero, "nonpositive exact RT0 moment determinant")?;
+    let outward = [[1, 2, 3], [0, 3, 2], [0, 1, 3], [0, 2, 1]];
+    let mut coefficients: [BigRational; 4] = std::array::from_fn(|_| zero.clone());
+    for opposite in 0..4 {
+        let order = outward[opposite];
+        let mut ids = order.map(|i| vertex_ids[i]);
+        let inversions = usize::from(ids[0] > ids[1]) + usize::from(ids[0] > ids[2])
+            + usize::from(ids[1] > ids[2]);
+        ids.sort_unstable();
+        let flux = *fluxes.get(&ids).ok_or_else(|| invalid("missing RT0 moment face"))?;
+        let coefficient = BigRational::from_float(flux)
+            .ok_or_else(|| invalid("nonfinite RT0 face moment"))? * &two;
+        coefficients[opposite] = if inversions % 2 == 0 { coefficient } else { -coefficient };
+    }
+    for local in 0..4 {
+        for axis in 0..3 {
+            let mut numerator = zero.clone();
+            for i in 0..4 {
+                numerator += &coefficients[i] * (&coordinates[local][axis] - &coordinates[i][axis]);
+            }
+            let expected = numerator / &determinant;
+            let sample = BigRational::from_float(currents[3 * local + axis])
+                .ok_or_else(|| invalid("nonfinite RT0 moment sample"))?;
+            let magnitude = if sample < zero { -sample.clone() } else { sample.clone() };
+            let error = &budget * magnitude;
+            require(expected >= &sample - &error && expected <= &sample + &error,
+                "J samples differ from canonical RT0 moments")?;
+        }
+    }
+    Ok(())
+}
+
+
+#[test]
+fn stored_point_center_preserves_failure_order() {
+    let mut cell=center_current_cell();
+    cell.center_current_xyz_apm2[0]=9.0;
+    cell.center_xyz_m[1]=0.5;
+    assert_eq!(center_failure_witness(&owned_center_failure(cell.clone()))["axis"],0);
+    cell.center_xyz_m[0]=0.5;
+    assert_eq!(owned_center_failure(cell).message,
+        "closed-loop identity refused: sampled center geometry mismatch");
+    let mut cell=center_current_cell();
+    cell.center_current_xyz_apm2[0]=9.0;
+    assert_eq!(check_center(&cell,&UNIT_TET,0,&BTreeMap::new()).unwrap_err().message,
+        "closed-loop identity refused: missing RT0 moment face");
+    cell.vertex_current_xyz_apm2[0]=f64::NAN;
+    assert_eq!(check_center(&cell,&UNIT_TET,0,&BTreeMap::new()).unwrap_err().message,
+        "closed-loop identity refused: nonfinite flux");
 }

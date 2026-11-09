@@ -64,4 +64,37 @@ class WitnessTests(unittest.TestCase):
   with mock.patch("verify_rt0_center_witness.Path.read_bytes",return_value=duplicate):
    with self.assertRaises(ValueError):read_witness("unused")
 
+
+def v2(w):
+ w=dict(w)
+ for key in ["mean_bits","scale_bits","difference_bits","budget_bits"]:w.pop(key)
+ w.update(schema="fullmag.rt0_center_failure.v2",comparison_policy="canonical_rt0_at_stored_point.v1",axis_scale_bits=bits(1.))
+ return w
+
+class StoredPointWitnessTests(unittest.TestCase):
+ def test_v2_replays_stored_point_instead_of_exact_centroid(self):
+  r=analyze(v2(fixture(float(2**52))))
+  self.assertTrue(r["gate_replay"]["passes"])
+  self.assertEqual(r["gate_replay"]["comparison_policy"],"canonical_rt0_at_stored_point.v1")
+  self.assertFalse(r["accepted_source"])
+ def test_v2_wrong_center_and_incomplete_reference_fail_closed(self):
+  w=v2(fixture(wrong_center=True))
+  self.assertFalse(analyze(w)["gate_replay"]["passes"])
+  w["face_flux_bits"][0]=None
+  r=analyze(w)
+  self.assertFalse(r["gate_replay"]["passes"])
+  self.assertFalse(r["moment_reconstruction"]["available"])
+ def test_v2_rejects_mixed_policy_and_legacy_derived_fields(self):
+  for key,value in [("comparison_policy","unknown"),("mean_bits",bits(.25)),("axis_scale_bits",bits(-1.))]:
+   w=v2(fixture());w[key]=value
+   with self.assertRaises(ValueError):analyze(w)
+ def test_v2_receipt_frame_preserves_the_complete_witness(self):
+  import json
+  from unittest import mock
+  from verify_rt0_center_witness import read_witness
+  w=v2(fixture())
+  raw=json.dumps({"failure_reason":"wrapper fullmag.rt0_center_failure.v2="+json.dumps(w)+" | stdout: tail"}).encode()
+  with mock.patch("verify_rt0_center_witness.Path.read_bytes",return_value=raw):
+   parsed,_=read_witness("unused");self.assertEqual(parsed,w)
+
 if __name__=="__main__":unittest.main()

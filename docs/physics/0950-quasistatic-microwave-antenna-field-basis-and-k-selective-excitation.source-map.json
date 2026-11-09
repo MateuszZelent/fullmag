@@ -3909,7 +3909,9 @@
       "sources": [
         "rt0-stored-point-export",
         "rt0-stored-point-native",
-        "rt0-stored-point-arithmetic"
+        "rt0-stored-point-arithmetic",
+        "rt0-stored-point-context",
+        "rt0-stored-point-regression"
       ]
     },
     {
@@ -3924,7 +3926,9 @@
       ],
       "sources": [
         "rt0-stored-point-verifier",
-        "rt0-stored-point-arithmetic"
+        "rt0-stored-point-arithmetic",
+        "rt0-stored-point-context",
+        "rt0-stored-point-regression"
       ]
     }
   ],
@@ -9411,7 +9415,7 @@
       "id": "rt0-stored-point-verifier",
       "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
       "symbol": "verify_center_current",
-      "responsibility": "Punkt zatwierdzonej naprawy; oczekuje odbioru GREEN/runtime.",
+      "responsibility": "Dokładne porównanie RT0 w zapisanym punkcie; CI/runtime oczekują.",
       "evidence_status": "source_only"
     },
     {
@@ -9419,6 +9423,20 @@
       "path": "examples/sushruth_2020_closed_gsg/stored_point_validation_20261108/stored_point_policy_audit.py",
       "symbol": "exact_field",
       "responsibility": "Wykonany dokładny odczyt komórki, bez solvera.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-context",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs",
+      "symbol": "ExactRt0MomentCell",
+      "responsibility": "Jeden dokładny kontekst geometrii i momentów dla środka i12 próbek nodalnych.",
+      "evidence_status": "source_only"
+    },
+    {
+      "id": "rt0-stored-point-regression",
+      "path": "crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2_affinity_tests.rs",
+      "symbol": "stored_point_center_accepts_actual_28881",
+      "responsibility": "Rzeczywisty RED komórki28881; oczekuje GREEN nowego predykatu.",
       "evidence_status": "source_only"
     }
   ],

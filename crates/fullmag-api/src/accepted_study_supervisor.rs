@@ -3457,10 +3457,21 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn worker_failure_reason_keeps_rt0_center_witness() {
+        assert_worker_failure_reason_keeps_rt0_center_witness("fullmag.rt0_center_failure.v1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_failure_reason_keeps_rt0_center_witness_v2() {
+        assert_worker_failure_reason_keeps_rt0_center_witness("fullmag.rt0_center_failure.v2");
+    }
+
+    #[cfg(unix)]
+    fn assert_worker_failure_reason_keeps_rt0_center_witness(schema: &str) {
         use std::os::unix::process::ExitStatusExt;
         let hexes = (0..12).map(|i| format!("{:016x}", u64::MAX - i)).collect::<Vec<_>>();
-        let witness = serde_json::json!({
-            "schema": "fullmag.rt0_center_failure.v1",
+        let mut witness = serde_json::json!({
+            "schema": schema,
             "element": "ffffffffffffffff", "axis": 0,
             "vertex_ids": ["ffffffffffffffff", "0000000000000011", "0000000000000005", "0000000000000009"],
             "vertex_xyz_bits": hexes, "vertex_j_bits": hexes,
@@ -3470,7 +3481,15 @@ mod tests {
             "difference_bits": "7ff8123456789abc", "budget_bits": "3d50000000000000",
             "face_flux_bits": ["8000000000000000", "7fefffffffffffff", "0000000000000001", null]
         });
-        let message = format!("closed-loop identity refused: cell-local J interpolation mismatch fullmag.rt0_center_failure.v1={witness}");
+        if schema == "fullmag.rt0_center_failure.v2" {
+            let object = witness.as_object_mut().unwrap();
+            for key in ["mean_bits", "scale_bits", "difference_bits", "budget_bits"] {
+                object.remove(key);
+            }
+            object.insert("comparison_policy".into(), "canonical_rt0_at_stored_point.v1".into());
+            object.insert("axis_scale_bits".into(), "4020000000000000".into());
+        }
+        let message = format!("closed-loop identity refused: cell-local J interpolation mismatch {schema}={witness}");
         assert!(message.is_ascii() && message.len() <= 2048);
         let error = anyhow::Error::new(fullmag_runner::RunError { message })
             .context("execute canonical full-volume inspection")
@@ -3490,7 +3509,7 @@ mod tests {
         assert!(reason.len() <= 4096);
         assert!(reason.ends_with(&"x".repeat(WORKER_FAILURE_STDOUT_BYTES)));
         let parsed = |reason: &str| {
-            let (_, json) = reason.split_once(" fullmag.rt0_center_failure.v1=").unwrap();
+            let (_, json) = reason.split_once(&format!(" {schema}=")).unwrap();
             serde_json::Deserializer::from_str(json).into_iter::<serde_json::Value>()
                 .next().unwrap().unwrap()
         };

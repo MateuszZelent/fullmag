@@ -10212,7 +10212,7 @@ pozostaje odmową, nigdy próbką zerową.
 
 | Realizacja | Interpretacja i dowód |
 |---|---|
-| FEM CPU | zatwierdzony kontrakt; arytmetyka jednej komórki 15/15 PASS; wdrożenie i managed odbiór oczekują |
+| FEM CPU | kod kontroli zapisanej próbki istnieje; arytmetyka 15/15 PASS; odbiór CI i managed oczekują |
 | FEM GPU | brak zmiany i kwalifikacji; precompute nie staje się GPU |
 | FDM CPU | brak nowej kontroli lub kwalifikacji konsumenta bazy |
 | FDM GPU | brak zmiany, fallback i kwalifikacji urządzenia |
@@ -10226,7 +10226,7 @@ LLG lub zgodności z publikacją.
 Indeks źródeł:
 - backends/fem/cpu/mfem/transport/closed_loop_source_snapshot.hpp::export_closed_loop_source_snapshot — zapis rzeczywistego punktu.
 - backends/fem/cpu/mfem/transport/affine_rt0_element.cpp::AffineRt0Element::retained_current_at — dokładne native RT0.
-- crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs::verify_center_current i verify_rt0_sample_moments — punkt wdrożenia i nodalne momenty, do odbioru GREEN.
+- crates/fullmag-runner/src/antenna_field_solution/closed_loop_identity_v2.rs::verify_center_current / ExactRt0MomentCell — dokładne porównanie i współdzielone nodalne momenty, do odbioru GREEN.
 - examples/sushruth_2020_closed_gsg/stored_point_validation_20261108/stored_point_policy_audit.py::exact_field / proposed_gate — wykonana arytmetyka, bez C++.
 
 ### 13.1 Source-code index
