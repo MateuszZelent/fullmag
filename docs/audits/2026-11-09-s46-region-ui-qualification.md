@@ -408,3 +408,49 @@ przypadków nadal wymagają wykonania w CI.
 
 Niezależny source review po korektach zamknął oba dodatkowe P2. Nie zastępuje to
 wykonania regresji Rust ani odbioru natywnej generacji po przebudowie.
+
+
+## Odbiór natywnego c98 i korekta dodatkowej fixture
+
+DEV `4e99765af6284dea82c91bff38cd2397` z czystego
+`c98c9f5170dd623c27561d864dac85cfddf29893` zakończył build/start stanem succeeded.
+Config `a6b460410f947d2302b036d46e4c3837dd73bcdb45c4962243474acb353f0e66`,
+snapshot `ac18002d9529c679e713a0fd9ef7214a9ed53ef4b1d9eb017c9d223806be0a40`.
+Przed próbą API `2332941b-2b19-4a63-b816-bfc8f1bcb13b` miało sessions=[],
+a /workspace i /home zwracały 200. Archive verifier świeżej generacji
+`26beb0672cf74484811ee9e18fde7050` potwierdził helper/app c98 i raw intent.
+
+CI c98 rzeczywiście wykonało: 6 testów resolvera IR, 10 projekcji authoring,
+ujemny guard custom cadence, rzeczywisty render/capture sceny S46 oraz dwie
+regresje analysis — PASS. Control Room: 924 pliki / 9641 testów PASS,
+13 testów pominiętych; dodatkowy zestaw 3 PASS. Generated API determinism: PASS.
+Jedyny błąd Rust dotyczy nowej fixture lokalnej tabeli: omyłkowo zawierała
+sampling w Relax, którego publiczny DSL prawidłowo odmawia. Nie osłabiono
+walidacji. Poprawiony test używa legalnego Run z czasowym cadence tabeli,
+następnie kanonicznej sceny przechwyconej przez SDK. Usuwa tylko quantities
+z lokalnych tabel flat/pipeline i ponownie sprawdza ścisły render/capture.
+Projekcja kopii payloadu uzupełnia domyślne kind/table_id/quantities, zachowując
+pozostałe pola i surowy dokument. Ten nowy wariant wymaga jeszcze wykonania CI.
+
+Rzeczywiste QA `704d5cd764ae4288b976b27fabf129d9` zaimportowało scenę i ACK.
+FDM Grid został przyjęty i zakończony: command
+`fm-8b151158-2998-47c5-aba2-bff4653bcfec`, 8 komórek, run
+`run-live-7b4bad143921812b889653bdd492b593b127eff61246d90c0c845376174e6217`.
+Odczyt po próbie potwierdza waiting_for_solve, solver awaiting_command,
+steps=0 i dokładnie jedną completed komendę Grid. Zatem 409 został usunięty
+również w rzeczywistym runtime; nie wykonano Compute ani replay.
+
+Cały S46 NIE przeszedł: runner zakończył obserwację po GET CurrentRun timeout
+20 s, podczas gdy Grid trwał 79 483 ms. Zamknięcie kontekstu przeglądarki
+przerwało obserwację odpowiedzi POST i PATCH. Ten raport nie jest dowodem
+nieudanego Grid ani kwalifikowanym eksportem; późniejszy scoped odczyt API
+potwierdził jego zakończenie. Trwają diagnoza blokowania odczytu i poprawka
+obserwacji tej samej operacji bez ponawiania kliknięcia. Import/export resetu
+regionu, pełna macierz P01–P22 i pozostałe realizacje pozostają otwarte.
+
+
+Końcowy source review wskazał również nullowe identyfikatory tabeli. Projekcja
+zachowuje reguły właściwego publicznego parsera: autosave.table przyjmuje domyślne
+kind/table_id także dla null, a lokalne Run sampling nadal odrzuca jawne null
+w table_id. Uzupełniono dodatnią i ujemną regresję tej granicy; surowa scena
+zachowuje pierwotne wartości. Wynik nowych testów pozostaje do odczytania w CI.

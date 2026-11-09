@@ -70,6 +70,9 @@ fn normalize_nodes(
         if let Some(payload) = node.get_mut("payload").filter(|value| value.is_object()) {
             if let Some(policy) = effective_policy(payload, kind.as_deref(), format, table)? {
                 payload["autosave"] = serde_json::to_value(policy).map_err(invalid)?;
+                if let Some(table) = payload.pointer_mut("/sampling/table_autosave") {
+                    normalize_authoring_table_defaults(table, false);
+                }
             }
         }
     }
@@ -87,10 +90,18 @@ fn positive(stage: &Value, key: &str) -> Option<f64> {
         .filter(|value: &f64| value.is_finite() && *value > 0.0)
 }
 
-fn normalize_table_quantities(value: &mut Value) {
+fn normalize_authoring_table_defaults(value: &mut Value, allow_null_table_id: bool) {
     // Match TableAutosave's public DSL default without changing the stricter
     // IR wire schema. Real SDK capture tests guard this compatibility boundary.
     if let Some(table) = value.as_object_mut() {
+        if table.get("kind").is_none_or(Value::is_null) {
+            table.insert("kind".into(), Value::String("table_autosave".into()));
+        }
+        // The autosave.table parser treats null IDs as defaults. The Run
+        // sampling surface rejects explicit null IDs before source rendering.
+        if !table.contains_key("table_id") || (allow_null_table_id && table["table_id"].is_null()) {
+            table.insert("table_id".into(), Value::String("default".into()));
+        }
         if table.get("quantities").is_none_or(Value::is_null) {
             table.insert(
                 "quantities".into(),
@@ -144,7 +155,7 @@ fn effective_policy(
                 );
             }
             if let Some(table) = value.get_mut("table") {
-                normalize_table_quantities(table);
+                normalize_authoring_table_defaults(table, true);
             }
             serde_json::from_value(value).map_err(invalid)
         })
@@ -154,7 +165,7 @@ fn effective_policy(
         Some(Value::Null) => None,
         Some(value) => {
             let mut value = value.clone();
-            normalize_table_quantities(&mut value);
+            normalize_authoring_table_defaults(&mut value, false);
             Some(serde_json::from_value(value).map_err(invalid)?)
         }
         None => table.cloned(),
@@ -199,7 +210,8 @@ mod tests {
     use serde_json::json;
 
     fn fixture(kind: &str, autosave: Option<Value>, storage: bool) -> (SceneDocument, Value) {
-        let mut stage = json!({"kind":kind, "entrypoint_kind":"flat_relax", "until_seconds":2.0});
+        let mut stage =
+            json!({"kind":kind, "entrypoint_kind":format!("flat_{kind}"), "until_seconds":2.0});
         if let Some(policy) = autosave {
             stage["autosave"] = policy;
         }
@@ -319,30 +331,54 @@ mod tests {
 
     #[test]
     fn local_table_defaults_and_explicit_table_override_keep_their_meaning() {
-        let (mut scene, mut projected) = fixture("relax", None, true);
-        projected["study_pipeline"] = Value::Null;
-        scene.study.stages[0].extra.insert(
-            "sampling".into(),
-            json!({
-                "table_autosave":{"every_steps":7}
-            }),
-        );
+        let (mut scene, mut projected) = fixture("run", None, true);
+        let sampling = json!({"table_autosave":{"kind":null,"sample_period_s":0.25}});
+        scene.study.stages[0]
+            .extra
+            .insert("sampling".into(), sampling.clone());
+        projected["study_pipeline"]["nodes"][0]["children"][0]["payload"]["sampling"] = sampling;
         normalize_project_output_projection(&scene, &mut projected).unwrap();
         let table = &projected["stages"][0]["autosave"]["table"];
-        assert_eq!(table["every_steps"], 7);
+        assert_eq!(table["sample_period_s"], 0.25);
         assert_eq!(
             table["quantities"],
             json!(["step", "t", "mx", "my", "mz", "e_total", "max_torque"])
         );
+        assert_eq!(
+            *table,
+            projected["study_pipeline"]["nodes"][0]["children"][0]["payload"]["sampling"]
+                ["table_autosave"]
+        );
         let mut custom = policy(9, "zarr");
-        custom["table"] = json!({"every_steps":3,"quantities":["mx"]});
+        custom["fields"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("every_steps");
+        custom["fields"][0]["every_seconds"] = json!(0.5);
+        custom["table"] =
+            json!({"kind":null,"table_id":null,"sample_period_s":0.125,"quantities":["mx"]});
         scene.study.stages[0]
             .extra
             .insert("autosave".into(), custom);
         normalize_project_output_projection(&scene, &mut projected).unwrap();
         let table = &projected["stages"][0]["autosave"]["table"];
-        assert_eq!(table["every_steps"], 3);
+        assert_eq!(table["sample_period_s"], 0.125);
         assert_eq!(table["quantities"], json!(["mx"]));
+        assert_eq!(table["kind"], "table_autosave");
+        assert_eq!(table["table_id"], "default");
+        assert!(scene.study.stages[0].extra["autosave"]["table"]["table_id"].is_null());
+    }
+
+    #[test]
+    fn local_run_table_id_null_keeps_the_sdk_rejection() {
+        let (mut scene, mut projected) = fixture("run", None, true);
+        scene.study.stages[0].extra.insert(
+            "sampling".into(),
+            json!({
+                "table_autosave":{"sample_period_s":0.25,"table_id":null}
+            }),
+        );
+        assert!(normalize_project_output_projection(&scene, &mut projected).is_err());
     }
 
     #[test]

@@ -3953,32 +3953,45 @@ mod tests {
     }
 
     #[test]
-    fn imported_relax_scene_with_implicit_table_quantities_survives_generated_source_capture() {
-        let mut authored: fullmag_authoring::SceneDocument = serde_json::from_str(include_str!(
+    fn imported_run_scene_with_implicit_table_quantities_survives_generated_source_capture() {
+        let mut raw: serde_json::Value = serde_json::from_str(include_str!(
             "test_fixtures/s46_first_grid_import_scene.json"
         ))
         .unwrap();
-        let table = serde_json::json!({"table_autosave":{"every_steps":7}});
-        for stage in &mut authored.study.stages {
-            stage.extra.insert("sampling".into(), table.clone());
-        }
-        let mut raw = serde_json::to_value(&authored).unwrap();
-        for index in 0..3 {
-            raw["study"]["study_pipeline"]["nodes"][index]["payload"]["sampling"] = table.clone();
-        }
-        let authored = serde_json::from_value(raw).unwrap();
+        // Start with a legal Run surface, then use the SDK's canonical scene
+        // to isolate omitted table quantities from unrelated stage defaults.
+        // Relax intentionally rejects sampling and has its own table surface.
+        raw["study"]["study_pipeline"] = serde_json::Value::Null;
+        raw["study"]["stages"] = serde_json::json!([{
+            "kind":"run", "entrypoint_kind":"flat_run", "until_seconds":1e-12,
+            "sampling":{"outputs":[],"table_autosave":{"sample_period_s":1e-13}}
+        }]);
+        let seed = serde_json::from_value(raw).unwrap();
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .canonicalize()
             .unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let generated = crate::script::render_accepted_scene_source_bounded(
-            &root, workspace.path(), &authored,
-        ).unwrap();
-        let capture = crate::script::capture_startup_script_scene(
-            &root, workspace.path(), &generated.path,
-        ).unwrap();
-        let captured = serde_json::from_value(capture.scene.unwrap()).unwrap();
+        let capture_scene = |scene: &fullmag_authoring::SceneDocument| {
+            let workspace = tempfile::tempdir().unwrap();
+            let generated = crate::script::render_accepted_scene_source_bounded(
+                &root, workspace.path(), scene,
+            ).unwrap();
+            let capture = crate::script::capture_startup_script_scene(
+                &root, workspace.path(), &generated.path,
+            ).unwrap();
+            serde_json::from_value::<fullmag_authoring::SceneDocument>(capture.scene.unwrap()).unwrap()
+        };
+        let canonical = capture_scene(&seed);
+        let mut raw = serde_json::to_value(canonical).unwrap();
+        let remove_quantities = |stage: &mut serde_json::Value| {
+            for pointer in ["/sampling/table_autosave", "/autosave/table"] {
+                stage.pointer_mut(pointer).unwrap().as_object_mut().unwrap().remove("quantities");
+            }
+        };
+        remove_quantities(&mut raw["study"]["stages"][0]);
+        remove_quantities(&mut raw["study"]["study_pipeline"]["nodes"][0]["payload"]);
+        let authored = serde_json::from_value(raw).unwrap();
+        let captured = capture_scene(&authored);
         super::validate_generated_scene_round_trip(&authored, &captured).unwrap();
     }
 
