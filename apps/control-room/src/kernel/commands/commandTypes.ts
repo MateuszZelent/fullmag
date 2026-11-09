@@ -113,6 +113,8 @@ export interface CommandResult {
   clientIntentId?: string;
   /** Backend command kind paired with clientIntentId for exact reconciliation. */
   clientIntentKind?: string;
+  /** Set only when this pending result follows its own emitted Compute started event. */
+  studyComputeObservationStarted?: true;
   observation?: "waiting" | "disconnected" | "publication-unconfirmed";
   message?: string;
 }

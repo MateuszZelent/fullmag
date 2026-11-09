@@ -143,6 +143,19 @@ leaves in-memory observation usable. A legacy, invalid, or absent body disables
 retry; it does not prove rejection or authorize a new Compute. Hints must remain
 isolated by API authority and logical session even when transport scope changes.
 
+A canonical Compute publisher emits its started observation before awaiting
+submission and marks its pending result with the optional local-only
+`studyComputeObservationStarted: true`. The command registry forwards this
+marker without adding it to the backend request. A later unconfirmed result
+cannot recreate an exact scoped intent already resolved by the observation
+owner. Known backend command ACKs and unmarked legacy results retain their
+existing reconciliation behavior. This requires no history of settled IDs.
+
+Build + Study derives its retained Solve continuation from that same owner and
+exact intent ID. Once resolved, it becomes inactive; a subsequent explicit
+Build + Study click rechecks the normal model, draft and Compute guards. An
+empty command queue alone never resolves the original submission.
+
 ### Viewport 3D appearance preferences
 
 `viewport3dStore` owns the viewport's client-side appearance preferences. The

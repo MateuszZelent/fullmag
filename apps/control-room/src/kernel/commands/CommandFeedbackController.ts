@@ -136,12 +136,16 @@ export class CommandFeedbackController {
   }
 
   /** True only for the requested current session and a typed unresolved Compute. */
-  hasUnresolvedStudyCompute(scopeKey: string | null | undefined): boolean {
+  hasUnresolvedStudyCompute(
+    scopeKey: string | null | undefined,
+    clientIntentId?: string,
+  ): boolean {
     if (!scopeKey || scopeKey !== this.currentScopeKey()) return false;
     for (const notice of this.pendingBackendCommands.values()) {
       if (
         notice.sessionScopeKey === scopeKey &&
         notice.clientIntentId !== null &&
+        (clientIntentId === undefined || notice.clientIntentId === clientIntentId) &&
         isStudyComputeKind(notice.clientIntentKind)
       ) {
         return true;
@@ -286,6 +290,19 @@ export class CommandFeedbackController {
     }
     // A result that arrives after the session changed belongs to the old session.
     if (event.sessionScopeKey !== this.currentScopeKey()) return;
+    if (
+      event.status === "pending" &&
+      event.studyComputeObservationStarted === true &&
+      event.backendCommandId === null &&
+      event.sessionScopeKey &&
+      event.clientIntentId &&
+      isStudyComputeKind(event.clientIntentKind) &&
+      !this.pendingBackendCommands.has(
+        computeTrackingIdentity(event.sessionScopeKey, event.clientIntentId, event.clientIntentKind),
+      )
+    ) {
+      return;
+    }
     this.upsert(noticeFromOutcome(event));
   }
 

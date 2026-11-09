@@ -423,6 +423,7 @@ describe("Study Compute observation recovery", () => {
       invocationId: "late-unconfirmed-outcome",
       observation: "publication-unconfirmed",
       status: "pending",
+      studyComputeObservationStarted: true,
     }));
 
     expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
@@ -440,6 +441,7 @@ describe("Study Compute observation recovery", () => {
       invocationId: "late-after-terminal",
       observation: "publication-unconfirmed",
       status: "pending",
+      studyComputeObservationStarted: true,
     }));
 
     expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
@@ -456,6 +458,8 @@ describe("Study Compute observation recovery", () => {
       invocationId: "legacy-outcome",
     }));
     expect(controller.hasUnresolvedStudyCompute(first)).toBe(true);
+    expect(controller.hasUnresolvedStudyCompute(first, "legacy-intent")).toBe(true);
+    expect(controller.hasUnresolvedStudyCompute(first, "other-intent")).toBe(false);
 
     controller.observeCommandQueue(queue({
       command_id: "legacy-command",
@@ -469,6 +473,7 @@ describe("Study Compute observation recovery", () => {
       clientIntentKind: "solve",
       commandId: "study.run",
       invocationId: "known-ack",
+      studyComputeObservationStarted: true,
     }));
     expect(controller.hasPendingBackendCommands()).toBe(true);
 

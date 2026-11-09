@@ -1680,6 +1680,7 @@ async function postRuntimeCommand(
   const submission = clientIntentId && requestOptions?.sessionScopeKey && isStudyCompute(refreshedCommand.kind)
     ? { clientIntentId, kind: refreshedCommand.kind, sessionScopeKey: requestOptions.sessionScopeKey, requestJson }
     : null;
+  const studyComputeObservationStarted = submission && context.bus ? true as const : undefined;
   if (submission) context.bus?.emit("study:compute-observation", { ...submission, state: "started" });
 
   let response: CommandResponse;
@@ -1720,6 +1721,7 @@ async function postRuntimeCommand(
     );
     return {
       commandId: reconciledCommandId,
+      studyComputeObservationStarted,
       clientIntentId: clientIntentId ?? undefined,
       clientIntentKind: clientIntentId ? refreshedCommand.kind : undefined,
       message: reconciledCommandId
@@ -1737,6 +1739,7 @@ async function postRuntimeCommand(
   if (!response.accepted && retry) {
     return {
       status: "pending",
+      studyComputeObservationStarted,
       clientIntentId: clientIntentId ?? undefined,
       clientIntentKind: refreshedCommand.kind,
       observation: "publication-unconfirmed",
@@ -1759,6 +1762,7 @@ async function postRuntimeCommand(
   // terminal result, including failures after native worker startup.
   return {
     commandId: response.command_id,
+    studyComputeObservationStarted,
     clientIntentId: clientIntentId ?? undefined,
     clientIntentKind: clientIntentId ? refreshedCommand.kind : undefined,
     message: successMessage,

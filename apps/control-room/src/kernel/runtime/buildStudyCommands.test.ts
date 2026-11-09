@@ -208,6 +208,7 @@ describe("Build + Study command", () => {
       // The Build, original Solve, and one explicit retry are the only POSTs
       // before the user chooses what to do next.
       expect(submit).toHaveBeenCalledTimes(3);
+      expect(registry.isActive("study.build-and-run", context)).toBe(false);
 
       const next = await registry.execute("study.build-and-run", context);
 

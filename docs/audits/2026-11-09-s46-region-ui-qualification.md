@@ -1132,3 +1132,41 @@ wnioskowaniu o monotoniczności. Marker musi wynikać z potwierdzonego trwałego
 missu we właściwym ownerze i terminalnej niezgodności przypiętych wejść,
 a nie z samego kodu HTTP, pustej kolejki lub przejściowego mismatchu domeny.
 Żadnego kodu produkcyjnego tej korekty backendu jeszcze nie zmieniono.
+
+
+## Hosted RED i korekta protokołu późnego wyniku
+
+HEAD `6b8ac9b1ba19b6a6e58bf7e7e09f0cbff855dc5b` został wypchnięty na szkic PR423.
+[Bootstrap 42702459943](https://github.com/MateuszZelent/fullmag/actions/runs/42702459943),
+job frontendowy `129450453603`, wykonał typecheck i lint, a potem potwierdził
+**4 semantyczne FAIL / 9719 PASS / 13 skipped**. Dwa FAIL dotyczą późnego
+pending po odrzuceniu lub terminalnym ledgerze, trzeci rzeczywistej ścieżki
+Runtime → CommandRegistry po retry, czwarty starej kontynuacji Build + Study.
+Są to oczekiwane regresje, a nie błędy kompilacji lub testowej fixture.
+
+Poprawka dodaje opcjonalny lokalny marker wyniku tylko po wyemitowaniu started.
+Registry przekazuje marker; kontroler nie odtwarza rozstrzygniętego intentu z
+późnego niepotwierdzonego pending. Znany ACK i nieoznaczony legacy wynik nadal
+podlegają obserwacji. Build + Study pyta tego samego właściciela o dokładny
+intent i wylicza aktywność kontynuacji; nie wnioskuje z pustej kolejki ani nie
+wysyła automatycznie nowego POST. Przegląd źródeł nie znalazł dalszego P1/P2;
+pełny GREEN tych zmian pozostaje wymagany.
+
+Backend job `129450453156` skompilował i uruchomił nowy test HTTP, ale fixture
+zatrzymała request na `session_connectivity_disconnected` przed oczekiwanym
+`command_current_run_changed`. **To nie jest semantic RED brakującego markera.**
+Fixture wymaga korekty podłączenia sesji przed ponownym uruchomieniem CI;
+produkcji backendowego dowodu nieprzyjęcia jeszcze nie zmieniono.
+
+Artifact `inspector-actions-browser-fixture` tego samego HEAD ma SHA-256
+`be9b714ffd21bedfd02bd590bd2c310e06f46bac62e0f60f4a8d7ce5b73c71e8`.
+Odczytano raport i obejrzano Object wide pending oraz Airbox narrow live.
+Siedem kroków przeszło, ze stabilnymi kontrolkami; raport jawnie kwalifikuje
+wyłącznie syntetyczne callbacki (0 żądań mutacji backendu), nie pełne API,
+FDM Cell, wyniki solvera ani odbiór rzeczywistego UI.
+
+Docker Engine nadal odpowiada; własny frontend jest healthy, backend unhealthy,
+health HTTP200/degraded. Dokładny typecheck exec pozostaje Running, więc nie
+ponowiono lokalnej bramki. Bieżący odczyt df pokazał 761 MiB wolnego na WSL
+i 20 GiB na C:, bez usuwania danych przez ten etap. Nie jest to dowód naprawy I/O
+ani wystarczającego miejsca dla wymaganego S46 export/import.
