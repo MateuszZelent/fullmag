@@ -266,6 +266,17 @@ jobs:
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_preserves_analysis_definitions_and_opaque_settings ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
           grep -F "test schemas::authoring::scene_resource_analysis_tests::scene_resource_keeps_explicit_empty_analysis_and_omits_legacy_absence ... ok" "$RUNNER_TEMP/complete-authoring-scene.log"
 
+      - name: Verify responsive CurrentRun snapshot reads
+        if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
+        env:
+          RUST_MIN_STACK: 8388608
+        run: |
+          set -o pipefail
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::current_run_snapshot_read_ -- --nocapture | tee "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_ignores_mutation_transition ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_reports_absence_during_mutation_transition ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+          grep -F "test router_v2::tests::current_run_snapshot_read_rejects_owner_replaced_during_publication ... ok" "$RUNNER_TEMP/current-run-snapshot-read.log"
+
       - name: Verify effective project output policy
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}
         env:

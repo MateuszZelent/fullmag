@@ -39,6 +39,40 @@ const scope = (session) => "session=" + encodeURIComponent(session.session_id) +
 const prefixKeys = ["region_topology_revision", "region_membership_revision", "region_coefficients_revision",
   "region_initial_state_revision", "scene_revision", "mesh_revision"];
 
+const readTimeoutObservationCountLimit = 32;
+const readTimeoutElapsedMsLimit = 120000;
+const apiRequestContextGetTimeout = /^apiRequestContext\.get: Timeout ([0-9]+)ms exceeded\./;
+
+/** Record only the known APIRequestContext.get timeout shape; all other read failures remain fatal. */
+export async function regionResetObserveGet(read, request, report) {
+  const startedAt = Date.now();
+  try {
+    return { kind: "response", value: await read() };
+  } catch (error) {
+    const timeoutMs = Number(apiRequestContextGetTimeout.exec(
+      typeof error?.message === "string" ? error.message : "",
+    )?.[1]);
+    const observations = report?.read_timeout_observations;
+    if (!Number.isSafeInteger(timeoutMs) || !Array.isArray(observations) ||
+        observations.length >= readTimeoutObservationCountLimit) throw error;
+    assert.equal(request?.method, "GET", "Only GET read timeouts can be observed");
+    assert(typeof request.path === "string" && request.path.length <= 1024);
+    assert(typeof request.phase === "string" && request.phase.length <= 64);
+    assert(typeof request.api_instance_id === "string" && request.api_instance_id.length <= 128);
+    assert(typeof request.session_scope === "string" && request.session_scope.length <= 512);
+    observations.push({
+      method: "GET",
+      path: request.path,
+      phase: request.phase,
+      api_instance_id: request.api_instance_id,
+      session_scope: request.session_scope,
+      timeout_ms: timeoutMs,
+      elapsed_ms: Math.min(readTimeoutElapsedMsLimit, Math.max(0, Date.now() - startedAt)),
+    });
+    return { kind: "read_timeout" };
+  }
+}
+
 export function regionResetExpectedComputePrecondition(status, solver, queue) {
   const result = {};
   for (const key of prefixKeys) {
@@ -334,7 +368,8 @@ export async function runRegionResetBrowserQa() {
     phase: "preflight", public_url: process.env.CONTROL_ROOM_PUBLIC_URL, probe_url: process.env.CONTROL_ROOM_URL,
     source_hashes_before: beforeHashes, source_hashes_after: null, api_instance_id: null, session: null,
     command_count: 0, command_attempt_count: 0, grid_command_count: 0, request_counts: {},
-    violations: [], failed_write_observations: [], errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
+    violations: [], failed_write_observations: [], read_timeout_observations: [],
+    errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
     expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [], read_cancellations: [], successful_read_responses: [] };
   const gate = { phase: "preflight", session: null, apiInstance: null, sourceName, sourceText,
     importAttempts: 0, createAttempts: 0, replaceAttempts: 0, editAttempts: 0, syncAttempts: 0,
@@ -422,7 +457,16 @@ export async function runRegionResetBrowserQa() {
     while (remaining() > 1) {
       assert.deepEqual(report.violations, [], "Request guard rejected the operation");
       const submitted = gate.lastSolverCommand;
-      const detail = submitted ? await get(commandsPath + "/" + encodeURIComponent(submitted.command_id), { optional: true }) : null;
+      const detailPath = submitted ? commandsPath + "/" + encodeURIComponent(submitted.command_id) : null;
+      const detailObservation = submitted ? await regionResetObserveGet(
+        () => get(detailPath, { optional: true }),
+        { method: "GET", path: detailPath, phase: gate.phase, api_instance_id: gate.apiInstance,
+          session_scope: scope(gate.session) }, report) : { kind: "response", value: null };
+      if (detailObservation.kind === "read_timeout") {
+        await page.waitForTimeout(Math.min(5000, remaining()));
+        continue;
+      }
+      const detail = detailObservation.value;
       if (detail) {
         assert.equal(detail.command_id, submitted.command_id, "Command detail belongs to another intent");
         assert(!["failed", "rejected", "cancelled"].includes(detail.status), "Submitted command failed");
@@ -433,7 +477,16 @@ export async function runRegionResetBrowserQa() {
           binding = detail.execution_binding;
         }
       }
-      const run = await get(base + "simulation/runs/current", { optional: true });
+      const runPath = base + "simulation/runs/current";
+      const runObservation = await regionResetObserveGet(
+        () => get(runPath, { optional: true }),
+        { method: "GET", path: runPath, phase: gate.phase, api_instance_id: gate.apiInstance,
+          session_scope: scope(gate.session) }, report);
+      if (runObservation.kind === "read_timeout") {
+        await page.waitForTimeout(Math.min(5000, remaining()));
+        continue;
+      }
+      const run = runObservation.value;
       if (run && binding && run.run_id === binding.run_id && run.run_id !== previousRun) {
         assert.equal(run.session_id, gate.session.session_id);
         assert(!["failed", "cancelled", "interrupted"].includes(run.status), "New run failed: " + run.run_id);

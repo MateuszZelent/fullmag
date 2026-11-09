@@ -424,7 +424,9 @@ fn preparation_log_level(value: &str) -> Result<PreparationLogLevel, ApiError> {
 pub async fn get_current_run(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<CurrentRunResource>, ApiError> {
-    let request_context = crate::capture_current_live_request_context(&state).await?;
+    // Preparation may hold the mutation transition while doing expensive work.
+    // Read the committed snapshot and retain its exact owner/epoch validation.
+    let request_context = crate::capture_current_live_read_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()

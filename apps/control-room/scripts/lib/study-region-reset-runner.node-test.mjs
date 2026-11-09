@@ -364,3 +364,59 @@ test("write-failure observations are count-bounded before reading or forwarding"
   assert.equal(report.failed_write_observations.length, 32);
   assert.equal(report.violations.length, 1);
 });
+
+test("APIRequestContext GET timeout is recorded narrowly and the next observation stays read-only", async () => {
+  const { regionResetObserveGet } = await import("../check-study-region-reset-browser.mjs");
+  assert.equal(typeof regionResetObserveGet, "function");
+  const request = { method: "GET", path: "/v2/sessions/current/simulation/runs/current",
+    phase: "build-study", api_instance_id: "api-owned", session_scope: scope };
+  const report = { read_timeout_observations: [] };
+  let reads = 0, writes = 0;
+  const timedOut = await regionResetObserveGet(async () => {
+    reads++;
+    throw new Error("apiRequestContext.get: Timeout 20000ms exceeded.\nCall log:\n  - → GET http://127.0.0.1:3243/v2/sessions/current/simulation/runs/current");
+  }, request, report);
+  assert.deepEqual(timedOut, { kind: "read_timeout" });
+  const observed = await regionResetObserveGet(async () => {
+    reads++;
+    return { run_id: "run-live-owned", status: "waiting_for_solve" };
+  }, request, report);
+  assert.deepEqual(observed, { kind: "response", value: { run_id: "run-live-owned", status: "waiting_for_solve" } });
+  assert.equal(reads, 2);
+  assert.equal(writes, 0);
+  assert.equal(report.read_timeout_observations.length, 1);
+  const [observation] = report.read_timeout_observations;
+  assert.equal(observation.method, "GET");
+  assert.equal(observation.path, request.path);
+  assert.equal(observation.phase, request.phase);
+  assert.equal(observation.api_instance_id, request.api_instance_id);
+  assert.equal(observation.session_scope, request.session_scope);
+  assert.equal(observation.timeout_ms, 20000);
+  assert(Number.isSafeInteger(observation.elapsed_ms) && observation.elapsed_ms >= 0 && observation.elapsed_ms < 1000);
+  assert.equal(Object.hasOwn(observation, "error"), false);
+});
+
+test("HTTP, guard, disposed-context, and route-fetch errors are never downgraded to read timeouts", async () => {
+  const { regionResetObserveGet } = await import("../check-study-region-reset-browser.mjs");
+  const request = { method: "GET", path: "/v2/sessions/current/simulation/runs/current",
+    phase: "build-study", api_instance_id: "api-owned", session_scope: scope };
+  const report = { read_timeout_observations: [] };
+  for (const message of ["GET failed: /v2/sessions/current/simulation/runs/current HTTP409",
+    "request_context_stale", "Request context disposed.", "route.fetch: Timeout 20000ms exceeded."]) {
+    const original = new Error(message);
+    await assert.rejects(regionResetObserveGet(async () => { throw original; }, request, report),
+      (error) => error === original);
+  }
+  assert.deepEqual(report.read_timeout_observations, []);
+});
+
+test("read-timeout observations are count-bounded and preserve the original timeout at the cap", async () => {
+  const { regionResetObserveGet } = await import("../check-study-region-reset-browser.mjs");
+  const request = { method: "GET", path: "/v2/sessions/current/simulation/runs/current",
+    phase: "build-study", api_instance_id: "api-owned", session_scope: scope };
+  const report = { read_timeout_observations: Array.from({ length: 32 }, () => ({})) };
+  const original = new Error("apiRequestContext.get: Timeout 20000ms exceeded.");
+  await assert.rejects(regionResetObserveGet(async () => { throw original; }, request, report),
+    (error) => error === original);
+  assert.equal(report.read_timeout_observations.length, 32);
+});

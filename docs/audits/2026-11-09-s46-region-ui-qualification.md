@@ -454,3 +454,39 @@ zachowuje reguły właściwego publicznego parsera: autosave.table przyjmuje dom
 kind/table_id także dla null, a lokalne Run sampling nadal odrzuca jawne null
 w table_id. Uzupełniono dodatnią i ujemną regresję tej granicy; surowa scena
 zachowuje pierwotne wartości. Wynik nowych testów pozostaje do odczytania w CI.
+
+
+## Obserwowalność przygotowania i odmowa restartu
+
+Źródła potwierdzają ryzyko blokowania odczytu: CurrentRun pobierał mutation
+request context pod globalnym current_live_session_transition. Pierwsze
+ensure_live_accepted_study może pod tym transition czekać na przygotowanie
+accepted Study w spawn_blocking. Sam native Grid po przyjęciu komendy działa
+w osobnym ownerze; nie ustalono telemetrycznie, jaka część 79 483 ms przypadała
+na ten lock. Nie przypisujemy całego czasu natywnego Grid do API mutexu.
+
+CurrentRun korzysta teraz z istniejącego read-context, tak jak status i
+preparation. Nadal czyta jeden committed snapshot pod read-lockiem i wywołuje
+ensure_current_live_request_context z aktualnym epoch. Dodano trzy testy:
+odczyt manifestu przy zajętym transition, 404 przed publikacją runu i 409 po
+zmianie właściciela podczas oczekiwania na faktyczny snapshot write-lock.
+Kontrola ujemna potwierdza, że mutation capture nadal czeka na transition.
+Niezależny source review zamknął ten zakres; wykonanie nowych regresji Rust
+pozostaje do potwierdzenia w CI.
+
+Harness rozróżnia wyłącznie zaobserwowany komunikat APIRequestContext GET timeout.
+Zapisuje do 32 obserwacji z konkretnym API/session scope/path i kontynuuje tylko
+GET polling w istniejącym budżecie. Błędy HTTP/pin/guard, disposed context i
+route.fetch pozostają błędami. Dotychczasowe pełne dowody terminalne nadal są
+wymagane do PASS; timeout sam niczego nie potwierdza. Managed Node: 26 PASS,
+focused ESLint obu plików: exit 0, zgodne SHA i readonly bind skryptów.
+Rzeczywisty odbiór poprawionego obserwatora pozostaje NOT VERIFIED.
+
+Próba managed stop-only z allow-prepared-session
+`c5ac4f237bb142c4bb5a32bef70dca3b` zakończyła się failed-confirmed. Preflight
+prepared wymaga commands=[], więc ukończony UI Grid także blokuje restart.
+Nie ponowiono operacji; backend i frontend pozostały running. Inwentarz
+przyjętych danych przed/po odmowie jest identyczny: 3915 plików / 94 031 799 B.
+Kwalifikacja ukończonego Grid wymaga niezależnego związania z bieżącym runem,
+manualnego Held gate bez start_release oraz wszystkich istniejących bramek
+native drain. Nie usunięto ani nie wyzerowano dziennika w celu obejścia tej odmowy.
