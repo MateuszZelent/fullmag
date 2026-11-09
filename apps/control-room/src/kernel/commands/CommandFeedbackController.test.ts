@@ -412,6 +412,75 @@ describe("Study Compute observation recovery", () => {
     expect(controller.getSnapshot()).toEqual([]);
   });
 
+  it("does not reopen an intent after exact rejection when its late pending outcome arrives", () => {
+    const { bus, controller } = feedbackFixture(first, undefined);
+    bus.emit("study:compute-observation", { ...submission, state: "started" });
+    bus.emit("study:compute-observation", { ...submission, state: "rejected" });
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
+    expect(controller.hasPendingBackendCommands()).toBe(false);
+
+    bus.emit("command:outcome", pendingOutcome({
+      invocationId: "late-unconfirmed-outcome",
+      observation: "publication-unconfirmed",
+      status: "pending",
+    }));
+
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
+    expect(controller.hasPendingBackendCommands()).toBe(false);
+  });
+
+  it("does not reopen an intent after its exact terminal ledger row and a late pending outcome", () => {
+    const { bus, controller } = feedbackFixture(first, undefined);
+    bus.emit("study:compute-observation", { ...submission, state: "started" });
+    controller.observeCommandQueue(queue(backend), first);
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
+    expect(controller.hasPendingBackendCommands()).toBe(false);
+
+    bus.emit("command:outcome", pendingOutcome({
+      invocationId: "late-after-terminal",
+      observation: "publication-unconfirmed",
+      status: "pending",
+    }));
+
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
+    expect(controller.hasPendingBackendCommands()).toBe(false);
+  });
+
+  it("continues tracking new legacy pending outcomes and known backend acknowledgements", () => {
+    const { bus, controller } = feedbackFixture(first, undefined);
+    bus.emit("command:outcome", pendingOutcome({
+      backendCommandId: null,
+      clientIntentId: "legacy-intent",
+      clientIntentKind: "run",
+      commandId: "study.execute-stage",
+      invocationId: "legacy-outcome",
+    }));
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(true);
+
+    controller.observeCommandQueue(queue({
+      command_id: "legacy-command",
+      client_intent_id: "legacy-intent",
+      kind: "run",
+      status: "pending",
+    }), first);
+    bus.emit("command:outcome", pendingOutcome({
+      backendCommandId: "known-command",
+      clientIntentId: "known-intent",
+      clientIntentKind: "solve",
+      commandId: "study.run",
+      invocationId: "known-ack",
+    }));
+    expect(controller.hasPendingBackendCommands()).toBe(true);
+
+    controller.observeCommandQueue(queue(
+      { command_id: "legacy-command", client_intent_id: "legacy-intent", kind: "run", status: "completed" },
+      { command_id: "known-command", client_intent_id: "known-intent", kind: "solve", status: "completed" },
+    ), first);
+
+    expect(controller.hasUnresolvedStudyCompute(first)).toBe(false);
+    expect(controller.hasPendingBackendCommands()).toBe(false);
+  });
+
   it("bounds observation hints and tolerates disabled or malformed storage", () => {
     const storage = storageFixture();
     const store = createStudyComputeObservationStore("http://api:81", () => storage);
