@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { homeView } from "@/kernel/layout/homeView";
@@ -117,6 +117,7 @@ export function StartScreen({ kernel }: ModuleProps) {
   });
   const authorName = useAuthorName();
   const {
+    host: attachedHost,
     section,
     selectedProjectId,
     selectedScriptId,
@@ -175,8 +176,54 @@ export function StartScreen({ kernel }: ModuleProps) {
       execute: (commandId, context) => kernel.commands.execute(commandId, context),
       isEnabled: (commandId, context) => kernel.commands.isEnabled(commandId, context),
     }),
-    [canCreateProblem, desktop, kernel.commands],
+    [canCreateProblem, desktop, kernel, kernel.commands],
   );
+  // The store's owner identity should survive capability refreshes. Keep the
+  // latest values private until their render commits, then let this stable
+  // adapter forward command reads and calls to that committed host.
+  const hostAdapter = useMemo(() => {
+    let committedHost: StartScreenHost | null = null;
+    let committedCommands: typeof kernel.commands | null = null;
+    const currentHost = () => {
+      if (!committedHost) throw new Error("The start-screen host is detached.");
+      return committedHost;
+    };
+    const host: StartScreenHost = {
+      get createProblemDisabledReason() {
+        return currentHost().createProblemDisabledReason;
+      },
+      get openScriptDisabledReason() {
+        return currentHost().openScriptDisabledReason;
+      },
+      disabledReason: (commandId, context) => currentHost().disabledReason(commandId, context),
+      execute: (commandId, context) => currentHost().execute(commandId, context),
+      isEnabled: (commandId, context) => currentHost().isEnabled(commandId, context),
+    };
+    return {
+      host,
+      commit: (nextHost: StartScreenHost, commands: typeof kernel.commands) => {
+        committedHost = nextHost;
+        committedCommands = commands;
+      },
+      refresh: () => committedCommands?.refresh(),
+      invalidate: () => {
+        const commands = committedCommands;
+        committedHost = null;
+        committedCommands = null;
+        return commands ? () => commands.refresh() : undefined;
+      },
+    };
+  }, [kernel]);
+  const [readyOwner, setReadyOwner] = useState<StartScreenHost | null>(null);
+  const hostReady = readyOwner === hostAdapter.host && attachedHost === hostAdapter.host;
+
+  // Capability revocations must reach command consumers before this commit can paint.
+  // Effects do not run on the server, so keep SSR on useEffect's safe no-op path.
+  const useHostCommitEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
+  useHostCommitEffect(() => {
+    hostAdapter.commit(host, kernel.commands);
+    if (startScreenStore.getSnapshot().host === hostAdapter.host) hostAdapter.refresh();
+  }, [host, kernel.commands, hostAdapter]);
 
   // One flow for the tile, the list buttons and the palette command: pick a
   // script, make sure the list shows scripts, and select the result so the
@@ -205,15 +252,16 @@ export function StartScreen({ kernel }: ModuleProps) {
     });
   }, [openScriptNonce, pickAndOpen]);
 
-  useEffect(() => {
-    const detach = startScreenStore.attach(host);
-    // Palette and menus read enablement at render time; tell them it changed.
-    kernel.commands.refresh();
+  useHostCommitEffect(() => {
+    const detach = startScreenStore.attach(hostAdapter.host);
+    hostAdapter.refresh();
+    setReadyOwner(hostAdapter.host);
     return () => {
+      const refresh = hostAdapter.invalidate();
       detach();
-      kernel.commands.refresh();
+      refresh?.();
     };
-  }, [host, kernel.commands]);
+  }, [hostAdapter]);
 
   const context = createCommandContext("menu", kernel, {
     sessionScopeKey: null,
@@ -416,25 +464,27 @@ export function StartScreen({ kernel }: ModuleProps) {
   const previousSection = useRef(section);
 
   useEffect(() => {
+    if (!hostReady) return;
     // Lazy Home mounting must not steal focus from a menu the user opened
     // while resources were loading.
     const active = document.activeElement;
     if (!active || active === document.body || active === document.documentElement) {
       initialFocusRef.current?.focus();
     }
-  }, []);
+  }, [hostReady]);
 
   // A section change moves focus to the new content, except when it came from
   // the rail, where the user is still navigating, or when DocsSection focuses
   // its own search input.
   useEffect(() => {
+    if (!hostReady) return;
     if (previousSection.current === section) return;
     previousSection.current = section;
     const active = typeof document === "undefined" ? null : document.activeElement;
     if (active && railRef.current?.contains(active)) return;
     if (section === "docs") return;
     mainRef.current?.focus();
-  }, [section]);
+  }, [hostReady, section]);
 
   const projectInspector = showInspector ? (
     <ProjectInspector
@@ -505,7 +555,13 @@ export function StartScreen({ kernel }: ModuleProps) {
       open={isCompact && detailsOpen && showInspector}
       onOpenChange={setDetailsOpen}
     >
-      <div className="fm-start" data-inspector={showInspector ? "visible" : "hidden"} data-section={section}>
+      <div
+        aria-busy={!hostReady}
+        className="fm-start"
+        data-inspector={showInspector ? "visible" : "hidden"}
+        data-section={section}
+        inert={!hostReady}
+      >
       <StartRail
         compute={compute}
         nodeInventory={computeProbe.nodeInventory}

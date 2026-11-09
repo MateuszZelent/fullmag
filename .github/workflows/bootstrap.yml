@@ -254,6 +254,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::persistence::script_project::tests::activation_scene_ -- --nocapture | tee "$RUNNER_TEMP/canonical-project-activation.log"
           grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_uses_canonical_typed_scene_document ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
           grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_preserves_pipeline_resets_and_explicit_clears ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
+          grep -F "test router_v2::handlers::persistence::script_project::tests::activation_scene_matches_commit_normalization_without_mutating_source ... ok" "$RUNNER_TEMP/canonical-project-activation.log"
 
       - name: Run fail-closed compact workspace import regression
         if: ${{ !cancelled() && steps.install-rust.outcome == 'success' && steps.install-python-runtime.outcome == 'success' }}

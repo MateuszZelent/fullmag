@@ -65,6 +65,10 @@ _SOURCE_PATHS = {
     "api_instance_pin": "apps/control-room/src/kernel/api/apiInstancePin.ts",
     "tab_route_sync": "apps/control-room/src/kernel/layout/TabRouteSync.tsx",
     "tab_routes": "apps/control-room/src/kernel/layout/tabRoutes.ts",
+    "start_screen": "apps/control-room/src/modules/start/StartScreen.tsx",
+    "start_screen_state": "apps/control-room/src/modules/start/model/startScreenState.ts",
+    "start_commands": "apps/control-room/src/modules/start/model/startCommands.ts",
+    "start_rail": "apps/control-room/src/modules/start/rail/StartRail.tsx",
     "import_section": "apps/control-room/src/modules/start/sections/ImportSection.tsx",
     "python_import": "apps/control-room/src/modules/start/model/pythonImport.ts",
     "create_project_action": "apps/control-room/src/modules/start/ui/CreateProjectAction.tsx",
@@ -836,6 +840,50 @@ def _validate_cleanup(report: Mapping[str, object]) -> None:
                  "Region reset cleanup cancellation is not a bounded GET/HEAD abort")
 
 
+def _validate_health_read_observations(report: Mapping[str, object]) -> None:
+    """Accept only bounded health-read aborts backed by a positive probe."""
+    cancellations = report.get("read_cancellations")
+    successes = report.get("successful_read_responses")
+    api_instance_id = report.get("api_instance_id")
+    _require(isinstance(cancellations, list) and len(cancellations) <= 4
+             and isinstance(successes, list) and len(successes) <= 16,
+             "Region reset health-read observations are missing or exceed their fixed budgets")
+    _require(_nonempty(api_instance_id),
+             "Region reset health-read observations have no pinned API instance")
+    expected_method = "GET"
+    expected_path = "/v2/platform/health"
+    for cancellation in cancellations:
+        _require(isinstance(cancellation, Mapping)
+                 and set(cancellation) == {"method", "path", "failure", "phase", "api_instance_id"}
+                 and cancellation.get("method") == expected_method
+                 and cancellation.get("path") == expected_path
+                 and cancellation.get("failure") == "net::ERR_ABORTED"
+                 and cancellation.get("phase") in {"preflight", "import", "reload"}
+                 and cancellation.get("api_instance_id") == api_instance_id,
+                 "Region reset health-read cancellation is outside its exact route/phase/API contract")
+    for response in successes:
+        _require(isinstance(response, Mapping)
+                 and set(response) == {"method", "path", "status", "api_instance_id"}
+                 and response.get("method") == expected_method
+                 and response.get("path") == expected_path
+                 and type(response.get("status")) is int and response["status"] == 200
+                 and response.get("api_instance_id") == api_instance_id,
+                 "Region reset successful health-read response is malformed or belongs to another API")
+    request_counts = report.get("request_counts")
+    observed = (request_counts.get("GET " + expected_path, 0)
+                if isinstance(request_counts, Mapping) else None)
+    _require(_safe_int(observed)
+             and len(cancellations) + len(successes) <= observed,
+             "Region reset health-read receipts exceed the observed GET request count")
+    positive_keys = {
+        (response["method"], response["path"], response["api_instance_id"])
+        for response in successes
+    }
+    _require(all((cancellation["method"], cancellation["path"], cancellation["api_instance_id"])
+                 in positive_keys for cancellation in cancellations),
+             "Region reset health-read cancellation lacks a matching successful probe")
+
+
 def parse_result(output: bytes, public_url: str, browser_url: str,
                  expected_sources: Mapping[str, str], mode: str,
                  parent_evidence: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -891,6 +939,7 @@ def parse_result(output: bytes, public_url: str, browser_url: str,
     _require(payload.get("violations") == [], "Region reset helper reported a forbidden or unrelated write")
     _validate_expected_404s(payload)
     _validate_cleanup(payload)
+    _validate_health_read_observations(payload)
 
     expected_edit_kinds = (["enable"] if phase == "import" else
                            ["region-reset", "disable"] if variant == "local" else ["disable"])

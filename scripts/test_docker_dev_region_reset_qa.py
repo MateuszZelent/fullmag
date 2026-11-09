@@ -141,6 +141,8 @@ def _report(mode, parent=None):
         "command_attempt_count": command_count,
         "grid_command_count": 1,
         "request_counts": request_counts,
+        "read_cancellations": [],
+        "successful_read_responses": [],
         "auxiliary_writes": [],
         "violations": [],
         "errors": {"page": [], "console": [], "http": []},
@@ -441,6 +443,14 @@ class RegionResetQaTests(unittest.TestCase):
         self.assertEqual(independent_export, independent_import)
         self.assertNotEqual(local_export["fixture"], independent_export["fixture"])
         self.assertGreaterEqual(len(local_export), 20)
+        self.assertLessEqual(len(local_export), 32)
+        for key, path in {
+            "start_screen": "apps/control-room/src/modules/start/StartScreen.tsx",
+            "start_screen_state": "apps/control-room/src/modules/start/model/startScreenState.ts",
+            "start_commands": "apps/control-room/src/modules/start/model/startCommands.ts",
+            "start_rail": "apps/control-room/src/modules/start/rail/StartRail.tsx",
+        }.items():
+            self.assertEqual(local_export.get(key), path)
         self.assertEqual(local_export["fixture"], "examples/interactive_study/fdm_cpu_three_relax_region_ui_baseline.py")
         self.assertEqual(independent_export["fixture"], "examples/interactive_study/fdm_cpu_three_relax_region_reset.py")
         for path in local_export.values():
@@ -765,6 +775,70 @@ class RegionResetQaTests(unittest.TestCase):
             with self.subTest(mutate=mutate), self.assertRaises(BuildControlError):
                 region_qa.parse_result(_encoded(value), value["public_url"], value["probe_url"], HASHES,
                                        "s46-local-export")
+
+    def test_health_read_cancellation_requires_exact_correlated_positive_probe(self):
+        base = _report("s46-independent-import", _parent_evidence("s46-independent-import"))
+        health_key = "GET /v2/platform/health"
+        cancellation = {
+            "method": "GET", "path": "/v2/platform/health",
+            "failure": "net::ERR_ABORTED", "phase": "preflight",
+            "api_instance_id": base["api_instance_id"],
+        }
+        success = {
+            "method": "GET", "path": "/v2/platform/health", "status": 200,
+            "api_instance_id": base["api_instance_id"],
+        }
+        base["request_counts"][health_key] = 2
+        base["read_cancellations"] = [cancellation]
+        base["successful_read_responses"] = [success]
+        for phase in ("preflight", "import", "reload"):
+            value = deepcopy(base)
+            value["read_cancellations"][0]["phase"] = phase
+            region_qa.parse_result(_encoded(value), value["public_url"], value["probe_url"],
+                                   HASHES, "s46-independent-import", _parent_evidence("s46-independent-import"))
+
+        mutations = [
+            lambda x: x["read_cancellations"][0].update(path="/v2/other/health"),
+            lambda x: x["read_cancellations"][0].update(method="HEAD"),
+            lambda x: x["read_cancellations"][0].update(api_instance_id="foreign-api"),
+            lambda x: x["read_cancellations"][0].update(phase="cleanup"),
+            lambda x: x["read_cancellations"][0].update(failure="net::ERR_FAILED"),
+            lambda x: x["successful_read_responses"].clear(),
+            lambda x: x["successful_read_responses"][0].update(status=503),
+            lambda x: x["successful_read_responses"][0].update(api_instance_id="foreign-api"),
+            lambda x: x["read_cancellations"][0].pop("phase"),
+            lambda x: x.pop("read_cancellations"),
+            lambda x: x.pop("successful_read_responses"),
+            lambda x: x["request_counts"].update({health_key: 1}),
+            lambda x: x["errors"]["http"].append("GET /v2/platform/health failed"),
+            lambda x: x["errors"]["page"].append("uncaught page error"),
+            lambda x: x["errors"]["console"].append("unexpected console error"),
+        ]
+        for mutate in mutations:
+            value = deepcopy(base)
+            mutate(value)
+            with self.subTest(mutate=mutate), self.assertRaises(BuildControlError):
+                region_qa.parse_result(_encoded(value), value["public_url"], value["probe_url"],
+                                       HASHES, "s46-independent-import",
+                                       _parent_evidence("s46-independent-import"))
+
+        over_cancellations = deepcopy(base)
+        over_cancellations["request_counts"][health_key] = 10
+        over_cancellations["read_cancellations"] *= 5
+        over_cancellations["successful_read_responses"] *= 5
+        with self.assertRaises(BuildControlError):
+            region_qa.parse_result(_encoded(over_cancellations), over_cancellations["public_url"],
+                                   over_cancellations["probe_url"], HASHES,
+                                   "s46-independent-import", _parent_evidence("s46-independent-import"))
+
+        over_successes = deepcopy(base)
+        over_successes["request_counts"][health_key] = 20
+        over_successes["read_cancellations"] = []
+        over_successes["successful_read_responses"] *= 17
+        with self.assertRaises(BuildControlError):
+            region_qa.parse_result(_encoded(over_successes), over_successes["public_url"],
+                                   over_successes["probe_url"], HASHES,
+                                   "s46-independent-import", _parent_evidence("s46-independent-import"))
 
 
 if __name__ == "__main__":

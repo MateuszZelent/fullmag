@@ -19,7 +19,10 @@ use fullmag_application::{
     CreateProjectRequest, FileProjectRepository, OpaqueDocument, ProjectApplication,
     RawJsonEnvelope,
 };
-use fullmag_authoring::{validate_scene_document_for_authoring, SceneDocument};
+use fullmag_authoring::{
+    normalize_scene_document_magnetization_assets, normalize_scene_document_study_pipeline_labels,
+    validate_scene_document_for_authoring, SceneDocument,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -442,7 +445,13 @@ fn build_project_from_script(
 fn activation_scene_from_document(
     scene_document: &SceneDocument,
 ) -> Result<BTreeMap<String, Value>, ApiError> {
-    let value = serde_json::to_value(scene_document).map_err(|error| {
+    // Match the authoring commit boundary while preserving the original SDK export
+    // in the project archive. In particular, preset textures gain their default
+    // presentation label before the browser compares the committed scene ACK.
+    let mut canonical_scene = scene_document.clone();
+    normalize_scene_document_magnetization_assets(&mut canonical_scene);
+    normalize_scene_document_study_pipeline_labels(&mut canonical_scene);
+    let value = serde_json::to_value(&canonical_scene).map_err(|error| {
         ApiError::internal(format!(
             "failed to serialize canonical scene document: {error}"
         ))
@@ -1061,6 +1070,47 @@ ValueError: no fixed timestep
             activation_scene["analysis"]["postprocessing_definitions"][0]["settings"],
             json!({"mode_index": 1})
         );
+    }
+
+    #[test]
+    fn activation_scene_matches_commit_normalization_without_mutating_source() {
+        let source: SceneDocument = serde_json::from_value(json!({
+            "version": "scene.v2",
+            "magnetization_assets": [
+                {"id": "uniform", "name": "Uniform asset", "kind": "preset_texture",
+                 "preset_kind": "uniform", "preset_params": {"direction": [1, 0, 0]}},
+                {"id": "custom", "name": "Custom asset", "kind": "uniform",
+                 "value": [0, 1, 0], "ui_label": "My texture"},
+                {"id": "random", "name": "Random asset", "kind": "random_seeded", "seed": 17}
+            ],
+            "study": {"study_pipeline": {"version": "study_pipeline.v2", "nodes": [{
+                "node_kind": "primitive", "id": "a", "label": "   ",
+                "enabled": true, "stage_kind": "run",
+                "payload": {"opaque_sdk_payload": {"keep": [null, 1]}}
+            }]}}
+        })).expect("source scene should deserialize");
+        let before = serde_json::to_value(&source).unwrap();
+        let activation = activation_scene_from_document(&source).unwrap();
+        let assets = &activation["magnetization_assets"];
+        assert_eq!(assets[0]["ui_label"], "Uniform");
+        assert_eq!(assets[0]["preset_version"], 1);
+        assert_eq!(assets[1]["ui_label"], "My texture");
+        assert_eq!(assets[1]["kind"], "preset_texture");
+        assert_eq!(assets[1]["preset_params"]["direction"], json!([0.0, 1.0, 0.0]));
+        assert_eq!(assets[2]["ui_label"], "Random");
+        assert_eq!(assets[2]["preset_params"]["seed"], 17);
+        assert_eq!(activation["study"]["study_pipeline"]["nodes"][0]["label"], "a");
+        assert_eq!(activation["study"]["study_pipeline"]["nodes"][0]["payload"],
+            json!({"opaque_sdk_payload": {"keep": [null, 1]}}));
+
+        let mut committed = source.clone();
+        fullmag_authoring::normalize_scene_document_magnetization_assets(&mut committed);
+        fullmag_authoring::normalize_scene_document_study_pipeline_labels(&mut committed);
+        let actual = serde_json::to_value(&activation).unwrap();
+        assert_eq!(actual, serde_json::to_value(committed).unwrap());
+        let again: SceneDocument = serde_json::from_value(actual).unwrap();
+        assert_eq!(activation_scene_from_document(&again).unwrap(), activation);
+        assert_eq!(serde_json::to_value(source).unwrap(), before);
     }
 
     #[test]

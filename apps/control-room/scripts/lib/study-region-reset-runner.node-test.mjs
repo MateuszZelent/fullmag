@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { regionResetExpectedComputePrecondition, regionResetWriteAllowed, regionResetCommandBindingMatches, regionResetValidateImportAck, regionResetAssertExecutionIdentity, regionResetValidateSync, regionResetGridIsReady, regionResetPinnedWorkspaceUrl, regionResetValidateImportedSource } from "../check-study-region-reset-browser.mjs";
+import { regionResetExpectedComputePrecondition, regionResetWriteAllowed, regionResetCommandBindingMatches, regionResetValidateImportAck, regionResetAssertExecutionIdentity, regionResetValidateSync, regionResetGridIsReady, regionResetPinnedHomeUrl, regionResetValidateImportedSource } from "../check-study-region-reset-browser.mjs";
 
 const session = { session_id: "owned", session_epoch: "owned@1", request_scope_epoch: "api:1" };
 const scope = "session=owned&epoch=owned%401&request_scope_epoch=api%3A1";
@@ -168,11 +168,11 @@ test("grid readiness binds the completed command, held run, preparation and doma
   ]) {const bad=structuredClone(x);mutate(bad);assert.throws(()=>regionResetGridIsReady(bad));}
 });
 
-test("workspace bootstrap uses the product API-incarnation pin before any mutation", () => {
+test("empty workspace import starts at canonical Home with the product API-incarnation pin", () => {
   const api="12345678-1234-4321-8765-123456789abc";
-  assert.equal(regionResetPinnedWorkspaceUrl("http://127.0.0.1:3243",api),
-    "http://127.0.0.1:3243/workspace?fullmag_api_instance="+api);
-  assert.throws(()=>regionResetPinnedWorkspaceUrl("http://127.0.0.1:3243","foreign"),/API incarnation/);
+  assert.equal(regionResetPinnedHomeUrl("http://127.0.0.1:3243",api),
+    "http://127.0.0.1:3243/home?fullmag_api_instance="+api);
+  assert.throws(()=>regionResetPinnedHomeUrl("http://127.0.0.1:3243","foreign"),/API incarnation/);
 });
 
 test("import evidence checks stored bytes and verified scene fidelity before activation", () => {
@@ -195,4 +195,30 @@ test("auxiliary renderer writes stay scoped and bounded; failed renderer ACK nev
   const bad=structuredClone(r);bad.body.status="failed";assert.equal(regionResetWriteAllowed(bad,g),false);
   g.clientAckAttempts=16;assert.equal(regionResetWriteAllowed(r,g),false);
   g.clientAckAttempts=0;r.body.extra="not permitted";assert.equal(regionResetWriteAllowed(r,g),false);
+});
+
+
+test("only a scoped startup health read cancellation can be classified as expected", async () => {
+  const { regionResetReadCancellationAllowed } = await import("../check-study-region-reset-browser.mjs");
+  const row = { method: "GET", path: "/v2/platform/health", failure: "net::ERR_ABORTED",
+    phase: "import", api_instance_id: "api-owned" };
+  assert.equal(regionResetReadCancellationAllowed(row, { apiInstance: "api-owned", observedCount: 0 }), true);
+  for (const patch of [{ method: "POST" }, { path: "/v2/sessions/current/status" },
+    { failure: "net::ERR_FAILED" }, { phase: "stage-b" }, { api_instance_id: "foreign" },
+    { api_instance_id: undefined }]) {
+    assert.equal(regionResetReadCancellationAllowed({ ...row, ...patch }, { apiInstance: "api-owned", observedCount: 0 }), false);
+  }
+  for (const count of [-1, 4, NaN, 0.5]) {
+    assert.equal(regionResetReadCancellationAllowed(row, { apiInstance: "api-owned", observedCount: count }), false);
+  }
+});
+
+test("a successful health proof requires the completed GET response from the exact API", async () => {
+  const { regionResetHealthResponseMatches } = await import("../check-study-region-reset-browser.mjs");
+  const row = { method: "GET", path: "/v2/platform/health", status: 200, api_instance_id: "api-owned" };
+  assert.equal(regionResetHealthResponseMatches(row, "api-owned"), true);
+  for (const patch of [{ method: "POST" }, { path: "/v2/sessions/current/status" },
+    { status: 503 }, { status: 204 }, { api_instance_id: "foreign" }, { api_instance_id: undefined }]) {
+    assert.equal(regionResetHealthResponseMatches({ ...row, ...patch }, "api-owned"), false);
+  }
 });

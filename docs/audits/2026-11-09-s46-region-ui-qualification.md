@@ -42,8 +42,9 @@ aktywacji korzysta teraz z tej samej kanonicznej serializacji; archiwum i bajty
 skryptu zachowują dotychczasowe źródło i hash. Dwie nowe regresje Rust obejmują
 normalizację aliasów i liczb, metadane Results, wyłączony B, niezależne przypisania,
 nieznane pola payloadu oraz obecność jawnych null dla pbc, thermal_noise i lokalnego
-initializer. Ich wykonanie oraz przebudowa backendu są nadal wymagane. Krok CI
-sprawdza także obecność obu nazw testów w zakończonym wyniku.
+initializer. Obie regresje przeszły w CI commita 9ea1739a, w kroku
+sprawdzającym także obecność ich nazw. Backend tego commita został zbudowany
+w zarządzanym DEV 845a8d3fede04860a1903e2fdf0e0b89.
 
 Przed przebudową ponownie potwierdzono niezmienione **4133 pliki / 94 691 729 B**
 wyników własnej sesji; obie publiczne kolejki na 3243 i chronionym 3242 mają zero
@@ -105,8 +106,10 @@ jawny budżet backendu 8 CPU / 32 GiB i frontendu 2 CPU / 8 GiB. Dotyczy to
 wyłącznie własnej grupy na 3243. Grupa użytkownika na 3242 pozostaje poza operacją.
 Każde recreate S46 musi otrzymać jawne --helper-source-root równe checkoutowi
 aplikacji i --helper-source-commit równy jego pełnemu commitowi. Profil sprawdza
-ten istniejący binding także w receipcie recreate. Jest to przygotowany kierunek
-odbioru; tej migracji stanu jeszcze nie wykonano.
+ten istniejący binding także w receipcie recreate. Pierwsza taka migracja została wykonana jako
+fc273e400a3640bc941d23fb7edc904d, przed DEV 845a8d3fede04860a1903e2fdf0e0b89.
+Archiwum zachowało poprzedni runtime i prywatny ledger; inwentarz 4133 plików
+wyników pozostał identyczny. Nie jest to jeszcze powiązanie eksportu S46 z importem.
 
 ## Pozostałe prace
 
@@ -116,3 +119,53 @@ Wykonać
 obie rzeczywiste sekwencje oraz testy odmowy zmiany celu/rewizji bez osłabiania
 istniejącego profilu całego obiektu `texture-stage-b`. FDM GPU, FEM i multilayer
 pozostają oddzielnymi bramkami pełnego planu.
+
+## Rzeczywisty import i poprawki bootstrapu Home
+
+W DEV `845a8d3fede04860a1903e2fdf0e0b89` potwierdzono nowy backend
+z commita `9ea1739a699d43900b41c87ddd8cd1b476f31288`, osobną pustą sesję API
+`e9026192-ceac-4db7-a92c-3c58b4a30279` oraz budżety 8 CPU / 32 GiB
+backendu i 2 CPU / 8 GiB frontendu. Chroniona grupa na 3242 nie była zmieniana.
+
+Próba `a63220bb92d94747a65b9fcbd0201212` odtworzyła kliknięcie Import
+przed hydratacją: przycisk SSR był aktywny, lecz nie miał jeszcze handlera.
+Wcześniejsze przejście bezpośrednio na kanoniczny `/home` samo nie naprawiło błędu.
+Home otrzymał barierę `inert`/`aria-busy` do podpięcia adaptera właściwego właściciela.
+Adapter zachowuje sekcję i wybór przy odświeżeniu capabilities; stary właściciel
+zostaje unieważniony po odpięciu. Regresja layout-phase wykryła dodatkowo stare
+uprawnienie przy przejściu no-session → loading. Aktualizacja bindingu i komend
+odbywa się teraz przed repaintem. W tej samej fazie odpinany jest poprzedni
+właściciel i podpinany nowy, co blokuje użycie starego kernela przez globalne
+skróty i palette. Test layout-phase odtworzył tę lukę przed poprawką i potwierdził
+odrzucenie starego adaptera po niej. SSR zachowuje bezpieczną ścieżkę bez efektów.
+Końcowe testy w managed frontendzie: **28 PASS**, w tym SSR, gotowość, focus,
+zmiana właściciela i odwołanie capability. To dowód testów, nie pełny odbiór UI.
+
+Próba `75c17dd9c64641ac8a01799f0861a24d` przeszła rzeczywisty Home → Import
+→ review pliku → Create project. Fidelity: verified. Utworzyła sesję
+`session-18e63f7d5bc25ecc000049fe` i zapisała scenę w rewizji 1.
+Ścisła kontrola ACK odrzuciła dodatkowe `ui_label: Uniform`: commit sceny
+normalizuje assets i etykiety pipeline, a odpowiedź importu wcześniej wykonywała
+samą serializację. Nie wysłano żadnego Grid, Relax ani Solve; kolejka jest pusta,
+CurrentRun zwraca 404. Sesja została zachowana, import nie został powtórzony.
+
+Odpowiedź aktywacji korzysta teraz z tych samych dwóch normalizatorów co commit
+sceny, na klonie dokumentu. Surowy eksport SDK i bajty skryptu w archiwum nie
+są zmieniane. Trzecia regresja Rust sprawdza domyślne i własne etykiety,
+legacy uniform/random, pustą etykietę etapu, idempotencję, niezmienione źródło
+oraz opaque payload z null. Jej uruchomienie wymusza CI przez obecność nazwy
+w logu; wykonanie tej nowej regresji pozostaje wymagane.
+
+Usunięto tymczasową diagnostykę wewnętrznych struktur Reacta. Runner zachowuje
+ograniczony snapshot DOM i screenshot błędu oraz przerywa oczekiwanie po
+odrzuceniu guardu. Anulowany GET health jest dopuszczany wyłącznie w trzech
+fazach na tej samej instancji API, w ograniczonym budżecie i z dowodem całkowicie
+odebranej odpowiedzi 200. Inne błędy nadal blokują wynik. Końcowe testy: **45 PASS**
+Node oraz **101 PASS** Python (kontroler, parser regionu i kontrakt workflow).
+Managed `pnpm typecheck` zakończył się z kodem 0. Osobny przegląd źródeł
+nie znalazł dalszej luki w normalizacji ACK i guardach runnera.
+
+Cztery pełne profile S46, porównania masek i początkowych pól, pozostałe realizacje
+FDM GPU/FEM/multilayer oraz pełna macierz P01–P22 pozostają otwarte. Nowe poprawki
+wymagają przypiętego commita, CI, zachowującego stary stan przejścia DEV i rzeczywistego
+odbioru; zielone fixture testy nie zamykają tych bramek.

@@ -194,10 +194,22 @@ export function regionResetGridIsReady({ status, queue, preparation, run, execut
   return true;
 }
 
-export function regionResetPinnedWorkspaceUrl(publicUrl, apiInstance) {
+export function regionResetReadCancellationAllowed(row, { apiInstance, observedCount }) {
+  return row.method === "GET" && row.path === "/v2/platform/health" &&
+    row.failure === "net::ERR_ABORTED" && ["preflight", "import", "reload"].includes(row.phase) &&
+    typeof apiInstance === "string" && apiInstance.length > 0 && row.api_instance_id === apiInstance &&
+    Number.isSafeInteger(observedCount) && observedCount >= 0 && observedCount < 4;
+}
+
+export function regionResetHealthResponseMatches(row, apiInstance) {
+  return row.method === "GET" && row.path === "/v2/platform/health" && row.status === 200 &&
+    typeof apiInstance === "string" && apiInstance.length > 0 && row.api_instance_id === apiInstance;
+}
+
+export function regionResetPinnedHomeUrl(publicUrl, apiInstance) {
   assert(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(apiInstance),
     "The workspace must pin the observed API incarnation");
-  const url = new URL("/workspace", publicUrl);
+  const url = new URL("/home", publicUrl);
   url.searchParams.set("fullmag_api_instance", apiInstance);
   return url.href;
 }
@@ -274,13 +286,14 @@ export async function runRegionResetBrowserQa() {
     source_hashes_before: beforeHashes, source_hashes_after: null, api_instance_id: null, session: null,
     command_count: 0, command_attempt_count: 0, grid_command_count: 0, request_counts: {},
     violations: [], errors: { page: [], console: [], http: [] }, edits: [], parent_evidence: parent,
-    expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [] };
+    expected_empty_404: [], expected_console_404: [], cleanup_cancellations: [], cleanup_errors: [], auxiliary_writes: [], read_cancellations: [], successful_read_responses: [] };
   const gate = { phase: "preflight", session: null, apiInstance: null, sourceName, sourceText,
     importAttempts: 0, createAttempts: 0, replaceAttempts: 0, editAttempts: 0, syncAttempts: 0,
     solverAttempts: 0, gridAttempts: 0, cameraAttempts: 0, clientAckAttempts: 0 };
   let proxy, browser, context, page, writes = [], editAck = null, sync = null, importedScene = null;
   let attemptedWrite = false, origin, total = 0, cleanupStarted = false;
   const emptyRequests = new WeakSet();
+  const pendingHealthObservations = new Set();
   const emptyPaths = new Set([base.slice(0, -1), base + "status", base + "simulation/runs/current",
     base + "simulation/stages/execution", base + "simulation/solver/status",
     base + "simulation/preparation"]);
@@ -358,6 +371,7 @@ export async function runRegionResetBrowserQa() {
   async function waitRun(previousRun, expectedIds) {
     let binding = null;
     while (remaining() > 1) {
+      assert.deepEqual(report.violations, [], "Request guard rejected the operation");
       const submitted = gate.lastSolverCommand;
       const detail = submitted ? await get(commandsPath + "/" + encodeURIComponent(submitted.command_id), { optional: true }) : null;
       if (detail) {
@@ -434,11 +448,34 @@ export async function runRegionResetBrowserQa() {
         report.expected_empty_404.push(path);
       } else report.errors.http.push({ path, status: response.status() });
     });
+    page.on("requestfinished", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() !== "GET" || path !== "/v2/platform/health") return;
+      // requestfinished requires a fully received response; aborted bodies never qualify as positive proof.
+      const observation = request.response().then((response) => {
+        if (!response || response.status() !== 200) return;
+        const row = { method: "GET", path, status: 200,
+          api_instance_id: response.headers()["x-fullmag-api-instance"] };
+        if (!regionResetHealthResponseMatches(row, gate.apiInstance)) {
+          report.errors.http.push({ path, failure: "Health response belongs to another API incarnation" });
+        } else if (report.successful_read_responses.length < 16) report.successful_read_responses.push(row);
+      }).catch((error) => report.errors.http.push({ path, failure: String(error.message).slice(0,512) }));
+      pendingHealthObservations.add(observation);
+      void observation.finally(() => pendingHealthObservations.delete(observation));
+    });
     page.on("requestfailed", (request) => {
       const path = new URL(request.url()).pathname;
       const failure = request.failure()?.errorText ?? "transport failure";
       if (cleanupStarted && ["GET", "HEAD"].includes(request.method()) && failure === "net::ERR_ABORTED") {
         if (report.cleanup_cancellations.length < 32) report.cleanup_cancellations.push({ method: request.method(), path, failure });
+        return;
+      }
+      const cancellation = { method: request.method(), path, failure, phase: gate.phase,
+        api_instance_id: request.headers()["x-fullmag-api-instance"] };
+      if (regionResetReadCancellationAllowed(cancellation, {
+        apiInstance: gate.apiInstance, observedCount: report.read_cancellations.length,
+      })) {
+        report.read_cancellations.push(cancellation);
         return;
       }
       // Aborted route violations are already evidence; all other failed requests are unexpected.
@@ -531,19 +568,42 @@ export async function runRegionResetBrowserQa() {
     assert(Array.isArray(collection.sessions) && !collection.sessions.some((s) => s.current),
       "S46 import requires an empty task-owned API; no current workspace is replaced");
     gate.storageDefaults = await get("/v2/platform/output-storage", { scoped: false });
-    await page.goto(regionResetPinnedWorkspaceUrl(origin, gate.apiInstance), { waitUntil: "domcontentloaded", timeout: Math.min(60000, remaining()) });
-    const home = page.getByRole("button", { name: "Home", exact: true });
-    if (await home.isVisible()) await home.click();
-    await page.locator('[data-section="import"]').click();
+    await page.goto(regionResetPinnedHomeUrl(origin, gate.apiInstance), { waitUntil: "domcontentloaded", timeout: Math.min(60000, remaining()) });
+    await page.evaluate(() => {
+      const events = [{ kind: "initial", at_ms: performance.now(),
+        section: document.querySelector(".fm-start")?.getAttribute("data-section") }];
+      window.__fullmagS46NavigationEvents = events;
+      const record = (event) => { if (events.length < 32) events.push({ ...event, at_ms: performance.now() }); };
+      document.addEventListener("click", (event) => {
+        const button = event.target instanceof Element ? event.target.closest("button") : null;
+        if (button && (button.closest(".fm-start__rail") || button.textContent.trim() === "Home")) {
+          record({ kind: "click", section: button.getAttribute("data-section"),
+            text: button.textContent.slice(0,100) });
+        }
+      }, true);
+      new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (mutation.target instanceof Element && mutation.target.classList.contains("fm-start")) {
+            record({ kind: "section", old_section: mutation.oldValue,
+              section: mutation.target.getAttribute("data-section") });
+          }
+        }
+      }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["data-section"], attributeOldValue: true });
+    });
+    await page.locator('.fm-start__rail button[data-section="import"]').click();
     gate.phase = "import"; report.phase = "import";
+    await page.getByRole("heading", { name: "Import", exact: true }).waitFor({ state: "visible" });
     await page.locator('input[type="file"][accept*=".py"]').setInputFiles({
       name: sourceName, mimeType: "text/x-python", buffer: Buffer.from(sourceText, "utf8") });
     await page.getByRole("button", { name: "Create project…", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Run script and create project", exact: true }).click();
+    while (!importedScene && remaining() > 1) {
+      assert.deepEqual(report.violations, [], "Import guard rejected the operation");
+      await page.waitForTimeout(Math.min(100, remaining()));
+    }
+    assert(importedScene && gate.session, "Import activation was not acknowledged");
     await page.waitForFunction(() => Boolean(document.querySelector('[data-node-id="model:study"]')), null,
       { timeout: Math.min(60000, remaining()) });
-    while (!importedScene && remaining() > 1) await page.waitForTimeout(Math.min(100, remaining()));
-    assert(importedScene && gate.session, "Import activation was not acknowledged");
     const importedStages = pipelineStages(importedScene);
     assert.equal(importedStages[1].enabled !== false, !isImport);
     if (isImport && local) assert.deepEqual(importedStages[1].payload.stage_magnetization_assignments?.assignments,
@@ -615,12 +675,41 @@ export async function runRegionResetBrowserQa() {
     assert.deepEqual(report.violations, []);
     assert(report.expected_empty_404.length <= 12 &&
       report.expected_console_404.length <= report.expected_empty_404.length, "Uncorrelated empty-workspace errors");
+    await Promise.all([...pendingHealthObservations]);
+    assert(report.read_cancellations.length === 0 || report.successful_read_responses.some((row) =>
+      regionResetHealthResponseMatches(row, gate.apiInstance)), "Canceled health read has no completed same-API response");
+    assert(report.read_cancellations.length + report.successful_read_responses.length <=
+      (report.request_counts["GET /v2/platform/health"] ?? 0), "Health observations exceed their request count");
     assert.deepEqual(report.errors, { page: [], console: [], http: [] });
     report.source_hashes_after = await sourceHashes(paths); assert.deepEqual(report.source_hashes_after, beforeHashes);
     report.state = "passed"; report.phase = "complete";
   } catch (error) {
     report.failure = String(error?.stack ?? error).slice(0,4096);
     report.outcome = attemptedWrite ? "unknown" : "not-dispatched";
+    if (page && !page.isClosed()) {
+      try {
+        report.ui_failure_snapshot = await page.evaluate(() => ({
+          url: location.href, ready_state: document.readyState,
+          navigation_events: window.__fullmagS46NavigationEvents ?? [],
+          sections: [...document.querySelectorAll(".fm-start")].map((element) => ({
+            section: element.getAttribute("data-section"), text: element.textContent?.slice(0,4000),
+          })),
+          navigation: [...document.querySelectorAll(".fm-start__rail button[data-section]")].map((element) => ({
+            section: element.getAttribute("data-section"), current: element.getAttribute("aria-current"),
+            disabled: element.disabled, text: element.textContent?.slice(0,200),
+          })),
+          file_inputs: [...document.querySelectorAll('input[type="file"]')].map((element) => ({
+            accept: element.accept, disabled: element.disabled, outer: element.outerHTML.slice(0,1000),
+          })),
+          alerts: [...document.querySelectorAll('[role="alert"], [role="status"]')]
+            .map((element) => element.textContent?.slice(0,1000)).slice(0,20),
+        }));
+        const screenshot = await page.screenshot({ type: "png", timeout: 5000 });
+        if (screenshot.length <= 700000) report.ui_failure_screenshot_png_base64 = screenshot.toString("base64");
+      } catch (diagnosticError) {
+        report.ui_failure_snapshot_error = String(diagnosticError.message).slice(0,512);
+      }
+    }
     process.exitCode = 1;
   } finally {
     cleanupStarted = true;
@@ -628,6 +717,7 @@ export async function runRegionResetBrowserQa() {
       try { await resource?.close(); }
       catch (error) { report.cleanup_errors.push(name + ": " + String(error.message).slice(0,512)); }
     }
+    await Promise.allSettled([...pendingHealthObservations]);
     if (report.state === "passed" && (report.cleanup_errors.length ||
         Object.values(report.errors).some((errors) => errors.length) || report.violations.length)) {
       report.state = "failed"; report.outcome = "unknown"; report.failure = "Browser cleanup or a late response is unconfirmed";
