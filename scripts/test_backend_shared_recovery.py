@@ -1,5 +1,6 @@
 """Interpreted shared-package crash and concurrency regressions."""
 import os
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -13,6 +14,81 @@ import test_docker_backend_dev as fixtures
 
 
 class SharedRecoveryTests(unittest.TestCase):
+    def test_mismatched_ready_candidate_is_preserved_and_unsafe_candidates_are_refused(self):
+        import backend_shared_recovery as recovery
+        for mutation in (None, "crash", "marker", "artifact", "symlink", "collision", "extra", "group", "rotation"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fixture = fixtures.BackendPackageTests()
+                store_root = root / "store"
+                store_root.mkdir()
+                group = "groups/" + "a" * 64
+                package = store_root / group
+                package.mkdir(parents=True)
+                build = root / "build"
+                build.mkdir()
+                control = backend._ensure_package_development_root(package)
+                candidate = Path(tempfile.mkdtemp(prefix=".backend-package-candidate-",
+                    dir=control / backend.PACKAGE_CANDIDATES_DIRNAME))
+                backend._write_candidate_marker(candidate, package, build, state="building")
+                workspace = fixture._package_workspace(root / "source")
+                records = fixture._copy_into_marked_candidate(workspace, candidate, package, build)
+                (candidate / "bin/fullmag").unlink()
+                manifest_path, manifest = fixture._live_manifest(root)
+                toolchain = fixture._toolchain_fixture()
+                receipt = fixture._receipt_for_manifest(records, manifest, toolchain)
+                identity = backend._shared_package_identity(manifest_path, toolchain, None)
+                receipt["source"]["runtime_source_digest"] = "b" * 64
+                receipt["shared_package"] = {"schema": shared.SCHEMA,
+                    "key": shared.key_for(identity), "inputs": identity}
+                backend._write_json(candidate / "backend-build-receipt.json", receipt, "mismatched receipt")
+                archive = control / backend.PACKAGE_QUARANTINE_DIRNAME
+                if mutation == "marker":
+                    marker = json.loads((candidate / backend.PACKAGE_CANDIDATE_MARKER).read_text())
+                    marker["package_root"] = str(root / "foreign")
+                    backend._write_json(candidate / backend.PACKAGE_CANDIDATE_MARKER, marker, "foreign marker")
+                elif mutation == "artifact":
+                    (candidate / "_fullmag_core.so").write_bytes(b"tampered")
+                elif mutation == "symlink":
+                    (candidate / "foreign-link").symlink_to(workspace)
+                elif mutation == "collision":
+                    archive.mkdir()
+                    (archive / candidate.name).mkdir()
+                elif mutation == "extra":
+                    (candidate / "unknown-extra").write_bytes(b"unknown")
+                elif mutation == "rotation":
+                    (control / backend.PACKAGE_ROTATION_JOURNAL_NAME).write_text("{}")
+                before = {str(p.relative_to(candidate)): p.read_bytes()
+                    for p in candidate.rglob("*") if p.is_file() and not p.is_symlink()}
+                with patch.object(shared, "ROOT", store_root), patch.dict(os.environ, {
+                        "FULLMAG_SHARED_BACKEND_STORE": str(store_root),
+                        "FULLMAG_SHARED_BACKEND_GROUP": "foreign" if mutation == "group" else group}), \
+                        patch.object(shared.Entry, "publish", side_effect=AssertionError("must not publish")):
+                    if mutation not in (None, "crash"):
+                        with self.assertRaises((backend.BackendBuildError, shared.StoreError)):
+                            recovery.recover_ready(backend, package, control, build)
+                        self.assertTrue(candidate.exists())
+                        continue
+                    if mutation == "crash":
+                        original_write = recovery._immutable_receipt
+                        def interrupt_completed(b, path, document):
+                            if path.name.endswith(".completed.json"):
+                                raise RuntimeError("simulated interruption after rename")
+                            return original_write(b, path, document)
+                        with patch.object(recovery, "_immutable_receipt", side_effect=interrupt_completed):
+                            with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                                recovery.recover_ready(backend, package, control, build)
+                        self.assertFalse(candidate.exists())
+                    recovery.recover_ready(backend, package, control, build)
+                    target = archive / candidate.name
+                    self.assertFalse(candidate.exists())
+                    self.assertEqual(before, {str(p.relative_to(target)): p.read_bytes()
+                        for p in target.rglob("*") if p.is_file()})
+                    self.assertTrue((archive / (candidate.name + ".prepared.json")).is_file())
+                    self.assertTrue((archive / (candidate.name + ".completed.json")).is_file())
+                    # Completed recovery is idempotent and never republishes.
+                    recovery.recover_ready(backend, package, control, build)
+
     def test_interrupted_shared_restore_is_recovered_without_changing_payload(self):
         for complete, private_receipt, interrupt_cleanup in ((False, False, False), (True, False, False), (True, True, False), (True, True, True)):
             with self.subTest(complete=complete, receipt=private_receipt), tempfile.TemporaryDirectory() as temporary:
