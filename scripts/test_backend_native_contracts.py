@@ -168,6 +168,10 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-cpu-pgbb-reuse", "fem_pgbb_accepted_cache_contract")
 
+    def test_object_average_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cuda-object-average", "fem_cuda_object_average_contract")
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):

@@ -909,6 +909,18 @@ in a dependency-free ABI build, so the initial-state average contract observes
 the same material intent. This does not provide MFEM operators or time stepping:
 those capabilities remain unavailable without the MFEM stack.
 
+Update 2026-11-10, FEM GPU observable candidate (runtime unqualified): the
+native per-object API dispatches to `gpu_object_average` before synchronizing
+the full magnetization to the host. It keeps the same nodal and P1/DG0 weights,
+explicit element-set ownership and induced node-set semantics. A bounded
+device ownership cache and chunked reduction read the resident magnetization;
+only the three weighted component sums and their denominator are downloaded.
+The CPU implementation remains the independent reference. GPU errors are
+reported explicitly. Parallel summation may change rounding; the actual-device
+`fem_cuda_object_average_contract` must establish observable parity,
+invalidation, invalid-index behavior and scalar-only transfers before this
+candidate can be qualified. Source inspection is not performance evidence.
+
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
 FEM resolves contact from boundary/domain markers in the shared-domain mesh. If
@@ -1566,6 +1578,7 @@ must include:
 | FEM transport Ms | `crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs` | `validate_transport_ms_realization` | Runner preflight of the same rule before any native transport call. |
 | FEM transport Ms | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `validate_transport_stage_ms_realization` | Native rejection before the reciprocal stage-transport torque is installed. |
 | FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_elements_f64` | DG0 per-object average `m` over explicit owned elements. |
+| FEM GPU object mean | `backends/fem/gpu/cuda/reductions/object_average.cpp` | `gpu_object_average` | Bounded device reduction with existing nodal and P1/DG0 ownership semantics; managed parity pending. |
 | FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
 | FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
 | FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |

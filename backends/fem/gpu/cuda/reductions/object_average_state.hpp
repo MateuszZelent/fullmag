@@ -1,0 +1,64 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <cstddef>
+#include <vector>
+#include <string>
+
+namespace fullmag::fem {
+
+// Fixed budgets: four 512 KiB ownership records on host and device, plus
+// bounded preparation/chunk scratch. Large selections stream through chunks.
+inline constexpr size_t kObjectAverageCacheEntries = 4;
+inline constexpr size_t kObjectAverageRecordLimit = 16384;
+inline constexpr size_t kObjectAverageChunkRecords = 4096;
+inline constexpr size_t kObjectAverageMembershipLimit = 65536;
+
+struct GpuObjectAverageRecord {
+    uint32_t nodes[4]{};
+    uint32_t count = 0;
+    double weight = 0.0;
+};
+static_assert(sizeof(GpuObjectAverageRecord) == 32);
+inline constexpr size_t kObjectAveragePreparedHostBytes =
+    ((kObjectAverageCacheEntries + 1) * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
+        sizeof(GpuObjectAverageRecord) + kObjectAverageMembershipLimit * sizeof(uint32_t);
+inline constexpr size_t kObjectAveragePreparedDeviceBytes =
+    (kObjectAverageCacheEntries * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
+        sizeof(GpuObjectAverageRecord) + 8 * sizeof(double);
+static_assert(kObjectAveragePreparedHostBytes + kObjectAveragePreparedDeviceBytes <= 6 * 1024 * 1024);
+
+
+struct GpuObjectAverageCacheEntry {
+    std::vector<GpuObjectAverageRecord> records;
+    void *device_records = nullptr;
+    uint64_t node_count = 0;
+    uint64_t last_use = 0;
+    size_t device_capacity = 0;
+    bool dg0 = false;
+    bool valid = false;
+};
+
+struct GpuObjectAverageState {
+    std::array<GpuObjectAverageCacheEntry, kObjectAverageCacheEntries> entries;
+    std::vector<GpuObjectAverageRecord> preparation;
+    std::vector<GpuObjectAverageRecord> chunk;
+    std::vector<uint32_t> membership;
+    void *device_chunk = nullptr;
+    double *result = nullptr; // four totals plus four chunk sums
+    size_t preparation_limit = 0;
+    size_t chunk_limit = 0;
+    uint64_t device_bytes = 0;
+    uint64_t sequence = 0;
+    uint64_t cache_hits = 0;
+    uint64_t cache_misses = 0;
+    bool allocated = false;
+};
+
+bool gpu_object_average_allocate(
+    GpuObjectAverageState &state, uint64_t node_count,
+    uint64_t &device_bytes, uint64_t &reduction_workspace_bytes, std::string &error);
+void gpu_object_average_free(GpuObjectAverageState &state);
+
+} // namespace fullmag::fem

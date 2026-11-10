@@ -62,6 +62,7 @@ set(FEM_SOURCES
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
+    gpu/cuda/reductions/object_average.cpp
     gpu/cuda/reductions/reduction_workspace_memory.cpp
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
@@ -353,6 +354,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
+            gpu/cuda/reductions/object_average_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
@@ -857,6 +859,14 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
+
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
+    add_executable(fem_cuda_object_average_contract tests/cuda_object_average_contract.cpp)
+    target_link_libraries(fem_cuda_object_average_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_cuda_object_average_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME fem_cuda_object_average_contract COMMAND fem_cuda_object_average_contract)
+endif()
 
 add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
 target_link_libraries(fem_cuda_sot_contract PRIVATE fullmag_fem)

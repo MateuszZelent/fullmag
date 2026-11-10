@@ -1056,6 +1056,13 @@
       "evidence_status": "implemented"
     },
     {
+      "id": "fem-gpu-object-average",
+      "path": "backends/fem/gpu/cuda/reductions/object_average.cpp",
+      "symbol": "gpu_object_average",
+      "responsibility": "Device per-object reduction preserving nodal/P1-DG0 weighting and explicit selection; scalar-only D2H. Managed numerical parity pending.",
+      "evidence_status": "runtime-unqualified"
+    },
+    {
       "id": "fem-per-object-average-m",
       "path": "backends/fem/src/api.cpp",
       "symbol": "fullmag_fem_backend_average_m_for_elements_f64",
