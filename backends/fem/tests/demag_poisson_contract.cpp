@@ -12,6 +12,9 @@
 #include "core/fem_material_runtime.hpp"
 #include "cuda_demag_residual_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/dmi.hpp"
+#include "cpu/mfem/interactions/dmi_workspace.hpp"
+#include "cpu/mfem/runtime/element_parallel_policy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_runtime.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_telemetry.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
@@ -1684,6 +1687,120 @@ void check_cpu_transfer_vectors(const std::vector<double> &actual,
         std::exit(1);
     }
 }
+
+void element_evaluation_thread_requests_preserve_p2_recovery_and_dmi() {
+    using namespace fullmag::fem;
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D(
+        8, 8, 6, mfem::Element::TETRAHEDRON, 1.0, 1.0, 1.0);
+    check(mesh.GetNE() > 2000 && mesh.GetNodes() == nullptr,
+          "element-thread regression crosses the parallel threshold on linear geometry");
+    mfem::H1_FECollection state_collection(1, 3), potential_collection(2, 3);
+    mfem::FiniteElementSpace state_space(&mesh, &state_collection);
+    mfem::FiniteElementSpace potential_space(&mesh, &potential_collection);
+    check(potential_space.GetFE(0)->GetOrder() == 2,
+          "recovery regression exercises mutable P2 H1 evaluation, not P1 fast path");
+    Context ctx;
+    mixed_poisson_context(ctx, mesh, state_space,
+                          std::vector<uint8_t>(mesh.GetNE(), 1u));
+    ctx.mfem_context.ready = true;
+    ctx.material_fields.material.saturation_magnetisation = 8e5;
+    mfem::GridFunction mx(&state_space), my(&state_space), mz(&state_space);
+    ctx.mfem_context.gf_mx = &mx;
+    ctx.mfem_context.gf_my = &my;
+    ctx.mfem_context.gf_mz = &mz;
+    ctx.mfem_context.m_x.resize(ctx.mesh.n_nodes);
+    ctx.mfem_context.m_y.resize(ctx.mesh.n_nodes);
+    ctx.mfem_context.m_z.resize(ctx.mesh.n_nodes);
+    std::vector<double> m(3u * ctx.mesh.n_nodes);
+    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
+        const double *x = mesh.GetVertex(static_cast<int>(node));
+        const double a = 0.4 + 0.2 * x[0] + 0.1 * x[1];
+        const double b = 0.3 + 0.1 * x[1] - 0.2 * x[2];
+        const double c = 0.7 - 0.2 * x[0] + 0.1 * x[2];
+        const double inverse = 1.0 / std::sqrt(a*a + b*b + c*c);
+        m[3u*node] = a * inverse;
+        m[3u*node+1] = b * inverse;
+        m[3u*node+2] = c * inverse;
+    }
+    ctx.state.m_xyz = m;
+    mfem::FunctionCoefficient quadratic_potential([](const mfem::Vector &x) {
+        return x[0]*x[0] + 0.3*x[0]*x[1] - 0.4*x[1]*x[1] + 0.7*x[2]*x[2];
+    });
+    mfem::GridFunction phi(&potential_space);
+    phi.ProjectCoefficient(quadratic_potential);
+    mfem::Vector true_potential;
+    phi.GetTrueDofs(true_potential);
+    std::string error;
+    check_result(initialize_demag_poisson_recovery_workspace(ctx, potential_space, error),
+                 error, "P2 element-thread recovery workspace");
+    ctx.dmi.interfacial_enabled = true;
+    ctx.dmi.interfacial_D = 0.003;
+    ctx.dmi.interface_normal = {0.0, 0.0, 1.0};
+    ctx.dmi.bulk_enabled = true;
+    ctx.dmi.bulk_D = -0.002;
+
+    // Deterministic ownership regression: preparing a second element must not
+    // mutate the first worker's ElementNo or transformation point matrix.
+    auto *workspace = dmi_element_workspace(ctx);
+    workspace->prepare_thread_residuals(4, m.size());
+    workspace->prepare_element_evaluation(state_space, 4);
+    auto *first = workspace->transformations_by_thread[0].get();
+    auto *second = workspace->transformations_by_thread[1].get();
+    check(first != second, "DMI workers own distinct transformations");
+    mesh.GetElementTransformation(0, first);
+    first->SetIntPoint(&mfem::Geometries.GetCenter(mesh.GetElementGeometry(0)));
+    const double first_weight = first->Weight();
+    mesh.GetElementTransformation(mesh.GetNE()-1, second);
+    check(first->ElementNo == 0 && second->ElementNo == mesh.GetNE()-1,
+          "preparing another worker preserves the first transformation identity");
+    check_near(first->Weight(), first_weight, 0.0,
+               "preparing another worker preserves the first Jacobian");
+
+    std::vector<double> reference_recovery, reference_visual, reference_interfacial, reference_bulk;
+    double reference_recovery_energy = 0.0, reference_interfacial_energy = 0.0, reference_bulk_energy = 0.0;
+    for (int requested : {1, 2, 4}) {
+        ctx.cpu_threads.effective_omp_threads = requested;
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            std::vector<double> recovery, interfacial, bulk;
+            double recovery_energy = 0.0, interfacial_energy = 0.0, bulk_energy = 0.0;
+            check_result(recover_demag_poisson_field_quadrature(ctx, true_potential,
+                recovery, recovery_energy, m, nullptr, error), error, "P2 quadrature thread-request regression");
+            check(ctx.poisson_demag.recovery_transfer.state != "ready",
+                  "quadrature regression cannot be satisfied by immutable transfer matrices");
+            check_result(compute_interfacial_dmi_field(ctx, m, interfacial, &interfacial_energy, error),
+                         error, "interfacial DMI thread-request regression");
+            const bool expected_parallel = requested > 1 && mfem_shared_element_evaluation_parallel_safe();
+            check(workspace->element_parallel_active == expected_parallel,
+                  "interfacial DMI respects actual provider safety, not requested threads alone");
+            check_result(compute_bulk_dmi_field(ctx, m, bulk, &bulk_energy, error),
+                         error, "bulk DMI thread-request regression");
+            check(workspace->element_parallel_active == expected_parallel,
+                  "bulk DMI respects actual provider safety, not requested threads alone");
+            if (requested == 1 && repeat == 0) {
+                reference_recovery = recovery;
+                reference_visual = ctx.demag.h_visual_xyz;
+                reference_interfacial = interfacial;
+                reference_bulk = bulk;
+                reference_recovery_energy = recovery_energy;
+                reference_interfacial_energy = interfacial_energy;
+                reference_bulk_energy = bulk_energy;
+            } else {
+                check_cpu_transfer_vectors(recovery, reference_recovery, 1.0, "P2 recovery requested-thread parity");
+                check_cpu_transfer_vectors(ctx.demag.h_visual_xyz, reference_visual, 1.0, "P2 visual recovery requested-thread parity");
+                check_cpu_transfer_vectors(interfacial, reference_interfacial, 1.0, "interfacial DMI requested-thread parity");
+                check_cpu_transfer_vectors(bulk, reference_bulk, 1.0, "bulk DMI requested-thread parity");
+                check_cpu_transfer_vectors({recovery_energy}, {reference_recovery_energy}, 1e-12, "P2 recovery energy parity");
+                check_cpu_transfer_vectors({interfacial_energy}, {reference_interfacial_energy}, 1e-12, "interfacial DMI energy parity");
+                check_cpu_transfer_vectors({bulk_energy}, {reference_bulk_energy}, 1e-12, "bulk DMI energy parity");
+            }
+        }
+    }
+    std::fprintf(stderr, "MFEM element safety: provider_parallel=%d; requested 1/2/4; P2 quadrature and both DMI matched\n",
+                 mfem_shared_element_evaluation_parallel_safe() ? 1 : 0);
+    destroy_dmi_workspace(ctx);
+    destroy_demag_poisson_recovery_workspace(ctx);
+}
+
 
 std::vector<double> cpu_transfer_vector(const mfem::Vector &value) {
     const double *data = value.HostRead();
@@ -4100,6 +4217,13 @@ void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
     check(
         recovery.find("#pragma omp atomic update") != std::string::npos,
         "Poisson demag recovery parallel path must accumulate directly into shared nodal buffers");
+    check(recovery.find("mfem_shared_element_evaluation_parallel_safe()") != std::string::npos,
+          "recovery element parallelism must be gated by the installed MFEM provider safety");
+    const auto element_loop = recovery.find("    auto accumulate_element =");
+    const auto element_loop_end = recovery.find("    int recover_threads = 1;", element_loop);
+    check(element_loop != std::string::npos && element_loop_end != std::string::npos &&
+          recovery.substr(element_loop, element_loop_end-element_loop).find("IntRules.Get(") == std::string::npos,
+          "recovery workers must consume serially prepared integration rules");
 }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -4807,6 +4931,7 @@ int main(int argc, char **argv) {
     run_contract_case("sharp_ms_demag_rhs_uses_typed_element_accessor", sharp_ms_demag_rhs_uses_typed_element_accessor);
 #if FULLMAG_HAS_MFEM_STACK
     run_contract_case("sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle", sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle);
+    run_contract_case("element_evaluation_thread_requests_preserve_p2_recovery_and_dmi", element_evaluation_thread_requests_preserve_p2_recovery_and_dmi);
     run_contract_case("cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup", cpu_fixed_transfers_match_retained_quadrature_and_reuse_setup);
     run_contract_case("cpu_fixed_transfers_refuse_budget_without_changing_quadrature", cpu_fixed_transfers_refuse_budget_without_changing_quadrature);
     run_contract_case("cpu_fixed_transfer_eligibility_preserves_unqualified_spaces", cpu_fixed_transfer_eligibility_preserves_unqualified_spaces);

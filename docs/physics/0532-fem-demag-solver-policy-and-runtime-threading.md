@@ -651,6 +651,19 @@ so same-input energy/torque parity and a one-build thread matrix remain required
 The former package's environment could still constrain MFEM/HYPRE threads;
 missing Fullmag flags are not proof that dependency thread teams were uncapped.
 
+Enabling OpenMP also requires respecting the selected provider's scratch
+ownership. The inspected MFEM providers have `MFEM_THREAD_SAFE` disabled:
+finite-element evaluators and the integration-rule cache may mutate shared
+buffers. `mfem_shared_element_evaluation_parallel_safe` therefore permits
+element-level parallelism only when Fullmag OpenMP, MFEM OpenMP and MFEM thread
+safety are all enabled. Nodal array normalization and independent energy
+reductions retain their separate parallel paths. DMI uses caller-owned
+transformations and prepared integration rules; geometry with `Mesh.Nodes`
+retains a serial element path until its evaluator ownership is qualified.
+Requests for 1, 2 and 4 threads on this provider qualify that serial safety
+guard and numerical parity, not parallel finite-element throughput. No physical
+operator, quadrature order, solver tolerance or CPU/GPU lane is changed.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -1049,3 +1062,4 @@ managed-runtime qualification.
 | cpu-relaxation-iteration-profile | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `accumulate_relaxation_profile_sample` | Sum linear iterations across evaluated trials before accepted-row publication. | FEM CPU | Regression added; execution pending. | Unpublished task candidate. |
 | native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
 | native-openmp-runtime | `backends/fem/tests/cpu_threads_contract.cpp` | `class ScopedOpenMpRuntimeState` | Probe the library runtime setters after seeding distinct OpenMP control values. | FEM CPU/GPU host control | Existing package defect confirmed; corrected runtime test pending. | Unpublished task candidate. |
+| mfem-element-parallel-policy | `backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp` | `mfem_shared_element_evaluation_parallel_safe` | Require thread-safe MFEM scratch before parallel element evaluation. | FEM CPU host element kernels | Provider flags inspected; runtime parity pending. | Unpublished task candidate. |

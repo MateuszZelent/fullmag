@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/dmi_workspace.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
+#include "cpu/mfem/runtime/element_parallel_policy.hpp"
 #include "dmi_weak_residual.hpp"
 
 #include <algorithm>
@@ -86,8 +87,11 @@ bool compute_interfacial_dmi_field(
 #ifdef _OPENMP
     dmi_threads = std::max(1, ctx.cpu_threads.effective_omp_threads);
 #endif
-    const bool parallel_dmi = dmi_threads > 1 && mesh->GetNE() >= 2000;
+    const bool parallel_dmi = mfem_shared_element_evaluation_parallel_safe() &&
+        mesh->GetNodes() == nullptr && dmi_threads > 1 && mesh->GetNE() >= 2000;
+    dmi_workspace->element_parallel_active = parallel_dmi;
     dmi_workspace->prepare_thread_residuals(parallel_dmi ? dmi_threads : 1, n * 3u);
+    dmi_workspace->prepare_element_evaluation(*fes, parallel_dmi ? dmi_threads : 1);
 
     auto accumulate_element = [&](int elem, int thread_index, double &thread_energy) {
         if (!ctx.mesh.magnetic_element_mask.empty() &&
@@ -96,8 +100,9 @@ bool compute_interfacial_dmi_field(
             return;
         }
 
-        const mfem::FiniteElement *fe = fes->GetFE(elem);
-        mfem::ElementTransformation *T = mesh->GetElementTransformation(elem);
+        const mfem::FiniteElement *fe = dmi_workspace->element_fes[static_cast<size_t>(elem)];
+        auto *T = dmi_workspace->transformations_by_thread[static_cast<size_t>(thread_index)].get();
+        mesh->GetElementTransformation(elem, T);
         mfem::Array<int> &dofs =
             dmi_workspace->dofs_by_thread[static_cast<size_t>(thread_index)];
         fes->GetElementDofs(elem, dofs);
@@ -130,7 +135,7 @@ bool compute_interfacial_dmi_field(
         }
 
         const mfem::IntegrationRule &ir =
-            mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
+            *dmi_workspace->element_rules[static_cast<size_t>(elem)];
 
         for (int q = 0; q < ir.GetNPoints(); ++q) {
             const mfem::IntegrationPoint &ip = ir.IntPoint(q);

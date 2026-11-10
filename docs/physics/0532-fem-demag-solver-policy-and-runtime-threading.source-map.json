@@ -321,6 +321,12 @@
       "responsibility": "Saturating successful-solve iteration aggregate alongside existing solve-counter reset and rollback boundaries. Native tests pending."
     },
     {
+      "id": "mfem-element-parallel-policy",
+      "path": "backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp",
+      "symbol": "mfem_shared_element_evaluation_parallel_safe",
+      "responsibility": "Guard shared MFEM element evaluation by actual Fullmag/MFEM OpenMP and MFEM_THREAD_SAFE configuration. Pure array reductions retain independent parallel policy; runtime parity pending."
+    },
+    {
       "id": "native-openmp-runtime",
       "path": "backends/fem/tests/cpu_threads_contract.cpp",
       "symbol": "class ScopedOpenMpRuntimeState",
