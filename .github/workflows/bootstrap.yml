@@ -485,6 +485,13 @@ jobs:
           cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::success_finalizer_propagates_terminal_provenance_publication_failure -- --exact
           cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::error_finalizer_preserves_primary_error_when_terminal_publication_fails -- --exact
 
+      - name: Run authoritative Zarr stage completion contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib stage_completion
+          cargo test --locked -p fullmag-runner --lib autosave_storage::tests
+          cargo test --locked -p fullmag-runner --lib regular_zarr_completion
+          cargo test --locked -p fullmag-runner --lib autosave_zarr::tests::metadata_atomic_replace_preserves_exact_bytes -- --exact
+
       - name: Run FDM CPU BB demag reuse contracts
         run: |
           cargo test --locked -p fullmag-engine --lib demag_cache_tests
@@ -603,6 +610,9 @@ jobs:
 
       - name: Verify the Windows checkpoint policy from its real writer
         run: cargo test -p fullmag-runner persists_platform_directory_sync_policy_from_real_checkpoint_writer --lib
+
+      - name: Verify atomic Zarr metadata replacement on Windows
+        run: cargo test --locked -p fullmag-runner --lib autosave_zarr::tests::metadata_atomic_replace_preserves_exact_bytes -- --exact
 
       - name: Verify the Windows writer-to-inspector contract
         env:
