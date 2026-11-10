@@ -173,7 +173,7 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
         commands = parser._subparsers._group_actions[0].choices
         expected = {"fem-demag-poisson", "fem-cuda-activity-trace",
                     "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard", "fem-cpu-pgbb-reuse",
-                    "fem-cuda-object-average"}
+                    "fem-cuda-object-average", "fem-cpu-threads"}
         for command_name in ("build", "up", "recreate-volume"):
             with self.subTest(command=command_name):
                 command = commands[command_name]

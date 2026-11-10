@@ -321,6 +321,12 @@
       "responsibility": "Saturating successful-solve iteration aggregate alongside existing solve-counter reset and rollback boundaries. Native tests pending."
     },
     {
+      "id": "native-openmp-runtime",
+      "path": "backends/fem/tests/cpu_threads_contract.cpp",
+      "symbol": "class ScopedOpenMpRuntimeState",
+      "responsibility": "Explicit private CXX OpenMP target when selected MFEM uses OpenMP; own library runtime setters and parallel loops must be compiled consistently."
+    },
+    {
       "id": "cpu-relaxation-iteration-profile",
       "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
       "symbol": "accumulate_relaxation_profile_sample",

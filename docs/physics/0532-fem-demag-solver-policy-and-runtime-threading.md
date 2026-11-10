@@ -637,6 +637,20 @@ their last-evaluation meaning. The aggregate is not a lifetime counter and
 does not include failed certification or recovery. Source-level numeric and
 rollback regressions are present; managed execution remains pending.
 
+The published `985df3521e2f5eb3c17588007cfc604203dfbf8e` package exposed a
+separate CPU execution defect: its Fullmag shared library had no OpenMP runtime
+imports and retained the `std::thread::hardware_concurrency` branch, although
+the selected MFEM and HYPRE libraries used OpenMP. MFEM's imported target linked
+the OpenMP runtime without propagating its C++ compilation flag. The build
+owner is `backends/fem/CMakeLists.txt`. When the
+selected MFEM configuration declares OpenMP, Fullmag must explicitly compile
+and link its C++ target with the matching CMake OpenMP target. This enables
+Fullmag's existing parallel regions and runtime setters; it introduces no new
+thread-count, wait or binding default. Parallel reductions can change rounding,
+so same-input energy/torque parity and a one-build thread matrix remain required.
+The former package's environment could still constrain MFEM/HYPRE threads;
+missing Fullmag flags are not proof that dependency thread teams were uncapped.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -1034,3 +1048,4 @@ managed-runtime qualification.
 | gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
 | cpu-relaxation-iteration-profile | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `accumulate_relaxation_profile_sample` | Sum linear iterations across evaluated trials before accepted-row publication. | FEM CPU | Regression added; execution pending. | Unpublished task candidate. |
 | native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
+| native-openmp-runtime | `backends/fem/tests/cpu_threads_contract.cpp` | `class ScopedOpenMpRuntimeState` | Probe the library runtime setters after seeding distinct OpenMP control values. | FEM CPU/GPU host control | Existing package defect confirmed; corrected runtime test pending. | Unpublished task candidate. |

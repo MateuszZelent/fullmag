@@ -172,6 +172,10 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-cuda-object-average", "fem_cuda_object_average_contract")
 
+    def test_cpu_threads_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cpu-threads", "fem_cpu_threads_contract")
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):

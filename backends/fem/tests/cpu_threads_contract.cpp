@@ -17,6 +17,10 @@
 #include <omp.h>
 #endif
 
+#if defined(FULLMAG_FEM_EXPECTS_OPENMP) && !defined(_OPENMP)
+#error "MFEM OpenMP thread contract must compile with OpenMP enabled"
+#endif
+
 namespace {
 
 void check(bool condition, const char *msg) {
@@ -72,6 +76,65 @@ private:
     const char *name_;
     std::optional<std::string> previous_;
 };
+
+#ifdef _OPENMP
+class ScopedOpenMpRuntimeState {
+public:
+    ScopedOpenMpRuntimeState()
+        : max_threads_(omp_get_max_threads())
+        , dynamic_(omp_get_dynamic())
+#if _OPENMP >= 200805
+        , max_active_levels_(omp_get_max_active_levels())
+#else
+        , nested_(omp_get_nested())
+#endif
+    {}
+
+    ~ScopedOpenMpRuntimeState()
+    {
+        omp_set_dynamic(dynamic_);
+#if _OPENMP >= 200805
+        omp_set_max_active_levels(max_active_levels_);
+#else
+        omp_set_nested(nested_);
+#endif
+        omp_set_num_threads(max_threads_);
+    }
+
+    void seed_distinct_runtime_state() const
+    {
+        omp_set_num_threads(7);
+        omp_set_dynamic(1);
+#if _OPENMP >= 200805
+        omp_set_max_active_levels(2);
+#else
+        omp_set_nested(1);
+#endif
+    }
+
+private:
+    int max_threads_;
+    int dynamic_;
+#if _OPENMP >= 200805
+    int max_active_levels_;
+#else
+    int nested_;
+#endif
+};
+
+void check_openmp_runtime_settings(int expected_threads) {
+    check(
+        omp_get_max_threads() == expected_threads,
+        "library CPU thread setter updates the OpenMP max-thread ICV");
+    check(omp_get_dynamic() == 0, "library CPU thread setter disables dynamic teams");
+    check(omp_get_nested() == 0, "library CPU thread setter disables nested teams");
+#if _OPENMP >= 200805
+    check(
+        omp_get_max_active_levels() == 1,
+        "library CPU thread setter limits active OpenMP levels to one");
+#endif
+}
+#endif
 
 void cpu_thread_runtime_is_owned_by_runtime_module() {
     const std::filesystem::path root = fem_source_root();
@@ -222,19 +285,23 @@ void auto_thread_cap_scales_by_context_size() {
 }
 
 void configure_host_runtime_writes_cpu_context_fields() {
+#ifdef _OPENMP
+    ScopedOpenMpRuntimeState openmp_runtime;
+    openmp_runtime.seed_distinct_runtime_state();
+#endif
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
     resolved.unset();
     omp.unset();
-    fullmag.set("3");
+    fullmag.set("2");
 
     fullmag::fem::Context ctx;
     fullmag::fem::configure_fem_host_runtime_threads(ctx);
 
     check(!ctx.cpu_threads.auto_requested, "manual CPU runtime does not mark auto mode");
-    check(ctx.cpu_threads.requested_omp_threads == 3, "manual CPU runtime stores requested threads");
-    check(ctx.cpu_threads.effective_omp_threads == 3, "manual CPU runtime stores effective threads");
+    check(ctx.cpu_threads.requested_omp_threads == 2, "manual CPU runtime stores requested threads");
+    check(ctx.cpu_threads.effective_omp_threads == 2, "manual CPU runtime stores effective threads");
     check(
         ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_NONE,
         "manual CPU runtime reports no auto cap reason");
@@ -248,15 +315,15 @@ void configure_host_runtime_writes_cpu_context_fields() {
         ctx.cpu_threads.max_active_parallel_levels == 1,
         "host runtime publishes a single active parallel level");
 #ifdef _OPENMP
-    check(omp_get_dynamic() == 0, "OpenMP dynamic teams are disabled");
-    check(omp_get_nested() == 0, "OpenMP nested teams are disabled");
-#if _OPENMP >= 200805
-    check(omp_get_max_active_levels() == 1, "OpenMP active parallel level is one");
-#endif
+    check_openmp_runtime_settings(2);
 #endif
 }
 
 void configure_host_runtime_writes_gpu_context_fields() {
+#ifdef _OPENMP
+    ScopedOpenMpRuntimeState openmp_runtime;
+    openmp_runtime.seed_distinct_runtime_state();
+#endif
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
@@ -274,6 +341,47 @@ void configure_host_runtime_writes_gpu_context_fields() {
     check(
         ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_HOST_THREAD_POLICY_NONE,
         "manual GPU host runtime reports no resolved policy override");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(4);
+#endif
+}
+
+void automatic_cpu_runtime_applies_size_cap_to_openmp() {
+#ifdef _OPENMP
+    ScopedOpenMpRuntimeState openmp_runtime;
+    openmp_runtime.seed_distinct_runtime_state();
+#endif
+    ScopedEnv fullmag("FULLMAG_CPU_THREADS");
+    ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
+    ScopedEnv omp("OMP_NUM_THREADS");
+    fullmag.set("auto");
+    resolved.unset();
+    native_resolved.unset();
+    omp.unset();
+
+    const auto request = fullmag::fem::requested_cpu_threads();
+    fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cpu";
+    ctx.mesh.n_nodes = 5000;
+    ctx.mesh.n_elements = 1000;
+    const int expected_threads =
+        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, request.requested_threads);
+    const int expected_reason =
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, request.requested_threads);
+
+    fullmag::fem::configure_fem_host_runtime_threads(ctx);
+
+    check(ctx.cpu_threads.auto_requested, "auto CPU runtime preserves automatic intent");
+    check(
+        ctx.cpu_threads.effective_omp_threads == expected_threads,
+        "auto CPU runtime applies the context-size thread cap");
+    check(
+        ctx.cpu_threads.cap_reason == expected_reason,
+        "auto CPU runtime reports the matching size-cap reason");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(expected_threads);
+#endif
 }
 
 void automatic_gpu_host_policy_is_deliberately_one_thread() {
@@ -290,11 +398,17 @@ void automatic_gpu_host_policy_is_deliberately_one_thread() {
 }
 
 void automatic_gpu_host_policy_overrides_external_cpu_auto_resolution() {
+#ifdef _OPENMP
+    ScopedOpenMpRuntimeState openmp_runtime;
+    openmp_runtime.seed_distinct_runtime_state();
+#endif
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
     fullmag.set("auto");
     resolved.set("8");
+    native_resolved.set("8");
     omp.set("8");
 
     fullmag::fem::Context ctx;
@@ -308,6 +422,9 @@ void automatic_gpu_host_policy_overrides_external_cpu_auto_resolution() {
     check(
         ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_HOST_THREAD_POLICY_GPU_DEFAULT_ONE,
         "qualified GPU host policy reports deliberate one-thread resolution");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(1);
+#endif
 }
 
 } // namespace
@@ -319,6 +436,7 @@ int main() {
     auto_thread_cap_scales_by_context_size();
     configure_host_runtime_writes_cpu_context_fields();
     configure_host_runtime_writes_gpu_context_fields();
+    automatic_cpu_runtime_applies_size_cap_to_openmp();
     automatic_gpu_host_policy_is_deliberately_one_thread();
     automatic_gpu_host_policy_overrides_external_cpu_auto_resolution();
     return 0;
