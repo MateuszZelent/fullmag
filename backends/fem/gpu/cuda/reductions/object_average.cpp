@@ -12,6 +12,39 @@
 
 namespace fullmag::fem {
 
+bool prepare_membership_shape(
+    GpuObjectAverageState &state, uint64_t node_count, uint64_t element_count,
+    const TransferAudit &audit, std::string &error)
+{
+    if (audit.hot_loop_depth != 0) {
+        error = "GPU object average membership shape cannot change inside a hot loop";
+        return false;
+    }
+    const uint64_t extent = std::max(node_count, element_count);
+    if (extent > state.membership.max_size()) {
+        error = "GPU object average membership extent exceeds vector max_size";
+        return false;
+    }
+    const size_t size = static_cast<size_t>(extent);
+    const bool reshape = state.membership_node_count != node_count ||
+        state.membership_element_count != element_count || state.membership.size() != size;
+    if (!reshape) {
+        std::fill(state.membership.begin(), state.membership.end(), uint8_t{0});
+        return true;
+    }
+    try {
+        std::vector<uint8_t> membership(size, uint8_t{0});
+        state.membership.swap(membership);
+    } catch (const std::exception &exception) {
+        error = std::string("GPU object average membership setup failed: ") + exception.what();
+        return false;
+    }
+    state.membership_node_count = node_count;
+    state.membership_element_count = element_count;
+    for (auto &entry : state.entries) { entry.valid = false; }
+    return true;
+}
+
 void gpu_object_average_free(GpuObjectAverageState &state)
 {
     for (auto &entry : state.entries) {
@@ -26,7 +59,9 @@ void gpu_object_average_free(GpuObjectAverageState &state)
     gpu_device_free_double(state.result);
     std::vector<GpuObjectAverageRecord>().swap(state.preparation);
     std::vector<GpuObjectAverageRecord>().swap(state.chunk);
-    std::vector<uint32_t>().swap(state.membership);
+    std::vector<uint8_t>().swap(state.membership);
+    state.membership_node_count = 0;
+    state.membership_element_count = 0;
     state.preparation_limit = state.chunk_limit = 0;
     state.device_bytes = 0;
     state.sequence = state.cache_hits = state.cache_misses = 0;
@@ -44,7 +79,6 @@ bool gpu_object_average_allocate(
             std::max<uint64_t>(node_count, 256), kObjectAverageChunkRecords));
         state.preparation.reserve(state.preparation_limit);
         state.chunk.reserve(state.chunk_limit);
-        state.membership.reserve(static_cast<size_t>(std::min<uint64_t>(node_count, kObjectAverageMembershipLimit)));
         // Small scratch is setup-owned. Ownership-cache payloads are prepared
         // on demand outside solver hot loops, rather than allocating four
         // maximum-size caches for every GPU context.
@@ -149,7 +183,10 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
             error = std::string(prefix) + " has an invalid nodal Ms extent";
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        const size_t available = element_set ? runtime->realization().element_count() : nodes;
+        const size_t elements = runtime.has_value()
+            ? runtime->realization().element_count()
+            : ctx.mesh.n_elements;
+        const size_t available = element_set ? elements : nodes;
         for (uint64_t i = 0; i < count; ++i) {
             if (indices[i] >= available) {
                 error = std::string(prefix) + (element_set ? " received element index out of range" : " received node index out of range");
@@ -160,27 +197,27 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
             error = std::string(prefix) + " has an invalid material node extent";
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        if (count == 0) { out_xyz[0] = out_xyz[1] = out_xyz[2] = 0.0; return FULLMAG_FEM_OK; }
         auto &state = gpu.reductions.object_average;
         if (!state.allocated) {
             error = std::string(prefix) + " requires setup-owned object reduction scratch";
             return FULLMAG_FEM_ERR_INTERNAL;
         }
-        // Membership scratch is bounded. Oversized selections retain exact
-        // semantics with linear lookup: worst-case preparation is
-        // O(active_elements * selected_indices). This is a capacity fallback,
-        // not a throughput qualification for extremely large DG0 selections.
-        state.membership.clear();
-        const bool sorted_membership = dg0 && count <= state.membership.capacity();
-        if (sorted_membership && count > 0) {
-            state.membership.assign(indices, indices + static_cast<size_t>(count));
-            std::sort(state.membership.begin(), state.membership.end());
+        if (state.membership_node_count != nodes || state.membership_element_count != elements ||
+            state.membership.size() != std::max(nodes, elements)) {
+            error = std::string(prefix) + " requires setup-prepared node/element membership shape";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (count == 0) { out_xyz[0] = out_xyz[1] = out_xyz[2] = 0.0; return FULLMAG_FEM_OK; }
+        const size_t membership_extent = element_set ? elements : nodes;
+        if (dg0) {
+            std::fill_n(state.membership.begin(), membership_extent, uint8_t{0});
+            for (uint64_t i = 0; i < count; ++i) {
+                state.membership[indices[i]] = 1;
+            }
         }
         auto member = [&](uint64_t index) {
-            if (count == 0 || index > std::numeric_limits<uint32_t>::max()) { return false; }
-            return sorted_membership
-                ? std::binary_search(state.membership.begin(), state.membership.end(), index)
-                : std::find(indices, indices + count, index) != indices + count;
+            return index <= std::numeric_limits<uint32_t>::max() &&
+                index < membership_extent && state.membership[static_cast<size_t>(index)] != 0;
         };
         auto each_record = [&](auto emit) {
             if (!dg0) {

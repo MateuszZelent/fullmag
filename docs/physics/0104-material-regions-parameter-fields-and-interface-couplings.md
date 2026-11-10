@@ -921,6 +921,20 @@ reported explicitly. Parallel summation may change rounding; the actual-device
 invalidation, invalid-index behavior and scalar-only transfers before this
 candidate can be qualified. Source inspection is not performance evidence.
 
+Przynależność selekcji DG0 wymaga osobnej hostowej maski roboczej,
+przygotowanej przy inicjalizacji GPU. Jej rozmiar wynosi `max(N, E)` bajtów,
+gdzie `N` i `E` oznaczają liczby węzłów i elementów bieżącej siatki.
+To dodatkowy, zależny od siatki koszt hosta, a nie pamięć urządzenia ani
+nieograniczony cache obiektów. Wywołanie obserwabli nie zmienia tego rozmiaru:
+sprawdza zgodność siatki, czyści właściwy zakres maski i zaznacza selekcję
+jednym przebiegiem. Duplikaty indeksów zachowują semantykę zbioru.
+Nie wolno przywracać wyszukiwania całej listy indeksów dla każdego elementu
+po przekroczeniu pojemności cache: prowadziłoby to do kosztu kwadratowego
+dla dużych selekcji, także gdy liczba wybranych elementów przekracza liczbę
+węzłów. Ta zmiana wymaga regresji dużych selekcji node-set i element-set,
+zmiany kształtu siatki, przełączania masek oraz braku alokacji w hot loop;
+nie stanowi jeszcze dowodu przyspieszenia pełnej symulacji.
+
 Contact/interface discovery is a realization step, not an authoring shortcut.
 FDM resolves contact from object/region masks and cell adjacency on one grid.
 FEM resolves contact from boundary/domain markers in the shared-domain mesh. If
@@ -1579,6 +1593,9 @@ must include:
 | FEM transport Ms | `backends/fem/cpu/mfem/interactions/transport_stage.cpp` | `validate_transport_stage_ms_realization` | Native rejection before the reciprocal stage-transport torque is installed. |
 | FEM observables | `backends/fem/src/api.cpp` | `fullmag_fem_backend_average_m_for_elements_f64` | DG0 per-object average `m` over explicit owned elements. |
 | FEM GPU object mean | `backends/fem/gpu/cuda/reductions/object_average.cpp` | `gpu_object_average` | Bounded device reduction with existing nodal and P1/DG0 ownership semantics; managed parity pending. |
+| FEM GPU membership workspace | `backends/fem/gpu/cuda/reductions/object_average.cpp` | `prepare_membership_shape` | Host mask prepared for the node/element shape before the hot loop; large selections retain linear preparation cost. |
+| FEM GPU large node selection | `backends/fem/tests/cuda_object_average_contract.cpp` | `dg0_large_node_selection_uses_prepared_byte_mask` | Independent weighted oracle beyond the retired membership limit; native execution pending. |
+| FEM GPU element selection shape | `backends/fem/tests/cuda_object_average_contract.cpp` | `dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift` | Global element IDs, duplicate and invalid selectors, mask switching and no hot-loop resize; native execution pending. |
 | FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
 | FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
 | FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |

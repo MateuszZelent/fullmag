@@ -1255,6 +1255,24 @@
       "path": "crates/fullmag-runtime-control/src/study.rs",
       "symbol": "resolve_step_output_inputs",
       "responsibility": "Preserve admitted typed bindings for repeated resolution and require exact canonical manifest/CAS revalidation before materializing initial magnetization."
+    },
+    {
+      "id": "fem-gpu-object-membership-shape",
+      "path": "backends/fem/gpu/cuda/reductions/object_average.cpp",
+      "symbol": "prepare_membership_shape",
+      "responsibility": "Prepare max(node_count,element_count) host bytes outside the hot loop, preserve shape on failure, invalidate ownership cache on reshape."
+    },
+    {
+      "id": "fem-gpu-object-large-node-selection",
+      "path": "backends/fem/tests/cuda_object_average_contract.cpp",
+      "symbol": "void dg0_large_node_selection_uses_prepared_byte_mask",
+      "responsibility": "Qualify induced DG0 node selection beyond the retired 65536-index membership capacity using the independent CPU oracle."
+    },
+    {
+      "id": "fem-gpu-object-element-membership-shape",
+      "path": "backends/fem/tests/cuda_object_average_contract.cpp",
+      "symbol": "void dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift",
+      "responsibility": "Qualify element IDs beyond node extent, duplicates, invalid selection, alternating node/element masks and no hot-loop resize."
     }
   ],
   "public_api": {

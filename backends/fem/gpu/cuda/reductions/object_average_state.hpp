@@ -8,12 +8,11 @@
 
 namespace fullmag::fem {
 
-// Fixed budgets: four 512 KiB ownership records on host and device, plus
-// bounded preparation/chunk scratch. Large selections stream through chunks.
+// Fixed cache and chunk budgets are bounded independently of the mesh. The
+// prepared membership mask adds max(node_count, element_count) host bytes.
 inline constexpr size_t kObjectAverageCacheEntries = 4;
 inline constexpr size_t kObjectAverageRecordLimit = 16384;
 inline constexpr size_t kObjectAverageChunkRecords = 4096;
-inline constexpr size_t kObjectAverageMembershipLimit = 65536;
 
 struct GpuObjectAverageRecord {
     uint32_t nodes[4]{};
@@ -23,7 +22,7 @@ struct GpuObjectAverageRecord {
 static_assert(sizeof(GpuObjectAverageRecord) == 32);
 inline constexpr size_t kObjectAveragePreparedHostBytes =
     ((kObjectAverageCacheEntries + 1) * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
-        sizeof(GpuObjectAverageRecord) + kObjectAverageMembershipLimit * sizeof(uint32_t);
+        sizeof(GpuObjectAverageRecord);
 inline constexpr size_t kObjectAveragePreparedDeviceBytes =
     (kObjectAverageCacheEntries * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
         sizeof(GpuObjectAverageRecord) + 8 * sizeof(double);
@@ -44,7 +43,9 @@ struct GpuObjectAverageState {
     std::array<GpuObjectAverageCacheEntry, kObjectAverageCacheEntries> entries;
     std::vector<GpuObjectAverageRecord> preparation;
     std::vector<GpuObjectAverageRecord> chunk;
-    std::vector<uint32_t> membership;
+    std::vector<uint8_t> membership;
+    uint64_t membership_node_count = 0;
+    uint64_t membership_element_count = 0;
     void *device_chunk = nullptr;
     double *result = nullptr; // four totals plus four chunk sums
     size_t preparation_limit = 0;

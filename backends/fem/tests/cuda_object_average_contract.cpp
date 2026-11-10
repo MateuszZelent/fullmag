@@ -1,4 +1,5 @@
 #include "backend_handle.hpp"
+#include "gpu/cuda/reductions/object_average.hpp"
 #include "gpu/cuda/reductions/object_average_state.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -23,15 +24,22 @@ void near(double actual, double expected, double tolerance = 1e-15)
     check(std::abs(actual - expected) <= tolerance * std::max(1.0, std::abs(expected)),
           "GPU weighted average matches CPU oracle within reduction-order tolerance");
 }
-void setup(fullmag_fem_backend &backend, const std::vector<double> &m)
+void setup(fullmag_fem_backend &backend, const std::vector<double> &m, uint32_t element_count = 0u)
 {
     auto &ctx = backend.context;
     ctx.mesh.n_nodes = static_cast<uint32_t>(m.size() / 3);
+    ctx.mesh.n_elements = element_count;
     ctx.state.m_xyz.assign(m.size(), 99.0); // deliberately stale host copy
     std::string error;
     check(fullmag::fem::gpu_state_initialize(
         ctx.gpu_state.device, m.size() / 3, FULLMAG_FEM_INTEGRATOR_RK23_BS,
         true, false, m.data(), m.size(), ctx.transfer_audit.audit, error), error.c_str());
+    check(fullmag::fem::prepare_membership_shape(
+        ctx.gpu_state.device.reductions.object_average,
+        ctx.mesh.n_nodes,
+        ctx.mesh.n_elements,
+        ctx.transfer_audit.audit,
+        error), error.c_str());
     ctx.gpu_state.device.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH;
     ctx.gpu_state.device.residency.host_state = fullmag::fem::FemGpuSyncState::HostStale;
 }
@@ -102,6 +110,160 @@ void nodal_parity_cache_and_chunks()
     check(unchanged == std::array<double, 3>{0,0,0}, "zero denominator produces zero vector");
     gpu_state_destroy(ctx.gpu_state.device);
 }
+
+void dg0_large_node_selection_uses_prepared_byte_mask()
+{
+    using namespace fullmag::fem;
+    constexpr size_t node_count = 65537;
+    fullmag_fem_backend backend{};
+    std::vector<double> m(node_count * 3, 0.0);
+    const std::array<double, 12> tetra_m = {1,0,0, 0,1,0, 0,0,1, -1,0,0};
+    const size_t first_tetra_node = node_count - 4;
+    for (size_t component = 0; component < tetra_m.size(); ++component) {
+        m[first_tetra_node * 3 + component] = tetra_m[component];
+    }
+    setup(backend, m, 1u);
+    auto &ctx = backend.context;
+    const std::vector<P1TetrahedronMaterialTopology> topology = {
+        {{{first_tetra_node, first_tetra_node + 1, first_tetra_node + 2, first_tetra_node + 3}}, 2.0}};
+    ctx.material_fields.runtime.emplace(P1TetrahedralMaterialRealization(
+        node_count, topology, {0},
+        {MaterialCoefficientLocation::element_dg0, {5e5}},
+        {MaterialCoefficientLocation::uniform, {0.0}}));
+
+    std::vector<uint32_t> nodes(node_count);
+    for (size_t node = 0; node < node_count; ++node) {
+        nodes[node] = static_cast<uint32_t>(node);
+    }
+    const auto actual = average(backend, nodes);
+    const auto &realization = ctx.material_fields.runtime->realization();
+    const std::vector<uint8_t> node_mask(node_count, 1u);
+    const auto oracle = realization.ms_weighted_aos3_average_reduction_for_node_set(m, node_mask);
+    check(oracle.denominator > 0.0, "large node-set oracle has positive DG0 weight");
+    for (int component = 0; component < 3; ++component) {
+        near(actual[component], oracle.weighted_component_integrals[component] / oracle.denominator);
+    }
+    const auto &state = ctx.gpu_state.device.reductions.object_average;
+    check(state.membership.size() == node_count && state.membership_node_count == node_count,
+          "node mask is sized for every node beyond the former 65536-entry threshold");
+    check(state.membership_element_count == 1 && state.membership.front() == 1 && state.membership.back() == 1,
+          "large node selection marks its prepared mask without growing it");
+    gpu_state_destroy(ctx.gpu_state.device);
+}
+
+void dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift()
+{
+    using namespace fullmag::fem;
+    fullmag_fem_backend backend{};
+    const std::vector<double> m = {1,0,0, 0,1,0, 0,0,1, -1,0,0, 0,-1,0, 0,0,-1};
+    setup(backend, m, 7u);
+    auto &ctx = backend.context;
+    const std::vector<P1TetrahedronMaterialTopology> topology = {
+        {{{0,1,2,3}}, 1.0}, {{{0,1,4,5}}, 1.5}, {{{0,1,2,4}}, 2.0},
+        {{{0,2,3,4}}, 2.5}, {{{1,2,3,5}}, 3.0}, {{{0,2,4,5}}, 3.5},
+        {{{1,3,4,5}}, 4.0}};
+    const std::vector<size_t> active = {1,3,5,6};
+    auto install_material = [&](
+        const std::vector<P1TetrahedronMaterialTopology> &elements,
+        const std::vector<size_t> &active_elements) {
+        std::vector<double> ms(elements.size());
+        for (size_t element = 0; element < ms.size(); ++element) {
+            ms[element] = static_cast<double>(element + 1) * 1e5;
+        }
+        ctx.material_fields.runtime.emplace(P1TetrahedralMaterialRealization(
+            6, elements, active_elements,
+            {MaterialCoefficientLocation::element_dg0, ms},
+            {MaterialCoefficientLocation::uniform, {0.0}}));
+    };
+    install_material(topology, active);
+    auto &state = ctx.gpu_state.device.reductions.object_average;
+    const auto compare_oracle = [&](const std::vector<uint32_t> &selection, bool element_set) {
+        const auto actual = average(backend, selection, element_set);
+        const auto &realization = ctx.material_fields.runtime->realization();
+        MsWeightedAos3AverageReduction oracle{};
+        if (element_set) {
+            const std::vector<size_t> selected_elements(selection.begin(), selection.end());
+            oracle = realization.ms_weighted_aos3_average_reduction_for_element_set(m, selected_elements);
+        } else {
+            std::vector<uint8_t> mask(realization.node_count(), 0);
+            for (const uint32_t node : selection) { mask[node] = 1; }
+            oracle = realization.ms_weighted_aos3_average_reduction_for_node_set(m, mask);
+        }
+        check(oracle.denominator > 0.0, "alternating mask oracle has positive DG0 weight");
+        for (int component = 0; component < 3; ++component) {
+            near(actual[component], oracle.weighted_component_integrals[component] / oracle.denominator);
+        }
+    };
+
+    compare_oracle({0,1,2,3,4,5}, false);
+    compare_oracle({0,1,2,3,4,5,6,6,1}, true); // count exceeds N and E; duplicates collapse.
+    compare_oracle({0,1,4,5}, false);
+    compare_oracle({3,6}, true); // stale node bits 1 and 5 must not select extra elements.
+    compare_oracle({0,1,4,5}, false); // stale element bit 3 must not add node 3.
+
+    const auto membership_before_invalid = state.membership;
+    const uint32_t invalid_element = 7;
+    std::array<double, 3> output = {7,8,9};
+    check(fullmag_fem_backend_average_m_for_elements_f64(
+              &backend, &invalid_element, 1, output.data(), 3) == FULLMAG_FEM_ERR_INVALID,
+          "element index validation precedes mask writes");
+    check(state.membership == membership_before_invalid,
+          "invalid element selection leaves the prepared mask unchanged");
+
+    std::string error;
+    const size_t membership_size = state.membership.size();
+    const size_t membership_capacity = state.membership.capacity();
+    const uint64_t membership_node_count = state.membership_node_count;
+    const uint64_t membership_element_count = state.membership_element_count;
+    {
+        TransferAuditScope hot_loop(ctx.transfer_audit.audit, TransferAuditScopeKind::HotLoop);
+        check(!prepare_membership_shape(state, 7, 7, ctx.transfer_audit.audit, error),
+              "membership shape preparation refuses to run inside a hot loop");
+    }
+    check(state.membership.size() == membership_size &&
+              state.membership_node_count == membership_node_count &&
+              state.membership_element_count == membership_element_count,
+          "hot-loop refusal preserves the prepared membership shape");
+    error.clear();
+    check(!prepare_membership_shape(
+              state, std::numeric_limits<uint64_t>::max(), 7, ctx.transfer_audit.audit, error),
+          "membership shape rejects an extent beyond vector max_size before allocation");
+    check(state.membership.size() == membership_size &&
+              state.membership_node_count == membership_node_count &&
+              state.membership_element_count == membership_element_count,
+          "oversized shape refusal preserves the prepared membership shape");
+
+    auto drifted_topology = topology;
+    drifted_topology.push_back({{{0,1,4,5}}, 4.5});
+    install_material(drifted_topology, {1,3,5,6,7});
+    const uint32_t newly_added_element = 7;
+    output = {7,8,9};
+    const int drift_status = fullmag_fem_backend_average_m_for_elements_f64(
+        &backend, &newly_added_element, 1, output.data(), 3);
+    check(drift_status == FULLMAG_FEM_ERR_INTERNAL,
+          "GPU object average rejects runtime element-shape drift without resizing in the call");
+    check(output == std::array<double, 3>{7,8,9}, "shape drift does not publish a result");
+    check(state.membership.size() == membership_size && state.membership.capacity() == membership_capacity &&
+              state.membership_node_count == membership_node_count &&
+              state.membership_element_count == membership_element_count,
+          "shape drift leaves the setup-owned mask allocation unchanged");
+    check(std::any_of(state.entries.begin(), state.entries.end(),
+                      [](const auto &entry) { return entry.valid; }),
+          "same-shape object averages have a valid ownership-cache entry before reshape");
+    const auto device_bytes = ctx.gpu_state.device.lifecycle.device_bytes;
+    error.clear();
+    check(prepare_membership_shape(state, 6, 8, ctx.transfer_audit.audit, error), error.c_str());
+    check(state.membership.size() == 8 && state.membership_node_count == 6 &&
+              state.membership_element_count == 8,
+          "setup helper reshapes membership to max(N,E)");
+    check(std::none_of(state.entries.begin(), state.entries.end(),
+                       [](const auto &entry) { return entry.valid; }),
+          "membership reshape invalidates ownership-cache entries");
+    check(ctx.gpu_state.device.lifecycle.device_bytes == device_bytes,
+          "membership reshape remains host-owned and does not alter device byte accounting");
+    gpu_state_destroy(ctx.gpu_state.device);
+}
+
 void forced_gpu_without_device_state_never_reduces_on_cpu()
 {
     fullmag_fem_backend backend{};
@@ -124,7 +286,7 @@ void dg0_parity_membership_and_invalidation()
     using namespace fullmag::fem;
     fullmag_fem_backend backend{};
     const std::vector<double> m = {1,0,0, 0,1,0, 0,0,1, -1,0,0, 0,-1,0, 0,0,-1};
-    setup(backend, m);
+    setup(backend, m, 3u);
     auto &ctx = backend.context;
     std::vector<P1TetrahedronMaterialTopology> topology = {
         {{{0,1,2,3}}, 1.0}, {{{0,1,4,5}}, 2.0}, {{{0,2,3,4}}, 3.0}};
@@ -141,7 +303,7 @@ void dg0_parity_membership_and_invalidation()
             oracle = ctx.material_fields.runtime->ms_weighted_aos3_average_reduction_for_element_set(
                 m, std::vector<size_t>(selection.begin(), selection.end()));
         } else {
-            std::vector<uint8_t> mask(6, 0);
+            std::vector<uint8_t> mask(ctx.material_fields.runtime->realization().node_count(), 0);
             for (auto node : selection) { mask[node] = 1; }
             oracle = ctx.material_fields.runtime->ms_weighted_aos3_average_reduction_for_node_set(m, mask);
         }
@@ -185,5 +347,7 @@ int main()
     forced_gpu_without_device_state_never_reduces_on_cpu();
     nodal_parity_cache_and_chunks();
     dg0_parity_membership_and_invalidation();
+    dg0_large_node_selection_uses_prepared_byte_mask();
+    dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift();
     std::puts("PASS: CUDA per-object magnetization averages");
 }
