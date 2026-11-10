@@ -2844,6 +2844,10 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
     stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
     stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof",
+                                        help="immutable control-relative historical namespace absence proof")
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof-sha256",
+                                        help="exact raw SHA-256 of the historical namespace proof")
     stop_bootstrap_frontend.add_argument("--apply", action="store_true")
     stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")

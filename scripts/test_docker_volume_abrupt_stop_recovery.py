@@ -773,6 +773,14 @@ class AbruptStopTests(unittest.TestCase):
                 return subprocess.run([sys.executable,'-B','-c',script,argv[-1]],capture_output=True)
             with patch.object(r,'bounded_capture',side_effect=execute):
                 result=r._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-master'),backend,retained_terminal_runs=[pin])
+                nonterminal_catalog=json.loads(catalog)
+                nonterminal_catalog['tasks'][0]['lifecycle']='running'
+                nonterminal_raw=json.dumps(nonterminal_catalog,separators=(',',':')).encode()
+                (run/'run_catalog.json').write_bytes(nonterminal_raw)
+                nonterminal_pin={**pin,'run_catalog_sha256':r._sha256(nonterminal_raw)}
+                with self.assertRaisesRegex(r.ContainerRecoveryError,'nonterminal'):
+                    r._ledger_and_store_snapshot(SimpleNamespace(project='fullmag-master'),backend,retained_terminal_runs=[nonterminal_pin])
+                (run/'run_catalog.json').write_bytes(catalog)
                 self.assertEqual(result['run_records'],[pin])
                 lease_path=leases/'lease.json'; lease_raw=lease_path.read_bytes()
                 lease_path.unlink()

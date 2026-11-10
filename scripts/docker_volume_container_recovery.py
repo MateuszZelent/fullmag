@@ -2240,7 +2240,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None
+    bootstrap_stop_reference=None, historical_namespace_reference=None
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -2256,7 +2256,10 @@ def prepare_abrupt_stop_proof(
         expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA,
                                    "retained_terminal_runs": retained_terminal_runs})
         from docker_volume_bootstrap_recovery import collect
-        bootstrap = collect(control, bootstrap_stop_reference)
+        bootstrap = collect(control, bootstrap_stop_reference,
+                            historical_namespace_reference=historical_namespace_reference)
+    elif historical_namespace_reference is not None:
+        _fail("historical namespace proof requires explicit bootstrap stop evidence")
     engine_sha = _docker_engine_sha()
     if retained_terminal_runs is not None:
         retained_terminal_runs = [dict(item) for item in retained_terminal_runs]
@@ -2285,7 +2288,8 @@ def prepare_abrupt_stop_proof(
     config, config_raw, config_sha = _runtime_config(control)
     if bootstrap is None:
         _validate_process_receipt_owner(process, owner)
-    _validate_owner_host(owner, backend)
+    if bootstrap is None:
+        _validate_owner_host(owner, backend)
     raw_records = {}
     for key, raw, sha, path in (
         ("process_receipt", process_raw, process_sha, "runtime-service/process-tree.json"),
@@ -2402,7 +2406,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         if pin["container_id"] != authorization[service + "_container_id"] or pin["image_id"] != authorization["old_image_id"]:
             _fail("abrupt archived container differs from authorization")
     containers = {service: _stable_container_observation(item) for service, item in containers.items()}
-    _validate_owner_host(owner, containers["backend"])
+    _validate_recovery_owner_namespace(owner, containers["backend"], proof, authorization, control=control)
     if control is not None:
         if _docker_engine_sha() != proof["docker_engine_id_sha256"]:
             _fail("abrupt Docker engine changed")
@@ -2841,6 +2845,18 @@ def _validate_owner_host(owner: Mapping[str, object], backend: Mapping[str, obje
         _fail("backend hostname does not bind the native owner host")
 
 
+def _validate_recovery_owner_namespace(owner, backend, proof, authorization, *, control=None):
+    """Explicit bootstrap-only historical absence; normal owner binding stays strict."""
+    from docker_volume_bootstrap_recovery import HISTORICAL_SCHEMA, validate_owner_namespace
+    evidence = proof.get("bootstrap_stop", {})
+    if (proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA
+            and isinstance(evidence, Mapping) and evidence.get("schema") == HISTORICAL_SCHEMA):
+        validate_owner_namespace(evidence, _abrupt_authorization_pins(authorization),
+                                 proof["raw_records"], backend, control=control)
+    else:
+        _validate_owner_host(owner, backend)
+
+
 def _reused_session_host():
     from docker_volume_dev import _session_host
     return _session_host()
@@ -3043,7 +3059,7 @@ def _revalidate_recovery_boundary(
     if _owner_identity_key(owner) != _owner_identity_key(expected_owner):
         _fail("runtime-service owner identity changed before the destructive boundary")
     _validate_proof_process_owner(process_receipt, owner, journal, authorization, control=control)
-    _validate_owner_host(owner, backend)
+    _validate_recovery_owner_namespace(owner, backend, journal, authorization, control=control)
     launch, _, launch_sha = _runtime_launch(control)
     runtime_config, _, config_sha = _runtime_config(control)
     if config_sha != expected_config_sha or config_sha != authorization["config_sha256"]:
@@ -3343,7 +3359,7 @@ def recover(args: argparse.Namespace) -> None:
     if observed_owner_sha != authorization["owner_sha256"]:
         _fail("runtime-service owner bytes differ from operator authorization")
     _validate_proof_process_owner(process_receipt, owner, journal, authorization, control=control)
-    _validate_owner_host(owner, backend)
+    _validate_recovery_owner_namespace(owner, backend, journal, authorization, control=control)
     launch, launch_raw, launch_sha = _runtime_launch(control)
     runtime_config, runtime_config_raw, config_sha = _runtime_config(control)
     if config_sha != authorization["config_sha256"]:

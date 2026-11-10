@@ -262,6 +262,7 @@ class BootstrapFixture:
             )
         }
         self.backend = {
+            "Config": {"Hostname": self.owner["host"]},
             "Id": self.backend_id,
             "Image": self.image_id,
             "State": {"StartedAt": self.backend_started_at},
@@ -426,6 +427,183 @@ class BootstrapRecoveryTests(unittest.TestCase):
             recovery.validate(
                 self.fixture.collect(), self.fixture.pins, self.fixture.runtime_records, None,
             )
+
+class HistoricalNamespaceAbsenceTests(unittest.TestCase):
+    def setUp(self):
+        self.f = f = BootstrapFixture()
+        self.read_patch = patch.object(stop, "_read_raw", side_effect=lambda c, path, **kw: c.files[path])
+        self.read_patch.start()
+        self.addCleanup(self.read_patch.stop)
+        f.control.project = f.compose_project
+        self.original, self.recreation = "c" * 32, "9" * 32
+        self.old_pair = ["8" * 64, "9" * 64]
+        labels = {"com.docker.compose.project": f.compose_project,
+                  "com.docker.compose.service": "backend",
+                  "org.fullmag.source.project-id": "project", "org.fullmag.source.worktree-id": "worktree",
+                  "org.fullmag.source.checkout-kind": "worktree"}
+        f.backend["Config"] = {"Hostname": "new-diagnostic-host", "Labels": labels}
+        f.compose["services"]["backend"]["hostname"] = "new-diagnostic-host"
+        f.development.update(schema="fullmag.docker-build-operation.v1", state="failed-confirmed",
+            state_root="/retained/state", backend_container=f.backend_id, frontend_container=f.frontend_id)
+        f._rebuild()
+        f.backend["Config"] = {"Hostname": "new-diagnostic-host", "Labels": labels}
+        original_compose = copy.deepcopy(f.compose)
+        original_compose["services"]["backend"]["hostname"] = f.owner["host"]
+        original = {**f.development, "attempt": self.original, "state": "succeeded",
+                    "config_sha256": digest(canonical(original_compose)),
+                    "backend_container": self.old_pair[0], "frontend_container": self.old_pair[1]}
+        f.development["config_sha256"] = f.pins["compose_config_sha256"]
+        f._rebuild()
+        f.backend["Config"] = {"Hostname": "new-diagnostic-host", "Labels": labels}
+        retained = {role: {"Id": identifier, "Config": {"Hostname": f.owner["host"] if role == "backend" else "old-frontend",
+                    "Labels": {**labels, "com.docker.compose.service": role}},
+                    "State": {"Running": False, "Pid": 0}} for role, identifier in zip(("backend", "frontend"), self.old_pair)}
+        records = {
+            f"development/attempts/{self.original}/terminal.json": original,
+            f"development/attempts/{self.original}/compose.json": original_compose,
+            f"development/attempts/{self.original}/backend-build-receipt.json": {"state": "succeeded", "source": {
+                "resolved_commit": f.owner["build_commit"], "source_snapshot_sha256": f.owner["build_snapshot"]}},
+            f"recreate-services/attempts/{self.recreation}/terminal.json": {
+                "schema": "fullmag.docker-build-operation.v1", "phase": "recreate-services", "state": "succeeded",
+                "attempt": self.recreation, "fresh_state": False, "compose_project": f.compose_project,
+                "control_volume": f.control.volume, "previous_state_root": "/retained/state", "removed_containers": self.old_pair,
+                "inputs": {"attempt": self.original, "config_sha256": original["config_sha256"]}},
+            f"recreate-services/attempts/{self.recreation}/retained-containers.json": retained,
+        }
+        f.control.files.update({path: raw_json(value) for path, value in records.items()})
+        self.absence = {"docker_engine_id_sha256": "f" * 64, "historical_container_ids_absent": sorted(self.old_pair),
+                        "historical_hostname": f.owner["host"], "hostname_reused": False}
+        from types import SimpleNamespace
+        with patch.object(recovery, "_observe_namespace_absence", return_value=self.absence), \
+                patch("docker_build_control.docker_capture", return_value=SimpleNamespace(stdout=canonical([f.backend]))):
+            self.document = recovery.prepare_historical_namespace_absence(f.control,
+                bootstrap_stop_reference=f.reference, original_development_attempt=self.original,
+                recreations=[{"attempt": self.recreation, "successor_development_attempt": f.development_attempt}])
+        self.path = "verification/historical-namespace.json"
+
+    def evidence(self, document=None):
+        raw = canonical(self.document if document is None else document)
+        self.f.control.files[self.path] = raw
+        return recovery.collect(self.f.control, self.f.reference,
+            historical_namespace_reference={"path": self.path, "sha256": digest(raw)})
+
+    def test_explicit_historical_namespace_keeps_old_process_observation_unknown(self):
+        evidence = self.evidence()
+        with patch.object(recovery, "_observe_namespace_absence", return_value=self.absence):
+            recovery.validate(evidence, self.f.pins, self.f.runtime_records, self.f.backend, control=self.f.control)
+        self.assertEqual(self.document["historical_process_observation"], "unknown")
+        self.assertIs(self.document["native_drain_claimed"], False)
+        with self.assertRaisesRegex(BuildControlError, "hostname"):
+            recovery.validate(self.f.collect(), self.f.pins, self.f.runtime_records, self.f.backend)
+
+    def test_incomplete_tampered_foreign_or_nonpreserving_chain_is_refused(self):
+        paths = list(self.document["records"])
+        for mutation in ("missing", "foreign", "running", "build", "delete", "fresh", "claim", "pair", "raw-digest"):
+            document = copy.deepcopy(self.document)
+            def change(path, update):
+                value = json.loads(document["records"][path]["raw_utf8"])
+                update(value)
+                raw = canonical(value)
+                document["records"][path] = {"raw_utf8": raw.decode(), "sha256": digest(raw)}
+            retained = f"recreate-services/attempts/{self.recreation}/retained-containers.json"
+            deletion = f"recreate-services/attempts/{self.recreation}/terminal.json"
+            if mutation == "missing": del document["records"][paths[-1]]
+            elif mutation == "foreign": change(retained, lambda v: v["backend"]["Config"]["Labels"].update({"org.fullmag.source.worktree-id": "foreign"}))
+            elif mutation == "running": change(retained, lambda v: v["backend"]["State"].update(Running=True))
+            elif mutation == "build": change(f"development/attempts/{self.original}/backend-build-receipt.json", lambda v: v["source"].update(resolved_commit="0" * 40))
+            elif mutation == "delete": change(deletion, lambda v: v.update(state="failed-confirmed"))
+            elif mutation == "fresh": change(deletion, lambda v: v.update(fresh_state=True))
+            elif mutation == "claim": document["historical_process_observation"] = "proved"
+            elif mutation == "pair": change(deletion, lambda v: v.update(removed_containers=["a" * 64, "b" * 64]))
+            else: document["records"][paths[-1]]["raw_utf8"] += " "
+            with self.subTest(mutation=mutation), self.assertRaises(BuildControlError):
+                recovery.validate_owner_namespace(self.evidence(document), self.f.pins, self.f.runtime_records, self.f.backend)
+
+    def test_live_absence_or_archived_byte_drift_is_refused(self):
+        evidence = self.evidence()
+        with patch.object(recovery, "_observe_namespace_absence", side_effect=BuildControlError("predecessor or hostname reused")):
+            with self.assertRaises(BuildControlError):
+                recovery.validate(evidence, self.f.pins, self.f.runtime_records, self.f.backend, control=self.f.control)
+        path = next(p for p in self.document["records"] if p.endswith("retained-containers.json"))
+        self.f.control.files[path] += b" "
+        with self.assertRaisesRegex(BuildControlError, "historical record changed"):
+            recovery.validate_owner_namespace(evidence, self.f.pins, self.f.runtime_records, self.f.backend, control=self.f.control)
+
+    def test_malformed_and_unknown_records_fail_closed(self):
+        for mutation in ("records-type", "raw-type", "extra-record", "missing-link", "wrong-namespace"):
+            document = copy.deepcopy(self.document)
+            if mutation == "records-type": document["records"] = []
+            elif mutation == "raw-type": next(iter(document["records"].values()))["raw_utf8"] = False
+            elif mutation == "extra-record": document["records"]["unknown"] = {"raw_utf8": "{}", "sha256": digest(b"{}")}
+            elif mutation == "missing-link": document["recreations"] = []
+            else: document["control_volume"] = "foreign"
+            with self.subTest(mutation=mutation), self.assertRaises(BuildControlError):
+                recovery.validate_owner_namespace(self.evidence(document), self.f.pins, self.f.runtime_records,
+                    self.f.backend, **({"control": self.f.control} if mutation == "wrong-namespace" else {}))
+
+    def test_engine_observer_refuses_existing_predecessor_hostname_reuse_and_inventory_race(self):
+        from types import SimpleNamespace
+        import docker_volume_container_recovery as r
+        for mode in ("present", "hostname", "race"):
+            listings = iter((["a" * 64], ["a" * 64, "b" * 64]) if mode == "race" else (["a" * 64], ["a" * 64]))
+            def docker(*command, **kwargs):
+                if command[0] == "ps":
+                    return SimpleNamespace(stdout=("\n".join(next(listings)) + "\n").encode())
+                return SimpleNamespace(stdout=canonical([{"Id": "a" * 64, "Config": {
+                    "Hostname": self.f.owner["host"] if mode == "hostname" else "other-host"}}]))
+            with self.subTest(mode=mode), patch.object(r, "_docker_engine_sha", return_value="f" * 64), \
+                    patch.object(r, "_assert_container_absent", side_effect=BuildControlError("predecessor present") if mode == "present" else None), \
+                    patch("docker_build_control.docker_capture", side_effect=docker), self.assertRaises(BuildControlError):
+                recovery._observe_namespace_absence(self.f.owner["host"], self.old_pair)
+
+    def test_container_recovery_prepare_validation_and_boundary_use_typed_namespace(self):
+        import docker_volume_container_recovery as r
+        f = self.f
+        evidence = self.evidence()
+        reference = {"path": self.path, "sha256": digest(canonical(self.document))}
+        pins = {**f.pins, "request_id": "11111111-1111-4111-8111-111111111111"}
+        network = f.compose_project + "_fullmag"
+        containers = {}
+        for role in ("backend", "frontend"):
+            row = copy.deepcopy(f.backend)
+            row["Id"] = pins[role + "_container_id"]
+            row["Config"]["Labels"]["com.docker.compose.service"] = role
+            row["HostConfig"] = {"PidMode": "", "IpcMode": "private", "NetworkMode": network}
+            row["NetworkSettings"] = {"Networks": {network: {"NetworkID": "e" * 64}}}
+            row["Mounts"] = [{"Type": "bind", "Source": "/state/source", "Destination": "/state", "RW": True}]
+            row["State"] = {"Status": "exited", "Running": False, "Pid": 0, "ExitCode": 0,
+                "Paused": False, "Restarting": False, "FinishedAt": "2026-11-06T10:00:00Z",
+                "StartedAt": f.backend_started_at if role == "backend" else f.resume["frontend_started_at"]}
+            containers[role] = row
+        terminal_pins = [{"run_id": "run-terminal", "run_intent_sha256": "1" * 64,
+                          "run_catalog_sha256": "2" * 64, "artifact_catalog_sha256": None}]
+        storage = {"run_records": terminal_pins}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(recovery, "_observe_namespace_absence", return_value=self.absence))
+            stack.enter_context(patch.object(r, "_docker_engine_sha", return_value="f" * 64))
+            stack.enter_context(patch.object(r, "_inspect_pair", return_value=tuple(containers.values())))
+            stack.enter_context(patch.object(r, "_assert_no_foreign_storage_consumers"))
+            stack.enter_context(patch.object(r, "_ledger_and_store_snapshot", return_value=storage))
+            stack.enter_context(patch.object(r, "_abrupt_network", return_value={"name": network, "state": "absent"}))
+            for key, function in (("process_receipt", "_runtime_process_receipt"), ("owner", "_runtime_owner"),
+                                  ("launch", "_runtime_launch"), ("config", "_runtime_config")):
+                record = f.runtime_records[key]; raw = record["raw_utf8"].encode()
+                stack.enter_context(patch.object(r, function, return_value=(json.loads(raw), raw, record["sha256"])))
+            proof = r.prepare_abrupt_stop_proof(f.control, pins, f.compose, retained_terminal_runs=terminal_pins,
+                bootstrap_stop_reference=f.reference, historical_namespace_reference=reference)
+            authorization = r.validate_operator_authorization({**pins, "schema_version": r.ABRUPT_OPERATOR_SCHEMA,
+                "abrupt_stop_proof": "verification/abrupt.json", "abrupt_stop_proof_sha256": digest(canonical(proof))})
+            r.validate_abrupt_stop_proof(proof, authorization)
+            # This is the exact namespace fence called at recover() and its
+            # destructive revalidation boundary, with current source CAS.
+            r._validate_recovery_owner_namespace(f.owner, containers["backend"], proof, authorization, control=f.control)
+            with self.assertRaisesRegex(BuildControlError, "hostname"):
+                r._validate_recovery_owner_namespace(f.owner, containers["backend"], {}, authorization)
+            with patch.object(r, "_ledger_and_store_snapshot", side_effect=BuildControlError("run contains nonterminal tasks")):
+                with self.assertRaisesRegex(BuildControlError, "nonterminal"):
+                    r.prepare_abrupt_stop_proof(f.control, pins, f.compose, retained_terminal_runs=terminal_pins,
+                        bootstrap_stop_reference=f.reference, historical_namespace_reference=reference)
+
 
 class BootstrapProofIntegrationTests(unittest.TestCase):
     def setUp(self):

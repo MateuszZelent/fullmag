@@ -50,7 +50,23 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _historical_namespace_reference(args: argparse.Namespace):
+    path = getattr(args, "historical_namespace_proof", None)
+    digest = getattr(args, "historical_namespace_proof_sha256", None)
+    if path is None and digest is None:
+        return None
+    _need(isinstance(path, str) and 0 < len(path) <= 1024
+          and not path.startswith("/") and "\\" not in path
+          and all(component not in ("", ".", "..") for component in path.split("/"))
+          and not any(ord(character) < 0x20 for character in path),
+          "historical namespace proof requires a canonical control-relative path")
+    _need(isinstance(digest, str) and SHA256_RE.fullmatch(digest) is not None,
+          "historical namespace proof requires its exact raw SHA-256")
+    return {"path": path, "sha256": digest}
+
+
 def _validate_args(args: argparse.Namespace) -> None:
+    _historical_namespace_reference(args)
     _need(isinstance(getattr(args, "attempt", None), str)
           and ATTEMPT_RE.fullmatch(args.attempt) is not None,
           "development attempt is not a complete lowercase identity")
@@ -238,13 +254,16 @@ def _observe(args, selected, identity, control) -> dict[str, object]:
     from docker_volume_dev import _validate_retained_service
     from docker_volume_stop_diagnostic import _port_matches
     from docker_volume_stop_unadmitted import _validate_network
-    from docker_volume_container_recovery import _abrupt_network, _validate_owner_host
+    from docker_volume_container_recovery import _abrupt_network
 
     reference = {
         "attempt": args.bootstrap_stop_attempt,
         "sha256": args.bootstrap_stop_sha256,
     }
-    evidence = recovery.collect(control, reference)
+    historical_reference = _historical_namespace_reference(args)
+    evidence = (recovery.collect(control, reference)
+                if historical_reference is None else recovery.collect(
+                    control, reference, historical_namespace_reference=historical_reference))
     records = evidence.get("records")
     if not isinstance(records, Mapping):
         _fail("frozen bootstrap-stop evidence has no record inventory")
@@ -304,9 +323,8 @@ def _observe(args, selected, identity, control) -> dict[str, object]:
     validated = recovery.validate(evidence, pins, runtime_records, actual["backend"], control=control)
     _require_stopped(actual["backend"], "backend")
     frontend_running = _frontend_running(actual["frontend"])
-    owner_raw = runtime_records["owner"]["raw_utf8"].encode("utf-8")
-    owner = bootstrap_stop._json(owner_raw, "retained native owner")
-    _validate_owner_host(owner, actual["backend"])
+    # validate() authenticates the ordinary owner host or the explicitly
+    # pinned historical namespace proof, including fresh Docker absence checks.
 
     for service in ("backend", "frontend"):
         row = actual[service]
@@ -346,6 +364,8 @@ def _observe(args, selected, identity, control) -> dict[str, object]:
         "control_namespace": control.namespace or None,
         "development_attempt": args.attempt,
         "bootstrap_stop": reference,
+        **({"historical_namespace_proof": historical_reference}
+           if historical_reference is not None else {}),
         "compose_config_sha256": args.config_sha256,
         "compose_raw_sha256": _sha(compose_raw),
         "bootstrap_evidence_sha256": dict(sorted(evidence_hashes.items())),
@@ -457,6 +477,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "source_root": str(selected),
         "port": args.port,
         "expected_plan_sha256": args.expected_plan_sha256,
+        **({"historical_namespace_proof": _historical_namespace_reference(args)}
+           if _historical_namespace_reference(args) is not None else {}),
         "execution_state": "unknown",
     }
     with control.operation(PHASE, operation_inputs) as operation:

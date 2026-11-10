@@ -843,6 +843,25 @@ sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
 Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
 do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
 
+Wąski wariant recovery z historycznym ownerem dopuszcza osobny dowód
+`fullmag.docker-bootstrap-historical-namespace-absence.v1`. Dotyczy sytuacji,
+gdy zachowany `OWNER.host` wskazuje wcześniejszy, usunięty kontener tej samej
+grupy, a obecny backend zatrzymano przez przypięty diagnostic bootstrap stop.
+Dowód wiąże obecne bajty OWNER/process z archiwalnym inspect, buildem i jawnym
+łańcuchem udanych rekreacji; ponownie sprawdza nieobecność dokładnych starych
+kontenerów oraz brak ponownego użycia historycznego hostname w całym silniku.
+Nie odtwarza brakującej historycznej obserwacji procesu i nie deklaruje drain.
+Zwykły recovery nadal wymaga zgodności hosta właściciela.
+
+Dowód powstaje przez `prepare_historical_namespace_absence` i jest publikowany
+niezmiennie w operacji BuildControl. `stop-bootstrap-frontend-volume` wymaga
+wtedy jawnej pary `--historical-namespace-proof <control-relative-path>` oraz
+`--historical-namespace-proof-sha256 <raw-sha256>`; preview i apply wiążą ten
+sam dowód i ponawiają kontrole nieobecności. Archiwizacja nadal wymaga pełnego
+terminalnego accepted store, przypiętego proof i operator authorization.
+Sesje, Zarr, historyczne metadane i lease pozostają zachowane. Ten wyjątek nie
+uprawnia do kasowania rekordów ownera ani do uznania Unknown za terminalny run.
+
 ### Przygotowana, nieopublikowana awaria tworzenia sieci
 
 `scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
