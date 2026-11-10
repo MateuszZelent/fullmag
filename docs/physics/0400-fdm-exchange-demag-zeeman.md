@@ -576,6 +576,21 @@ so that the FFT realizes the linear convolution instead of an unphysical circula
 The exact padding policy belongs to the execution plan and provenance.
 It must not leak into the shared Python semantics.
 
+Update 2026-11-10, CPU single-layer candidate (runtime unqualified):
+`ExchangeLlgProblem::create_workspace` selects an internal transform with
+`pz=1` only for one physical layer, an entirely open stencil policy and open
+demagnetization. All source and target cells then share the same z coordinate;
+only the six Newell tensor planes at zero z displacement contribute to the
+cropped convolution. The physical cell thickness and all six tensor components
+are retained. XY padding and inverse normalization are unchanged. The public
+`FftWorkspace::new`, 3D, periodic and GPU routes retain their existing policies.
+The workspace lifecycle digest includes the actual transform dimensions and
+reports schema `fullmag.fdm.fft_workspace.v3`. Tests compare both AoS and SoA
+fields and energy against an explicitly constructed legacy `pz=2` workspace,
+including a mask hole, heterogeneous saturation magnetization and non-cubic
+cells. These tests and an identical-input full-Zarr timing/parity comparison
+must pass before claiming numerical qualification or a speedup.
+
 ##### GPU implementation contract
 
 The CUDA implementation should:
@@ -1054,3 +1069,6 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Accepted original-context fields | crates/fullmag-runner/src/accepted_materialization.rs | capture_solver_observables, materialize_captured_observables | Copy complete same-clock fields and bind them to the final immutable state before CAS publication. | FDM CPU/GPU | source-visible; runtime NOT VERIFIED |
 | Terminal binary spool | crates/fullmag-api/src/accepted_observation_spool.rs | write_fragment | Write one complete quantity with accepted-source guards and admitted budgets. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |
 | Terminal binary publication | crates/fullmag-api/src/accepted_field_materialization_worker.rs | materialize_spool | Validate complete catalog and publish immutable CAS chunks plus metadata. | FDM/FEM CPU/GPU | source-only; runtime NOT VERIFIED |
+
+| CPU single-layer transform | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `new_open_single_layer` | Retains all six zero-z-displacement Newell planes with one transform plane. | FDM CPU | source candidate; managed numerical/runtime qualification pending |
+| CPU single-layer oracle | `crates/fullmag-engine/src/fdm/shared/problem.rs` | `open_single_layer_workspace_matches_legacy_aos_and_soa_oracle` | Compares fields and energy against the legacy transform. | FDM CPU | executable regression; not yet run |

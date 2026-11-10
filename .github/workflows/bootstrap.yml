@@ -490,6 +490,15 @@ jobs:
           cargo test --locked -p fullmag-engine --lib demag_cache_tests
           cargo test --locked -p fullmag-runner --lib relaxation::direct_minimizer_reference::tests::projected_gradient_bb_reuses_each_trial_demag_fft_in_aos_and_soa -- --exact
 
+      - name: Run FDM CPU single-layer FFT oracle contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --features parallel --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
+
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
 
