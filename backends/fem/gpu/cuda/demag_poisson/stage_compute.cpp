@@ -539,6 +539,8 @@ bool compute_device_demag_for_device_stage_impl(
         gpu.demag_poisson.field_and_energy_evaluation_count += 1;
     }
     ctx.poisson_demag.solves_current_step += 1;
+    note_successful_demag_linear_iterations(ctx.poisson_demag,
+        static_cast<uint64_t>(std::max(0, iterations)));
     // Within an active performance attempt, count certified device-Poisson
     // work even if the enclosing RK attempt subsequently fails or is rejected.
     // Direct minimizers still use their native per-step solve statistics;

@@ -23,6 +23,7 @@
 #include <mfem.hpp>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -156,6 +157,8 @@ bool context_compute_demag_poisson(
             recover_wall_time_ns_pbc,
             energy_wall_time_ns_pbc);
         ctx.poisson_demag.solves_current_step += 1;
+        note_successful_demag_linear_iterations(ctx.poisson_demag,
+            static_cast<uint64_t>(std::max(0, ctx.poisson_demag.last_iterations)));
         return true;
     }
 
@@ -230,6 +233,8 @@ bool context_compute_demag_poisson(
         recover_wall_time_ns,
         energy_wall_time_ns);
     ctx.poisson_demag.solves_current_step += 1;
+    note_successful_demag_linear_iterations(ctx.poisson_demag,
+        static_cast<uint64_t>(std::max(0, ctx.poisson_demag.last_iterations)));
 
     return true;
 }

@@ -135,6 +135,7 @@ bool context_snapshot_stats_mfem(
     PhaseTimings timings;
     stats = {};
     ctx.poisson_demag.solves_current_step = 0;
+    ctx.poisson_demag.linear_iterations_current_step = 0;
     ctx.poisson_demag.setup_count_current_step = 0;
     ctx.poisson_demag.fresh_zero_guess_count_current_step = 0;
     ctx.poisson_demag.event_wait_count_current_step = 0;

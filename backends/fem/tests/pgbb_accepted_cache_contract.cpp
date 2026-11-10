@@ -89,7 +89,12 @@ void accepted_cache_guards_exact_inputs()
     };
     fullmag_fem_step_stats stats{};
     publish();
+    ctx.poisson_demag.solves_current_step = 3;
+    ctx.poisson_demag.linear_iterations_current_step = 33;
     check(relaxation::take_pgbb_accepted_stats(ctx, stats), "unchanged endpoint reuses accepted evaluation");
+    check(ctx.poisson_demag.solves_current_step == 0 &&
+          ctx.poisson_demag.linear_iterations_current_step == 0 && stats.demag_linear_iterations == 0,
+          "accepted field reuse charges zero new linear solves and iterations");
     check(stats.total_energy_joules == -3.0 && stats.max_torque_Apm == 2.0,
           "reuse preserves accepted numerical observables");
     check(!relaxation::take_pgbb_accepted_stats(ctx, stats), "accepted token is single use");

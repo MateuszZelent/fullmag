@@ -12,6 +12,8 @@
 #include "core/fem_material_runtime.hpp"
 #include "cuda_demag_residual_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
+#include "cpu/mfem/interactions/demag_poisson_runtime.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem_telemetry.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
@@ -3989,6 +3991,7 @@ void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
         "uint64_t step_solver_apply_wall_time_ns",
         "bool last_solver_setup_reused",
         "uint32_t solves_current_step",
+        "uint32_t linear_iterations_current_step",
         "uint32_t setup_count_current_step",
         "uint32_t fresh_zero_guess_count_current_step",
         "uint32_t event_wait_count_current_step",
@@ -4182,6 +4185,43 @@ void demag_recovery_finalizes_periodic_field_before_energy() {
         "periodic demag projection must happen after visual accumulation/zeroing and before energy");
 }
 
+void demag_iteration_work_counter_is_bounded_and_independent() {
+    using namespace fullmag::fem;
+    PoissonDemagRuntimeState state{};
+    state.last_iterations = 11;
+    note_successful_demag_linear_iterations(state, 17);
+    note_successful_demag_linear_iterations(state, 5);
+    note_successful_demag_linear_iterations(state, 11);
+    check(state.linear_iterations_current_step == 33u,
+          "successful solve iterations accumulate 17+5+11, not only the last solve");
+    check(state.last_iterations == 11,
+          "aggregate iteration work does not overwrite the last-solve diagnostic");
+    state.linear_iterations_current_step = std::numeric_limits<uint32_t>::max() - 1u;
+    note_successful_demag_linear_iterations(state, 1);
+    check(state.linear_iterations_current_step == std::numeric_limits<uint32_t>::max(),
+          "exact upper-bound addition remains representable");
+    state.linear_iterations_current_step = 0;
+    note_successful_demag_linear_iterations(state, std::numeric_limits<uint64_t>::max());
+    check(state.linear_iterations_current_step == std::numeric_limits<uint32_t>::max(),
+          "uint64 work saturates the bounded ABI counter without wrapping");
+#if FULLMAG_HAS_MFEM_STACK
+    Context ctx{};
+    DemagFemBemSolveTelemetry solve{};
+    solve.u1_iterations = -2;
+    solve.u2_iterations = 5;
+    publish_demag_fem_bem_solver_stats(ctx, solve);
+    check(ctx.poisson_demag.linear_iterations_current_step == 5u,
+          "FEM/BEM contributes only positive linear-solve work");
+    solve.u1_iterations = 17;
+    solve.u2_iterations = 11;
+    publish_demag_fem_bem_solver_stats(ctx, solve);
+    check(ctx.poisson_demag.linear_iterations_current_step == 33u,
+          "FEM/BEM accumulates both u1 and u2 across evaluations");
+    check(ctx.poisson_demag.last_iterations == 28,
+          "FEM/BEM retains its existing last-evaluation diagnostic");
+#endif
+}
+
 void demag_solver_stats_are_filled_by_poisson_module() {
     fullmag::fem::Context ctx;
     fullmag_fem_step_stats stats{};
@@ -4220,7 +4260,7 @@ void demag_solver_stats_are_filled_by_poisson_module() {
 
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
     check(stats.demag_solve_count == 3, "enabled demag solve count");
-    check(stats.demag_linear_iterations == 0, "negative demag iterations clamp to zero");
+    check(stats.demag_linear_iterations == 0, "no successful solve work reports zero independently of last diagnostic");
     check(stats.demag_linear_residual == 1.5e-7, "enabled demag residual");
     check(stats.demag_potential_order == 2, "enabled demag potential order");
     check(stats.demag_potential_true_dof_count == 321,
@@ -4230,9 +4270,13 @@ void demag_solver_stats_are_filled_by_poisson_module() {
     check(stats.demag_recovered_field_energy_joules == 2.0e-19,
           "enabled demag recovered-field energy in J");
 
-    ctx.poisson_demag.last_iterations = 12;
+    fullmag::fem::note_successful_demag_linear_iterations(ctx.poisson_demag, 17);
+    fullmag::fem::note_successful_demag_linear_iterations(ctx.poisson_demag, 5);
+    fullmag::fem::note_successful_demag_linear_iterations(ctx.poisson_demag, 11);
+    ctx.poisson_demag.last_iterations = 11;
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
-    check(stats.demag_linear_iterations == 12, "positive demag iterations are reported");
+    check(stats.demag_linear_iterations == 33, "step statistics publish accumulated successful work");
+    check(ctx.poisson_demag.last_iterations == 11, "stats retain the separate last-solve diagnostic");
 
     ctx.poisson_demag.ready = false;
     stats.demag_potential_order = 66;
@@ -4242,8 +4286,8 @@ void demag_solver_stats_are_filled_by_poisson_module() {
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
     check(stats.demag_solve_count == 3,
           "not-ready Robin preserves existing demag solve count reporting");
-    check(stats.demag_linear_iterations == 12,
-          "not-ready Robin preserves existing demag iterations reporting");
+    check(stats.demag_linear_iterations == 33,
+          "not-ready Robin preserves aggregate iteration reporting");
     check(stats.demag_linear_residual == 1.5e-7,
           "not-ready Robin preserves existing demag residual reporting");
     check(stats.demag_potential_order == 0,
@@ -4259,6 +4303,7 @@ void demag_solver_stats_are_filled_by_poisson_module() {
     ctx.poisson_demag.ready = true;
     ctx.poisson_demag.solves_current_step = 4;
     ctx.poisson_demag.last_iterations = 8;
+    ctx.poisson_demag.linear_iterations_current_step = 19;
     ctx.poisson_demag.last_residual = 2.5e-7;
     stats.demag_potential_order = 66;
     stats.demag_potential_true_dof_count = 55;
@@ -4267,8 +4312,8 @@ void demag_solver_stats_are_filled_by_poisson_module() {
     fullmag::fem::fill_demag_poisson_solver_stats(ctx, stats);
     check(stats.demag_solve_count == 4,
           "Fredkin-Koehler preserves existing demag solve count reporting");
-    check(stats.demag_linear_iterations == 8,
-          "Fredkin-Koehler preserves existing demag iterations reporting");
+    check(stats.demag_linear_iterations == 19,
+          "Fredkin-Koehler reports aggregate work independently of last diagnostic");
     check(stats.demag_linear_residual == 2.5e-7,
           "Fredkin-Koehler preserves existing demag residual reporting");
     check(stats.demag_potential_order == 0,
@@ -4802,6 +4847,7 @@ int main(int argc, char **argv) {
     run_contract_case("demag_recovery_uses_negative_scalar_potential_gradient", demag_recovery_uses_negative_scalar_potential_gradient);
 #endif
     run_contract_case("demag_recovery_finalizes_periodic_field_before_energy", demag_recovery_finalizes_periodic_field_before_energy);
+    run_contract_case("demag_iteration_work_counter_is_bounded_and_independent", demag_iteration_work_counter_is_bounded_and_independent);
     run_contract_case("demag_solver_stats_are_filled_by_poisson_module", demag_solver_stats_are_filled_by_poisson_module);
     run_contract_case("demag_step_stats_provenance_abi_is_append_only", demag_step_stats_provenance_abi_is_append_only);
     run_contract_case("demag_poisson_ready_contract_is_owned_by_poisson_module", demag_poisson_ready_contract_is_owned_by_poisson_module);

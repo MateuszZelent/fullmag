@@ -628,6 +628,15 @@ does not turn the Poisson runtime's last-solve diagnostic into a lifetime work
 counter. The managed regression is
 `relaxation_profile_accumulates_all_trial_iterations`; execution is pending.
 
+Native CPU/GPU Poisson and FEM/BEM reporting now also uses a separate
+`linear_iterations_current_step` aggregate, alongside `solves_current_step`.
+Only successful, certified and recovered evaluations contribute; FEM/BEM adds
+both sparse systems. Reset, observation and rollback boundaries follow the
+existing solve counter. `last_iterations` and the reported residual retain
+their last-evaluation meaning. The aggregate is not a lifetime counter and
+does not include failed certification or recovery. Source-level numeric and
+rollback regressions are present; managed execution remains pending.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -1024,3 +1033,4 @@ managed-runtime qualification.
 | cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
 | gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
 | cpu-relaxation-iteration-profile | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `accumulate_relaxation_profile_sample` | Sum linear iterations across evaluated trials before accepted-row publication. | FEM CPU | Regression added; execution pending. | Unpublished task candidate. |
+| native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
