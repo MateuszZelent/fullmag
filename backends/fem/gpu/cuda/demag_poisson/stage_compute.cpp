@@ -539,6 +539,15 @@ bool compute_device_demag_for_device_stage_impl(
         gpu.demag_poisson.field_and_energy_evaluation_count += 1;
     }
     ctx.poisson_demag.solves_current_step += 1;
+    // Within an active performance attempt, count certified device-Poisson
+    // work even if the enclosing RK attempt subsequently fails or is rejected.
+    // Direct minimizers still use their native per-step solve statistics;
+    // they do not yet open this performance-attempt lifecycle.
+    // Failed certification/recovery work remains outside these counters.
+    GpuPerformanceCounterDelta solve_work{};
+    solve_work.demag_solves = 1;
+    solve_work.demag_iterations = static_cast<uint64_t>(std::max(0, iterations));
+    gpu_performance_note(ctx.gpu_state.performance_counters, solve_work);
     return true;
 #else
     (void)ctx;
