@@ -123,7 +123,7 @@ install-cli install-cli-dev install-cli-static:
 	native_contracts="$${FULLMAG_INTERNAL_NATIVE_CONTRACTS:-}"; \
 	case "$$native_contracts" in \
 		"") ;; \
-		fem-demag-poisson|fem-cuda-activity-trace) \
+		fem-demag-poisson|fem-cuda-activity-trace|fem-cuda-pgbb-reuse|fem-cuda-rk-guard|fem-cpu-pgbb-reuse) \
 			if [ "$@" != "install-cli-dev" ] || [ "$${FULLMAG_DIRECT_COMPOSE:-0}" != "1" ] || [ "$${FULLMAG_BACKEND_CARGO_PROFILE:-}" != "backend-dev" ]; then \
 				echo "FULLMAG_INTERNAL_NATIVE_CONTRACTS requires direct Compose install-cli-dev backend-dev" >&2; exit 2; \
 			fi ;; \

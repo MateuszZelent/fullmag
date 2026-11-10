@@ -171,7 +171,8 @@ class DockerDevUpReconciliationTests(unittest.TestCase):
     def test_native_contract_cli_accepts_cuda_activity_gate_but_remains_single_select(self):
         parser = docker_dev._parser()
         commands = parser._subparsers._group_actions[0].choices
-        expected = {"fem-demag-poisson", "fem-cuda-activity-trace"}
+        expected = {"fem-demag-poisson", "fem-cuda-activity-trace",
+                    "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard", "fem-cpu-pgbb-reuse"}
         for command_name in ("build", "up", "recreate-volume"):
             with self.subTest(command=command_name):
                 command = commands[command_name]
