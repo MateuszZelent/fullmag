@@ -356,7 +356,7 @@ def _prepared_release(store, ledger, rows, store_id, target):
 
 
 def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='/proc',
-            binary='/opt/fullmag/package/bin/fullmag-runtime-service', prepared_target=None):
+            binary='/opt/fullmag/package/bin/fullmag-runtime-service', prepared_target=None, terminal_only=False):
     """Image-owned read-only observation; all locks are existing and scoped."""
     import fcntl
     state, control_root, ledger = Path(state), Path(control_root), Path(ledger)
@@ -446,7 +446,7 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
                 and cert.get('restart_expected_sha256') == sha(sentinel), 'Linux restart sentinel differs')
         identity = {'schema': 'fullmag.linux-native-store-identity.v1', 'engine_id': engine,
                     'owner_token': owner_token, 'relative_state_path': 'runs/docker-all/session-store'}
-        store_proof = observe_store(store, ledger, 'sha256:' + sha(canonical(identity)), prepared_target=prepared_target)
+        store_proof = observe_store(store, ledger, 'sha256:' + sha(canonical(identity)), prepared_target=prepared_target, terminal_only=terminal_only)
         if prepared_target is not None:
             prep_pid = store_proof['prepared_unclaimed']['preparation_pid']
             require(prep_pid not in [api_pid, *pids] and not (Path(proc_root) / str(prep_pid)).exists(),
@@ -467,21 +467,21 @@ def observe(state, control_root, ledger, image_id, *, stopped=False, proc_root='
                 'api_pid': api_pid, 'store': store_proof, 'native_binary_sha256': binary_sha(binary)}
 
 
-def _script(image_id, stopped, prepared_target=None):
+def _script(image_id, stopped, prepared_target=None, terminal_only=False):
     # This module is stdlib-only until the orchestration functions are called.
     source = Path(__file__).read_text()
-    return source + '\nprint(json.dumps(observe("/state", "/opt/fullmag/runtime-control", "/host-ledger/ledger", ' + repr(image_id) + ', stopped=' + repr(stopped) + ', prepared_target=' + repr(prepared_target) + ')))\n'
+    return source + '\nprint(json.dumps(observe("/state", "/opt/fullmag/runtime-control", "/host-ledger/ledger", ' + repr(image_id) + ', stopped=' + repr(stopped) + ', prepared_target=' + repr(prepared_target) + ', terminal_only=' + repr(terminal_only) + ')))\n'
 
 
-def _probe(control, actual, image_id, *, stopped=False, prepared_target=None):
+def _probe(control, actual, image_id, *, stopped=False, prepared_target=None, terminal_only=False):
     from docker_build_control import docker_capture, bounded_capture
     if not stopped:
-        result = docker_capture('exec', actual['Id'], '/usr/local/bin/python3', '-B', '-c', _script(image_id, False, prepared_target), timeout=90)
+        result = docker_capture('exec', actual['Id'], '/usr/local/bin/python3', '-B', '-c', _script(image_id, False, prepared_target, terminal_only), timeout=90)
     else:
         import copy
         require(actual.get('Image') == image_id and re.fullmatch('sha256:[0-9a-f]{64}', image_id),
                 'readonly probe requires the exact immutable backend image')
-        script = '/usr/local/bin/python3 -B -c ' + shlex.quote(_script(image_id, True, prepared_target))
+        script = '/usr/local/bin/python3 -B -c ' + shlex.quote(_script(image_id, True, prepared_target, terminal_only))
         # The CUDA base used by generic control reads need not contain Python.
         # This exact image already ran the pre-stop Python observation above.
         probe_control = copy.copy(control)
@@ -639,7 +639,7 @@ def stop(args, selected, identity, actual):
             pair = services()
             _assert_private_restart_network(pair, ids, control.project)
             _retained_certificate(Path(previous['state_root']), document)
-            obs = _probe(control, pair['backend'], args.image_id)
+            obs = _probe(control, pair['backend'], args.image_id, terminal_only=bool(getattr(args,'terminal_only',False)))
             require(obs['process_receipt_sha256'] == args.process_receipt_sha256, 'pinned process receipt differs')
             return obs, cancellation(control, scope, obs)
         before, cancelled = recheck()
@@ -655,6 +655,8 @@ def stop(args, selected, identity, actual):
                    'supervision_probe': before, 'scope': scope, 'cancellation': cancelled,
                    'previous_config_sha256': before['config_raw_sha256'], 'service_pins': initial,
                    'operation_attempt': operation['receipt']['attempt']}
+        if getattr(args,'terminal_only',False):
+            journal['terminal_only']=True
         control.write(path, journal)
         require(recheck() == (before, cancelled), 'final stop evidence changed')
         operation['daemon_pending'] = True
@@ -664,7 +666,7 @@ def stop(args, selected, identity, actual):
             require(value['State'].get('Running') is False and value['State'].get('Pid') == 0
                     and value['State'].get('OOMKilled') is False and type(value['State'].get('ExitCode')) is int,
                     'service namespace stop is unconfirmed: ' + name)
-        after = _probe(control, pair['backend'], args.image_id, stopped=True)
+        after = _probe(control, pair['backend'], args.image_id, stopped=True, terminal_only=bool(getattr(args,'terminal_only',False)))
         _same_retained(before, after)
         require(cancellation(control, scope, after, original_process_sha256=before['process_receipt_sha256']) == cancelled,
                 'cancellation proof changed after stop')
@@ -1193,7 +1195,8 @@ def retained_context(control, previous, journal, journal_raw, backend_id, fresh_
             and sha(canonical(document)) == previous.get('config_sha256'), 'retained terminal/Compose changed')
     _assert_private_restart_network(services, {name: item['Id'] for name, item in services.items()}, control.project)
     _retained_certificate(Path(previous['state_root']), document)
-    after = _probe(control, actual, journal['image_id'], stopped=True)
+    require(type(journal.get('terminal_only',False)) is bool, 'Invalid terminal observation mode')
+    after = _probe(control, actual, journal['image_id'], stopped=True, terminal_only=journal.get('terminal_only',False))
     _same_retained(journal['supervision_probe'], after)
     require(after['process_receipt_sha256'] == journal['terminal_process_receipt_sha256']
             and after['config_raw_sha256'] == journal['previous_config_sha256'], 'terminal process/config evidence changed')

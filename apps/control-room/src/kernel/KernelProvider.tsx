@@ -34,6 +34,7 @@ import {
 } from "./commands/commandShortcuts";
 import { CommandDiagnosticsController } from "./commands/CommandDiagnosticsController";
 import { CommandFeedbackController } from "./commands/CommandFeedbackController";
+import { createStudyComputeObservationStore } from "./commands/studyComputeObservations";
 import { isMeshBuildConfirmCommandId } from "./authoring/meshBuildConfirmation";
 import { EventBus } from "./events/EventBus";
 import type { KernelEventMap } from "./events/eventTypes";
@@ -82,6 +83,7 @@ import { useSessionResourceIdentity } from "./resources/useSessionStatus";
 import { useSessionCollection } from "./resources/useSessionCollection";
 import { isProjectWorkspaceCommand } from "./commands/projectWorkspaceCommandPolicy";
 import { STUDY_RUNTIME_COMMANDS } from "./runtime/studyRuntimeCommandContributions";
+import { createBuildStudyCommands } from "./runtime/buildStudyCommands";
 import { SelectionController } from "./selection/SelectionController";
 import type { KernelApi } from "./types";
 import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
@@ -152,6 +154,7 @@ function createKernel(): KernelApi {
     getSessionScopeKey: () => commands.getSessionScopeKey(),
     // The mesh build dialog observes and presents mesh run outcomes itself.
     isRunOutcomeSelfPresented: isMeshBuildConfirmCommandId,
+    studyComputeObservations: createStudyComputeObservationStore(api.getBaseUrl()),
     subscribeSessionScope: (listener) => commands.subscribeSessionScope(listener),
   });
 
@@ -217,6 +220,9 @@ function createKernel(): KernelApi {
     commands.register(cmd);
   }
   for (const cmd of STUDY_RUNTIME_COMMANDS) {
+    commands.register(cmd);
+  }
+  for (const cmd of createBuildStudyCommands(commands)) {
     commands.register(cmd);
   }
   for (const cmd of MAGNETIZATION_TEXTURE_COMMANDS) {

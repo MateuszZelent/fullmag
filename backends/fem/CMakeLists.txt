@@ -1953,9 +1953,16 @@ target_include_directories(fem_field_buffers_contract PRIVATE
 )
 add_test(NAME fem_field_buffers_contract COMMAND fem_field_buffers_contract)
 
-add_executable(fem_demag_poisson_contract tests/demag_poisson_contract.cpp)
+add_executable(fem_demag_poisson_contract
+    tests/demag_poisson_contract.cpp
+    tests/regional_marker_map_contract.cpp
+)
 target_link_libraries(fem_demag_poisson_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK)
+    target_sources(fem_demag_poisson_contract PRIVATE tests/charge_transport_abi_contract.cpp
+        tests/steady_transport_abi_contract.cpp tests/fem_mixed_p1_contract.cpp)
+    target_compile_definitions(fem_demag_poisson_contract PRIVATE FULLMAG_EMBED_CHARGE_TRANSPORT_CONTRACT=1
+        FULLMAG_EMBED_STEADY_TRANSPORT_CONTRACT=1 FULLMAG_EMBED_MIXED_MARKER_CONTRACT=1)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_demag_poisson_contract PRIVATE MFEM::mfem)
     else()

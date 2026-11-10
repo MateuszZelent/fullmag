@@ -54,6 +54,22 @@ class _ControlFixture:
 
 
 class AcceptedReattachProducerTests(unittest.TestCase):
+    def test_control_reader_caps_requested_budget_at_transport_limit(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from docker_build_control import MAX_DOCUMENT_BYTES
+        control = SimpleNamespace(path=lambda relative: "/control/" + relative,
+                                  helper_args=lambda script: ["helper", script])
+        result = SimpleNamespace(returncode=0, stdout=b"{}", stderr=b"")
+        with patch.object(producer, "bounded_capture", return_value=result):
+            self.assertEqual(producer._control_bytes(control, "proof.json", maximum=24 * 1024 * 1024), b"{}")
+        fixture = _ControlFixture({"proof.json": b"x" * (MAX_DOCUMENT_BYTES + 1)})
+        with self.assertRaises(producer.BuildControlError):
+            producer._control_bytes(fixture, "proof.json", maximum=24 * 1024 * 1024)
+        for maximum in (0, -1, True, None):
+            with self.subTest(maximum=maximum), self.assertRaises(producer.BuildControlError):
+                producer._control_bytes(control, "proof.json", maximum=maximum)
+
     activation_attempt = "a" * 32
     reconciliation_attempt = "b" * 32
     development_attempt = "c" * 32

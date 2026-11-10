@@ -119,6 +119,7 @@ struct Context {
     InterruptRuntimeState interrupt{};
 };
 
-bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error);
+bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error,
+                       const uint32_t *canonical_boundary_marker = nullptr);
 
 } // namespace fullmag::fem

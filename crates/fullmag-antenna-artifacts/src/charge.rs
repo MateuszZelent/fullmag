@@ -304,7 +304,7 @@ pub fn decode_accepted_terminal_charge_record(
         let key = sorted(element.vertex_ids);
         require(
             element.attribute > 0
-                && element.attribute <= i32::MAX as u64
+                && element.attribute <= u32::MAX as u64
                 && element.conductivity_spm > 0.0
                 && key.windows(2).all(|pair| pair[0] < pair[1])
                 && key.iter().all(|id| by_id.contains_key(id))
@@ -340,7 +340,7 @@ pub fn decode_accepted_terminal_charge_record(
         let key = sorted(face.vertex_ids);
         require(
             face.attribute > 0
-                && face.attribute <= i32::MAX as u64
+                && face.attribute <= u32::MAX as u64
                 && incidence.get(&key).is_some_and(|owners| owners.len() == 1)
                 && boundary_keys.insert(key),
             "canonical boundary does not identify a unique actual exterior face",
@@ -820,6 +820,26 @@ mod tests {
             format!("{:x}", Sha256::digest(&record.canonical_payload))
         );
     }
+    #[test]
+    fn canonical_attributes_preserve_u32_without_accepting_invalid_ranges() {
+        let original = zero_current_tetrahedron_payload();
+        let mut high = original.clone();
+        mutate_field(&mut high, "attribute", 0, &u64::from(u32::MAX).to_be_bytes());
+        for occurrence in 1..5 {
+            mutate_field(&mut high, "attribute", occurrence, &(i32::MAX as u64 + 1).to_be_bytes());
+        }
+        let record = decode(high).unwrap();
+        assert_eq!(record.elements[0].attribute, u64::from(u32::MAX));
+        assert!(record.boundary.iter().all(|face| face.attribute == i32::MAX as u64 + 1));
+        for value in [0, u32::MAX as u64 + 1, u64::MAX] {
+            for occurrence in 0..5 {
+                let mut invalid = original.clone();
+                mutate_field(&mut invalid, "attribute", occurrence, &value.to_be_bytes());
+                assert!(decode(invalid).is_err());
+            }
+        }
+    }
+
     #[test]
     fn stale_noncanonical_and_trailing_hash_records_are_rejected() {
         let payload = zero_current_tetrahedron_payload();

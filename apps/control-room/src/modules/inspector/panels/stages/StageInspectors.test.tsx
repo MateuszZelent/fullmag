@@ -48,6 +48,7 @@ import type {
   HysteresisSettleTraceResource,
   HysteresisSettlePipelineSchema,
   HysteresisStagePlanSchema,
+  StudyStageResult,
 } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -63,6 +64,8 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
+import { stageResultInitialState } from "./StageInitialStateSelector";
 
 const TEST_SESSION_IDENTITY: SessionResourceIdentity = {
   requestScopeEpoch: "api-instance:stage-inspectors-test",
@@ -334,6 +337,19 @@ function hysteresisFamilyVariantPointsRef(
 }
 
 describe("Study stage inspectors", () => {
+  it("keeps saved results strict until the user chooses to use one as a seed", () => {
+    const result: StudyStageResult = {
+      project_id: "project", study_id: "study", artifact_id: "state-a", artifact_sha256: "a".repeat(64),
+      source: { run_id: "run-a", task_id: "task-a", step_id: "relax", case_id: "default", attempt_id: "attempt-a", ownership_epoch: 1 },
+      codec_id: "fullmag.runner.field_json", codec_version: "v1", accepted_at: "",
+      authored_relation: "authored_input_changed", supports_magnetization_input: true,
+    };
+    expect(stageResultInitialState(result)).toEqual({
+      kind: "stage_result", run_id: "run-a", step_id: "relax", case_id: "default",
+      artifact_id: "state-a", content_sha256: result.artifact_sha256, allow_stale_model: false,
+    });
+    expect(stageResultInitialState({ ...result, authored_relation: "authoring_unavailable" })?.allow_stale_model).toBe(false);
+  });
   it("exposes the periodic-airbox magnetostatic control for eigenmode authoring", () => {
     const frameProps = props("eigenmodes");
     const html = render(

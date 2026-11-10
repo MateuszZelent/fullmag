@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
+import { SIMULATION_STAGES_EXECUTION_PATH } from "@/kernel/api/apiPaths";
+import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
 import type { KernelApi } from "@/kernel/types";
 import {
   findElement,
@@ -15,6 +18,7 @@ import type { ExplorerNode } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 
 const interaction = vi.hoisted(() => ({
+  menuVisible: false,
   select: vi.fn(),
   setKeyboardRow: vi.fn(),
   toggle: vi.fn(),
@@ -51,8 +55,13 @@ vi.mock("@/shared/ui/Tooltip", () => ({
 
 vi.mock("@/shared/ui/ContextMenu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => children,
-  ContextMenuContent: () => null,
-  ContextMenuItem: () => null,
+  ContextMenuContent: ({ children }: { children: ReactNode }) => interaction.menuVisible ? children : null,
+  ContextMenuItem: ({ children, disabled, onSelect, title }: {
+    children: ReactNode;
+    disabled?: boolean;
+    onSelect?: () => void;
+    title?: string;
+  }) => <button type="button" disabled={disabled} onClick={onSelect} title={title}>{children}</button>,
   ContextMenuLabel: () => null,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: ({ children }: { children: ReactNode }) => children,
@@ -82,6 +91,106 @@ const nodes: ExplorerNode[] = [
     ],
   },
 ];
+
+describe("ExplorerTreeView context menu", () => {
+  it("updates the clicked stage readiness and rejects an old menu after a workspace switch", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const commands = new CommandRegistry();
+    let scope: string | null = "workspace-a";
+    const subscribers = new Set<() => void>();
+    commands.attachSessionScopeSource({
+      getScopeKey: () => scope,
+      subscribe: (listener) => {
+        subscribers.add(listener);
+        return () => { subscribers.delete(listener); };
+      },
+    });
+    const run = vi.fn((_context: CommandContext) => ({ status: "completed" as const }));
+    const ready = (context: CommandContext) =>
+      context.resourceData?.[SIMULATION_STAGES_EXECUTION_PATH] != null;
+    commands.register({
+      id: "test.run-stage",
+      title: "Run This Stage",
+      scope: "runtime",
+      group: "study-runtime",
+      isEnabled: ready,
+      disabledReason: (context) => ready(context) ? null : "Waiting for stage execution.",
+      run,
+    });
+    const kernel = { commands } as KernelApi;
+    const stages: ExplorerNode[] = [
+      {
+        id: "selected", parentId: null, kind: "study.stage.run", label: "Selected stage",
+      },
+      {
+        id: "clicked", parentId: null, kind: "study.stage.relax", label: "Clicked stage",
+        contextCommands: ["test.run-stage"],
+        contextCommandInputs: { "test.run-stage": { stageId: "relax-clicked" } },
+      },
+    ];
+    const execution = { run_id: "held-study" };
+    const renderTree = (stageExecution: typeof execution | null) =>
+      <ExplorerTreeView
+        activeNodeId="selected"
+        expandedIds={new Set()}
+        keyboardRowId={null}
+        kernel={kernel}
+        moduleId="explorer"
+        nodes={stages}
+        sceneResourceData={null}
+        sharedCommandResources={{ [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution }}
+        tabId="model"
+      />;
+    const item = () => findElement(container, (element) =>
+      element.tagName === "BUTTON" && element.textContent === "Run This Stage", "Run This Stage");
+
+    interaction.menuVisible = true;
+    try {
+      await act(async () => root.render(renderTree(null)));
+      expect(item().disabled).toBe(true);
+      expect(item().getAttribute("title")).toBe("Waiting for stage execution.");
+
+      await act(async () => root.render(renderTree(execution)));
+      expect(item().disabled).toBe(false);
+      await act(async () => item().click());
+      expect(run).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledWith(expect.objectContaining({
+        input: { stageId: "relax-clicked" },
+        sessionScopeKey: "workspace-a",
+        resourceData: expect.objectContaining({ [SIMULATION_STAGES_EXECUTION_PATH]: execution }),
+      }));
+      expect(interaction.select).not.toHaveBeenCalled();
+
+      // Dispatch the old callback before React observes the scope switch.
+      await act(async () => {
+        scope = "workspace-b";
+        item().click();
+        for (const notify of subscribers) notify();
+      });
+      expect(run).toHaveBeenCalledOnce();
+      expect(item().disabled).toBe(true);
+      expect(item().getAttribute("title")).toContain("Reopen the context menu");
+
+      // A new menu can use the new workspace once its resources are ready.
+      interaction.menuVisible = false;
+      await act(async () => root.render(renderTree(null)));
+      interaction.menuVisible = true;
+      const nextExecution = { run_id: "next-workspace-study" };
+      await act(async () => root.render(renderTree(nextExecution)));
+      expect(item().disabled).toBe(false);
+      await act(async () => item().click());
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run.mock.calls[1][0].sessionScopeKey).toBe("workspace-b");
+      expect(run.mock.calls[1][0].resourceData?.[SIMULATION_STAGES_EXECUTION_PATH]).toBe(nextExecution);
+    } finally {
+      interaction.menuVisible = false;
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+});
 
 describe("ExplorerTreeView branch interaction", () => {
   it("toggles an SVG or empty branch target without changing the selected mode", async () => {
@@ -133,6 +242,7 @@ describe("ExplorerTreeView branch interaction", () => {
         moduleId="explorer"
         nodes={nodes}
         sceneResourceData={null}
+        sharedCommandResources={{}}
         tabId="results"
       />
     );

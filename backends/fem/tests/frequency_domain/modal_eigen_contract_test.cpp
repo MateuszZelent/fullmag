@@ -2666,27 +2666,25 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
 
     std::unique_ptr<mfem::Mesh> native_mesh;
     check(
-        fullmag::fem::build_mfem_mesh(context.mesh, native_mesh, error),
+        fullmag::fem::build_mfem_mesh(context.mesh, native_mesh, error, &context.mfem_context.marker_maps),
         error.c_str());
     check(native_mesh != nullptr && native_mesh->GetNV() == static_cast<int>(node_count),
           "native static Poisson uses the same expanded MFEM mesh as the modal importer");
 
     const int maximum_boundary_attribute = native_mesh->bdr_attributes.Max();
-    check(maximum_boundary_attribute >= 8,
+    check(maximum_boundary_attribute == 3,
           "physical fixture contains the explicit Robin and periodic seam attributes");
     std::vector<int> static_robin_marker(
         static_cast<std::size_t>(maximum_boundary_attribute), 0);
     std::vector<int> dynamic_robin_marker(
         static_cast<std::size_t>(maximum_boundary_attribute), 0);
-    static_robin_marker[0] = 1;
-    dynamic_robin_marker[0] = 1;
+    static_robin_marker[context.mfem_context.marker_maps.boundary.attribute(1u)-1] = 1;
+    dynamic_robin_marker[context.mfem_context.marker_maps.boundary.attribute(1u)-1] = 1;
     for (std::uint32_t periodic_marker : context.mesh.periodic_boundary_marker_set) {
-        if (periodic_marker == 0u || periodic_marker >
-                static_cast<std::uint32_t>(maximum_boundary_attribute)) {
-            continue;
-        }
-        static_robin_marker[periodic_marker - 1u] = 0;
-        dynamic_robin_marker[periodic_marker - 1u] = 0;
+        const int attribute = context.mfem_context.marker_maps.boundary.attribute(periodic_marker);
+        if (attribute == 0) continue;
+        static_robin_marker[attribute - 1] = 0;
+        dynamic_robin_marker[attribute - 1] = 0;
     }
     check(static_robin_marker == dynamic_robin_marker,
           "static and shared-domain owners select Robin boundaries with the same marker policy");
@@ -2712,9 +2710,9 @@ void initialize_native_count_fixture(FloquetContourSharedDomainFixture &fixture)
     std::size_t marker8_face_count = 0u;
     for (int boundary = 0; boundary < native_mesh->GetNBE(); ++boundary) {
         const int attribute = native_mesh->GetBdrAttribute(boundary);
-        marker1_face_count += attribute == 1 ? 1u : 0u;
-        marker7_face_count += attribute == 7 ? 1u : 0u;
-        marker8_face_count += attribute == 8 ? 1u : 0u;
+        marker1_face_count += attribute == context.mfem_context.marker_maps.boundary.attribute(1u) ? 1u : 0u;
+        marker7_face_count += attribute == context.mfem_context.marker_maps.boundary.attribute(7u) ? 1u : 0u;
+        marker8_face_count += attribute == context.mfem_context.marker_maps.boundary.attribute(8u) ? 1u : 0u;
         if (attribute <= 0 ||
             static_robin_marker[static_cast<std::size_t>(attribute - 1)] == 0) {
             continue;

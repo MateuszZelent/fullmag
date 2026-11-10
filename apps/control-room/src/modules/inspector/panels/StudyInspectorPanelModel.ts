@@ -621,21 +621,10 @@ export function resolveCommandSummary(
   }
 
   const commands = [...commandQueue.commands].reverse();
-  const problem = commands.find((command) =>
-    PROBLEM_COMMAND_STATUSES.has(command.status),
-  );
-  if (problem) {
-    return commandSummaryFromEntry(problem);
-  }
-
   const active = commands.find((command) =>
     ACTIVE_COMMAND_STATUSES.has(command.status),
   );
-  if (active) {
-    return commandSummaryFromEntry(active);
-  }
-
-  const latest = commands[0] ?? null;
+  const latest = active ?? commands[0] ?? null;
   return latest
     ? commandSummaryFromEntry(latest)
     : {
@@ -650,7 +639,9 @@ function commandSummaryFromEntry(command: CommandQueueEntry): CommandSummary {
   return {
     badge: command.status,
     commandId: command.command_id,
-    error: command.error ?? null,
+    error: PROBLEM_COMMAND_STATUSES.has(command.status)
+      ? command.error ?? null
+      : null,
     label: `${titleCase(command.kind)} ${command.status}`,
   };
 }

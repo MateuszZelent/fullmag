@@ -5,6 +5,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from fullmag.runtime.thermal_noise_authoring import canonical_thermal_noise
 from fullmag.model.geometry import RigidTransform
 from fullmag.model.study import _MAX_FEM_EIGEN_SOLVER_ITERATIONS
 from fullmag.model.compute_resources import ComputeResources
@@ -1921,6 +1922,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         if requested_backend.strip().lower() == "fdm":
             raise ValueError("fem_domain_mesh requires the FEM backend")
         document["study"]["fem_domain_mesh"] = fem_domain_mesh
+    if "thermal_noise" in builder:
+        document["study"]["thermal_noise"] = canonical_thermal_noise(builder["thermal_noise"])
     if "pbc" in builder:
         document["study"]["pbc"] = _scene_pbc_to_ir(builder["pbc"])
     for collection in (
@@ -2280,6 +2283,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
             if value is not None
         ):
             raise ValueError("fem_domain_mesh requires the FEM backend")
+    if "thermal_noise" in study:
+        builder["thermal_noise"] = canonical_thermal_noise(study["thermal_noise"])
     if "pbc" in study:
         builder["pbc"] = _scene_pbc_to_ir(study["pbc"])
     if "fdm" in study:
@@ -2564,8 +2569,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             {
                 "kind": stage.get("kind"),
                 "entrypoint_kind": stage.get("entrypoint_kind"),
-                "integrator": stage.get("integrator") or None,
-                "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                "integrator": stage.get("integrator") or stage.get("solver") or None,
+                "fixed_timestep": _number_or_none(stage.get("fixed_timestep", stage.get("dt"))),
                 **(
                     {
                         "adaptive_timestep": _stage_adaptive_timestep_override(
@@ -2578,8 +2583,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "autosave": copy.deepcopy(stage.get("autosave")),
                 "relax_algorithm": _stage_relax_algorithm(stage) or None,
-                "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
+                "torque_tolerance": _number_or_none(
+                    stage.get("torque_tolerance_apm", stage.get("torque_tolerance", stage.get("tol")))
+                ),
+                "energy_tolerance": _number_or_none(stage.get("energy_tolerance_j", stage.get("energy_tolerance"))),
+                "relax_alpha": _number_or_none(stage.get("relax_alpha")),
                 "max_steps": _int_or_none(stage.get("max_steps")),
                 "eigen_count": _eigen_count_override(stage),
                 "eigen_target": stage.get("eigen_target") or None,
@@ -2638,6 +2646,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     if builder.get("fem_domain_mesh") is not None:
         overrides["fem_domain_mesh"] = copy.deepcopy(builder["fem_domain_mesh"])
     raw_study = scene.get("study")
+    if isinstance(raw_study, Mapping) and "thermal_noise" in raw_study:
+        overrides["thermal_noise"] = canonical_thermal_noise(raw_study["thermal_noise"])
     if isinstance(raw_study, Mapping) and "visualization_hint" in raw_study:
         visualization_hint = raw_study.get("visualization_hint")
         if visualization_hint is not None:

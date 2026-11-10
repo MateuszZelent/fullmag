@@ -7,6 +7,8 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1160,6 +1162,64 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             "/state/development/workspace/apps/control-room/scripts",
         })
 
+    def test_fdm_cell_physics_compose_and_cli_profile_are_explicit_and_bounded(self):
+        qa = self.qa
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+            canvas_only=True,
+            expect_live_field="m",
+            expect_airbox_vectors=False,
+            expect_ambiguous_compute_fields=False,
+            expect_fdm_cell_physics=True,
+        )
+        service = document["services"]["browser-qa"]
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS"], "1")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY"], "1")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD"], "m")
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS"], "0")
+        self.assertNotIn("CONTROL_ROOM_BROWSER_QA_EXPECT_TERMINAL_TELEMETRY", service["environment"])
+        self.assertTrue(service["read_only"])
+        self.assertNotIn("ports", service)
+
+        for invalid in (
+            {"canvas_only": False, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": False},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": True,
+             "expect_ambiguous_compute_fields": False},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": False, "expect_terminal_telemetry": True},
+            {"canvas_only": True, "expect_live_field": "m", "expect_airbox_vectors": False,
+             "expect_ambiguous_compute_fields": True},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+                    expect_fdm_cell_physics=True, **invalid,
+                )
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3199, 180,
+                canvas_only=True, expect_live_field="m", expect_airbox_vectors=False,
+                expect_ambiguous_compute_fields=False, expect_fdm_cell_physics=1,
+            )
+
+        with patch.object(qa, "resolve_defaults", return_value=SimpleNamespace(source_root=ROOT, port=3199)):
+            with self.assertRaisesRegex(qa.BuildControlError, "--expect-fdm-cell-physics requires"):
+                qa.main(["--repo-root", str(ROOT), "--expect-fdm-cell-physics"])
+            with self.assertRaisesRegex(qa.BuildControlError, "--expect-fdm-cell-physics requires"):
+                qa.main([
+                    "--repo-root", str(ROOT), "--canvas-only", "--expect-live-field", "m",
+                    "--expect-airbox-vectors", "--expect-fdm-cell-physics",
+                ])
+
     def test_planar_airbox_compose_reuses_the_managed_readonly_runner(self):
         identity = {
             "project_name": "fullmag-worktree-fixture",
@@ -1241,6 +1301,151 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
                 mutate(invalid)
                 with self.assertRaises(qa.BuildControlError):
                     qa._validate_planar_airbox_observation(invalid, session)
+
+    def test_inspector_ack_compose_is_standalone_and_attests_its_exact_command_and_sources(self):
+        qa = self.qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree", "source_root": str(ROOT)}
+        sources = {key: "a" * 64 for key in qa.INSPECTOR_ACK_SOURCES}
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+            inspector_ack=True, inspector_ack_source_sha256=sources,
+        )
+        service = document["services"]["browser-qa"]
+        self.assertEqual(service["command"], [
+            "node", "/state/development/workspace/apps/control-room/scripts/check-inspector-ack-browser.mjs",
+        ])
+        self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "inspector-ack")
+        self.assertEqual(json.loads(service["environment"]["CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256"]), sources)
+        self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+        for options in ({"airbox_inspector": True}, {"canvas_only": False}, {"expect_run_performance": True},
+                        {"saved_playback_item_id": "123"}, {"expect_planar_airbox": True}):
+            with self.subTest(options=options), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                    inspector_ack=True, inspector_ack_source_sha256=sources, **options,
+                )
+        helper = {
+            "Image": "sha256:" + "c" * 64,
+            "Config": {
+                "User": "65532:65532", "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {**qa.source_labels(identity), "com.docker.compose.project": identity["project_name"],
+                           "com.docker.compose.service": "browser-qa"},
+            },
+            "HostConfig": {
+                "GroupAdd": qa._script_bind_groups(ROOT), "ReadonlyRootfs": True,
+                "NetworkMode": identity["network_name"], "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": "fullmag-frontend-state", "Destination": "/state/development", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+            ],
+        }
+        control = SimpleNamespace(project=identity["project_name"])
+        qa._validate_browser_helper(helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                                    inspector_ack=True, inspector_ack_source_sha256=sources)
+        for change in ("command", "source", "unrequested"):
+            altered = deepcopy(helper)
+            if change == "command":
+                altered["Config"]["Cmd"][-1] = "/tmp/untrusted.mjs"
+            if change == "source":
+                altered["Config"]["Env"].append("CONTROL_ROOM_INSPECTOR_ACK_SOURCE_SHA256={}")
+            with self.subTest(change=change), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    altered, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                    inspector_ack=change != "unrequested", inspector_ack_source_sha256=sources,
+                )
+
+    def test_inspector_ack_validator_requires_restoration_and_nonvacuous_bounded_proof(self):
+        qa = self.qa
+        sources = {key: "a" * 64 for key in qa.INSPECTOR_ACK_SOURCES}
+        fields = [{"label": "Name", "disabled": False, "opacity": "1"}]
+        payload = {
+            "schema": qa.INSPECTOR_ACK_RESULT_SCHEMA, "scenario": "inspector-ack", "state": "passed", "failure": None,
+            "public_url": "http://127.0.0.1:3242", "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION, "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources, "source_sha256_after": sources,
+            "session": {"name": "airbox_inspector_mixed", "session_id": "owned", "session_epoch": "owned@1",
+                        "request_scope_epoch": "api:1"},
+            "object_id": "box", "original_name": "mixed_p1_box_prism",
+            "generated_name": "mixed_p1_box_prism_ui_ack_00000000-0000-4000-8000-000000000001",
+            "baseline": {"fields": fields, "opacity_animations": 0, "scroll": 0},
+            "pending": {"fields": fields, "opacity_animations": 0, "scroll": 90},
+            "ack": {"fields": fields, "opacity_animations": 0, "scroll": 90},
+            "node_preserved": True, "focus_preserved": True,
+            "receipts": [{"phase": "commit", "status": 200, "revision": 5},
+                         {"phase": "restore", "status": 200, "revision": 6}],
+            "restoration": {"state": "restored", "name": "mixed_p1_box_prism", "revision": 6},
+            "request_counts": {"PATCH /v2/sessions/current/model/objects/box": 2,
+                               "GET /v2/sessions/current/model/scene": 3},
+            "measured_requests": 5, "total_requests": 25, "request_limit": 128, "per_path_read_limit": 16,
+            "errors": [], "violations": [], "proxy_failures": [],
+        }
+
+        payload["session_after"] = dict(payload["session"])
+
+        def parse(value):
+            return qa._parse_inspector_ack_result(json.dumps(value).encode(), payload["public_url"],
+                                                  payload["probe_url"], sources)
+
+        self.assertEqual(parse(payload), payload)
+        cases = [
+            ("foreign session", lambda value: value["session"].update(name="unrelated")),
+            ("foreign command", lambda value: value["request_counts"].update({"POST /v2/sessions/current/simulation/commands": 1})),
+            ("unknown restoration", lambda value: value["restoration"].update(state="unknown")),
+            ("source drift", lambda value: value.update(source_sha256_after={**sources, "runner": "b" * 64})),
+            ("focus lost", lambda value: value.update(focus_preserved=False)),
+            ("scroll reset", lambda value: value["ack"].update(scroll=0)),
+            ("disabled pending input", lambda value: value["pending"].update(fields=[{"label": "Name", "disabled": True, "opacity": "1"}])),
+            ("duplicate object write", lambda value: value["request_counts"].update({"PATCH /v2/sessions/current/model/objects/box": 3})),
+            ("non-ACK", lambda value: value["receipts"][0].update(status=409)),
+            ("reused revision", lambda value: value["receipts"][1].update(revision=5)),
+            ("vacuous fields", lambda value: value["baseline"].update(fields=[])),
+        ]
+        for reason, change in cases:
+            with self.subTest(reason=reason), self.assertRaises(qa.BuildControlError):
+                altered = deepcopy(payload)
+                change(altered)
+                parse(altered)
+
+    def test_inspector_ack_cleanup_refuses_foreign_session_or_concurrent_name(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for the existing browser harness pure cleanup contract")
+        source = (ROOT / "apps/control-room/scripts/check-inspector-ack-browser.mjs").as_uri()
+        javascript = """
+import assert from 'node:assert/strict';
+const { inspectorAckSession, inspectorAckRestoreDecision } = await import(process.argv[1]);
+const status = {
+ session: { name: 'airbox_inspector_mixed', session_id: 'owned', session_epoch: 'owned@1', request_scope_epoch: 'api:1' },
+ solver: { state: 'awaiting_command' },
+ lifecycle: { commandability: 'allowed', connectivity: 'connected', session_resource: 'active' },
+};
+const session = inspectorAckSession(status);
+for (const changed of [
+ {...status, session: {...status.session, name:'foreign'}},
+ {...status, solver: {state:'running'}},
+ {...status, solver: {state:'waiting'}},
+]) assert.throws(() => inspectorAckSession(changed));
+const options = {
+ expectedSession: session, actualSession: session, objectId: 'box', originalName: 'original',
+ generatedName: 'unique-attempt-name', scene: {revision: 8, objects:[{id:'box', name:'unique-attempt-name', notes:'concurrent note'}]},
+};
+assert.deepEqual(inspectorAckRestoreDecision(options), {state:'restore', patch:{name:'original', base_revision:8}});
+assert.equal(inspectorAckRestoreDecision({...options, actualSession:{...session, request_scope_epoch:'new'}}).state,'unknown');
+assert.equal(inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[{id:'box',name:'third-party'}]}}).state,'conflict');
+assert.equal(inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[{id:'box',name:'original'}]}}).state,'original');
+assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,objects:[]}}));
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_airbox_inspector_compose_is_opt_in_and_uses_the_managed_readonly_runner(self):
         identity = {
@@ -1714,6 +1919,49 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         self.assertEqual(service["volumes"][1]["read_only"], True)
         self.assertEqual(document["networks"]["fullmag"]["name"], identity["network_name"])
 
+    def test_desktop_wsl_file_alias_requires_the_exact_selected_regular_file(self):
+        qa = self.qa
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = root / "fixture.py"
+            expected.write_text("fixture")
+            aliases = root / "aliases"
+            local = aliases / "Ubuntu2" / ("a" * 64)
+            local.parent.mkdir(parents=True)
+            local.symlink_to(expected)
+            wire = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/" + "a" * 64
+            with patch.object(qa, "LOCAL_WSL_BIND_MOUNT_ROOT", aliases):
+                self.assertTrue(qa._source_mount_matches_selected(wire, expected))
+                foreign = root / "other.py"
+                foreign.write_text("fixture")
+                self.assertFalse(qa._source_mount_matches_selected(wire, foreign))
+                self.assertFalse(qa._source_mount_matches_selected(wire, expected.parent))
+
+    def test_runner_output_survives_failed_helper_identity_validation_without_parsing(self):
+        qa = self.qa
+        writes = []
+        control = SimpleNamespace(project="fullmag-worktree-fixture",
+                                  write=lambda path, value: writes.append((path, deepcopy(value))))
+        operation = {"root": "browser-qa/attempts/" + "a" * 32,
+                     "receipt": {"attempt": "a" * 32}, "daemon_pending": False}
+        result = SimpleNamespace(returncode=1, stdout=b'{"possible_dispatch":true}', stderr=b'failure')
+        with patch.object(qa, "_probe_public_loopback", return_value={"state": "passed"}), \
+             patch.object(qa, "docker_capture", return_value=result) as daemon, \
+             patch.object(qa, "_inspect", return_value={"Id": "b" * 64}), \
+             patch.object(qa, "_validate_browser_helper", side_effect=qa.ControlOutcomeUnknown("mount mismatch")), \
+             patch.object(qa, "_parse_study_stage_rerun_result") as parse:
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._run(operation, control, {"services": {"browser-qa": {"command": ["node"]}}},
+                        {"project_name": control.project}, ROOT, "frontend-volume", "sha256:" + "c" * 64,
+                        "http://127.0.0.1:3242", "http://frontend:8080", 180)
+        saved = [value for path, value in writes if path.endswith('/runner-output.json')]
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["stdout"], result.stdout.decode())
+        self.assertEqual(saved[0]["exit_code"], 1)
+        parse.assert_not_called()
+        self.assertTrue(operation["daemon_pending"])
+        self.assertEqual([call.args[0] for call in daemon.call_args_list], ["compose"])
+
     def test_browser_helper_inspect_enforces_uid_environment_and_mount_boundary(self):
         qa = self.qa
         identity = {
@@ -1772,6 +2020,45 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
             ],
         }
         qa._validate_browser_helper(document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT)
+
+        fdm_environment = [
+            "CONTROL_ROOM_BROWSER_QA_CANVAS_ONLY=1",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_LIVE_FIELD=m",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_AIRBOX_VECTORS=0",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_AMBIGUOUS_COMPUTE_FIELDS=0",
+            "CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=1",
+        ]
+        fdm_document = deepcopy(document)
+        fdm_document["Config"]["Env"].extend(fdm_environment)
+        profile_kwargs = {
+            "canvas_only": True,
+            "expect_live_field": "m",
+            "expect_airbox_vectors": False,
+            "expect_ambiguous_compute_fields": False,
+            "expect_fdm_cell_physics": True,
+        }
+        qa._validate_browser_helper(
+            fdm_document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+            **profile_kwargs,
+        )
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                fdm_document, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+            )
+        missing_profile_flag = deepcopy(fdm_document)
+        missing_profile_flag["Config"]["Env"].remove("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=1")
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                missing_profile_flag, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+                **profile_kwargs,
+            )
+        duplicate_profile_flag = deepcopy(fdm_document)
+        duplicate_profile_flag["Config"]["Env"].append("CONTROL_ROOM_BROWSER_QA_EXPECT_FDM_CELL_PHYSICS=0")
+        with self.assertRaises(qa.ControlOutcomeUnknown):
+            qa._validate_browser_helper(
+                duplicate_profile_flag, FakeControl(), identity, "fullmag-frontend-state", browser_id, 0, ROOT,
+                **profile_kwargs,
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             local_alias_root = Path(temporary) / "docker-desktop-bind-mounts"
@@ -2576,6 +2863,148 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         receipts = [value for path, value in writes if path.endswith("/receipt.json")]
         self.assertTrue(any(value.get("browser_container_id") == browser_id for value in receipts))
 
+    def test_fdm_cell_physics_result_requires_pinned_real_cell_and_layout_proof(self):
+        qa = self.qa
+        vector = [1.0, -0.25, 0.5]
+        scalar_values = {
+            "mat_ms": 800000.0,
+            "mat_aex": 1.3e-11,
+            "mat_alpha": 0.01,
+            "eden_total": -25000.0,
+        }
+
+        def shown(kind, raw):
+            return {"kind": kind, "text": str(raw), "raw": raw}
+
+        rows = [{
+            "id": "m", "status": "ready",
+            "values": [shown("mx", vector[0]), shown("my", vector[1]), shown("mz", vector[2])],
+        }]
+        rows.extend({
+            "id": quantity, "status": "ready", "values": [shown("scalar", raw)],
+        } for quantity, raw in scalar_values.items() if quantity != "eden_total")
+        rows.append({
+            "id": "eden_total", "status": "ready",
+            "values": [shown("scalar", scalar_values["eden_total"]), shown("cell-energy", -2.5e-21)],
+        })
+        public_probes = [{"quantity_id": "m", "cell_id": 7, "vector": vector}]
+        public_probes.extend({
+            "quantity_id": quantity, "cell_id": 7, "scalar": raw,
+        } for quantity, raw in scalar_values.items())
+
+        def layout(inspector_width, inner_width):
+            return {
+                "inspector_width": inspector_width,
+                "width": inner_width,
+                "scroll_width": inner_width,
+                "total_bottom": 210,
+                "footer_top": 250,
+                "clipped_values": [],
+            }
+
+        proof = {
+            "state": "passed",
+            "real_pointer_pick": True,
+            "keyboard_tabs": True,
+            "observation": {"ordinal": 7, "rows": rows},
+            "public_probes": public_probes,
+            "layout": layout(380, 320),
+            "narrow_layout": layout(300, 240),
+        }
+        canvas = {
+            "rect": {"width": 1440, "height": 900},
+            "width": 1440,
+            "height": 900,
+            "context_type": "WebGL2RenderingContext",
+            "context_lost": False,
+            "drawing_buffer_width": 1440,
+            "drawing_buffer_height": 900,
+        }
+        source_hash = "a" * 64
+        payload = {
+            "schema": qa.RESULT_SCHEMA,
+            "state": "passed",
+            "public_url": "http://127.0.0.1:32871",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "canvas_only": True,
+            "expect_live_field": "m",
+            "expect_airbox_vectors": False,
+            "expect_ambiguous_compute_fields": False,
+            "expect_fdm_cell_physics": True,
+            "qa_scope": "canvas-home-fdm-cell-physics",
+            "skipped_areas": qa.CANVAS_ONLY_SKIPPED_AREAS,
+            "home_round_trip": True,
+            "session": {
+                "session_id": "session-1",
+                "session_epoch": "session-1@1",
+                "request_scope_epoch": "api:1",
+            },
+            "workspace": {"visible": True, "canvas_dom_stable": True},
+            "canvas_before": canvas,
+            "canvas_after": deepcopy(canvas),
+            "viewport_dom_observations": {
+                "field_data_proven": False,
+                "note": qa.VIEWPORT_DOM_OBSERVATIONS_NOTE,
+                **{
+                    key: {
+                        "dataset": {}, "quantity_labels": [],
+                        "dataset_entry_count": 0, "quantity_label_count": 0,
+                        "dataset_truncated": False, "quantity_labels_truncated": False,
+                    }
+                    for key in ("before_home", "after_home")
+                },
+            },
+            "live_field_observation": {"state": "ready"},
+            "canvas_screenshot": {"state": "captured"},
+            "fdm_cell_physics": proof,
+            "harness_source_sha256": {
+                "algorithm": "sha256", "unchanged": True,
+                "runner_before": source_hash, "runner_after": source_hash,
+            },
+            "page_errors": 0,
+            "console_errors": 0,
+            "request_failures": 0,
+            "http_errors": [],
+            "resource_responses": [],
+        }
+        encoded = lambda value: (json.dumps(value) + "\n").encode("utf-8")
+
+        def parse(candidate, requested_profile=True, **overrides):
+            with patch.object(qa, "_validate_live_field_observation"), \
+                 patch.object(qa, "_validate_canvas_screenshot"):
+                return qa._parse_result(
+                    encoded(candidate), payload["public_url"], payload["probe_url"],
+                    canvas_only=True,
+                    expect_live_field="m",
+                    expect_airbox_vectors=False,
+                    expect_ambiguous_compute_fields=False,
+                    fdm_cell_physics_harness_sha256=source_hash,
+                    expect_fdm_cell_physics=requested_profile,
+                    **overrides,
+                )
+
+        self.assertEqual(parse(payload), payload)
+        invalid_cases = (
+            ("wrong visible vector text", lambda item: item["fdm_cell_physics"]["observation"]["rows"][0]["values"][0].update(text="999")),
+            ("wrong visible scalar text", lambda item: item["fdm_cell_physics"]["observation"]["rows"][1]["values"][0].update(text="999")),
+            ("missing proof", lambda item: item.pop("fdm_cell_physics")),
+            ("helper flag", lambda item: item.update(expect_fdm_cell_physics=False)),
+            ("wrong inspector width", lambda item: item["fdm_cell_physics"]["layout"].update(inspector_width=300)),
+            ("clipped value", lambda item: item["fdm_cell_physics"]["narrow_layout"].update(clipped_values=["eden_total"])),
+            ("missing exact probe", lambda item: item["fdm_cell_physics"]["public_probes"].pop()),
+            ("changed runner", lambda item: item["harness_source_sha256"].update(runner_after="b" * 64)),
+        )
+        for name, mutate in invalid_cases:
+            with self.subTest(rejected=name):
+                invalid = deepcopy(payload)
+                mutate(invalid)
+                with self.assertRaises(qa.BuildControlError):
+                    parse(invalid)
+        with self.assertRaises(qa.BuildControlError):
+            parse(payload, requested_profile=1)
+
     def test_result_validator_rejects_invalid_buffers_and_recorded_errors(self):
         canvas = {
             "rect": {"width": 1440, "height": 900},
@@ -2698,6 +3127,2092 @@ class DockerDevBrowserQaContractTests(unittest.TestCase):
         lock = (ROOT / "pnpm-lock.yaml").read_text(encoding="utf-8")
         self.assertRegex(lock, r"playwright:\n\s+specifier: \^1\.60\.0\n\s+version: 1\.62\.1")
         self.assertIn("test_docker_dev_browser_qa", (ROOT / "scripts/docker_volume_checks.py").read_text(encoding="utf-8"))
+
+
+class StudyStageRerunContractTests(unittest.TestCase):
+    SOURCE_KEYS = (
+        "runner", "loopback_proxy", "fixture", "scene_adapter", "tree_view", "study_nodes",
+        "stage_builder", "command_adapter", "command_contributions", "study_compute_input", "tab_routes",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qa = _load_qa_module()
+
+    @staticmethod
+    def sources(qa):
+        return qa._study_stage_rerun_source_sha256(ROOT)
+
+    def fdm_grid_resume_parent_documents(self, qa, *, changed=None, observed_phase=None):
+        mode = "fdm-cell-study"
+        current_sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        prior_sources = deepcopy(current_sources)
+        prior_sources["runner"] = "f" * 64
+        report = self.result_fixture(mode, prior_sources)
+        report.update(
+            state="outcome-unknown", outcome="unknown", phase=observed_phase or "fdm-grid-observing",
+            failure="held-grid proof failed before Compute Study submission",
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            prepared_grid_run=report["prepared_grid_run"] if observed_phase else None,
+            client_ack_count=0,
+        )
+        if not observed_phase:
+            report["grid_refresh_receipt"].pop("domain_transition")
+        held_results_key = "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100"
+        report["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
+        if observed_phase:
+            report["request_counts"][held_results_key] -= 1
+            if report["request_counts"][held_results_key] == 0:
+                report["request_counts"].pop(held_results_key)
+            report["read_counts"]["stage_results"] = 3
+        else:
+            report["request_counts"].pop(held_results_key, None)
+            report["read_counts"]["stage_results"] = 2
+        report["total_requests"] = sum(report["request_counts"].values())
+        if changed == "solve-dispatched":
+            report.update(command_count=1, command_attempt_count=1, ui_command_proven=True,
+                          command_receipt={"method": "POST"})
+        elif changed == "source-drift":
+            prior_sources["study_inspector_panel"] = "e" * 64
+            report["source_sha256_before"] = prior_sources
+            report["source_sha256_after"] = prior_sources
+        elif changed == "wrong-session":
+            report["session_before"]["session_id"] = "foreign-session"
+            report["session_after"] = deepcopy(report["session_before"])
+            report["fdm_cell_receipt"]["scope_header"] = "session=foreign"
+            report["grid_refresh_receipt"]["scope_header"] = "session=foreign"
+        elif changed == "wrong-grid-terminal":
+            report["grid_refresh_receipt"]["terminal_detail"]["status"] = "running"
+            report["grid_refresh_receipt"]["terminal_detail"]["completion_status"] = "running"
+        elif changed == "wrong-cell-ack":
+            report["fdm_cell_receipt"]["unmodified_scene_sha256_after"] = "0" * 64
+        elif changed == "duplicate-grid":
+            report["grid_refresh_attempt_count"] = 2
+        attempt = "d" * 32
+        identity = {
+            "project_name": "fullmag-worktree-fixture", "worktree_id": "fixture",
+            "source_root": str(ROOT),
+        }
+        current = {
+            "attempt": "a" * 32, "source_commit": "commit-d67",
+            "config_sha256": "b" * 64, "runtime_terminal_sha256": "c" * 64,
+            "runtime_attempt": "a" * 32, "runtime_phase": "development",
+            "development_terminal_state": "succeeded",
+        }
+        operation_inputs = {
+            "scenario": "study-stage-rerun", "study_stage_rerun": "fdm-cell-study",
+            "study_stage_rerun_source_sha256": prior_sources,
+            "source_root": str(ROOT), "source_commit": current["source_commit"],
+            "worktree_id": identity["worktree_id"], "development_attempt": current["attempt"],
+            "development_config_sha256": current["config_sha256"],
+            "runtime_terminal_sha256": current["runtime_terminal_sha256"],
+            "runtime_attempt": current["runtime_attempt"], "runtime_phase": current["runtime_phase"],
+            "development_terminal_state": current["development_terminal_state"],
+            "compose_project": identity["project_name"],
+            "frontend_container": "frontend-1", "frontend_volume": "frontend-state",
+            "public_loopback_url": "http://127.0.0.1:3242", "browser_url": "http://frontend:8080",
+        }
+        receipt = {
+            "schema": "fullmag.docker-build-operation.v1", "phase": "browser-qa",
+            "state": "failed-confirmed", "attempt": attempt,
+            "compose_project": identity["project_name"], "inputs": operation_inputs,
+            "exit_code": 1,
+        }
+        terminal = deepcopy(receipt)
+        runner_output = {
+            "schema": "fullmag.docker-dev-browser-qa-runner-output.v1",
+            "exit_code": 1, "stdout": json.dumps(report, separators=(",", ":")),
+            "stderr_tail": "bounded helper failure",
+        }
+        result = deepcopy(report)
+        result.update(
+            state="failed-confirmed", error="Browser helper exited before a passing public terminal proof",
+            study_stage_rerun_native_outcome="unknown", requires_current_run_readback=True,
+        )
+        docs = {
+            f"browser-qa/attempts/{attempt}/receipt.json": qa.canonical(receipt) + b"\n",
+            f"browser-qa/attempts/{attempt}/terminal.json": qa.canonical(terminal) + b"\n",
+            f"browser-qa/attempts/{attempt}/runner-output.json": qa.canonical(runner_output) + b"\n",
+            f"browser-qa/attempts/{attempt}/result.json": qa.canonical(result) + b"\n",
+        }
+        class FakeControl:
+            def __init__(self, documents):
+                self.documents = dict(documents)
+                self.project = identity["project_name"]
+                self.identity = identity
+
+            def read_bytes(self, path, *, optional=False, **kwargs):
+                value = self.documents.get(path)
+                if value is None and not optional:
+                    raise qa.BuildControlError("missing test control record")
+                return value
+
+            def read(self, path, *, optional=False):
+                raw = self.read_bytes(path, optional=optional)
+                return None if raw is None else json.loads(raw)
+
+            def write(self, path, value):
+                self.documents[path] = qa.canonical(value) + b"\n"
+
+        return FakeControl(docs), attempt, identity, current, current_sources
+
+    def test_material_stage_a_guard_pins_one_material_patch_and_preserves_scene_state(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+assert.deepEqual(runner.studyStageCommandForMode('material-stage-a'), {
+  kind:'relax', target:{kind:'stage_id',stage_id:'relax-a'},
+  initial_state:{kind:'default_for_target'},
+});
+assert.deepEqual(runner.studyStageExpectedStageIds('material-stage-a','before'),
+  ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('material-stage-a','after'), ['relax-a']);
+const session = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
+const sceneBefore = {
+  revision:31,
+  objects:[{id:'film',name:'film',material_ref:'material-film',magnetization_ref:'mag-film'}],
+  materials:[{id:'material-film',name:'film',properties:{Ms:800000,Aex:13e-12,alpha:0.5,Dind:null,Dbulk:null},
+    references:[{label:'fixture'}]}],
+  magnetization_assets:[{id:'mag-film',kind:'uniform',value:[1,0,0]}],
+};
+const before = runner.studyStageMaterialState(sceneBefore);
+assert.deepEqual(before, {
+  object_id:'film', material_id:'material-film', material_name:'film',
+  properties:{Ms:800000,Aex:13e-12,alpha:0.5,Dind:null,Dbulk:null},
+  magnetization_ref:'mag-film',magnetization_asset_sha256:'9f5b7db421041ddbe7884ecb073a3dd6221e40e01a5e4e0f71ecb1acf8bc988b',
+});
+const request = {method:'POST',path:'/v2/sessions/current/model/transactions',scope,body:{
+  kind:'patch_material',material_id:'material-film',base_revision:31,
+  patch:{name:'film',properties:{Aex:1e-11,Dind:null,Dbulk:null,Ms:600000,alpha:0.5}},
+}};
+const context = {phase:'material-submit',materialCount:0,session,beforeRevision:31,before};
+assert.equal(runner.studyStageMaterialRequestAllowed(request,context),true);
+assert.equal(runner.studyStageMaterialRequestAllowed(request,{...context,phase:'ui-submit'}),false);
+assert.equal(runner.studyStageMaterialRequestAllowed(request,{...context,materialCount:1}),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,base_revision:30}},context),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,patch:{...request.body.patch,properties:{...request.body.patch.properties,alpha:0.7}}}},context),false);
+assert.equal(runner.studyStageMaterialRequestAllowed({...request,body:{...request.body,patch:{...request.body.patch,properties:{...request.body.patch.properties,texture:'bad'}}}},context),false);
+const sceneAfter = structuredClone(sceneBefore);
+sceneAfter.revision = 32;
+sceneAfter.materials[0].properties.Ms = 600000;
+sceneAfter.materials[0].properties.Aex = 1e-11;
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,sceneAfter),true);
+const withoutOptionalDmi = structuredClone(sceneBefore);
+delete withoutOptionalDmi.materials[0].properties.Dind;
+delete withoutOptionalDmi.materials[0].properties.Dbulk;
+assert.equal(runner.studyStageMaterialSceneMatches(withoutOptionalDmi,sceneAfter),true);
+const changedDmi = structuredClone(sceneAfter);
+changedDmi.materials[0].properties.Dind = 1e-3;
+assert.equal(runner.studyStageMaterialSceneMatches(withoutOptionalDmi,changedDmi),false);
+
+const changedM0 = structuredClone(sceneAfter);
+changedM0.magnetization_assets[0].value = [0,1,0];
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,changedM0),false);
+const changedAlpha = structuredClone(sceneAfter);
+changedAlpha.materials[0].properties.alpha = 0.7;
+assert.equal(runner.studyStageMaterialSceneMatches(sceneBefore,changedAlpha),false);
+const accepted = runner.studyStageMaterialTransactionOutcome(200, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:sceneAfter,
+}, sceneBefore);
+assert.deepEqual(accepted,{outcome:'accepted',scene_revision:32,material: {
+  object_id:'film',material_id:'material-film',material_name:'film',
+  properties:{Ms:600000,Aex:1e-11,alpha:0.5,Dind:null,Dbulk:null},magnetization_ref:'mag-film',
+  magnetization_asset_sha256:'9f5b7db421041ddbe7884ecb073a3dd6221e40e01a5e4e0f71ecb1acf8bc988b',
+}});
+assert.equal(runner.studyStageMaterialTransactionOutcome(409, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:sceneAfter,
+}, sceneBefore).outcome,'unknown');
+const foreignAck = structuredClone(sceneAfter); foreignAck.objects[0].name = 'other';
+assert.equal(runner.studyStageMaterialTransactionOutcome(200, {
+  transaction_kind:'patch_material',scene_revision:32,committed_scene:foreignAck,
+}, sceneBefore).outcome,'unknown');
+"""
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source.as_uri()],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fdm_cell_study_guards_one_exact_merge_patch_and_automatic_grid_refresh(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+assert.deepEqual(runner.studyStageCommandForMode('fdm-cell-study'), {kind:'solve',target:{kind:'study'}});
+assert.deepEqual(runner.studyStageCommandForMode('fdm-cell-study-resume'), {kind:'solve',target:{kind:'study'}});
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study','before'), ['relax-a']);
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study','after'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study-resume','before'), ['relax-a']);
+assert.deepEqual(runner.studyStageExpectedStageIds('fdm-cell-study-resume','after'), ['relax-a','relax-b','relax-c']);
+const session = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
+const before = {revision:9,study:{requested_backend:'fdm',fdm:{default_cell:[2e-9,1e-9,2e-9],demag:{mode:'auto'}}},objects:[]};
+const after = structuredClone(before); after.revision=10; after.study.fdm.default_cell=[1e-9,2e-9,2e-9];
+const patch = {method:'POST',path:'/v2/sessions/current/model/transactions',scope,body:{
+  kind:'merge_patch',base_revision:9,merge_patch:{study:{fdm:{default_cell:[1e-9,2e-9,2e-9]}}},
+}};
+assert.deepEqual(runner.studyStageFdmCellState(before),{cell:[2e-9,1e-9,2e-9]});
+const context={phase:'fdm-cell-submit',transactionCount:0,session,beforeRevision:9,beforeScene:before};
+assert.equal(runner.studyStageFdmCellRequestAllowed(patch,context),true);
+assert.equal(runner.studyStageFdmCellRequestAllowed(patch,{...context,phase:'ui-submit'}),false);
+assert.equal(runner.studyStageFdmCellRequestAllowed(patch,{...context,transactionCount:1}),false);
+assert.equal(runner.studyStageFdmCellRequestAllowed({...patch,body:{...patch.body,base_revision:8}},context),false);
+assert.equal(runner.studyStageFdmCellRequestAllowed({...patch,body:{...patch.body,merge_patch:{study:{fdm:{default_cell:[1e-9,2e-9,2e-9],per_magnet:{other:{cell:[1,1,1]}}}}}}},context),false);
+assert.equal(runner.studyStageFdmCellRequestAllowed({...patch,body:{...patch.body,merge_patch:{study:{fdm:{default_cell:[1e-9,2e-9,2e-9]},solver:{integrator:'same'}}}}},context),false);
+assert.deepEqual(runner.studyStageFdmCellTransactionOutcome(200,{transaction_kind:'merge_patch',scene_revision:10,committed_scene:after},before),{
+  outcome:'accepted',scene_revision:10,before_cell:[2e-9,1e-9,2e-9],after_cell:[1e-9,2e-9,2e-9],
+});
+const changedSolver=structuredClone(after); changedSolver.study.solver={integrator:'bad'};
+assert.equal(runner.studyStageFdmCellTransactionOutcome(200,{transaction_kind:'merge_patch',scene_revision:10,committed_scene:changedSolver},before).outcome,'unknown');
+const request={method:'POST',path:'/v2/sessions/current/simulation/commands',scope,body:{
+  client_intent_id:'fdm-grid-refresh-123-1',kind:'fdm_grid_refresh',precondition:{scene_revision:10},reason:'study_global_commit',
+}};
+const gridContext={phase:'fdm-grid-submit',refreshCount:0,session,sceneRevision:10,existingIntentIds:new Set(['fdm-grid-refresh-old'])};
+const wait = runner.studyStageObserveResponse(Promise.reject(new Error('page closed')), 'grid: ');
+await new Promise((resolve) => setImmediate(resolve));
+assert.deepEqual(await wait, {response:null,error:'grid: page closed'});
+const response = {status:200};
+assert.deepEqual(await runner.studyStageObserveResponse(Promise.resolve(response),'grid: '),
+  {response,error:null});
+
+assert.equal(runner.studyStageFdmGridRefreshRequestAllowed(request,gridContext),true);
+assert.equal(runner.studyStageFdmGridRefreshRequestAllowed(request,{...gridContext,refreshCount:1}),false);
+assert.equal(runner.studyStageFdmGridRefreshRequestAllowed({...request,body:{...request.body,reason:'explicit_build_grid'}},gridContext),false);
+assert.equal(runner.studyStageFdmGridRefreshRequestAllowed({...request,body:{...request.body,mesh_target:{kind:'study_domain'}}},gridContext),false);
+assert.equal(runner.studyStageFdmGridRefreshRequestAllowed({...request,body:{...request.body,client_intent_id:'fdm-grid-refresh-old'}},gridContext),false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'running'}},'new'),false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'old'},solver:{state:'awaiting_command'}},'new'),false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'awaiting_command'}},'new'),true);
+""";
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source.as_uri()],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_texture_profiles_pin_B_local_v2_recipe_source_catalog_and_authored_stage_command(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+const baseline = () => ({
+  revision: 41,
+  objects: [{id:'film',name:'film',role:'magnet',material_ref:'mat-film',magnetization_ref:'mag-film'}],
+  materials: [{id:'mat-film',name:'film material',properties:{Ms:600000,Aex:1e-11,alpha:0.5}}],
+  magnetization_assets: [{id:'mag-film',kind:'preset_texture',preset_kind:'uniform',
+    preset_params:{direction:[1,0,0]}}],
+  study: {requested_backend:'fdm',requested_device:'cpu',requested_precision:'double',
+    fdm:{default_cell:[1e-9,2e-9,2e-9]},study_pipeline:{version:'study_pipeline.v1',nodes:[
+      {enabled:true,id:'relax-a',label:'Relax 1',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{adaptive_timestep:null,demag_interval_s:'',energy_tolerance:'',entrypoint_kind:'flat_relax',
+        fixed_timestep:'1e-13',integrator:'rk23',kind:'relax',max_relaxation_time_s:'',max_steps:'10',
+        relax_algorithm:'llg_overdamped',stage_id:'relax-a',torque_tolerance:'0.0001',until_seconds:''}},
+      {enabled:true,id:'relax-b',label:'Relax 2',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',max_steps:'1',
+        relax_algorithm:'projected_gradient_bb',stage_id:'relax-b',torque_tolerance:'0.0001',until_seconds:''}},
+      {enabled:true,id:'relax-c',label:'Relax 3',node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+       payload:{energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',max_steps:'1',
+        relax_algorithm:'nonlinear_cg',stage_id:'relax-c',torque_tolerance:'0.0001',until_seconds:''}},
+    ]}},
+});
+assert.deepEqual(runner.studyStageCommandForMode('texture-stage-b',42), {
+  kind:'relax',target:{kind:'stage_id',stage_id:'relax-b'},
+  initial_state:{kind:'authored_initial_state',source:{kind:'stage',scene_revision:42,stage_id:'relax-b'}},
+});
+assert.deepEqual(runner.studyStageCommandForMode('texture-study'),{kind:'solve',target:{kind:'study'}});
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-stage-b','before'),['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-stage-b','after'),['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-study','before'),['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('texture-study','after'),['relax-a','relax-b','relax-c']);
+const original = baseline();
+runner.studyStageTextureSceneProfile(original,{allowUnedited:true});
+assert.throws(()=>runner.studyStageTextureSceneProfile(original),/acknowledged/i);
+const tx = (await import(new URL('./lib/study-texture-browser-qa.mjs',process.argv[1]))).buildStageBUniformXResetTransaction({
+  scene:original,sceneRevision:41,statusSceneRevision:41,objectId:'film',
+});
+const saved = structuredClone(original); saved.study.study_pipeline=tx.merge_patch.study.study_pipeline;
+const profile=runner.studyStageTextureSceneProfile(saved);
+assert.deepEqual(profile.stage_b_texture_reset,{stage_id:'relax-b',object_id:'film',scope:'object',initializer:null});
+const normalizedBaseline = runner.studyStageTextureBaselineState(saved);
+assert.deepEqual(normalizedBaseline.global_m0.direction,[1,0,0]);
+assert.deepEqual(normalizedBaseline.material.properties,
+  {Ms:600000,Aex:1e-11,alpha:0.5,Dind:null,Dbulk:null});
+const nonzeroDmi = structuredClone(saved); nonzeroDmi.materials[0].properties.Dind = 1e-3;
+assert.throws(()=>runner.studyStageTextureBaselineState(nonzeroDmi));
+for (const mutate of [
+  (scene)=>{scene.study.study_pipeline.nodes[0].payload.stage_magnetization_assignments={};},
+  (scene)=>{scene.study.study_pipeline.nodes[1].payload.stage_magnetization_assignments.assignments[0].region_id='core';},
+  (scene)=>{scene.study.fdm.default_cell=[2e-9,1e-9,2e-9];},
+]) {
+  const bad=structuredClone(saved); mutate(bad); assert.throws(()=>runner.studyStageTextureSceneProfile(bad));
+}
+const sourceIdentity={project_id:'p',study_id:'s',source:{run_id:'run-a',task_id:'t',step_id:'relax-a',case_id:'c',attempt_id:'a',ownership_epoch:1},
+  authored_stage_id:'relax-a',artifact_id:'artifact-a',artifact_sha256:'a'.repeat(64),codec_id:'magnetization',codec_version:'1',accepted_at:'now'};
+const catalog={next_cursor:null,results:[{...sourceIdentity,authored_relation:'matching_authored_input',
+  domain_relation:'matching_published_layout',supports_magnetization_input:true}]};
+assert.equal(runner.studyStageTextureCatalogProof(catalog,'run-a','relax-a',sourceIdentity,'film').artifact_id,'artifact-a');
+const migrated=structuredClone(catalog); migrated.results[0].authored_relation='authored_input_changed';
+assert.equal(runner.studyStageTextureCatalogProof(migrated,'run-a','relax-a',sourceIdentity,'film',
+  'authored_input_changed').authored_relation,'authored_input_changed');
+const wrongArtifact=structuredClone(migrated); wrongArtifact.results[0].artifact_sha256='b'.repeat(64);
+assert.throws(()=>runner.studyStageTextureCatalogProof(wrongArtifact,'run-a','relax-a',sourceIdentity,'film',
+  'authored_input_changed'));
+assert.throws(()=>runner.studyStageTextureCatalogProof(migrated,'run-a','relax-a',sourceIdentity,'film',
+  'authoring_unavailable'));
+
+for (const change of [
+  (item)=>item.authored_relation='authored_input_changed',
+  (item)=>item.domain_relation='different_published_layout',
+  (item)=>item.supports_magnetization_input=false,
+]) {
+  const bad=structuredClone(catalog); change(bad.results[0]);
+  assert.throws(()=>runner.studyStageTextureCatalogProof(bad,'run-a','relax-a',sourceIdentity,'film'));
+}
+const session={session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const precondition={scene_revision:42};
+const command=runner.studyStageCommandForMode('texture-stage-b',42);
+const request={method:'POST',path:'/v2/sessions/current/simulation/commands',scope:'session=s&epoch=s%401&request_scope_epoch=api%3A1',body:{
+  ...command,precondition:{...precondition},client_intent_id:'study:relax:texture-b',reason:'user_requested',requested_at_unix_ms:1799000000000,
+}};
+const context={mode:'texture-stage-b',session,expectedPrecondition:precondition,commandCount:0,phase:'ui-submit',
+  idempotencyKey:'study:relax:texture-b'};
+assert.equal(runner.studyStageRerunRequestAllowed(request,context),true);
+assert.equal(runner.studyStageRerunRequestAllowed(request,{...context,idempotencyKey:'foreign'}),false);
+assert.equal(runner.studyStageRerunRequestAllowed(request,{...context,phase:'texture-ready'}),false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request,body:{...request.body,initial_state:{kind:'default_for_target'}}},context),false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request,body:{...request.body,precondition:{scene_revision:41}}},context),false);
+assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_target:{kind:'stage_id',stage_id:'relax-b'},step_id:'relax-b'},'texture-stage-b','new'),true);
+assert.equal(runner.studyStageExecutionBindingMatches({run_id:'new',requested_target:{kind:'study'},step_id:null},'texture-stage-b','new'),false);
+""";
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source.as_uri()],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mode_specific_source_pins_leave_legacy_profiles_unchanged(self):
+        qa = self.qa
+        stage_b = qa._study_stage_rerun_source_sha256(ROOT, "stage-b")
+        material = qa._study_stage_rerun_source_sha256(ROOT, "material-stage-a")
+        fdm_cell = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
+        texture_stage = qa._study_stage_rerun_source_sha256(ROOT, "texture-stage-b")
+        texture_study = qa._study_stage_rerun_source_sha256(ROOT, "texture-study")
+        self.assertEqual(set(stage_b), set(self.SOURCE_KEYS))
+        self.assertEqual(set(material), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_MATERIAL_SOURCES))
+        self.assertEqual(set(fdm_cell), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_FDM_CELL_SOURCES))
+        self.assertEqual(set(texture_stage), set(self.SOURCE_KEYS) | set(qa.STUDY_STAGE_TEXTURE_SOURCES))
+        self.assertEqual(texture_stage, texture_study)
+        qa._validate_study_stage_rerun_hashes(stage_b, "stage-b")
+        qa._validate_study_stage_rerun_hashes(material, "material-stage-a")
+        qa._validate_study_stage_rerun_hashes(fdm_cell, "fdm-cell-study")
+        qa._validate_study_stage_rerun_hashes(texture_stage, "texture-stage-b")
+        qa._validate_study_stage_rerun_hashes(texture_study, "texture-study")
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_study_stage_rerun_hashes(material, "stage-b")
+
+    def test_texture_profiles_accept_exact_terminal_proofs_and_reject_scope_drift(self):
+        qa = self.qa
+        for mode in ("texture-stage-b", "texture-study"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            payload = self.texture_result_fixture(mode, sources)
+            encoded = (json.dumps(payload) + "\n").encode()
+            with self.subTest(mode=mode):
+                parsed = qa._parse_study_stage_rerun_result(
+                    encoded, payload["public_url"], payload["probe_url"], sources, mode,
+                )
+                self.assertEqual(parsed["texture_source_proof"]["authored_relation"],
+                                 "authored_input_changed" if mode == "texture-stage-b" else "matching_authored_input")
+                self.assertFalse(parsed["native_execution_proven"])
+                wrong_relation = deepcopy(payload)
+                wrong_relation["texture_source_proof"]["authored_relation"] = (
+                    "matching_authored_input" if mode == "texture-stage-b" else "authored_input_changed")
+                wrong_relation["before"]["texture_source_proof"] = deepcopy(wrong_relation["texture_source_proof"])
+                with self.assertRaises(qa.BuildControlError):
+                    qa._parse_study_stage_rerun_result(
+                        json.dumps(wrong_relation).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+                    )
+                for mutate in (
+                    lambda item: item["texture_source_proof"].update(domain_relation="different_published_layout"),
+                    lambda item: item["texture_source_proof"].update(artifact_sha256="f" * 64),
+                    lambda item: item["before"]["texture_state"].update(scope="region"),
+                    lambda item: item["before"]["profile"].update(domain_cell_count=8),
+                    lambda item: item["command_receipt"]["payload"].update(target={"kind": "stage_id", "stage_id": "relax-a"}),
+                    lambda item: item["after"]["scene_profile"].update(pipeline_version="study_pipeline.v1"),
+                ):
+                    bad = deepcopy(payload)
+                    mutate(bad)
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                        )
+                if mode == "texture-stage-b":
+                    for mutate in (
+                        lambda item: item["texture_receipt"]["payload"].__setitem__("base_revision", 38),
+                        lambda item: item["texture_receipt"]["acknowledgement"]["committed_scene"].__setitem__("revision", 41),
+                        lambda item: item["texture_receipt"]["payload"]["merge_patch"]["study"]["study_pipeline"]["nodes"][0]["payload"].update(
+                            stage_magnetization_assignments={"schema_version": "fullmag.magnetization-assignments.v1",
+                                                             "assignments": []}),
+                        lambda item: item["command_receipt"].update(idempotency_key="foreign"),
+                    ):
+                        bad = deepcopy(payload)
+                        mutate(bad)
+                        with self.assertRaises(qa.BuildControlError):
+                            qa._parse_study_stage_rerun_result(
+                                (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                            )
+                else:
+                    bad = deepcopy(payload)
+                    bad["texture_transaction_count"] = 1
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                        )
+
+    def test_texture_unknown_profiles_retain_possible_writes_without_terminal_claims(self):
+        qa = self.qa
+        for mode in ("texture-stage-b", "texture-study"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            payload = self.texture_result_fixture(mode, sources)
+            payload.update({
+                "state": "outcome-unknown", "outcome": "unknown",
+                "failure": "bounded observation ended after a possible dispatch",
+                "after": None, "reload_proof": None, "history_identity_preserved": None,
+                "public_terminal_proven": False, "native_execution_proven": False, "field_data_proven": False,
+            })
+            if mode == "texture-stage-b":
+                payload["command_receipt"] = None
+                payload["command_count"] = 0
+                payload["command_attempt_count"] = 0
+                payload["ui_command_proven"] = False
+                payload["request_counts"].pop("POST /v2/sessions/current/simulation/commands")
+            payload["total_requests"] = sum(payload["request_counts"].values())
+            parsed = qa._parse_study_stage_rerun_result(
+                (json.dumps(payload) + "\n").encode(), payload["public_url"], payload["probe_url"], sources, mode,
+            )
+            self.assertEqual(parsed["outcome"], "unknown")
+            self.assertIsNone(parsed["after"])
+            self.assertFalse(parsed["public_terminal_proven"])
+            bad = deepcopy(payload)
+            bad["command_attempt_count"] = 2
+            with self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(
+                    (json.dumps(bad) + "\n").encode(), bad["public_url"], bad["probe_url"], sources, mode,
+                )
+
+    @staticmethod
+    def result_identity(run_id, stage_id, index):
+        return {
+            "project_id": "project-p22",
+            "study_id": "study-p22",
+            "source": {
+                "run_id": run_id,
+                "task_id": f"task-{index}",
+                "step_id": stage_id,
+                "case_id": f"case-{index}",
+                "attempt_id": f"attempt-{index}",
+                "ownership_epoch": index,
+            },
+            "authored_stage_id": stage_id,
+            "artifact_id": f"artifact-{run_id}-{stage_id}",
+            "artifact_sha256": f"{index:064x}",
+            "codec_id": "fullmag.scalar-series.v1",
+            "codec_version": "1",
+            "accepted_at": "2026-11-07T10:00:00Z",
+        }
+
+    def result_fixture(self, mode, sources):
+        qa = self.qa
+        session = {
+            "name": "P22 three Relax stages",
+            "session_id": "session-p22",
+            "session_epoch": "session-p22@1",
+            "request_scope_epoch": "api:p22:1",
+        }
+        previous_run = "run-before"
+        new_run = "run-held" if mode == "fdm-cell-study" else "run-after"
+        before_ids = (["relax-b"] if mode == "study" else ["relax-a"] if mode == "fdm-cell-study"
+                      else ["relax-a", "relax-b", "relax-c"])
+        after_ids = (["relax-b"] if mode == "stage-b" else ["relax-a"] if mode == "material-stage-a"
+                     else ["relax-a", "relax-b", "relax-c"])
+        before_results = [self.result_identity(previous_run, stage_id, index + 1)
+                          for index, stage_id in enumerate(before_ids)]
+        new_results = [self.result_identity(new_run, stage_id, index + 4)
+                       for index, stage_id in enumerate(after_ids)]
+        fdm_previous_revisions = {
+            "region_topology_revision": 0,
+            "region_membership_revision": 0,
+            "region_coefficients_revision": 1,
+            "region_initial_state_revision": 0,
+        }
+        precondition = {
+            "scene_revision": 2 if mode == "fdm-cell-study" else 32 if mode == "material-stage-a" else 31,
+            "mesh_revision": 1 if mode == "fdm-cell-study" else 18,
+            "domain_generation_id": "fdm-domain-8",
+            **(fdm_previous_revisions if mode == "fdm-cell-study" else {
+                "region_topology_revision": 3,
+                "region_membership_revision": 4,
+                "region_coefficients_revision": 5,
+                "region_initial_state_revision": 6,
+            }),
+            "current_run": {"kind": "run", "run_id": previous_run},
+            "runtime_state": "awaiting_command",
+            "command_revision": 3 if mode == "fdm-cell-study" else 0,
+        }
+        command_precondition = deepcopy(precondition)
+        if mode == "fdm-cell-study":
+            command_precondition.update({
+                "scene_revision": 3,
+                "mesh_revision": 2,
+                "domain_generation_id": "fdm-domain-16",
+                "current_run": {"kind": "run", "run_id": new_run},
+                "command_revision": 4,
+                "region_topology_revision": 1,
+                "region_membership_revision": 1,
+                "region_coefficients_revision": 2,
+                "region_initial_state_revision": 1,
+            })
+        if mode in {"stage-b", "material-stage-a"}:
+            selected_stage = "relax-b" if mode == "stage-b" else "relax-a"
+            command = {
+                "kind": "relax",
+                "target": {"kind": "stage_id", "stage_id": selected_stage},
+                "initial_state": {"kind": "default_for_target"},
+                "precondition": deepcopy(precondition),
+                "client_intent_id": "study:relax:p22-stage-b",
+                "reason": "user_requested",
+                "requested_at_unix_ms": 1_799_000_000_000,
+            }
+        else:
+            command = {
+                "kind": "solve",
+                "target": {"kind": "study"},
+                "precondition": deepcopy(command_precondition),
+                "client_intent_id": "study:solve:p22-study",
+                "reason": "user_requested",
+                "requested_at_unix_ms": 1_799_000_000_000,
+            }
+        scope = "session=session-p22&epoch=session-p22%401&request_scope_epoch=api%3Ap22%3A1"
+        execution_binding = {"requested_target": command["target"], "run_id": new_run}
+        if mode in {"stage-b", "material-stage-a"}:
+            execution_binding["step_id"] = command["target"]["stage_id"]
+        payload = {
+            "schema": qa.STUDY_STAGE_RERUN_RESULT_SCHEMA,
+            "scenario": "study-stage-rerun",
+            "state": "passed",
+            "mode": mode,
+            "failure": None,
+            "public_url": "http://127.0.0.1:3242",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources,
+            "source_sha256_after": sources,
+            "session_before": session,
+            "session_after": dict(session),
+            "before": {
+                "run_id": previous_run,
+                "run_status": "completed",
+                "solver_state": "awaiting_command",
+                "execution_state": "completed",
+                "stage_ids": before_ids,
+                "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["completed" if stage in before_ids else "pending"
+                                   for stage in ("relax-a", "relax-b", "relax-c")],
+                "completed_stage_indexes": [i for i, stage in enumerate(("relax-a", "relax-b", "relax-c"))
+                                            if stage in before_ids],
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm",
+                "domain_cell_count": 8,
+                            "domain_generation_id": "fdm-domain-8",
+                            "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                            "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                            "script_sha256": sources["fixture"]},
+                "result_identities": before_results,
+                "precondition": precondition,
+            },
+            "command_receipt": {
+                "method": "POST",
+                "path": "/v2/sessions/current/simulation/commands",
+                "status": 202,
+                "scope_header": scope,
+                "payload": command,
+                "execution_binding": execution_binding,
+            },
+            "phase": "await-terminal",
+            "material_receipt": None,
+            "material_count": 0,
+            "material_attempt_count": 0,
+            "ui_material_proven": False,
+            "command_count": 1,
+            "command_attempt_count": 1,
+            "ui_command_proven": True,
+            "after": {
+                "run_id": new_run,
+                "run_status": "completed",
+                "solver_state": "awaiting_command",
+                "execution_state": "completed",
+                "stage_ids": after_ids,
+                "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["completed" if stage in after_ids else "pending"
+                                   for stage in ("relax-a", "relax-b", "relax-c")],
+                "completed_stage_indexes": [i for i, stage in enumerate(("relax-a", "relax-b", "relax-c"))
+                                            if stage in after_ids],
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm",
+                "domain_cell_count": 16 if mode == "fdm-cell-study" else 8,
+                            "domain_generation_id": "fdm-domain-16" if mode == "fdm-cell-study" else "fdm-domain-8",
+                            "requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                            "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                            "script_sha256": sources["fixture"]},
+                "result_identities": new_results,
+                "preserved_prior_result_identities": deepcopy(before_results),
+            },
+            "reload_proof": {"status": 200, "path": "/session/p22-three-relax-stages", "run_id": new_run,
+                "command_count": 1, "command_attempt_count": 1,
+                "stable_projection": True, "history_identity_preserved": True,
+                "canvas": {"visible": True, "context_type": "WebGL2RenderingContext", "context_lost": False,
+                    "drawing_buffer_width": 600, "drawing_buffer_height": 500,
+                    "quantity_id": "m", "label_visible": True, "field_state": "data-ready",
+                    "fdm_model_count": 16 if mode == "fdm-cell-study" else 8}},
+            "history_identity_preserved": True,
+            "public_terminal_proven": True,
+            "native_execution_proven": False,
+            "field_data_proven": False,
+            "outcome": "terminal-confirmed",
+            "read_counts": {
+                "status": 2,
+                "current_session": 2,
+                "scene": 2,
+                "commands": 2,
+                "current_run": 2,
+                "stage_execution": 2,
+                "solver_status": 2,
+                "stage_results": 3,
+                "command_details": 1 if mode == "fdm-cell-study" else 0,
+            },
+            "request_counts": {
+                "GET /v2/sessions/current/status": 3 if mode == "fdm-cell-study" else 2,
+                "GET /v2/sessions/current": 2,
+                "GET /v2/sessions/current/model/scene": 3 if mode == "fdm-cell-study" else 2,
+                "GET /v2/sessions/current/simulation/commands": 2,
+                "GET /v2/sessions/current/simulation/runs/current": 2,
+                "GET /v2/sessions/current/simulation/stages/execution": 2,
+                "GET /v2/sessions/current/simulation/solver/status": 2,
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={previous_run}&limit=100": 2,
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100": 1,
+                **({"GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6": 1}
+                   if mode == "fdm-cell-study" else {}),
+                "POST /v2/sessions/current/simulation/commands": 2 if mode == "fdm-cell-study" else 1,
+            },
+            "total_requests": 18 + (1 + 1 + 1 + 1 + 1 if mode == "fdm-cell-study" else 0),
+            "request_limit": 512,
+            "request_path_limit": 128,
+            "per_path_read_limit": 128,
+            "violations": [],
+            "errors": [],
+            "proxy_failures": [],
+        }
+        if mode == "material-stage-a":
+            magnetization_hash = "d" * 64
+            material_before = {
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
+                "properties": {"Ms": 800000, "Aex": 13e-12, "alpha": 0.5, "Dind": None, "Dbulk": None},
+                "magnetization_ref": "mag-film", "magnetization_asset_sha256": magnetization_hash,
+            }
+            material_after = {
+                **deepcopy(material_before),
+                "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
+            }
+            material_payload = {
+                "base_revision": 31,
+                "kind": "patch_material",
+                "material_id": "mat-film",
+                "patch": {"name": "film material", "properties": {
+                    "Aex": 1e-11, "Dind": None, "Dbulk": None, "Ms": 600000, "alpha": 0.5,
+                }},
+            }
+            payload["material_count"] = 1
+            payload["material_attempt_count"] = 1
+            payload["ui_material_proven"] = True
+            payload["material_receipt"] = {
+                "method": "POST",
+                "path": "/v2/sessions/current/model/transactions",
+                "status": 200,
+                "scope_header": scope,
+                "payload": material_payload,
+                "before_scene_revision": 31,
+                "material_before": material_before,
+                "acknowledged": True,
+                "transaction_kind": "patch_material",
+                "scene_revision": 32,
+                "material_after": material_after,
+                "unmodified_scene_sha256_before": "e" * 64,
+                "unmodified_scene_sha256_after": "e" * 64,
+            }
+            payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
+            payload["total_requests"] += 1
+        if mode == "fdm-cell-study":
+            material_hash = "d" * 64
+            material_state = {
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
+                "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
+                "magnetization_ref": "mag-film", "magnetization_asset_sha256": material_hash,
+            }
+            payload["before"]["material_state"] = deepcopy(material_state)
+            payload["after"]["material_state"] = deepcopy(material_state)
+            payload["fdm_material_initial_state"] = deepcopy(material_state)
+            before_cell = [2e-9, 1e-9, 2e-9]
+            payload["fdm_cell_count"] = 1
+            payload["fdm_cell_attempt_count"] = 1
+            payload["ui_fdm_cell_proven"] = True
+            payload["fdm_cell_receipt"] = {
+                "method": "POST", "path": "/v2/sessions/current/model/transactions", "status": 200,
+                "scope_header": scope,
+                "payload": {"base_revision": 2 if mode == "fdm-cell-study" else 31, "kind": "merge_patch",
+                    "merge_patch": {"study": {"fdm": {"default_cell": [1e-9, 2e-9, 2e-9]}}}},
+                "before_scene_revision": 2 if mode == "fdm-cell-study" else 31,
+                "before_cell": [2e-9, 2e-9, 2e-9] if mode == "fdm-cell-study" else before_cell,
+                "acknowledged": True,
+                "transaction_kind": "merge_patch", "scene_revision": 3 if mode == "fdm-cell-study" else 32,
+                "after_cell": [1e-9, 2e-9, 2e-9],
+                "unmodified_scene_sha256_before": "e" * 64,
+                "unmodified_scene_sha256_after": "e" * 64,
+            }
+            payload["grid_refresh_count"] = 1
+            payload["grid_refresh_attempt_count"] = 1
+            payload["ui_grid_refresh_proven"] = True
+            payload["grid_refresh_receipt"] = {
+                "method": "POST", "path": "/v2/sessions/current/simulation/commands", "status": 202,
+                "scope_header": scope,
+                "payload": {"client_intent_id": "fdm-grid-refresh-1799000000000-1",
+                    "kind": "fdm_grid_refresh", "precondition": {"scene_revision": 3},
+                    "reason": "study_global_commit"},
+                "accepted": True, "command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6", "failed_grid_response": None,
+                "terminal_detail": {"command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6", "kind": "fdm_grid_refresh",
+                    "status": "completed", "completion_status": "completed",
+                    "client_intent_id": "fdm-grid-refresh-1799000000000-1",
+                    "reason": "study_global_commit", "seq": 17},
+                "domain_transition": {"before_domain_cell_count": 8,
+                    "before_domain_generation_id": "fdm-domain-8",
+                    "ready_domain_cell_count": 16, "ready_domain_generation_id": "fdm-domain-16",
+                    "scene_revision": 3, "prior_run_id": previous_run,
+                    "preserved_prior_result_identities": deepcopy(before_results),
+                    "prepared_run_id": new_run, "preparation_id": "prep-held", "preparation_revision": 17},
+            }
+            prep_stage_statuses = [
+                ("runtime_startup", "completed"), ("script_materialization", "completed"),
+                ("validation", "completed"), ("planning", "completed"),
+                ("domain_preparation", "completed"), ("meshing", "completed"),
+                ("mesh_postprocessing", "completed"), ("solver_initialization", "skipped"),
+                ("ready", "completed"),
+            ]
+            payload["prepared_grid_run"] = {
+                "run_id": new_run, "run_status": "waiting_for_solve",
+                "solver_state": "awaiting_command", "execution_state": "awaiting_command",
+                "stage_ids": [], "authored_stage_ids": ["relax-a", "relax-b", "relax-c"],
+                "stage_statuses": ["pending", "pending", "pending"], "completed_stage_indexes": [],
+                "scene_profile": qa._expected_study_stage_scene_profile(),
+                "profile": {"domain_discretization": "fdm", "domain_cell_count": 16,
+                    "domain_generation_id": "fdm-domain-16", "requested_backend": "fdm",
+                    "requested_device": "cpu", "requested_precision": "double",
+                    "script_path": "/opt/fullmag/source/examples/interactive_study/fdm_cpu_three_relax_continue.py",
+                    "script_sha256": sources["fixture"]},
+                "scene_revision": 3, "precondition": deepcopy(command_precondition),
+                "commands": {"resource_revision": 8, "count": 4, "pending_count": 0, "running_count": 0,
+                    "terminal_statuses": ["completed", "completed", "completed", "completed"],
+                    "last_command_id": "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"},
+                "preparation": {
+                    "preparation_id": "prep-held", "revision": 17, "resource_revision": 17,
+                    "status": "ready", "active_stage_id": None, "failure": None,
+                    "receipt": {"schema_version": "preparation_receipt.v1", "preparation_id": "prep-held",
+                        "run_id": new_run, "plan_fingerprint": "sha256:" + "a" * 64,
+                        "payload_sha256": "b" * 64},
+                    "stages": [{"stage_id": stage_id, "status": state}
+                        for stage_id, state in prep_stage_statuses],
+                },
+            }
+            payload["read_counts"]["preparation"] = 1
+            payload["read_counts"]["stage_results"] = 4
+            payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
+            payload["request_counts"]["GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6"] = 1
+            payload["request_counts"]["GET /v2/sessions/current/simulation/preparation"] = 1
+            payload["request_counts"][
+                f"GET /v2/sessions/current/simulation/stages/results?run_id={new_run}&limit=100"] += 1
+            payload["total_requests"] = sum(payload["request_counts"].values())
+        return payload
+
+    def texture_result_fixture(self, mode, sources):
+        if mode not in {"texture-stage-b", "texture-study"}:
+            raise ValueError(mode)
+        base_mode = "stage-b" if mode == "texture-stage-b" else "study"
+        payload = self.result_fixture(base_mode, sources)
+        qa = self.qa
+        payload["mode"] = mode
+        scene_revision = 40
+        domain_id = "fdm-domain-16"
+        precondition = payload["before"]["precondition"]
+        precondition["scene_revision"] = scene_revision
+        precondition["mesh_revision"] = 19
+        precondition["domain_generation_id"] = domain_id
+        payload["command_receipt"]["payload"]["precondition"] = deepcopy(precondition)
+        for snapshot in (payload["before"], payload["after"]):
+            snapshot["profile"]["domain_cell_count"] = 16
+            snapshot["profile"]["domain_generation_id"] = domain_id
+            snapshot["scene_profile"] = qa._expected_study_stage_scene_profile(
+                pipeline_version="study_pipeline.v2", texture_object_id="film")
+        payload["reload_proof"]["canvas"]["fdm_model_count"] = 16
+
+        baseline = {
+            "material": {
+                "object_id": "film", "material_id": "mat-film", "material_name": "film material",
+                "properties": {"Ms": 600000, "Aex": 1e-11, "alpha": 0.5, "Dind": None, "Dbulk": None},
+                "magnetization_ref": "mag-film", "magnetization_asset_sha256": "d" * 64,
+            },
+            "default_cell": [1e-9, 2e-9, 2e-9],
+            "global_m0": {"object_id": "film", "magnetization_ref": "mag-film", "asset_sha256": "d" * 64,
+                           "preset_kind": "uniform", "direction": [1, 0, 0]},
+        }
+        source_stage = "relax-a" if mode == "texture-stage-b" else "relax-b"
+        source_identity = next(item for item in payload["before"]["result_identities"]
+                               if item["authored_stage_id"] == source_stage)
+        source_proof = {
+            "authored_stage_id": source_stage, "object_id": "film", "run_id": "run-before",
+            "artifact_id": source_identity["artifact_id"], "artifact_sha256": source_identity["artifact_sha256"],
+            "codec_id": source_identity["codec_id"], "codec_version": source_identity["codec_version"],
+            "authored_relation": ("authored_input_changed" if mode == "texture-stage-b" else "matching_authored_input"),
+            "domain_relation": "matching_published_layout",
+            "supports_magnetization_input": True,
+        }
+        reset = {"stage_id": "relax-b", "object_id": "film", "scope": "object", "initializer": None}
+        for snapshot in (payload["before"], payload["after"]):
+            snapshot["texture_state"] = deepcopy(reset)
+            snapshot["texture_baseline_state"] = deepcopy(baseline)
+            snapshot["texture_source_proof"] = deepcopy(source_proof)
+        payload["texture_source_proof"] = source_proof
+        payload["texture_baseline_state"] = baseline
+
+        command = payload["command_receipt"]["payload"]
+        if mode == "texture-stage-b":
+            command["initial_state"] = {"kind": "authored_initial_state", "source": {
+                "kind": "stage", "scene_revision": scene_revision, "stage_id": "relax-b"}}
+            payload["command_receipt"]["idempotency_key"] = command["client_intent_id"]
+        else:
+            payload["command_receipt"]["idempotency_key"] = command["client_intent_id"]
+
+        payload["texture_transaction_count"] = 0
+        payload["texture_transaction_attempt_count"] = 0
+        payload["texture_receipt"] = None
+        payload["ui_texture_proven"] = False
+        if mode == "texture-stage-b":
+            pipeline = {
+                "version": "study_pipeline.v1",
+                "nodes": [
+                    {"enabled": True, "id": "relax-a", "label": "Relax 1", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "adaptive_timestep": None, "demag_interval_s": "", "energy_tolerance": "",
+                        "entrypoint_kind": "flat_relax", "fixed_timestep": "1e-13", "integrator": "rk23",
+                        "kind": "relax", "max_relaxation_time_s": "", "max_steps": "10",
+                        "relax_algorithm": "llg_overdamped", "stage_id": "relax-a",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                    {"enabled": True, "id": "relax-b", "label": "Relax 2", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "energy_tolerance": "", "entrypoint_kind": "flat_relax", "kind": "relax",
+                        "max_steps": "1", "relax_algorithm": "projected_gradient_bb", "stage_id": "relax-b",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                    {"enabled": True, "id": "relax-c", "label": "Relax 3", "node_kind": "primitive",
+                     "source": "script_imported", "stage_kind": "relax", "payload": {
+                        "energy_tolerance": "", "entrypoint_kind": "flat_relax", "kind": "relax",
+                        "max_steps": "1", "relax_algorithm": "nonlinear_cg", "stage_id": "relax-c",
+                        "torque_tolerance": "0.0001", "until_seconds": ""}},
+                ],
+            }
+            scene_before = {
+                "revision": scene_revision - 1,
+                "objects": [{"id": "film", "name": "film", "role": "magnet", "material_ref": "mat-film",
+                             "magnetization_ref": "mag-film"}],
+                "materials": [{"id": "mat-film", "name": "film material", "properties": deepcopy(baseline["material"]["properties"])}],
+                "magnetization_assets": [{"id": "mag-film", "kind": "preset_texture", "preset_kind": "uniform",
+                                          "preset_params": {"direction": [1, 0, 0]}}],
+                "study": {"requested_backend": "fdm", "requested_device": "cpu", "requested_precision": "double",
+                          "fdm": {"default_cell": [1e-9, 2e-9, 2e-9]}, "study_pipeline": pipeline},
+            }
+            expected_pipeline = deepcopy(pipeline)
+            expected_pipeline["version"] = "study_pipeline.v2"
+            expected_pipeline["nodes"][1]["payload"]["stage_magnetization_assignments"] = {
+                "schema_version": "fullmag.magnetization-assignments.v1",
+                "assignments": [{"object_id": "film", "region_id": None, "initializer": None}],
+            }
+            tx_request = {"kind": "merge_patch", "base_revision": scene_revision - 1,
+                          "merge_patch": {"study": {"study_pipeline": expected_pipeline}}}
+            committed = deepcopy(scene_before)
+            committed["revision"] = scene_revision
+            committed["study"]["study_pipeline"] = expected_pipeline
+            payload["texture_transaction_count"] = 1
+            payload["texture_transaction_attempt_count"] = 1
+            payload["ui_texture_proven"] = True
+            payload["texture_receipt"] = {
+                "method": "POST", "path": "/v2/sessions/current/model/transactions",
+                "scope_header": payload["command_receipt"]["scope_header"], "status": 200,
+                "payload": tx_request, "scene_before": scene_before,
+                "acknowledgement": {"transaction_kind": "merge_patch", "scene_revision": scene_revision,
+                                    "committed_scene": committed},
+                "helper_ack": {"sceneRevision": scene_revision, "stageId": "relax-b", "objectId": "film"},
+                "ui_saved_ack_proven": True, "ui_saved_ack_text": "Saved stage relax-b.",
+            }
+            payload["request_counts"]["POST /v2/sessions/current/model/transactions"] = 1
+
+        old_results_path = "GET /v2/sessions/current/simulation/stages/results?run_id=run-before&limit=100"
+        new_results_path = "GET /v2/sessions/current/simulation/stages/results?run_id=run-after&limit=100"
+        payload["request_counts"][old_results_path] = 8 if mode == "texture-stage-b" else 6
+        payload["request_counts"][new_results_path] = 2
+        payload["read_counts"]["stage_results"] = 10 if mode == "texture-stage-b" else 8
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        return payload
+
+    def test_terminal_scope_keeps_authored_rows_but_requires_only_selected_execution(self):
+        import shutil
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        source = ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs"
+        javascript = """
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+const {studyStageTerminalScope: scope} = await import(process.argv[1]);
+const ids=['relax-a','relax-b','relax-c'];
+const e={total_stages:3,stage_statuses:['pending','completed','pending'],completed_stage_indexes:[1],
+  stages:ids.map((stage_id,index)=>({stage_id,index,status:index===1?'completed':'pending'}))};
+assert.deepEqual(scope(e,ids,['relax-b']),['relax-b']);
+const extra=structuredClone(e); extra.stage_statuses[0]='completed';
+assert.throws(()=>scope(extra,ids,['relax-b']));
+const metadata=structuredClone(e); metadata.stages[0].started_at_unix_ms=42;
+assert.throws(()=>scope(metadata,ids,['relax-b']));
+const wrong=structuredClone(e); wrong.completed_stage_indexes=[0];
+assert.throws(()=>scope(wrong,ids,['relax-b']));
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source.as_uri()],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_managed_compose_pins_one_fixed_stage_or_study_runner(self):
+        qa = self.qa
+        identity = {
+            "project_name": "fullmag-worktree-fixture",
+            "network_name": "fullmag-worktree-fixture_fullmag",
+            "project_id": "fullmag",
+            "worktree_id": "fixture",
+            "checkout_kind": "worktree",
+            "source_root": str(ROOT),
+        }
+        sources = self.sources(qa)
+        for mode in ("stage-b", "study"):
+            document = qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun=mode, study_stage_rerun_source_sha256=sources,
+            )
+            service = document["services"]["browser-qa"]
+            self.assertEqual(service["command"], [
+                "node", "/state/development/workspace/apps/control-room/scripts/check-study-stage-rerun-browser.mjs",
+                mode,
+            ])
+            self.assertEqual(service["environment"]["CONTROL_ROOM_BROWSER_QA_SCENARIO"], "study-stage-rerun")
+            self.assertEqual(service["environment"]["CONTROL_ROOM_STUDY_STAGE_RERUN_MODE"], mode)
+            self.assertEqual(json.loads(service["environment"]["CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256"]), sources)
+            self.assertTrue(service["read_only"])
+            self.assertTrue(all(mount["read_only"] for mount in service["volumes"]))
+            mounts = {mount["target"]: mount for mount in service["volumes"]}
+            self.assertEqual(set(mounts), {
+                "/state/development",
+                "/state/development/workspace/apps/control-room/scripts",
+                qa.STUDY_STAGE_RERUN_SRC_TARGET,
+                qa.STUDY_STAGE_RERUN_FIXTURE_TARGET,
+            })
+            self.assertEqual(mounts[qa.STUDY_STAGE_RERUN_SRC_TARGET]["source"], str(ROOT / "apps/control-room/src"))
+            self.assertEqual(mounts[qa.STUDY_STAGE_RERUN_FIXTURE_TARGET]["source"],
+                             str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]))
+            self.assertNotIn("ports", service)
+        with self.assertRaises(qa.BuildControlError):
+            qa._compose_document(
+                ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                study_stage_rerun="compute-anything", study_stage_rerun_source_sha256=sources,
+            )
+        for options in (
+            {"canvas_only": False},
+            {"prepare_viewport_fixture": True},
+            {"airbox_inspector": True},
+            {"inspector_ack": True},
+            {"saved_playback_item_id": "4", "source_script_sha256": "b" * 64},
+            {"expect_run_performance": True},
+        ):
+            with self.subTest(options=options), self.assertRaises(qa.BuildControlError):
+                qa._compose_document(
+                    ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+                    study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources, **options,
+                )
+
+    def test_result_validator_requires_exact_target_terminal_scope_and_old_history(self):
+        qa = self.qa
+        for mode in ("stage-b", "study", "material-stage-a", "fdm-cell-study"):
+            sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+            payload = self.result_fixture(mode, sources)
+            parsed = qa._parse_study_stage_rerun_result(
+                json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+            )
+            self.assertEqual(parsed, payload)
+            bad_cases = (
+                ("mode", lambda item: item.update(mode="study" if mode == "stage-b" else "stage-b")),
+                ("source drift", lambda item: item.update(source_sha256_after={**sources, "runner": "b" * 64})),
+                ("collapsed authored rows", lambda item: item["after"].update(authored_stage_ids=["relax-b"])),
+                ("missing public statuses", lambda item: item["after"].pop("stage_statuses")),
+                ("wrong completed index", lambda item: item["after"].update(
+                    completed_stage_indexes=[1] if mode == "material-stage-a" else [0])),
+                ("missing reload", lambda item: item.pop("reload_proof")),
+                ("reload foreign run", lambda item: item["reload_proof"].update(run_id="foreign")),
+                ("reload foreign route", lambda item: item["reload_proof"].update(path="/session/foreign-session")),
+                ("reload generic route", lambda item: item["reload_proof"].update(path="/workspace")),
+                ("reload duplicate submit", lambda item: item["reload_proof"].update(command_attempt_count=2)),
+                ("reload history lost", lambda item: item["reload_proof"].update(history_identity_preserved=False)),
+                ("reload context lost", lambda item: item["reload_proof"]["canvas"].update(context_lost=True)),
+                ("reload empty canvas", lambda item: item["reload_proof"]["canvas"].update(drawing_buffer_width=0)),
+                ("reload wrong domain", lambda item: item["reload_proof"]["canvas"].update(
+                    fdm_model_count=8 if mode == "fdm-cell-study" else 16)),
+                ("duplicate command", lambda item: item.update(command_count=2)),
+                ("duplicate command attempt", lambda item: item.update(command_attempt_count=2)),
+                ("background command", lambda item: item.update(ui_command_proven=False)),
+                ("wrong target", lambda item: item["command_receipt"]["payload"]["target"].update(
+                    stage_id="relax-a" if mode == "stage-b" else "relax-b")),
+                ("foreign run binding", lambda item: item["command_receipt"]["execution_binding"].update(
+                    run_id="foreign-run")),
+                ("wrong step binding", lambda item: item["command_receipt"]["execution_binding"].update(
+                    step_id="relax-a" if mode == "stage-b" else "relax-b")),
+                ("edited requested scene", lambda item: item["before"]["scene_profile"].update(
+                    requested_device="cuda")),
+                ("wrong scope", lambda item: item["command_receipt"].update(scope_header="session=foreign")),
+                ("stale precondition", lambda item: item["command_receipt"]["payload"]["precondition"].update(mesh_revision=17)),
+                ("changed old history", lambda item: item["after"]["preserved_prior_result_identities"][0].update(
+                    artifact_sha256="f" * 64)),
+                ("incomplete terminal", lambda item: item["after"].update(run_status="running")),
+                ("unexpected stage-control precondition", lambda item: (
+                    item["before"]["precondition"].update(stage_execution_revision=27),
+                    item["command_receipt"]["payload"]["precondition"].update(stage_execution_revision=27),
+                )),
+                ("native claim", lambda item: item.update(native_execution_proven=True)),
+                ("field claim", lambda item: item.update(field_data_proven=True)),
+                ("result shape", lambda item: item["after"]["result_identities"].pop()),
+            )
+            if mode == "material-stage-a":
+                bad_cases += (
+                    ("material edit missing", lambda item: item.update(material_receipt=None)),
+                    ("material duplicate", lambda item: item.update(material_attempt_count=2)),
+                    ("material target changed", lambda item: item["material_receipt"]["material_after"].update(
+                        material_id="foreign-material")),
+                    ("material alpha changed", lambda item: item["material_receipt"]["material_after"]
+                     ["properties"].update(alpha=0.7)),
+                    ("material texture changed", lambda item: item["material_receipt"].update(
+                        unmodified_scene_sha256_after="f" * 64)),
+                )
+            if mode == "fdm-cell-study":
+                bad_cases += (
+                    ("missing FDM cell receipt", lambda item: item.update(fdm_cell_receipt=None)),
+                    ("wrong FDM cell target", lambda item: item["fdm_cell_receipt"]["payload"]
+                     ["merge_patch"]["study"]["fdm"].update(default_cell=[2e-9, 2e-9, 2e-9])),
+                    ("extra FDM scene field", lambda item: item["fdm_cell_receipt"]["payload"]
+                     ["merge_patch"]["study"].update(title="unexpected")),
+                    ("wrong FDM base revision", lambda item: item["fdm_cell_receipt"]["payload"]
+                     .update(base_revision=30)),
+                    ("missing grid refresh receipt", lambda item: item.update(grid_refresh_receipt=None)),
+                    ("wrong refresh reason", lambda item: item["grid_refresh_receipt"]["payload"]
+                     .update(reason="user_requested")),
+                    ("duplicate refresh attempt", lambda item: item.update(grid_refresh_attempt_count=2)),
+                    ("wrong ready domain", lambda item: item["grid_refresh_receipt"]["domain_transition"]
+                     .update(ready_domain_cell_count=8)),
+                    ("lost A history at refresh", lambda item: item["grid_refresh_receipt"]["domain_transition"]
+                     .update(preserved_prior_result_identities=[])),
+                    ("grid response falsely has failure body", lambda item: item["grid_refresh_receipt"].update(
+                        failed_grid_response={"code": "stale", "message": "failed"})),
+                    ("held run aliases old A", lambda item: item["prepared_grid_run"].update(run_id="run-before")),
+                    ("held precondition has stale scene revision", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(scene_revision=31)),
+                    ("held run receipt belongs to another run", lambda item: item["prepared_grid_run"]
+                     ["preparation"]["receipt"].update(run_id="foreign-run")),
+                    ("held preparation revision is stale", lambda item: item["prepared_grid_run"]
+                     ["preparation"].update(resource_revision=13)),
+                    ("held preparation receipt hash is malformed", lambda item: item["prepared_grid_run"]
+                     ["preparation"]["receipt"].update(payload_sha256="bad")),
+                    ("held preparation is not ready", lambda item: item["prepared_grid_run"]
+                     ["preparation"].update(status="preparing")),
+                    ("held frontier executed A before Solve", lambda item: item["prepared_grid_run"]
+                     .update(stage_statuses=["completed", "pending", "pending"])),
+                    ("held command queue is active", lambda item: item["prepared_grid_run"]
+                     ["commands"].update(running_count=1)),
+                    ("held command queue has unknown terminal state", lambda item: item["prepared_grid_run"]
+                     ["commands"].update(terminal_statuses=["running"])),
+                    ("held frontier domain is stale", lambda item: item["prepared_grid_run"]
+                     ["profile"].update(domain_generation_id="fdm-domain-8")),
+                    ("grid refresh changed region revision", lambda item: item["prepared_grid_run"]
+                     ["precondition"].update(region_coefficients_revision=9)),
+                    ("transition names foreign held run", lambda item: item["grid_refresh_receipt"]
+                     ["domain_transition"].update(prepared_run_id="foreign-run")),
+                    ("wrong material baseline", lambda item: item["before"]["material_state"]
+                     ["properties"].update(Ms=800000)),
+                    ("wrong reload domain", lambda item: item["reload_proof"]["canvas"]
+                     .update(fdm_model_count=8)),
+                )
+            for name, mutate in bad_cases:
+                with self.subTest(mode=mode, reason=name):
+                    invalid = deepcopy(payload)
+                    mutate(invalid)
+                    with self.assertRaises(qa.BuildControlError):
+                        qa._parse_study_stage_rerun_result(
+                            json.dumps(invalid).encode(), payload["public_url"], payload["probe_url"], sources, mode,
+                        )
+
+    def test_fdm_cell_study_unknown_outcomes_retain_receipts_without_replaying_compute(self):
+        qa = self.qa
+        mode = "fdm-cell-study"
+        sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        payload = self.result_fixture(mode, sources)
+        payload.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="Grid is ready but the Compute Study action was not observed",
+            phase="fdm-grid-ready", command_receipt=None, command_count=0,
+            command_attempt_count=0, ui_command_proven=False, after=None,
+            reload_proof=None, history_identity_preserved=None, public_terminal_proven=False,
+            client_ack_count=0,
+        )
+        payload["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
+        held_results_key = "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100"
+        payload["request_counts"][held_results_key] -= 1
+        if payload["request_counts"][held_results_key] == 0:
+            payload["request_counts"].pop(held_results_key)
+        payload["read_counts"]["stage_results"] = 3
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode), payload)
+
+        preparation_pending = self.result_fixture(mode, sources)
+        preparation_pending.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="Grid refresh completed but the new preparation frontier was not proven ready",
+            phase="fdm-grid-observing", prepared_grid_run=None,
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            client_ack_count=0,
+        )
+        preparation_pending["request_counts"]["POST /v2/sessions/current/simulation/commands"] = 1
+        preparation_pending["request_counts"].pop(
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100")
+        preparation_pending["read_counts"]["stage_results"] = 2
+        preparation_pending["read_counts"]["preparation"] = 1
+        preparation_pending["grid_refresh_receipt"].pop("domain_transition")
+        preparation_pending["total_requests"] = sum(preparation_pending["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(preparation_pending).encode(), preparation_pending["public_url"],
+            preparation_pending["probe_url"], sources, mode), preparation_pending)
+
+        ready_without_proof = deepcopy(preparation_pending)
+        ready_without_proof["phase"] = "fdm-grid-ready"
+        with self.assertRaises(qa.BuildControlError):
+            qa._parse_study_stage_rerun_result(
+                json.dumps(ready_without_proof).encode(), ready_without_proof["public_url"],
+                ready_without_proof["probe_url"], sources, mode)
+
+        for name, mutate in (
+            ("compute secretly dispatched", lambda item: item["request_counts"].update(
+                {qa.STUDY_FDM_GRID_REFRESH_KEY: 2})),
+            ("cell transaction duplicated", lambda item: item.update(fdm_cell_attempt_count=2)),
+            ("grid refresh duplicated", lambda item: item.update(grid_refresh_attempt_count=2)),
+            ("A history not preserved", lambda item: item["grid_refresh_receipt"]["domain_transition"]
+             .update(preserved_prior_result_identities=[])),
+            ("wrong ready generation", lambda item: item["before"]["profile"]
+             .update(domain_generation_id="foreign-domain")),
+        ):
+            invalid = deepcopy(payload)
+            mutate(invalid)
+            invalid["total_requests"] = sum(invalid["request_counts"].values())
+            with self.subTest(name=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(
+                    json.dumps(invalid).encode(), invalid["public_url"], invalid["probe_url"], sources, mode)
+
+        dispatched = self.result_fixture(mode, sources)
+        dispatched.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="Compute Study response timed out after dispatch",
+            after=None, reload_proof=None, history_identity_preserved=None,
+            public_terminal_proven=False,
+        )
+        dispatched["command_receipt"]["status"] = 503
+        dispatched["command_receipt"].pop("execution_binding")
+        dispatched["read_counts"].update({
+            "status": 3, "current_session": 3, "scene": 3, "commands": 3,
+            "current_run": 3, "stage_execution": 3, "solver_status": 3,
+        })
+        dispatched["request_counts"][held_results_key] -= 1
+        if dispatched["request_counts"][held_results_key] == 0:
+            dispatched["request_counts"].pop(held_results_key)
+        dispatched["total_requests"] = sum(dispatched["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(dispatched).encode(), dispatched["public_url"], dispatched["probe_url"], sources, mode),
+            dispatched)
+        third_run = self.result_fixture(mode, sources)
+        third_run.update(state="outcome-unknown", outcome="unknown",
+            failure="Command response timed out after dispatch", after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False)
+        third_run["command_receipt"]["execution_binding"]["run_id"] = "run-third"
+        third_run["command_receipt"]["status"] = 503
+        for key in ("GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100",):
+            third_run["request_counts"][key] -= 1
+            if third_run["request_counts"][key] == 0:
+                third_run["request_counts"].pop(key)
+        third_run["total_requests"] = sum(third_run["request_counts"].values())
+        with self.assertRaises(qa.BuildControlError):
+            qa._parse_study_stage_rerun_result(
+                json.dumps(third_run).encode(), third_run["public_url"], third_run["probe_url"], sources, mode)
+
+
+    def test_prepared_grid_waits_for_the_rendered_run_and_mesh_before_compute(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the prepared-grid UI regression")
+        source = (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri()
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+const expected = {run_id: 'run-live-prepared', cell_count: 16};
+let state;
+const visible = () => state.visible === false ? [] : [{}];
+globalThis.document = {
+  querySelector(selector) {
+    assert.equal(selector, '[role="treeitem"][data-node-id="model:mesh"]');
+    return {innerText: state.mesh, getClientRects: visible};
+  },
+  querySelectorAll(selector) {
+    assert.equal(selector, '.fm-inspector-field-row');
+    return [{
+      getClientRects: visible,
+      querySelector(selector) {
+        if (selector === '.fm-inspector-field-row__label') return {innerText: state.label ?? 'Run'};
+        assert.equal(selector, '.fm-inspector-field-row__value');
+        return {innerText: state.run};
+      },
+    }];
+  },
+};
+const ready = {mesh: '[Mesh ready] — FDM · 8 × 2 × 1 / 16 cells', run: expected.run_id};
+for (const candidate of [
+  {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells', run: 'run-live-old'},
+  {...ready, run: 'run-live-old'},
+  {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells'},
+  {...ready, mesh: '[Unavailable] — FDM · 8 × 2 × 1 / 16 cells'},
+  {...ready, mesh: '[Mesh ready] — FDM · 80 × 2 × 1 / 160 cells'},
+  {...ready, visible: false},
+  {...ready, label: 'Historical run'},
+]) {
+  state = candidate;
+  assert.equal(runner.studyStagePreparedGridUiIsReady(expected), false);
+}
+state = ready;
+assert.equal(runner.studyStagePreparedGridUiIsReady(expected), true);
+assert.equal(runner.studyStagePreparedGridUiIsReady({...expected, run_id: ''}), false);
+assert.equal(runner.studyStagePreparedGridUiIsReady({...expected, cell_count: 0}), false);
+let polls = 0;
+let disposed = 0;
+let completed = false;
+const page = {
+  async waitForFunction(predicate, argument, options) {
+    assert.equal(predicate, runner.studyStagePreparedGridUiIsReady);
+    assert.deepEqual(argument, expected);
+    assert.deepEqual(options, {polling: 'raf', timeout: 1234});
+    for (const candidate of [
+      {...ready, mesh: '[Mesh ready] — FDM · 4 × 2 × 1 / 8 cells', run: 'run-live-old'},
+      {...ready, run: 'run-live-old'},
+      ready,
+    ]) {
+      state = candidate;
+      polls++;
+      if (predicate(argument)) return {async dispose() { disposed++; }};
+      assert.equal(completed, false);
+    }
+    throw new Error('Render readiness did not settle');
+  },
+};
+await runner.waitForStudyStagePreparedGridUi(page, expected, 1234);
+completed = true;
+assert.equal(polls, 3);
+assert.equal(disposed, 1);
+"""
+        result = subprocess.run([node, "--input-type=module", "-e", javascript, source],
+                                capture_output=True, text=True, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_renderer_prepared_grid_summary_obeys_the_host_report_schema(self):
+        qa = self.qa
+        sources = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
+        full = self.result_fixture("fdm-cell-study", sources)
+        prepared = full["prepared_grid_run"]
+        commands = prepared["commands"]
+        snapshot = {
+            "currentRun": {"run_id": prepared["run_id"], "status": prepared["run_status"]},
+            "solverStatus": {"runtime_state": prepared["solver_state"]},
+            "execution": {"runtime_state": prepared["execution_state"],
+                          "stage_statuses": prepared["stage_statuses"],
+                          "completed_stage_indexes": prepared["completed_stage_indexes"]},
+            "stageIds": prepared["stage_ids"], "sceneStageIds": prepared["authored_stage_ids"],
+            "sceneProfile": prepared["scene_profile"], "profile": prepared["profile"],
+            "scene": {"revision": prepared["scene_revision"]}, "precondition": prepared["precondition"],
+            "status": {"resources": {"simulation_preparation_revision": prepared["preparation"]["revision"]}},
+            "commands": {"revision": commands["resource_revision"], "pending_count": 0, "running_count": 0,
+                         "commands": [{"status": state, "command_id": commands["last_command_id"]}
+                                      for state in commands["terminal_statuses"]]},
+            "preparation": {**prepared["preparation"],
+                            "stages": [{"id": stage["stage_id"], "status": stage["status"]}
+                                       for stage in prepared["preparation"]["stages"]]},
+        }
+        javascript = """const r=await import(process.argv[1]);
+process.stdout.write(JSON.stringify(r.studyStagePreparedGridSummary(JSON.parse(process.argv[2]))));"""
+        result = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", javascript,
+             (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri(), json.dumps(snapshot)],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered, prepared)
+        qa._validate_study_fdm_prepared_grid_run(
+            rendered, previous_run=full["before"]["run_id"],
+            previous_domain_generation=full["before"]["profile"]["domain_generation_id"],
+            cell_receipt=full["fdm_cell_receipt"], previous_precondition=full["before"]["precondition"],
+            expected_script_sha256=sources["fixture"], expected_last_command_id=commands["last_command_id"],
+        )
+
+
+    def test_fdm_resume_keeps_current_request_counts_and_checks_the_joined_cycle(self):
+        for phase in (None, "fdm-grid-ready", "ui-submit"):
+            with self.subTest(parent_phase=phase):
+                self._assert_fdm_resume_joined_cycle(phase)
+
+    def _assert_fdm_resume_joined_cycle(self, phase):
+        qa = self.qa
+        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(
+            qa, observed_phase=phase)
+        evidence = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources,
+        )
+        payload = self.result_fixture("fdm-cell-study", sources)
+        payload.update(mode="fdm-cell-study-resume", fdm_cell_count=0, fdm_cell_attempt_count=0,
+                       grid_refresh_count=0, grid_refresh_attempt_count=0,
+                       fdm_cell_receipt=None, grid_refresh_receipt=None,
+                       ui_fdm_cell_proven=False, ui_grid_refresh_proven=False)
+        payload["prepared_grid_run"]["commands"]["last_command_id"] = evidence["grid_command_id"]
+        payload["resume_evidence"] = {
+            "schema": evidence["schema"], "prior_attempt": evidence["prior_attempt"],
+            "record_sha256": evidence["record_sha256"], "grid_command_id": evidence["grid_command_id"],
+            "original_run_id": evidence["prior_before"]["run_id"],
+            "original_result_identities": evidence["prior_before"]["result_identities"],
+            "cell_scene_revision": evidence["prior_cell_receipt"]["scene_revision"],
+            "unmodified_scene_sha256_after": evidence["prior_cell_receipt"]["unmodified_scene_sha256_after"],
+        }
+        payload["request_counts"].pop(qa.STUDY_FDM_CELL_TRANSACTION_KEY)
+        command_key = "POST /v2/sessions/current/simulation/commands"
+        payload["request_counts"][command_key] = 1
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        original = deepcopy(payload)
+
+        def parse(value, parent=evidence):
+            return qa._parse_study_stage_rerun_result(
+                json.dumps(value).encode(), value["public_url"], value["probe_url"], sources,
+                "fdm-cell-study-resume", expected_resume_evidence=parent,
+            )
+
+        self.assertEqual(parse(payload), original)
+        self.assertEqual(payload, original, "Internal cycle validation must not alter the measured current report")
+        for name, mutate in (
+            ("replayed model edit", lambda item: item["request_counts"].update({qa.STUDY_FDM_CELL_TRANSACTION_KEY: 1})),
+            ("duplicate Solve", lambda item: item.update(command_count=2, command_attempt_count=2)),
+            ("borrowed grid claimed current", lambda item: item.update(grid_refresh_receipt=evidence["prior_grid_receipt"])),
+            ("foreign parent hash", lambda item: item["resume_evidence"]["record_sha256"].update(result="0" * 64)),
+            ("third held run", lambda item: item["prepared_grid_run"].update(run_id="foreign-run")),
+            ("old A command precondition", lambda item: item["command_receipt"]["payload"].update(precondition=item["before"]["precondition"])),
+            ("old domain after Solve", lambda item: item["after"]["profile"].update(domain_cell_count=8)),
+            ("replaced grid command", lambda item: item["prepared_grid_run"]["commands"].update(last_command_id="foreign-command")),
+            ("wrong execution binding", lambda item: item["command_receipt"]["execution_binding"].update(run_id="third-run")),
+        ):
+            with self.subTest(rejected=name):
+                changed = deepcopy(original)
+                mutate(changed)
+                with self.assertRaises(qa.BuildControlError):
+                    parse(changed)
+        with self.assertRaises(qa.BuildControlError):
+            parse(original, None)
+
+
+    def test_fdm_grid_resume_requires_one_pinned_failed_no_solve_parent_and_consumes_it_once(self):
+        qa = self.qa
+        control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(qa)
+        evidence = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources,
+        )
+        self.assertEqual(evidence["prior_attempt"], attempt)
+        self.assertEqual(evidence["prior_report"]["phase"], "fdm-grid-observing")
+        self.assertEqual(evidence["prior_before"]["stage_ids"], ["relax-a"])
+        self.assertEqual(evidence["grid_command_id"], "fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6")
+        self.assertEqual(set(evidence["record_sha256"]), {"receipt", "terminal", "runner_output", "result"})
+        marker = qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="b" * 32)
+        self.assertEqual(marker["parent_attempt"], attempt)
+        reloaded = qa._load_fdm_grid_resume_evidence(
+            control, attempt, selected=ROOT, current=current, identity=identity,
+            frontend_id="frontend-1", frontend_volume="frontend-state",
+            public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+            expected_sources=sources, consumed_by="b" * 32,
+        )
+        self.assertEqual(reloaded, evidence)
+        marker_path = f"browser-qa/attempts/{attempt}/resume-consumed.json"
+        mismatched = deepcopy(marker)
+        mismatched["record_sha256"]["result"] = "0" * 64
+        control.write(marker_path, mismatched)
+        with self.assertRaises(qa.BuildControlError):
+            qa._load_fdm_grid_resume_evidence(
+                control, attempt, selected=ROOT, current=current, identity=identity,
+                frontend_id="frontend-1", frontend_volume="frontend-state",
+                public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+                expected_sources=sources, consumed_by="b" * 32,
+            )
+        control.write(marker_path, marker)
+        with self.assertRaises(qa.BuildControlError):
+            qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="c" * 32)
+
+        for changed in ("solve-dispatched", "source-drift", "wrong-session", "wrong-grid-terminal", "duplicate-grid"):
+            with self.subTest(rejected=changed):
+                invalid_control, invalid_attempt, invalid_identity, invalid_current, invalid_sources = (
+                    self.fdm_grid_resume_parent_documents(qa, changed=changed))
+                with self.assertRaises(qa.BuildControlError):
+                    qa._load_fdm_grid_resume_evidence(
+                        invalid_control, invalid_attempt, selected=ROOT, current=invalid_current,
+                        identity=invalid_identity, frontend_id="frontend-1", frontend_volume="frontend-state",
+                        public_url="http://127.0.0.1:3242",
+                        browser_url="http://frontend:8080", expected_sources=invalid_sources,
+                    )
+
+        missing_control, missing_attempt, missing_identity, missing_current, missing_sources = (
+            self.fdm_grid_resume_parent_documents(qa))
+        missing_control.documents.pop(f"browser-qa/attempts/{missing_attempt}/runner-output.json")
+        with self.assertRaises(qa.BuildControlError):
+            qa._load_fdm_grid_resume_evidence(
+                missing_control, missing_attempt, selected=ROOT, current=missing_current,
+                identity=missing_identity, frontend_id="frontend-1", frontend_volume="frontend-state",
+                public_url="http://127.0.0.1:3242",
+                browser_url="http://frontend:8080", expected_sources=missing_sources,
+            )
+
+    def test_ready_grid_resume_requires_undispatched_study_and_the_observed_transition(self):
+        qa = self.qa
+        for phase in ("fdm-grid-ready", "ui-submit"):
+            control, attempt, identity, current, sources = self.fdm_grid_resume_parent_documents(
+                qa, observed_phase=phase)
+            def load():
+                return qa._load_fdm_grid_resume_evidence(
+                    control, attempt, selected=ROOT, current=current, identity=identity,
+                    frontend_id="frontend-1", frontend_volume="frontend-state",
+                    public_url="http://127.0.0.1:3242", browser_url="http://frontend:8080",
+                    expected_sources=sources)
+            evidence = load()
+            self.assertEqual(evidence["prior_report"]["phase"], phase)
+            self.assertEqual(evidence["prior_grid_receipt"]["domain_transition"]["prepared_run_id"], "run-held")
+            script = """const r=await import(process.argv[1]);
+const e=JSON.parse(process.argv[2]);
+if(!r.studyStageFdmResumeEvidenceAllowed(e)) process.exit(1);
+for(const mutate of [x=>x.prior_report.command_attempt_count=1,
+ x=>delete x.prior_grid_receipt.domain_transition,
+ x=>x.prior_grid_receipt.domain_transition.prepared_run_id=x.prior_before.run_id,
+ x=>x.prior_grid_receipt.domain_transition.before_domain_generation_id='foreign']) {
+ const bad=structuredClone(e);mutate(bad);
+ if(r.studyStageFdmResumeEvidenceAllowed(bad)) process.exit(2);
+}"""
+            observed = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script,
+                (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri(),
+                json.dumps(evidence)], capture_output=True, text=True, timeout=20)
+            self.assertEqual(observed.returncode, 0, observed.stderr)
+            for reason, mutate in (
+                ("attempted Solve", lambda item: item.update(command_attempt_count=1)),
+                ("lost ready proof", lambda item: item.update(prepared_grid_run=None)),
+                ("foreign held run", lambda item: item["grid_refresh_receipt"]["domain_transition"].update(prepared_run_id="foreign")),
+            ):
+                altered = dict(control.documents)
+                wrapper_path=f"browser-qa/attempts/{attempt}/runner-output.json"
+                wrapper=json.loads(control.documents[wrapper_path]); report=json.loads(wrapper["stdout"])
+                mutate(report);wrapper["stdout"]=json.dumps(report)
+                control.documents[wrapper_path]=qa.canonical(wrapper)+b"\n"
+                with self.subTest(phase=phase, rejected=reason), self.assertRaises(qa.BuildControlError):
+                    load()
+                control.documents=altered
+            qa._consume_fdm_grid_resume_evidence(control, evidence, child_attempt="b" * 32)
+            with self.assertRaises(qa.BuildControlError):
+                load()
+
+    def test_fdm_grid_409_preserves_bounded_error_without_compute_or_retry(self):
+        qa = self.qa
+        mode = "fdm-cell-study"
+        sources = qa._study_stage_rerun_source_sha256(ROOT, mode)
+        payload = self.result_fixture(mode, sources)
+        payload.update(
+            state="outcome-unknown", outcome="unknown",
+            failure="The one automatic grid refresh was rejected before Compute Study",
+            phase="fdm-grid-unknown", prepared_grid_run=None,
+            command_receipt=None, command_count=0, command_attempt_count=0,
+            ui_command_proven=False, after=None, reload_proof=None,
+            history_identity_preserved=None, public_terminal_proven=False,
+            client_ack_count=0,
+        )
+        payload["request_counts"][qa.STUDY_FDM_GRID_REFRESH_KEY] = 1
+        payload["request_counts"].pop("GET /v2/sessions/current/simulation/commands/fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6")
+        payload["request_counts"].pop("GET /v2/sessions/current/simulation/preparation")
+        payload["request_counts"].pop(
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-held&limit=100")
+        payload["read_counts"].update({"preparation": 0, "stage_results": 2})
+        receipt = payload["grid_refresh_receipt"]
+        receipt.update({"status": 409, "accepted": False, "terminal_detail": None,
+                        "failed_grid_response": {
+                            "code": "accepted_live_study_run_replaced_before_publication",
+                            "message": "The accepted frontier changed before it could be published",
+                        }})
+        receipt.pop("command_id")
+        receipt.pop("domain_transition")
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, mode), payload)
+        for name, mutate in (
+            ("missing actual error body", lambda item: item["grid_refresh_receipt"].update(
+                failed_grid_response=None)),
+            ("empty error code", lambda item: item["grid_refresh_receipt"]["failed_grid_response"].update(code="")),
+            ("oversized error message", lambda item: item["grid_refresh_receipt"]["failed_grid_response"].update(
+                message="x" * 513)),
+            ("false 2xx error response", lambda item: item["grid_refresh_receipt"].update(status=200)),
+            ("retry was attempted", lambda item: item.update(grid_refresh_attempt_count=2)),
+            ("duplicate grid POST", lambda item: item["request_counts"].update(
+                {qa.STUDY_FDM_GRID_REFRESH_KEY: 2})),
+            ("Solve was dispatched", lambda item: item.update(command_count=1, command_attempt_count=1)),
+            ("foreign terminal command", lambda item: item["grid_refresh_receipt"].update(
+                command_id="foreign-grid-command")),
+        ):
+            invalid = deepcopy(payload)
+            mutate(invalid)
+            invalid["total_requests"] = sum(invalid["request_counts"].values())
+            with self.subTest(reason=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(
+                    json.dumps(invalid).encode(), invalid["public_url"], invalid["probe_url"], sources, mode)
+
+    def test_camera_autosave_is_scoped_bounded_and_cannot_carry_model_edits(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        payload = self.result_fixture("stage-b", sources)
+        camera = {"fov_degrees": 45, "orthographic_scale": None, "position": [1, 2, 3],
+                  "projection": "perspective", "target": [0, 0, 0], "up": [0, 1, 0]}
+        receipt = {"method": "PATCH", "path": "/v2/sessions/current/visualization/state",
+                   "scope_header": payload["command_receipt"]["scope_header"], "payload": {"camera": camera}}
+        key = "PATCH /v2/sessions/current/visualization/state"
+        payload["camera_patch_receipts"] = [receipt]
+        payload["request_counts"][key] = 1
+        payload["total_requests"] += 1
+        self.assertEqual(qa._parse_study_stage_rerun_result(
+            json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b"), payload)
+        for name, change in (
+            ("foreign scope", lambda x: x["camera_patch_receipts"][0].update(scope_header="foreign")),
+            ("material smuggled", lambda x: x["camera_patch_receipts"][0]["payload"].update(material={})),
+            ("unknown camera field", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(extra=1)),
+            ("nonfinite coordinate", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(up=[0, float("nan"), 0])),
+            ("invalid projection", lambda x: x["camera_patch_receipts"][0]["payload"]["camera"].update(projection="invalid")),
+            ("unreported write", lambda x: x.update(camera_patch_receipts=[])),
+            ("over budget", lambda x: x.update(camera_patch_receipts=[receipt] * 5,
+                request_counts={**x["request_counts"], key: 5}, total_requests=x["total_requests"] + 4)),
+        ):
+            value = deepcopy(payload)
+            change(value)
+            with self.subTest(name=name), self.assertRaises(qa.BuildControlError):
+                qa._parse_study_stage_rerun_result(json.dumps(value).encode(), value["public_url"],
+                    value["probe_url"], sources, "stage-b")
+
+    def test_post_dispatch_unknown_is_retained_without_claiming_terminal_or_history(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        payload = self.result_fixture("stage-b", sources)
+        payload.update(
+            state="outcome-unknown",
+            failure="The command response timed out after dispatch",
+            outcome="unknown",
+            after=None,
+            history_identity_preserved=None,
+            public_terminal_proven=False,
+        )
+        payload["command_receipt"]["status"] = 503
+        payload["command_receipt"].pop("execution_binding")
+        for key in ("status", "current_session", "scene", "commands", "current_run", "stage_execution", "solver_status"):
+            payload["read_counts"][key] = 3
+        payload["request_counts"] = {
+            "GET /v2/sessions/current/status": 3,
+            "GET /v2/sessions/current": 3,
+            "GET /v2/sessions/current/model/scene": 3,
+            "GET /v2/sessions/current/simulation/commands": 3,
+            "GET /v2/sessions/current/simulation/runs/current": 3,
+            "GET /v2/sessions/current/simulation/stages/execution": 3,
+            "GET /v2/sessions/current/simulation/solver/status": 3,
+            "GET /v2/sessions/current/simulation/stages/results?run_id=run-before&limit=100": 3,
+            "POST /v2/sessions/current/simulation/commands": 1,
+        }
+        payload["total_requests"] = sum(payload["request_counts"].values())
+        self.assertEqual(
+            qa._parse_study_stage_rerun_result(
+                json.dumps(payload).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b",
+            ),
+            payload,
+        )
+        for name, mutate in (
+            ("fabricated after state", lambda value: value.update(after={})),
+            ("claimed public terminal", lambda value: value.update(public_terminal_proven=True)),
+            ("claimed history preservation", lambda value: value.update(history_identity_preserved=True)),
+            ("missing UI proof", lambda value: value.update(ui_command_proven=False)),
+            ("duplicate POST", lambda value: value["request_counts"].update(
+                {"POST /v2/sessions/current/simulation/commands": 2})),
+            ("foreign target binding", lambda value: value["command_receipt"].update(execution_binding={
+                "requested_target": {"kind": "stage_id", "stage_id": "relax-a"},
+                "run_id": "possible-run", "step_id": "relax-b",
+            })),
+        ):
+            with self.subTest(rejected=name):
+                invalid = deepcopy(payload)
+                mutate(invalid)
+                invalid["total_requests"] = sum(invalid["request_counts"].values())
+                with self.assertRaises(qa.BuildControlError):
+                    qa._parse_study_stage_rerun_result(
+                        json.dumps(invalid).encode(), payload["public_url"], payload["probe_url"], sources, "stage-b",
+                    )
+
+    def test_parse_error_is_unknown_unless_complete_pinned_output_proves_no_dispatch(self):
+        qa = self.qa
+        sources = self.sources(qa)
+        result = {
+            "schema": qa.STUDY_STAGE_RERUN_RESULT_SCHEMA,
+            "scenario": "study-stage-rerun",
+            "mode": "stage-b",
+            "state": "failed",
+            "outcome": "not-dispatched",
+            "failure": "Preflight stopped before opening the command menu",
+            "public_url": "http://127.0.0.1:3242",
+            "probe_url": "http://frontend:8080",
+            "playwright_version": qa.PLAYWRIGHT_VERSION,
+            "browser_gpu_mode": "swiftshader-webgl-requested",
+            "source_sha256_before": sources,
+            "source_sha256_after": sources,
+            "session_before": None,
+            "session_after": None,
+            "before": None,
+            "command_receipt": None,
+            "command_count": 0,
+            "command_attempt_count": 0,
+            "client_ack_count": 0,
+            "ui_command_proven": False,
+            "after": None,
+            "history_identity_preserved": None,
+            "public_terminal_proven": False,
+            "native_execution_proven": False,
+            "field_data_proven": False,
+            "read_counts": {
+                "status": 0, "current_session": 0, "scene": 0, "commands": 0, "current_run": 0,
+                "stage_execution": 0, "solver_status": 0, "stage_results": 0, "command_details": 0,
+            },
+            "request_counts": {},
+            "total_requests": 0,
+            "request_limit": 512,
+            "request_path_limit": 128,
+            "per_path_read_limit": 128,
+            "violations": [],
+            "errors": [],
+            "proxy_failures": [],
+        }
+        encoded = (json.dumps(result) + "\n").encode()
+        self.assertTrue(qa._study_stage_no_dispatch_proven(encoded, sources, "stage-b"))
+        fdm_sources = qa._study_stage_rerun_source_sha256(ROOT, "fdm-cell-study")
+        fdm_no_dispatch = deepcopy(result)
+        fdm_no_dispatch.update(mode="fdm-cell-study", source_sha256_before=fdm_sources,
+                               source_sha256_after=fdm_sources, fdm_cell_receipt=None,
+                               fdm_cell_count=0, fdm_cell_attempt_count=0, ui_fdm_cell_proven=False,
+                               material_receipt=None, material_count=0, material_attempt_count=0,
+                               ui_material_proven=False, fdm_material_initial_state=None,
+                               grid_refresh_receipt=None, grid_refresh_count=0,
+                               grid_refresh_attempt_count=0, ui_grid_refresh_proven=False)
+        self.assertTrue(qa._study_stage_no_dispatch_proven(
+            (json.dumps(fdm_no_dispatch) + "\n").encode(), fdm_sources, "fdm-cell-study"))
+        fdm_dispatched = deepcopy(fdm_no_dispatch)
+        fdm_dispatched.update(fdm_cell_count=1, fdm_cell_attempt_count=1,
+                              ui_fdm_cell_proven=True, fdm_cell_receipt={"acknowledged": False})
+        self.assertFalse(qa._study_stage_no_dispatch_proven(
+            (json.dumps(fdm_dispatched) + "\n").encode(), fdm_sources, "fdm-cell-study"))
+        for name, raw in (
+            ("missing output", b""),
+            ("truncated JSON", encoded[:len(encoded) // 2]),
+            ("malformed JSON", b"{not-json}\n"),
+            ("oversized output", b" " * (qa.MAX_RESULT_BYTES + 1)),
+        ):
+            with self.subTest(incomplete=name):
+                self.assertFalse(qa._study_stage_no_dispatch_proven(raw, sources, "stage-b"))
+        for name, mutate in (
+            ("source drift", lambda value: value.update(source_sha256_after={**sources, "runner": "b" * 64})),
+            ("wrong mode", lambda value: value.update(mode="study")),
+            ("command count", lambda value: value.update(command_count=1)),
+            ("UI dispatch marker", lambda value: value.update(ui_command_proven=True)),
+            ("command receipt", lambda value: value.update(command_receipt={"method": "POST"})),
+            ("forwarded command inventory", lambda value: value.update(request_counts={
+                "POST /v2/sessions/current/simulation/commands": 1,
+            }, total_requests=1)),
+        ):
+            with self.subTest(rejected=name):
+                invalid = deepcopy(result)
+                mutate(invalid)
+                self.assertFalse(
+                    qa._study_stage_no_dispatch_proven(
+                        (json.dumps(invalid) + "\n").encode(), sources, "stage-b",
+                    )
+                )
+
+    def test_new_mode_helper_inspect_refuses_command_or_pin_substitution(self):
+        qa = self.qa
+        identity = {"project_name": "fullmag-worktree-fixture", "network_name": "fullmag-worktree-fixture_fullmag",
+                    "project_id": "fullmag", "worktree_id": "fixture", "checkout_kind": "worktree", "source_root": str(ROOT)}
+        sources = self.sources(qa)
+        document = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, "fullmag-frontend-state", 3242, 180,
+            study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources,
+        )
+        service = document["services"]["browser-qa"]
+        helper = {
+            "Image": "sha256:" + "c" * 64,
+            "Config": {
+                "User": "65532:65532", "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {**qa.source_labels(identity), "com.docker.compose.project": identity["project_name"],
+                           "com.docker.compose.service": "browser-qa"},
+            },
+            "HostConfig": {"GroupAdd": qa._script_bind_groups(ROOT), "ReadonlyRootfs": True,
+                           "NetworkMode": identity["network_name"], "PortBindings": None,
+                           "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"}, "CapDrop": ["ALL"],
+                           "SecurityOpt": ["no-new-privileges:true"], "ExtraHosts": None,
+                           "Mounts": [
+                               {"Type": "volume", "Source": "fullmag-frontend-state", "Target": "/state/development",
+                                "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                                "Target": "/state/development/workspace/apps/control-room/scripts", "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / "apps/control-room/src"),
+                                "Target": qa.STUDY_STAGE_RERUN_SRC_TARGET, "ReadOnly": True},
+                               {"Type": "bind", "Source": str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                                "Target": qa.STUDY_STAGE_RERUN_FIXTURE_TARGET, "ReadOnly": True},
+                           ]},
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": "fullmag-frontend-state", "Destination": "/state/development", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/src"),
+                 "Destination": qa.STUDY_STAGE_RERUN_SRC_TARGET, "RW": False},
+                {"Type": "bind", "Source": str(ROOT / qa.STUDY_STAGE_RERUN_SOURCES["fixture"]),
+                 "Destination": qa.STUDY_STAGE_RERUN_FIXTURE_TARGET, "RW": False},
+            ],
+        }
+        control = SimpleNamespace(project=identity["project_name"])
+        qa._validate_browser_helper(
+            helper, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+            study_stage_rerun="stage-b", study_stage_rerun_source_sha256=sources,
+        )
+        for changed in ("command", "source-pin", "missing-src", "foreign-fixture", "writable-src", "unrequested"):
+            altered = deepcopy(helper)
+            if changed == "command":
+                altered["Config"]["Cmd"][-1] = "study"
+            if changed == "source-pin":
+                altered["Config"]["Env"].append("CONTROL_ROOM_STUDY_STAGE_RERUN_SOURCE_SHA256={}")
+            if changed == "missing-src":
+                altered["HostConfig"]["Mounts"].pop(2)
+                altered["Mounts"].pop(2)
+            if changed == "foreign-fixture":
+                altered["HostConfig"]["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+                altered["Mounts"][3]["Source"] = "/foreign/p22-fixture.py"
+            if changed == "writable-src":
+                altered["HostConfig"]["Mounts"][2]["ReadOnly"] = False
+                altered["Mounts"][2]["RW"] = True
+            with self.subTest(changed=changed), self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    altered, control, identity, "fullmag-frontend-state", helper["Image"], 0, ROOT,
+                    study_stage_rerun="stage-b" if changed != "unrequested" else None,
+                    study_stage_rerun_source_sha256=sources if changed != "unrequested" else None,
+                )
+
+    def test_javascript_guard_allows_only_one_scoped_exact_command(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for the study-stage-rerun pure guard contract")
+        source = (ROOT / "apps/control-room/scripts/check-study-stage-rerun-browser.mjs").as_uri()
+        javascript = r"""
+import assert from 'node:assert/strict';
+const runner = await import(process.argv[1]);
+assert.deepEqual(runner.studyStageCommandForMode('stage-b'), {
+  kind: 'relax', target: {kind:'stage_id', stage_id:'relax-b'},
+  initial_state: {kind:'default_for_target'},
+});
+assert.deepEqual(runner.studyStageCommandForMode('study'), {
+  kind: 'solve', target: {kind:'study'},
+});
+assert.throws(() => runner.studyStageCommandForMode('script'));
+assert.deepEqual(runner.studyStageExpectedStageIds('stage-b', 'before'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageExpectedStageIds('stage-b', 'after'), ['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('study', 'before'), ['relax-b']);
+assert.deepEqual(runner.studyStageExpectedStageIds('study', 'after'), ['relax-a','relax-b','relax-c']);
+assert.deepEqual(runner.studyStageCommandResponseOutcome(202, {accepted:true,command_id:'cmd-1'}),
+  {outcome:'accepted',command_id:'cmd-1'});
+assert.deepEqual(runner.studyStageCommandResponseOutcome(503, {accepted:true,command_id:'cmd-1'}),
+  {outcome:'unknown',command_id:null});
+assert.deepEqual(runner.studyStageCommandResponseOutcome(202, {accepted:true}),
+  {outcome:'unknown',command_id:null});
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'stage_id',stage_id:'relax-b'},
+  run_id:'new',step_id:'relax-b'}, 'stage-b', 'new'), true);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'stage_id',stage_id:'relax-b'},
+  run_id:'foreign',step_id:'relax-b'}, 'stage-b', 'new'), false);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new'}, 'study', 'new'), true);
+assert.equal(runner.studyStageExecutionBindingMatches({requested_target:{kind:'study'},run_id:'new',step_id:'relax-b'},
+  'study', 'new'), false);
+const failedTerminal = {
+  status:{run:{run_id:'run-new'}},
+  currentRun:{run_id:'run-new',status:'failed'},
+  execution:{run_id:'run-new',runtime_state:'failed'},
+  commands:{commands:[{command_id:'cmd-exact',status:'failed'}]},
+};
+const failedBinding = {run_id:'run-new'};
+assert.deepEqual(runner.studyStageFailedTerminalOutcome(failedTerminal,failedBinding,'run-old','cmd-exact'),
+  {run_id:'run-new',run_status:'failed',command_status:'failed'});
+const cancelledTerminal = {...failedTerminal,
+  currentRun:{run_id:'run-new',status:'cancelled'},
+  execution:{run_id:'run-new',runtime_state:'cancelled'},
+  commands:{commands:[{command_id:'cmd-exact',status:'cancelled'}]},
+};
+assert.deepEqual(runner.studyStageFailedTerminalOutcome(cancelledTerminal,failedBinding,'run-old','cmd-exact'),
+  {run_id:'run-new',run_status:'cancelled',command_status:'cancelled'});
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,failedBinding,'run-new','cmd-exact'),null,
+  'the pre-command run cannot be treated as a new terminal result');
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,{run_id:'run-foreign'},'run-old','cmd-exact'),null,
+  'a foreign binding cannot terminate this accepted command');
+assert.equal(runner.studyStageFailedTerminalOutcome(failedTerminal,null,'run-old','cmd-exact'),null,
+  'missing execution binding remains outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,execution:{...failedTerminal.execution,run_id:'run-foreign'}},
+  failedBinding,'run-old','cmd-exact'),null,'inconsistent execution identity remains outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,execution:{...failedTerminal.execution,runtime_state:'cancelled'}},
+  failedBinding,'run-old','cmd-exact'),null,'inconsistent terminal states remain outcome-unknown');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,commands:{commands:[{command_id:'cmd-exact',status:'running'}]}},
+  failedBinding,'run-old','cmd-exact'),null,'a nonterminal matching command must keep polling');
+assert.equal(runner.studyStageFailedTerminalOutcome({...failedTerminal,commands:{commands:[{command_id:'cmd-foreign',status:'failed'}]}},
+  failedBinding,'run-old','cmd-exact'),null,'a foreign command cannot confirm terminal failure');
+const node = (id, label, algorithm, maxSteps, first=false) => ({
+  enabled:true,id,label,node_kind:'primitive',source:'script_imported',stage_kind:'relax',
+  payload:{...(first ? {adaptive_timestep:null,demag_interval_s:'',fixed_timestep:'1e-13',integrator:'rk23',
+    max_relaxation_time_s:''} : {}),energy_tolerance:'',entrypoint_kind:'flat_relax',kind:'relax',
+    max_steps:maxSteps,relax_algorithm:algorithm,stage_id:id,torque_tolerance:'0.0001',until_seconds:''}
+});
+const makeScene = () => ({study:{requested_backend:'fdm',requested_device:'cpu',requested_precision:'double',
+  study_pipeline:{version:'study_pipeline.v1',nodes:[node('relax-a','Relax 1','llg_overdamped','10',true),
+    node('relax-b','Relax 2','projected_gradient_bb','1'),node('relax-c','Relax 3','nonlinear_cg','1')]}}});
+assert.equal(runner.validateStudyStageScene(makeScene()).stages.length, 3);
+const editedSteps = makeScene(); editedSteps.study.study_pipeline.nodes[1].payload.max_steps = '1000000000000';
+assert.throws(() => runner.validateStudyStageScene(editedSteps));
+const editedDevice = makeScene(); editedDevice.study.requested_device = 'cuda';
+assert.throws(() => runner.validateStudyStageScene(editedDevice));
+const extraNode = makeScene(); extraNode.study.study_pipeline.nodes.push(node('relax-d','Relax 4','nonlinear_cg','1'));
+assert.throws(() => runner.validateStudyStageScene(extraNode));
+const session = {name:'P22 three Relax stages', session_id:'s', session_epoch:'s@1', request_scope_epoch:'api:1'};
+const scope = 'session=s&epoch=s%401&request_scope_epoch=api%3A1';
+const precondition = {scene_revision:31, mesh_revision:18, domain_generation_id:'fdm-domain-8',
+  current_run:{kind:'run',run_id:'old'}, runtime_state:'awaiting_command', command_revision:0,
+  region_topology_revision:3, region_membership_revision:4,
+  region_coefficients_revision:5, region_initial_state_revision:6};
+const computeStatus = {run:{run_id:'old'},resources:{scene_revision:31,mesh_revision:18,
+  domain_generation_id:'fdm-domain-8',region_topology_revision:3,region_membership_revision:4,
+  region_coefficients_revision:5,region_initial_state_revision:6}};
+assert.deepEqual(runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
+  {runtime_state:'awaiting_command'},{commands:[]}),precondition);
+assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'foreign'},
+  {runtime_state:'awaiting_command'},{commands:[]}));
+assert.throws(() => runner.studyStageComputePrecondition(computeStatus,{run_id:'old'},
+  {runtime_state:'paused'},{commands:[]}));
+const heldStatus = {run:{run_id:'held'},solver:{state:'awaiting_command'},
+  domain:{discretization:'fdm',cell_count:16,generation_id:'fdm-domain-16'},
+  resources:{scene_revision:32,mesh_revision:19,domain_generation_id:'fdm-domain-16',
+    commands_revision:8,simulation_preparation_revision:17,region_topology_revision:4,
+    region_membership_revision:5,region_coefficients_revision:6,region_initial_state_revision:7}};
+const heldRun = {run_id:'held',status:'waiting_for_solve',session_id:'s'};
+const heldExecution = {run_id:'held',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1',
+  runtime_state:'awaiting_command',total_stages:3,stage_statuses:['pending','pending','pending'],
+  completed_stage_indexes:[],stages:['relax-a','relax-b','relax-c'].map((stage_id,index)=>
+    ({stage_id,index,status:'pending'}))};
+const prepStageStatuses = [['runtime_startup','completed'],['script_materialization','completed'],
+  ['validation','completed'],['planning','completed'],['domain_preparation','completed'],['meshing','completed'],
+  ['mesh_postprocessing','completed'],['solver_initialization','skipped'],['ready','completed']];
+const heldPreparation = {preparation_id:'prep-held',revision:17,status:'ready',active_stage_id:null,failure:null,
+  receipt:{schema_version:'preparation_receipt.v1',preparation_id:'prep-held',run_id:'held',
+    plan_fingerprint:'sha256:'+'a'.repeat(64),payload_sha256:'b'.repeat(64)},
+  stages:prepStageStatuses.map(([id,status])=>({id,status}))};
+const heldSession = {session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const heldCommands = {revision:8,commands:[{command_id:'cmd-1',status:'completed'},
+  {command_id:'cmd-2',status:'completed'},{command_id:'cmd-3',status:'completed'},
+  {command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',kind:'fdm_grid_refresh',status:'completed'}],pending_count:0,running_count:0};
+const heldPrecondition = runner.studyStagePreparedGridPrecondition({status:heldStatus,currentRun:heldRun,
+  execution:heldExecution,solverStatus:{runtime_state:'awaiting_command'},commands:heldCommands,
+  preparation:heldPreparation,session:heldSession,previousRunId:'old',
+  previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+    region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+  expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'});
+assert.equal(heldPrecondition.current_run.run_id,'held');
+assert.equal(heldPrecondition.scene_revision,32);
+assert.equal(heldPrecondition.domain_generation_id,'fdm-domain-16');
+assert.equal(heldPrecondition.command_revision,4);
+const resumeSession={name:'P22 three Relax stages',session_id:'s',session_epoch:'s@1',request_scope_epoch:'api:1'};
+const resumeBefore={run_id:'old',run_status:'completed',stage_ids:['relax-a'],completed_stage_indexes:[0],
+  profile:{domain_cell_count:8},precondition:{scene_revision:2,current_run:{kind:'run',run_id:'old'}},
+  result_identities:[{authored_stage_id:'relax-a'}],material_state:{Ms:600000}};
+const resumeEvidence={schema:'fullmag.p22-fdm-grid-resume-evidence.v1',prior_attempt:'d'.repeat(32),
+  record_sha256:{receipt:'a'.repeat(64),terminal:'b'.repeat(64),runner_output:'c'.repeat(64),result:'d'.repeat(64)},
+  prior_source_sha256:{runner:'a'.repeat(64)},prior_session:resumeSession,prior_before:resumeBefore,
+  prior_material_initial_state:{Ms:600000},
+  prior_cell_receipt:{method:'POST',status:200,acknowledged:true,transaction_kind:'merge_patch',
+    scope_header:scope,before_scene_revision:2,scene_revision:3,after_cell:[1e-9,2e-9,2e-9],
+    unmodified_scene_sha256_after:'e'.repeat(64)},
+  prior_grid_receipt:{method:'POST',status:200,accepted:true,failed_grid_response:null,scope_header:scope,
+    command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',payload:{kind:'fdm_grid_refresh',reason:'study_global_commit',
+      precondition:{scene_revision:3}},terminal_detail:{command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',kind:'fdm_grid_refresh',
+      status:'completed',completion_status:'completed'}},grid_command_id:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6',
+  prior_report:{mode:'fdm-cell-study',phase:'fdm-grid-observing',outcome:'unknown',
+    command_count:0,command_attempt_count:0}};
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed(resumeEvidence),true);
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed({...resumeEvidence,prior_report:{
+  ...resumeEvidence.prior_report,command_attempt_count:1}}),false);
+assert.equal(runner.studyStageFdmResumeEvidenceAllowed({...resumeEvidence,prior_grid_receipt:{
+  ...resumeEvidence.prior_grid_receipt,domain_transition:{prepared_run_id:'foreign'}}}),false);
+for (const altered of [
+  {preparation:{...heldPreparation,revision:13}},
+  {preparation:{...heldPreparation,receipt:{...heldPreparation.receipt,run_id:'foreign'}}},
+  {execution:{...heldExecution,stage_statuses:['completed','pending','pending']}},
+  {commands:{...heldCommands,pending_count:1}},
+  {currentRun:{...heldRun,run_id:'old'}},
+  {status:{...heldStatus,resources:{...heldStatus.resources,region_membership_revision:3}}},
+  {currentRun:{...heldRun,status:'waiting_for_compute'}},
+  {preparation:{...heldPreparation,stages:heldPreparation.stages.map(({id,status})=>({stage_id:id,status}))}},
+  {commands:{...heldCommands,revision:7}},
+  {commands:{...heldCommands,commands:[...heldCommands.commands.slice(0,-1),
+    {...heldCommands.commands.at(-1),command_id:'foreign-grid'}]}},
+]) {
+  assert.throws(()=>runner.studyStagePreparedGridPrecondition({status:altered.status ?? heldStatus,
+    currentRun:altered.currentRun ?? heldRun,execution:altered.execution ?? heldExecution,
+    solverStatus:{runtime_state:'awaiting_command'},commands:altered.commands ?? heldCommands,
+    preparation:altered.preparation ?? heldPreparation,session:heldSession,previousRunId:'old',
+    previousDomainGenerationId:'fdm-domain-8',previousPrecondition:{region_topology_revision:3,
+      region_membership_revision:4,region_coefficients_revision:5,region_initial_state_revision:6},
+    expectedSceneRevision:32,expectedGridCommandId:'fm-feef69b2-ce89-4231-8f6c-7c1dafb977a6'}));
+}
+const heldSolve = {kind:'solve',target:{kind:'study'},precondition:heldPrecondition,
+  client_intent_id:'study:solve:resume',reason:'user_requested',requested_at_unix_ms:1000};
+const resumeCommandContext={mode:'fdm-cell-study-resume',session,expectedPrecondition:heldPrecondition,
+  commandCount:0,phase:'ui-submit'};
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:heldSolve},resumeCommandContext),true);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:{...heldSolve,precondition:{...heldPrecondition,scene_revision:31}}},resumeCommandContext),false);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:{...heldSolve,kind:'fdm_grid_refresh'}},resumeCommandContext),false);
+assert.equal(runner.studyStageRerunRequestAllowed({method:'POST',path:'/v2/sessions/current/simulation/commands',scope,
+  body:heldSolve},{...resumeCommandContext,phase:'fdm-grid-ready'}),false);
+const request = {method:'POST', path:'/v2/sessions/current/simulation/commands', scope,
+  body:{...runner.studyStageCommandForMode('stage-b'), precondition, client_intent_id:'study:relax:test',
+    reason:'user_requested', requested_at_unix_ms:1000}};
+const context = {mode:'stage-b', session, expectedPrecondition:precondition, commandCount:0, phase:'ui-submit'};
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'running'}}, 'new'), false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'old'},solver:{state:'awaiting_command'}}, 'new'), false);
+assert.equal(runner.studyStageShouldReadTerminalResources({run:{run_id:'new'},solver:{state:'awaiting_command'}}, 'new'), true);
+const activeStatus = {session,lifecycle:{connectivity:'connected',session_resource:'active',commandability:'allowed'}};
+assert.deepEqual(runner.readStudyStageSessionIdentity(activeStatus), session);
+const runningStatus = {...activeStatus,lifecycle:{...activeStatus.lifecycle,commandability:'forbidden'}};
+assert.throws(() => runner.readStudyStageSessionIdentity(runningStatus));
+assert.deepEqual(runner.readStudyStageSessionIdentity(runningStatus,{requireCommandable:false}), session);
+for (const invalid of [
+  {...runningStatus,lifecycle:{...runningStatus.lifecycle,connectivity:'disconnected'}},
+  {...runningStatus,lifecycle:{...runningStatus.lifecycle,session_resource:'inactive'}},
+  {...runningStatus,session:{...session,request_scope_epoch:''}},
+]) assert.throws(() => runner.readStudyStageSessionIdentity(invalid,{requireCommandable:false}));
+const cameraRequest = {method:'PATCH',path:'/v2/sessions/current/visualization/state',scope,
+  body:{camera:{fov_degrees:45,orthographic_scale:null,position:[1,2,3],projection:'perspective',
+    target:[0,0,0],up:[0,1,0]}}};
+assert.equal(runner.studyStageCameraPatchAllowed(cameraRequest, session), true);
+for (const invalid of [
+  {...cameraRequest, scope:'foreign'}, {...cameraRequest,method:'POST'},
+  {...cameraRequest,path:cameraRequest.path+'?extra=1'},
+  {...cameraRequest,body:{...cameraRequest.body,material:{}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,extra:1}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,position:[NaN,0,0]}}},
+  {...cameraRequest,body:{camera:{...cameraRequest.body.camera,projection:'invalid'}}},
+]) assert.equal(runner.studyStageCameraPatchAllowed(invalid, session), false);
+assert.equal(runner.studyStageRerunRequestAllowed(request, context), true);
+assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, phase:'preflight'}), false);
+assert.equal(runner.studyStageRerunRequestAllowed(request, {...context, commandCount:1}), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, scope:'session=other'}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, target:{kind:'stage_id',stage_id:'relax-a'}}}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, precondition:{...precondition, mesh_revision:17}}}, context), false);
+assert.equal(runner.studyStageRerunRequestAllowed({...request, body:{...request.body, precondition:{...precondition, stage_execution_revision:27}}}, context), false);
+"""
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", javascript, source],
+            capture_output=True, text=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_just_dispatches_an_enum_and_quotes_source_without_executing_it(self):
+        just = shutil.which("just")
+        if just is None:
+            self.skipTest("just is required for fixed managed dispatch coverage")
+        source = "/tmp/p22 source;$(touch /tmp/should-not-run)"
+        justfile = str(ROOT / "justfile")
+        result = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "stage-b"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = result.stdout + result.stderr
+        self.assertIn("--study-stage-rerun stage-b", rendered)
+        self.assertIn("p22 source;$(touch /tmp/should-not-run)", rendered)
+        self.assertFalse(Path("/tmp/should-not-run").exists())
+
+        omitted = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", ""],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(omitted.returncode, 0, omitted.stderr)
+        self.assertNotIn("--study-stage-rerun", omitted.stdout + omitted.stderr)
+
+        malformed = subprocess.run(
+            [just, "--justfile", justfile, "--dry-run", "--verbose", "docker-dev-browser-qa",
+             source, "", "", "180", "1800", "", "arbitrary"],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(malformed.returncode, 0)
 
 
 if __name__ == "__main__":

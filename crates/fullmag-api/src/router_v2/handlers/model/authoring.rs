@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Json;
 use serde_json::Value;
 
@@ -17,6 +18,7 @@ use crate::schemas::authoring::{
     FieldDriveDeleteRequest, FieldDriveListResource, FieldDriveReplaceRequest,
     GeometryRealizationRequest, MagnetizationAssetPatchRequest, MagnetizationAssetResource,
     MaterialParameterFieldListResource, MaterialParameterFieldResource, MaterialPatchRequest,
+    MagnetizationApplyRequest, MagnetizationApplyScope, MagnetizationApplyTarget,
     MaterialPropertiesResource, MaterialReferenceResource, MaterialResource, NullableF64PatchValue,
     NullableParallelExecutionPatchValue, NullableStringPatchValue, NullableU32PatchValue,
     ObjectCreateRequest,
@@ -3220,6 +3222,7 @@ pub async fn patch_authoring_object_interaction(
 #[utoipa::path(
     post,
     path = "/v2/sessions/current/model/transactions",
+    params(("idempotency-key" = Option<String>, Header, description = "Required for a scoped magnetization apply")),
     request_body = AuthoringTransactionRequest,
     responses(
         (status = 200, description = "Committed authoring transaction", body = AuthoringTransactionResponse),
@@ -3231,14 +3234,44 @@ pub async fn patch_authoring_object_interaction(
 )]
 pub async fn commit_authoring_transaction(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(req): Json<AuthoringTransactionRequest>,
 ) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let (transaction_kind, committed) = match req {
+        AuthoringTransactionRequest::ApplyMagnetization {
+            base_revision, operation_id, target,
+        } => {
+            return commit_scoped_magnetization_transaction(
+                &state, &request_context, &headers, base_revision, operation_id, target,
+            ).await;
+        }
         AuthoringTransactionRequest::ReplaceScene {
             base_revision,
             scene,
+            magnetization_apply,
         } => {
+            if let Some(request) = magnetization_apply {
+                if crate::router_v2::middleware::session_scope::current_expected_session_scope().is_none() {
+                    return Err(ApiError::bad_request("magnetization apply requires a session scope"));
+                }
+                let base_revision = base_revision.filter(|revision| *revision < u64::MAX)
+                    .ok_or_else(|| ApiError::bad_request("magnetization apply requires a valid base_revision"))?;
+                let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+                    request, base_revision, &scene,
+                    headers.get("idempotency-key").and_then(|value| value.to_str().ok()),
+                )?;
+                let mut proposed: SceneDocument = serde_json::from_value(scene)
+                    .map_err(|error| ApiError::bad_request(format!("invalid scene document payload: {error}")))?;
+                proposed.revision = base_revision;
+                let (committed, receipt) = crate::commit_current_live_magnetization_apply(
+                    &state, &request_context, proposed, &apply,
+                ).await?;
+                crate::validate_current_live_request_context(&state, &request_context).await?;
+                let Json(mut response) = authoring_transaction_response("apply_magnetization", committed)?;
+                response.magnetization_apply = Some(receipt);
+                return Ok(Json(response));
+            }
             let mut scene_document: SceneDocument =
                 serde_json::from_value(scene).map_err(|error| {
                     ApiError::bad_request(format!("invalid scene document payload: {error}"))
@@ -3285,6 +3318,104 @@ pub async fn commit_authoring_transaction(
     authoring_transaction_response(transaction_kind, committed)
 }
 
+async fn commit_scoped_magnetization_transaction(
+    state: &Arc<AppState>,
+    context: &crate::types::CurrentLiveRequestContext,
+    headers: &HeaderMap,
+    base_revision: u64,
+    operation_id: String,
+    target: MagnetizationApplyTarget,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    if crate::router_v2::middleware::session_scope::current_expected_session_scope().is_none()
+        || base_revision == u64::MAX
+    {
+        return Err(ApiError::bad_request(
+            "magnetization apply requires a session scope and a valid base_revision",
+        ));
+    }
+    let scope = match &target {
+        MagnetizationApplyTarget::Object { object_id, .. } => MagnetizationApplyScope {
+            object_id: object_id.clone(), region_id: None,
+        },
+        MagnetizationApplyTarget::Region { object_id, region_id, .. } => MagnetizationApplyScope {
+            object_id: object_id.clone(), region_id: Some(region_id.clone()),
+        },
+    };
+    let payload = serde_json::to_value(&target)
+        .map_err(|error| ApiError::internal(format!("encode magnetization apply target: {error}")))?;
+    let apply = crate::live_authored_initial_state::MagnetizationApply::validate_request(
+        MagnetizationApplyRequest { operation_id, scopes: vec![scope] },
+        base_revision,
+        &payload,
+        headers.get("idempotency-key").and_then(|value| value.to_str().ok()),
+    )?;
+    let (replay, scene) = {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot, context, state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let replay = snapshot.magnetization_applies.replay(&apply, context, snapshot.scene_document.as_ref())?;
+        let scene = if replay.is_none() { snapshot.scene_document.clone() } else { None };
+        (replay, scene)
+    };
+    let (committed, receipt) = if let Some(replay) = replay {
+        replay
+    } else {
+        let mut scene = scene.ok_or_else(|| ApiError::conflict("magnetization apply requires a committed scene"))?;
+        check_base_scene_revision(&scene, Some(base_revision))?;
+        apply.validate_scopes(&scene)?;
+        apply_magnetization_target(&mut scene, target)?;
+        crate::commit_current_live_magnetization_apply(state, context, scene, &apply).await?
+    };
+    crate::validate_current_live_request_context(state, context).await?;
+    let Json(mut response) = authoring_transaction_response("apply_magnetization", committed)?;
+    response.magnetization_apply = Some(receipt);
+    Ok(Json(response))
+}
+
+fn apply_magnetization_target(
+    scene: &mut SceneDocument,
+    target: MagnetizationApplyTarget,
+) -> Result<(), ApiError> {
+    match target {
+        MagnetizationApplyTarget::Object { object_id, asset } => {
+            let asset: Option<MagnetizationAsset> = serde_json::from_value(asset)
+                .map_err(|error| ApiError::bad_request(format!("invalid magnetization asset payload: {error}")))?;
+            let mut reference = None;
+            if let Some(mut asset) = asset {
+                if scene.magnetization_assets.iter().any(|existing| existing.id == asset.id && existing != &asset)
+                    && scene.objects.iter().any(|other| {
+                        (other.id != object_id && other.magnetization_ref.as_deref() == Some(asset.id.as_str()))
+                            || other.region_overrides.values().any(|region| region.magnetization_ref.as_deref() == Some(asset.id.as_str()))
+                    })
+                {
+                    let digest = fullmag_session::canonical_json_sha256(&serde_json::json!([object_id, asset]));
+                    asset.id = format!("mag:scoped:{digest}");
+                    if scene.magnetization_assets.iter().any(|existing| existing.id == asset.id && existing != &asset) {
+                        return Err(ApiError::conflict("scoped magnetization asset identity conflict"));
+                    }
+                }
+                reference = Some(asset.id.clone());
+                upsert_magnetization_asset(scene, asset);
+            }
+            let object = scene.objects.iter_mut().find(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply object not found"))?;
+            object.magnetization_ref = reference;
+        }
+        MagnetizationApplyTarget::Region { object_id, region_id, texture_override } => {
+            let object = scene.objects.iter_mut().find(|object| object.id == object_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply object not found"))?;
+            let region = object.regions.iter_mut().find(|region| region.region_id == region_id)
+                .ok_or_else(|| ApiError::not_found("magnetization apply region not found"))?;
+            region.texture_override = texture_override;
+            object.region_overrides.remove(&region_id);
+        }
+    }
+    Ok(())
+}
+
 fn apply_authoring_transaction(
     current_scene: &mut SceneDocument,
     req: AuthoringTransactionRequest,
@@ -3304,8 +3435,9 @@ fn apply_authoring_transaction(
             *current_scene = assigned;
             Ok("assign_study_execution")
         }
-        AuthoringTransactionRequest::ReplaceScene { .. } => Err(ApiError::internal(
-            "replace_scene transaction must use the dedicated replacement path",
+        AuthoringTransactionRequest::ReplaceScene { .. }
+        | AuthoringTransactionRequest::ApplyMagnetization { .. } => Err(ApiError::internal(
+            "scoped or replacement transaction must use its dedicated commit path",
         )),
         AuthoringTransactionRequest::MergePatch {
             base_revision,
@@ -3556,6 +3688,7 @@ fn authoring_transaction_response(
         transaction_kind: transaction_kind.to_string(),
         scene_revision,
         committed_scene,
+        magnetization_apply: None,
     }))
 }
 
@@ -4700,12 +4833,9 @@ fn apply_object_patch(
         object.visible = visible;
     }
     if let Some(material_ref) = req.material_ref {
-        // Clients may resend unchanged references with metadata edits; only a
-        // real change affects the realized domain.
-        if object.material_ref != material_ref {
-            object.material_ref = material_ref;
-            mesh_dirty = true;
-        }
+        // Material assignment is lowered again with the solver input.
+        // RegionRealizationImpact independently checks magnetic support.
+        object.material_ref = material_ref;
     }
     if let Some(region_name) = req.region_name {
         let region_name = region_name.trim();

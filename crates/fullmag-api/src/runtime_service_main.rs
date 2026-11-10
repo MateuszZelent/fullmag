@@ -2284,6 +2284,8 @@ fn cancel_failed_no_spawn(args: impl Iterator<Item = OsString>) -> Result<()> {
     {
         bail!("failed no-spawn cancellation found a worker process exit receipt");
     }
+    fullmag_runtime_control::ensure_admitted_task_coordinator_genesis(&store, &claim)
+        .context("recover exact pre-Prepare admission genesis for no-spawn cancellation")?;
     let recovered = fullmag_runtime_control::recover_coordinator(&store, &claim)?;
     if recovered
         .events

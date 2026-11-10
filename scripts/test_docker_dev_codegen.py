@@ -184,6 +184,79 @@ class DockerDevCodegenTests(unittest.TestCase):
         self.assertEqual(options["environment"]["HOME"], "/state/development")
         self.assertEqual(options["environment"]["npm_config_store_dir"], "/state/development/pnpm-store")
 
+    @unittest.skipUnless(os.name == "posix", "requires POSIX exec semantics")
+    def test_openapi_export_configures_image_device_access_before_exact_binary_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entrypoint = root / "entrypoint.py"
+            api_binary = root / "fullmag-api"
+            policy_marker = root / "policy-marker"
+            child_result = root / "child-result.json"
+            entrypoint.write_text(
+                "import os\n"
+                "from pathlib import Path\n"
+                "def _configure_device_access():\n"
+                "    if os.environ.get('TEST_DEVICE_POLICY') != 'valid':\n"
+                "        raise RuntimeError('image device policy rejected')\n"
+                "    Path(os.environ['TEST_POLICY_MARKER']).write_text('configured')\n",
+                encoding="utf-8",
+            )
+            api_binary.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['TEST_CHILD_RESULT']).write_text(json.dumps({\n"
+                "    'argv': sys.argv,\n"
+                "    'policy': Path(os.environ['TEST_POLICY_MARKER']).read_text(),\n"
+                "}))\n",
+                encoding="utf-8",
+            )
+            api_binary.chmod(0o700)
+            command = codegen._api_openapi_export_arguments(
+                python=sys.executable,
+                entrypoint_path=str(entrypoint),
+                api_binary=str(api_binary),
+            )
+            self.assertEqual(
+                codegen._api_openapi_export_arguments(),
+                (
+                    codegen.API_EXPORT_PYTHON,
+                    "-I",
+                    "-B",
+                    "-c",
+                    codegen.API_OPENAPI_EXPORT_SCRIPT,
+                    "/opt/fullmag/entrypoint.py",
+                    "/opt/fullmag/package/bin/fullmag-api",
+                    "--print-openapi-v2",
+                ),
+            )
+
+            environment = {
+                **os.environ,
+                "TEST_DEVICE_POLICY": "valid",
+                "TEST_POLICY_MARKER": str(policy_marker),
+                "TEST_CHILD_RESULT": str(child_result),
+            }
+            completed = subprocess.run(command, env=environment, text=True, capture_output=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                json.loads(child_result.read_text(encoding="utf-8")),
+                {"argv": [str(api_binary), "--print-openapi-v2"], "policy": "configured"},
+            )
+
+            child_result.unlink()
+            policy_marker.unlink()
+            rejected = subprocess.run(
+                command,
+                env={**environment, "TEST_DEVICE_POLICY": "invalid"},
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("image device policy rejected", rejected.stderr)
+            self.assertFalse(child_result.exists(), "invalid policy must stop before API exec")
+            self.assertFalse(policy_marker.exists())
+
     def test_running_service_requires_actual_host_source_mount_and_env(self) -> None:
         identity = {
             "project_id": "project-id",

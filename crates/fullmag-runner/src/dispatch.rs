@@ -4535,11 +4535,17 @@ mod tests {
         );
 
         let final_output_body = &artifacts[body_end..];
-        assert!(
-            final_output_body.contains("backend.apply_average_m_to_step_stats(&mut final_stats)?")
-                && final_output_body.contains("artifacts.record_scalar(&final_stats)?"),
-            "native CUDA final scalar rows must reduce M before recording"
-        );
+        let reduced = final_output_body
+            .find("backend.apply_average_m_to_step_stats(&mut final_stats)?")
+            .expect("final scalar row must reduce M");
+        let canonical = final_output_body
+            .find("canonical_fdm_publication_stats(plan, final_stats)")
+            .expect("final scalar row must canonicalize its physical clock");
+        let recorded = final_output_body
+            .find("artifacts.record_scalar(&published)?")
+            .expect("final scalar row must record the canonical publication copy");
+        assert!(reduced < canonical && canonical < recorded,
+            "native CUDA final scalar rows must reduce M before clock normalization and recording");
 
         let execution_start = execute
             .find("pub(crate) fn execute_cuda_fdm(")

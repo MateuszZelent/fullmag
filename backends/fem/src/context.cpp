@@ -10,9 +10,10 @@
 
 namespace fullmag::fem {
 
-bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error)
+bool context_from_plan(Context &ctx, const fullmag_fem_plan_desc &plan, std::string &error,
+                       const uint32_t *canonical_boundary_marker)
 {
-    return build_context_from_plan(ctx, plan, error);
+    return build_context_from_plan(ctx, plan, error, canonical_boundary_marker);
 }
 
 } // namespace fullmag::fem

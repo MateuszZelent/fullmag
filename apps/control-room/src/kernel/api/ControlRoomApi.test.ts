@@ -1099,6 +1099,54 @@ describe("ControlRoomApi", () => {
     expect(requests.every((request) => !request.url.includes("session="))).toBe(true);
   });
 
+  it("returns null for an absent current energy sample with session and API instance pins", async () => {
+    const pin = "12345678-1234-4234-8234-123456789abc";
+    const sessionScopeKey = "session=project-a&epoch=project-a%40123";
+    let observedUrl = "";
+    let observedHeaders = new Headers();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      expectedApiInstance: pin,
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedHeaders = new Headers(init?.headers);
+        return new Response(null, {
+          headers: { ...contractHeaders, "x-fullmag-api-instance": pin },
+          status: 204,
+        });
+      },
+    });
+
+    await expect(
+      api.simulation.solver.energies.current({ sessionScopeKey }),
+    ).resolves.toBeNull();
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/simulation/solver/energies/current",
+    );
+    expect(observedHeaders.get("x-fullmag-session-scope")).toBe(sessionScopeKey);
+    expect(observedHeaders.get("x-fullmag-api-instance")).toBe(pin);
+  });
+
+  it("keeps the API instance fence on a no-content current energy response", async () => {
+    const api = new ControlRoomApi({
+      expectedApiInstance: "12345678-1234-4234-8234-123456789abc",
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: {
+            ...contractHeaders,
+            "x-fullmag-api-instance": "87654321-1234-4234-8234-123456789abc",
+          },
+          status: 204,
+        }),
+    });
+
+    await expect(api.simulation.solver.energies.current()).rejects.toMatchObject({
+      code: "API_INSTANCE_MISMATCH",
+      status: 409,
+    });
+  });
+
   it("routes full visualization replacements through scoped typed PUT requests", async () => {
     const scope = "session=project-a&epoch=project-a%40123";
     const requests: Array<{ method: string | undefined; scope: string | null; url: string }> = [];
@@ -2610,6 +2658,38 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("serves prepared magnetization only from the requested observation frame", async () => {
+    const source = { observation_frame_id: "prepared-frame-1", domain_generation_id: "domain-1" };
+    for (const [responseFrame, responseDomain] of [
+      ["prepared-frame-1", "domain-1"], ["later-frame", "domain-1"],
+      [null, "domain-1"], ["prepared-frame-1", "other-domain"],
+    ]) {
+      let observedFrame: string | null = null;
+      let observedDomain: string | null = null;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (url, init) => {
+          observedFrame = new Headers(init?.headers).get("x-fullmag-expected-observation-frame-id");
+          observedDomain = new URL(String(url)).searchParams.get("expected_generation_id");
+          return binaryResponse(makeFieldVectorBuffer(), {
+            headers: {
+              ...(responseFrame ? { "x-fullmag-observation-frame-id": responseFrame } : {}),
+              ...(responseDomain ? { "x-fullmag-domain-generation-id": responseDomain } : {}),
+            },
+          });
+        },
+      });
+      const result = api.data.fields.preparedMagnetization(source);
+      if (responseFrame === source.observation_frame_id && responseDomain === source.domain_generation_id) {
+        await expect(result).resolves.toMatchObject({ status: "ready" });
+      } else {
+        await expect(result).rejects.toMatchObject({ status: 409 });
+      }
+      expect(observedFrame).toBe(source.observation_frame_id);
+      expect(observedDomain).toBe(source.domain_generation_id);
+    }
+  });
+
   it("sends the artifact generation precondition and rejects missing or mismatched response headers", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -3461,6 +3541,27 @@ describe("ControlRoomApi", () => {
       status: 404,
       message: "No active workspace",
     });
+  });
+
+  it.each([
+    { kind: "solve" },
+    { kind: "run", until_seconds: 1 },
+    { kind: "relax", max_steps: 10 },
+  ] as const)("binds the $kind request key to its client intent", async (command) => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Idempotency-Key")).toBe("compute-intent");
+      return jsonResponse({ accepted: true, command_id: "cmd-first" });
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics: new RequestDiagnosticsController(),
+      fetchImpl,
+      requestIdFactory: () => "req-compute",
+    });
+
+    await expect(api.commands.submit({ ...command, client_intent_id: "compute-intent" }))
+      .resolves.toMatchObject({ command_id: "cmd-first" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("submits structured commands through the v2 simulation command resource", async () => {
@@ -6150,6 +6251,47 @@ describe("ControlRoomApi", () => {
       data: null,
       status: "pending",
     });
+  });
+
+  it("replays only the same scoped magnetization Apply after a lost HTTP response", async () => {
+    const writes: { operation: string; scope: string | null; body: unknown }[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      retryDelayMs: 0,
+      fetchImpl: async (_url, init) => {
+        const headers = new Headers(init?.headers);
+        const operation = headers.get("idempotency-key") ?? "";
+        const body = parseRequestBody(init?.body);
+        writes.push({ operation, scope: headers.get("x-fullmag-session-scope"), body });
+        if (writes.length === 1) throw new TypeError("response lost");
+        return jsonResponse({
+          committed_scene: { objects: [], revision: 11 },
+          scene_revision: 11,
+          magnetization_apply: {
+            operation_id: operation, scene_revision: 11,
+            scopes: [{ object_id: "body", region_id: "core" }],
+            status: "initial_state_pending", reason: "Build the grid.",
+          },
+        });
+      },
+    });
+    const target = {
+      kind: "region", object_id: "body", region_id: "core",
+      texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+    } as const;
+    const sessionScopeKey = "session=A&epoch=1&request_scope_epoch=1";
+    await expect(api.model.applyMagnetization({
+      ...target, texture_override: { initial_magnetization: { kind: "uniform", value: [1, 0, 0] } },
+    }, { baseRevision: 10, sessionScopeKey })).resolves.toMatchObject({
+      magnetization_apply: { status: "initial_state_pending" },
+    });
+    expect(writes).toHaveLength(2);
+    expect(writes[0].operation).toMatch(/^[a-f0-9]{32}$/);
+    expect(writes[0].scope).toBe(sessionScopeKey);
+    expect(writes[0].body).toEqual({
+      kind: "apply_magnetization", base_revision: 10, operation_id: writes[0].operation, target,
+    });
+    expect(writes[1]).toEqual(writes[0]);
   });
 
   it("commits object region and coupling writes through model transactions", async () => {

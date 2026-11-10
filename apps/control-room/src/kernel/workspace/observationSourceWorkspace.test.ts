@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { ObservationFrameResource } from "../api/apiTypes";
+import type { FieldMetaResource, ObservationFrameResource, PreparedInitialStateResource } from "../api/apiTypes";
 
 import {
   observationSourceWorkspaceStore,
   pinnedObservationSourceFromFrame,
   resetObservationSourceWorkspaceForTests,
+  resolvePreparedMagnetizationAvailability,
 } from "./observationSourceWorkspace";
 
 const FRAME = {
@@ -43,6 +44,39 @@ const SESSION = {
   sessionId: "session-1",
 };
 
+describe("prepared magnetization availability", () => {
+  const source: PreparedInitialStateResource = {
+    scene_revision: 8, initial_state_revision: 3, publication_id: "publication-a",
+    observation_frame_id: "frame-a", domain_generation_id: "domain-a",
+    values_sha256: "b".repeat(64),
+  };
+  const live = { sceneRevision: 8, domainGenerationId: "domain-a" };
+  const field = (frameId: string, publicationId = "publication-a") => ({
+    domain_generation_id: "domain-a",
+    observation_frame: { observation_frame_id: frameId },
+    publication_bundle: { publication_id: publicationId },
+  } as FieldMetaResource);
+
+  it("requires current metadata before rendering a prepared preview", () => {
+    const data = field("frame-a");
+    expect(resolvePreparedMagnetizationAvailability(source, live, { data, status: "loading" })).toBe("checking");
+    expect(resolvePreparedMagnetizationAvailability(source, { ...live, sceneRevision: 7 }, { data, status: "ready" })).toBe("checking");
+    expect(resolvePreparedMagnetizationAvailability(source, live, { data, status: "ready" })).toBe("current");
+  });
+
+  it("rejects a new frame or publication on the same scene and domain", () => {
+    expect(resolvePreparedMagnetizationAvailability(source, live, { data: field("frame-b"), status: "ready" })).toBe("superseded");
+    expect(resolvePreparedMagnetizationAvailability(source, live, { data: field("frame-a", "publication-b"), status: "ready" })).toBe("superseded");
+    expect(resolvePreparedMagnetizationAvailability(source, live, { data: null, status: "ready" })).toBe("superseded");
+  });
+
+  it("reports a superseding scene or changed domain even with cached metadata", () => {
+    const meta = { data: field("frame-a"), status: "ready" } as const;
+    expect(resolvePreparedMagnetizationAvailability(source, { ...live, sceneRevision: 9 }, meta)).toBe("superseded");
+    expect(resolvePreparedMagnetizationAvailability(source, { ...live, domainGenerationId: "domain-b" }, meta)).toBe("earlier-domain");
+  });
+});
+
 describe("observationSourceWorkspaceStore", () => {
   it("pins only the compact exact source identity", () => {
     resetObservationSourceWorkspaceForTests();
@@ -61,6 +95,28 @@ describe("observationSourceWorkspaceStore", () => {
       stageId: "stage-1",
       stateDigest: "state",
     });
+  });
+
+  it("switches from a pinned result to an exact prepared preview within one session", () => {
+    resetObservationSourceWorkspaceForTests();
+    const pinned = pinnedObservationSourceFromFrame(FRAME, SESSION);
+    const preview = {
+      objectId: "magnet",
+      regionId: "core",
+      sessionIdentityKey: pinned.sessionIdentityKey,
+      source: {
+        scene_revision: 8, initial_state_revision: 3, publication_id: "publication",
+        observation_frame_id: "prepared-frame", domain_generation_id: "domain",
+        values_sha256: "b".repeat(64),
+      },
+    };
+    observationSourceWorkspaceStore.pin(pinned);
+    observationSourceWorkspaceStore.showPrepared(preview);
+    expect(observationSourceWorkspaceStore.getSnapshot()).toEqual({ pinned: null, prepared: preview });
+    observationSourceWorkspaceStore.clearForSession(SESSION);
+    expect(observationSourceWorkspaceStore.getSnapshot().prepared).toEqual(preview);
+    observationSourceWorkspaceStore.clearForSession({ ...SESSION, requestScopeEpoch: "scope-2" });
+    expect(observationSourceWorkspaceStore.getSnapshot().prepared).toBeNull();
   });
 
   it("clears a pin when the active session identity changes", () => {

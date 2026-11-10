@@ -15,6 +15,11 @@ import type {
   SolverProfileResource,
 } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  MESHING_BUILDS_CURRENT_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  SIMULATION_STAGES_EXECUTION_PATH,
+} from "@/kernel/api/apiPaths";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
@@ -153,6 +158,7 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { StudyResultHistory } from "./StudyResultHistory";
 import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
 type TextureLoadNodeRequestedEvent =
@@ -496,6 +502,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
+  const sharedCommandResources = useMemo(() => ({
+    [MESHING_BUILDS_CURRENT_PATH]: activeBuild.status === "ready" ? activeBuild.data : null,
+    [MESHING_SHARED_DOMAIN_MANIFEST_PATH]: manifest.status === "ready" ? manifest.data : null,
+    [SIMULATION_STAGES_EXECUTION_PATH]: stageExecution.status === "ready" ? stageExecution.data : null,
+  }), [
+    activeBuild.data,
+    activeBuild.status,
+    manifest.data,
+    manifest.status,
+    stageExecution.data,
+    stageExecution.status,
+  ]);
   const activeHysteresisStageId = useMemo(
     () => activeHysteresisStageIdFromExecution(stageExecution.data),
     [stageExecution.data],
@@ -559,7 +577,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       ? []
       : resultContextRun.status === "ready" && resultContextRun.data
         ? [
-            "Selected run is not the current session run; run-scoped result resources are not published.",
+            "Live observation frames are available for the current run. Open a saved Study state to inspect this run's published final results.",
           ]
         : resultContextRun.status === "error"
           ? ["Selected result run could not be loaded."]
@@ -733,7 +751,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const currentManifestParts = Array.isArray(manifest.data?.mesh_parts)
       ? manifest.data.mesh_parts
       : null;
-    const manifestSceneRevision = revisionValue(manifest.data?.source_scene_revision);
+    const manifestSceneRevision = revisionValue(
+      manifest.data?.validated_for_scene_revision ?? manifest.data?.source_scene_revision,
+    );
     const sceneRevisionMatches = currentSceneRevision !== null &&
       manifestSceneRevision !== null &&
       String(currentSceneRevision) === String(manifestSceneRevision);
@@ -778,6 +798,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         activeBuild.data?.last_build_error ??
         latestSuccessfulBuild.data?.last_build_error,
       manifestSourceSceneRevision: manifest.data?.source_scene_revision,
+      manifestValidatedSceneRevision: manifest.data?.validated_for_scene_revision,
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
@@ -1068,12 +1089,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           onTabChange={setExplorerActiveTab}
         />
         {activeTab === "results" ? (
-          <ResultContextSelector
-            currentRunId={currentRunId}
-            knownRunIds={knownResultContextRunIds}
-            onChange={setExplorerResultContextRunId}
-            selectedRunId={resolvedResultContextRunId}
-          />
+          <>
+            <ResultContextSelector
+              currentRunId={currentRunId}
+              knownRunIds={knownResultContextRunIds}
+              onChange={setExplorerResultContextRunId}
+              selectedRunId={resolvedResultContextRunId}
+            />
+            <StudyResultHistory runId={resultContextIsCurrent ? undefined : resolvedResultContextRunId ?? undefined}
+              onPreviewRun={setExplorerResultContextRunId} />
+          </>
         ) : null}
         <AnalysisFieldOverlayContextNotice
           context={analysisFieldOverlayContext}
@@ -1150,6 +1175,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           sceneResourceData={
             modelResource.status === "ready" ? modelResource.data : null
           }
+          sharedCommandResources={sharedCommandResources}
           tabId={activeTab}
         />
       </section>

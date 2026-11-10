@@ -1,6 +1,7 @@
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import type { CommandQueueStatusResource } from "../api/apiTypes";
+import type { StudyComputeObservationStore } from "./studyComputeObservations";
 
 type CommandOutcomeEvent = KernelEventMap["command:outcome"];
 
@@ -33,6 +34,7 @@ export interface CommandFeedbackControllerOptions {
    */
   isRunOutcomeSelfPresented?: (commandId: string) => boolean;
   maxNotices?: number;
+  studyComputeObservations?: StudyComputeObservationStore;
   subscribeSessionScope: (listener: () => void) => () => void;
 }
 
@@ -64,12 +66,20 @@ export class CommandFeedbackController {
     this.scopeKey = options.getSessionScopeKey() ?? null;
     this.disposers.push(
       bus.on("command:outcome", (event) => this.handleOutcome(event)),
+      bus.on("study:compute-observation", (event) => {
+        if (event.state === "rejected") {
+          this.forgetRejectedStudyCompute(event.sessionScopeKey, event.clientIntentId);
+        } else if (event.sessionScopeKey === this.currentScopeKey()) {
+          options.studyComputeObservations?.remember(event);
+        }
+      }),
       bus.on("mesh:build-observed", (event) => this.handleBackendObservation(event)),
       bus.on("session:status-changed", ({ status }) => {
         if (status === "idle") this.replace([]);
       }),
       options.subscribeSessionScope(() => this.handleScopeChange()),
     );
+    if (this.scopeKey) this.restoreStudyCompute(this.scopeKey);
   }
 
   dispose(): void {
@@ -176,6 +186,9 @@ export class CommandFeedbackController {
         : record.status;
       if (!["completed", "failed", "rejected", "cancelled"].includes(status)) continue;
       this.pendingBackendCommands.delete(trackingKey);
+      if (notice.clientIntentId && record.client_intent_id === notice.clientIntentId) {
+        this.options.studyComputeObservations?.forget(sessionScopeKey, notice.clientIntentId);
+      }
       const terminalStatus = status === "completed"
         ? "completed"
         : status === "cancelled"
@@ -246,6 +259,47 @@ export class CommandFeedbackController {
     }
     const kept = this.notices.filter((notice) => notice.sessionScopeKey === next);
     if (kept.length !== this.notices.length || trackingChanged) this.replace(kept);
+    if (next) this.restoreStudyCompute(next);
+  }
+
+  private forgetRejectedStudyCompute(scopeKey: string, clientIntentId: string): void {
+    const store = this.options.studyComputeObservations;
+    if (!store?.forget(scopeKey, clientIntentId)) return;
+    const current = this.currentScopeKey();
+    if (!current || store.list(current).some((entry) => entry.clientIntentId === clientIntentId)) return;
+    const invocationId = `recovered:${clientIntentId}`;
+    let trackingChanged = false;
+    for (const [key, notice] of this.pendingBackendCommands) {
+      if (notice.invocationId === invocationId) {
+        this.pendingBackendCommands.delete(key);
+        trackingChanged = true;
+      }
+    }
+    const kept = this.notices.filter((notice) => notice.invocationId !== invocationId);
+    if (kept.length !== this.notices.length || trackingChanged) this.replace(kept);
+  }
+
+  private restoreStudyCompute(scopeKey: string): void {
+    const observations = this.options.studyComputeObservations?.list(scopeKey) ?? [];
+    for (const { clientIntentId, kind } of observations) {
+      const invocationId = `recovered:${clientIntentId}`;
+      this.upsert(noticeFromOutcome({
+        backendCommandId: null,
+        clientIntentId,
+        clientIntentKind: kind,
+        commandId: kind === "solve" ? "study.run" : "study.execute-stage",
+        feedback: "foreground",
+        invocationId,
+        message: "Checking the previous submission in the session command ledger.",
+        observation: "publication-unconfirmed",
+        phase: "run",
+        sessionScopeKey: scopeKey,
+        source: "ribbon",
+        sourceDetail: null,
+        status: "pending",
+        title: kind === "solve" ? "Compute Study" : kind === "relax" ? "Relax stage" : "Run stage",
+      }));
+    }
   }
 
   private currentScopeKey(): string | null {

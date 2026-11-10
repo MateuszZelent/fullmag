@@ -801,6 +801,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_scalars),
         )
         .route(
+            "/v2/sessions/current/simulation/stages/results",
+            get(handlers::data::stage_results::get_study_stage_results),
+        )
+        .route(
+            "/v2/sessions/current/simulation/stages/results/scalars",
+            get(handlers::data::scalars::get_historical_scalars),
+        )
+        .route(
             "/v2/sessions/current/data/tables",
             get(handlers::data::list_tables),
         )
@@ -1278,6 +1286,30 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets/:solution_set_id/revisions/:revision",
             get(handlers::persistence::solutions::get_solution_revision),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results",
+            get(handlers::persistence::solutions::study_state::list_project_study_results),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id",
+            get(handlers::persistence::solutions::study_state::get_study_result_state),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/magnetization",
+            get(handlers::persistence::solutions::study_state::get_study_result_magnetization),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/topology",
+            get(handlers::persistence::solutions::study_state::get_study_result_topology),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/support",
+            get(handlers::persistence::solutions::study_state::get_study_result_support),
+        )
+        .route(
+            "/v2/persistence/projects/:project_id/runs/:run_id/study-results/:artifact_id/scalars",
+            get(handlers::persistence::solutions::study_state::get_study_result_scalars),
         )
         .route(
             "/v2/persistence/projects/:project_id/runs/:run_id/solution-sets",

@@ -1,7 +1,8 @@
 //! API request/response types and view models.
 
 use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+    CommandExecutionBinding, CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget,
+    RuntimeInitialStateRequest, SolverPolicyRequest,
 };
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
@@ -621,6 +622,40 @@ pub(crate) struct ScalarRow {
 }
 
 impl ScalarRow {
+    pub(crate) fn from_accepted_stats(stats: &fullmag_runner::StepStats) -> Self {
+        Self {
+            kind: stats.kind.clone(),
+            solver_progress: stats.solver_progress.clone(),
+            observation_frame: None,
+            step: stats.step,
+            time: stats.time,
+            solver_dt: stats.dt,
+            error_estimate: stats.error_estimate,
+            max_error: stats.max_error,
+            dt_suggested: stats.dt_suggested,
+            rejected_attempts: stats.rejected_attempts,
+            pseudo_time_s: stats.pseudo_time_s,
+            active_runtime_s: None,
+            mx: stats.mx,
+            my: stats.my,
+            mz: stats.mz,
+            e_ex: stats.e_ex,
+            e_demag: stats.e_demag,
+            e_ext: stats.e_ext,
+            e_ani: stats.e_ani,
+            e_dmi: stats.e_dmi,
+            e_rotated_dmi: Some(stats.e_rotated_dmi),
+            e_total: stats.e_total,
+            max_dm_dt: stats.max_dm_dt,
+            max_h_eff: stats.max_h_eff,
+            max_h_demag: stats.max_h_demag,
+            max_torque_Apm: stats.max_torque_Apm,
+            max_torque_T: stats.max_torque_T,
+            per_object_scalars: stats.per_object_scalars.clone(),
+            table_expressions: Vec::new(),
+        }
+    }
+
     pub(crate) fn validate_record_kind(&self) -> Result<(), &'static str> {
         self.kind
             .validate_solver_progress(self.solver_progress.as_ref())?;
@@ -825,14 +860,7 @@ impl StepUpdateView {
 /// Identity of one accepted worker attempt's live observation. The worker
 /// sequence is intentionally excluded: progress-only header revisions do not
 /// create a new physical scalar sample.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AcceptedLiveScalarIdentity {
-    pub run_id: String,
-    pub task_id: String,
-    pub step_id: String,
-    pub attempt_id: String,
-    pub ownership_epoch: u64,
-}
+pub(crate) use crate::schemas::scalars::ScalarSeriesIdentity as AcceptedLiveScalarIdentity;
 
 impl AcceptedLiveScalarIdentity {
     pub(crate) fn from_header(
@@ -842,14 +870,22 @@ impl AcceptedLiveScalarIdentity {
             run_id: header.run_id.clone(),
             task_id: header.task_id.clone(),
             step_id: header.step_id.clone(),
+            case_id: crate::accepted_study_worker::DEFAULT_ACCEPTED_CASE_ID.into(),
             attempt_id: header.attempt_id.clone(),
             ownership_epoch: header.ownership_epoch,
         }
     }
 }
 
-/// Process-local scalar pin state. Only public_source is serialized into the
-/// existing ScalarObservationSource wire shape by the scalars handler.
+#[derive(Debug, Clone)]
+pub(crate) struct CurrentScalarSeries {
+    pub identity: AcceptedLiveScalarIdentity,
+    /// Mirrors the current buffer, including replacement of an equal-step row.
+    pub row_revisions: Vec<u64>,
+}
+
+/// Process-local scalar pins. Public reads expose the verified source and
+/// series independently of transient worker header availability.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CurrentScalarSourceState {
     pub public_source: Option<crate::schemas::scalars::ScalarObservationSource>,
@@ -859,6 +895,7 @@ pub(crate) struct CurrentScalarSourceState {
     /// Most recent active accepted header identity. None means the projector
     /// cannot currently authenticate a live worker observation.
     pub active_live_identity: Option<AcceptedLiveScalarIdentity>,
+    pub series: Option<CurrentScalarSeries>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -899,6 +936,12 @@ pub(crate) struct SessionStateResponse {
     /// with field/scalar acceptance and must never be reconstructed by a read handler.
     #[serde(skip, default)]
     pub field_publication_bundles: BTreeMap<String, crate::schemas::common::FieldPublicationBundle>,
+    /// Authority issued by the Live preparation publisher for this process.
+    #[serde(skip)]
+    pub authored_initial_state: Option<crate::live_authored_initial_state::AuthoredInitialStatePublication>,
+    /// Scoped reset receipt and pending publication for this live owner.
+    #[serde(skip)]
+    pub magnetization_applies: crate::live_authored_initial_state::MagnetizationApplyState,
     #[serde(skip_serializing, default)]
     pub preview_cache: CachedPreviewFields,
     pub artifacts: Vec<ArtifactEntry>,
@@ -1825,6 +1868,8 @@ pub(crate) struct SessionCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<RuntimeCommandTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_binding: Option<CommandExecutionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precondition: Option<RuntimeCommandPrecondition>,
@@ -1832,6 +1877,8 @@ pub(crate) struct SessionCommand {
     pub client_intent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_state: Option<RuntimeInitialStateRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2229,6 +2276,7 @@ mod tests {
             demag_realization: None,
             fdm: None,
             external_field: None,
+            thermal_noise: None,
             rotated_interfacial_dmi: None,
             rotated_interfacial_dmi_object_ids: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
@@ -2404,6 +2452,8 @@ mod tests {
             fem_mesh: None,
             latest_fields: LatestFields::default(),
             field_publication_bundles: BTreeMap::new(),
+            authored_initial_state: None,
+            magnetization_applies: Default::default(),
             preview_cache: CachedPreviewFields::default(),
             artifacts: Vec::new(),
             display_selection: CurrentDisplaySelection::default(),

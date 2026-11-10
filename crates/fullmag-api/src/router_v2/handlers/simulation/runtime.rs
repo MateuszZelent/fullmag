@@ -16,7 +16,7 @@ use crate::router_v2::handlers::analysis::hysteresis::{
     read_hysteresis_minor_loops_if_available, read_hysteresis_points_if_available,
     read_hysteresis_settle_trace_if_available,
 };
-use crate::schemas::commands::CommandFailureRequest;
+use crate::schemas::commands::{CommandFailureRequest, RuntimeCommandTarget};
 use crate::schemas::hysteresis::{
     HysteresisBookmarkSchema, HysteresisExecutionTreeNode, HysteresisExecutionTreeResource,
     HysteresisFieldUnitProvenanceSchema, HysteresisMinorLoopSchema, HysteresisOrientationSchema,
@@ -1874,13 +1874,14 @@ pub async fn get_solver_status(
     path = "/v2/sessions/current/simulation/solver/energies/current",
     responses(
         (status = 200, description = "Current solver energy sample", body = SolverEnergyCurrentResource),
-        (status = 404, description = "No solver energy data"),
+        (status = 204, description = "No current solver energy sample is available"),
+        (status = 404, description = "No active workspace"),
     ),
     tag = "simulation"
 )]
 pub async fn get_solver_energies_current(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<SolverEnergyCurrentResource>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let request_context = crate::capture_current_live_request_context(&state).await?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
@@ -1893,9 +1894,26 @@ pub async fn get_solver_energies_current(
             .current_live_session_epoch
             .load(std::sync::atomic::Ordering::Acquire),
     )?;
-    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+    let Some(selected) = current_solver_energy_resource_for_snapshot(
         snapshot,
         &request_context.request_scope_epoch,
+    ) else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    Ok(Json(selected).into_response())
+}
+
+/// Resolve readiness and value from the same source-qualified selection used
+/// by the current-energy endpoint. Status surfaces use this to avoid probing a
+/// resource before the current active run has published its accepted scalar pin.
+pub(crate) fn current_solver_energy_resource_for_snapshot(
+    snapshot: &SessionStateResponse,
+    request_scope_epoch: &str,
+) -> Option<SolverEnergyCurrentResource> {
+    let accepted_live_row = crate::router_v2::handlers::sessions::status::accepted_live_scalar_row(
+        snapshot,
+        request_scope_epoch,
     );
     let active_docker_run = active_docker_accepted_run(snapshot);
     // Accepted field materialization validates the durable accepted state and
@@ -1915,16 +1933,13 @@ pub async fn get_solver_energies_current(
     let revision = snapshot.scalar_revision.saturating_add(
         crate::router_v2::handlers::sessions::status::field_revision(snapshot),
     );
-    let selected = select_current_energy_resource(
+    select_current_energy_resource(
         accepted_live_row,
         materialized,
         historical_row,
         active_docker_run,
         revision,
     )
-    .ok_or_else(|| ApiError::not_found("no solver energy data"))?;
-
-    Ok(Json(selected))
 }
 
 #[utoipa::path(
@@ -2193,6 +2208,8 @@ fn runtime_command_readiness_resources(
 ) -> Vec<RuntimeCommandReadinessResource> {
     [
         "solve",
+        "run",
+        "relax",
         "compute_fields",
         "compute_energies",
         "mesh_build",
@@ -2242,6 +2259,7 @@ fn runtime_command_disabled_reason(
                 return Some("Accepted preparation is pending; Compute remains held.".into());
             }
             "pause" => return Some(ACCEPTED_PAUSE_UNSUPPORTED_REASON.into()),
+            "skip" => return Some(ACCEPTED_SKIP_UNSUPPORTED_REASON.into()),
             "close" => return Some(DOCKER_CLOSE_UNSUPPORTED_REASON.into()),
             "stop" => return accepted_stop_disabled_reason(snapshot),
             "compute_fields" | "compute_energies" => {
@@ -2273,7 +2291,7 @@ fn runtime_command_disabled_reason(
         "stop" => (!matches!(state, RuntimeStatus::Running | RuntimeStatus::Paused))
             .then(|| "Runtime is not active.".into()),
         "skip" => runtime_skip_disabled_reason(snapshot, state),
-        "solve" | "compute_fields" | "compute_energies" => {
+        "solve" | "run" | "relax" | "compute_fields" | "compute_energies" => {
             runtime_compute_disabled_reason(ledger, state)
         }
         _ => Some("Unsupported runtime command.".into()),
@@ -2283,6 +2301,7 @@ fn runtime_command_disabled_reason(
 /// Reason prefix matches the rejection code published by the accepted Pause
 /// route so UI readiness and command admission stay one contract.
 const ACCEPTED_PAUSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Pause is unavailable until a worker pause command is published.";
+pub(crate) const ACCEPTED_SKIP_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: Docker accepted workers expose durable Stop; Skip is unavailable until a worker stage-skip command is published.";
 /// Close is drained only by a CLI session host, which the Docker API-only
 /// runtime does not have; admission rejects it instead of queueing it forever.
 pub(crate) const DOCKER_CLOSE_UNSUPPORTED_REASON: &str = "accepted_control_unsupported: the Docker API-only runtime has no session host to close; use Stop for a run, or create a new simulation to replace the session.";
@@ -2360,10 +2379,7 @@ fn runtime_skip_disabled_reason(
 
 fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommandRecord>) -> bool {
     ledger.iter().any(|record| {
-        matches!(
-            record.command.kind.as_str(),
-            "solve" | "compute_fields" | "compute_energies"
-        ) && matches!(
+        super::remesh_admission::is_compute_command(record.command.kind.as_str()) && matches!(
             record.status,
             CommandLifecycleState::Queued
                 | CommandLifecycleState::Accepted
@@ -2371,6 +2387,20 @@ fn has_active_compute_command(ledger: &std::collections::VecDeque<TrackedCommand
                 | CommandLifecycleState::Running
         )
     })
+}
+
+#[cfg(test)]
+#[test]
+fn runtime_stage_compute_counts_run_and_relax_as_active() {
+    for kind in ["run", "relax"] {
+        let mut record: TrackedCommandRecord = serde_json::from_value(serde_json::json!({
+            "command": {"seq":1, "command_id":"stage-command", "kind":kind, "created_at_unix_ms":1},
+            "status": "running",
+        })).unwrap();
+        assert!(has_active_compute_command(&[record.clone()].into()));
+        record.status = CommandLifecycleState::Completed;
+        assert!(!has_active_compute_command(&[record].into()));
+    }
 }
 
 #[utoipa::path(
@@ -2488,6 +2518,9 @@ pub async fn get_command_detail(
             .cloned()
             .ok_or_else(|| ApiError::not_found("command not found"))?
     };
+    let execution_binding = crate::live_compute_request::retained_command_binding(
+        &state, &request_context, &record.command,
+    ).await?;
     let (
         stage_linkage,
         run_id,
@@ -2497,35 +2530,36 @@ pub async fn get_command_detail(
         diagnostics,
     ) = {
         let guard = state.current_live_state.read().await;
-        if let Some(snapshot) = guard.as_ref() {
-            crate::ensure_current_live_request_context(
-                snapshot,
-                &request_context,
-                state
-                    .current_live_session_epoch
-                    .load(std::sync::atomic::Ordering::Acquire),
-            )?;
-        }
-        let stage_linkage = guard.as_ref().and_then(|snapshot| {
+        let snapshot = guard.as_ref()
+            .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &request_context,
+            state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        let bound_run_id = execution_binding.as_ref().map(|binding| binding.run_id.as_str())
+            .or_else(|| match &record.command.target {
+                Some(RuntimeCommandTarget::Run { run_id: Some(run_id) }) => Some(run_id.as_str()),
+                _ => None,
+            });
+        let current_run_id = snapshot.run.as_ref().map(|run| run.run_id.as_str())
+            .unwrap_or(snapshot.session.run_id.as_str());
+        let command_snapshot = bound_run_id.is_none_or(|run_id| run_id == current_run_id)
+            .then_some(snapshot);
+        let stage_linkage = command_snapshot.and_then(|snapshot| {
             command_stage_linkage(
                 snapshot.stage_execution.as_ref(),
                 record.command.command_id.as_str(),
                 &record.command.target,
             )
         });
-        let run_id = guard.as_ref().map(|snapshot| {
-            snapshot
-                .run
-                .as_ref()
-                .map(|run| run.run_id.clone())
-                .unwrap_or_else(|| snapshot.session.run_id.clone())
-        });
-        let requested_execution = guard.as_ref().map(requested_execution_readback);
-        let resolved_execution = guard.as_ref().and_then(resolved_execution_readback);
+        let run_id = Some(bound_run_id.unwrap_or(current_run_id).to_owned());
+        let requested_execution = command_snapshot.map(requested_execution_readback);
+        let resolved_execution = command_snapshot.and_then(resolved_execution_readback);
         let resource_invalidations =
-            command_resource_invalidations(&record, guard.as_ref(), stage_linkage.as_ref());
+            command_resource_invalidations(&record, command_snapshot, stage_linkage.as_ref());
         let diagnostics =
-            command_diagnostic_references(&record, guard.as_ref(), stage_linkage.as_ref());
+            command_diagnostic_references(&record, command_snapshot, stage_linkage.as_ref());
         (
             stage_linkage,
             run_id,
@@ -2557,15 +2591,17 @@ pub async fn get_command_detail(
         precondition: record.command.precondition.clone(),
         client_intent_id: record.command.client_intent_id.clone(),
         requested_at_unix_ms: record.command.requested_at_unix_ms,
-        stage_id: stage_linkage
-            .as_ref()
-            .and_then(|linkage| linkage.stage_id.clone())
+        stage_id: execution_binding.as_ref().and_then(|binding| binding.step_id.clone())
+            .or_else(|| stage_linkage.as_ref().and_then(|linkage| linkage.stage_id.clone()))
             .or_else(|| command_stage_id(&record.command.target)),
         stage_index: stage_linkage
             .as_ref()
             .and_then(|linkage| linkage.stage_index)
+            .or_else(|| execution_binding.as_ref()
+                .and_then(|binding| command_stage_index(&binding.requested_target)))
             .or_else(|| command_stage_index(&record.command.target)),
         run_id,
+        execution_binding,
         requested_execution,
         resolved_execution,
         resource_invalidations,
@@ -2754,6 +2790,15 @@ mod accepted_live_energy_clock_tests {
     }
 
     #[test]
+    fn zero_total_is_still_a_ready_current_energy_sample() {
+        let current = scalar_row(0, 0.0, 0.0);
+        let selected = select_current_energy_resource(Some(&current), None, None, true, 1)
+            .expect("a qualified zero-energy row is a real sample");
+
+        assert_eq!(selected.total, 0.0);
+    }
+
+    #[test]
     fn active_docker_energy_selection_uses_exact_pin_and_rejects_same_clock_stale_sources() {
         // Stage A's cached materialization and scalar tail can have the exact
         // same step/time as stage B's current observation. The pinned accepted
@@ -2828,7 +2873,9 @@ mod accepted_live_energy_clock_tests {
 }
 
 fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    if crate::session::has_nonphysical_latest_step(snapshot) {
+    if crate::live_authored_initial_state::current_publication(snapshot).is_some()
+        || crate::session::has_nonphysical_latest_step(snapshot)
+    {
         return None;
     }
     snapshot

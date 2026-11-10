@@ -76,6 +76,7 @@ _STUDY_FIELDS = frozenset(
         "demag_realization",
         "fdm",
         "external_field",
+        "thermal_noise",
         "rotated_interfacial_dmi",
         "rotated_interfacial_dmi_object_ids",
         "solver",
@@ -521,7 +522,9 @@ def _reject_unlowered_scene_fields(scene: Mapping[str, object]) -> None:
         if pipeline is not None:
             if not isinstance(pipeline, Mapping):
                 raise ValueError("SceneDocument.study.study_pipeline must be an object")
-            if pipeline.get("version", "study_pipeline.v1") != "study_pipeline.v1":
+            if pipeline.get("version", "study_pipeline.v1") not in {
+                "study_pipeline.v1", "study_pipeline.v2"
+            }:
                 raise ValueError("scene_document_study_pipeline_version_not_supported")
             if not isinstance(pipeline.get("nodes", []), list):
                 raise ValueError("SceneDocument.study.study_pipeline.nodes must be a list")

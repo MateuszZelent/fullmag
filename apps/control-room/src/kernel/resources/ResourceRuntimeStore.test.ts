@@ -178,6 +178,99 @@ describe("ResourceRuntimeStore", () => {
     });
   });
 
+  it("coalesces repeated stale in-flight revisions without duplicate snapshot notifications", async () => {
+    type Sample = { label: string; revision: number };
+    const store = new ResourceRuntimeStore<Sample>();
+    const resourceKey = "simulation/solver/energies/current";
+    const inflight = deferred<Sample>();
+    const latest = deferred<Sample>();
+    const firstLoad = vi.fn(() => inflight.promise);
+    const supersededLoad = vi.fn(async () => ({ label: "superseded", revision: 2 }));
+    const latestLoad = vi.fn(() => latest.promise);
+    const snapshots: unknown[] = [];
+    const unsubscribe = store.subscribe(resourceKey, () => {
+      snapshots.push(store.getSnapshot<Sample>(resourceKey));
+    });
+
+    const firstResult = store.ensureLoad({
+      externalRevision: 1,
+      load: firstLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    expect(snapshots).toHaveLength(1);
+
+    store.ensureLoad({
+      externalRevision: 2,
+      load: supersededLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    const queuedSnapshot = store.getSnapshot<Sample>(resourceKey);
+    expect(queuedSnapshot).toMatchObject({ status: "loading", revision: 2 });
+    expect(snapshots).toHaveLength(2);
+
+    const duplicateQueuedResult = store.ensureLoad({
+      externalRevision: 2,
+      load: latestLoad,
+      resourceKey,
+      resolveRevision: (sample) => sample.revision,
+    });
+    expect(duplicateQueuedResult).toBe(firstResult);
+    expect(store.getSnapshot<Sample>(resourceKey)).toBe(queuedSnapshot);
+    expect(snapshots).toHaveLength(2);
+
+    inflight.resolve({ label: "old", revision: 1 });
+    await firstResult;
+    await vi.waitFor(() => expect(latestLoad).toHaveBeenCalledTimes(1));
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+    expect(supersededLoad).not.toHaveBeenCalled();
+
+    latest.resolve({ label: "latest", revision: 2 });
+    await vi.waitFor(() => {
+      expect(store.getSnapshot<Sample>(resourceKey)).toMatchObject({
+        data: { label: "latest", revision: 2 },
+        revision: 2,
+        status: "ready",
+      });
+    });
+    unsubscribe();
+  });
+
+  it("appends the resource key to a subscriber error and rethrows the same error", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const resourceKey = "session=abc@1|simulation/solver/energies/current";
+    const subscriberError = new Error("resource subscriber failed");
+    store.subscribe(resourceKey, () => {
+      throw subscriberError;
+    });
+
+    let caught: unknown;
+    try {
+      store.updateData(resourceKey, "ready", 1);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(subscriberError);
+    expect(subscriberError.stack).toContain(`resourceKey=${resourceKey}`);
+  });
+
+  it("keeps the resource name in bounded diagnostics for a long session scope", () => {
+    const store = new ResourceRuntimeStore<string>();
+    const resourceKey = `session=${"scope".repeat(80)}|simulation/preparation`;
+    const subscriberError = new Error("subscriber failed");
+    store.subscribe(resourceKey, () => {
+      throw subscriberError;
+    });
+
+    expect(() => store.updateData(resourceKey, "ready", 1)).toThrow(subscriberError);
+    const detail = subscriberError.stack?.split("ResourceRuntimeStore resourceKey=")[1];
+    expect(detail).toContain("session=");
+    expect(detail).toContain("|simulation/preparation");
+    expect(detail?.length).toBeLessThanOrEqual(160);
+  });
+
   it("keeps warm quantity resources without refetching when switching back", async () => {
     const store = new ResourceRuntimeStore<string>();
     const loadM = vi.fn(async () => "m-data");

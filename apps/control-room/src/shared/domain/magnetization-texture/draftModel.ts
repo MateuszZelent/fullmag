@@ -36,18 +36,31 @@ export function resolveMagnetizationTextureModel({
     target.kind === "region"
       ? regionResource(regionList, target.regionId)
       : null;
+  const authoredRegion = target.kind === "region"
+    ? scene?.objects?.find((entry) => entry.id === target.objectId)
+        ?.regions?.find((entry) => entry.region_id === target.regionId)
+    : undefined;
+  const textureOverride = authoredRegion?.texture_override ?? null;
+  const regionInitializer = asRecord(textureOverride?.initial_magnetization);
   const regionMagnetizationRef = asNonEmptyString(region?.magnetization_ref);
   const effectiveMagnetizationRef =
     target.kind === "region"
       ? regionMagnetizationRef ?? objectMagnetizationRef
       : objectMagnetizationRef;
-  const asset = magnetizationAsset(sceneRecord, effectiveMagnetizationRef);
+  const authoredAsset = target.kind === "region" && regionInitializer
+    ? inlineRegionTextureAsset(target.regionId, regionInitializer)
+    : null;
+  const asset = authoredAsset ?? magnetizationAsset(sceneRecord, effectiveMagnetizationRef);
 
   return {
     asset,
-    assignment: assignmentKind(target, object, region, regionMagnetizationRef),
+    assignment: authoredAsset
+      ? "region-override"
+      : assignmentKind(target, object, asRecord(authoredRegion) ?? region, regionMagnetizationRef),
+    authoredRegion: Boolean(authoredRegion),
+    regionTextureOverride: textureOverride,
     baseRevision: asFiniteNumber(sceneRecord?.revision),
-    effectiveMagnetizationRef,
+    effectiveMagnetizationRef: authoredAsset?.id ?? effectiveMagnetizationRef,
     objectMagnetizationRef,
     regionMagnetizationRef,
     target,
@@ -103,6 +116,24 @@ export function buildRegionTextureOverridePatch(
       } satisfies components["schemas"]["SceneInitialMagnetization"],
     },
   };
+}
+
+function inlineRegionTextureAsset(regionId: string, initializer: JsonRecord): MagnetizationAssetDraft {
+  const kind = asNonEmptyString(initializer.kind) ?? "unknown";
+  const asset: MagnetizationAssetDraft = {
+    ...(initializer as JsonObject),
+    id: `region-texture:${regionId}`,
+    kind,
+    name: "Region texture",
+  };
+  if (kind === "uniform" && Array.isArray(initializer.value)) {
+    asset.preset_kind = "uniform";
+    asset.preset_params = { direction: initializer.value };
+  } else if (kind === "random_seeded" && typeof initializer.seed === "number") {
+    asset.preset_kind = "random_seeded";
+    asset.preset_params = { seed: initializer.seed };
+  }
+  return asset;
 }
 
 function normalizeMagnetizationRef(

@@ -391,5 +391,71 @@ class HistoryQualificationTests(unittest.TestCase):
             history.select_candidates([base, base], set(), history_count=0, history_bytes=0)
 
 
+
+
+
+class RejectedHistoryTests(unittest.TestCase):
+    def evidence(self):
+        files, _, _ = fixture()
+        receipt = json.loads(files["receipt.json"])
+        receipt.update(state="failed-confirmed", activation_state="rejected", run_id=None,
+                       session_id=None, retirement_result={"state":"retirement-only","retirement":None}, error="Backend activation was rejected; terminal activation receipt retained and retry is forbidden")
+        files["receipt.json"] = files["terminal.json"] = raw(receipt)
+        files["result.json"] = raw({"schema":"fullmag.startup-script-activation.v1", "state":"rejected",
+            "request_id":REQUEST, "source_sha256":SOURCE, "source_relative":"examples/sp4.py",
+            "rejection":{"http_status":422,"code":"accepted_execution_plan_invalid","message":"unsupported capability"}})
+        return files
+
+    def check(self, files, records=None, paths=None):
+        return history.qualify_rejected_activation(TOKEN, files, project=PROJECT,
+            volume=VOLUME, namespace="", store_records=records or {}, inventory_paths=paths or [])
+
+    def test_confirmed_rejection_has_explicit_no_run_kind(self):
+        result = self.check(self.evidence())
+        self.assertEqual(result["qualification_kind"], "rejected-no-run-v1")
+        self.assertIsNone(result["run_id"])
+        self.assertEqual(result["files"], history.file_manifest(self.evidence()))
+
+    def test_hidden_run_admission_or_lease_refuses(self):
+        for path in ["runs/hidden/run_intent.json", "admission/request.json", "idempotency/key.json",
+                     "runs/hidden/resource_leases/gpu/lease.json"]:
+            with self.subTest(path=path):
+                with self.assertRaises(history.HistoryError):
+                    self.check(self.evidence(), {path:raw({"request_id":REQUEST})}, [path])
+                with self.assertRaises(history.HistoryError):
+                    self.check(self.evidence(), {}, [path])
+        with self.assertRaises(history.HistoryError):
+            self.check(self.evidence(), {}, ["admission/live-http-"+history.digest(REQUEST.encode())])
+
+    def test_unrelated_admission_is_preserved(self):
+        path="runs/other/run_intent.json"
+        result=self.check(self.evidence(),{path:raw({"request_id":"another-request"})},[path])
+        self.assertIn(path,result["store_record_hashes"])
+
+    def test_ambiguous_rejection_identity_or_reconciliation_refuses(self):
+        for change in [{"run_id":"hidden"},{"session_id":"hidden"},{"reconciliation":{}},
+                       {"reconciliation":{"state":"recovered"}},{"activation_state":"unknown"},
+                       {"source_sha256":"c"*64},{"error":"outcome unknown"}]:
+            files=self.evidence();receipt=json.loads(files["receipt.json"]);receipt.update(change)
+            files["receipt.json"]=files["terminal.json"]=raw(receipt)
+            with self.subTest(change=change),self.assertRaises(history.HistoryError):self.check(files)
+        for key,value in [("state","activated"),("request_id","other"),("response",{}),("run_id","hidden")]:
+            files=self.evidence();result=json.loads(files["result.json"]);result[key]=value;files["result.json"]=raw(result)
+            with self.subTest(key=key),self.assertRaises(history.HistoryError):self.check(files)
+
+    def test_any_predecessor_retirement_or_ambiguous_result_is_refused(self):
+        for retirement, result in [({}, {"state":"retirement-only","retirement":{}}),
+                                   ({"state":"retired","terminal_outcome":"startup_failed"}, {"state":"retirement-only","retirement":{}}),
+                                   (None, None), (None, {"state":"unknown","retirement":None})]:
+            files=self.evidence();receipt=json.loads(files["receipt.json"])
+            receipt.update(retirement=retirement,retirement_result=result)
+            files["receipt.json"]=files["terminal.json"]=raw(receipt)
+            with self.subTest(retirement=retirement,result=result),self.assertRaises(history.HistoryError):self.check(files)
+
+    def test_any_related_retirement_path_or_unknown_blob_is_refused(self):
+        for path in ["retirements/"+TOKEN,"retirements/"+TOKEN+"/project/extra.json","objects/"+SOURCE]:
+            with self.subTest(path=path),self.assertRaises(history.HistoryError):self.check(self.evidence(),{},[path])
+
+
 if __name__ == "__main__":
     unittest.main()

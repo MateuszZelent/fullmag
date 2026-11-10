@@ -2940,7 +2940,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ??");
-    expect(source).toContain('(pinnedObservationActive ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
+    expect(source).toContain('(pinnedObservationActive || preparedSource ? "m" : selectedSnapshotId ? quantityId : modelQuantityId);');
     expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
@@ -5356,7 +5356,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(
-      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest)",
+      "resolveViewport3DFieldVectorRequestResourceKey(primaryFieldRequest, preparedSource)",
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
@@ -5936,15 +5936,15 @@ describe("useViewport3DSceneModel", () => {
       notifyOnError: false,
     });
     expect(source).toMatch(
-      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
+      /const liveFieldVector = useViewport3DFieldVectorRequest\([\s\S]*?\{\s*\.\.\.VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\s*pauseLoad: waitingForAuthoredFieldCatalog,\s*preparedSource,?\s*\},\s*\);/,
     );
     expect(source).toMatch(
       /const observationFieldVector = useViewport3DObservationFrameMagnetization\([\s\S]*?VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n {2}\);/,
     );
     // Other field-vector consumers have no banner and keep the default toast.
     expect(
-      source.match(/VIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS,\n/g),
-    ).toHaveLength(2);
+      source.match(/\bVIEWPORT3D_PRIMARY_FIELD_VECTOR_REQUEST_OPTIONS\b/g),
+    ).toHaveLength(3);
     expect(source).toContain(": hudStatus,");
   });
 

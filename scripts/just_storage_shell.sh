@@ -256,7 +256,7 @@ case "${recipe}" in
       exec "${python_cmd}" -B "${script_dir}/docker_volume_stop_failed.py" "${prepared_stop_args[@]}"
       exit 0
     fi
-    volume_stop_failed_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_stop_failed.py\" --source-root '[^']+' --container-id '[0-9a-f]{64}' --image-id 'sha256:[0-9a-f]{64}' --process-receipt-sha256 '[0-9a-f]{64}'[[:space:]]*$"
+    volume_stop_failed_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_stop_failed.py\" --source-root '[^']+' --container-id '[0-9a-f]{64}' --image-id 'sha256:[0-9a-f]{64}' --process-receipt-sha256 '[0-9a-f]{64}'( --terminal-only)?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${volume_stop_failed_pattern} ]]; then
       echo "[fullmag just] invalid failed DEV supervisor stop recipe" >&2
       exit 2
@@ -407,14 +407,17 @@ case "${recipe}" in
     exec "${bash_executable}" -euo pipefail -c "${recipe}"
     ;;
   *"scripts/docker_activation_history.py"*)
-    history_pattern="^[^[:space:]]+ \"([^\"]+)\" --repo-root \"([^\"]+)\" --source-root '([^']+)' --activation '([0-9a-f]{32})'( --apply --plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    history_pattern="^[^[:space:]]+ \"([^\"]+)\" --repo-root \"([^\"]+)\" --source-root '([^']+)' --activation '([0-9a-f]{32})'( --rejected-no-run)?( --apply --plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${history_pattern} ]]; then
       echo "[fullmag just] invalid activation history recipe" >&2
       exit 2
     fi
     history_args=(--repo-root "${BASH_REMATCH[2]}" --source-root "${BASH_REMATCH[3]}" --activation "${BASH_REMATCH[4]}")
     if [[ -n "${BASH_REMATCH[5]:-}" ]]; then
-      history_args+=(--apply --plan-sha256 "${BASH_REMATCH[6]}")
+      history_args+=(--rejected-no-run)
+    fi
+    if [[ -n "${BASH_REMATCH[6]:-}" ]]; then
+      history_args+=(--apply --plan-sha256 "${BASH_REMATCH[7]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_activation_history.py" "${history_args[@]}"
     ;;
@@ -450,9 +453,13 @@ case "${recipe}" in
     # Browser proof owns its resolver, Compose project, BuildControl lease,
     # and image pull; do not create compatibility links or enter the generic
     # host runner before it can authenticate the selected volume DEV group.
-    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--saved-playback-item-id '([0-9]{1,20})')?[[:space:]]*$"
+    browser_qa_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_browser_qa.py\" --repo-root \"[^\"]+\"[[:space:]]+(--source-root '([^']+)'[[:space:]]+)?(--port '([0-9]{1,5})'[[:space:]]+)?--timeout '([0-9]{2,3})'[[:space:]]+--pull-timeout '([0-9]{2,4})'([[:space:]]+--browser-image '([^']+)')?([[:space:]]+--saved-playback-item-id '([0-9]{1,20})')?([[:space:]]+--study-stage-rerun (stage-b|study|material-stage-a|fdm-cell-study|texture-stage-b|texture-study))?([[:space:]]+--resume-fdm-grid-attempt '([0-9a-f]{32})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${browser_qa_pattern} ]]; then
       echo "[fullmag just] invalid managed Docker DEV browser QA recipe" >&2
+      exit 2
+    fi
+    if [[ -n "${BASH_REMATCH[14]:-}" && ( -n "${BASH_REMATCH[12]:-}" || -n "${BASH_REMATCH[10]:-}" ) ]]; then
+      echo "[fullmag just] grid resume cannot be combined with another browser scenario" >&2
       exit 2
     fi
     browser_qa_args=(--repo-root "${repo_root}")
@@ -468,6 +475,12 @@ case "${recipe}" in
     fi
     if [[ -n "${BASH_REMATCH[10]:-}" ]]; then
       browser_qa_args+=(--saved-playback-item-id "${BASH_REMATCH[10]}")
+    fi
+    if [[ -n "${BASH_REMATCH[12]:-}" ]]; then
+      browser_qa_args+=(--study-stage-rerun "${BASH_REMATCH[12]}")
+    fi
+    if [[ -n "${BASH_REMATCH[14]:-}" ]]; then
+      browser_qa_args+=(--resume-fdm-grid-attempt "${BASH_REMATCH[14]}")
     fi
     exec "${python_cmd}" -B "${script_dir}/docker_dev_browser_qa.py" "${browser_qa_args[@]}"
     ;;
@@ -517,7 +530,7 @@ case "${recipe}" in
     ;;
   *"scripts/docker_dev.py"*)
     docker_dev_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" build --gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?[[:space:]]*$"
-    docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson)')?[[:space:]]*$"
+    docker_dev_up_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" up[ ]+(--port '([0-9]{4,5})'[ ]+)?--gpu-access '(auto|required|disabled)'( --source-root '([^']+)')?( --script '([^']+)')?([[:space:]]+--native-contract '(fem-demag-poisson)')?([[:space:]]+--network-subnet '([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2})')?[[:space:]]*$"
     docker_dev_codegen_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" codegen-openapi( --source-root '([^']+)')?[[:space:]]*$"
     docker_dev_recreate_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate --direct-development --run-receipt '([^']+)' --previous-config-sha256 '([0-9a-f]{64})' --gpu-access '(auto|required|disabled)'[ ]+(--source-root '([^']+)'[ ]+)?--port '([0-9]{4,5})'[[:space:]]*$"
     docker_dev_recovery_build_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --restart-backend --build-for-recovery '(verification/[A-Za-z0-9._/-]+\\.json)' --build-for-recovery-sha256 '([0-9a-f]{64})'[[:space:]]*$"
@@ -530,6 +543,12 @@ case "${recipe}" in
     docker_dev_resume_recreation_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --resume-recreation '([0-9a-f]{32})'[[:space:]]*$"
     docker_dev_frontend_refresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" refresh-frontend-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --frontend-frozen-resume '([0-9a-f]{32})' --frontend-frozen-resume-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_idle_restart_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})'( --saved-authoring-checkpoint '([a-zA-Z0-9_./-]+)' --saved-authoring-checkpoint-sha256 '([0-9a-f]{64})')?( --stop-only)?( --allow-prepared-session)?[[:space:]]*$"
+    docker_dev_prelaunch_stop_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --quiesce-api --capture-prelaunch-failure[[:space:]]*$"
+    docker_dev_terminal_capture_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --allow-prepared-session --capture-terminal-observation[[:space:]]*$"
+    docker_dev_terminal_restore_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --terminal-observation-stop '([0-9a-f]{32})'[[:space:]]*$"
+    docker_dev_native_terminal_stop_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" restart-idle-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --stop-only --quiesce-api --capture-native-terminal[[:space:]]*$"
+    docker_dev_prelaunch_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --prelaunch-failure-stop '([0-9a-f]{32})' --prelaunch-failure-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
+    docker_dev_native_terminal_fresh_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" recreate-volume --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)' --port '([0-9]{4,5})' --fresh-state --native-terminal-stop '([0-9a-f]{32})' --native-terminal-stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
     docker_dev_cache_maintenance_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" maintain-cache --attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '([^']+)'[[:space:]]*$"
     docker_dev_interrupted_fresh_archive_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" resume-interrupted-fresh-archive --prior-attempt '([0-9a-f]{32})' --config-sha256 '([0-9a-f]{64})' --source-root '(/[^']+)' --recreation-attempt '([0-9a-f]{32})' --unknown-receipt-sha256 '([0-9a-f]{64})' --helper-container-id '([0-9a-f]{64})' --helper-image '([^[:space:]']+@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64})' --engine-id '([^']{1,256})'( --prepared-quarantine-sha256 '([0-9a-f]{64})' --prepared-archive-terminal-sha256 '([0-9a-f]{64})')?( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     docker_dev_cold_quarantine_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev.py\" --repo-root \"[^\"]+\" quarantine-failed-bootstrap --source-root '([^']+)' --operation-attempt '([0-9a-f]{32})' --recovery-id '([0-9a-f]{32})'( --apply --expected-plan-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
@@ -586,6 +605,9 @@ case "${recipe}" in
       if [[ -n "${BASH_REMATCH[9]:-}" ]]; then
         docker_dev_args+=(--native-contract "${BASH_REMATCH[9]}")
       fi
+      if [[ -n "${BASH_REMATCH[11]:-}" ]]; then
+        docker_dev_args+=(--network-subnet "${BASH_REMATCH[11]}")
+      fi
     elif [[ "${recipe}" =~ ${docker_dev_recreate_pattern} ]]; then
       echo "[fullmag just] host-receipt DEV recreation is retired; use docker-dev-resume with a Docker-volume attempt" >&2
       exit 2
@@ -625,6 +647,30 @@ case "${recipe}" in
     elif [[ "${recipe}" =~ ${docker_dev_resume_recreation_pattern} ]]; then
       docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --resume-recreation "${BASH_REMATCH[5]}")
+    elif [[ "${recipe}" =~ ${docker_dev_terminal_capture_pattern} ]]; then
+      docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --stop-only --allow-prepared-session --capture-terminal-observation)
+    elif [[ "${recipe}" =~ ${docker_dev_terminal_restore_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --terminal-observation-stop "${BASH_REMATCH[5]}")
+    elif [[ "${recipe}" =~ ${docker_dev_native_terminal_stop_pattern} ]]; then
+      docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --stop-only --quiesce-api --capture-native-terminal)
+    elif [[ "${recipe}" =~ ${docker_dev_native_terminal_fresh_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --fresh-state
+        --native-terminal-stop "${BASH_REMATCH[5]}" --native-terminal-stop-sha256 "${BASH_REMATCH[6]}")
+    elif [[ "${recipe}" =~ ${docker_dev_prelaunch_stop_pattern} ]]; then
+      docker_dev_args+=(restart-idle-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}"
+        --stop-only --quiesce-api --capture-prelaunch-failure)
+    elif [[ "${recipe}" =~ ${docker_dev_prelaunch_fresh_pattern} ]]; then
+      docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
+        --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}" --fresh-state
+        --prelaunch-failure-stop "${BASH_REMATCH[5]}" --prelaunch-failure-stop-sha256 "${BASH_REMATCH[6]}")
     elif [[ "${recipe}" =~ ${docker_dev_volume_recreate_pattern} ]]; then
       docker_dev_args+=(recreate-volume --attempt "${BASH_REMATCH[1]}" --config-sha256 "${BASH_REMATCH[2]}"
         --source-root "${BASH_REMATCH[3]}" --port "${BASH_REMATCH[4]}")

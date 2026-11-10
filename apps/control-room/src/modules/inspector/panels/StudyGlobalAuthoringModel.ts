@@ -122,6 +122,7 @@ export interface StudyGlobalDraftValidation {
 
 export interface StudyExecutionDiscretizationContext {
   baseRevision?: number | null;
+  baselineDraft?: StudyGlobalDraft;
   executionProfileBound?: boolean;
   requestedBackend?: string | null;
   requestedDiscretization?: string | null;
@@ -147,6 +148,25 @@ export function isExplicitFdmStudy({
   if (requestedLane === "fem") return false;
 
   return normalizeDiscretization(sessionDiscretization) === "fdm";
+}
+
+function isSoleFdmDefaultCellChange(
+  draft: StudyGlobalDraft,
+  baseline: StudyGlobalDraft,
+): boolean {
+  if (
+    !draft.fdm || !baseline.fdm ||
+    draft.fdm.defaultCell === baseline.fdm.defaultCell
+  ) {
+    return false;
+  }
+
+  const withoutDefaultCell = (value: StudyGlobalDraft) =>
+    JSON.stringify({
+      ...value,
+      fdm: { ...value.fdm, defaultCell: undefined },
+    });
+  return withoutDefaultCell(draft) === withoutDefaultCell(baseline);
 }
 
 const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
@@ -458,6 +478,24 @@ export function buildStudyGlobalMergePatch(
     sessionDiscretization: context.sessionDiscretization,
   } satisfies StudyExecutionDiscretizationContext;
   const explicitFdm = isExplicitFdmStudy(laneContext);
+  if (
+    explicitFdm && draft.fdm !== undefined && context.baselineDraft !== undefined &&
+    isSoleFdmDefaultCellChange(draft, context.baselineDraft)
+  ) {
+    return {
+      kind: "merge_patch",
+      ...(context.baseRevision === undefined || context.baseRevision === null
+        ? {}
+        : { base_revision: context.baseRevision }),
+      merge_patch: {
+        study: {
+          fdm: {
+            default_cell: optionalVector3(draft.fdm.defaultCell),
+          },
+        },
+      },
+    };
+  }
   const normalizedDemagRealization = normalizeDemagRealizationForLane(
     draft.demagRealization,
     laneContext,

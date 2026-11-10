@@ -45,6 +45,8 @@ export type AuthoringMutationSceneResolver<T> = (
 ) => SceneResource | null | Promise<SceneResource | null>;
 
 export interface RunAuthoringMutationWithHistoryOptions {
+  /** A write with a server-enforced base revision may reuse its scoped scene snapshot. */
+  expectedSceneRevision?: number;
   /** Capture UI state changed by the mutation itself after its successful ACK. */
   captureWorkspaceStateAfter?: boolean | ((result: unknown) => boolean);
   /** Callback fired when the mutation succeeded on the server, but local history recording was degraded. */
@@ -134,9 +136,14 @@ export async function captureAuthoringHistoryScene(
 
 export async function prepareAuthoringMutation(
   context: AuthoringHistoryMutationContext,
+  expectedSceneRevision?: number,
 ): Promise<AuthoringMutationPreparation> {
   const historyGeneration = context.authoringHistory?.getGeneration?.();
-  const before = await captureAuthoringHistoryScene(context);
+  const cachedScene = asRecord(context.resourceData?.[MODEL_SCENE_PATH]) as SceneResource | null;
+  const reuseScopedScene = context.authoringHistory && context.sessionScopeKey &&
+    context.isCurrentSessionScope?.() === true &&
+    expectedSceneRevision !== undefined && sceneRevision(cachedScene) === expectedSceneRevision;
+  const before = reuseScopedScene ? cachedScene : await captureAuthoringHistoryScene(context);
   return {
     before,
     beforeWorkspaceState: captureAuthoringHistoryWorkspaceState(context),
@@ -230,7 +237,7 @@ export async function runAuthoringMutationWithHistory<T>(
   options: RunAuthoringMutationWithHistoryOptions = {},
 ): Promise<T> {
   assertCurrentSessionScope(context);
-  const preparation = await prepareAuthoringMutation(context);
+  const preparation = await prepareAuthoringMutation(context, options.expectedSceneRevision);
   assertCurrentSessionScope(context);
   const result = await mutation(preparation);
   if (context.isCurrentSessionScope?.() === false) return result;

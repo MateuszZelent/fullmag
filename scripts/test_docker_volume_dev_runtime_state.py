@@ -265,6 +265,18 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                 self.assertEqual(accepted["solver_profile_sha256"], profile_sha256)
                 self.assertEqual(accepted["cuda_trace_sha256"], expected_trace_sha256)
 
+            for code in ("accepted_script_capture_invalid", "accepted_script_capture_required", "accepted_script_compilation_failed"):
+                marker["result"]["rejection"]["code"] = code
+                marker_path.write_text(json.dumps(marker), encoding="utf-8")
+                accepted = namespace["rejected_startup_marker"](status, (session_id, 1, 1))
+                self.assertEqual(accepted["rejection"]["code"], code)
+            for code in ("accepted_run_commit_failed", "accepted_unknown_outcome"):
+                marker["result"]["rejection"]["code"] = code
+                marker_path.write_text(json.dumps(marker), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "not a known pre-acceptance outcome"):
+                    namespace["rejected_startup_marker"](status, (session_id, 1, 1))
+            marker["result"]["rejection"]["code"] = "accepted_cuda_trace_unsupported"
+
             trace["max_bytes"] = 536870911
             marker_path.write_text(json.dumps(marker), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "cuda trace"):

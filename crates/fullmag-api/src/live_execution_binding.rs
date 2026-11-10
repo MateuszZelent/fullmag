@@ -1,15 +1,178 @@
 //! Compatibility between an authored document and immutable accepted input.
 
 use crate::error::ApiError;
-use crate::types::{AppState, SessionStateResponse};
+use crate::study_execution_contract::{parse_study_history_parent, StudyHistoryParent};
+use crate::types::{AppState, CurrentLiveRequestContext, SessionStateResponse};
 use fullmag_application::RunSpecification;
 use fullmag_authoring::{
     scene_execution_input_identity, SceneDocument, SceneExecutionInputIdentity,
     SCENE_EXECUTION_INPUT_SCHEMA,
 };
+use fullmag_session::{FmsRunIntent, SessionStore};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
-pub(crate) fn input_identity(scene: &SceneDocument) -> Result<SceneExecutionInputIdentity, ApiError> {
+const MAX_STUDY_HISTORY_PROJECTS: usize = 64;
+
+pub(crate) fn verified_history_run_spec(
+    intent: &FmsRunIntent,
+) -> Result<RunSpecification, ApiError> {
+    let specification: RunSpecification = serde_json::from_value(intent.specification.clone())
+        .map_err(|error| ApiError::conflict(format!("invalid accepted RunSpec: {error}")))?;
+    if specification.run_id.as_str() != intent.run_id
+        || specification
+            .fingerprint()
+            .map_err(|error| ApiError::conflict(error.to_string()))?
+            != intent.payload_sha256
+    {
+        return Err(ApiError::conflict(
+            "Study history RunSpec identity mismatch",
+        ));
+    }
+    Ok(specification)
+}
+
+fn live_owner_matches(specification: &Value, session_id: &str, session_epoch: u64) -> bool {
+    specification
+        .pointer("/parameters/live_workspace")
+        .is_some_and(|live| {
+            live["session_id"].as_str() == Some(session_id)
+                && live["session_epoch"].as_u64() == Some(session_epoch)
+        })
+}
+
+fn study_history_parent(
+    specification: &RunSpecification,
+) -> Result<Option<StudyHistoryParent>, ApiError> {
+    specification
+        .parameters
+        .pointer("/live_workspace/study_history_parent")
+        .map(parse_study_history_parent)
+        .transpose()
+        .map_err(|error| ApiError::conflict(format!("invalid Study history lineage: {error}")))
+}
+
+/// A run accepted in a different API project may link only to the actual
+/// durable run of the captured workspace. Runs in the same project inherit
+/// the prior cross-project link, so ordinary Compute does not grow the chain.
+pub(crate) fn next_study_history_parent(
+    store: &SessionStore,
+    context: &CurrentLiveRequestContext,
+    project_id: &str,
+) -> Result<Option<StudyHistoryParent>, ApiError> {
+    let Some(previous_run) = context.run_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(intent) = store
+        .read_run_intent(previous_run)
+        .map_err(|error| ApiError::internal(format!("read current Study history: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if !live_owner_matches(
+        &intent.specification,
+        &context.session_id,
+        context.session_epoch,
+    ) {
+        return Ok(None);
+    }
+    let specification = verified_history_run_spec(&intent)?;
+    if specification.snapshot.project_id.as_str() == project_id {
+        return study_history_parent(&specification);
+    }
+    Ok(Some(StudyHistoryParent::V1 {
+        run_id: intent.run_id,
+        specification_sha256: intent.payload_sha256,
+    }))
+}
+
+/// Only verified links from the active accepted run can add another project
+/// to the current history. A missing retained parent ends the chain.
+pub(crate) fn study_history_projects(
+    store: &SessionStore,
+    current: &RunSpecification,
+    session_id: &str,
+    session_epoch: u64,
+) -> Result<BTreeSet<String>, ApiError> {
+    let mut projects = BTreeSet::from([current.snapshot.project_id.as_str().to_owned()]);
+    let mut parent = study_history_parent(current)?;
+    while projects.len() < MAX_STUDY_HISTORY_PROJECTS {
+        let Some(StudyHistoryParent::V1 {
+            run_id,
+            specification_sha256,
+        }) = parent
+        else {
+            break;
+        };
+        let Some(intent) = store
+            .read_run_intent(&run_id)
+            .map_err(|error| ApiError::internal(format!("read retained Study history: {error}")))?
+        else {
+            break;
+        };
+        if intent.payload_sha256 != specification_sha256
+            || !live_owner_matches(&intent.specification, session_id, session_epoch)
+        {
+            return Err(ApiError::conflict(
+                "Study history parent differs from its workspace or digest",
+            ));
+        }
+        let specification = verified_history_run_spec(&intent)?;
+        if !projects.insert(specification.snapshot.project_id.as_str().to_owned()) {
+            return Err(ApiError::conflict(
+                "Study history project lineage repeats a project",
+            ));
+        }
+        parent = study_history_parent(&specification)?;
+    }
+    Ok(projects)
+}
+
+pub(crate) struct WorkspaceStudyHistory {
+    pub(crate) project_id: String,
+    pub(crate) project_ids: BTreeSet<String>,
+}
+
+impl WorkspaceStudyHistory {
+    pub(crate) fn owns(
+        &self,
+        intent: &FmsRunIntent,
+        context: &CurrentLiveRequestContext,
+    ) -> bool {
+        live_owner_matches(&intent.specification, &context.session_id, context.session_epoch)
+            && intent.specification.pointer("/snapshot/project_id").and_then(Value::as_str)
+                .is_some_and(|project| self.project_ids.contains(project))
+    }
+}
+
+/// Use the committed current run as the only anchor for cross-project
+/// history. A source named by the client cannot add its own project.
+pub(crate) fn current_study_history(
+    store: &SessionStore,
+    context: &CurrentLiveRequestContext,
+) -> Result<Option<WorkspaceStudyHistory>, ApiError> {
+    let Some(run_id) = context.run_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(intent) = store.read_run_intent(run_id)
+        .map_err(|error| ApiError::internal(format!("read current Study history: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if !live_owner_matches(&intent.specification, &context.session_id, context.session_epoch) {
+        return Ok(None);
+    }
+    let specification = verified_history_run_spec(&intent)?;
+    let project_id = specification.snapshot.project_id.as_str().to_owned();
+    let project_ids = study_history_projects(
+        store, &specification, &context.session_id, context.session_epoch,
+    )?;
+    Ok(Some(WorkspaceStudyHistory { project_id, project_ids }))
+}
+
+pub(crate) fn input_identity(
+    scene: &SceneDocument,
+) -> Result<SceneExecutionInputIdentity, ApiError> {
     scene_execution_input_identity(scene)
         .map_err(|error| ApiError::internal(format!("encode authored execution identity: {error}")))
 }
@@ -22,12 +185,14 @@ pub(crate) fn validate_input_binding(
     current_identity: &SceneExecutionInputIdentity,
     scene_revision: u64,
 ) -> Result<(), ApiError> {
-    let live = specification.pointer("/parameters/live_workspace").ok_or_else(|| {
-        ApiError::conflict_with_code(
-            "accepted_execution_input_unavailable",
-            "accepted run has no live workspace binding",
-        )
-    })?;
+    let live = specification
+        .pointer("/parameters/live_workspace")
+        .ok_or_else(|| {
+            ApiError::conflict_with_code(
+                "accepted_execution_input_unavailable",
+                "accepted run has no live workspace binding",
+            )
+        })?;
     match live.get("execution_input") {
         Some(value) => {
             let identity: SceneExecutionInputIdentity = serde_json::from_value(value.clone())
@@ -73,11 +238,7 @@ pub(crate) fn recover_scene_projection(
     let current_identity = input_identity(&scene)?;
     let mismatch = match validate_input_binding(&binding, &current_identity, scene.revision) {
         Ok(()) => return Ok(scene),
-        Err(error)
-            if error.code.as_deref() == Some("accepted_execution_input_mismatch") =>
-        {
-            error
-        }
+        Err(error) if error.code.as_deref() == Some("accepted_execution_input_mismatch") => error,
         Err(error) => return Err(error),
     };
 
@@ -100,44 +261,90 @@ pub(crate) async fn validate_active_scene_mutation(
     state: &AppState,
     snapshot: &SessionStateResponse,
     next: &SceneDocument,
-) -> Result<(), ApiError> {
+    explicit_magnetization_apply: bool,
+) -> Result<bool, ApiError> {
     if !crate::live_accepted_execution::docker_api_only_runtime() {
-        return Ok(());
+        return Ok(false);
     }
-    let Some(run) = snapshot.run.as_ref() else { return Ok(()); };
-    if matches!(run.status.as_str(), "completed" | "succeeded" | "failed" | "cancelled" | "stopped" | "closed") {
-        return Ok(());
+    let Some(run) = snapshot.run.as_ref() else {
+        return Ok(false);
+    };
+    if matches!(
+        run.status.as_str(),
+        "completed" | "succeeded" | "failed" | "cancelled" | "stopped" | "closed"
+    ) {
+        return Ok(false);
     }
-    let current = snapshot.scene_document.as_ref().ok_or_else(|| {
-        ApiError::conflict("active accepted run has no authored document")
-    })?;
+    let current = snapshot
+        .scene_document
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("active accepted run has no authored document"))?;
     let current_identity = input_identity(current)?;
-    if input_identity(next)? != current_identity {
+    let next_identity = input_identity(next)?;
+    if explicit_magnetization_apply || next_identity != current_identity {
+        if matches!(
+            run.status.as_str(),
+            "waiting_for_compute" | "waiting_for_solve"
+        ) {
+            let digest = fullmag_session::canonical_json_sha256(&json!({
+                "schema": "live-held-scene-edit.v1",
+                "run_id": run.run_id,
+                "input": next_identity,
+                "base_revision": current.revision,
+            }));
+            crate::live_accepted_execution::retire_superseded_live_start(
+                state,
+                &snapshot.session.session_id,
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                &run.run_id,
+                &format!("replace-live-{digest}"),
+            )
+            .await?;
+            return Ok(true);
+        }
         return Err(ApiError::conflict_with_code(
             "accepted_execution_input_locked",
             "finish or stop the accepted run before changing geometry, materials, initial state, stages, runtime, or outputs; your draft has not been applied",
         ));
     }
-    let store_root = state.submit_store_root.clone().ok_or_else(|| {
-        ApiError::conflict("accepted input binding store is unavailable")
-    })?;
+    let store_root = state
+        .submit_store_root
+        .clone()
+        .ok_or_else(|| ApiError::conflict("accepted input binding store is unavailable"))?;
     let run_id = run.run_id.clone();
     let specification = tokio::task::spawn_blocking(move || {
         let store = fullmag_session::SessionStore::open_existing(&store_root)
             .map_err(|error| ApiError::conflict(format!("open accepted input store: {error}")))?;
-        let intent = store.read_run_intent(&run_id)
+        let intent = store
+            .read_run_intent(&run_id)
             .map_err(|error| ApiError::conflict(format!("read accepted input binding: {error}")))?
             .ok_or_else(|| ApiError::conflict("accepted input binding is unavailable"))?;
-        intent.validate().map_err(|error| ApiError::conflict(format!("invalid accepted input binding: {error}")))?;
+        intent.validate().map_err(|error| {
+            ApiError::conflict(format!("invalid accepted input binding: {error}"))
+        })?;
         Ok::<_, ApiError>(intent.specification)
-    }).await.map_err(|error| ApiError::internal(format!("accepted input lookup failed: {error}")))??;
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("accepted input lookup failed: {error}")))??;
     let live = specification.pointer("/parameters/live_workspace");
-    if live.and_then(|value| value.get("api_instance_id")).and_then(Value::as_str)
+    if live
+        .and_then(|value| value.get("api_instance_id"))
+        .and_then(Value::as_str)
         != Some(state.request_scope_instance_id.as_str())
-        || live.and_then(|value| value.get("session_id")).and_then(Value::as_str)
+        || live
+            .and_then(|value| value.get("session_id"))
+            .and_then(Value::as_str)
             != Some(snapshot.session.session_id.as_str())
-        || live.and_then(|value| value.get("session_epoch")).and_then(Value::as_u64)
-            != Some(state.current_live_session_epoch.load(std::sync::atomic::Ordering::Acquire))
+        || live
+            .and_then(|value| value.get("session_epoch"))
+            .and_then(Value::as_u64)
+            != Some(
+                state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+            )
     {
         return Err(ApiError::conflict_with_code(
             "accepted_execution_input_owner_mismatch",
@@ -145,13 +352,16 @@ pub(crate) async fn validate_active_scene_mutation(
         ));
     }
     validate_input_binding(&specification, &current_identity, current.revision)?;
-    if specification.pointer("/parameters/live_workspace/execution_input").is_none() {
+    if specification
+        .pointer("/parameters/live_workspace/execution_input")
+        .is_none()
+    {
         return Err(ApiError::conflict_with_code(
             "accepted_execution_input_legacy_revision",
             "this accepted run predates metadata-independent input binding; finish or stop it before editing the document",
         ));
     }
-    Ok(())
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -199,6 +409,78 @@ mod tests {
     }
 
     #[test]
+    fn study_history_links_only_verified_projects_in_the_same_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path()).unwrap();
+        let mut context = CurrentLiveRequestContext {
+            session_id: "session-lineage".into(),
+            run_id: None,
+            session_epoch: 7,
+            request_scope_epoch: "api:7".into(),
+        };
+        let make_run = |run_id: &str, project_id: &str, parent: Option<StudyHistoryParent>| {
+            let mut run = specification(json!({"live_workspace": {
+                "session_id": "session-lineage", "session_epoch": 7,
+            }}));
+            run.run_id = fullmag_application::RunId::parse(run_id).unwrap();
+            run.snapshot.project_id = ProjectId::parse(project_id).unwrap();
+            if let Some(parent) = parent {
+                run.parameters["live_workspace"]["study_history_parent"] = json!(parent);
+            }
+            store
+                .commit_run_intent(&FmsRunIntent::new(
+                    run_id,
+                    format!("intent-{run_id}"),
+                    serde_json::to_value(&run).unwrap(),
+                ))
+                .unwrap();
+            run
+        };
+
+        make_run("run-first", "project-first", None);
+        context.run_id = Some("run-first".into());
+        let from_first = next_study_history_parent(&store, &context, "project-second")
+            .unwrap()
+            .unwrap();
+        make_run("run-second", "project-second", Some(from_first.clone()));
+        context.run_id = Some("run-second".into());
+        assert_eq!(
+            next_study_history_parent(&store, &context, "project-second").unwrap(),
+            Some(from_first),
+        );
+        let from_second = next_study_history_parent(&store, &context, "project-third")
+            .unwrap()
+            .unwrap();
+        let mut third = make_run("run-third", "project-third", Some(from_second));
+        assert_eq!(
+            study_history_projects(&store, &third, "session-lineage", 7).unwrap(),
+            ["project-first", "project-second", "project-third"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>(),
+        );
+
+        make_run("run-unlinked", "project-unlinked", None);
+        context.run_id = Some("run-third".into());
+        let history = current_study_history(&store, &context).unwrap().unwrap();
+        assert_eq!(history.project_id, "project-third");
+        for run in ["run-first", "run-second", "run-third"] {
+            let intent = store.read_run_intent(run).unwrap().unwrap();
+            assert!(history.owns(&intent, &context));
+        }
+        let unlinked = store.read_run_intent("run-unlinked").unwrap().unwrap();
+        assert!(!history.owns(&unlinked, &context));
+        context.session_epoch += 1;
+        assert!(!history.owns(&store.read_run_intent("run-first").unwrap().unwrap(), &context));
+        assert!(current_study_history(&store, &context).unwrap().is_none());
+
+        assert!(study_history_projects(&store, &third, "session-lineage", 8).is_err());
+        third.parameters["live_workspace"]["study_history_parent"]["specification_sha256"] =
+            json!("f".repeat(64));
+        assert!(study_history_projects(&store, &third, "session-lineage", 7).is_err());
+    }
+
+    #[test]
     fn exact_authored_input_is_restored_unchanged() {
         let scene = SceneDocument::default();
         let identity = serde_json::to_value(input_identity(&scene).unwrap()).unwrap();
@@ -214,8 +496,7 @@ mod tests {
         let authored = SceneDocument::default();
         let identity = serde_json::to_value(input_identity(&authored).unwrap()).unwrap();
         let mut stored = authored;
-        stored.study.execution_profile =
-            Some(fullmag_application::legacy_live_execution_profile());
+        stored.study.execution_profile = Some(fullmag_application::legacy_live_execution_profile());
 
         let restored =
             recover_scene_projection(stored.clone(), &versioned_specification(identity)).unwrap();
@@ -227,8 +508,7 @@ mod tests {
     #[test]
     fn explicitly_authored_legacy_profile_is_preserved_when_exactly_pinned() {
         let mut scene = SceneDocument::default();
-        scene.study.execution_profile =
-            Some(fullmag_application::legacy_live_execution_profile());
+        scene.study.execution_profile = Some(fullmag_application::legacy_live_execution_profile());
         let identity = serde_json::to_value(input_identity(&scene).unwrap()).unwrap();
 
         let restored =
@@ -246,10 +526,13 @@ mod tests {
         custom.profile_id = "exec:custom".into();
         candidate.study.execution_profile = Some(custom);
 
-        let error = recover_scene_projection(candidate, &versioned_specification(identity))
-            .unwrap_err();
+        let error =
+            recover_scene_projection(candidate, &versioned_specification(identity)).unwrap_err();
 
-        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_mismatch"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("accepted_execution_input_mismatch")
+        );
     }
 
     #[test]
@@ -261,10 +544,13 @@ mod tests {
         candidate.study.execution_profile =
             Some(fullmag_application::legacy_live_execution_profile());
 
-        let error = recover_scene_projection(candidate, &versioned_specification(identity))
-            .unwrap_err();
+        let error =
+            recover_scene_projection(candidate, &versioned_specification(identity)).unwrap_err();
 
-        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_mismatch"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("accepted_execution_input_mismatch")
+        );
     }
 
     #[test]
@@ -285,7 +571,10 @@ mod tests {
             let error =
                 recover_scene_projection(candidate.clone(), &versioned_specification(identity))
                     .unwrap_err();
-            assert_eq!(error.code.as_deref(), Some("accepted_execution_input_invalid"));
+            assert_eq!(
+                error.code.as_deref(),
+                Some("accepted_execution_input_invalid")
+            );
         }
     }
 
@@ -316,6 +605,9 @@ mod tests {
 
         let error = recover_scene_projection(candidate, &specification).unwrap_err();
 
-        assert_eq!(error.code.as_deref(), Some("accepted_execution_input_legacy_revision"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("accepted_execution_input_legacy_revision")
+        );
     }
 }

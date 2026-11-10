@@ -172,6 +172,9 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if let Some(Some(thermal)) = &scene.study.thermal_noise {
+        thermal.validate().map_err(SceneDocumentValidationError::new)?;
+    }
     if let Some(reference) = &scene.study.fem_domain_mesh {
         if scene.study.requested_backend.eq_ignore_ascii_case("fdm") {
             return Err(SceneDocumentValidationError::new(
@@ -3552,7 +3555,7 @@ fn validate_scene_v1_has_no_region_owned_payloads(
 fn validate_study_pipeline_document(
     document: &StudyPipelineDocument,
 ) -> Result<(), SceneDocumentValidationError> {
-    if document.version != "study_pipeline.v1" {
+    if !matches!(document.version.as_str(), "study_pipeline.v1" | "study_pipeline.v2") {
         return Err(SceneDocumentValidationError::new(format!(
             "unsupported study pipeline version '{}'",
             document.version

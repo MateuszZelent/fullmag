@@ -135,7 +135,7 @@ struct PoissonDemagRuntimeState {
     bool gpu_workspace_ready = false;
     uint64_t gpu_workspace_device_bytes = 0;
     int gpu_demag_mode = 0;
-    int boundary_marker = 99;
+    int64_t boundary_marker = 99; // Canonical u32 or an invalid signed legacy selector.
     int robin_beta_mode = 0;
     double robin_beta_factor = 1.0;
     double robin_effective_beta = 0.0;

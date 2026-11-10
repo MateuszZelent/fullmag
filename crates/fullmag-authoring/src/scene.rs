@@ -389,6 +389,15 @@ pub struct SceneCurrentModulesState {
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
 }
 
+fn deserialize_scene_thermal_noise_presence<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<crate::ScriptBuilderThermalNoiseState>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<crate::ScriptBuilderThermalNoiseState>::deserialize(deserializer).map(Some)
+}
+
 fn deserialize_scene_pbc_presence<'de, D>(
     deserializer: D,
 ) -> Result<Option<Option<fullmag_ir::FdmPeriodicityIR>>, D::Error>
@@ -874,6 +883,10 @@ pub struct SceneStudyState {
     pub fdm: Option<SceneFdmDiscretizationState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    // Missing preserves script intent; null explicitly clears authored noise.
+    #[serde(default, skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_scene_thermal_noise_presence")]
+    pub thermal_noise: Option<Option<crate::ScriptBuilderThermalNoiseState>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotated_interfacial_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

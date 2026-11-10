@@ -755,12 +755,21 @@ pub(crate) fn scene_document_to_authored_problem_ir(
     scene_document: &SceneDocument,
     requested_execution: &fullmag_application::RequestedExecution,
 ) -> Result<fullmag_ir::ProblemIR, ApiError> {
-    capture_authored_scene(
-        repo_root,
-        workspace_root,
-        scene_document,
-        requested_execution,
-        SceneCaptureKind::ProblemIr,
+    scene_document_to_authored_problem_ir_with_asset_root(
+        repo_root, workspace_root, None, scene_document, requested_execution,
+    )
+}
+
+pub(crate) fn scene_document_to_authored_problem_ir_with_asset_root(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene_document: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+) -> Result<fullmag_ir::ProblemIR, ApiError> {
+    capture_authored_scene_with_asset_root(
+        repo_root, workspace_root, asset_root, scene_document, requested_execution,
+        SceneCaptureKind::ProblemIr, None,
     )
 }
 
@@ -833,35 +842,63 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progr
         requested_execution,
         progress_sender,
     )?;
+    study_execution_inputs_from_stages(&stages, scene_document, study)
+}
+
+/// Keep the authored tree available for sequential materialization. Its
+/// configuration nodes have already taken effect in each resulting ProblemIR
+/// by the time a worker sees that physical input.
+pub(crate) fn select_scene_pipeline_tasks(study: &mut StudyPlan) {
+    use fullmag_authoring::StudyStepKind;
+    if study.source_pipeline_version.is_none() {
+        return;
+    }
+    for step in &mut study.steps {
+        if matches!(&step.kind, StudyStepKind::Group { .. })
+            || matches!(&step.kind, StudyStepKind::Primitive { stage_kind }
+                if stage_kind.is_pipeline_input_configuration())
+        {
+            step.enabled = false;
+        }
+    }
+}
+
+fn study_execution_inputs_from_stages(
+    stages: &[fullmag_application::script_stage_contract::ResolvedScriptStage],
+    scene_document: &SceneDocument,
+    study: &StudyPlan,
+) -> Result<Vec<fullmag_application::StudyStepExecutionInput>, ApiError> {
     let enabled_steps = study.steps.iter().filter(|step| step.enabled);
+    let flat_input = if study.source_pipeline_version.is_none() && enabled_steps.clone().count() == 1 {
+        match stages {
+            [stage] if stage.action.is_none() => Some(stage),
+            _ => None,
+        }
+    } else {
+        None
+    };
     enabled_steps
         .map(|step| {
             let matches = stages
                 .iter()
                 .filter(|stage| stage.action.is_none())
                 .filter(|stage| {
-                    stage
-                        .provenance
-                        .as_ref()
-                        .is_some_and(|provenance| provenance.authored_step_id == step.step_id)
+                    if let Some(provenance) = &stage.provenance {
+                        provenance.authored_step_id == step.step_id
+                    } else {
+                        study.source_pipeline_version.is_none()
+                            && stage.ir.problem_meta.runtime_metadata.get("active_stage_id")
+                                .and_then(Value::as_str) == Some(step.step_id.as_str())
+                    }
                 })
                 .collect::<Vec<_>>();
             let stage = if matches.len() == 1 {
                 matches[0]
-            } else if stages.len() == 1 && matches.is_empty() {
-                // A flat scene has no authored stage provenance.  Its one
-                // solver input is still the canonical source for the one-step
-                // StudyPlan projection.
-                stages.first().ok_or_else(|| {
-                    ApiError::unprocessable(
-                        "accepted study execution has no authored solver stage",
-                    )
-                })?
             } else if matches.is_empty() {
-                return Err(ApiError::unprocessable(format!(
+                flat_input.ok_or_else(|| ApiError::unprocessable(format!(
                     "accepted study step `{}` has no authored solver stage",
                     step.step_id
-                )));
+                )))?
             } else {
                 return Err(ApiError::unprocessable(format!(
                     "accepted study step `{}` expands to multiple solver stages",
@@ -882,6 +919,32 @@ pub(crate) fn scene_document_to_study_execution_inputs_with_asset_root_and_progr
             })
         })
         .collect()
+}
+
+pub(crate) fn try_reuse_live_geometry_for_study(
+    repo_root: &Path,
+    workspace_root: &Path,
+    asset_root: Option<&Path>,
+    scene: &SceneDocument,
+    requested_execution: &fullmag_application::RequestedExecution,
+    study: &StudyPlan,
+    asset: &fullmag_ir::FemDomainMeshAssetIR,
+    provenance: &Value,
+) -> Result<Option<Vec<fullmag_application::StudyStepExecutionInput>>, ApiError> {
+    if !crate::live_geometry_mesh_build::can_qualify_live_geometry_reuse(scene, asset) {
+        return Ok(None);
+    }
+    let config = scene_document_to_authored_script_config_with_asset_root(
+        repo_root, workspace_root, asset_root, scene, requested_execution,
+    )?;
+    let stages = materialize_scene_document_stages(config)?;
+    let mut inputs = study_execution_inputs_from_stages(&stages, scene, study)?;
+    if !crate::live_geometry_mesh_build::bind_reused_geometry_to_inputs(
+        repo_root, scene, asset, provenance, &mut inputs,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some(inputs))
 }
 
 /// Capture actual authored stage IR/actions through the same Python helper as
@@ -2078,6 +2141,85 @@ mod tests {
             selected, &stage_id, &port_id, "wrong-output",
         ).is_err());
         capture.verify_unchanged().unwrap();
+    }
+
+    #[test]
+    fn accepted_scene_keeps_configuration_and_reset_on_the_correct_physical_input() {
+        let root = repo_root();
+        let workspace = tempfile::tempdir().unwrap();
+        let source = workspace.path().join("configured_study.py");
+        std::fs::write(&source, r#"import fullmag as fm
+study = fm.study("ordered-configuration")
+study.engine("fdm")
+body = study.geometry(fm.Box(10e-9, 10e-9, 5e-9), name="film")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.01
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_run(stage_id="before", until=1e-12)
+study.stages.tableautosave(5e-14, quantities=["mx", "my"], stage_id="table")
+body.m = fm.texture.uniform(0, 1, 0)
+study.stages.add_run(stage_id="after", until=1e-12)
+"#).unwrap();
+        let scene = load_scene_document_state(&root, workspace.path(), &source).unwrap();
+        let defaults = fullmag_authoring::StudyPlanMigrationDefaults {
+            model: fullmag_authoring::StudyModelReference {
+                model_id: "model:configuration".into(), version: "1".into(),
+            },
+            solver_config: fullmag_authoring::StudySolverConfigReference {
+                preset_id: "solver:configuration".into(), version: "1".into(),
+            },
+            discretization: fullmag_authoring::StudyDiscretizationReference {
+                recipe_id: "mesh:configuration".into(), version: "1".into(),
+            },
+            execution_profile: fullmag_authoring::StudyExecutionProfileReference {
+                profile_id: "exec:configuration".into(), version: "1".into(),
+            },
+        };
+        let mut study = fullmag_authoring::scene_document_to_study_plan(
+            &scene, "study:configuration", scene.revision, &defaults,
+        ).unwrap();
+        select_scene_pipeline_tasks(&mut study);
+        assert!(!study.steps.iter().find(|step| step.step_id == "table").unwrap().enabled);
+        let requested = fullmag_application::RequestedExecution {
+            backend: "fdm".into(), device: "cpu".into(), precision: "double".into(),
+            mode: "strict".into(), minimum_resources: None,
+        };
+        let stages = scene_document_to_authored_stages(
+            &root, workspace.path(), &scene, &requested,
+        ).unwrap();
+        let inputs = study_execution_inputs_from_stages(&stages, &scene, &study).unwrap();
+        let [before, after] = inputs.as_slice() else { panic!("expected two solver inputs") };
+        assert_eq!(before.step_id, "before");
+        assert_eq!(after.step_id, "after");
+        assert!(before.problem.study.sampling().table_autosave.is_none());
+        assert_eq!(
+            after.problem.study.sampling().table_autosave.as_ref().unwrap().sample_period_s,
+            Some(5e-14),
+        );
+        for (input, direction) in [(before, [1, 0, 0]), (after, [0, 1, 0])] {
+            let magnet = serde_json::to_value(&input.problem.magnets[0]).unwrap();
+            assert_eq!(
+                magnet["initial_magnetization"]["preset_params"]["direction"],
+                serde_json::json!(direction),
+            );
+        }
+        fullmag_application::bind_scene_study_physical_state_flow(
+            &mut study, scene.study.study_pipeline.as_ref(), &inputs,
+        ).unwrap();
+        let before = study.steps.iter().find(|step| step.step_id == "before").unwrap();
+        let after = study.steps.iter().find(|step| step.step_id == "after").unwrap();
+        assert_eq!(after.completion_dependencies, vec![before.step_id.clone()]);
+        assert!(after.inputs.is_empty(), "the full reset does not inherit the previous state");
+
+        // A canonical authored target must not borrow another input, even
+        // when that input is the only solver stage the producer returned.
+        let only_before = stages.iter().find(|stage| {
+            stage.provenance.as_ref().is_some_and(|source| source.authored_step_id == "before")
+        }).unwrap();
+        assert!(study_execution_inputs_from_stages(
+            std::slice::from_ref(only_before), &scene, &study,
+        ).is_err());
     }
 
     #[test]
