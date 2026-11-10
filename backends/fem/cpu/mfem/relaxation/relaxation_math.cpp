@@ -1514,6 +1514,11 @@ void accumulate_relaxation_profile_sample(
     accumulated_stats.relaxation_preconditioner_cache_misses +=
         sample_stats.relaxation_preconditioner_cache_misses;
     accumulated_stats.demag_solve_count += sample_stats.demag_solve_count;
+    // Samples include rejected trials and direct-increment refinements. Keep
+    // their physical work even though only the accepted endpoint is published.
+    accumulated_stats.demag_linear_iterations += std::min(
+        sample_stats.demag_linear_iterations,
+        std::numeric_limits<uint32_t>::max() - accumulated_stats.demag_linear_iterations);
     accumulated_stats.rhs_evaluations += sample_stats.rhs_evaluations;
     accumulated_stats.rejected_attempts += sample_stats.rejected_attempts;
 }
@@ -1573,6 +1578,7 @@ void finish_accepted_relaxation_step(
     out_stats.relaxation_preconditioner_cache_misses =
         accumulated_stats.relaxation_preconditioner_cache_misses;
     out_stats.demag_solve_count = accumulated_stats.demag_solve_count;
+    out_stats.demag_linear_iterations = accumulated_stats.demag_linear_iterations;
     out_stats.rhs_evaluations = accumulated_stats.rhs_evaluations;
     out_stats.rejected_attempts = accumulated_stats.rejected_attempts;
 

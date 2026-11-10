@@ -315,6 +315,12 @@
       "responsibility": "Qualifies single-use static endpoint field reuse; actual solves remain fresh-zero and torque confirmations stay fresh. Runtime parity pending."
     },
     {
+      "id": "cpu-relaxation-iteration-profile",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "accumulate_relaxation_profile_sample",
+      "responsibility": "Accumulate CPU direct-minimizer trial linear iterations without charging reused endpoints twice. Managed regression pending."
+    },
+    {
       "id": "cpu-pgbb-accepted-field-reuse",
       "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
       "symbol": "take_pgbb_accepted_stats",

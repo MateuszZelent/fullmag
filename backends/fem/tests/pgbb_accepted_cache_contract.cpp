@@ -6,6 +6,7 @@
 #endif
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 namespace {
 void check(bool condition, const char *message)
@@ -14,6 +15,39 @@ void check(bool condition, const char *message)
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+void relaxation_profile_accumulates_all_trial_iterations()
+{
+    using namespace fullmag::fem;
+    fullmag_fem_step_stats accumulated{};
+    fullmag_fem_step_stats sample{};
+    for (const uint32_t iterations : {17u, 5u, 11u}) {
+        sample.demag_linear_iterations = iterations;
+        sample.demag_solve_count = 1u;
+        relaxation::accumulate_relaxation_profile_sample(accumulated, sample);
+    }
+    check(accumulated.demag_linear_iterations == 33u,
+          "profile includes current, rejected trial, and accepted trial iterations");
+    check(accumulated.demag_solve_count == 3u, "profile counts all three solves");
+    Context ctx{};
+    fullmag_fem_step_stats accepted{};
+    accepted.demag_linear_iterations = 11u;
+    accepted.demag_solve_count = 1u;
+    accepted.demag_linear_residual = 1e-13;
+    fullmag_fem_step_stats published{};
+    relaxation::finish_accepted_relaxation_step(ctx, accepted, accumulated, published, 1.0);
+    check(published.demag_linear_iterations == 33u,
+          "accepted step publishes accumulated work, not only final solve");
+    check(published.demag_linear_residual == accepted.demag_linear_residual,
+          "residual still describes the accepted field certificate");
+    check(ctx.relaxation.cached_current_stats.demag_linear_iterations == 0u,
+          "reusing accepted fields must not charge their solve a second time");
+    accumulated.demag_linear_iterations = std::numeric_limits<uint32_t>::max() - 1u;
+    sample.demag_linear_iterations = 5u;
+    relaxation::accumulate_relaxation_profile_sample(accumulated, sample);
+    check(accumulated.demag_linear_iterations == std::numeric_limits<uint32_t>::max(),
+          "bounded ABI iteration total saturates instead of wrapping");
 }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -125,6 +159,7 @@ void accepted_cache_guards_exact_inputs()
 
 int main()
 {
+    relaxation_profile_accumulates_all_trial_iterations();
 #if FULLMAG_HAS_MFEM_STACK
     accepted_cache_guards_exact_inputs();
 #endif

@@ -182,9 +182,6 @@ the complete authored solver policy:
 
 | Python parameter | Type | Default | SI unit | Validation and rejection | Meaning | Backend support |
 |---|---|---|---|---|---|---|
-| gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
-| cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
-| gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
 | `FemLinearSolverPolicy.solver` | `Literal["CG", "GMRES"]` | `"CG"` | `1` | Must be `CG` or `GMRES`; other values raise `ValueError`. | Outer Krylov solver. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
 | `FemLinearSolverPolicy.preconditioner` | `Literal["AMG", "JACOBI", "NONE"]` | `"AMG"` | `1` | Must be `AMG`, `JACOBI`, or `NONE`; other values raise `ValueError`. | Preconditioner for the Poisson solve. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
 | `FemLinearSolverPolicy.rtol` | `float` | `1e-8` | `1` | Converts with `float`; the converted value must be finite and greater than zero, otherwise `ValueError`. Conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original field value rather than coercing it. | Relative residual tolerance. | Native FEM CPU/GPU; `rtol` is dimensionless. |
@@ -622,6 +619,15 @@ evaluation. Ordinary physical solve counts can decrease while logical RHS
 record semantics remain unchanged. Source tests do not establish trajectory
 parity or a performance improvement; both require managed full-Zarr runs.
 
+The CPU direct-minimizer profile also accumulates linear iterations from each
+sample (current field, rejected/accepted trial and explicit refinement) before
+publishing the accepted row. Its accepted-field cache contributes zero physical
+iterations on reuse. The bounded ABI counter saturates rather than wrapping;
+the residual continues to describe the accepted endpoint certificate. This
+does not turn the Poisson runtime's last-solve diagnostic into a lifetime work
+counter. The managed regression is
+`relaxation_profile_accumulates_all_trial_iterations`; execution is pending.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -1014,3 +1020,7 @@ managed-runtime qualification.
 | Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
 | Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L151) |
 | Independent GPU residual regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Corrupts a successfully solved GPU potential and requires independent rejection despite the stale HYPRE success report. | FEM GPU | Managed RED compiled and failed at the intended assertion; GREEN passed with the actual corruption-rejection marker. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711) |
+| gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
+| cpu-relaxation-iteration-profile | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `accumulate_relaxation_profile_sample` | Sum linear iterations across evaluated trials before accepted-row publication. | FEM CPU | Regression added; execution pending. | Unpublished task candidate. |
