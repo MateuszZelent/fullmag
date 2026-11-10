@@ -16,7 +16,7 @@ import test_docker_backend_dev as fixtures
 class SharedRecoveryTests(unittest.TestCase):
     def test_mismatched_ready_candidate_is_preserved_and_unsafe_candidates_are_refused(self):
         import backend_shared_recovery as recovery
-        for mutation in (None, "crash", "marker", "artifact", "symlink", "collision", "extra", "group", "rotation"):
+        for mutation in (None, "crash", "legacy", "namespace-symlink", "marker", "artifact", "symlink", "collision", "extra", "group", "rotation"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 fixture = fixtures.BackendPackageTests()
@@ -42,7 +42,8 @@ class SharedRecoveryTests(unittest.TestCase):
                 receipt["shared_package"] = {"schema": shared.SCHEMA,
                     "key": shared.key_for(identity), "inputs": identity}
                 backend._write_json(candidate / "backend-build-receipt.json", receipt, "mismatched receipt")
-                archive = control / backend.PACKAGE_QUARANTINE_DIRNAME
+                quarantine = control / backend.PACKAGE_QUARANTINE_DIRNAME
+                archive = quarantine / recovery.QUARANTINE_NAMESPACE
                 if mutation == "marker":
                     marker = json.loads((candidate / backend.PACKAGE_CANDIDATE_MARKER).read_text())
                     marker["package_root"] = str(root / "foreign")
@@ -52,8 +53,14 @@ class SharedRecoveryTests(unittest.TestCase):
                 elif mutation == "symlink":
                     (candidate / "foreign-link").symlink_to(workspace)
                 elif mutation == "collision":
-                    archive.mkdir()
+                    archive.mkdir(parents=True)
                     (archive / candidate.name).mkdir()
+                elif mutation == "legacy":
+                    quarantine.mkdir()
+                    (quarantine / "legacy-unknown.txt").write_bytes(b"legacy payload")
+                elif mutation == "namespace-symlink":
+                    quarantine.mkdir()
+                    archive.symlink_to(workspace, target_is_directory=True)
                 elif mutation == "extra":
                     (candidate / "unknown-extra").write_bytes(b"unknown")
                 elif mutation == "rotation":
@@ -64,7 +71,7 @@ class SharedRecoveryTests(unittest.TestCase):
                         "FULLMAG_SHARED_BACKEND_STORE": str(store_root),
                         "FULLMAG_SHARED_BACKEND_GROUP": "foreign" if mutation == "group" else group}), \
                         patch.object(shared.Entry, "publish", side_effect=AssertionError("must not publish")):
-                    if mutation not in (None, "crash"):
+                    if mutation not in (None, "crash", "legacy"):
                         with self.assertRaises((backend.BackendBuildError, shared.StoreError)):
                             recovery.recover_ready(backend, package, control, build)
                         self.assertTrue(candidate.exists())
@@ -80,6 +87,8 @@ class SharedRecoveryTests(unittest.TestCase):
                                 recovery.recover_ready(backend, package, control, build)
                         self.assertFalse(candidate.exists())
                     recovery.recover_ready(backend, package, control, build)
+                    if mutation == "legacy":
+                        self.assertEqual((quarantine / "legacy-unknown.txt").read_bytes(), b"legacy payload")
                     target = archive / candidate.name
                     self.assertFalse(candidate.exists())
                     self.assertEqual(before, {str(p.relative_to(target)): p.read_bytes()

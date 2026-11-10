@@ -15,6 +15,7 @@ import backend_shared_store as shared
 
 
 QUARANTINE_SCHEMA = "fullmag.shared-candidate-quarantine.v1"
+QUARANTINE_NAMESPACE = "shared-identity-v1"
 
 
 def _quarantine_inventory(b, candidate):
@@ -53,7 +54,7 @@ def _finish_quarantine(b, store, output, control_root, build_root, proof):
             or proof.get("group") != b.os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", "")):
         b._fail("shared candidate quarantine owner differs")
     candidate = control_root / b.PACKAGE_CANDIDATES_DIRNAME / name
-    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
     target = archive / name
     if candidate.exists() and (target.exists() or target.is_symlink()):
         b._fail("shared candidate quarantine destination collision")
@@ -83,7 +84,7 @@ def _resume_quarantines(b, store, output, control_root, build_root):
     journal = control_root / b.PACKAGE_ROTATION_JOURNAL_NAME
     if journal.exists() or journal.is_symlink():
         b._fail("shared candidate quarantine requires recovered package rotation")
-    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
     if not archive.exists() and not archive.is_symlink():
         return
     b._ensure_directory(archive, "shared candidate quarantine")
@@ -111,7 +112,7 @@ def _quarantine_mismatch(b, store, output, control_root, build_root, candidate, 
     b._assert_direct_candidate_inventory(candidate, records, include_receipt=True)
     group = b.os.environ.get("FULLMAG_SHARED_BACKEND_GROUP", "")
     store.private_alias(output, candidate, group)
-    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME
+    archive = control_root / b.PACKAGE_QUARANTINE_DIRNAME / QUARANTINE_NAMESPACE
     b._ensure_directory(archive, "shared candidate quarantine")
     if len(list(archive.iterdir())) + 3 > 3 * b.MAX_PACKAGE_CANDIDATES:
         b._fail("shared candidate quarantine exceeds its bounded entry limit")
