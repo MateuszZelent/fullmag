@@ -577,9 +577,16 @@ fn execute_projected_gradient_bb_soa_with_observer(
     let mut g_new = VectorFieldSoA::zeros(n);
     let mut energy_scratch = VectorFieldSoA::zeros(n);
 
-    problem.effective_field_into_soa_ws(&m, ws, &mut h_eff);
+    let (mut energy, initial_field_computed) = problem.total_energy_and_field_if_accepted_soa_ws(
+        &m,
+        ws,
+        &mut energy_scratch,
+        &mut h_eff,
+        0.0,
+        |_| true,
+    );
+    debug_assert!(initial_field_computed);
     problem.tangent_gradient_from_soa_field_into(&m, &h_eff, &mut g);
-    let mut energy = problem.total_energy_from_soa_ws(&m, ws, &mut energy_scratch);
 
     let lambda_default: f64 = 1e-6;
     let mut lambda: f64 = lambda_default;
@@ -660,20 +667,29 @@ fn execute_projected_gradient_bb_soa_with_observer(
                 line_search_backtracks += 1;
                 continue;
             }
-            let candidate_energy =
-                problem.total_energy_from_soa_ws(&m_trial, ws, &mut energy_scratch);
-            energy_evaluations += 1;
             let chord_increment_j =
                 fdm_representable_chord_energy_linear_increment_soa(problem, &m, &m_trial, &h_eff);
-            if descent_derivative.is_finite()
-                && descent_derivative < 0.0
-                && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
-                    energy,
-                    candidate_energy,
-                    chord_increment_j,
-                )
-            {
+            let (candidate_energy, candidate_accepted) =
+                problem.total_energy_and_field_if_accepted_soa_ws(
+                    &m_trial,
+                    ws,
+                    &mut energy_scratch,
+                    &mut h_eff_new,
+                    0.0,
+                    |candidate_energy| {
+                        descent_derivative.is_finite()
+                            && descent_derivative < 0.0
+                            && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
+                                energy,
+                                candidate_energy,
+                                chord_increment_j,
+                            )
+                    },
+                );
+            energy_evaluations += 1;
+            if candidate_accepted {
                 accepted_energy = Some(candidate_energy);
+                field_evaluations += 1;
                 break;
             }
             if backtracks >= max_backtrack {
@@ -702,8 +718,6 @@ fn execute_projected_gradient_bb_soa_with_observer(
             break;
         };
 
-        problem.effective_field_into_soa_ws(&m_trial, ws, &mut h_eff_new);
-        field_evaluations += 1;
         problem.tangent_gradient_from_soa_field_into(&m_trial, &h_eff_new, &mut g_new);
 
         let mut s_dot_s = 0.0;
@@ -859,12 +873,15 @@ fn execute_projected_gradient_bb_aos_with_observer(
         return Ok(invalid_initial_state_result(initial_magnetization));
     }
     let mut m: Vec<Vector3> = initial_magnetization.to_vec();
+    let mut h_eff_new = vec![[0.0; 3]; n];
 
-    // Initial gradient
-    let mut h_eff = problem.effective_field_from_vectors_ws(&m, ws);
+    // Compute the initial energy and field from one demag convolution.
+    let mut h_eff = vec![[0.0; 3]; n];
+    let (mut energy, initial_field_computed) =
+        problem.total_energy_and_field_if_accepted_vectors_ws(&m, ws, &mut h_eff, 0.0, |_| true);
+    debug_assert!(initial_field_computed);
     let mut g = ExchangeLlgProblem::tangent_gradient_from_field(&m, &h_eff);
     mask_frozen_vectors(problem, &mut g);
-    let mut energy = problem.total_energy_from_vectors_ws(&m, ws);
 
     // Initial step size
     let lambda_default: f64 = 1e-6;
@@ -952,20 +969,28 @@ fn execute_projected_gradient_bb_aos_with_observer(
                 continue;
             };
 
-            let candidate_energy = problem.total_energy_from_vectors_ws(&candidate_m, ws);
-            energy_evaluations += 1;
-
             let chord_increment_j =
                 fdm_representable_chord_energy_linear_increment(problem, &m, &candidate_m, &h_eff);
-            if descent_derivative.is_finite()
-                && descent_derivative < 0.0
-                && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
-                    energy,
-                    candidate_energy,
-                    chord_increment_j,
-                )
-            {
+            let (candidate_energy, candidate_accepted) =
+                problem.total_energy_and_field_if_accepted_vectors_ws(
+                    &candidate_m,
+                    ws,
+                    &mut h_eff_new,
+                    0.0,
+                    |candidate_energy| {
+                        descent_derivative.is_finite()
+                            && descent_derivative < 0.0
+                            && crate::relaxation::direct_minimizer::projected_gradient_armijo_accepts(
+                                energy,
+                                candidate_energy,
+                                chord_increment_j,
+                            )
+                    },
+                );
+            energy_evaluations += 1;
+            if candidate_accepted {
                 accepted_trial = Some((candidate_m, candidate_energy));
+                field_evaluations += 1;
                 break;
             }
             if backtracks >= max_backtrack {
@@ -994,9 +1019,7 @@ fn execute_projected_gradient_bb_aos_with_observer(
             break;
         };
 
-        // Compute gradient at new point
-        let h_eff_new = problem.effective_field_from_vectors_ws(&m_trial, ws);
-        field_evaluations += 1;
+        // The accepted candidate's effective field was computed with its energy.
         let mut g_new = ExchangeLlgProblem::tangent_gradient_from_field(&m_trial, &h_eff_new);
         mask_frozen_vectors(problem, &mut g_new);
 
@@ -1052,7 +1075,7 @@ fn execute_projected_gradient_bb_aos_with_observer(
 
         // Accept step
         m = m_trial;
-        h_eff = h_eff_new;
+        std::mem::swap(&mut h_eff, &mut h_eff_new);
         g = g_new;
         energy = e_trial;
         steps += 1;
@@ -1904,6 +1927,22 @@ mod tests {
         )
     }
 
+    fn direct_minimizer_demag_problem() -> ExchangeLlgProblem {
+        let grid = GridShape::new(4, 1, 1).expect("valid grid");
+        ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(2.0e-9, 2.0e-9, 2.0e-9).expect("valid cell size"),
+            MaterialParameters::new(8.0e5, 1.3e-11, 0.2).expect("valid material"),
+            LlgConfig::new(2.211e5, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: true,
+                demag: true,
+                external_field: Some([0.0, 0.0, 7.5e4]),
+                ..Default::default()
+            },
+        )
+    }
+
     fn direct_minimizer_initial() -> Vec<Vector3> {
         vec![
             [1.0, 0.0, 0.0],
@@ -2010,6 +2049,28 @@ mod tests {
 
         let soa = execute_projected_gradient_bb(&problem, &initial, &mut soa_ws, &control);
         let aos = execute_projected_gradient_bb_aos(&problem, &initial, &mut aos_ws, &control);
+
+        assert_relaxation_result_close(&soa, &aos, 1e-8);
+    }
+
+    #[test]
+    fn projected_gradient_bb_reuses_each_trial_demag_fft_in_aos_and_soa() {
+        let problem = direct_minimizer_demag_problem();
+        let initial = direct_minimizer_initial();
+        let mut control = direct_minimizer_control(RelaxationAlgorithmIR::ProjectedGradientBb);
+        control.stop.max_steps = Some(1);
+
+        let mut soa_ws = problem.create_workspace();
+        let soa = execute_projected_gradient_bb_soa(&problem, &initial, &mut soa_ws, &control);
+        let soa_telemetry = soa_ws.telemetry();
+        assert_eq!(soa_telemetry.forward_fft_count, soa.energy_evaluations * 3);
+        assert_eq!(soa_telemetry.inverse_fft_count, soa.energy_evaluations * 3);
+
+        let mut aos_ws = problem.create_workspace();
+        let aos = execute_projected_gradient_bb_aos(&problem, &initial, &mut aos_ws, &control);
+        let aos_telemetry = aos_ws.telemetry();
+        assert_eq!(aos_telemetry.forward_fft_count, aos.energy_evaluations * 3);
+        assert_eq!(aos_telemetry.inverse_fft_count, aos.energy_evaluations * 3);
 
         assert_relaxation_result_close(&soa, &aos, 1e-8);
     }

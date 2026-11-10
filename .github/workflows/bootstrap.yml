@@ -485,6 +485,11 @@ jobs:
           cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::success_finalizer_propagates_terminal_provenance_publication_failure -- --exact
           cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::error_finalizer_preserves_primary_error_when_terminal_publication_fails -- --exact
 
+      - name: Run FDM CPU BB demag reuse contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib demag_cache_tests
+          cargo test --locked -p fullmag-runner --lib relaxation::direct_minimizer_reference::tests::projected_gradient_bb_reuses_each_trial_demag_fft_in_aos_and_soa -- --exact
+
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
 
