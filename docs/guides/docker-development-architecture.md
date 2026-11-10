@@ -862,6 +862,11 @@ terminalnego accepted store, przypiętego proof i operator authorization.
 Sesje, Zarr, historyczne metadane i lease pozostają zachowane. Ten wyjątek nie
 uprawnia do kasowania rekordów ownera ani do uznania Unknown za terminalny run.
 
+Inwentarz historii aktywacji traktuje `bootstrap-namespace-proof` i
+`bootstrap-container-proof` jako znane, konserwatywne źródła pinów. Ich
+odwołania do aktywacji nadal blokują archiwizację; nie należą do wykluczonych
+danych technicznych. Nieznany root control nadal powoduje odmowę kwalifikacji.
+
 ### Przygotowana, nieopublikowana awaria tworzenia sieci
 
 `scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny

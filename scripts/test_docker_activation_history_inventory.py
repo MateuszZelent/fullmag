@@ -62,6 +62,19 @@ class HistoryInventoryTests(unittest.TestCase):
             with self.subTest(root=name),self.assertRaises(HistoryError):control_references(self.root,TOKEN)
             path.unlink();path.parent.rmdir()
 
+    def test_bootstrap_proof_roots_keep_activation_path_pins(self):
+        self.terminal(TOKEN, RUN)
+        activation_path = "/control/activation/attempts/" + TOKEN + "/receipt.json"
+        for name in ("bootstrap-namespace-proof", "bootstrap-container-proof"):
+            with self.subTest(root=name):
+                relative = name + "/proof.json"
+                path = self.put(relative, {"activation_path": activation_path})
+                proof = control_references(self.root, "0" * 32)
+                self.assertIn(TOKEN, proof["protected"])
+                self.assertIn(relative, proof["pins"])
+                path.unlink()
+                path.parent.rmdir()
+
     def test_current_and_direct_predecessor_protected_without_pinning_entire_history(self):
         a, b, c = "a" * 32, "b" * 32, "c" * 32
         self.terminal(a, "run-a")
