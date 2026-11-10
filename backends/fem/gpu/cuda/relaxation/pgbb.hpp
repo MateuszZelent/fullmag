@@ -13,6 +13,11 @@
 namespace fullmag::fem {
 
 struct Context;
+struct FemGpuPgbbFieldKey;
+
+// Internal provenance seam shared with the native contract test.
+bool gpu_relax_pgbb_field_reuse_key(
+    const Context &ctx, FemGpuPgbbFieldKey &key) noexcept;
 
 int gpu_relax_projected_gradient_bb_step(
     Context &ctx,

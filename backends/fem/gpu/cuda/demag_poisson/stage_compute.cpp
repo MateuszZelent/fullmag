@@ -160,6 +160,7 @@ bool compute_device_demag_for_device_stage_impl(
     const GpuDemagApplyRequest &request,
     std::string &reason)
 {
+    gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
     if (!validate_gpu_demag_evaluation_request(request, reason)) {
         return false;
     }

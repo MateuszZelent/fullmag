@@ -24,6 +24,7 @@ bool gpu_relaxation_state_allocate(
     relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
     relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
+    relaxation.pgbb_accepted_field = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
     if (!gpu_device_allocate_component(
@@ -58,6 +59,7 @@ void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
     relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
     relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
+    relaxation.pgbb_accepted_field = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
 }

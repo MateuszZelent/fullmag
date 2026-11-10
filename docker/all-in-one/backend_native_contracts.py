@@ -25,6 +25,9 @@ FEM_CUDA_ACTIVITY_TRACE = "fem-cuda-activity-trace"
 CONTRACT_TARGETS = {
     FEM_DEMAG_POISSON: "fem_demag_poisson_contract",
     FEM_CUDA_ACTIVITY_TRACE: "fem_cuda_activity_trace_contract",
+    "fem-cuda-pgbb-reuse": "fem_cuda_pgbb_reuse_contract",
+    "fem-cuda-rk-guard": "fem_cuda_rk_guard_contract",
+    "fem-cpu-pgbb-reuse": "fem_pgbb_accepted_cache_contract",
 }
 ALLOWED_CONTRACTS = frozenset(CONTRACT_TARGETS)
 PACKAGE_LIBRARY_ARTIFACT_PATH = "lib/libfullmag_fem.so"

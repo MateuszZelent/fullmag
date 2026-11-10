@@ -1156,6 +1156,162 @@ int fresh_line_search_snapshot(
 #endif
 }
 
+namespace {
+#if FULLMAG_HAS_MFEM_STACK
+bool pgbb_accepted_guard_inputs(
+    const Context &ctx,
+    PoissonOperatorDependencyKey &poisson_key,
+    OperatorDependencyKey &exchange_key,
+    std::array<uint64_t, 32> &scalars)
+{
+    if (!ctx.demag.enabled || ctx.demag.realization != FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
+        ctx.gpu_state.device.lifecycle.allocated || !ctx.poisson_demag.ready ||
+        !ctx.poisson_demag.operator_lifecycle.setup_complete ||
+        !ctx.exchange.enabled || !ctx.exchange.mfem.ready ||
+        !ctx.exchange.mfem.operator_lifecycle.setup_complete ||
+        ctx.mfem_context.mesh == nullptr || ctx.state.current_time != 0.0 ||
+        ctx.stage_completion.relax_torque_confirmation_count != 0 ||
+        ctx.demag.field_refresh.has_demag_interval_s != 0 ||
+        ctx.zeeman.has_external_field || !ctx.zeeman.regional_drives.empty() ||
+        ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled || ctx.magnetoelastic.enabled ||
+        ctx.thermal_brown.temperature > 0.0 || ctx.frozen_spins.enabled() ||
+        !ctx.mesh.periodic_node_pairs.empty() || !ctx.mesh.periodic_reduced_node.empty() ||
+        ctx.oersted.has_stage_callback || ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
+        ctx.stage_transport.has_stage_callback || ctx.stt.zhang_li_enabled ||
+        ctx.stt.slonczewski_enabled || ctx.sot.enabled ||
+        (ctx.material_fields.runtime.has_value() &&
+         ctx.material_fields.runtime->has_elementwise_ms())) {
+        return false;
+    }
+    poisson_key = make_poisson_operator_dependency_key(
+        ctx, *static_cast<const mfem::Mesh *>(ctx.mfem_context.mesh), false);
+    exchange_key = make_exchange_operator_dependency_key(
+        ctx, *static_cast<const mfem::Mesh *>(ctx.mfem_context.mesh), false);
+    if (exchange_key != ctx.exchange.mfem.operator_lifecycle.active_key ||
+        poisson_key != ctx.poisson_demag.operator_lifecycle.active_key) {
+        return false;
+    }
+    auto integer = [](auto value) { return static_cast<uint64_t>(value); };
+    auto bits = [](double value) {
+        uint64_t result = 0;
+        std::memcpy(&result, &value, sizeof(result));
+        return result;
+    };
+    scalars = {
+        ctx.state.step_count, ctx.relaxation.accepted_steps, bits(ctx.state.current_time),
+        integer(ctx.base_plan.precision), integer(ctx.base_plan.precession_enabled),
+        integer(ctx.exchange.enabled), integer(ctx.exchange.mfem.ready),
+        integer(ctx.exchange.mfem.use_consistent_mass),
+        bits(ctx.material_fields.material.saturation_magnetisation),
+        bits(ctx.material_fields.material.exchange_stiffness),
+        bits(ctx.material_fields.material.damping), bits(ctx.material_fields.material.gyromagnetic_ratio),
+        integer(ctx.demag.solver.solver), integer(ctx.demag.solver.preconditioner),
+        bits(ctx.demag.solver.relative_tolerance), integer(ctx.demag.solver.has_absolute_tolerance),
+        bits(ctx.demag.solver.absolute_tolerance), ctx.demag.solver.max_iterations,
+        bits(ctx.demag.cached_robin_boundary_energy), ctx.zeeman.regional_drive_revision,
+        bits(ctx.zeeman.stage_start_time_s),
+        integer(ctx.stage_completion.relax_stop.has_torque_tolerance_apm),
+        bits(ctx.stage_completion.relax_stop.torque_tolerance_apm),
+        integer(ctx.cpu_threads.requested_omp_threads), integer(ctx.cpu_threads.effective_omp_threads),
+        integer(ctx.cpu_threads.cap_reason), bits(ctx.anisotropy.energy_joules),
+        bits(ctx.dmi.energy_joules), bits(ctx.magnetoelastic.energy_joules),
+    };
+    return true;
+}
+
+std::array<const std::vector<double> *, 9> pgbb_guard_fields(const Context &ctx)
+{
+    return {&ctx.state.m_xyz, &ctx.exchange.h_xyz, &ctx.demag.h_xyz,
+        &ctx.effective_field.h_xyz, &ctx.material_fields.Ms_field,
+        &ctx.material_fields.A_field, &ctx.material_fields.alpha_field,
+        &ctx.integration_weights.mfem_lumped_mass, &ctx.mesh.node_volumes};
+}
+#endif
+} // namespace
+
+bool take_pgbb_accepted_stats(Context &ctx, fullmag_fem_step_stats &stats)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    auto &guard = ctx.relaxation.pgbb_accepted_guard;
+    const bool valid = guard.valid;
+    guard.valid = false;
+    PoissonOperatorDependencyKey poisson_key{};
+    OperatorDependencyKey exchange_key{};
+    std::array<uint64_t, 32> scalars{};
+    if (!valid || !ctx.relaxation.cached_current_stats_valid ||
+        !pgbb_accepted_guard_inputs(ctx, poisson_key, exchange_key, scalars) ||
+        poisson_key != guard.poisson_key || exchange_key != guard.exchange_key ||
+        scalars != guard.scalars ||
+        ctx.mesh.magnetic_node_mask != guard.magnetic_mask) {
+        return false;
+    }
+    const auto fields = pgbb_guard_fields(ctx);
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i]->size() != guard.fields[i].size() ||
+            (!fields[i]->empty() && std::memcmp(
+                fields[i]->data(), guard.fields[i].data(),
+                fields[i]->size() * sizeof(double)) != 0)) {
+            return false;
+        }
+    }
+    ctx.poisson_demag.solves_current_step = 0;
+    ctx.poisson_demag.setup_count_current_step = 0;
+    ctx.poisson_demag.fresh_zero_guess_count_current_step = 0;
+    ctx.poisson_demag.event_wait_count_current_step = 0;
+    ctx.poisson_demag.global_sync_count_current_step = 0;
+    ctx.poisson_demag.step_assemble_wall_time_ns = 0;
+    ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
+    ctx.poisson_demag.step_recover_wall_time_ns = 0;
+    ctx.poisson_demag.step_energy_wall_time_ns = 0;
+    stats = ctx.relaxation.cached_current_stats;
+    // Existing CPU snapshot logical-RHS semantics are retained. Physical
+    // counters were zeroed by finish_accepted_relaxation_step.
+    stats.rk_transaction_capture_host_wall_time_ns = 0;
+    stats.rk_transaction_capture_device_elapsed_time_ns = 0;
+    stats.rk_transaction_capture_bytes = 0;
+    stats.rk_transaction_restore_host_wall_time_ns = 0;
+    stats.rk_transaction_restore_device_elapsed_time_ns = 0;
+    stats.rk_transaction_restore_bytes = 0;
+    stats.rk_transaction_rollback_count = 0;
+    stats.rk_transaction_commit_count = 0;
+    stats.demag_hypre_wait_in_enqueue_wall_time_ns = 0;
+    stats.demag_hypre_host_api_wall_time_ns = 0;
+    stats.demag_hypre_device_elapsed_time_ns = 0;
+    stats.demag_hypre_wait_out_enqueue_wall_time_ns = 0;
+    stats.demag_hypre_event_wait_count = 0;
+    stats.demag_hypre_timed_solve_count = 0;
+    stats.rk_transaction_cpu_snapshot_allocation_count = 0;
+    stats.rk_transaction_peak_rss_bytes = 0;
+    return true;
+#else
+    (void)ctx; (void)stats;
+    return false;
+#endif
+}
+
+void publish_pgbb_accepted_stats(Context &ctx, bool refined_evaluation)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    auto &guard = ctx.relaxation.pgbb_accepted_guard;
+    guard.valid = false;
+    if (refined_evaluation || !ctx.relaxation.cached_current_stats_valid ||
+        (ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0 &&
+         !(ctx.relaxation.cached_current_stats.max_torque_Apm >
+           ctx.stage_completion.relax_stop.torque_tolerance_apm)) ||
+        !pgbb_accepted_guard_inputs(ctx, guard.poisson_key, guard.exchange_key, guard.scalars)) {
+        return;
+    }
+    const auto fields = pgbb_guard_fields(ctx);
+    for (size_t i = 0; i < fields.size(); ++i) { guard.fields[i] = *fields[i]; }
+    guard.magnetic_mask = ctx.mesh.magnetic_node_mask;
+    guard.valid = true;
+#else
+    (void)ctx; (void)refined_evaluation;
+#endif
+}
+
 bool take_cached_current_stats(
     Context &ctx,
     fullmag_fem_step_stats &stats)

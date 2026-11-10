@@ -13,6 +13,7 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
@@ -244,7 +245,10 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
                     return false;
                 }
-                gpu.rk.fsal_valid = false;
+                // The checkpoint restored the same accepted m, time and k0.
+                // Keep an already valid derivative only under the existing
+                // source policy; fields and Poisson guesses stay invalid.
+                gpu_rk_retain_restored_fsal_on_retry(ctx);
                 active_dt = adaptive_result.dt_next;
                 ctx.base_plan.dt_seconds = active_dt;
                 ctx.adaptive_dt.current_dt = active_dt;

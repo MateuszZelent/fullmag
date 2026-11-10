@@ -881,6 +881,29 @@ target_include_directories(fem_cuda_rk_guard_contract PRIVATE
 )
 add_test(NAME fem_cuda_rk_guard_contract COMMAND fem_cuda_rk_guard_contract)
 
+add_executable(fem_cuda_pgbb_reuse_contract tests/cuda_pgbb_reuse_contract.cpp)
+target_link_libraries(fem_cuda_pgbb_reuse_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cuda_pgbb_reuse_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_pgbb_reuse_contract COMMAND fem_cuda_pgbb_reuse_contract)
+
+add_executable(fem_pgbb_accepted_cache_contract tests/pgbb_accepted_cache_contract.cpp)
+target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE mfem)
+    endif()
+endif()
+target_include_directories(fem_pgbb_accepted_cache_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_pgbb_accepted_cache_contract COMMAND fem_pgbb_accepted_cache_contract)
+
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
     add_executable(
         fem_gpu_pageable_scalar_readback_contract

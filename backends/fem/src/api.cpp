@@ -5205,6 +5205,8 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
     auto &ctx = handle->context;
     ctx.stepper.workspace.fsal_valid = false;
 #if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag::fem::gpu_relax_note_external_state_change(
+        ctx.gpu_state.device.relaxation);
     ctx.gpu_state.device.rk.fsal_valid = false;
 #endif
     ctx.gpu_state.device.rk.endpoint_valid = false;

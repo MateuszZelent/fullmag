@@ -182,6 +182,9 @@ the complete authored solver policy:
 
 | Python parameter | Type | Default | SI unit | Validation and rejection | Meaning | Backend support |
 |---|---|---|---|---|---|---|
+| gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
 | `FemLinearSolverPolicy.solver` | `Literal["CG", "GMRES"]` | `"CG"` | `1` | Must be `CG` or `GMRES`; other values raise `ValueError`. | Outer Krylov solver. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
 | `FemLinearSolverPolicy.preconditioner` | `Literal["AMG", "JACOBI", "NONE"]` | `"AMG"` | `1` | Must be `AMG`, `JACOBI`, or `NONE`; other values raise `ValueError`. | Preconditioner for the Poisson solve. | Native FEM CPU/GPU; selected tuple remains backend-validated. |
 | `FemLinearSolverPolicy.rtol` | `float` | `1e-8` | `1` | Converts with `float`; the converted value must be finite and greater than zero, otherwise `ValueError`. Conversion can raise `TypeError`, `ValueError`, or `OverflowError`. The dataclass retains the original field value rather than coercing it. | Relative residual tolerance. | Native FEM CPU/GPU; `rtol` is dimensionless. |
@@ -609,6 +612,16 @@ additively. The packed readback and trial-snapshot reuse do not change Armijo,
 BB1/BB2 reset policy, fresh-zero demag, rollback, energy monotonicity, ABI, or
 opt-in profiler ownership.
 
+Update 2026-11-10 accepted-field reuse candidates (runtime unqualified):
+`gpu_relax_pgbb_field_reuse_key` and CPU `take_pgbb_accepted_stats` qualify
+single-use reuse of an already certified static endpoint. The GPU candidate
+starts with Poisson, exchange and constant Zeeman; the CPU candidate is limited
+to static Robin Poisson and exchange. Other source families, projections,
+refined-Armijo endpoints and pending torque confirmations retain fresh
+evaluation. Ordinary physical solve counts can decrease while logical RHS
+record semantics remain unchanged. Source tests do not establish trajectory
+parity or a performance improvement; both require managed full-Zarr runs.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -869,6 +882,18 @@ the cached final `H_ex`, `H_demag`, and `H_eff` buffers by swapping the stepper
 workspace buffers into the context instead of copying full field arrays. This
 preserves the same accepted state and final field values; it only removes an
 O(N) copy from the adaptive RK accept path.
+
+Update 2026-11-10 adaptive retry candidate (runtime unqualified): after the GPU
+transaction restores the accepted magnetization, time and stage-zero derivative,
+`gpu_rk_retain_restored_fsal_on_retry` preserves an already valid derivative
+under `gpu_rk_rhs_allows_fsal_reuse`. It never promotes an invalid derivative.
+Brown thermal noise, callback-driven sources, frozen spins and periodic reduced
+nodes continue to disable reuse. Derived-field endpoint tokens remain invalid;
+Poisson still requires a fresh initial guess for every executed fresh solve.
+This changes neither the adaptive error criterion nor authored tolerances.
+The CUDA guard contract exercises checkpoint derivative preservation and
+stochastic rejection. Rejected-step runtime parity and performance qualification
+for the supported explicit integrators remain required before promotion.
 
 Update 2026-05-15 non-FSAL final refresh: Heun/RK4 final effective-field refresh
 now reuses the same stepper field workspace and swaps the final buffers into the

@@ -301,6 +301,24 @@
       "responsibility": "Require configured device memory/execution and vendor SpTrans/SpMV/SpGEMM with no recorded error.",
       "evidence_status": "Pinned current source contract; no new runtime, full-residency, or speedup qualification.",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L103"
+    },
+    {
+      "id": "gpu-fsal-adaptive-retry",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_retain_restored_fsal_on_retry",
+      "responsibility": "Retains only a restored eligible deterministic FSAL derivative on adaptive rejection; endpoint field tokens and fresh-zero solve semantics remain separate. Runtime qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-field-reuse",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.hpp",
+      "symbol": "gpu_relax_pgbb_field_reuse_key",
+      "responsibility": "Qualifies single-use static endpoint field reuse; actual solves remain fresh-zero and torque confirmations stay fresh. Runtime parity pending."
+    },
+    {
+      "id": "cpu-pgbb-accepted-field-reuse",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "take_pgbb_accepted_stats",
+      "responsibility": "Checks exact endpoint buffers and operator dependency keys before static CPU BB reuse. Runtime parity pending."
     }
   ],
   "public_api": {
