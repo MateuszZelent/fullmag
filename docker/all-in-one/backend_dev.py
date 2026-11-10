@@ -6036,8 +6036,23 @@ def _prepare_with_shared_package(
                 receipt, _, _ = _validated_package(output, "shared package publisher", exclude_candidate_marker=True)
                 if receipt["build"].get("cuda_architectures") != architectures:
                     _fail("published CUDA target differs from shared build key")
+                # Materialization may recapture a checkout edited after the
+                # claim was acquired. Never publish that build under the old
+                # immutable key or silently switch keys without their lock.
+                final_identity = _shared_package_identity(
+                    Path(args.manifest), toolchain, architectures,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {}))
+                if final_identity != identity:
+                    _fail(
+                        "shared package source identity changed during preparation; "
+                        "candidate retained without shared publication; retry with stable sources"
+                    )
                 receipt["shared_package"] = {"schema": shared.SCHEMA, "key": entry.key,
                     "inputs": identity, "reuse": "publisher"}
+                if not _package_matches_fresh_live_manifest(
+                    receipt, Path(args.manifest), toolchain, BACKEND_CARGO_PROFILE,
+                    **({"required_native_contracts": required_contracts} if required_contracts else {})):
+                    _fail("shared package producer receipt identity does not match its claimed source")
                 _write_json(output / "backend-build-receipt.json", receipt, "shared package producer receipt")
                 entry.publish(alias, receipt)
                 _log_phase("shared-package", "published", key=entry.key)
