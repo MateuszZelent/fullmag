@@ -28,6 +28,7 @@ KNOWN_ROOTS = frozenset({
     "host-device-reattest", "container-recovery-preparation", "runtime-services",
     "stop-bootstrap", "stop-bootstrap-frontend",
     "startup-recovery-stop", "startup-recovery-stop-preview",
+    "stop-diagnostic", "stop-diagnostic-preview",
     "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
     "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
     "bootstrap-namespace-proof", "bootstrap-container-proof",
@@ -505,7 +506,10 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
                 if relative in {"activation/history-v1", "activation/history-staging-v1",
                                 "activation/history-operations-v1"}:
                     continue
-                if entry.parent.name == "attempts":
+                if (entry.parent.name == "attempts"
+                        and entry.parent.parent.name not in {
+                            "stop-diagnostic", "stop-diagnostic-preview",
+                        }):
                     if closed_terminal(entry) is not None:
                         # A current/verified pointer outside attempts still
                         # protects this record and its direct dependencies.
