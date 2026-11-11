@@ -291,17 +291,22 @@ void configure_host_runtime_writes_cpu_context_fields() {
 #endif
     ScopedEnv fullmag("FULLMAG_CPU_THREADS");
     ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
     resolved.unset();
+    native_resolved.set("3");
     omp.unset();
-    fullmag.set("2");
+    fullmag.set("40");
 
     fullmag::fem::Context ctx;
+    ctx.mfem_device.device_string_override = "cpu";
+    ctx.mesh.n_nodes = 5000;
+    ctx.mesh.n_elements = 1000;
     fullmag::fem::configure_fem_host_runtime_threads(ctx);
 
     check(!ctx.cpu_threads.auto_requested, "manual CPU runtime does not mark auto mode");
-    check(ctx.cpu_threads.requested_omp_threads == 2, "manual CPU runtime stores requested threads");
-    check(ctx.cpu_threads.effective_omp_threads == 2, "manual CPU runtime stores effective threads");
+    check(ctx.cpu_threads.requested_omp_threads == 40, "manual CPU runtime stores requested threads");
+    check(ctx.cpu_threads.effective_omp_threads == 40, "manual CPU runtime is not auto-capped by mesh size or allocation");
     check(
         ctx.cpu_threads.cap_reason == fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_NONE,
         "manual CPU runtime reports no auto cap reason");
@@ -315,7 +320,7 @@ void configure_host_runtime_writes_cpu_context_fields() {
         ctx.cpu_threads.max_active_parallel_levels == 1,
         "host runtime publishes a single active parallel level");
 #ifdef _OPENMP
-    check_openmp_runtime_settings(2);
+    check_openmp_runtime_settings(40);
 #endif
 }
 
@@ -384,6 +389,95 @@ void automatic_cpu_runtime_applies_size_cap_to_openmp() {
 #endif
 }
 
+void automatic_cpu_runtime_combines_external_allocation_and_mesh_cap() {
+#ifdef _OPENMP
+    ScopedOpenMpRuntimeState openmp_runtime;
+    openmp_runtime.seed_distinct_runtime_state();
+#endif
+    ScopedEnv fullmag("FULLMAG_CPU_THREADS");
+    ScopedEnv resolved("FULLMAG_CPU_THREADS_AUTO_RESOLVED");
+    ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
+    ScopedEnv omp("OMP_NUM_THREADS");
+    fullmag.set("auto");
+    resolved.unset();
+    native_resolved.set("40");
+    omp.unset();
+
+    const auto detected_request = fullmag::fem::requested_cpu_threads();
+    check(detected_request.requested_threads >= 1, "auto mode has a detected host limit");
+    check(detected_request.auto_resolved_threads == 40, "auto mode reads the external allocation limit");
+
+    fullmag::fem::Context medium;
+    medium.mfem_device.device_string_override = "cpu";
+    medium.mesh.n_nodes = 20000;
+    medium.mesh.n_elements = 100000;
+    check(
+        fullmag::fem::auto_cpu_thread_cap_for_context(medium, 40) == 16,
+        "external allocation 40 still meets the medium-mesh cap of 16");
+    fullmag::fem::configure_fem_host_runtime_threads(medium);
+    const int expected_medium_threads = detected_request.requested_threads < 16
+        ? detected_request.requested_threads
+        : 16;
+    check(
+        medium.cpu_threads.effective_omp_threads == expected_medium_threads,
+        "external allocation 40 and detected host limit are both subject to the medium-mesh cap");
+    const int expected_medium_reason = detected_request.requested_threads > 16
+        ? fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_MEDIUM_MESH
+        : fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
+    check(
+        medium.cpu_threads.cap_reason == expected_medium_reason,
+        "medium-mesh telemetry identifies the size limit only when it is restrictive");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(expected_medium_threads);
+#endif
+
+    fullmag::fem::Context small;
+    small.mfem_device.device_string_override = "cpu";
+    small.mesh.n_nodes = 5000;
+    small.mesh.n_elements = 1000;
+    check(
+        fullmag::fem::auto_cpu_thread_cap_for_context(small, 40) == 8,
+        "external allocation 40 still meets the small-mesh cap of 8");
+    fullmag::fem::configure_fem_host_runtime_threads(small);
+    const int expected_small_threads = detected_request.requested_threads < 8
+        ? detected_request.requested_threads
+        : 8;
+    check(
+        small.cpu_threads.effective_omp_threads == expected_small_threads,
+        "external allocation 40 and detected host limit are both subject to the small-mesh cap");
+    const int expected_small_reason = detected_request.requested_threads > 8
+        ? fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH
+        : fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
+    check(
+        small.cpu_threads.cap_reason == expected_small_reason,
+        "small-mesh telemetry identifies the size limit only when it is restrictive");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(expected_small_threads);
+#endif
+
+    native_resolved.set("3");
+    fullmag::fem::Context externally_limited;
+    externally_limited.mfem_device.device_string_override = "cpu";
+    externally_limited.mesh.n_nodes = 20000;
+    externally_limited.mesh.n_elements = 100000;
+    fullmag::fem::configure_fem_host_runtime_threads(externally_limited);
+    const int expected_external_threads = detected_request.requested_threads < 3
+        ? detected_request.requested_threads
+        : 3;
+    check(
+        externally_limited.cpu_threads.effective_omp_threads == expected_external_threads,
+        "external allocation 3 limits medium-mesh auto mode to 3 when detected capacity permits");
+    const int expected_external_reason = detected_request.requested_threads > 3
+        ? fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_EXTERNAL_AUTO_RESOLVED
+        : fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
+    check(
+        externally_limited.cpu_threads.cap_reason == expected_external_reason,
+        "telemetry reports the external allocation only when it is the restrictive bound");
+#ifdef _OPENMP
+    check_openmp_runtime_settings(expected_external_threads);
+#endif
+}
+
 void automatic_gpu_host_policy_is_deliberately_one_thread() {
     fullmag::fem::Context ctx;
     ctx.mfem_device.device_string_override = "cuda";
@@ -407,9 +501,9 @@ void automatic_gpu_host_policy_overrides_external_cpu_auto_resolution() {
     ScopedEnv native_resolved("FULLMAG_NATIVE_THREADS_AUTO_RESOLVED");
     ScopedEnv omp("OMP_NUM_THREADS");
     fullmag.set("auto");
-    resolved.set("8");
-    native_resolved.set("8");
-    omp.set("8");
+    resolved.set("40");
+    native_resolved.set("40");
+    omp.set("40");
 
     fullmag::fem::Context ctx;
     ctx.mfem_device.device_string_override = "cuda";
@@ -437,6 +531,7 @@ int main() {
     configure_host_runtime_writes_cpu_context_fields();
     configure_host_runtime_writes_gpu_context_fields();
     automatic_cpu_runtime_applies_size_cap_to_openmp();
+    automatic_cpu_runtime_combines_external_allocation_and_mesh_cap();
     automatic_gpu_host_policy_is_deliberately_one_thread();
     automatic_gpu_host_policy_overrides_external_cpu_auto_resolution();
     return 0;

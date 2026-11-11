@@ -227,7 +227,7 @@
       "id": "native-threads",
       "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
       "symbol": "configure_fem_host_runtime_threads",
-      "responsibility": "Resolves and applies native FEM OpenMP settings when its context starts."
+      "responsibility": "In auto CPU mode applies the minimum of detected capacity, external allocation, and mesh-aware limit, and reports the strictly limiting bound; preserves manual counts and the one-thread automatic GPU host policy."
     },
     {
       "id": "runner-thread-request",
@@ -263,7 +263,7 @@
       "id": "native-thread-test",
       "path": "backends/fem/tests/cpu_threads_contract.cpp",
       "symbol": "main",
-      "responsibility": "Exercises native FEM CPU thread request and setup behavior."
+      "responsibility": "Covers external allocation versus small/medium mesh limits, truthful cap reasons, uncapped manual counts, and the automatic GPU host one-thread policy."
     },
     {
       "id": "shared-linear-validation",
