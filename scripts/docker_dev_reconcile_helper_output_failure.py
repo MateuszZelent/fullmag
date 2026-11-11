@@ -1,4 +1,4 @@
-"""Reconcile a pre-admission helper-output failure while preserving terminal runs.
+"""Reconcile exact pre-admission helper-output failures while preserving runs.
 
 Preview is read-only. Apply requires the preview digest, an empty live workspace,
 a terminal/released SessionStore, and proof that the failed request has no
@@ -29,6 +29,26 @@ FAILURE = (
     "Python helper log inspection failed: 500 Internal Server Error: "
     "Python helper output exceeded the 1048576 byte combined log limit"
 )
+# Pinned to the historical SceneStudyState deny_unknown_fields schema at
+# 1c5c6c0a09faf499040b720bb2f6f5b962ee8ea0, which emitted the retained API
+# error before compute_resources was supported. A schema or serde diagnostic
+# change must fail closed until requalified.
+SCENE_STUDY_STATE_FIELDS = (
+    "backend", "requested_backend", "requested_device", "requested_precision", "requested_mode",
+    "requested_cpu_threads", "parallel_execution", "pbc", "fem_demag_solver_policy",
+    "fem_demag_accuracy_contract", "exchange_enabled", "demag_enabled", "demag_realization",
+    "fdm", "external_field", "thermal_noise", "rotated_interfacial_dmi",
+    "rotated_interfacial_dmi_object_ids", "solver", "universe_mesh", "shared_domain_mesh",
+    "fem_domain_mesh", "mesh_defaults", "mesh_interfaces", "stages", "study_pipeline",
+    "table_autosave", "output_storage", "execution_profile", "execution_layers", "initial_state",
+    "visualization_hint",
+)
+SCENE_DESERIALIZATION_FAILURE = (
+    "failed to deserialize SceneDocument response: unknown field `compute_resources`, expected one of "
+    + ", ".join(f"`{field}`" for field in SCENE_STUDY_STATE_FIELDS)
+    + " at line 1 column 12321"
+)
+LEGACY_FAILURE_VARIANT = "combined-helper-output-limit"
 SCHEMA = "fullmag.docker-pre-admission-output-reconciliation.v1"
 
 
@@ -36,12 +56,38 @@ def sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def failure_variant(response: object) -> str:
+    """Classify only the original overflow or the exact SceneStudyState error."""
+    if not isinstance(response, dict) or response.get("code") != "internal_error":
+        raise BuildControlError("Not a known pre-admission helper-output failure")
+    message = response.get("message")
+    if message == FAILURE:
+        # Preserve the original, exact combined-output-limit predicate.
+        return "combined-helper-output-limit"
+    if message == SCENE_DESERIALIZATION_FAILURE and response.get("error") == SCENE_DESERIALIZATION_FAILURE:
+        # docker_startup::activate_current_live_startup loads and deserializes
+        # SceneDocument before publishing the temporary live owner or accepting
+        # a RunIntent. Require both serialized error fields to match exactly.
+        return "scene-study-compute-resources-unknown-field"
+    raise BuildControlError("Not an exact pre-admission helper-output failure")
+
+
 def failure_response(error: object) -> dict:
     match = re.search(r"startup activation returned HTTP 500: (\{[^\n]+\})\Z", error) if isinstance(error, str) else None
     response = json.loads(match[1]) if match else None
-    if not isinstance(response, dict) or response.get("code") != "internal_error" or response.get("message") != FAILURE:
-        raise BuildControlError("Not the exact pre-admission helper-output failure")
+    failure_variant(response)
     return response
+
+
+def validate_terminal_proof_variant(proof: object, variant: str) -> None:
+    """Keep old overflow proofs readable; require new proofs to name the variant."""
+    if not isinstance(proof, dict):
+        raise BuildControlError("Terminal history proof is malformed")
+    # Proofs written before the SceneDocument variant existed have no tag.
+    # Only the original combined-output-limit route may resume those proofs.
+    recorded = proof.get("failure_variant", LEGACY_FAILURE_VARIANT)
+    if recorded != variant:
+        raise BuildControlError("Terminal proof failure variant differs")
 
 
 def request_absent(store: Path, runs: list[dict], request_id: str, source_sha256: str) -> None:
@@ -126,6 +172,7 @@ def reconcile(args) -> dict:
     if receipt.get("retirement_phase") != "startup":
         raise BuildControlError("Failure did not occur in startup phase")
     response = failure_response(receipt.get("error"))
+    variant = failure_variant(response)
     root = "activation/attempts/" + args.activation
     marker_relative = inputs["activation_receipt_path"].removeprefix("/opt/fullmag/control/")
     marker_raw = _raw(control, marker_relative)
@@ -140,11 +187,13 @@ def reconcile(args) -> dict:
     completed = control.read(root + "/terminal.json", optional=True)
     if completed is not None:
         proof = control.read(root + "/terminal-history-output-proof.json")
-        if (completed.get("state") != "failed-confirmed" or completed.get("activation_state") != "not-admitted"
+        if (not isinstance(proof, dict)
+                or completed.get("state") != "failed-confirmed" or completed.get("activation_state") != "not-admitted"
                 or completed.get("reconciliation") != "pre-admission-output-terminal-history"
                 or completed.get("inputs") != receipt.get("inputs")
                 or completed.get("release_proof_sha256") != sha(canonical(proof))):
             raise BuildControlError("Existing terminal is not this authenticated reconciliation")
+        validate_terminal_proof_variant(proof, variant)
         retained_plan(proof, bindings, proof["plan"]["backend_started_at"])
         if active is not None:
             raise BuildControlError("Terminal was published; original helper release still requires observation")
@@ -183,7 +232,7 @@ def reconcile(args) -> dict:
         digest = sha(canonical(plan))
     protected = plan["protected_runs_sha256"]
     if not args.apply:
-        return {"state": "preview", "plan_sha256": digest, "plan": plan}
+        return {"state": "preview", "failure_variant": variant, "plan_sha256": digest, "plan": plan}
     if args.plan_sha256 != digest:
         raise BuildControlError("Exact unchanged preview plan SHA256 required")
 
@@ -222,7 +271,7 @@ def reconcile(args) -> dict:
     if control.read("development/current.json") != previous:
         raise BuildControlError("Development identity changed during drain")
     _validate_helper(control, receipt["helper_container"], args.activation)
-    proof = {"schema": SCHEMA, "plan": plan, "plan_sha256": digest,
+    proof = {"schema": SCHEMA, "plan": plan, "plan_sha256": digest, "failure_variant": variant,
              "process_tree_sha256": sha(process_raw), "preserved_store": after,
              "outcome": "not-admitted", "old_request_replay": "forbidden"}
     control.write(root + "/terminal-history-output-proof.json", proof)
@@ -241,7 +290,8 @@ def reconcile(args) -> dict:
         raise BuildControlError("Terminal publication not acknowledged; retain evidence")
     for _ in range(10):
         if _raw(control, "active", optional=True) is None:
-            return {"state": "not-admitted-confirmed", "activation": args.activation, "preserved_runs": len(after["runs"]), "replayed": False}
+            return {"state": "not-admitted-confirmed", "activation": args.activation,
+                    "failure_variant": variant, "preserved_runs": len(after["runs"]), "replayed": False}
         time.sleep(1)
     raise BuildControlError("Original helper has not released its lease; retain evidence")
 
