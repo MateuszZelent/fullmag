@@ -1031,6 +1031,7 @@ jobs:
           python -B scripts/test_docker_activation_history_reader.py -v
           python -B scripts/test_docker_activation_history_storage.py -v
           python -B scripts/test_docker_activation_history_inventory.py -v
+          python -B scripts/test_docker_activation_history_closed_recovery.py -v
           python -B scripts/test_docker_activation_history_cli.py -v
           python -B scripts/test_docker_activation_history_admission.py -v
           python -B scripts/test_docker_activation_history_output.py -v

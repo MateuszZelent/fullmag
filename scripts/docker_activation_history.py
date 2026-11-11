@@ -218,6 +218,7 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
     ledger_raw = _raw(root / "private/ledger/ledger/HOST_RESOURCE_LEDGER.json")
     ledger = ledger_evidence(ledger_raw)
     refs = control_references(root, token, owner_marker_pin=request["owner_marker_pin"],
+                              store_root=store_root, identity=identity,
                               qualified_rejection=(
                                   {"candidate": candidate, "files": files} if rejected else None))
     archives = validate_existing_archives(root)
