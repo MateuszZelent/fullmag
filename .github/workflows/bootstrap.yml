@@ -205,7 +205,9 @@ jobs:
           cargo test -p fullmag-api --bin fullmag-api rejected_accepted_admission_does_not_reserve_a_run_command
 
       - name: Run runtime service sampler and control contracts
-        run: cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+        run: |
+          cargo test -p fullmag-api --bin fullmag-runtime-service --no-fail-fast
+          cargo test --locked -p fullmag-runtime-control --lib gpu_pre_spawn_
 
       - name: Check mixed-history recovery CLI contract
         run: cargo check -p fullmag-cli --bin fullmag
