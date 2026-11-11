@@ -12,6 +12,11 @@
 
 namespace fullmag::fem {
 
+void fullmag_cuda_relax_project_tangent_field(
+    const double *mx, const double *my, const double *mz,
+    double *x, double *y, double *z, const uint8_t *mask,
+    int n, cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
     const double *mx,
     const double *my,

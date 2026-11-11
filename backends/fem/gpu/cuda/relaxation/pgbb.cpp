@@ -9,6 +9,7 @@
  */
 
 #include "gpu/cuda/relaxation/pgbb.hpp"
+#include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 
 #include "context.hpp"
 
@@ -32,6 +33,7 @@
 #include "src/relaxation_numerics.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -756,6 +758,59 @@ int gpu_relax_projected_gradient_bb_step(
             std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize);
     }
     double last_trial_energy_j = current_energy;
+    // Preserve k[0] as the physical gradient for transported BB curvature
+    // and stopping. Only the retraction direction is preconditioned.
+    const FemGpuComponentField *trial_gradient = &gpu.rk.k[0];
+    const bool precondition = gpu_bb_exchange_mass_enabled(ctx);
+    if (precondition) {
+#if FULLMAG_HAS_MFEM_STACK
+        const auto begin = std::chrono::steady_clock::now();
+        if (!gpu_bb_exchange_mass_prepare(ctx, reason) ||
+            !gpu_bb_exchange_mass_solve(*gpu.relaxation.bb_exchange_mass,
+                gpu.rk.k[0], gpu.relaxation.bb_preconditioned_gradient,
+                trial_step, reinterpret_cast<void *>(stream),
+                ctx.transfer_audit.audit, reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx, stream, "exchange-mass direction solve failure", reason, error);
+        }
+        auto &z = gpu.relaxation.bb_preconditioned_gradient;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            fullmag_cuda_relax_project_static_periodic_field(z.x, z.y, z.z,
+                gpu.mesh_regions.periodic_representative_nodes, n, stream);
+        }
+        fullmag_cuda_relax_project_tangent_field(
+            gpu.rk.m_backup.x, gpu.rk.m_backup.y, gpu.rk.m_backup.z,
+            z.x, z.y, z.z, gpu_relax_pgbb_node_mask(ctx), n, stream);
+        fullmag_cuda_relax_energy_weighted_dot_blocks(
+            z.x, z.y, z.z, gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
+            gpu.materials.ms, gpu.mesh_metrics.lumped_mass,
+            gpu_relax_pgbb_node_mask(ctx), gpu.reductions.scalar_workspace, n, stream);
+        double direction_dot_gradient = 0.0;
+        if (!cuda_launch_ok("project BB preconditioned direction", reason) ||
+            !gpu_relax_reduce_scalar_sum(ctx, stream, gpu.reductions.scalar_workspace,
+                blocks, gpu.reductions.scalar_result, "reduce BB direction descent", reason) ||
+            !gpu_rk_read_control_scalar_results(ctx, stream, "read BB direction descent",
+                &direction_dot_gradient, 1, reason)) {
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx, stream, "exchange-mass descent check failure", reason, error);
+        }
+        if (!std::isfinite(direction_dot_gradient)) {
+            reason = "non-finite FEM GPU BB preconditioned descent metric";
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx, stream, "exchange-mass direction failure", reason, error);
+        }
+        if (direction_dot_gradient > 0.0) { trial_gradient = &z; }
+        // Same safeguard as CPU: a non-descent projected direction restarts
+        // with the raw GPU gradient. This never invokes a CPU operator.
+        gpu.relaxation.bb_preconditioner_wall_time_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - begin).count());
+#else
+        reason = "FEM GPU BB exchange-mass requires the MFEM stack";
+        return gpu_relax_restore_previous_magnetization_after_failure(
+            ctx, stream, "exchange-mass unavailable", reason, error);
+#endif
+    }
     uint32_t backtracks = 0;
     uint32_t logical_rhs_evaluations = 1u;
     uint32_t refinement_rhs_evaluations = 0u;
@@ -782,9 +837,9 @@ int gpu_relax_projected_gradient_bb_step(
                 gpu.rk.m_backup.x,
                 gpu.rk.m_backup.y,
                 gpu.rk.m_backup.z,
-                gpu.rk.k[0].x,
-                gpu.rk.k[0].y,
-                gpu.rk.k[0].z,
+                trial_gradient->x,
+                trial_gradient->y,
+                trial_gradient->z,
                 gpu_relax_pgbb_node_mask(ctx),
                 -trial_step,
                 gpu.rk.m_stage.x,

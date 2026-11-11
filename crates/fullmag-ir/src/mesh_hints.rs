@@ -1070,8 +1070,36 @@ impl FdmMultilayerPlanIR {
     }
 }
 
+/// Per-run GPU projected-gradient BB direction policy. `Auto` retains intent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuBbPreconditionerIR {
+    Auto,
+    None,
+    ExchangeMass,
+}
+
+impl FemGpuBbPreconditionerIR {
+    pub fn native_id(self) -> u32 {
+        match self {
+            Self::Auto => 0,
+            Self::None => 1,
+            Self::ExchangeMass => 2,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::None => "none",
+            Self::ExchangeMass => "exchange_mass",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemHintsIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_bb_preconditioner: Option<FemGpuBbPreconditionerIR>,
     pub order: u32,
     pub hmax: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1084,6 +1112,32 @@ pub struct FemHintsIR {
 mod multilayer_contract_tests {
     use super::*;
     use crate::plan::FdmGridCertificateIR;
+
+    #[test]
+    fn gpu_bb_policy_round_trip_and_native_ids_are_explicit() {
+        for (name, native_id) in [("auto", 0), ("none", 1), ("exchange_mass", 2)] {
+            let hints: FemHintsIR = serde_json::from_value(serde_json::json!({
+                "order": 1, "hmax": 1e-9, "gpu_bb_preconditioner": name
+            }))
+            .unwrap();
+            assert_eq!(hints.gpu_bb_preconditioner.unwrap().native_id(), native_id);
+            assert_eq!(
+                serde_json::to_value(hints).unwrap()["gpu_bb_preconditioner"],
+                name
+            );
+        }
+        let legacy: FemHintsIR =
+            serde_json::from_value(serde_json::json!({"order": 1, "hmax": 1e-9})).unwrap();
+        assert_eq!(legacy.gpu_bb_preconditioner, None);
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("gpu_bb_preconditioner")
+            .is_none());
+        assert!(serde_json::from_value::<FemHintsIR>(serde_json::json!({
+            "order": 1, "hmax": 1e-9, "gpu_bb_preconditioner": "vendor_magic"
+        }))
+        .is_err());
+    }
 
     #[test]
     fn fdm_fft_legacy_demag_policy_defaults_backend_to_auto() {

@@ -2592,6 +2592,7 @@ class _WorldState:
     _fem_order: int = 1
     _mesh_source: str | None = None
     _fem_demag_solver_policy: FemLinearSolverPolicy | None = None
+    _fem_bb_preconditioner: str | None = None
     _api_surface: str = "flat"
     _study_universe: StudyUniverseConfig | None = None
     _domain_mesh_source: str | None = None
@@ -6411,6 +6412,11 @@ class StudyBuilder:
         _state._extra_runtime_metadata["output_storage"] = output_storage.to_ir()
         return self
 
+    def fem_bb_preconditioner(self, policy: str) -> "StudyBuilder":
+        """Select the GPU projected-gradient BB direction for this study."""
+        fem_bb_preconditioner(policy)
+        return self
+
     def fem_demag_solver(
         self,
         *,
@@ -7327,6 +7333,14 @@ def parallel_execution(
     resolved = ParallelExecutionPolicy.from_ir(candidate)
     _state._parallel_execution = resolved
     return resolved
+
+
+def fem_bb_preconditioner(policy: str) -> str:
+    """Set an explicit per-run GPU BB policy: auto, none, or exchange_mass."""
+    if not isinstance(policy, str) or policy not in ("auto", "none", "exchange_mass"):
+        raise ValueError("fem_bb_preconditioner must be auto, none, or exchange_mass")
+    _state._fem_bb_preconditioner = policy
+    return policy
 
 
 def fem_demag_solver(
@@ -8258,6 +8272,7 @@ def _resolve_flat_fem_hint() -> FEM | None:
         hmax=resolved_fem_hint_hmax if resolved_fem_hint_hmax is not None else resolved_hmax,
         mesh=shared_source,
         demag_solver_policy=s._fem_demag_solver_policy,
+        gpu_bb_preconditioner=s._fem_bb_preconditioner,
     )
 
 

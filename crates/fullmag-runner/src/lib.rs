@@ -7809,6 +7809,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),
@@ -11335,6 +11336,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 2e-9,
                 mesh: Some("meshes/unit_tet.msh".to_string()),

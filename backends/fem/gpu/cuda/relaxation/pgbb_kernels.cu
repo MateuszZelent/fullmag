@@ -373,6 +373,19 @@ __global__ void direct_energy_difference_kernel(
     }
 }
 
+__global__ void project_tangent_field_kernel(
+    const double *mx, const double *my, const double *mz,
+    double *x, double *y, double *z, const uint8_t *mask, int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) { return; }
+    double px = 0.0, py = 0.0, pz = 0.0;
+    if (active_node(mask, i)) {
+        project_node_tangent(mx[i], my[i], mz[i], x[i], y[i], z[i], px, py, pz);
+    }
+    x[i] = px; y[i] = py; z[i] = pz;
+}
+
 __global__ void tangent_gradient_norm_kernel(
     const double *mx,
     const double *my,
@@ -1087,6 +1100,15 @@ __global__ void ncg_reset_direction_if_not_descent_kernel(
 }
 
 } // namespace
+
+void fullmag_cuda_relax_project_tangent_field(
+    const double *mx, const double *my, const double *mz,
+    double *x, double *y, double *z, const uint8_t *mask,
+    int n, cudaStream_t stream)
+{
+    project_tangent_field_kernel<<<(n + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        mx, my, mz, x, y, z, mask, n);
+}
 
 void fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
     const double *mx,

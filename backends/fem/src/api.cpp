@@ -5330,6 +5330,30 @@ int fullmag_fem_backend_set_interrupt_poll(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_set_gpu_bb_preconditioner(
+    fullmag_fem_backend *handle, uint32_t policy)
+{
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("GPU BB preconditioner setter received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (policy > 2u || handle->context.state.step_count != 0u ||
+        handle->context.relaxation.accepted_steps != 0u) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires a valid policy before the first step");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!handle->context.gpu_state.device.lifecycle.allocated) {
+        fullmag_fem_set_handle_error(handle,
+            "GPU BB preconditioner requires an allocated GPU backend; no CPU fallback");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    auto &state = handle->context.gpu_state.device.relaxation;
+    state.bb_preconditioner_policy = policy;
+    fullmag::fem::gpu_relax_invalidate_accepted_evaluation(state);
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
     int enabled

@@ -1422,6 +1422,8 @@ pub struct FemMixedTopologyProvenanceIR {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemPlanIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_bb_preconditioner: Option<crate::FemGpuBbPreconditionerIR>,
     pub mesh_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh_source: Option<String>,
@@ -1617,6 +1619,7 @@ pub struct FemPlanIR {
 impl Default for FemPlanIR {
     fn default() -> Self {
         Self {
+            gpu_bb_preconditioner: None,
             mesh_name: String::new(),
             mesh_source: None,
             mesh: MeshIR::default(),

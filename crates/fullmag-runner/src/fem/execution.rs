@@ -373,6 +373,7 @@ fn execute_native_fem(
         &mut provenance,
         plan.relaxation.as_ref(),
         execution_engine == "fem_native_gpu",
+        plan.gpu_bb_preconditioner,
     );
     apply_native_fem_runtime_contract(
         &mut provenance,

@@ -96,15 +96,59 @@ fn resolve_fem_direct_minimizer_policy(
     direction_override: Option<&str>,
     linear_solver_override: Option<&str>,
     preconditioner_override: Option<&str>,
+    gpu_bb: bool,
+    gpu_bb_policy: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
 ) -> FemDirectMinimizerPolicyProvenance {
     if gpu {
+        let policy = gpu_bb_policy.unwrap_or(fullmag_ir::FemGpuBbPreconditionerIR::Auto);
+        let preconditioned = gpu_bb && policy != fullmag_ir::FemGpuBbPreconditionerIR::None;
         return FemDirectMinimizerPolicyProvenance {
-            requested_direction_policy: "device_tangent_gradient".to_string(),
-            resolved_direction_policy: "device_tangent_gradient".to_string(),
-            requested_linear_solver: "not_used".to_string(),
-            resolved_linear_solver: "not_used".to_string(),
-            requested_preconditioner: "not_used".to_string(),
-            resolved_preconditioner: "not_used".to_string(),
+            direction_policy_source: Some(
+                if gpu_bb && gpu_bb_policy.is_some() {
+                    "discretization_hints.fem.gpu_bb_preconditioner"
+                } else {
+                    "backend_default"
+                }
+                .to_string(),
+            ),
+            requested_direction_policy: if gpu_bb {
+                gpu_bb_policy
+                    .map(|policy| policy.as_str())
+                    .unwrap_or("auto")
+            } else {
+                "device_tangent_gradient"
+            }
+            .to_string(),
+            resolved_direction_policy: if preconditioned {
+                "device_exchange_mass_preconditioned"
+            } else {
+                "device_tangent_gradient"
+            }
+            .to_string(),
+            requested_linear_solver: if preconditioned {
+                "cooperative_device_pcg"
+            } else {
+                "not_used"
+            }
+            .to_string(),
+            resolved_linear_solver: if preconditioned {
+                "cooperative_device_pcg"
+            } else {
+                "not_used"
+            }
+            .to_string(),
+            requested_preconditioner: if preconditioned {
+                "device_jacobi"
+            } else {
+                "not_used"
+            }
+            .to_string(),
+            resolved_preconditioner: if preconditioned {
+                "device_jacobi"
+            } else {
+                "not_used"
+            }
+            .to_string(),
             environment_overrides: Vec::new(),
         };
     }
@@ -145,6 +189,7 @@ fn resolve_fem_direct_minimizer_policy(
     }
 
     FemDirectMinimizerPolicyProvenance {
+        direction_policy_source: None,
         requested_direction_policy: requested_direction.to_string(),
         resolved_direction_policy: resolved_direction.to_string(),
         requested_linear_solver: requested_solver.to_string(),
@@ -160,6 +205,7 @@ pub(crate) fn apply_fem_direct_minimizer_policy_provenance(
     provenance: &mut ExecutionProvenance,
     relaxation: Option<&RelaxationControlIR>,
     gpu: bool,
+    gpu_bb_policy: Option<fullmag_ir::FemGpuBbPreconditionerIR>,
 ) {
     if relaxation
         .and_then(|control| direct_energy_minimizer_name(control.algorithm))
@@ -172,6 +218,9 @@ pub(crate) fn apply_fem_direct_minimizer_policy_provenance(
         std::env::var(DIRECTION_POLICY_ENV).ok().as_deref(),
         std::env::var(LINEAR_SOLVER_ENV).ok().as_deref(),
         std::env::var(PRECONDITIONER_ENV).ok().as_deref(),
+        relaxation
+            .is_some_and(|control| control.algorithm == RelaxationAlgorithmIR::ProjectedGradientBb),
+        gpu_bb_policy,
     ));
 }
 
@@ -198,6 +247,8 @@ mod tests {
             Some("raw_tangent_gradient"),
             Some("hypre"),
             Some("jacobi"),
+            false,
+            None,
         );
 
         assert_eq!(policy.requested_direction_policy, "raw_tangent_gradient");
@@ -214,7 +265,7 @@ mod tests {
 
     #[test]
     fn fem_cpu_policy_records_actual_default_serial_realization() {
-        let policy = resolve_fem_direct_minimizer_policy(false, None, None, None);
+        let policy = resolve_fem_direct_minimizer_policy(false, None, None, None, false, None);
 
         assert_eq!(
             policy.resolved_direction_policy,
@@ -232,12 +283,68 @@ mod tests {
             Some("raw_tangent_gradient"),
             Some("hypre"),
             Some("jacobi"),
+            false,
+            None,
         );
 
         assert_eq!(policy.resolved_direction_policy, "device_tangent_gradient");
         assert_eq!(policy.resolved_linear_solver, "not_used");
         assert_eq!(policy.resolved_preconditioner, "not_used");
         assert!(policy.environment_overrides.is_empty());
+    }
+
+    #[test]
+    fn gpu_bb_typed_policy_preserves_request_and_ignores_cpu_environment() {
+        use fullmag_ir::FemGpuBbPreconditionerIR as Policy;
+        for (requested, enabled) in [
+            (Policy::Auto, true),
+            (Policy::None, false),
+            (Policy::ExchangeMass, true),
+        ] {
+            let policy = resolve_fem_direct_minimizer_policy(
+                true,
+                Some("raw_tangent_gradient"),
+                Some("hypre"),
+                Some("none"),
+                true,
+                Some(requested),
+            );
+            assert_eq!(policy.requested_direction_policy, requested.as_str());
+            assert_eq!(
+                policy.resolved_direction_policy,
+                if enabled {
+                    "device_exchange_mass_preconditioned"
+                } else {
+                    "device_tangent_gradient"
+                }
+            );
+            assert_eq!(
+                policy.resolved_linear_solver,
+                if enabled {
+                    "cooperative_device_pcg"
+                } else {
+                    "not_used"
+                }
+            );
+            assert_eq!(
+                policy.resolved_preconditioner,
+                if enabled { "device_jacobi" } else { "not_used" }
+            );
+            assert_eq!(
+                policy.direction_policy_source.as_deref(),
+                Some("discretization_hints.fem.gpu_bb_preconditioner")
+            );
+            assert!(policy.environment_overrides.is_empty());
+        }
+        let default = resolve_fem_direct_minimizer_policy(true, None, None, None, true, None);
+        assert_eq!(default.requested_direction_policy, "auto");
+        assert_eq!(default.resolved_linear_solver, "cooperative_device_pcg");
+        assert_eq!(
+            default.direction_policy_source.as_deref(),
+            Some("backend_default")
+        );
+        let ncg = resolve_fem_direct_minimizer_policy(true, None, None, None, false, None);
+        assert_eq!(ncg.resolved_linear_solver, "not_used");
     }
 
     #[test]
@@ -282,6 +389,8 @@ mod tests {
             None,
             Some("hypre"),
             Some("jacobi"),
+            false,
+            None,
         ));
 
         let value = serde_json::to_value(provenance).expect("serialize execution provenance");

@@ -1869,6 +1869,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "requested_cpu_threads": builder.get("cpu_threads"),
             "parallel_execution": copy.deepcopy(parallel_execution),
             "fem_demag_solver_policy": builder.get("fem_demag_solver_policy"),
+            "fem_bb_preconditioner": builder.get("fem_bb_preconditioner"),
             "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
                 builder.get("fem_demag_accuracy_contract"),
                 context="builder.fem_demag_accuracy_contract",
@@ -2249,6 +2250,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         **_execution_profile_fields(study, "SceneDocument.study"),
         **_compute_resources_fields(study, "SceneDocument.study"),
         "fem_demag_solver_policy": study.get("fem_demag_solver_policy"),
+        "fem_bb_preconditioner": study.get("fem_bb_preconditioner"),
         "fem_demag_accuracy_contract": validate_fem_demag_accuracy_contract(
             study.get("fem_demag_accuracy_contract"),
             context="SceneDocument.study.fem_demag_accuracy_contract",
@@ -2497,6 +2499,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             "precision": builder.get("requested_precision", "double"),
             "parallel_execution": parallel_execution,
         },
+        "fem_bb_preconditioner": builder.get("fem_bb_preconditioner"),
         "fem_demag_solver_policy": (
             dict(builder.get("fem_demag_solver_policy"))
             if isinstance(builder.get("fem_demag_solver_policy"), dict)

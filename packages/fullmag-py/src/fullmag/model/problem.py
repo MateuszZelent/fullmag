@@ -3134,6 +3134,12 @@ class Problem:
             for geometry in self._collect_geometries()
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
+        if discretization is not None and discretization.fem is not None and discretization.fem.gpu_bb_preconditioner is not None:
+            if (runtime.backend_target is not BackendTarget.FEM
+                    or runtime.device_target is not DeviceTarget.GPU
+                    or not isinstance(self.study, Relaxation)
+                    or self.study.algorithm != "projected_gradient_bb"):
+                raise ValueError("gpu_bb_preconditioner requires explicit FEM GPU projected_gradient_bb relaxation")
         pbc_ir = _pbc_to_ir(self.pbc)
         if (
             runtime.backend_target == BackendTarget.FDM

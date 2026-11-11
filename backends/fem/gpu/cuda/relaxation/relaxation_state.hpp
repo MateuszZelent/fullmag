@@ -14,8 +14,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace fullmag::fem {
+struct GpuBbExchangeMassWorkspace;
 
 static constexpr std::size_t kFemGpuAcceptedEnergyTermSlots = 18;
 
@@ -65,6 +67,12 @@ enum class GpuRelaxNcgFailurePoint : uint32_t {
 };
 
 struct FemGpuRelaxationDeviceState {
+    uint32_t bb_preconditioner_policy = 0; // auto, none, exchange_mass
+    std::shared_ptr<GpuBbExchangeMassWorkspace> bb_exchange_mass;
+    FemGpuComponentField bb_preconditioned_gradient;
+    uint64_t bb_preconditioner_wall_time_ns = 0;
+    uint32_t bb_preconditioner_cache_hits = 0;
+    uint32_t bb_preconditioner_cache_misses = 0;
     FemGpuComponentField projected_gradient_accepted_h_eff;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
@@ -97,6 +105,9 @@ inline void gpu_relax_invalidate_accepted_evaluation(
 inline void gpu_relax_reset_step_diagnostics(
     FemGpuRelaxationDeviceState &state) noexcept
 {
+    state.bb_preconditioner_wall_time_ns = 0;
+    state.bb_preconditioner_cache_hits = 0;
+    state.bb_preconditioner_cache_misses = 0;
     state.accepted_evaluation_cache_hits_current_step = 0;
     state.accepted_evaluation_cache_misses_current_step = 0;
     state.accepted_evaluation_invalidations_current_step = 0;

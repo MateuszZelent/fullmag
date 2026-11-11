@@ -3562,6 +3562,10 @@ extern "C" {
         segment_start_time_s: f64,
         waveform_origin_time_s: f64,
     ) -> i32;
+    pub fn fullmag_fem_backend_set_gpu_bb_preconditioner(
+        handle: *mut fullmag_fem_backend,
+        policy: u32,
+    ) -> i32;
     pub fn fullmag_fem_backend_set_gpu_execution_request_v1(
         handle: *mut fullmag_fem_backend,
         request: fullmag_fem_gpu_execution_request_v1,

@@ -31,6 +31,7 @@
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
 #include "gpu/cuda/relaxation/pgbb.hpp"
+#include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
@@ -501,6 +502,15 @@ int run_backend_relaxation_step(
                 0.0,
                 0.0);
             return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        // Prepare immutable MFEM CSR and Krylov storage outside the hot-loop
+        // audit scope. Subsequent BB steps only reuse this prepared state.
+        if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB &&
+            gpu_bb_exchange_mass_enabled(ctx) &&
+            !gpu_bb_exchange_mass_prepare(ctx, error)) {
+            set_stage_completion(ctx, FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                nullptr, 0.0, 0.0);
+            return FULLMAG_FEM_ERR_UNAVAILABLE;
         }
         gpu_rk_reset_phase_timing_events(ctx);
         gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);

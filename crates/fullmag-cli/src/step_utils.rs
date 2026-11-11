@@ -6352,6 +6352,7 @@ mod tests {
         problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
             fdm: None,
             fem: Some(fullmag_ir::FemHintsIR {
+                gpu_bb_preconditioner: None,
                 order: 1,
                 hmax: 25e-9,
                 mesh: None,

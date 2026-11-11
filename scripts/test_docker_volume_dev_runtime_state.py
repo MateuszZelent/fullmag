@@ -65,6 +65,10 @@ class DockerVolumeDevRuntimeStateTests(unittest.TestCase):
                     )
 
     def test_native_contract_allowlist_keeps_one_contract_per_invocation(self):
+        self.assertEqual(
+            docker_volume_dev._native_contracts(["fem-cuda-bb-exchange-mass"]),
+            ("fem-cuda-bb-exchange-mass",),
+        )
         self.assertEqual(docker_volume_dev._native_contracts(None), ())
         self.assertEqual(docker_volume_dev._native_contracts([]), ())
         self.assertEqual(

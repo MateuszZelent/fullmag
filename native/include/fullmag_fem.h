@@ -3994,6 +3994,12 @@ FULLMAG_FEM_API int fullmag_fem_backend_set_interrupt_poll(
     void *user_data
 );
 
+/* Per-context FEM GPU projected-gradient BB direction. Set before stepping.
+ * 0=auto (exchange mass), 1=raw tangent gradient, 2=exchange mass.
+ * This does not alter Poisson policy, physical gradients or convergence. */
+FULLMAG_FEM_API int fullmag_fem_backend_set_gpu_bb_preconditioner(
+    fullmag_fem_backend *handle, uint32_t policy);
+
 FULLMAG_FEM_API int fullmag_fem_backend_set_step_profile(
     fullmag_fem_backend *handle,
     int enabled

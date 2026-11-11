@@ -3388,6 +3388,8 @@ pub struct RelaxationControllerPolicyProvenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FemDirectMinimizerPolicyProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction_policy_source: Option<String>,
     pub requested_direction_policy: String,
     pub resolved_direction_policy: String,
     pub requested_linear_solver: String,
@@ -5357,6 +5359,7 @@ mod tests {
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
+            gpu_bb_preconditioner: None,
             mesh_name: "unit_tet".to_string(),
             mesh_source: Some("test".to_string()),
             mesh: MeshIR {

@@ -8364,6 +8364,7 @@ mod tests {
                 material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fem(FemPlanIR {
+                gpu_bb_preconditioner: None,
                 mesh_name: "unit_tet".to_string(),
                 mesh_source: Some("meshes/unit_tet.msh".to_string()),
                 mesh: MeshIR {

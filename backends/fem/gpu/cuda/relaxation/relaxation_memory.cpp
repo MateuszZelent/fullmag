@@ -28,6 +28,11 @@ bool gpu_relaxation_state_allocate(
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
     if (!gpu_device_allocate_component(
+            relaxation.bb_preconditioned_gradient,
+            node_count,
+            device_bytes,
+            error) ||
+        !gpu_device_allocate_component(
             relaxation.projected_gradient_accepted_h_eff,
             node_count,
             device_bytes,
@@ -50,6 +55,8 @@ bool gpu_relaxation_state_allocate(
 
 void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
 {
+    relaxation.bb_exchange_mass.reset();
+    gpu_device_free_component(relaxation.bb_preconditioned_gradient);
     gpu_device_free_component(relaxation.projected_gradient_accepted_h_eff);
     gpu_device_free_component(relaxation.nonlinear_cg_direction);
     gpu_device_free_component(relaxation.nonlinear_cg_direction_backup);
