@@ -358,13 +358,44 @@ def _runtime_witness_pin(args):
     return relative, sha
 
 
+def _current_runtime_terminals(control, previous, original, compose, *, source_root):
+    """Authenticate the current runtime without repairing immutable receipts.
+
+    A build can fail before its terminal acquires a config pin. Only a
+    failed-confirmed terminal may use the hash of its retained Compose document;
+    the existing recovery validator must then authenticate a succeeded linked
+    resume/iteration against that hash before any live group is inspected.
+    """
+    from docker_volume_activate import _linked_runtime_terminals
+
+    if (not isinstance(previous, dict) or not isinstance(original, dict)
+            or not isinstance(compose, dict) or canonical(previous) != canonical(original)):
+        raise HistoryError("Current development terminal/config differs")
+    config_sha256 = digest(canonical(compose))
+    if "config_sha256" in previous:
+        if previous["config_sha256"] != config_sha256:
+            raise HistoryError("Current development terminal/config differs")
+    elif previous.get("state") != "failed-confirmed":
+        raise HistoryError("Current development terminal is missing its config pin")
+    inputs = previous.get("inputs")
+    image = inputs.get("image_id") if isinstance(inputs, dict) else None
+    if not isinstance(image, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+        raise HistoryError("Current development backend image is not immutable")
+    attempt = previous.get("attempt")
+    if not isinstance(attempt, str) or not ATTEMPT.fullmatch(attempt):
+        raise HistoryError("Current development attempt is invalid")
+    terminals = _linked_runtime_terminals(control, attempt, original,
+        source_root=source_root, image=image, config_sha256=config_sha256)
+    return image, terminals
+
+
 def host_context(args):
     witness = _runtime_witness_pin(args)
     import fullmag_storage as storage
     from docker_development_inputs import select_checkout
     from docker_compose_identity import compose_project_identity
     from docker_build_control import toolchain_configuration
-    from docker_volume_activate import _linked_runtime_terminals, _validate_running_group
+    from docker_volume_activate import _validate_running_group
     from docker_dev_host import validate_host_path
     selected = select_checkout(args.repo_root.resolve(strict=True), args.source_root).resolve(strict=True)
     layout = storage.resolve_layout(selected, "docker-all-gpu")
@@ -382,11 +413,8 @@ def host_context(args):
     current_root = "development/attempts/" + previous["attempt"]
     original = control.read(current_root + "/terminal.json")
     compose = control.read(current_root + "/compose.json")
-    if canonical(previous) != canonical(original) or digest(canonical(compose)) != previous["config_sha256"]:
-        raise HistoryError("Current development terminal/config differs")
-    image = previous["inputs"]["image_id"]
-    runtime_terminals = _linked_runtime_terminals(control, previous["attempt"], original,
-        source_root=str(selected), image=image, config_sha256=previous["config_sha256"])
+    image, runtime_terminals = _current_runtime_terminals(
+        control, previous, original, compose, source_root=str(selected))
     validation_error = None
     for terminal in runtime_terminals:
         try:
