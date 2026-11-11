@@ -9951,9 +9951,24 @@ mod tests {
             "native FEM GPU snapshots must stage x component device-to-device asynchronously"
         );
         assert!(
-            source.contains("cudaMemcpy2DAsync("),
-            "native FEM GPU snapshots must copy staged device data to AoS host payload asynchronously"
+            pool.contains("cudaMalloc(&slot.device_aos"),
+            "native FEM GPU snapshot pool must preallocate packed device storage"
         );
+        let start = source.find("bool schedule_gpu_snapshot_payload(")
+            .expect("GPU snapshot submission owner");
+        let (function, _) = source[start..].split_once("\n}\n")
+            .expect("GPU snapshot submission body");
+        let compact = function.split_whitespace().collect::<String>();
+        let pack = compact.find("err=fullmag::fem::fullmag_cuda_pack_soa_to_aos(")
+            .expect("GPU snapshots must pack staged SoA before host transfer");
+        let copy = compact.find(
+            "err=cudaMemcpyAsync(snapshot.host_aos,snapshot.device_aos,snapshot.host_aos_len_bytes,cudaMemcpyDeviceToHost,io_stream);"
+        ).expect("GPU snapshots require one contiguous asynchronous packed D2H");
+        assert!(pack < copy, "host copy must follow device-side packing");
+        assert_eq!(compact.matches("cudaMemcpyDeviceToHost").count(), 1,
+            "snapshot submission must not transfer component planes separately");
+        assert!(compact[copy..].contains("err=cudaEventRecord(done_event,io_stream);"),
+            "snapshot completion event must follow the packed host copy");
         assert!(
             source.contains(
                 "cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot->done_event))"
