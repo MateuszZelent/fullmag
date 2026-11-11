@@ -449,6 +449,14 @@ jobs:
           RUST_MIN_STACK: 8388608
         run: cargo test -p fullmag-api --bin fullmag-api scene_pbc_overrides_roundtrip_via_python_helper
 
+      - name: Run typed compute resource authoring bridge regressions
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test --locked -p fullmag-authoring --lib compute_resources
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir -- --exact
+
       - name: Run full field identity binary transport contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api field_vector_v5
