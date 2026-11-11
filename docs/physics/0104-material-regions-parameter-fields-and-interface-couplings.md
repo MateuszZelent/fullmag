@@ -948,7 +948,14 @@ Regresja `large_active_selectors_reuse_records` obejmuje 18 529 aktywnych
 rekordów nodalnych i 56 047 aktywnych tetraedrów DG0, powtórne odczyty
 w pętli gorącej, zgodność z oracle oraz rzeczywiste liczniki H2D i alokacji.
 Jej mikrobenchmark redukcji nie zastępuje pomiaru całej symulacji ani
-parytetu energii i torque. Wykonanie nowej wersji na urządzeniu: **NOT VERIFIED**.
+parytetu energii i torque. Pełny kontrakt CUDA przeszedł na źródłach
+`1c5c6c0a09faf499040b720bb2f6f5b962ee8ea0` i RTX 4080 SUPER,
+z biblioteką SHA-256 `eeb0068fabe13a6fbfd8e32a19be3b4887ddac349efd37eedd7b8587759f5706`
+przy budżecie grupy 40 CPU/32 GiB. W pięciu naprzemiennych parach sumy
+czasów cache/streaming wyniosły `0.788/5.234 ms` (nodal) oraz
+`3.083/18.389 ms` (DG0), z zerowym ponownym H2D na trafieniach.
+To odpowiednio około 6.64× i 5.96× dla tej redukcji, nie czasu kroku ani
+pełnej kwalifikacji fizycznej czterech solverów; te pozostają **NOT VERIFIED**.
 
 Przynależność selekcji DG0 wymaga osobnej hostowej maski roboczej,
 przygotowanej przy inicjalizacji GPU. Jej rozmiar wynosi `max(N, E)` bajtów,
@@ -1625,7 +1632,7 @@ must include:
 | FEM GPU membership workspace | `backends/fem/gpu/cuda/reductions/object_average.cpp` | `prepare_membership_shape` | Host mask prepared for the node/element shape before the hot loop; large selections retain linear preparation cost. |
 | FEM GPU large node selection | `backends/fem/tests/cuda_object_average_contract.cpp` | `dg0_large_node_selection_uses_prepared_byte_mask` | Independent weighted oracle beyond the retired membership limit; native execution pending. |
 | FEM GPU element selection shape | `backends/fem/tests/cuda_object_average_contract.cpp` | `dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift` | Global element IDs, duplicate and invalid selectors, mask switching and no hot-loop resize; native execution pending. |
-| FEM GPU large active object cache | `backends/fem/tests/cuda_object_average_contract.cpp` | `large_active_selectors_reuse_records` | Active nodal/DG0 selections beyond the retired record limit; observable oracle, H2D and stable allocation gates; native execution pending. |
+| FEM GPU large active object cache | `backends/fem/tests/cuda_object_average_contract.cpp` | `large_active_selectors_reuse_records` | Active nodal/DG0 selectors, oracle, H2D and stable allocation gates passed on `1c5c6c0a`; full solver timing and physics parity remain unqualified. |
 | FEM observables | `backends/fem/core/fem_element_quadrature_material.cpp` | `ms_weighted_aos3_average_reduction_for_element_set` | Exact P1/DG0 moment reduction over the selected active elements, independent of shared interface nodes. |
 | FEM object ownership | `crates/fullmag-runner/src/native_fem/object_average.rs` | `object_element_indices` | Resolve object element selectors before native marker normalization. |
 | FEM mass policy import | `backends/fem/cpu/mfem/interactions/exchange.cpp` | `initialize_exchange_plan_fields` | Preserve requested consistent-mass policy independently of MFEM availability; no operator or stepping capability is added. |

@@ -19,14 +19,14 @@ numerycznymi; nie przypisywać im hipotetycznego przyspieszenia.
 
 ## Kolejność i odbiór
 
-- [ ] Regresja GPU z ponad 16 384 aktywnymi rekordami nodal i DG0:
+- [x] Regresja GPU z ponad 16 384 aktywnymi rekordami nodal i DG0:
       zgodność z niezależnym oracle, ponowny odczyt bez H2D, brak wzrostu
       alokacji w pętli; zmiana selekcji i materiału nie daje starego wyniku.
-- [ ] Cache GPU: przygotowanie poza pętlą, aktualne wagi, skalarne D2H;
+- [x] Cache GPU: przygotowanie poza pętlą, aktualne wagi, skalarne D2H;
       testy błędów, dużych selekcji i układów wielu obiektów.
 - [ ] Regresje i naprawa CPU `auto`: alokacja 40 + mała/średnia siatka
       daje 8/16; mniejsza alokacja pozostaje ograniczeniem; manual i GPU bez zmian.
-- [ ] Naprawa kwalifikowanej archiwizacji historycznych aktywacji, jeżeli
+- [x] Naprawa kwalifikowanej archiwizacji historycznych aktywacji, jeżeli
       potrzebna do wykonania testów. Żadnego kasowania historii, podnoszenia
       limitu ani powtórzenia niejednoznacznego Solve.
 - [ ] Testy w stałym backendzie Compose, kontrola źródeł/dokumentacji,
@@ -40,3 +40,21 @@ numerycznymi; nie przypisywać im hipotetycznego przyspieszenia.
 **Właściciele:** root — GPU/cache, wykonanie, review i integracja;
 `auto_threads_fix` — CPU thread policy, jej testy i nota 0532;
 `object_cache_contract` — odczytowa analiza kontraktu zależności cache.
+
+## Checkpoint wykonania 2026-11-11
+
+- CUDA: `1c5c6c0a09faf499040b720bb2f6f5b962ee8ea0`, test
+  `20e7242cc1474a68aea501af9d38c0df`, biblioteka
+  `eeb0068fabe13a6fbfd8e32a19be3b4887ddac349efd37eedd7b8587759f5706`.
+  Pełny kontrakt PASS; mikrobenchmark dotyczy wyłącznie redukcji obiektowej.
+- CPU: poprawka i regresje zapisane w `21261668b`; wykonanie natywnego
+  kontraktu wątków i nowego biegu CPU pozostaje do potwierdzenia.
+- Archiwizacja: 141 testów PASS; przeniesiono aktywacje
+  `0fbd858f1aa740c99ba45e28d8dc41e1` i `3f1024ba978443ee8851a01b82992cef`.
+  Wszystkie bajty i Zarr zachowane, bez powtórzenia Solve.
+- Wznowienie: `1695e876fa0168538290ceea1dbdeb4877d268cd`, 62 testy
+  rodziny budżetu PASS oraz niezależne review. Uwierzytelniona historia
+  prawidłowego drain umożliwiła odtworzenie wcześniejszego budżetu 40 CPU/32 GiB.
+  Development `81d82ac214984c33805231208d218271` ma zdrowe API na porcie 3274.
+- Fizyka i czas całego solvera: nowe przebiegi i parytet **NOT VERIFIED**.
+  Mikrobenchmark i zielone CI nie zastępują tych bramek.
