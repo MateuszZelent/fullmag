@@ -2121,7 +2121,7 @@ def _native_contracts(values):
                    or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
                                     "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                     "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                    "fem-cuda-bb-exchange-mass"}
+                                    "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot"}
                    for value in values)
             or len(values) > 1
             or len(set(values)) != len(values)):

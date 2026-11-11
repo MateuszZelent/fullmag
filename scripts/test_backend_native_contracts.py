@@ -180,6 +180,10 @@ class BackendNativeContractsTests(unittest.TestCase):
         self._assert_performance_contract_binding(
             "fem-cuda-bb-exchange-mass", "fem_cuda_bb_exchange_mass_contract")
 
+    def test_gpu_snapshot_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cuda-snapshot", "fem_cuda_snapshot_contract")
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):

@@ -2862,7 +2862,7 @@ def _parser() -> argparse.ArgumentParser:
                                  choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                           "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                          "fem-cuda-bb-exchange-mass"),
+                                          "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -3031,7 +3031,7 @@ def _parser() -> argparse.ArgumentParser:
                              choices=("fem-demag-poisson", "fem-cuda-activity-trace",
                                           "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
                                           "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads",
-                                          "fem-cuda-bb-exchange-mass"),
+                                          "fem-cuda-bb-exchange-mass", "fem-cuda-snapshot"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),

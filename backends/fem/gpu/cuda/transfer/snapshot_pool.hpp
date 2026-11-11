@@ -21,6 +21,7 @@ constexpr std::size_t kFemGpuSnapshotPoolCapacity = 8;
 
 struct FemGpuSnapshotPoolSlot {
     void *host_aos = nullptr;
+    void *device_aos = nullptr;
     void *ready_event = nullptr;
     void *staging_done_event = nullptr;
     void *done_event = nullptr;
@@ -44,6 +45,7 @@ struct FemGpuSnapshotPoolState {
 struct FemGpuSnapshotPoolLease {
     std::size_t slot_index = kFemGpuSnapshotPoolCapacity;
     void *host_aos = nullptr;
+    void *device_aos = nullptr;
     FemGpuComponentField staging{};
     void *ready_event = nullptr;
     void *staging_done_event = nullptr;

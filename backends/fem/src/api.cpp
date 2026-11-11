@@ -52,6 +52,7 @@
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
+#include "gpu/cuda/transfer/transfer_kernels.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 #if FULLMAG_HAS_MFEM_STACK
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
@@ -546,6 +547,7 @@ bool apply_device_demag_tangent_with_potential_f64(
 struct FemSnapshotPayload {
     std::vector<double> data;
     void *host_aos = nullptr;
+    void *device_aos = nullptr;
     size_t host_aos_len_bytes = 0;
     fullmag::fem::FemGpuComponentField staging{};
     void *stream = nullptr;
@@ -569,6 +571,7 @@ void destroy_snapshot_payload(FemSnapshotPayload &snapshot)
         snapshot.pool_slot = fullmag::fem::kFemGpuSnapshotPoolCapacity;
     }
     snapshot.host_aos = nullptr;
+    snapshot.device_aos = nullptr;
     snapshot.host_aos_len_bytes = 0;
     snapshot.staging = {};
     snapshot.stream = nullptr;
@@ -716,12 +719,14 @@ bool schedule_gpu_snapshot_payload(
     snapshot.pool = cuda_runtime.snapshot_pool;
     snapshot.pool_slot = lease.slot_index;
     snapshot.host_aos = lease.host_aos;
+    snapshot.device_aos = lease.device_aos;
     snapshot.staging = lease.staging;
     snapshot.stream = cuda_runtime.io_stream;
     snapshot.ready_event = lease.ready_event;
     snapshot.staging_done_event = lease.staging_done_event;
     snapshot.done_event = lease.done_event;
-    if (cuda_runtime.snapshot_pool->component_bytes != component_bytes ||
+    if (snapshot.host_aos == nullptr || snapshot.device_aos == nullptr ||
+        cuda_runtime.snapshot_pool->component_bytes != component_bytes ||
         cuda_runtime.snapshot_pool->host_aos_bytes != snapshot.host_aos_len_bytes) {
         handle.last_error = "FEM GPU snapshot pool size does not match backend node count";
         destroy_snapshot_payload(snapshot);
@@ -831,38 +836,21 @@ bool schedule_gpu_snapshot_payload(
     err = cudaStreamWaitEvent(compute_stream, staging_done_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(FEM snapshot.staging_done_event)", err);
 
-    auto *host = static_cast<double *>(snapshot.host_aos);
-    const size_t host_pitch = 3u * sizeof(double);
-    err = cudaMemcpy2DAsync(
-        host + 0u,
-        host_pitch,
+    err = fullmag::fem::fullmag_cuda_pack_soa_to_aos(
         snapshot.staging.x,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_x)", err);
-    err = cudaMemcpy2DAsync(
-        host + 1u,
-        host_pitch,
         snapshot.staging.y,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_y)", err);
-    err = cudaMemcpy2DAsync(
-        host + 2u,
-        host_pitch,
         snapshot.staging.z,
-        sizeof(double),
-        sizeof(double),
-        static_cast<size_t>(node_count),
+        static_cast<double *>(snapshot.device_aos),
+        static_cast<int>(node_count),
+        io_stream);
+    if (err != cudaSuccess) return fail("launch FEM snapshot SoA-to-AoS pack", err);
+    err = cudaMemcpyAsync(
+        snapshot.host_aos,
+        snapshot.device_aos,
+        snapshot.host_aos_len_bytes,
         cudaMemcpyDeviceToHost,
         io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpy2DAsync(FEM snapshot.host_z)", err);
+    if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.host_aos)", err);
 
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.done_event)", err);

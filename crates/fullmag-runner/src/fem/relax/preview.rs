@@ -5,7 +5,7 @@
 
 use fullmag_ir::FemPlanIR;
 
-use crate::dispatch::{flatten_vectors, FemEngine};
+use crate::dispatch::FemEngine;
 use crate::interactive_runtime::display_is_global_scalar;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
@@ -314,17 +314,19 @@ fn materialize_magnetization(
     deferred: DeferredLiveMagnetization,
 ) -> Result<FemLiveMagnetizationPayload, RunError> {
     let copy_start = std::time::Instant::now();
-    let magnetization = snapshot.into_vector_field()?;
-    if magnetization.len() != deferred.node_count {
+    let payload = snapshot.into_flat_vector_field()?;
+    let expected_value_count = deferred.node_count.checked_mul(3).ok_or_else(|| RunError {
+        message: "native FEM magnetization payload node count overflowed".to_string(),
+    })?;
+    if payload.len() != expected_value_count {
         return Err(RunError {
             message: format!(
-                "native FEM magnetization payload returned {} nodes, expected {}",
-                magnetization.len(),
-                deferred.node_count
+                "native FEM magnetization payload returned {} values, expected {}",
+                payload.len(),
+                expected_value_count
             ),
         });
     }
-    let payload = flatten_vectors(&magnetization);
     let field_copy_wall_time_ns = elapsed_ns(copy_start);
     let field_copy_bytes = (payload.len() as u64).saturating_mul(std::mem::size_of::<f64>() as u64);
     Ok(FemLiveMagnetizationPayload {

@@ -1835,6 +1835,20 @@ target_include_directories(fem_snapshot_contract PRIVATE
 )
 add_test(NAME fem_snapshot_contract COMMAND fem_snapshot_contract)
 
+add_executable(fem_cuda_snapshot_contract tests/snapshot_contract.cpp)
+target_link_libraries(fem_cuda_snapshot_contract PRIVATE fullmag_fem)
+target_compile_definitions(fem_cuda_snapshot_contract PRIVATE
+    FULLMAG_SNAPSHOT_REQUIRE_CUDA=1)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_cuda_snapshot_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_cuda_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_snapshot_contract COMMAND fem_cuda_snapshot_contract)
+set_tests_properties(fem_cuda_snapshot_contract PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(fem_mfem_context_contract tests/mfem_context_contract.cpp)
 target_link_libraries(fem_mfem_context_contract PRIVATE fullmag_fem)
 target_include_directories(fem_mfem_context_contract PRIVATE

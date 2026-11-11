@@ -3103,7 +3103,7 @@ pub(crate) struct NativeFemEnergyDensitySnapshot {
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 unsafe impl Send for NativeFemEnergyDensitySnapshot {}
 
-#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NativeFemFieldSnapshotInfo {
     pub node_count: usize,
@@ -6801,6 +6801,200 @@ mod task5_energy_density_tests {
     }
 }
 
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeFemFieldSnapshotLayoutError {
+    UnsupportedLayout,
+    MismatchedPayloadLength,
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+fn native_fem_field_snapshot_layout_error(name: &str, error: NativeFemFieldSnapshotLayoutError) -> RunError {
+    RunError {
+        message: match error {
+            NativeFemFieldSnapshotLayoutError::UnsupportedLayout => {
+                format!("native FEM field snapshot '{}' returned unsupported layout", name)
+            }
+            NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength => format!(
+                "native FEM field snapshot '{}' returned mismatched payload length",
+                name
+            ),
+        },
+    }
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+fn native_fem_field_snapshot_scalar_count(
+    info: NativeFemFieldSnapshotInfo,
+    len_bytes: u64,
+) -> Result<usize, NativeFemFieldSnapshotLayoutError> {
+    if !matches!(info.component_count, 1 | 3)
+        || info.scalar_bytes != std::mem::size_of::<f64>()
+    {
+        return Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout);
+    }
+
+    let expected_scalar_count = info
+        .node_count
+        .checked_mul(info.component_count)
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let expected_len_bytes = expected_scalar_count
+        .checked_mul(info.scalar_bytes)
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let max_slice_bytes = usize::try_from(isize::MAX)
+        .map_err(|_| NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    if expected_len_bytes > max_slice_bytes {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+    let expected_len_bytes = u64::try_from(expected_len_bytes)
+        .map_err(|_| NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    if len_bytes != expected_len_bytes {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+
+    Ok(expected_scalar_count)
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native", test))]
+fn flatten_native_fem_snapshot_values(
+    values: &[f64],
+    info: NativeFemFieldSnapshotInfo,
+) -> Result<Vec<f64>, NativeFemFieldSnapshotLayoutError> {
+    let len_bytes = values
+        .len()
+        .checked_mul(std::mem::size_of::<f64>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+    let scalar_count = native_fem_field_snapshot_scalar_count(info, len_bytes)?;
+    if values.len() != scalar_count {
+        return Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength);
+    }
+
+    match info.component_count {
+        3 => Ok(values.to_vec()),
+        1 => {
+            let flat_count = info
+                .node_count
+                .checked_mul(3)
+                .ok_or(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)?;
+            let mut flat = Vec::with_capacity(flat_count);
+            for value in values {
+                flat.push(*value);
+                flat.push(0.0);
+                flat.push(0.0);
+            }
+            Ok(flat)
+        }
+        _ => Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout),
+    }
+}
+
+#[cfg(test)]
+mod native_fem_snapshot_flat_values_tests {
+    use super::*;
+
+    #[test]
+    fn native_fem_snapshot_flat_values_preserve_aos_order_and_scalar_fallback() {
+        let vector_info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let vector_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&vector_values, vector_info)
+                .expect("validated vector snapshot"),
+            vector_values.to_vec()
+        );
+
+        let scalar_info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 1,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let scalar_values = [7.0, -2.5];
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&scalar_values, scalar_info)
+                .expect("validated scalar snapshot"),
+            vec![7.0, 0.0, 0.0, -2.5, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn native_fem_snapshot_flat_values_reject_invalid_layout_in_safe_helper() {
+        let values = [1.0, 2.0, 3.0];
+        let invalid_component_count = NativeFemFieldSnapshotInfo {
+            node_count: 1,
+            component_count: 2,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_component_count),
+            Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout)
+        );
+
+        let invalid_scalar_bytes = NativeFemFieldSnapshotInfo {
+            node_count: 1,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f32>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_scalar_bytes),
+            Err(NativeFemFieldSnapshotLayoutError::UnsupportedLayout)
+        );
+
+        let invalid_length = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            flatten_native_fem_snapshot_values(&values, invalid_length),
+            Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)
+        );
+
+        let max_slice_bytes = usize::try_from(isize::MAX).expect("isize max fits usize");
+        let oversized_scalar_info = NativeFemFieldSnapshotInfo {
+            node_count: max_slice_bytes / std::mem::size_of::<f64>() + 1,
+            component_count: 1,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        assert_eq!(
+            native_fem_field_snapshot_scalar_count(oversized_scalar_info, u64::MAX),
+            Err(NativeFemFieldSnapshotLayoutError::MismatchedPayloadLength)
+        );
+    }
+
+    #[test]
+    fn native_fem_snapshot_flat_values_preserve_float_bits() {
+        let info = NativeFemFieldSnapshotInfo {
+            node_count: 2,
+            component_count: 3,
+            scalar_bytes: std::mem::size_of::<f64>(),
+        };
+        let values = [
+            -0.0,
+            f64::from_bits(0x7ff8_0000_0000_0042),
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+        ];
+        let flattened =
+            flatten_native_fem_snapshot_values(&values, info).expect("validated vector snapshot");
+        assert_eq!(
+            flattened
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl NativeFemFieldSnapshot {
     fn wait_payload(
@@ -6922,6 +7116,34 @@ impl NativeFemFieldSnapshot {
                 ),
             }),
         }
+    }
+
+    pub(crate) fn into_flat_vector_field(mut self) -> Result<Vec<f64>, RunError> {
+        let (data, len_bytes, info) = self.wait_payload()?;
+        let scalar_count = native_fem_field_snapshot_scalar_count(info, len_bytes)
+            .map_err(|error| native_fem_field_snapshot_layout_error(&self.name, error))?;
+        if scalar_count == 0 {
+            return Ok(Vec::new());
+        }
+        if data.is_null() {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned a null payload",
+                    self.name
+                ),
+            });
+        }
+        if (data as usize) % std::mem::align_of::<f64>() != 0 {
+            return Err(RunError {
+                message: format!(
+                    "native FEM field snapshot '{}' returned a misaligned payload",
+                    self.name
+                ),
+            });
+        }
+        let values = unsafe { std::slice::from_raw_parts(data.cast::<f64>(), scalar_count) };
+        flatten_native_fem_snapshot_values(values, info)
+            .map_err(|error| native_fem_field_snapshot_layout_error(&self.name, error))
     }
 }
 
