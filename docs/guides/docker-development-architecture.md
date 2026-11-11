@@ -920,6 +920,17 @@ archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
 blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
 namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
 
+### Zachowane wyniki przed archiwizacją aktywacji
+
+Kwalifikacja pojedynczego ukończonego runu rozpoznaje dwa istniejące układy:
+`reversal-attempt-1` z targetem `main` oraz `relax-attempt-1` z targetem
+`relax`. Nazwa katalogu musi zgadzać się z oboma receiptami storage i wpisem
+etapu w `fullmag-run.json`; target musi zgadzać się z deklaracjami wyjść,
+manifestem autosave i metadanymi Zarr. Dodatkowy katalog próby, brakujący
+chunk lub niezgodna tożsamość nadal blokują operację. Walidator nie zmienia
+nazw wyników ani ich zawartości. To rozszerzenie nie uchyla kontroli lease,
+referencji control, aktualnej aktywacji i jej chronionego poprzednika.
+
 ### Archiwizacja odrzuconej aktywacji bez Run
 
 `docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
