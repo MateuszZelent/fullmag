@@ -949,6 +949,15 @@ brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
 Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
 kwalifikację. Nie pomija się poddrzew wyników ani historii.
 
+Dla tak zakwalifikowanego odrzucenia samo `activation/current.json` może być
+historycznym wskaźnikiem: jego surowe bajty muszą być identyczne z terminalem
+tego samego kandydata. Plan wiąże rodzaj kwalifikacji, identyfikator próby
+oraz oba hashe; pointer pozostaje przypięty w guardach/CAS. Apply ponownie
+kwalifikuje kandydata pod blokadą. `verified`, inne referencje recovery,
+nieznany wynik i zmiana choćby formatu bajtów nadal blokują operację.
+Pozostawiony pointer korzysta z istniejącego odczytu archiwalnego pod dawną
+ścieżką; nie jest usuwany ani przestawiany na inny wynik.
+
 Preview i apply zachowują istniejące blokady, source/consumer pins oraz
 niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`
 z zachowaniem wszystkich bajtów i odczytu pod dawnymi ścieżkami. Nie usuwa

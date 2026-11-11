@@ -40,6 +40,7 @@ class HistoryInventoryTests(unittest.TestCase):
         files=RejectedHistoryTests().evidence()
         receipt=json.loads(files["receipt.json"]);receipt["activation_receipt_key"]="c"*64
         files["receipt.json"]=files["terminal.json"]=raw(receipt)
+        qualified={"candidate":RejectedHistoryTests().check(files),"files":files}
         for name,content in files.items():
             path=self.root/"activation/attempts"/TOKEN/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
         marker={"schema":"fullmag.docker-startup-activation-receipt.v1","state":"rejected",
@@ -47,12 +48,12 @@ class HistoryInventoryTests(unittest.TestCase):
                 "authorization":json.loads(files["authorization.json"]),"result":json.loads(files["result.json"])}
         path=self.put("backend/script-activation-"+"c"*64+"/activation.json",marker)
         with self.assertRaises(HistoryError):control_references(self.root,TOKEN)
-        self.assertNotIn(TOKEN,control_references(self.root,TOKEN,qualified_rejection=files)["protected"])
+        self.assertNotIn(TOKEN,control_references(self.root,TOKEN,qualified_rejection=qualified)["protected"])
         self.put("backend/recovery.json",{"activation":TOKEN})
-        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=qualified)
         (self.root/"backend/recovery.json").unlink()
         marker["future_pin"]=TOKEN;path.write_bytes(raw(marker))
-        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=qualified)
 
     def test_known_operational_roots_are_live_references_not_excluded(self):
         for name in ["browser-qa","claimed-interruption-collect","cancel-failed-no-spawn",

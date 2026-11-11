@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from docker_activation_history_inventory import control_references
 from docker_activation_history_policy import HistoryError, digest
+from test_docker_activation_history_policy import RejectedHistoryTests, TOKEN, raw
 
 
 def make_root(path):
@@ -24,6 +25,10 @@ def put(root, relative, value):
     else:
         path.write_text(json.dumps(value, separators=(",", ":")) + "\n")
     return path
+
+
+def qualified_rejection(files):
+    return {"candidate": RejectedHistoryTests().check(files), "files": files}
 
 
 def activation_marker(root, token):
@@ -271,6 +276,81 @@ class HistoricalMarkerReferenceTests(unittest.TestCase):
         with patch("docker_activation_history_inventory.MAX_PIN_BYTES", 1):
             with self.assertRaisesRegex(HistoryError, "byte budget"):
                 control_references(self.root, "f" * 32)
+
+    def test_qualified_rejected_current_pointer_is_excluded_but_hash_pinned(self):
+        files = RejectedHistoryTests().evidence()
+        qualified = qualified_rejection(files)
+        attempt_dir = self.root / "activation/attempts" / TOKEN
+        attempt_dir.mkdir(parents=True)
+        for name, content in files.items():
+            (attempt_dir / name).write_bytes(content)
+        current = put(self.root, "activation/current.json", files["terminal.json"])
+
+        proof = control_references(self.root, TOKEN, qualified_rejection=qualified)
+
+        self.assertNotIn(TOKEN, proof["protected"])
+        self.assertEqual(proof["pins"]["activation/current.json"], digest(current.read_bytes()))
+
+    def test_only_exact_qualified_current_pointer_gets_the_exception(self):
+        cases = (
+            ("unqualified", None, None),
+            ("changed", RejectedHistoryTests().evidence(), "changed"),
+            ("unknown", RejectedHistoryTests().evidence(), "unknown"),
+            ("succeeded", RejectedHistoryTests().evidence(), "succeeded"),
+            ("verified", RejectedHistoryTests().evidence(), "verified"),
+        )
+        for name, qualified, current_kind in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = make_root(temporary)
+                files = RejectedHistoryTests().evidence()
+                attempt_dir = root / "activation/attempts" / TOKEN
+                attempt_dir.mkdir(parents=True)
+                for filename, content in files.items():
+                    (attempt_dir / filename).write_bytes(content)
+                if current_kind == "changed":
+                    current = files["terminal.json"] + b" "
+                elif current_kind == "unknown":
+                    current = raw({"attempt": TOKEN, "state": "outcome-unknown-resources-retained"})
+                elif current_kind == "succeeded":
+                    current = raw({"attempt": TOKEN, "state": "succeeded", "run_id": "run-other"})
+                else:
+                    current = files["terminal.json"]
+                put(root, "activation/current.json", current)
+                if current_kind == "verified":
+                    put(root, "activation/verified.json", files["terminal.json"])
+
+                with self.assertRaises(HistoryError):
+                    if name == "unqualified":
+                        control_references(root, TOKEN)
+                    elif name == "verified":
+                        control_references(root, TOKEN, qualified_rejection=qualified_rejection(files))
+                    else:
+                        control_references(root, TOKEN, qualified_rejection=qualified_rejection(files))
+
+    def test_inventory_requires_explicit_rejected_no_run_qualification(self):
+        files = RejectedHistoryTests().evidence()
+        attempt_dir = self.root / "activation/attempts" / TOKEN
+        attempt_dir.mkdir(parents=True)
+        for name, content in files.items():
+            (attempt_dir / name).write_bytes(content)
+        put(self.root, "activation/current.json", files["terminal.json"])
+        unqualified = qualified_rejection(files)
+        del unqualified["candidate"]["qualification_kind"]
+
+        with self.assertRaisesRegex(HistoryError, "current no-run qualification"):
+            control_references(self.root, TOKEN, qualified_rejection=unqualified)
+
+    def test_other_control_root_still_blocks_a_qualified_current_pointer(self):
+        files = RejectedHistoryTests().evidence()
+        attempt_dir = self.root / "activation/attempts" / TOKEN
+        attempt_dir.mkdir(parents=True)
+        for name, content in files.items():
+            (attempt_dir / name).write_bytes(content)
+        put(self.root, "activation/current.json", files["terminal.json"])
+        put(self.root, "backend/recovery.json", {"activation": TOKEN})
+
+        with self.assertRaisesRegex(HistoryError, "referenced"):
+            control_references(self.root, TOKEN, qualified_rejection=qualified_rejection(files))
 
 
 if __name__ == "__main__":

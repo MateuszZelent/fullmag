@@ -15,13 +15,17 @@ import tempfile
 from docker_activation_history_policy import (
     ATTEMPT, SCHEMA, SHA, HistoryError, MAX_ATTEMPT_BYTES, MAX_DOCUMENT_BYTES,
     MAX_HISTORY_ATTEMPTS, MAX_HISTORY_BYTES, MAX_LOG_BYTES,
-    canonical, digest, file_manifest, referenced_attempts,
+    canonical, digest, document, file_manifest, referenced_attempts,
 )
 
 
 METADATA = frozenset({".history.json", ".history.sha256"})
 GUARDS = ("activation/current.json", "activation/verified.json", "activation/unresolved.json",
           "development/current.json", "development/verified.json")
+REJECTED_NO_RUN = "rejected-no-run-v1"
+REJECTED_ACTIVATION_ERROR = (
+    "Backend activation was rejected; terminal activation receipt retained and retry is forbidden"
+)
 
 
 def _directory(path):
@@ -97,6 +101,71 @@ def source_files(path):
     return result
 
 
+def _qualified_current_terminal(root, candidates, guard_records):
+    """Return a proof only for the exact current pointer to a qualified rejection.
+
+    Candidate qualification is produced by the managed guest from complete
+    SessionStore and activation evidence. This helper binds that qualification
+    to the candidate's terminal manifest and raw current pointer; it does not
+    accept a host-supplied exception flag.
+    """
+    current_raw = guard_records.get("activation/current.json")
+    if current_raw is None:
+        return None
+    for candidate in candidates:
+        if candidate.get("qualification_kind") != REJECTED_NO_RUN:
+            continue
+        token = candidate.get("attempt")
+        if (not isinstance(token, str) or ATTEMPT.fullmatch(token) is None
+                or candidate.get("run_id") is not None
+                or candidate.get("session_id") is not None
+                or not isinstance(candidate.get("rejection"), dict)):
+            raise HistoryError("Rejected no-run candidate qualification is malformed")
+        source = root / "activation/attempts" / token
+        archive = root / "activation/history-v1" / token
+        if source.exists() and archive.exists():
+            raise HistoryError("Duplicate live/history activation")
+        retained = source if source.exists() else archive
+        if not retained.exists():
+            raise HistoryError("Qualified current terminal candidate is absent")
+        files = source_files(retained)
+        manifest = file_manifest(files)
+        if manifest != candidate.get("files"):
+            raise HistoryError("Qualified current terminal manifest changed")
+        terminal_raw = files["terminal.json"]
+        terminal = document(terminal_raw, "qualified rejected terminal")
+        receipt = document(files["receipt.json"], "qualified rejected receipt")
+        if (files["receipt.json"] != terminal_raw
+                or terminal.get("schema") != "fullmag.docker-build-operation.v1"
+                or terminal.get("phase") != "activation"
+                or terminal.get("state") != "failed-confirmed"
+                or terminal.get("activation_state") != "rejected"
+                or terminal.get("attempt") != token
+                or terminal.get("run_id") is not None
+                or terminal.get("session_id") is not None
+                or terminal.get("retirement") is not None
+                or terminal.get("retirement_result") != {
+                    "state": "retirement-only", "retirement": None}
+                or terminal.get("error") != REJECTED_ACTIVATION_ERROR
+                or receipt != terminal):
+            raise HistoryError("Qualified current terminal is not a confirmed no-run rejection")
+        rejection = candidate["rejection"]
+        if (type(rejection.get("http_status")) is not int
+                or rejection["http_status"] not in {400, 422}
+                or not isinstance(rejection.get("code"), str)
+                or not isinstance(rejection.get("message"), str)):
+            raise HistoryError("Rejected no-run candidate lacks its API rejection identity")
+        if current_raw == terminal_raw:
+            return {
+                "path": "activation/current.json",
+                "qualification_kind": REJECTED_NO_RUN,
+                "attempt": token,
+                "terminal_sha256": manifest["terminal.json"]["sha256"],
+                "current_sha256": digest(current_raw),
+            }
+    return None
+
+
 def make_plan(root, candidates, *, identity, external_evidence_sha256, protected):
     root = _directory(root)
     if (not isinstance(identity, dict) or not identity.get("compose_project")
@@ -111,8 +180,12 @@ def make_plan(root, candidates, *, identity, external_evidence_sha256, protected
         raise HistoryError("Operation lock identity is unsafe")
     guards = {name: _optional_digest(root, name) for name in GUARDS}
     guard_records = {name: _raw(root / name) for name, pin in guards.items() if pin is not None}
+    qualified_current_terminal = _qualified_current_terminal(root, candidates, guard_records)
+    roots = dict(guard_records)
+    if qualified_current_terminal is not None:
+        roots.pop(qualified_current_terminal["path"])
     live_protected = set(protected) | referenced_attempts(
-        guard_records, {value["run_id"]: value["attempt"] for value in candidates if value.get("run_id") is not None})
+        roots, {value["run_id"]: value["attempt"] for value in candidates if value.get("run_id") is not None})
     live = _entries(root / "activation/attempts")
     archived = _entries(root / "activation/history-v1")
     if len(live) > 64 or set(live) & set(archived):
@@ -128,11 +201,14 @@ def make_plan(root, candidates, *, identity, external_evidence_sha256, protected
             raise HistoryError("Prepared history requires its retained plan")
         if file_manifest(source_files(path)) != value["files"]:
             raise HistoryError("Candidate changed after qualification")
-    return {"schema": SCHEMA, "identity": dict(identity), "candidates": candidates,
+    plan = {"schema": SCHEMA, "identity": dict(identity), "candidates": candidates,
             "external_evidence_sha256": external_evidence_sha256,
             "protected": sorted(live_protected), "guard_files": guards,
             "live_attempts": live, "archived_attempts": archived,
             "operation_lock": {"device": lock_info.st_dev, "inode": lock_info.st_ino}}
+    if qualified_current_terminal is not None:
+        plan["qualified_current_terminal"] = qualified_current_terminal
+    return plan
 
 
 def _sync_dir(path):
@@ -223,6 +299,13 @@ def apply_plan(root, plan, *, expected_plan_sha256, fresh_external_evidence, che
                 or archived != set(plan["archived_attempts"]) | completed):
             raise HistoryError("History pool changed since preview")
         current_roots = {name: _raw(root / name) for name, pin in plan["guard_files"].items() if pin is not None}
+        qualified_current_terminal = _qualified_current_terminal(
+            root, list(candidates.values()), current_roots)
+        if (("qualified_current_terminal" in plan) != (qualified_current_terminal is not None)
+                or plan.get("qualified_current_terminal") != qualified_current_terminal):
+            raise HistoryError("Qualified current terminal proof differs from the pinned plan")
+        if qualified_current_terminal is not None:
+            current_roots.pop(qualified_current_terminal["path"])
         current_protected = referenced_attempts(current_roots, {
             value["run_id"]: token for token, value in candidates.items() if value.get("run_id") is not None})
         if set(candidates) & (set(plan["protected"]) | current_protected):
