@@ -462,6 +462,8 @@ jobs:
         # source tests pin the per-run policy, legality and provenance bridge.
         # Keep them explicit: unrelated runner filters do not select them.
         run: |
+          cargo test --locked -p fullmag-authoring --test gpu_bb_scene_bridge
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_gpu_bb_policy_cross_python_scene_rust_builder_and_problem_ir -- --exact
           cargo test --locked -p fullmag-ir --lib gpu_bb
           cargo test --locked -p fullmag-plan --lib gpu_bb_policy
           cargo test --locked -p fullmag-runner --lib relaxation::provenance::tests

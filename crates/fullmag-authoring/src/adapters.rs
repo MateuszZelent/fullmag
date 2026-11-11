@@ -109,6 +109,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
             pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
+            fem_bb_preconditioner: builder.fem_bb_preconditioner,
             fem_demag_accuracy_contract: builder.fem_demag_accuracy_contract.clone(),
             exchange_enabled: builder.exchange_enabled,
             demag_enabled: builder.demag_enabled,
@@ -257,6 +258,7 @@ pub fn scene_document_to_script_builder(
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
         pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
+        fem_bb_preconditioner: normalized_scene.study.fem_bb_preconditioner,
         fem_demag_accuracy_contract: normalized_scene.study.fem_demag_accuracy_contract.clone(),
         exchange_enabled: normalized_scene.study.exchange_enabled,
         demag_enabled: normalized_scene.study.demag_enabled,
@@ -519,6 +521,7 @@ pub fn scene_document_to_script_builder_overrides(
             "cpu_threads": scene.study.requested_cpu_threads,
             "parallel_execution": scene.study.parallel_execution,
             "fem_demag_solver_policy": scene.study.fem_demag_solver_policy,
+            "fem_bb_preconditioner": scene.study.fem_bb_preconditioner,
             "fem_demag_accuracy_contract": scene.study.fem_demag_accuracy_contract,
             "explicit_selection": scene.study.requested_backend != "auto"
                 || scene.study.requested_device != "auto"
@@ -2645,6 +2648,7 @@ mod tests {
             parallel_execution: None,
             pbc: None,
             fem_demag_solver_policy: Some(fullmag_ir::FemLinearSolverPolicy::default()),
+            fem_bb_preconditioner: None,
             fem_demag_accuracy_contract: None,
             fem_domain_mesh: None,
             exchange_enabled: true,

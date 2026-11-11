@@ -1,0 +1,481 @@
+{
+  "antenna_field_solve_stages": [],
+  "antenna_port_modes": [],
+  "antenna_spectrum_requests": [],
+  "antenna_target_projections": [],
+  "couplings": [],
+  "current_modules": {
+    "excitation_analysis": null,
+    "modules": []
+  },
+  "current_transports": [],
+  "editor": {
+    "active_transform_scope": null,
+    "air_mesh_opacity": 28.0,
+    "air_mesh_visible": true,
+    "focused_entity_id": null,
+    "gizmo_mode": null,
+    "mesh_entity_view_state": {},
+    "object_view_mode": "context",
+    "selected_entity_id": null,
+    "selected_object_id": null,
+    "transform_space": null
+  },
+  "field_drives": {
+    "drives": []
+  },
+  "magnetization_assets": [
+    {
+      "dataset": null,
+      "id": "mag:body",
+      "kind": "uniform",
+      "mapping": {
+        "clamp_mode": "none",
+        "projection": "object_local",
+        "space": "object"
+      },
+      "name": "body magnetization",
+      "preset_kind": null,
+      "preset_params": null,
+      "preset_version": null,
+      "sample_index": null,
+      "seed": null,
+      "source_format": null,
+      "source_path": null,
+      "texture_transform": {
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "ui_label": null,
+      "value": [
+        1.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "id": "mat:body",
+      "name": "body material",
+      "properties": {
+        "Aex": 1.3e-11,
+        "Dbulk": null,
+        "Dind": null,
+        "Ms": 800000.0,
+        "alpha": 0.01
+      }
+    }
+  ],
+  "monitors": {
+    "planar": []
+  },
+  "objects": [
+    {
+      "absorbing_boundary": null,
+      "allocated_region_ids": [],
+      "geometry": {
+        "bounds_max": [
+          1e-08,
+          1e-08,
+          1e-08
+        ],
+        "bounds_min": [
+          -1e-08,
+          -1e-08,
+          -1e-08
+        ],
+        "geometry_kind": "Box",
+        "geometry_params": {
+          "size": [
+            2e-08,
+            2e-08,
+            2e-08
+          ]
+        }
+      },
+      "id": "body",
+      "locked": false,
+      "magnetization_ref": "mag:body",
+      "material_parameter_fields": [],
+      "material_ref": "mat:body",
+      "mesh_override": {
+        "algorithm_2d": null,
+        "algorithm_3d": null,
+        "boundary_layer_count": null,
+        "boundary_layer_stretching": null,
+        "boundary_layer_target_curve_selectors": [],
+        "boundary_layer_target_curve_tags": [],
+        "boundary_layer_target_surface_selectors": [],
+        "boundary_layer_target_surface_tags": [],
+        "boundary_layer_thickness": "",
+        "build_requested": false,
+        "calibrate_for": null,
+        "compute_quality": null,
+        "corner_extent": "",
+        "corner_maximum_element_size": "",
+        "corner_transition_distance": "",
+        "curvature_factor": "",
+        "edge_maximum_element_size": "",
+        "edge_thickness": "",
+        "edge_transition_distance": "",
+        "element_family": null,
+        "exact_layer_count": null,
+        "growth_rate": "",
+        "hmax": "2e-08",
+        "hmin": "",
+        "interface_hmax": "",
+        "interface_maximum_element_size": "",
+        "interface_thickness": "",
+        "maximum_element_growth_rate": "",
+        "maximum_element_size": "2e-08",
+        "mesh_strategy": null,
+        "minimum_element_size": "",
+        "mode": "custom",
+        "narrow_region_resolution": "",
+        "narrow_regions": null,
+        "operations": [],
+        "optimize": null,
+        "optimize_iterations": null,
+        "order": 1,
+        "per_element_quality": null,
+        "resolved_growth_rate": "",
+        "resolved_narrow_regions": null,
+        "resolved_size_from_curvature": null,
+        "size_factor": null,
+        "size_fields": [],
+        "size_from_curvature": null,
+        "size_preset": null,
+        "smoothing_steps": null,
+        "source": null,
+        "sweep_direction": null,
+        "sweep_face_meshing": null,
+        "through_thickness_distribution": null,
+        "through_thickness_element_ratio": null,
+        "through_thickness_elements": null,
+        "through_thickness_symmetric": null,
+        "topology": null,
+        "transition_distance": "",
+        "transition_growth": null,
+        "transition_policy": null
+      },
+      "name": "body",
+      "object_mesh": {
+        "algorithm_2d": null,
+        "algorithm_3d": null,
+        "boundary_layer_count": null,
+        "boundary_layer_stretching": null,
+        "boundary_layer_target_curve_selectors": [],
+        "boundary_layer_target_curve_tags": [],
+        "boundary_layer_target_surface_selectors": [],
+        "boundary_layer_target_surface_tags": [],
+        "boundary_layer_thickness": "",
+        "build_requested": false,
+        "calibrate_for": null,
+        "compute_quality": null,
+        "corner_extent": "",
+        "corner_maximum_element_size": "",
+        "corner_transition_distance": "",
+        "curvature_factor": "",
+        "edge_maximum_element_size": "",
+        "edge_thickness": "",
+        "edge_transition_distance": "",
+        "element_family": null,
+        "exact_layer_count": null,
+        "growth_rate": "",
+        "hmax": "2e-08",
+        "hmin": "",
+        "interface_hmax": "",
+        "interface_maximum_element_size": "",
+        "interface_thickness": "",
+        "maximum_element_growth_rate": "",
+        "maximum_element_size": "2e-08",
+        "mesh_strategy": null,
+        "minimum_element_size": "",
+        "mode": "custom",
+        "narrow_region_resolution": "",
+        "narrow_regions": null,
+        "operations": [],
+        "optimize": null,
+        "optimize_iterations": null,
+        "order": 1,
+        "per_element_quality": null,
+        "resolved_growth_rate": "",
+        "resolved_narrow_regions": null,
+        "resolved_size_from_curvature": null,
+        "size_factor": null,
+        "size_fields": [],
+        "size_from_curvature": null,
+        "size_preset": null,
+        "smoothing_steps": null,
+        "source": null,
+        "sweep_direction": null,
+        "sweep_face_meshing": null,
+        "through_thickness_distribution": null,
+        "through_thickness_element_ratio": null,
+        "through_thickness_elements": null,
+        "through_thickness_symmetric": null,
+        "topology": null,
+        "transition_distance": "",
+        "transition_growth": null,
+        "transition_policy": null
+      },
+      "physics_stack": [
+        {
+          "enabled": true,
+          "kind": "exchange",
+          "params": null
+        },
+        {
+          "enabled": true,
+          "kind": "demag",
+          "params": null
+        }
+      ],
+      "region_name": "body",
+      "regions": [],
+      "role": "magnet",
+      "tags": [],
+      "transform": {
+        "pivot": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_quat": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      },
+      "visible": true,
+      "visualization_hint": {}
+    }
+  ],
+  "oersted_fields": [],
+  "outputs": {
+    "items": []
+  },
+  "revision": 1,
+  "scene": {
+    "authoring_schema": "mesh-first-fem.v1",
+    "id": "scene",
+    "name": "gpu-bb-scene-bridge",
+    "source_of_truth": "repo_head"
+  },
+  "solved_antenna_drives": [],
+  "spin_torques": [],
+  "spin_transports": [],
+  "study": {
+    "backend": "fem",
+    "demag_enabled": true,
+    "demag_realization": null,
+    "exchange_enabled": true,
+    "external_field": null,
+    "fem_bb_preconditioner": "exchange_mass",
+    "fem_demag_accuracy_contract": null,
+    "fem_demag_solver_policy": null,
+    "initial_state": null,
+    "mesh_defaults": {
+      "adaptive_convergence_metric": "energy_delta",
+      "adaptive_enabled": false,
+      "adaptive_error_tolerance": "",
+      "adaptive_h_max": "",
+      "adaptive_h_min": "",
+      "adaptive_indicator": "geometric_only",
+      "adaptive_max_passes": 2,
+      "adaptive_policy": "auto",
+      "adaptive_target_quantity": "auto",
+      "adaptive_theta": 0.3,
+      "algorithm_2d": 6,
+      "algorithm_3d": 1,
+      "boundary_layer_count": null,
+      "boundary_layer_stretching": null,
+      "boundary_layer_target_curve_selectors": [],
+      "boundary_layer_target_curve_tags": [],
+      "boundary_layer_target_surface_selectors": [],
+      "boundary_layer_target_surface_tags": [],
+      "boundary_layer_thickness": "",
+      "calibrate_for": "",
+      "compute_quality": true,
+      "corner_extent": "",
+      "corner_maximum_element_size": "",
+      "corner_transition_distance": "",
+      "curvature_factor": "",
+      "edge_maximum_element_size": "",
+      "edge_thickness": "",
+      "edge_transition_distance": "",
+      "growth_rate": "",
+      "hmax": "",
+      "hmin": "",
+      "interface_hmax": "",
+      "interface_maximum_element_size": "",
+      "interface_thickness": "",
+      "maximum_element_growth_rate": "",
+      "maximum_element_size": "",
+      "minimum_element_size": "",
+      "narrow_region_resolution": "",
+      "narrow_regions": 0,
+      "optimize": "",
+      "optimize_iterations": 1,
+      "order": null,
+      "per_element_quality": true,
+      "resolved_growth_rate": "",
+      "resolved_narrow_regions": null,
+      "resolved_size_from_curvature": null,
+      "size_factor": 1.0,
+      "size_from_curvature": 0,
+      "size_preset": "",
+      "smoothing_steps": 1,
+      "transition_distance": "",
+      "transition_growth": ""
+    },
+    "output_storage": null,
+    "parallel_execution": {
+      "max_cpu_percent": 90.0,
+      "max_memory_percent": 80.0,
+      "max_workers": null,
+      "memory_reserve_bytes": 1073741824,
+      "mode": "serial",
+      "threads_per_worker": 1
+    },
+    "pbc": null,
+    "requested_backend": "fem",
+    "requested_cpu_threads": null,
+    "requested_device": "gpu",
+    "requested_mode": "strict",
+    "requested_precision": "double",
+    "rotated_interfacial_dmi": null,
+    "shared_domain_mesh": {
+      "adaptive_convergence_metric": "energy_delta",
+      "adaptive_enabled": false,
+      "adaptive_error_tolerance": "",
+      "adaptive_h_max": "",
+      "adaptive_h_min": "",
+      "adaptive_indicator": "geometric_only",
+      "adaptive_max_passes": 2,
+      "adaptive_policy": "auto",
+      "adaptive_target_quantity": "auto",
+      "adaptive_theta": 0.3,
+      "algorithm_2d": 6,
+      "algorithm_3d": 1,
+      "boundary_layer_count": null,
+      "boundary_layer_stretching": null,
+      "boundary_layer_target_curve_selectors": [],
+      "boundary_layer_target_curve_tags": [],
+      "boundary_layer_target_surface_selectors": [],
+      "boundary_layer_target_surface_tags": [],
+      "boundary_layer_thickness": "",
+      "calibrate_for": "",
+      "compute_quality": true,
+      "corner_extent": "",
+      "corner_maximum_element_size": "",
+      "corner_transition_distance": "",
+      "curvature_factor": "",
+      "edge_maximum_element_size": "",
+      "edge_thickness": "",
+      "edge_transition_distance": "",
+      "growth_rate": "",
+      "hmax": "",
+      "hmin": "",
+      "interface_hmax": "",
+      "interface_maximum_element_size": "",
+      "interface_thickness": "",
+      "maximum_element_growth_rate": "",
+      "maximum_element_size": "",
+      "minimum_element_size": "",
+      "narrow_region_resolution": "",
+      "narrow_regions": 0,
+      "optimize": "",
+      "optimize_iterations": 1,
+      "order": null,
+      "per_element_quality": true,
+      "resolved_growth_rate": "",
+      "resolved_narrow_regions": null,
+      "resolved_size_from_curvature": null,
+      "size_factor": 1.0,
+      "size_from_curvature": 0,
+      "size_preset": "",
+      "smoothing_steps": 1,
+      "transition_distance": "",
+      "transition_growth": ""
+    },
+    "solver": {
+      "demag_interval_s": "",
+      "energy_tolerance": "",
+      "integrator": "auto",
+      "max_relax_steps": "2",
+      "max_relaxation_time_s": "",
+      "relax_algorithm": "projected_gradient_bb",
+      "torque_tolerance": "1e-06"
+    },
+    "stages": [
+      {
+        "algorithm": "projected_gradient_bb",
+        "energy_tolerance": "",
+        "entrypoint_kind": "flat_relax",
+        "kind": "relax",
+        "max_steps": "2",
+        "torque_tolerance": "1e-06",
+        "until_seconds": ""
+      }
+    ],
+    "study_pipeline": {
+      "nodes": [
+        {
+          "enabled": true,
+          "id": "stage_1_relax",
+          "label": "Relax 1",
+          "node_kind": "primitive",
+          "payload": {
+            "energy_tolerance": "",
+            "entrypoint_kind": "flat_relax",
+            "kind": "relax",
+            "max_steps": "2",
+            "relax_algorithm": "projected_gradient_bb",
+            "torque_tolerance": "1e-06",
+            "until_seconds": ""
+          },
+          "source": "script_imported",
+          "stage_kind": "relax"
+        }
+      ],
+      "version": "study_pipeline.v1"
+    },
+    "table_autosave": null,
+    "thermal_noise": null,
+    "universe_mesh": null
+  },
+  "universe": null,
+  "version": "scene.v2"
+}

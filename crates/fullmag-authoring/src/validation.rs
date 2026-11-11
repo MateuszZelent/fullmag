@@ -172,6 +172,28 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if scene.study.fem_bb_preconditioner.is_some() {
+        if !scene.study.requested_backend.eq_ignore_ascii_case("fem")
+            || !scene.study.requested_device.eq_ignore_ascii_case("gpu")
+        {
+            return Err(SceneDocumentValidationError::new(
+                "study.fem_bb_preconditioner requires explicit FEM GPU execution",
+            ));
+        }
+        for stage in &scene.study.stages {
+            if stage.extra.get("enabled") == Some(&Value::Bool(false)) {
+                continue;
+            }
+            if !stage.kind.eq_ignore_ascii_case("relax")
+                || stage.relax_algorithm != "projected_gradient_bb"
+            {
+                return Err(SceneDocumentValidationError::new(
+                    "study.fem_bb_preconditioner requires projected_gradient_bb relaxation",
+                ));
+            }
+        }
+    }
+
     if let Some(resources) = &scene.study.compute_resources {
         resources.validate().map_err(|errors| {
             SceneDocumentValidationError::new(format!(
