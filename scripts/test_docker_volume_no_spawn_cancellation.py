@@ -83,6 +83,157 @@ class RequestTests(unittest.TestCase):
                 with self.assertRaises(BuildControlError):target.validate_result(request,r,p)
 
 
+def authority_fixture():
+    source=Path('/selected');attempt='a'*32;cid='c'*64;image='sha256:'+'b'*64
+    class Control:
+        project='fullmag-test';volume='control';namespace='namespaces/'+'d'*32
+        identity={'project_id':'project','worktree_id':'worktree'}
+        def subpath(self,value):return self.namespace+'/'+value
+        def read_bytes(self,path,**kwargs):
+            if path not in self.records and kwargs.get('optional'):return None
+            return self.records[path]
+    control=Control()
+    compose={'name':control.project,'services':{'backend':{'image':image,'volumes':[
+        {'type':'bind','source':str(source),'target':'/opt/fullmag/source','read_only':True},
+        {'type':'bind','source':'/storage/runtime','target':'/state'},
+        {'type':'bind','source':'/storage/results','target':'/user-data'},
+        {'type':'volume','source':'control','target':'/opt/fullmag/control','volume':{'subpath':control.namespace}},
+        {'type':'volume','source':'control','target':'/host-ledger','volume':{'subpath':control.subpath('private/ledger')}},
+    ]}},'volumes':{'control':{'name':'control'}}}
+    config=target.sha(canonical(compose))
+    previous={'schema':'fullmag.docker-build-operation.v1','phase':'development','state':'failed-confirmed',
+              'attempt':attempt,'compose_project':control.project,'control_volume':control.volume,
+              'control_namespace':control.namespace,'state_root':'/storage/runtime','finished_at':2.0,
+              'inputs':{'source_root':str(source),'image_id':image,'source_project_id':'project','source_worktree_id':'worktree'}}
+    witness={'schema':'fullmag.docker-build-operation.v1','phase':'iteration','state':'succeeded','attempt':'e'*32,
+             'compose_project':control.project,'control_volume':control.volume,'control_namespace':control.namespace,
+             'config_sha256':config,'state_root':previous['state_root'],'backend_container':cid,'frontend_container':'f'*64,
+             'source_commit':'1'*40,'source_digest':'2'*64,'source_snapshot_sha256':'3'*64,
+             'backend_started_at':'2026-11-11T15:39:35.464703989Z',
+             'backend_build_receipt_sha256':'4'*64,'started_at':3.0,'finished_at':4.0,'ui_mode':'gui',
+             'inputs':{'attempt':attempt,'config_sha256':config,'source_root':str(source),'image_id':image}}
+    path='iteration/attempts/'+witness['attempt']+'/terminal.json'
+    raw=canonical(previous);wr=canonical(witness)
+    # A failed DEV never becomes verified: retain the earlier unrelated success.
+    old_verified=deepcopy(previous)
+    old_verified.update(state='succeeded',attempt='8'*32,config_sha256='7'*64,backend_container='6'*64)
+    control.records={'development/current.json':raw,'development/verified.json':canonical(old_verified),
+        'development/attempts/'+attempt+'/terminal.json':raw,
+        'development/attempts/'+attempt+'/compose.json':canonical(compose),
+        path:wr,path.replace('terminal.json','receipt.json'):wr,'iteration/verified.json':wr}
+    args=SimpleNamespace(backend_container_id=cid,image_id=image,runtime_witness=path,runtime_witness_sha256=target.sha(wr))
+    return control,previous,compose,source,args,witness
+
+
+class DevelopmentAuthorityTests(unittest.TestCase):
+    def test_early_failed_development_uses_existing_exact_recovery_validators_without_writes(self):
+        control,previous,compose,source,args,_=authority_fixture();before=deepcopy(control.records)
+        pins,witness=target.development_authority(control,canonical(previous),canonical(compose),source,args)
+        self.assertEqual(control.records,before)
+        self.assertEqual(witness,{'path':args.runtime_witness,'sha256':args.runtime_witness_sha256,
+                                  'backend_started_at':'2026-11-11T15:39:35.464703989Z'})
+        self.assertIn('resume/verified.json',pins)
+        self.assertIn('iteration/verified.json',pins)
+        self.assertIn(args.runtime_witness.replace('terminal.json','receipt.json'),pins)
+        self.assertIn('development/verified.json',pins)
+        self.assertNotIn('config_sha256',previous)
+        self.assertNotEqual(pins['development/verified.json'],canonical(previous))
+        self.assertEqual(pins['development/verified.json'],before['development/verified.json'])
+
+    def test_runtime_incarnation_must_match_selected_witness(self):
+        control,previous,compose,source,args,_=authority_fixture()
+        _,witness=target.development_authority(control,canonical(previous),canonical(compose),source,args)
+        actual={'State':{'StartedAt':witness['backend_started_at']}}
+        target.validate_runtime_incarnation(actual,witness)
+        actual['State']['StartedAt']='2026-11-11T16:39:35.464703989Z'
+        with self.assertRaisesRegex(BuildControlError,'witness incarnation'):
+            target.validate_runtime_incarnation(actual,witness)
+        target.validate_runtime_incarnation(actual,None)
+
+    def test_recovery_witness_without_incarnation_is_rejected(self):
+        control,previous,compose,source,args,witness=authority_fixture()
+        del witness['backend_started_at'];raw=canonical(witness)
+        for path in (args.runtime_witness,args.runtime_witness.replace('terminal.json','receipt.json'),'iteration/verified.json'):
+            control.records[path]=raw
+        args.runtime_witness_sha256=target.sha(raw)
+        with self.assertRaisesRegex(BuildControlError,'backend incarnation'):
+            target.development_authority(control,canonical(previous),canonical(compose),source,args)
+
+    def test_runtime_witness_cli_pins_are_paired_and_confined(self):
+        for path,digest in ((None,'0'*64),('iteration/attempts/'+'e'*32+'/terminal.json',None),
+                            ('../terminal.json','0'*64),('resume/attempts/'+'e'*32+'/terminal.json','BAD')):
+            with self.subTest(path=path,digest=digest),self.assertRaises(ValueError):
+                target.runtime_witness_pin(SimpleNamespace(runtime_witness=path,runtime_witness_sha256=digest))
+
+    def test_wrong_or_missing_recovery_authority_fails_closed(self):
+        for mutation in ('missing','digest','receipt','verified','container','image','source','namespace','project',
+                         'worktree','config','null-config','unknown','future','prior-source','stopped','mount'):
+            with self.subTest(mutation=mutation):
+                control,previous,compose,source,args,witness=authority_fixture()
+                if mutation=='missing':args.runtime_witness=args.runtime_witness_sha256=None
+                elif mutation=='digest':args.runtime_witness_sha256='0'*64
+                elif mutation=='receipt':control.records[args.runtime_witness.replace('terminal.json','receipt.json')]=b'{}'
+                elif mutation=='verified':control.records['iteration/verified.json']=b'{}'
+                elif mutation=='worktree':previous['inputs']['source_worktree_id']='foreign'
+                elif mutation=='config':previous['config_sha256']='0'*64
+                elif mutation=='null-config':previous['config_sha256']=None
+                elif mutation=='unknown':previous['state']='outcome-unknown'
+                elif mutation=='mount':compose['services']['backend']['volumes'][0]['read_only']=False
+                else:
+                    if mutation=='container':witness['backend_container']='0'*64
+                    elif mutation=='image':witness['inputs']['image_id']='sha256:'+'0'*64
+                    elif mutation=='source':witness['inputs']['source_root']='/foreign'
+                    elif mutation=='namespace':witness['control_namespace']='foreign'
+                    elif mutation=='project':witness['compose_project']='foreign'
+                    elif mutation=='future':witness['started_at']=1.0
+                    elif mutation=='prior-source':previous['source_digest']='0'*64
+                    else:witness['idle_backend_stopped']=True
+                    wr=canonical(witness)
+                    for path in (args.runtime_witness,args.runtime_witness.replace('terminal.json','receipt.json'),'iteration/verified.json'):control.records[path]=wr
+                    args.runtime_witness_sha256=target.sha(wr)
+                raw=canonical(previous)
+                for path in ('development/current.json','development/attempts/'+previous['attempt']+'/terminal.json'):control.records[path]=raw
+                with self.assertRaises((ValueError,BuildControlError)):
+                    target.development_authority(control,raw,canonical(compose),source,args)
+
+    def test_explicit_superseded_resume_is_not_latest_runtime_authority(self):
+        control,previous,compose,source,args,witness=authority_fixture()
+        older=deepcopy(witness);older.update(phase='resume',attempt='9'*32,started_at=2.2,finished_at=2.5)
+        path='resume/attempts/'+older['attempt']+'/terminal.json';raw=canonical(older)
+        control.records.update({path:raw,path.replace('terminal.json','receipt.json'):raw,'resume/verified.json':raw})
+        args.runtime_witness=path;args.runtime_witness_sha256=target.sha(raw)
+        with self.assertRaisesRegex(BuildControlError,'latest verified'):
+            target.development_authority(control,canonical(previous),canonical(compose),source,args)
+
+    def test_every_recovery_read_is_cas_pinned_including_absent_resume(self):
+        for changed in ('development/verified.json','iteration/verified.json','resume/verified.json','witness','receipt'):
+            with self.subTest(changed=changed):
+                control,previous,compose,source,args,_=authority_fixture()
+                pins,_=target.development_authority(control,canonical(previous),canonical(compose),source,args)
+                path=args.runtime_witness if changed=='witness' else args.runtime_witness.replace('terminal.json','receipt.json') if changed=='receipt' else changed
+                control.records[path]=b'{}'
+                with self.assertRaisesRegex(BuildControlError,'CAS changed'):target.validate_authority_pins(control,pins)
+
+    def test_succeeded_authority_still_requires_its_own_verified_record(self):
+        control,previous,compose,source,args,_=authority_fixture()
+        previous.update(state='succeeded',config_sha256=target.sha(canonical(compose)),backend_container=args.backend_container_id)
+        raw=canonical(previous)
+        control.records['development/attempts/'+previous['attempt']+'/terminal.json']=raw
+        args.runtime_witness=args.runtime_witness_sha256=None
+        with self.assertRaisesRegex(BuildControlError,'retained development authority'):
+            target.development_authority(control,raw,canonical(compose),source,args)
+
+    def test_succeeded_authority_remains_compatible_without_witness(self):
+        control,previous,compose,source,args,_=authority_fixture()
+        previous.update(state='succeeded',config_sha256=target.sha(canonical(compose)),backend_container=args.backend_container_id)
+        raw=canonical(previous)
+        for path in ('development/current.json','development/verified.json','development/attempts/'+previous['attempt']+'/terminal.json'):control.records[path]=raw
+        args.runtime_witness=args.runtime_witness_sha256=None
+        _,witness=target.development_authority(control,raw,canonical(compose),source,args)
+        self.assertIsNone(witness)
+
+
+
 class ShellRouteTests(unittest.TestCase):
     def test_fixed_route_keeps_argv_without_host_build_profile_or_shell_evaluation(self):
         root=Path(__file__).resolve().parent.parent
@@ -111,7 +262,22 @@ class ShellRouteTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(json.loads(log.read_text())[-4:],
                              ['--reconcile-loader-failure','e'*32,'--failed-receipt-sha256','f'*64])
-            log.unlink()
+            witness="iteration/attempts/"+'9'*32+"/terminal.json"
+            with_witness=reconcile+" --runtime-witness '"+witness+"' --runtime-witness-sha256 '"+'8'*64+"'"
+            result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),with_witness],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(log.read_text())[-4:],["--runtime-witness",witness,"--runtime-witness-sha256",'8'*64])
+            preview=command.removesuffix(' --apply')+" --runtime-witness '"+witness+"' --runtime-witness-sha256 '"+'8'*64+"'"
+            result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),preview],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertNotIn('--apply',json.loads(log.read_text()))
+            self.assertEqual(json.loads(log.read_text())[-4:],["--runtime-witness",witness,"--runtime-witness-sha256",'8'*64])
+            for invalid in (command+" --runtime-witness '"+witness+"'",with_witness+'; true',with_witness.replace(witness,'../terminal.json')):
+                log.unlink(missing_ok=True)
+                result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),invalid],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,2)
+                self.assertFalse(log.exists())
+            log.unlink(missing_ok=True)
             result=subprocess.run(['bash',str(root/'scripts/just_storage_shell.sh'),command+'; true'],
                                   env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,2)
@@ -177,7 +343,7 @@ class NamespacedApplyTests(unittest.TestCase):
             class Control:
                 project='fullmag-worktree-test';volume='control';namespace='namespaces/'+'d'*32
                 namespace_registry_sha256='e'*64
-                def read_bytes(self,path):
+                def read_bytes(self,path,**kwargs):
                     return canonical(document) if path.endswith('/compose.json') else previous_raw
                 def subpath(self,path):raise AssertionError('Backend is already mounted at the selected namespace')
                 def write(self,*args):pass
