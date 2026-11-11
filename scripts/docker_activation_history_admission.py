@@ -120,7 +120,15 @@ def historical_mounts(control, receipt, terminal, compose, selected, *, runtime_
         raise HistoryError("Historical failed development requires one explicit recovery witness")
     expected = {"schema": "fullmag.docker-build-operation.v1", "phase": "development",
                 "state": development_state, "attempt": token, "compose_project": control.project,
-                "control_volume": control.volume, "config_sha256": expected_config}
+                "control_volume": control.volume}
+    if "config_sha256" not in terminal:
+        # An early failed build can precede publication of this pin. The
+        # retained Compose hash and explicit succeeded recovery witness must
+        # independently authenticate it below; never rewrite the old receipt.
+        if development_state != "failed-confirmed":
+            raise HistoryError("Historical development is missing its config pin")
+    elif terminal["config_sha256"] != expected_config:
+        raise HistoryError("Historical development terminal/config identity differs")
     if (any(terminal.get(key) != value for key, value in expected.items())
             or terminal.get("control_namespace", "") != control.namespace
             or receipt.get("control_namespace", "") != control.namespace

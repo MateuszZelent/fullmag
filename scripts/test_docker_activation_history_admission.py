@@ -178,6 +178,30 @@ class AdmissionTests(unittest.TestCase):
             (Path("/storage/runtime"), Path("/storage/results")))
         self.assertEqual(control.read_pins, {p: digest(raw) for p, raw in records.items()})
 
+    def test_early_failed_start_missing_config_still_requires_pinned_recovery(self):
+        control, receipt, terminal, compose, source, path, records = self.recovered_fixture()
+        del terminal["config_sha256"]
+        original = copy.deepcopy(terminal)
+        self.assertEqual(historical_mounts(control, receipt, terminal, compose, source,
+            runtime_witness=(path, digest(records[path]))),
+            (Path("/storage/runtime"), Path("/storage/results")))
+        self.assertEqual(terminal, original)
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, compose, source)
+        for value in (None, "0" * 64):
+            with self.subTest(declared=value):
+                changed = {**terminal, "config_sha256": value}
+                with self.assertRaises(HistoryError):
+                    historical_mounts(control, receipt, changed, compose, source,
+                        runtime_witness=(path, digest(records[path])))
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, {**terminal, "state": "succeeded"}, compose, source)
+        wrong_compose = copy.deepcopy(compose)
+        wrong_compose["services"]["backend"]["volumes"][2]["source"] = "/storage/copied-results"
+        with self.assertRaises(HistoryError):
+            historical_mounts(control, receipt, terminal, wrong_compose, source,
+                runtime_witness=(path, digest(records[path])))
+
     def test_historical_recovery_witness_rejects_identity_timing_and_receipt_changes(self):
         mutations = ("state", "phase", "original-attempt", "backend", "activation-backend",
             "config", "source", "image", "volume", "namespace", "state-root", "stop-only",
