@@ -54,6 +54,7 @@ use super::build_v2_router;
 
 fn sample_scene_document() -> fullmag_authoring::SceneDocument {
     let builder = fullmag_authoring::ScriptBuilderState {
+        compute_resources: None,
         execution_profile: None,
         execution_layers: vec![],
         revision: 3,
@@ -22598,6 +22599,108 @@ async fn scoped_equal_magnetization_apply_replays_the_receipt_and_retires_live_f
     assert_eq!(snapshot.mesh_revision, previous_mesh);
     assert_eq!(snapshot.region_realization_revisions.initial_state, previous_revisions.initial_state + 1);
     assert!(snapshot.latest_fields.get("m").is_none());
+}
+
+#[tokio::test]
+async fn typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for typed in [false, true] {
+        let source = workspace
+            .path()
+            .join(if typed { "typed.py" } else { "legacy.py" });
+        let resources = if typed {
+            "study.resources(fm.ComputeResources(target=fm.ComputeTarget(kind='node', id='authored-node'), cpu=fm.CpuResources(threads=30, native_threads=30, blas_threads=1), ram=fm.MemoryReservation(reservation_bytes=4294967296)))"
+        } else {
+            ""
+        };
+        fs::write(
+            &source,
+            format!(
+                r#"import fullmag as fm
+study = fm.study('typed-resource-bridge')
+study.engine('fdm')
+study.device('cpu')
+study.cell(5e-9, 5e-9, 5e-9)
+{resources}
+body = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name='film')
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1, 0, 0)
+study.run(1e-12)
+"#
+            ),
+        )
+        .unwrap();
+        // This first hop reproduces the live startup deserialization boundary.
+        let scene = crate::script::load_scene_document_state(&repo_root, workspace.path(), &source)
+            .unwrap();
+        let builder = fullmag_authoring::scene_document_to_script_builder(&scene).unwrap();
+        let round_trip = fullmag_authoring::scene_document_from_script_builder(&builder);
+        assert_eq!(
+            round_trip.study.compute_resources,
+            scene.study.compute_resources
+        );
+        let expected = serde_json::to_value(scene.study.compute_resources.as_ref()).unwrap();
+        let rendered = workspace.path().join(if typed {
+            "typed-rendered.py"
+        } else {
+            "legacy-rendered.py"
+        });
+        crate::script::render_scene_document_via_python_helper(
+            &repo_root,
+            workspace.path(),
+            &rendered,
+            &round_trip,
+        )
+        .unwrap();
+        let text = fs::read_to_string(&rendered).unwrap();
+        assert_eq!(text.contains("study.resources("), typed);
+        let reloaded =
+            crate::script::load_scene_document_state(&repo_root, workspace.path(), &rendered)
+                .unwrap();
+        assert_eq!(
+            reloaded.study.compute_resources,
+            scene.study.compute_resources
+        );
+        let requested = fullmag_application::RequestedExecution {
+            backend: "fdm".into(),
+            device: "cpu".into(),
+            precision: "double".into(),
+            mode: "strict".into(),
+            minimum_resources: None,
+        };
+        let problem = crate::script::scene_document_to_problem_ir(
+            &repo_root,
+            workspace.path(),
+            &reloaded,
+            &requested,
+        )
+        .unwrap();
+        if typed {
+            assert_eq!(
+                problem.problem_meta.runtime_metadata["compute_resources"],
+                expected
+            );
+            let resources = fullmag_ir::ComputeResourcesIR::from_problem(&problem)
+                .unwrap()
+                .unwrap();
+            assert_eq!(resources.cpu.threads.count(), Some(30));
+            assert_eq!(resources.cpu.native_threads.count(), Some(30));
+            assert_eq!(resources.cpu.blas_threads.count(), Some(1));
+            assert_eq!(resources.ram.reservation_bytes, Some(4294967296));
+        } else {
+            assert!(
+                !problem
+                    .problem_meta
+                    .runtime_metadata
+                    .contains_key("compute_resources")
+            );
+        }
+    }
 }
 
 #[tokio::test]

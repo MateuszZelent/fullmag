@@ -150,6 +150,20 @@ pub(crate) async fn activate_current_live_startup(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DockerStartupRequest>,
 ) -> Result<Json<DockerStartupResponse>, ApiError> {
+    activate_current_live_startup_with_loader(state, request, |state, request| async move {
+        load_startup_scene(&state, &request).await
+    })
+    .await
+}
+
+async fn activate_current_live_startup_with_loader<F>(
+    state: Arc<AppState>,
+    request: DockerStartupRequest,
+    load: impl FnOnce(Arc<AppState>, DockerStartupRequest) -> F,
+) -> Result<Json<DockerStartupResponse>, ApiError>
+where
+    F: std::future::Future<Output = Result<LoadedStartupScene, ApiError>>,
+{
     validate_request(&request)?;
     let transition = state.current_live_session_transition.lock().await;
 
@@ -158,7 +172,7 @@ pub(crate) async fn activate_current_live_startup(
         return replay_or_reject(&request, &source, &existing);
     }
 
-    let loaded = load_startup_scene(&state, &request).await?;
+    let loaded = load(Arc::clone(&state), request.clone()).await?;
     let source_root = loaded
         .source
         .path
@@ -721,15 +735,7 @@ async fn load_startup_scene(
                 stderr.trim()
             )));
         }
-        let mut scene: SceneDocument =
-            serde_json::from_slice(&scene_output.stdout).map_err(|error| {
-                ApiError::internal(format!(
-                    "failed to deserialize SceneDocument response: {error}"
-                ))
-            })?;
-        normalize_scene_document_magnetization_assets(&mut scene);
-        fullmag_authoring::validate_scene_document_for_authoring(&scene)
-            .map_err(|error| ApiError::bad_request(error.message))?;
+        let scene = decode_startup_scene(&scene_output.stdout)?;
 
         // Export the script-owned runtime metadata through the same canonical
         // Python loader.  This is a bounded read-only capture; it does not
@@ -777,6 +783,22 @@ async fn load_startup_scene(
         runtime,
         output_storage_binding,
     })
+}
+
+/// Called only after a successful capture, before live state or accepted-run
+/// admission. Malformed authored content has a known terminal rejection here;
+/// transport, process failures and later publication keep their own errors.
+fn decode_startup_scene(stdout: &[u8]) -> Result<SceneDocument, ApiError> {
+    let mut scene: SceneDocument = serde_json::from_slice(stdout).map_err(|error| {
+        ApiError::unprocessable_with_code(
+            "validation_error",
+            format!("failed to deserialize SceneDocument response: {error}"),
+        )
+    })?;
+    normalize_scene_document_magnetization_assets(&mut scene);
+    fullmag_authoring::validate_scene_document_for_authoring(&scene)
+        .map_err(|error| ApiError::unprocessable_with_code("validation_error", error.message))?;
+    Ok(scene)
 }
 
 /// A bounded helper that hit its deadline was killed and reaped before any
@@ -3579,6 +3601,65 @@ mod tests {
         noncanonical = request;
         noncanonical.execution.interactive = "caller_override".to_string();
         assert!(validate_request(&noncanonical).is_err());
+    }
+
+    #[tokio::test]
+    async fn malformed_startup_scene_is_rejected_before_live_or_durable_admission() {
+        let mut unknown_field = serde_json::to_value(SceneDocument::default()).unwrap();
+        unknown_field["study"]["unknown_setting"] = json!(true);
+        let mut invalid_resources = serde_json::to_value(SceneDocument::default()).unwrap();
+        invalid_resources["study"]["compute_resources"] =
+            json!({"schema_version": "compute_resources.v0"});
+        for stdout in [
+            b"not JSON".to_vec(),
+            serde_json::to_vec(&unknown_field).unwrap(),
+            serde_json::to_vec(&invalid_resources).unwrap(),
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let submit_store = workspace.path().join("submit-store");
+            let mut state = crate::router_v2::tests::test_app_state();
+            let config = Arc::get_mut(&mut state).unwrap();
+            config.current_workspace_root = workspace.path().to_path_buf();
+            config.submit_store_root = Some(submit_store.clone());
+            let error = activate_current_live_startup_with_loader(
+                Arc::clone(&state),
+                request(),
+                |_, _| async move { decode_startup_scene(&stdout).map(loaded_scene_for_test) },
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(error.code.as_deref(), Some("validation_error"));
+            assert!(state.current_live_state.read().await.is_none());
+            assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 0);
+            assert!(
+                state
+                    .current_live_preparation_receipt
+                    .read()
+                    .await
+                    .is_none()
+            );
+            // RunIntent/CAS/catalog publication cannot create any durable data.
+            assert!(!submit_store.exists());
+            assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 0);
+            assert!(state.current_live_session_transition.try_lock().is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_loader_transport_failure_keeps_internal_error_before_admission() {
+        let state = crate::router_v2::tests::test_app_state();
+        let error = activate_current_live_startup_with_loader(
+            Arc::clone(&state),
+            request(),
+            |_, _| async { Err(ApiError::internal("helper transport failed")) },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code, None);
+        assert!(state.current_live_state.read().await.is_none());
+        assert_eq!(state.current_live_session_epoch.load(Ordering::Acquire), 0);
     }
 
     #[test]

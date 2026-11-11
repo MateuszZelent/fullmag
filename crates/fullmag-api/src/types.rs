@@ -2258,6 +2258,7 @@ mod tests {
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 3,
+            compute_resources: None,
             execution_profile: None,
             execution_layers: vec![],
             backend: None,

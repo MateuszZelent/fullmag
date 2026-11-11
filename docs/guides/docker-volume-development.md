@@ -607,12 +607,17 @@ DSL) helper SceneDocument zgłasza kopertą `fullmag.script-load-rejection.v1`
 `validation_error`, zanim powstanie stan live, RunIntent lub wpis katalogu. Jest to
 więc terminalne odrzucenie: grupa pozostaje wolna dla kolejnego skryptu, a wynik
 `run-script` zawiera pole `rejection` z kodem i komunikatem API (wraz z numerem
-linii skryptu). Inne niepowodzenie helpera pozostaje HTTP 500 i nieznanym wynikiem.
+linii skryptu). API zwraca również HTTP 422 `validation_error`, gdy helper kończy
+się poprawnie, ale odpowiedź `SceneDocument` nie przechodzi deserializacji lub
+walidacji autorowania. Ten błąd występuje przed placeholderem live, stanem sesji
+i `RunIntent`; wynik `run-script` zawiera terminalne `rejection`. Błędy transportu,
+procesu helpera, odczytu metadanych runtime i późniejszej publikacji nie należą do
+tej klasy i zachowują dotychczasową obsługę HTTP 500 lub nieznanego wyniku.
 
-Grupa zablokowana tym błędem przed poprawką (receipt aktywacji
+Grupa zablokowana starszym błędem procesu helpera (receipt aktywacji
 `outcome-unknown-resources-retained` z `HTTP 500 ... python SceneDocument helper
 failed`) nie jest przeklasyfikowywana automatycznie i nie ma trasy zwalniającej
-tę kwarantannę: pozostaje zablokowana do wycofania grupy przez jej właściciela
+tej awarii helpera: pozostaje zablokowana do wycofania grupy przez jej właściciela
 w cyklu sprzątania worktree (**NOT VERIFIED** jako trasa odzyskania). Nie usuwaj
 ręcznie `active`, markera ani lease.
 
@@ -650,6 +655,21 @@ dokładnego zapisanego HTTP 500 dla limitu 1048576 bajtów, pustej aktywnej sesj
 terminalnych katalogów zadań, zwolnionych lease i dowodu braku `RunIntent`
 tego żądania we wszystkich zachowanych runach. Ta trasa nie zmienia warunków
 starszego `docker-dev-release-unknown-activation`.
+
+Historyczna aktywacja, która przed tą zmianą zapisała HTTP 500 `internal_error`
+z `failed to deserialize SceneDocument response` i nieznanym polem
+`compute_resources` w `SceneStudyState` (`line 1 column 12321`), nie jest
+przeklasyfikowywana automatycznie. Ta trasa dopuszcza wyłącznie dokładną starą
+odpowiedź: identyczne pola `error` i `message`, pełną listę oczekiwanych pól
+historycznego `SceneStudyState` z rewizji `1c5c6c0a09faf499040b720bb2f6f5b962ee8ea0`
+oraz dokładną pozycję błędu. Inne błędy parsera i inne nieznane pola pozostają
+w kwarantannie. W bieżącym API deterministycznie niepoprawna odpowiedź
+`SceneDocument` jest HTTP 422; kod
+`docker_startup::activate_current_live_startup` ładuje i deserializuje dokument
+przed utworzeniem placeholdera live, publikacją stanu sesji i akceptacją
+`RunIntent`. Historyczny wariant używa tych samych pinów, preview/CAS, sprawdzenia
+wszystkich zachowanych runów, drainu i zwolnienia wyłącznie przez pierwotnego
+helpera. Nie ponawia żądania ani nie czyści historii lub `active`.
 
 Operator zapisuje trwały intent przed SIGTERM. Nie wysyła SIGKILL; po przerwanej
 obserwacji wznowienie wymaga tego samego planu i tej samej inkarnacji backendu.

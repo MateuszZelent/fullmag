@@ -105,6 +105,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
                 .clone()
                 .unwrap_or_else(|| "strict".to_string()),
             requested_cpu_threads: builder.cpu_threads,
+            compute_resources: builder.compute_resources.clone(),
             parallel_execution: builder.parallel_execution.clone().unwrap_or_default(),
             pbc: Some(builder.pbc.clone()),
             fem_demag_solver_policy: builder.fem_demag_solver_policy.clone(),
@@ -252,6 +253,7 @@ pub fn scene_document_to_script_builder(
         requested_precision: Some(normalized_scene.study.requested_precision.clone()),
         requested_mode: Some(normalized_scene.study.requested_mode.clone()),
         cpu_threads: normalized_scene.study.requested_cpu_threads,
+        compute_resources: normalized_scene.study.compute_resources.clone(),
         parallel_execution: Some(normalized_scene.study.parallel_execution.clone()),
         pbc: normalized_scene.study.pbc.clone().flatten(),
         fem_demag_solver_policy: normalized_scene.study.fem_demag_solver_policy.clone(),
@@ -788,6 +790,10 @@ pub fn scene_document_to_script_builder_overrides(
             .as_object_mut()
             .expect("script builder overrides are an object")
             .remove("pbc");
+    }
+    if let Some(resources) = builder.compute_resources.as_ref() {
+        overrides["compute_resources"] =
+            serde_json::to_value(resources).expect("compute resources are serializable");
     }
     if let Some(profile) = builder.execution_profile.as_ref() {
         overrides["execution_profile"] =
@@ -2769,6 +2775,7 @@ mod tests {
             }),
             table_autosave: None,
             output_storage: None,
+            compute_resources: None,
             execution_profile: None,
             execution_layers: Vec::new(),
             initial_state: Some(ScriptBuilderInitialState {
@@ -3319,6 +3326,91 @@ mod tests {
             serde_json::from_value::<SceneDocument>(scene_value).is_err(),
             "adaptive scalar fields must reject nonnumeric JSON values"
         );
+    }
+
+    #[test]
+    fn compute_resources_survive_scene_builder_overrides_and_model() {
+        // Shared Python/Rust wire fixture includes native/BLAS threads, target,
+        // memory, GPU placement, and distributed intent: preserve every field.
+        let expected: Value = serde_json::from_str(include_str!(
+            "../../../packages/fullmag-py/tests/fixtures/compute_resources.v1.json"
+        ))
+        .unwrap();
+        let mut authored =
+            serde_json::to_value(scene_document_from_script_builder(&sample_builder())).unwrap();
+        authored["study"]["compute_resources"] = expected.clone();
+        let scene: SceneDocument =
+            serde_json::from_value(authored).expect("Python-authored typed resources decode");
+        let resources: fullmag_ir::ComputeResourcesIR =
+            serde_json::from_value(expected.clone()).unwrap();
+        resources.validate().unwrap();
+        assert_eq!(scene.study.compute_resources.as_ref(), Some(&resources));
+        let builder = scene_document_to_script_builder(&scene).expect("typed scene validates");
+        assert_eq!(builder.compute_resources.as_ref(), Some(&resources));
+        let round_trip = scene_document_from_script_builder(&builder);
+        assert_eq!(round_trip.study.compute_resources, Some(resources));
+        assert_eq!(
+            scene_document_to_script_builder_overrides(&scene).unwrap()["compute_resources"],
+            expected
+        );
+        let model = crate::scene_document_model_definition(&scene).unwrap();
+        assert_eq!(model.discretization.unwrap()["compute_resources"], expected);
+    }
+
+    #[test]
+    fn absent_compute_resources_preserves_legacy_authoring() {
+        let builder = sample_builder();
+        let scene = scene_document_from_script_builder(&builder);
+        assert!(
+            serde_json::to_value(&builder)
+                .unwrap()
+                .get("compute_resources")
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(&scene).unwrap()["study"]
+                .get("compute_resources")
+                .is_none()
+        );
+        assert!(
+            scene_document_to_script_builder_overrides(&scene)
+                .unwrap()
+                .get("compute_resources")
+                .is_none()
+        );
+        let model = crate::scene_document_model_definition(&scene).unwrap();
+        assert!(
+            model
+                .discretization
+                .unwrap()
+                .get("compute_resources")
+                .is_none()
+        );
+        assert_eq!(
+            scene_document_to_script_builder(&scene)
+                .unwrap()
+                .cpu_threads,
+            builder.cpu_threads
+        );
+    }
+
+    #[test]
+    fn malformed_compute_resources_are_not_silently_dropped() {
+        let scene = scene_document_from_script_builder(&sample_builder());
+        for invalid in [
+            serde_json::json!({"schema_version":"compute_resources.v0"}),
+            serde_json::json!({"schema_version":"compute_resources.v1", "cpu":{"threads":30,"native_threads":31}}),
+        ] {
+            let mut authored = serde_json::to_value(&scene).unwrap();
+            authored["study"]["compute_resources"] = invalid;
+            let decoded: SceneDocument = serde_json::from_value(authored).unwrap();
+            let error = scene_document_to_script_builder(&decoded)
+                .expect_err("invalid typed resource intent must fail");
+            assert!(error.message.contains("compute_resources"));
+        }
+        let mut authored = serde_json::to_value(&scene).unwrap();
+        authored["study"]["compute_resources"] = serde_json::json!({"schema_version":"compute_resources.v1", "unknown_resource_field":1});
+        assert!(serde_json::from_value::<SceneDocument>(authored).is_err());
     }
 
     fn sample_execution_profile() -> fullmag_ir::ExecutionProfileIR {
