@@ -71,6 +71,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
@@ -686,6 +689,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -713,6 +719,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -773,6 +782,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -900,6 +912,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -986,6 +1001,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
 
       - name: Setup Python
         uses: actions/setup-python@v7

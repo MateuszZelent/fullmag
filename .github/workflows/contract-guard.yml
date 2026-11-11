@@ -47,6 +47,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
+
       - name: Install ripgrep
         run: |
           sudo apt-get update

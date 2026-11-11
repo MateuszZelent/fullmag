@@ -42,6 +42,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+      - name: Prefer canonical Ubuntu apt mirrors
+        uses: ./.github/actions/ubuntu-apt
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
