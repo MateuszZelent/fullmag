@@ -8,9 +8,10 @@
 
 namespace fullmag::fem {
 
-// Four LRU payloads, each bounded by max(N,E) records and selector indices.
+// Four LRU payloads, each bounded by max(N,E) records and max(N,E,4096)
+// selector indices (small duplicate/filtered selectors remain cacheable).
 // One shared exact dependency snapshot and preparation buffer are O(N+E).
-// Duplicate-heavy selectors beyond max(N,E) retain bounded streaming scratch.
+// Duplicate-heavy selectors beyond these budgets retain bounded streaming scratch.
 inline constexpr size_t kObjectAverageCacheEntries = 4;
 inline constexpr size_t kObjectAverageChunkRecords = 4096;
 

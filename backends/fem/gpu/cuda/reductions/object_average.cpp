@@ -339,7 +339,8 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
         // A hot-loop miss uses prepared streaming scratch; no ownership-cache
         // vector or CUDA allocation is permitted there.
         const bool can_prepare_cache = ctx.transfer_audit.audit.hot_loop_depth == 0 &&
-            record_count <= state.preparation_limit && count <= state.preparation_limit;
+            record_count <= state.preparation_limit &&
+            count <= std::max(state.preparation_limit, kObjectAverageChunkRecords);
         if (hit != state.entries.end() || can_prepare_cache) {
             if (hit == state.entries.end()) {
                 state.cache_misses += 1;

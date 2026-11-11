@@ -924,7 +924,9 @@ candidate can be qualified. Source inspection is not performance evidence.
 Aktualizacja 2026-11-11: próg 16 384 rekordów nie ogranicza już cache
 do małych obiektów. Bufor przygotowania jest rezerwowany poza pętlą dla
 `max(N, E)` rekordów; cztery wpisy LRU przechowują najwyżej tyle rekordów
-i indeksów selektora każdy. Wspólny dokładny snapshot wag nodalnych albo
+oraz `max(N, E, 4096)` indeksów selektora każdy. Osobny dolny limit
+selekcji pozwala buforować małe listy z powtórzeniami i pomijanymi wagami,
+których długość przekracza liczbę węzłów. Wspólny dokładny snapshot wag nodalnych albo
 aktywnych ordinali, topologii, objętości i `Ms` DG0 zajmuje dodatkowe
 `O(N+E)` pamięci hosta. To budżet zależny od siatki, a nie wcześniejszy
 stały limit 6 MiB. Selekcje z liczbą powtórzonych indeksów przekraczającą
