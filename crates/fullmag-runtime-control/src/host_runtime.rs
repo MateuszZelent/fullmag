@@ -77,6 +77,40 @@ mod recovery_tests {
 
     const TEST_GPU: &str = "GPU-00000000-0000-4000-8000-000000000001";
 
+    fn seal_fixture_snapshot(
+        snapshot: ComputeNodeSnapshot,
+        previous: Option<&ComputeNodeSnapshot>,
+    ) -> ComputeNodeSnapshot {
+        use fullmag_session::compute_node_snapshot::ComputeNodeSnapshotData;
+        // Synthetic inventory/enforcement edits belong in the constructor input:
+        // it seals the final digest and advances only the revisions that changed.
+        let sealed = ComputeNodeSnapshot::successor(
+            ComputeNodeSnapshotData {
+                node_id: snapshot.node_id,
+                boot_id: snapshot.boot_id,
+                runtime_owner_id: snapshot.runtime_owner_id,
+                owner_epoch: snapshot.owner_epoch,
+                host_owner_id: snapshot.host_owner_id,
+                host_owner_epoch: snapshot.host_owner_epoch,
+                inventory_revision: snapshot.inventory_revision,
+                capabilities_revision: snapshot.capabilities_revision,
+                cpu: snapshot.cpu,
+                memory: snapshot.memory,
+                gpus: snapshot.gpus,
+                capabilities: snapshot.capabilities,
+                sample: snapshot.sample,
+                enforcement: snapshot.enforcement,
+            },
+            previous,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        if let Some(previous) = previous {
+            assert!(!sealed.sample_does_not_advance(previous));
+        }
+        sealed
+    }
+
     fn reported_test_gpu() -> fullmag_session::compute_node_snapshot::GpuDeviceSnapshot {
         use fullmag_session::compute_node_snapshot::{GpuDeviceSnapshot, GpuPartition, Observation};
         let unavailable = || Reported::Unavailable { reason: UnavailableReason::NotReported, last_known: None };
@@ -147,6 +181,7 @@ mod recovery_tests {
                 sample.enforcement.gpu_visibility =
                     fullmag_session::compute_node_snapshot::EnforcementStatus::Supported;
             }
+            let sample = seal_fixture_snapshot(sample, None);
             ledger
                 .publish_compute_node_snapshot_with_owner(&inventory_owner, &sample)
                 .unwrap();
@@ -164,7 +199,7 @@ mod recovery_tests {
             }],
             preparation_resources: vec![FmsPreparationResourceOffer {
                 resource_id: "prep.cpu".into(),
-                budget: budget.clone(),
+                budget: FmsResourceBudget { gpu_memory_bytes: 0, ..budget.clone() },
             }],
             worker_timeout_seconds: 30,
             preparation_timeout_seconds: 30,
@@ -340,6 +375,7 @@ mod recovery_tests {
         assert_eq!(claim.lease.budget.gpu_memory_bytes, 1024);
         assert_eq!(fixture.ledger.policy().total_budget.gpu_memory_bytes, 0);
         assert_eq!(fixture.request.budget.gpu_memory_bytes, 0);
+        assert_eq!(fixture.config.preparation_resources[0].budget.gpu_memory_bytes, 0);
         let reconstructed = crate::host_allocation::host_request_for_task_claim(
             &fixture.store, fixture.context.ledger(), &claim,
             fixture.context.solver_placement(&fixture.request.identity.resource_id).unwrap(),
@@ -357,13 +393,17 @@ mod recovery_tests {
         fixture.context.ensure_committed_request(&fixture.request).unwrap();
         let baseline = fixture.context.required_current_compute_node_snapshot().unwrap();
         let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
-            &fixture.ledger, fixture.inventory_owner.descriptor(), None).unwrap();
+            &fixture.ledger, fixture.inventory_owner.descriptor(), Some(&baseline)).unwrap();
         snapshot.cpu = baseline.cpu.clone();
         snapshot.enforcement = baseline.enforcement.clone();
         snapshot.gpus = Reported::Unavailable {
             reason: UnavailableReason::SourceUnavailable, last_known: Some(vec![reported_test_gpu()]),
         };
-        fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot).unwrap();
+        let unavailable_snapshot = seal_fixture_snapshot(snapshot, Some(&baseline));
+        assert_eq!(unavailable_snapshot.inventory_sha256, baseline.inventory_sha256);
+        assert_eq!(unavailable_snapshot.inventory_revision, baseline.inventory_revision);
+        assert_eq!(unavailable_snapshot.capabilities_revision, baseline.capabilities_revision);
+        fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &unavailable_snapshot).unwrap();
         let error = fixture.context.gpu_request_matches_placement(&problem, placement).unwrap_err();
         assert!(error.chain().any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
         assert!(!format!("{error:#}").contains("ordinal request"));
@@ -375,10 +415,14 @@ mod recovery_tests {
             Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending)));
         // The same immutable claim can be considered again after a new sample recovers.
         let mut snapshot = crate::compute_node_probe::sample_compute_node_for_owner(
-            &fixture.ledger, fixture.inventory_owner.descriptor(), None).unwrap();
+            &fixture.ledger, fixture.inventory_owner.descriptor(), Some(&unavailable_snapshot)).unwrap();
         snapshot.cpu = baseline.cpu;
         snapshot.enforcement = baseline.enforcement;
         snapshot.gpus = Reported::Available { value: vec![reported_test_gpu()] };
+        let snapshot = seal_fixture_snapshot(snapshot, Some(&unavailable_snapshot));
+        assert_eq!(snapshot.inventory_sha256, unavailable_snapshot.inventory_sha256);
+        assert_eq!(snapshot.inventory_revision, unavailable_snapshot.inventory_revision);
+        assert_eq!(snapshot.capabilities_revision, unavailable_snapshot.capabilities_revision);
         fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot).unwrap();
         assert!(fixture.context.gpu_request_matches_placement(&problem, placement).unwrap());
         fixture.context.ensure_committed_request(&fixture.request).unwrap();
@@ -399,6 +443,7 @@ mod recovery_tests {
         let now = chrono::Utc::now();
         snapshot.sample.collected_at = now - chrono::Duration::seconds(31);
         snapshot.sample.refresh_freshness_at(now);
+        let snapshot = seal_fixture_snapshot(snapshot, None);
         fixture.ledger.publish_compute_node_snapshot_with_owner(&fixture.inventory_owner, &snapshot).unwrap();
         let error = fixture.context.gpu_request_matches_placement(&problem, placement).unwrap_err();
         assert!(error.chain().any(|cause| cause.is::<ComputeNodeSampleNotCurrent>()));
