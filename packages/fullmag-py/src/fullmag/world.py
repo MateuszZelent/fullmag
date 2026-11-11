@@ -8612,6 +8612,8 @@ def _current_mesh_authoring_document() -> dict[str, object]:
     fem_payload = fem_hint.to_ir() if fem_hint is not None else None
     if isinstance(fem_payload, dict):
         fem_payload.pop("mesh", None)
+        # The relaxation direction changes neither mesh authoring nor topology.
+        fem_payload.pop("gpu_bb_preconditioner", None)
     return {
         "geometries": geometry_payloads,
         "fem": fem_payload,

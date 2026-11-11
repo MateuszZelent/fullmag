@@ -229,6 +229,59 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.quality, quality)
         self.assertEqual(loaded.per_domain_quality, {1: quality})
 
+    def test_gpu_bb_policy_reuses_same_pinned_mesh_without_erasing_problem_ir(self) -> None:
+        mesh = _tetra_mesh()
+        source = """import fullmag as fm
+study = fm.study("bb-mesh-identity")
+study.engine("fem")
+study.device("gpu", precision="double")
+{policy_line}
+body = study.geometry(fm.Box({width}, 1e-9, 1e-9), name="film")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh(maximum_element_size={hmax}, order=1)
+"""
+        assets = {"fem_domain_mesh_asset": {
+            "mesh_source": None, "mesh": mesh.to_ir("study_domain"),
+            "region_markers": [{"geometry_name": "film", "marker": 1}],
+            "object_region_markers": [], "build_report": {"build_mode": "test"}}}
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frozen = root / "frozen.fullmag-mesh"
+            baseline = source.format(policy_line="", width="1e-9", hmax="1e-9")
+            namespace = {}
+            exec(baseline, namespace)
+            with patch("fullmag.world._build_explicit_mesh_assets", return_value=assets):
+                namespace["study"].mesh.save(frozen)
+            authoring = load_mesh_artifact(frozen).authoring_document
+            original = frozen.read_bytes()
+            frozen_sha = sha256(original).hexdigest()
+            topology = mesh.topology_fingerprint_v3()
+            for policy in ("auto", "none", "exchange_mass"):
+                with self.subTest(policy=policy):
+                    fm.reset()
+                    path = root / (policy + ".py")
+                    script = source.format(policy_line=f"study.fem_bb_preconditioner({policy!r})", width="1e-9", hmax="1e-9")
+                    script += f"study.mesh.load({str(frozen)!r}, expected_sha256={frozen_sha!r})\n"
+                    script += 'study.relax(algorithm="projected_gradient_bb", max_steps=2, tolA=1e-6)\n'
+                    path.write_text(script)
+                    loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+                    problem = loaded.stages[0].problem
+                    self.assertEqual(problem.to_ir(include_geometry_assets=False)["backend_policy"]["discretization_hints"]["fem"]["gpu_bb_preconditioner"], policy)
+                    artifact = load_mesh_artifact(frozen, expected_authoring_document=authoring, expected_sha256=frozen_sha)
+                    self.assertEqual(artifact.topology_fingerprint, topology)
+                    self.assertEqual(frozen.read_bytes(), original)
+            for width, hmax in (("2e-9", "1e-9"), ("1e-9", "2e-9")):
+                fm.reset()
+                script = source.format(policy_line='study.fem_bb_preconditioner("exchange_mass")', width=width, hmax=hmax)
+                script += f"study.mesh.load({str(frozen)!r}, expected_sha256={frozen_sha!r})\n"
+                path = root / "changed.py"
+                path.write_text(script)
+                with self.assertRaises(MeshConfigurationMismatch):
+                    fm.load_problem_from_script(path, lightweight_assets=True)
+                self.assertEqual(frozen.read_bytes(), original)
+
     def test_native_load_reports_authoring_mismatch(self) -> None:
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "film.fullmag-mesh"
