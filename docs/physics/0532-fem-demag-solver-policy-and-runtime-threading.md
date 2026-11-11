@@ -305,9 +305,20 @@ The requested study thread count is recorded separately from its resolved
 control-pool allocation. Native FEM configures its OpenMP team when the native
 context starts. Its requested and effective counts can differ from the runner's
 Rayon/control-pool count; for automatic selection, native FEM can apply
-mesh-aware CPU caps, while the GPU host runtime follows its own initialization
-path. Native FEM disables dynamic and nested OpenMP teams. Thread-pool changes
-made after a run starts do not retune that active run.
+mesh-aware CPU caps. The CPU auto count is the minimum of detected host
+capacity, the positive external allocation ceiling in
+`FULLMAG_NATIVE_THREADS_AUTO_RESOLVED` (or its legacy fallback), and the mesh
+limit. Small contexts (at most 10,000 nodes or 75,000 elements) cap at 8
+threads; medium contexts (at most 50,000 nodes or 400,000 elements) cap at 16;
+larger contexts have no additional mesh cap. The external value is an
+allocation ceiling and cannot bypass the mesh limit. Telemetry reports the
+external-allocation reason when that ceiling is strictly tighter than both
+detected capacity and the mesh limit, and reports the small/medium mesh reason
+when the mesh limit is tighter. Explicit manual counts keep their existing
+environment precedence and are not auto-capped. Automatic GPU host
+initialization remains at one thread regardless of CPU allocation hints.
+Native FEM disables dynamic and nested OpenMP teams. Thread-pool changes made
+after a run starts do not retune that active run.
 
 Runtime metadata records requested/resolved CPU counts. Requested/effective
 native FEM OpenMP counts are filled from native step statistics when the lane
@@ -609,6 +620,61 @@ additively. The packed readback and trial-snapshot reuse do not change Armijo,
 BB1/BB2 reset policy, fresh-zero demag, rollback, energy monotonicity, ABI, or
 opt-in profiler ownership.
 
+Update 2026-11-10 accepted-field reuse candidates (runtime unqualified):
+`gpu_relax_pgbb_field_reuse_key` and CPU `take_pgbb_accepted_stats` qualify
+single-use reuse of an already certified static endpoint. The GPU candidate
+starts with Poisson, exchange and constant Zeeman; the CPU candidate is limited
+to static Robin Poisson and exchange. Other source families, projections,
+refined-Armijo endpoints and pending torque confirmations retain fresh
+evaluation. Ordinary physical solve counts can decrease while logical RHS
+record semantics remain unchanged. Source tests do not establish trajectory
+parity or a performance improvement; both require managed full-Zarr runs.
+
+The CPU direct-minimizer profile also accumulates linear iterations from each
+sample (current field, rejected/accepted trial and explicit refinement) before
+publishing the accepted row. Its accepted-field cache contributes zero physical
+iterations on reuse. The bounded ABI counter saturates rather than wrapping;
+the residual continues to describe the accepted endpoint certificate. This
+does not turn the Poisson runtime's last-solve diagnostic into a lifetime work
+counter. The managed regression is
+`relaxation_profile_accumulates_all_trial_iterations`; execution is pending.
+
+Native CPU/GPU Poisson and FEM/BEM reporting now also uses a separate
+`linear_iterations_current_step` aggregate, alongside `solves_current_step`.
+Only successful, certified and recovered evaluations contribute; FEM/BEM adds
+both sparse systems. Reset, observation and rollback boundaries follow the
+existing solve counter. `last_iterations` and the reported residual retain
+their last-evaluation meaning. The aggregate is not a lifetime counter and
+does not include failed certification or recovery. Source-level numeric and
+rollback regressions are present; managed execution remains pending.
+
+The published `985df3521e2f5eb3c17588007cfc604203dfbf8e` package exposed a
+separate CPU execution defect: its Fullmag shared library had no OpenMP runtime
+imports and retained the `std::thread::hardware_concurrency` branch, although
+the selected MFEM and HYPRE libraries used OpenMP. MFEM's imported target linked
+the OpenMP runtime without propagating its C++ compilation flag. The build
+owner is `backends/fem/CMakeLists.txt`. When the
+selected MFEM configuration declares OpenMP, Fullmag must explicitly compile
+and link its C++ target with the matching CMake OpenMP target. This enables
+Fullmag's existing parallel regions and runtime setters; it introduces no new
+thread-count, wait or binding default. Parallel reductions can change rounding,
+so same-input energy/torque parity and a one-build thread matrix remain required.
+The former package's environment could still constrain MFEM/HYPRE threads;
+missing Fullmag flags are not proof that dependency thread teams were uncapped.
+
+Enabling OpenMP also requires respecting the selected provider's scratch
+ownership. The inspected MFEM providers have `MFEM_THREAD_SAFE` disabled:
+finite-element evaluators and the integration-rule cache may mutate shared
+buffers. `mfem_shared_element_evaluation_parallel_safe` therefore permits
+element-level parallelism only when Fullmag OpenMP, MFEM OpenMP and MFEM thread
+safety are all enabled. Nodal array normalization and independent energy
+reductions retain their separate parallel paths. DMI uses caller-owned
+transformations and prepared integration rules; geometry with `Mesh.Nodes`
+retains a serial element path until its evaluator ownership is qualified.
+Requests for 1, 2 and 4 threads on this provider qualify that serial safety
+guard and numerical parity, not parallel finite-element throughput. No physical
+operator, quadrature order, solver tolerance or CPU/GPU lane is changed.
+
 The required five-repeat production preset on 2026-07-23 produced 110 rows:
 95 completed and 15 failed before a benchmark result. Every one of the 50
 completed GPU PG-BB rows satisfied the canonical bound with a margin of three
@@ -870,6 +936,18 @@ workspace buffers into the context instead of copying full field arrays. This
 preserves the same accepted state and final field values; it only removes an
 O(N) copy from the adaptive RK accept path.
 
+Update 2026-11-10 adaptive retry candidate (runtime unqualified): after the GPU
+transaction restores the accepted magnetization, time and stage-zero derivative,
+`gpu_rk_retain_restored_fsal_on_retry` preserves an already valid derivative
+under `gpu_rk_rhs_allows_fsal_reuse`. It never promotes an invalid derivative.
+Brown thermal noise, callback-driven sources, frozen spins and periodic reduced
+nodes continue to disable reuse. Derived-field endpoint tokens remain invalid;
+Poisson still requires a fresh initial guess for every executed fresh solve.
+This changes neither the adaptive error criterion nor authored tolerances.
+The CUDA guard contract exercises checkpoint derivative preservation and
+stochastic rejection. Rejected-step runtime parity and performance qualification
+for the supported explicit integrators remain required before promotion.
+
 Update 2026-05-15 non-FSAL final refresh: Heun/RK4 final effective-field refresh
 now reuses the same stepper field workspace and swaps the final buffers into the
 context. The post-step `max_dm_dt` RHS also reuses a stage derivative buffer
@@ -979,13 +1057,20 @@ managed-runtime qualification.
 | Shared GPU HYPRE readiness | `backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp` | `hypre_cuda_device_policy_is_available` | Requires configured device memory/execution and all vendor sparse flags without an error. | Native FEM GPU consumers | Source contract; setter success does not prove full GPU residency. | [source](https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L103) |
 | Potential RHS | `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp` | `assemble_demag_poisson_rhs` | Assembles the magnetization source for the finite-element Poisson equation. | FEM CPU; shared equation contract | Source-visible; see `fem_demag_poisson_contract`. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp#L359) |
 | Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | Recovers `H_demag` from the potential gradient. | FEM CPU; shared equation contract | Source-visible; manufactured-potential check is described in `docs/physics/fem_demag_poisson.md`. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp#L709) |
-| Native FEM host threads | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | Resolves and applies the native OpenMP team at run start. | FEM CPU; GPU host initialization | `cpu_threads_contract` source contract; no device-residency claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/runtime/cpu_threads.cpp#L137) |
+| Native FEM host threads | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp` | `configure_fem_host_runtime_threads` | Applies the minimum of detected capacity, external allocation, and the CPU mesh cap in auto mode; preserves manual counts and the one-thread GPU host policy. | FEM CPU; GPU host initialization | Updated source contract covers both limiting reasons; managed native test not yet run. No device-residency claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/cpu/mfem/runtime/cpu_threads.cpp#L137) |
 | Requested runner threads | `crates/fullmag-runner/src/lib.rs` | `requested_cpu_threads` | Reads the typed compute-resource request or legacy runtime metadata. | CPU runtime selection | Source-visible; runner thread tests cover precedence. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/lib.rs#L6716) |
 | Runtime thread summary | `crates/fullmag-runner/src/artifacts.rs` | `runtime_threading_summary` | Publishes requested/resolved counts and leaves native OpenMP fields unavailable until observed. | CPU runtime provenance | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/artifacts.rs#L472) |
 | Observed native thread provenance | `crates/fullmag-runner/src/artifacts.rs` | `provenance_with_runtime_threading` | Enriches provenance from native FEM step statistics when present. | FEM CPU/GPU runtime metadata | Source-visible; values remain unavailable if the native lane does not report them. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/crates/fullmag-runner/src/artifacts.rs#L1008) |
 | Policy script export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_export_fem_demag_solver_policy` | Exports the authored policy for script round-trip. | FEM authoring round-trip | Source-visible; export/re-import does not execute a solver. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/runtime/script_builder.py#L3869) |
 | Policy acceptance regression | `packages/fullmag-py/tests/test_standard_problem_4_fem.py` | `test_sp4_requests_qualified_demag_linear_solver_policy` | Checks the SP4 policy request in the authored script. | FEM API | Existing repository test; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/tests/test_standard_problem_4_fem.py#L10) |
-| Native CPU thread contract | `backends/fem/tests/cpu_threads_contract.cpp` | `main` | Exercises native thread resolution and setup behavior. | FEM CPU | Existing source contract; not run as part of this documentation change. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/cpu_threads_contract.cpp#L315) |
+| Native CPU thread contract | `backends/fem/tests/cpu_threads_contract.cpp` | `main` | Covers external allocation versus mesh limits, the reported limiting reason, manual counts, and GPU host initialization. | FEM CPU | Regression source added; managed native test not yet run. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/cpu_threads_contract.cpp#L315) |
 | Shared validation rule | `backends/fem/core/demag_linear_solve_validation.cpp` | `validate_demag_linear_solve_result` | Accepts finite in-tolerance residuals within the iteration cap when the solver or an independent certificate establishes convergence. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/core/demag_linear_solve_validation.cpp#L9) |
 | Shared validation regression | `backends/fem/tests/demag_poisson_contract.cpp` | `demag_linear_solve_validation_rejects_invalid_results` | Exercises rejection of unverified false convergence and acceptance of an independently certified result. | FEM CPU/GPU | Existing shared contract; the device-HYPRE corrupted-potential regression passed managed RED/GREEN with the correction described in section 5.1. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L151) |
 | Independent GPU residual regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Corrupts a successfully solved GPU potential and requires independent rejection despite the stale HYPRE success report. | FEM GPU | Managed RED compiled and failed at the intended assertion; GREEN passed with the actual corruption-rejection marker. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/backends/fem/tests/demag_poisson_contract.cpp#L2711) |
+| gpu-pgbb-accepted-field-reuse | `backends/fem/gpu/cuda/relaxation/pgbb.hpp` | `gpu_relax_pgbb_field_reuse_key` | Qualifies exact static endpoint reuse. | FEM GPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| cpu-pgbb-accepted-field-reuse | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `take_pgbb_accepted_stats` | Qualifies endpoint buffers and both operator keys. | FEM CPU | Policy tests added; runtime parity pending. | Unpublished task candidate. |
+| gpu-fsal-adaptive-retry | `backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp` | `gpu_rk_retain_restored_fsal_on_retry` | Preserve only an eligible restored derivative after rejection. | FEM GPU | CUDA guard extended; runtime qualification pending. | Unpublished task candidate. |
+| cpu-relaxation-iteration-profile | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `accumulate_relaxation_profile_sample` | Sum linear iterations across evaluated trials before accepted-row publication. | FEM CPU | Regression added; execution pending. | Unpublished task candidate. |
+| native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
+| native-openmp-runtime | `backends/fem/tests/cpu_threads_contract.cpp` | `class ScopedOpenMpRuntimeState` | Probe the library runtime setters after seeding distinct OpenMP control values. | FEM CPU/GPU host control | Existing package defect confirmed; corrected runtime test pending. | Unpublished task candidate. |
+| mfem-element-parallel-policy | `backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp` | `mfem_shared_element_evaluation_parallel_safe` | Require thread-safe MFEM scratch before parallel element evaluation. | FEM CPU host element kernels | Provider flags inspected; runtime parity pending. | Unpublished task candidate. |

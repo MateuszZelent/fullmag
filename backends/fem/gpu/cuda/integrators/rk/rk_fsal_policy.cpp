@@ -66,4 +66,10 @@ uint64_t gpu_rk_fsal_operator_signature(const Context &ctx) noexcept
     return signature;
 }
 
+void gpu_rk_retain_restored_fsal_on_retry(Context &ctx)
+{
+    auto &rk = ctx.gpu_state.device.rk;
+    rk.fsal_valid = rk.fsal_valid && gpu_rk_rhs_allows_fsal_reuse(ctx);
+}
+
 } // namespace fullmag::fem

@@ -1040,6 +1040,8 @@ bool compute_device_demag_fem_bem_for_device_stage(
     ctx.poisson_demag.last_iterations = static_cast<int>(workspace->u2_iterations);
     ctx.poisson_demag.last_residual = workspace->u2_residual;
     ctx.poisson_demag.solves_current_step += 2u;
+    note_successful_demag_linear_iterations(ctx.poisson_demag, workspace->u1_iterations);
+    note_successful_demag_linear_iterations(ctx.poisson_demag, workspace->u2_iterations);
     gpu.demag_poisson.last_evaluation_mode =
         field_and_recovered_energy ? 1u : 0u;
     gpu.demag_poisson.last_evaluation_purpose = 0u;

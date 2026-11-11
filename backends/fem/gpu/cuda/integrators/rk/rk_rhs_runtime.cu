@@ -111,6 +111,7 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     std::string &reason,
     bool fresh_demag_initial_guess = false)
 {
+    gpu_relax_invalidate_accepted_evaluation(ctx.gpu_state.device.relaxation);
     auto &timings = ctx.gpu_state.rk_phase_timings;
     // The reduced periodic exchange representation is valid only after the
     // local vector has been projected onto periodic classes. CPU RK enforces

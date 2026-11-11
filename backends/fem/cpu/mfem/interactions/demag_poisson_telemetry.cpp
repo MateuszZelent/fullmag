@@ -45,8 +45,7 @@ void fill_demag_poisson_solver_stats(
          ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
          ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER)) {
         stats.demag_solve_count = ctx.poisson_demag.solves_current_step;
-        stats.demag_linear_iterations =
-            static_cast<uint32_t>(std::max(ctx.poisson_demag.last_iterations, 0));
+        stats.demag_linear_iterations = ctx.poisson_demag.linear_iterations_current_step;
         stats.demag_linear_residual = ctx.poisson_demag.last_residual;
     } else {
         stats.demag_solve_count = 0;

@@ -1834,6 +1834,7 @@ struct PublishedRkStateSnapshot {
     bool fsal_valid = false;
     std::vector<double> fsal_k0;
     uint64_t demag_solves_current_step = 0;
+    uint32_t demag_linear_iterations_current_step = 0;
     uint64_t transfer_host_to_device = 0;
     uint64_t transfer_device_to_host = 0;
 };
@@ -1857,6 +1858,7 @@ PublishedRkStateSnapshot capture_published_rk_state(
         ctx.stepper.workspace.fsal_valid,
         ctx.stepper.workspace.k[0],
         ctx.poisson_demag.solves_current_step,
+        ctx.poisson_demag.linear_iterations_current_step,
         ctx.transfer_audit.audit.counters.h2d_bytes,
         ctx.transfer_audit.audit.counters.d2h_bytes,
     };
@@ -1940,6 +1942,7 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
         ctx.demag.call_count = 11;
         ctx.effective_field.h_visual_xyz = {10.0, 11.0, 12.0};
         ctx.poisson_demag.solves_current_step = 13;
+        ctx.poisson_demag.linear_iterations_current_step = 17;
         ctx.transfer_audit.audit.counters.h2d_bytes = 17;
         ctx.transfer_audit.audit.counters.d2h_bytes = 19;
         fullmag::fem::rk_step_transaction_prepare_workspace(ctx);
@@ -1954,6 +1957,13 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
         check(ctx.stepper.failure_injection.injected_count == 1u,
               "configured RK failpoint must execute exactly once");
         assert_published_rk_state_equal(ctx, before, "complete RK transaction rollback");
+        // The minimal CPU journal retains current-attempt work diagnostics;
+        // this field-only fixture performs no demag work after the step reset.
+        check(before.demag_solves_current_step == 13 && before.demag_linear_iterations_current_step == 17,
+              "rollback fixture starts with distinct published demag counters");
+        check(ctx.poisson_demag.solves_current_step == 0 &&
+              ctx.poisson_demag.linear_iterations_current_step == 0,
+              "minimal CPU rollback preserves matching current-attempt work counters");
         const auto &telemetry = ctx.stepper.transaction_telemetry;
         check(telemetry.step_transaction_begin_count == 1u,
               "failed RK step must report one outer transaction begin");

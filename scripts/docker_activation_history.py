@@ -218,7 +218,8 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
     ledger_raw = _raw(root / "private/ledger/ledger/HOST_RESOURCE_LEDGER.json")
     ledger = ledger_evidence(ledger_raw)
     refs = control_references(root, token, owner_marker_pin=request["owner_marker_pin"],
-                              qualified_rejection=files if rejected else None)
+                              qualified_rejection=(
+                                  {"candidate": candidate, "files": files} if rejected else None))
     archives = validate_existing_archives(root)
     # The selected completed archive is expected during exact-plan reentry.
     archives.pop(token, None)
@@ -226,6 +227,7 @@ def collect_guest(root, request, *, source_root, store_root, output_root):
                 "output": output_evidence,
                 "ledger": ledger,
                 "control_reference_pins": refs["pins"], "prior_archives": archives,
+                "qualified_current_terminal": refs["qualified_current_terminal"],
                 "admission_pins": request["admission_pins"],
                 "source_files": request["source_files"], "runtime": identity}
     return candidate, refs["protected"], digest(canonical(evidence))

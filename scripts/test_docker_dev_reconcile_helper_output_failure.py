@@ -15,16 +15,34 @@ from docker_build_control import BuildControlError
 REQUEST = "failed-startup"
 SOURCE = "a" * 64
 RUN = "run-live-historical"
+RETAINED_RUNS = (RUN, "run-live-historical-2", "run-live-historical-3")
 INTENT = {"schema_version": "run_intent.v1", "run_id": RUN,
           "idempotency_key": "other-request", "specification": {"parameters": {
               "live_workspace": {"session_id": "older-session", "command_id": "older-command",
                                  "request_idempotency_key": "older-command",
                                  "command": {"request_id": "older-command"}}}}}
+SCENE_STUDY_FIELDS = (
+    "backend", "requested_backend", "requested_device", "requested_precision", "requested_mode",
+    "requested_cpu_threads", "parallel_execution", "pbc", "fem_demag_solver_policy",
+    "fem_demag_accuracy_contract", "exchange_enabled", "demag_enabled", "demag_realization",
+    "fdm", "external_field", "thermal_noise", "rotated_interfacial_dmi",
+    "rotated_interfacial_dmi_object_ids", "solver", "universe_mesh", "shared_domain_mesh",
+    "fem_domain_mesh", "mesh_defaults", "mesh_interfaces", "stages", "study_pipeline",
+    "table_autosave", "output_storage", "execution_profile", "execution_layers", "initial_state",
+    "visualization_hint",
+)
+SCENE_DESERIALIZATION_FAILURE = (
+    "failed to deserialize SceneDocument response: unknown field `compute_resources`, expected one of "
+    + ", ".join(f"`{field}`" for field in SCENE_STUDY_FIELDS)
+    + " at line 1 column 12321"
+)
 
 
 class FailureSignatureTests(unittest.TestCase):
-    def error(self, **changes):
+    def error(self, message=None, **changes):
+        message = recovery.FAILURE if message is None else message
         response = {"code": "internal_error", "message": recovery.FAILURE, **changes}
+        response["message"] = message
         return "startup activation returned HTTP 500: " + json.dumps(response)
 
     def test_only_exact_output_failure_is_accepted(self):
@@ -34,6 +52,25 @@ class FailureSignatureTests(unittest.TestCase):
                       self.error().replace("HTTP 500", "HTTP 422"), None):
             with self.subTest(error=error), self.assertRaises(BuildControlError):
                 recovery.failure_response(error)
+
+    def test_exact_scene_study_compute_resources_deserialization_failure_is_accepted(self):
+        error = self.error(message=SCENE_DESERIALIZATION_FAILURE, error=SCENE_DESERIALIZATION_FAILURE)
+        self.assertEqual(recovery.failure_response(error)["message"], SCENE_DESERIALIZATION_FAILURE)
+
+    def test_other_parser_or_unknown_field_failures_are_not_accepted(self):
+        for message, changes in (
+            (SCENE_DESERIALIZATION_FAILURE.replace("compute_resources", "other_field"),
+             {"error": SCENE_DESERIALIZATION_FAILURE.replace("compute_resources", "other_field")}),
+            (SCENE_DESERIALIZATION_FAILURE.replace("column 12321", "column 12322"),
+             {"error": SCENE_DESERIALIZATION_FAILURE.replace("column 12321", "column 12322")}),
+            (SCENE_DESERIALIZATION_FAILURE.replace("`visualization_hint`", "`unexpected_field`"),
+             {"error": SCENE_DESERIALIZATION_FAILURE.replace("`visualization_hint`", "`unexpected_field`")}),
+            ("failed to deserialize SceneDocument response: expected value at line 1 column 12321",
+             {"error": "failed to deserialize SceneDocument response: expected value at line 1 column 12321"}),
+            (SCENE_DESERIALIZATION_FAILURE, {"error": "different deserialization error"}),
+        ):
+            with self.subTest(message=message), self.assertRaises(BuildControlError):
+                recovery.failure_response(self.error(message=message, **changes))
 
 
 class AbsentRequestTests(unittest.TestCase):
@@ -71,6 +108,21 @@ class AbsentRequestTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(BuildControlError):
                 self.check(value)
 
+    def test_matching_request_in_any_retained_run_refuses_release(self):
+        runs = []
+        for index, run_id in enumerate(RETAINED_RUNS):
+            value = copy.deepcopy(INTENT)
+            value["run_id"] = run_id
+            value["idempotency_key"] = f"other-request-{index}"
+            if index == len(RETAINED_RUNS) - 1:
+                value["specification"]["parameters"]["live_workspace"]["command_id"] = REQUEST
+            path = self.root / "runs" / run_id / "run_intent.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(value))
+            runs.append({"run_id": run_id})
+        with self.assertRaisesRegex(BuildControlError, "retained RunIntent"):
+            recovery.request_absent(self.root, runs, REQUEST, SOURCE)
+
     def test_malformed_or_missing_intent_refuses_release(self):
         cases = [None, [], {**INTENT, "schema_version": "unknown"},
                  {**INTENT, "run_id": "different"}, {**INTENT, "specification": None}]
@@ -95,6 +147,23 @@ class AbsentRequestTests(unittest.TestCase):
 
 
 class PublicationAndResumeTests(unittest.TestCase):
+    def test_terminal_proof_tag_is_mandatory_for_scene_error_only(self):
+        recovery.validate_terminal_proof_variant({}, "combined-helper-output-limit")
+        recovery.validate_terminal_proof_variant(
+            {"failure_variant": "scene-study-compute-resources-unknown-field"},
+            "scene-study-compute-resources-unknown-field",
+        )
+        for proof, variant in (
+            ({}, "scene-study-compute-resources-unknown-field"),
+            ({"failure_variant": "combined-helper-output-limit"},
+             "scene-study-compute-resources-unknown-field"),
+            ({"failure_variant": "scene-study-compute-resources-unknown-field"},
+             "combined-helper-output-limit"),
+        ):
+            with self.subTest(proof=proof, variant=variant), self.assertRaisesRegex(
+                    BuildControlError, "failure variant"):
+                recovery.validate_terminal_proof_variant(proof, variant)
+
     def test_resume_rejects_changed_pins_plan_or_backend_incarnation(self):
         bindings = {"schema": recovery.SCHEMA, "activation": "a" * 32, "source_sha256": SOURCE}
         plan = {**bindings, "backend_started_at": "original-start", "protected_runs_sha256": "b" * 64}
@@ -131,19 +200,37 @@ class PublicationAndResumeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(result.stdout, b"published")
 
-    def test_stopped_backend_resumes_from_durable_intent_without_health_or_restart(self):
+    def test_stopped_backend_reconciles_exact_combined_output_limit(self):
+        self._assert_stopped_backend_reconciles(FailureSignatureTests().error(),
+                                                "combined-helper-output-limit")
+
+    def test_stopped_backend_reconciles_exact_scene_document_field_error(self):
+        error = FailureSignatureTests().error(
+            message=SCENE_DESERIALIZATION_FAILURE, error=SCENE_DESERIALIZATION_FAILURE,
+        )
+        self._assert_stopped_backend_reconciles(
+            error, "scene-study-compute-resources-unknown-field",
+        )
+
+    def _assert_stopped_backend_reconciles(self, failure_error, expected_variant):
         with TemporaryDirectory() as temporary:
             state = Path(temporary)
             store = state / "runs/docker-all/session-store"
-            intent_file = store / "runs" / RUN / "run_intent.json"
-            intent_file.parent.mkdir(parents=True)
-            intent_file.write_text(json.dumps(INTENT))
+            retained_intents = {}
+            for index, run_id in enumerate(RETAINED_RUNS):
+                value = copy.deepcopy(INTENT)
+                value["run_id"] = run_id
+                value["idempotency_key"] = f"other-request-{index}"
+                intent_file = store / "runs" / run_id / "run_intent.json"
+                intent_file.parent.mkdir(parents=True, exist_ok=True)
+                intent_file.write_text(json.dumps(value))
+                retained_intents[run_id] = value
             root = "activation/attempts/" + "a" * 32
             marker_path = "backend/script-activation-key/activation.json"
             inputs = {"request_id": REQUEST, "source_sha256": SOURCE, "provenance_sha256": "b" * 64,
                       "activation_receipt_path": "/opt/fullmag/control/" + marker_path}
             receipt = {"retirement_phase": "startup", "helper_container": "original-helper", "inputs": inputs,
-                       "error": FailureSignatureTests().error()}
+                       "error": failure_error}
             raw = recovery.canonical(receipt)
             marker = recovery.canonical({"state": "started", **{key: inputs[key] for key in ("request_id", "source_sha256", "provenance_sha256")}})
             previous = {"state": "succeeded", "attempt": "dev", "backend_container": "backend",
@@ -192,18 +279,22 @@ class PublicationAndResumeTests(unittest.TestCase):
                  patch.object(recovery, "_validate_helper_logged"), \
                  patch.object(recovery, "_linked_runtime_terminals", return_value=[{}]), \
                  patch.object(recovery, "_validate_running_group", return_value=("backend", "frontend")) as live_group, \
-                 patch.object(recovery, "_inventory_store", return_value={"runs": [{"run_id": RUN}]}), \
+                 patch.object(recovery, "_inventory_store",
+                              return_value={"runs": [{"run_id": run_id} for run_id in RETAINED_RUNS]}), \
                  patch.object(recovery, "validate_stopped_backend") as stopped, \
                  patch.object(recovery, "validate_drained") as drained, \
                  patch.object(recovery, "_raw", side_effect=raw_read), \
                  patch.object(recovery, "docker_capture", side_effect=docker):
                 preview = recovery.reconcile(arguments)
+                self.assertEqual(preview["failure_variant"], expected_variant)
                 arguments.apply, arguments.plan_sha256 = True, preview["plan_sha256"]
                 with self.assertRaisesRegex(OSError, "observation lost"):
                     recovery.reconcile(arguments)
                 live_calls = live_group.call_count
                 result = recovery.reconcile(arguments)
                 self.assertEqual(result["state"], "not-admitted-confirmed")
+                self.assertEqual(result["failure_variant"], expected_variant)
+                self.assertEqual(result["preserved_runs"], len(RETAINED_RUNS))
                 self.assertEqual(live_group.call_count, live_calls)
                 stopped.assert_called_once()
                 drained.assert_called_once()
@@ -211,7 +302,9 @@ class PublicationAndResumeTests(unittest.TestCase):
                 repeated = recovery.reconcile(arguments)
                 self.assertIs(repeated["replayed"], False)
                 self.assertIs(repeated["already_completed"], True)
-                self.assertEqual(json.loads(intent_file.read_text()), INTENT)
+                for run_id, value in retained_intents.items():
+                    intent_file = store / "runs" / run_id / "run_intent.json"
+                    self.assertEqual(json.loads(intent_file.read_text()), value)
                 # Simulate an interrupted pre-stop attempt retaining its intent,
                 # followed by a new live session. Resume must not send SIGTERM.
                 del documents[root + "/terminal.json"]

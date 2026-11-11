@@ -860,6 +860,8 @@ pub struct SceneStudyState {
     pub requested_mode: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_cpu_threads: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_resources: Option<fullmag_ir::ComputeResourcesIR>,
     #[serde(default, deserialize_with = "fullmag_ir::deserialize_parallel_execution_policy")]
     pub parallel_execution: fullmag_ir::ParallelExecutionPolicyIR,
     // Missing preserves an existing script; null explicitly clears its PBC.

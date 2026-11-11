@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
+#include "gpu/cuda/reductions/object_average.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
@@ -58,6 +59,19 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             ctx.transfer_audit.audit,
             error)) {
         return gpu_bootstrap_failed(ctx, error);
+    }
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+        const uint64_t element_count = ctx.material_fields.runtime.has_value()
+            ? static_cast<uint64_t>(ctx.material_fields.runtime->realization().element_count())
+            : static_cast<uint64_t>(ctx.mesh.n_elements);
+        if (!prepare_membership_shape(
+                ctx.gpu_state.device.reductions.object_average,
+                ctx.mesh.n_nodes,
+                element_count,
+                ctx.transfer_audit.audit,
+                error)) {
+            return gpu_bootstrap_failed(ctx, error);
+        }
     }
     gpu_performance_configure(
         ctx.gpu_state.performance_counters,

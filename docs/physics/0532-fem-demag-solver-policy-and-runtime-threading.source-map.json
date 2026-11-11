@@ -227,7 +227,7 @@
       "id": "native-threads",
       "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
       "symbol": "configure_fem_host_runtime_threads",
-      "responsibility": "Resolves and applies native FEM OpenMP settings when its context starts."
+      "responsibility": "In auto CPU mode applies the minimum of detected capacity, external allocation, and mesh-aware limit, and reports the strictly limiting bound; preserves manual counts and the one-thread automatic GPU host policy."
     },
     {
       "id": "runner-thread-request",
@@ -263,7 +263,7 @@
       "id": "native-thread-test",
       "path": "backends/fem/tests/cpu_threads_contract.cpp",
       "symbol": "main",
-      "responsibility": "Exercises native FEM CPU thread request and setup behavior."
+      "responsibility": "Covers external allocation versus small/medium mesh limits, truthful cap reasons, uncapped manual counts, and the automatic GPU host one-thread policy."
     },
     {
       "id": "shared-linear-validation",
@@ -301,6 +301,48 @@
       "responsibility": "Require configured device memory/execution and vendor SpTrans/SpMV/SpGEMM with no recorded error.",
       "evidence_status": "Pinned current source contract; no new runtime, full-residency, or speedup qualification.",
       "permalink": "https://github.com/MateuszZelent/fullmag/blob/70d35b84dae4e840e8cc881c35ef45014c604284/backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp#L103"
+    },
+    {
+      "id": "gpu-fsal-adaptive-retry",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "symbol": "gpu_rk_retain_restored_fsal_on_retry",
+      "responsibility": "Retains only a restored eligible deterministic FSAL derivative on adaptive rejection; endpoint field tokens and fresh-zero solve semantics remain separate. Runtime qualification pending."
+    },
+    {
+      "id": "gpu-pgbb-accepted-field-reuse",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.hpp",
+      "symbol": "gpu_relax_pgbb_field_reuse_key",
+      "responsibility": "Qualifies single-use static endpoint field reuse; actual solves remain fresh-zero and torque confirmations stay fresh. Runtime parity pending."
+    },
+    {
+      "id": "native-linear-iteration-work",
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp",
+      "symbol": "note_successful_demag_linear_iterations",
+      "responsibility": "Saturating successful-solve iteration aggregate alongside existing solve-counter reset and rollback boundaries. Native tests pending."
+    },
+    {
+      "id": "mfem-element-parallel-policy",
+      "path": "backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp",
+      "symbol": "mfem_shared_element_evaluation_parallel_safe",
+      "responsibility": "Guard shared MFEM element evaluation by actual Fullmag/MFEM OpenMP and MFEM_THREAD_SAFE configuration. Pure array reductions retain independent parallel policy; runtime parity pending."
+    },
+    {
+      "id": "native-openmp-runtime",
+      "path": "backends/fem/tests/cpu_threads_contract.cpp",
+      "symbol": "class ScopedOpenMpRuntimeState",
+      "responsibility": "Explicit private CXX OpenMP target when selected MFEM uses OpenMP; own library runtime setters and parallel loops must be compiled consistently."
+    },
+    {
+      "id": "cpu-relaxation-iteration-profile",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "accumulate_relaxation_profile_sample",
+      "responsibility": "Accumulate CPU direct-minimizer trial linear iterations without charging reused endpoints twice. Managed regression pending."
+    },
+    {
+      "id": "cpu-pgbb-accepted-field-reuse",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "take_pgbb_accepted_stats",
+      "responsibility": "Checks exact endpoint buffers and operator dependency keys before static CPU BB reuse. Runtime parity pending."
     }
   ],
   "public_api": {

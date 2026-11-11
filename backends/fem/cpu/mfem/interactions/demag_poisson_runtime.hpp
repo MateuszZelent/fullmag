@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -171,6 +172,7 @@ struct PoissonDemagRuntimeState {
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
+    uint32_t linear_iterations_current_step = 0;
     uint32_t setup_count_current_step = 0;
     uint32_t fresh_zero_guess_count_current_step = 0;
     uint32_t event_wait_count_current_step = 0;
@@ -186,6 +188,17 @@ struct PoissonDemagRuntimeState {
     mfem::HypreSolver *cached_hypre_solver = nullptr;
     bool solver_setup = false;
 };
+
+// Successful certified/recovered solves contribute bounded work to the
+// existing uint32 StepStats field. Last-solve diagnostics remain independent.
+inline void note_successful_demag_linear_iterations(
+    PoissonDemagRuntimeState &state, uint64_t iterations) noexcept
+{
+    constexpr uint32_t maximum = std::numeric_limits<uint32_t>::max();
+    const uint64_t remaining = maximum - state.linear_iterations_current_step;
+    state.linear_iterations_current_step = iterations >= remaining
+        ? maximum : state.linear_iterations_current_step + static_cast<uint32_t>(iterations);
+}
 
 /* Recompute the dependency key observed by the public CPU Poisson runtime. */
 PoissonOperatorDependencyKey make_poisson_operator_dependency_key(

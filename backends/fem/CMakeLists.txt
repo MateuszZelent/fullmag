@@ -62,6 +62,7 @@ set(FEM_SOURCES
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
+    gpu/cuda/reductions/object_average.cpp
     gpu/cuda/reductions/reduction_workspace_memory.cpp
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
@@ -163,6 +164,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/backend_lifecycle.cpp
     cpu/mfem/runtime/backend_step.cpp
     cpu/mfem/runtime/cpu_threads.cpp
+    cpu/mfem/runtime/element_parallel_policy.cpp
     cpu/mfem/runtime/hypre_host_policy.cpp
     cpu/mfem/runtime/eigen_dense.cpp
     cpu/mfem/runtime/field_refresh.cpp
@@ -253,6 +255,9 @@ if(FULLMAG_USE_MFEM_STACK)
     endif()
     include("${CMAKE_SOURCE_DIR}/cmake/FindFullmagMfem.cmake")
     fullmag_find_mfem()
+    if(MFEM_USE_OPENMP)
+        find_package(OpenMP REQUIRED COMPONENTS CXX)
+    endif()
     if(FULLMAG_FEM_WITH_SLEPC)
         if(WIN32)
             fullmag_validate_windows_modal()
@@ -353,6 +358,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
+            gpu/cuda/reductions/object_average_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
@@ -497,6 +503,9 @@ if(FULLMAG_USE_MFEM_STACK)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
     else()
         target_link_libraries(fullmag_fem PRIVATE mfem)
+    endif()
+    if(MFEM_USE_OPENMP)
+        target_link_libraries(fullmag_fem PRIVATE OpenMP::OpenMP_CXX)
     endif()
     if(FULLMAG_FEM_WITH_SLEPC)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=1)
@@ -858,6 +867,14 @@ target_include_directories(fem_cuda_slonczewski_contract PRIVATE
 )
 add_test(NAME fem_cuda_slonczewski_contract COMMAND fem_cuda_slonczewski_contract)
 
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
+    add_executable(fem_cuda_object_average_contract tests/cuda_object_average_contract.cpp)
+    target_link_libraries(fem_cuda_object_average_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_cuda_object_average_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME fem_cuda_object_average_contract COMMAND fem_cuda_object_average_contract)
+endif()
+
 add_executable(fem_cuda_sot_contract tests/cuda_sot_contract.cpp)
 target_link_libraries(fem_cuda_sot_contract PRIVATE fullmag_fem)
 if(FULLMAG_ENABLE_CUDA)
@@ -880,6 +897,29 @@ target_include_directories(fem_cuda_rk_guard_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cuda_rk_guard_contract COMMAND fem_cuda_rk_guard_contract)
+
+add_executable(fem_cuda_pgbb_reuse_contract tests/cuda_pgbb_reuse_contract.cpp)
+target_link_libraries(fem_cuda_pgbb_reuse_contract PRIVATE fullmag_fem)
+target_include_directories(fem_cuda_pgbb_reuse_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_cuda_pgbb_reuse_contract COMMAND fem_cuda_pgbb_reuse_contract)
+
+add_executable(fem_pgbb_accepted_cache_contract tests/pgbb_accepted_cache_contract.cpp)
+target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_pgbb_accepted_cache_contract PRIVATE mfem)
+    endif()
+endif()
+target_include_directories(fem_pgbb_accepted_cache_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_pgbb_accepted_cache_contract COMMAND fem_pgbb_accepted_cache_contract)
 
 if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
     add_executable(
@@ -1667,6 +1707,10 @@ add_test(NAME fem_frozen_spins_contract COMMAND fem_frozen_spins_contract)
 
 add_executable(fem_cpu_threads_contract tests/cpu_threads_contract.cpp)
 target_link_libraries(fem_cpu_threads_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND MFEM_USE_OPENMP)
+    target_link_libraries(fem_cpu_threads_contract PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(fem_cpu_threads_contract PRIVATE FULLMAG_FEM_EXPECTS_OPENMP=1)
+endif()
 target_include_directories(fem_cpu_threads_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

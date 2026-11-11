@@ -540,6 +540,12 @@ fn discretization_payload(scene: &SceneDocument) -> Value {
     if let Some(reference) = scene.study.fem_domain_mesh.as_ref() {
         object.insert("fem_domain_mesh".to_string(), json!(reference));
     }
+    if let Some(resources) = scene.study.compute_resources.as_ref() {
+        object.insert(
+            "compute_resources".to_string(),
+            serde_json::to_value(resources).expect("compute resources are serializable"),
+        );
+    }
     if let Some(profile) = scene.study.execution_profile.as_ref() {
         object.insert(
             "execution_profile".to_string(),

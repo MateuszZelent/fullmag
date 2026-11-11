@@ -165,6 +165,10 @@ int fresh_line_search_snapshot(
     const char *snapshot_name,
     std::string &error);
 
+// PGBB-only exact guard; generic cached-current stats are intentionally weaker.
+bool take_pgbb_accepted_stats(Context &ctx, fullmag_fem_step_stats &stats);
+void publish_pgbb_accepted_stats(Context &ctx, bool refined_evaluation);
+
 bool take_cached_current_stats(
     Context &ctx,
     fullmag_fem_step_stats &stats);

@@ -1339,13 +1339,13 @@ fn execute_cuda_assisted_multilayer_double(
     let stage_telemetry = native_demag
         .as_ref()
         .and_then(|operator| operator.latest_stage_telemetry.clone());
-    artifacts.update_provenance(assisted_multilayer_provenance(
+    artifacts.replace_provenance_synchronously(assisted_multilayer_provenance(
         plan,
         device_info,
         native_demag_enabled,
         transfer_counters,
         stage_telemetry,
-    )?);
+    )?)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused
@@ -1619,13 +1619,13 @@ fn execute_cuda_assisted_multilayer_single(
     let stage_telemetry = native_demag
         .as_ref()
         .and_then(|operator| operator.latest_stage_telemetry.clone());
-    artifacts.update_provenance(assisted_multilayer_provenance(
+    artifacts.replace_provenance_synchronously(assisted_multilayer_provenance(
         plan,
         device_info,
         native_demag_enabled,
         transfer_counters,
         stage_telemetry,
-    )?);
+    )?)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused
@@ -2013,12 +2013,12 @@ fn execute_native_device_resident_cuda_multilayer(
         )?;
     }
 
-    artifacts.update_provenance(device_resident_multilayer_provenance(
+    artifacts.replace_provenance_synchronously(device_resident_multilayer_provenance(
         plan,
         device_info,
         stage_telemetry,
         transfer_counters,
-    )?);
+    )?)?;
     let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let status = if paused {
         RunStatus::Paused

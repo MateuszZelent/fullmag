@@ -68,6 +68,30 @@ void DmiElementWorkspace::reduce_thread_residuals(size_t field_len) {
     }
 }
 
+void DmiElementWorkspace::prepare_element_evaluation(
+    mfem::FiniteElementSpace &fes, int thread_count) {
+    const int count = std::max(1, thread_count);
+    while (transformations_by_thread.size() < static_cast<size_t>(count)) {
+        transformations_by_thread.emplace_back(std::make_unique<mfem::IsoparametricTransformation>());
+    }
+    element_fes.resize(fes.GetMesh()->GetNE());
+    element_rules.resize(element_fes.size());
+    int maximum_dofs = 0;
+    // Refresh every descriptor on each call. Mesh/space/order/basis changes
+    // cannot leave a stale FE or rule pointer in the retained workspace.
+    for (int element = 0; element < fes.GetMesh()->GetNE(); ++element) {
+        const auto *fe = fes.GetFE(element);
+        element_fes[static_cast<size_t>(element)] = fe;
+        element_rules[static_cast<size_t>(element)] =
+            &mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder());
+        maximum_dofs = std::max(maximum_dofs, fe->GetDof());
+    }
+    for (int thread = 0; thread < count; ++thread) {
+        dofs_by_thread[static_cast<size_t>(thread)].SetSize(maximum_dofs);
+        prepare_thread_local(thread, maximum_dofs);
+    }
+}
+
 DmiElementWorkspace *dmi_element_workspace(Context &ctx) {
     auto *workspace = ctx.dmi.workspace;
     if (workspace == nullptr) {

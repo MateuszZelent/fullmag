@@ -7,6 +7,7 @@
  * unavailable-path errors. It does not own Context construction internals, MFEM runtime lifecycle, interaction physics, integrator stages, or transfer-audit policy.
  */
 
+#include "gpu/cuda/reductions/object_average.hpp"
 #include "fullmag_fem.h"
 
 #include "backend_handle.hpp"
@@ -5205,6 +5206,8 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
     auto &ctx = handle->context;
     ctx.stepper.workspace.fsal_valid = false;
 #if FULLMAG_HAS_CUDA_RUNTIME
+    fullmag::fem::gpu_relax_note_external_state_change(
+        ctx.gpu_state.device.relaxation);
     ctx.gpu_state.device.rk.fsal_valid = false;
 #endif
     ctx.gpu_state.device.rk.endpoint_valid = false;
@@ -5412,6 +5415,13 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     }
 
     handle->last_error.clear();
+    if (handle->context.gpu_state.device.lifecycle.allocated ||
+        fullmag::fem::mfem_device_requests_gpu(handle->context)) {
+        const int status = fullmag::fem::gpu_object_average(
+            handle->context, node_indices, node_count, false, out_xyz, handle->last_error);
+        if (status != FULLMAG_FEM_OK) { fullmag_fem_set_handle_error(handle, handle->last_error); }
+        return status;
+    }
     if (!fullmag::fem::context_sync_gpu_magnetization_to_host(
             handle->context,
             handle->last_error)) {
@@ -5556,6 +5566,14 @@ int fullmag_fem_backend_average_m_for_elements_f64(
                 handle,
                 "fullmag_fem_backend_average_m_for_elements_f64 requires element-DG0 Ms");
             return FULLMAG_FEM_ERR_UNAVAILABLE;
+        }
+
+        if (handle->context.gpu_state.device.lifecycle.allocated ||
+            fullmag::fem::mfem_device_requests_gpu(handle->context)) {
+            const int status = fullmag::fem::gpu_object_average(
+                handle->context, element_indices, element_count, true, out_xyz, handle->last_error);
+            if (status != FULLMAG_FEM_OK) { fullmag_fem_set_handle_error(handle, handle->last_error); }
+            return status;
         }
 
         const std::size_t available_elements =
