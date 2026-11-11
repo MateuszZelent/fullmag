@@ -46,8 +46,6 @@ subject to native validation. Element-family/device support is capability-gated.
 | `FEM.demag_solver_policy` | `FemLinearSolverPolicy \| None` | `None` | 1 | Typed solver policy. | Algebraic Poisson/demag solver request; not mesh geometry. | FEM demagnetization lanes | `backend_policy.discretization_hints.fem.demag_solver_policy` |
 | `FEM.gpu_bb_preconditioner` | `str \| None` | `None` | 1 | When set, exactly `auto`, `none`, or `exchange_mass`; explicit use requires FEM GPU `projected_gradient_bb` relaxation or raises `ValueError`. | Requested FEM GPU BB search-direction policy. `None` omits the hint from `ProblemIR` and preserves the backend default. | Explicit policy: FEM GPU `projected_gradient_bb` only; FEM CPU, FDM CPU/GPU, and other FEM relaxation algorithms reject it. Managed GPU execution, SP4 performance, and CPU/GPU parity remain `NOT VERIFIED`. | `backend_policy.discretization_hints.fem.gpu_bb_preconditioner` |
 
-For the FEM GPU projected-gradient BB implementation and its qualification boundary, see [Section 11 of physics note 0581](https://github.com/MateuszZelent/fullmag/blob/7f2d02a3d4b0af26d8dcb66c736c98039b953911/docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md#11-candidate-fem-gpu-projected-gradient-bb-exchange-mass-realization).
-
 ```python
 # %% Complete stage-first FEM mesh scenario
 import fullmag as fm
