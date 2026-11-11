@@ -126,6 +126,84 @@ class ResumedHistoryTests(unittest.TestCase):
     def observe(self):
         return restore._history(self.control, self.previous, self.iteration, self.fence, recreate_attempt=self.recreate)
 
+    def make_successful_idle_stop(self):
+        self.terminal = copy.deepcopy(self.terminal)
+        self.terminal.update(state='succeeded', idle_backend_stopped=True,
+                             backend_started_at='then', frontend_started_at='front-then',
+                             config_sha256=self.terminal['inputs']['config_sha256'])
+        self.terminal.pop('error', None)
+
+        retained_path = self.recreate_root + '/retained-containers.json'
+        retained = json.loads(self.records[retained_path])
+        images = {'backend': self.terminal['inputs']['image_id'],
+                  'frontend': 'sha256:' + 'c' * 64}
+        started_at = {'backend': self.terminal['backend_started_at'],
+                      'frontend': self.terminal['frontend_started_at']}
+        for name, row in retained.items():
+            row['Image'] = images[name]
+            row['State'] = dict(StartedAt=started_at[name], Running=False, Status='exited',
+                                Pid=0, ExitCode=0, OOMKilled=False)
+        self.write(retained_path, retained)
+
+        snapshot_path = self.old_root + '/idle-stop-containers.json'
+        self.write(snapshot_path, retained)
+        self.terminal['idle_stop_containers_sha256'] = base._sha(self.records[snapshot_path])
+        for path in ('terminal.json', 'receipt.json'):
+            self.write(self.old_root + '/' + path, self.terminal)
+        return snapshot_path
+
+    def write_success_terminal(self, terminal):
+        for path in ('terminal.json', 'receipt.json'):
+            self.write(self.old_root + '/' + path, terminal)
+
+    def test_successful_idle_drain_then_retained_recreate_is_accepted_and_pinned(self):
+        snapshot_path = self.make_successful_idle_stop()
+        with patch.object(proof, 'docker_capture', return_value=SimpleNamespace(returncode=0, stdout=b'')):
+            observed = self.observe()
+        self.assertEqual(observed['recreate_attempt'], self.recreate)
+        self.assertIn(snapshot_path, observed['control_hashes'])
+        self.assertEqual(observed['control_hashes'][snapshot_path], self.terminal['idle_stop_containers_sha256'])
+        self.assertEqual(base._sha(self.records[snapshot_path]), self.terminal['idle_stop_containers_sha256'])
+
+    def test_successful_idle_drain_rejects_unpinned_or_mismatched_history(self):
+        snapshot_path = self.make_successful_idle_stop()
+        valid_records = copy.deepcopy(self.records)
+        mutations = ('idle_flag', 'error', 'nonzero_exit', 'unpinned', 'snapshot_mismatch', 'changed_id')
+        for mutation in mutations:
+            self.records = copy.deepcopy(valid_records)
+            terminal = json.loads(self.records[self.old_root + '/terminal.json'])
+            with self.subTest(mutation=mutation):
+                expected_message = 'successful idle drain terminal differs'
+                if mutation == 'idle_flag':
+                    terminal.pop('idle_backend_stopped')
+                elif mutation == 'error':
+                    terminal['error'] = 'unexpected terminal error'
+                elif mutation == 'nonzero_exit':
+                    retained_path = self.recreate_root + '/retained-containers.json'
+                    retained = json.loads(self.records[retained_path])
+                    retained['backend']['State']['ExitCode'] = 2
+                    self.write(retained_path, retained)
+                    snapshot = copy.deepcopy(retained)
+                    self.write(snapshot_path, snapshot)
+                    terminal['idle_stop_containers_sha256'] = base._sha(self.records[snapshot_path])
+                    expected_message = 'successful idle-stop service is not confirmed stopped: backend'
+                elif mutation == 'unpinned':
+                    terminal.pop('idle_stop_containers_sha256')
+                    expected_message = 'successful idle-stop snapshot digest differs'
+                elif mutation == 'snapshot_mismatch':
+                    snapshot = json.loads(self.records[snapshot_path])
+                    snapshot['frontend']['State']['StartedAt'] = 'different-start'
+                    self.write(snapshot_path, snapshot)
+                    terminal['idle_stop_containers_sha256'] = base._sha(self.records[snapshot_path])
+                    expected_message = 'successful idle-stop snapshot service differs: frontend'
+                else:
+                    terminal['backend_container'] = 'a' * 64
+                    expected_message = 'historical service ID differs'
+                self.write_success_terminal(terminal)
+                with patch.object(proof, 'docker_capture', return_value=SimpleNamespace(returncode=0, stdout=b'')):
+                    with self.assertRaisesRegex(BuildControlError, expected_message):
+                        self.observe()
+
     def test_completed_drain_then_failed_rebuild_then_completed_recreate(self):
         with patch.object(proof, 'docker_capture', return_value=SimpleNamespace(returncode=0, stdout=b'')):
             observed = self.observe()
