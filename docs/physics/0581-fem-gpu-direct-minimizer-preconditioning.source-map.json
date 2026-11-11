@@ -11,7 +11,8 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "implemented-unvalidated"
+      "status": "implemented-unvalidated",
+      "reason": "Managed native oracle and frozen-SP4 component parity at common torque 1e-8 T passed; the required five alternating performance pairs and broader scientific qualification remain open."
     },
     {
       "solver": "FDM",

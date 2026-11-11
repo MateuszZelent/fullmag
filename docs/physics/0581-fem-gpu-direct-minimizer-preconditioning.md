@@ -1,8 +1,8 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU projected-gradient BB cooperative-PCG path and typed Study policy now have source, but end-to-end GPU and scientific qualification remain NOT VERIFIED; no production promotion is claimed.
+- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU BB cooperative-PCG path has a managed hardware oracle and a passing frozen-SP4 common-stop component comparison at `1e-8 T`. Full scientific/performance qualification remains open, including the five alternating pairs; no production promotion is claimed.
 - Owners: Fullmag FEM backend
-- Last updated: 2026-11-11 (historical NCG result remains dated 2026-07-26)
+- Last updated: 2026-11-12 (historical NCG result remains dated 2026-07-26)
 - Related physics notes:
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 - Related specs:
@@ -498,7 +498,7 @@ separately from the resolved solver and execution provenance.
 | Solver | Device | Status for this preconditioner | Boundary |
 |---|---|---|---|
 | FEM | CPU | Existing reference | Consistent-mass exchange form and `step_m_per_a` scaling are owned by the current CPU minimizer helpers. |
-| FEM | GPU | Implemented in source, unqualified | Typed Study/IR policy and cooperative device PCG sources exist; managed execution, parity, and performance remain NOT VERIFIED. |
+| FEM | GPU | Selected SP4 comparison passed; full qualification open | Managed native oracle and common-stop `1e-8 T` component parity passed; repeated performance/general qualification remains incomplete. |
 | FDM | CPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 | FDM | GPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 
@@ -708,8 +708,17 @@ The pilot's exchange component differs from the historical GPU endpoint by
 qualification remains open. Independent P1 tetrahedron integration reproduces
 exchange for each of the four retained CPU/GPU endpoint states within a
 relative error of 5.4e-14; this distinguishes different endpoint magnetizations
-from an observed same-state energy-evaluator discrepancy. It does not waive
-the component gate or qualify FEM against MuMax3. See the
+from an observed same-state energy-evaluator discrepancy. The common-stop
+`1e-7 T` comparison still failed at 2.103205 ppm. At the predeclared stricter
+`1e-8 T` stop, CPU, GPU unpreconditioned and GPU exchange-mass all pass the
+unchanged component/total-energy gates: maximum exchange difference is
+0.217735 ppm and maximum total-energy relative difference is 3.493e-14.
+Independent reconstruction of the saved exchange fields has weighted-L2
+relative error at most 2.471e-13 for those three endpoints.
+Their single-run worker times are 123.572094, 535.705042 and 48.947291 s,
+respectively. This is not the required alternating five-pair performance
+benchmark and does not qualify the historical looser endpoints or FEM
+against MuMax3. See the
 [bounded follow-up evidence](../audits/2026-11-11-fem-gpu-bb-transfer-followup.md).
 
 (implementation-mapping)=

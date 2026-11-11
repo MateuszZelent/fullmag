@@ -1,8 +1,10 @@
 # FEM GPU SP4 — BB, transfery i Poisson, 11 listopada 2026
 
-Status: transfery przeszły test CUDA i porównanie numeryczne SP4.
-Kwalifikacja polityki BB, nowego Poissona oraz porównania wszystkich czterech
-solverów z MuMax3 GPU pozostaje otwarta. PR #424 nie jest jeszcze scalony.
+Aktualizacja 12 listopada: transfery przeszły test CUDA i porównanie numeryczne
+SP4. Trzy realizacje FEM przeszły porównanie wszystkich energii przy wspólnym
+torque `1e-8 T`. Pełna kwalifikacja BB (w tym pięć naprzemiennych par), nowego
+Poissona oraz czterech solverów względem MuMax3 GPU pozostaje otwarta.
+PR #424 nie jest jeszcze scalony.
 
 ## Tożsamość pomiaru transferów
 
@@ -83,12 +85,43 @@ energii exchange daje składnik liniowy4,6442262014e-25 J i kwadratowy
 7,3850845967e-30 J. Mała zmiana tekstury wyjaśnia tę różnicę składowych,
 mimo niemal takiej samej energii całkowitej.
 
-Różnica exchange5,646 ppm nadal przekracza niezmienioną bramkę2 ppm.
-Kwalifikacja polityki pozostaje otwarta do porównania CPU/GPU raw/GPU
-preconditioned przy wspólnym torque1e-7 T, a w razie potrzeby zadeklarowanym
-1e-8 T. Nie podnosimy tolerancji komponentów ani nie uznajemy zgodności
-całkowitej energii za zastępstwo. To nie rozstrzyga różnicy dyskretyzacji FEM
-i MuMax3 GPU.
+Historyczna różnica exchange 5,646 ppm przekracza bramkę 2 ppm. W kolejnym
+porównaniu CPU/GPU raw/GPU preconditioned przy wspólnym torque 1e-7 T
+największa różnica wyniosła 2,103205 ppm: ta próba również nie przeszła
+niezmienionej bramki. Nie podnosiliśmy limitu komponentów.
+
+### Wspólny próg 1e-8 T
+
+Zgodnie z zadeklarowanym wcześniej kolejnym krokiem wykonano wszystkie trzy
+biegi z progiem 1e-8 T, bez zmiany siatki, fizyki ani certyfikacji Poissona.
+Użyły tej samej biblioteki `142438c6…`. Wszystkie Zarr są kompletne i skończone;
+CSV nie mają luk ani utraconych wierszy.
+
+| Realizacja FEM | Kroki | Czas workera [s] | Końcowe torque [T] | Rzeczywiste residuum Poissona |
+|---|---:|---:|---:|---:|
+| CPU | 109 | 123,572094 | 7,076274e-9 | 3,948764e-13 |
+| GPU bez prekondycjonera | 1945 | 535,705042 | 8,502109e-9 | 4,107678e-13 |
+| GPU z exchange-mass | 113 | 48,947291 | 8,895426e-9 | 4,117029e-13 |
+
+Wszystkie osiem składowych/energii przeszło bramki we wszystkich trzech
+parach. Największa różnica względna exchange wynosi 0,217735 ppm (CPU/raw),
+demag 0,033119 ppm, a energii całkowitej 3,493e-14. Para dwóch GPU różni się
+w exchange o 0,043986 ppm. Zerowe składniki zachowują limit 1e-30 J.
+Raport: `2026-11-11-fem-common-stop-tight8.json` i sąsiednia analiza.
+
+Niezależny oracle odtwarza także pole wymiany z macierzy sztywności P1 i
+lumpowanych objętości węzłowych. Dla tych trzech stanów maksymalny względny
+błąd ważonego L2 wynosi 2,471e-13, a składowej pola 4,935e-8 A/m. Energia
+odtworzona z gradientu i z zapisanego H_ex przechodzi limit 1e-10 względnie.
+Dowód: `2026-11-12-independent-exchange-field-common8.json` z kodem oracle.
+Nie zaobserwowano błędu ewaluatora exchange ani jego pola dla tych stanów.
+
+Ilorazy pojedynczych czasów wynoszą 2,524595× względem CPU i 10,944529×
+względem GPU raw. To porównanie kosztu dojścia do tego samego progu,
+obejmujące zimną inicjalizację; nie jest izolowanym czasem kernela, czasem
+aktywacji w UI ani wymaganym benchmarkiem pięciu naprzemiennych par.
+Wynik nie zmienia kwalifikacji historycznych stanów przy luźniejszym progu
+1e-6 T ani nie rozstrzyga różnicy dyskretyzacji FEM i MuMax3 GPU.
 
 ## Poisson — następny pomiar
 
