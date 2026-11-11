@@ -21,7 +21,7 @@ bool prepare_membership_shape(
         return false;
     }
     const uint64_t extent = std::max(node_count, element_count);
-    if (extent > state.membership.max_size()) {
+    if (extent > state.membership.max_size() || extent > state.preparation.max_size()) {
         error = "GPU object average membership extent exceeds vector max_size";
         return false;
     }
@@ -34,7 +34,9 @@ bool prepare_membership_shape(
     }
     try {
         std::vector<uint8_t> membership(size, uint8_t{0});
+        state.preparation.reserve(size);
         state.membership.swap(membership);
+        state.preparation_limit = size;
     } catch (const std::exception &exception) {
         error = std::string("GPU object average membership setup failed: ") + exception.what();
         return false;
@@ -42,6 +44,7 @@ bool prepare_membership_shape(
     state.membership_node_count = node_count;
     state.membership_element_count = element_count;
     for (auto &entry : state.entries) { entry.valid = false; }
+    state.dependencies_valid = false;
     return true;
 }
 
@@ -51,6 +54,7 @@ void gpu_object_average_free(GpuObjectAverageState &state)
         gpu_device_free_bytes(entry.device_records);
         entry.valid = false;
         std::vector<GpuObjectAverageRecord>().swap(entry.records);
+        std::vector<uint32_t>().swap(entry.selector);
         entry.last_use = 0;
         entry.node_count = 0;
         entry.device_capacity = 0;
@@ -60,6 +64,11 @@ void gpu_object_average_free(GpuObjectAverageState &state)
     std::vector<GpuObjectAverageRecord>().swap(state.preparation);
     std::vector<GpuObjectAverageRecord>().swap(state.chunk);
     std::vector<uint8_t>().swap(state.membership);
+    std::vector<double>().swap(state.dependency_weights);
+    std::vector<uint64_t>().swap(state.dependency_ordinals);
+    std::vector<GpuObjectAverageRecord>().swap(state.dependency_records);
+    state.dependencies_valid = false;
+    state.record_generation_passes = 0;
     state.membership_node_count = 0;
     state.membership_element_count = 0;
     state.preparation_limit = state.chunk_limit = 0;
@@ -74,7 +83,7 @@ bool gpu_object_average_allocate(
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
     try {
-        state.preparation_limit = static_cast<size_t>(std::min<uint64_t>(node_count, kObjectAverageRecordLimit));
+        state.preparation_limit = static_cast<size_t>(node_count);
         state.chunk_limit = static_cast<size_t>(std::min<uint64_t>(
             std::max<uint64_t>(node_count, 256), kObjectAverageChunkRecords));
         state.preparation.reserve(state.preparation_limit);
@@ -208,8 +217,53 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (count == 0) { out_xyz[0] = out_xyz[1] = out_xyz[2] = 0.0; return FULLMAG_FEM_OK; }
+        auto nodal_weight = [&](size_t node) {
+            const double ms = ctx.material_fields.Ms_field.empty()
+                ? ctx.material_fields.material.saturation_magnetisation : ctx.material_fields.Ms_field[node];
+            const double weight = ms * volume[node];
+            return std::isfinite(weight) && weight > 0.0 ? weight : 0.0;
+        };
+        auto dependencies_match = [&] {
+            if (!state.dependencies_valid || state.dependencies_dg0 != dg0) { return false; }
+            if (!dg0) {
+                if (state.dependency_weights.size() != nodes) { return false; }
+                for (size_t node = 0; node < nodes; ++node) {
+                    if (state.dependency_weights[node] != nodal_weight(node)) { return false; }
+                }
+            } else {
+                const auto &realization = runtime->realization();
+                const auto &active = realization.active_element_ordinals();
+                if (active.size() != state.dependency_ordinals.size()) { return false; }
+                for (size_t i = 0; i < active.size(); ++i) {
+                    if (active[i] != state.dependency_ordinals[i]) { return false; }
+                    const auto &topology = realization.element_topology(active[i]);
+                    const auto &record = state.dependency_records[i];
+                    // Keep volume and Ms separately: products alone can hide
+                    // a topology/material change in direct Context callers.
+                    if (record.weight != topology.volume_m3 ||
+                        state.dependency_weights[i] != realization.ms_a_per_m(active[i])) { return false; }
+                    for (size_t local = 0; local < 4; ++local) {
+                        if (record.nodes[local] != topology.node_ids[local]) { return false; }
+                    }
+                }
+            }
+            return true;
+        };
+        const bool dependencies_current = dependencies_match();
+        if (!dependencies_current) {
+            for (auto &entry : state.entries) { entry.valid = false; }
+            state.dependencies_valid = false;
+        }
+        auto hit = state.entries.end();
+        if (dependencies_current) {
+            hit = std::find_if(state.entries.begin(), state.entries.end(), [&](const auto &entry) {
+                return entry.valid && entry.dg0 == dg0 && entry.node_count == nodes &&
+                    entry.element_set == element_set && entry.selector.size() == count &&
+                    std::equal(entry.selector.begin(), entry.selector.end(), indices);
+            });
+        }
         const size_t membership_extent = element_set ? elements : nodes;
-        if (dg0) {
+        if (dg0 && hit == state.entries.end()) {
             std::fill_n(state.membership.begin(), membership_extent, uint8_t{0});
             for (uint64_t i = 0; i < count; ++i) {
                 state.membership[indices[i]] = 1;
@@ -220,6 +274,7 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
                 index < membership_extent && state.membership[static_cast<size_t>(index)] != 0;
         };
         auto each_record = [&](auto emit) {
+            ++state.record_generation_passes;
             if (!dg0) {
                 for (uint64_t i = 0; i < count; ++i) {
                     const auto node = indices[i];
@@ -251,13 +306,15 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
             }
             return true;
         };
-        state.preparation.clear();
-        uint64_t record_count = 0;
-        each_record([&](const auto &record) {
-            if (record_count < state.preparation_limit) { state.preparation.push_back(record); }
-            ++record_count;
-            return true;
-        });
+        uint64_t record_count = hit != state.entries.end() ? hit->records.size() : 0;
+        if (hit == state.entries.end()) {
+            state.preparation.clear();
+            each_record([&](const auto &record) {
+                if (record_count < state.preparation_limit) { state.preparation.push_back(record); }
+                ++record_count;
+                return true;
+            });
+        }
         if (record_count == 0) { out_xyz[0] = out_xyz[1] = out_xyz[2] = 0.0; return FULLMAG_FEM_OK; }
         if (gpu.reductions.scalar_workspace == nullptr || gpu.reductions.temp_storage == nullptr) {
             error = std::string(prefix) + " requires prepared device reduction workspace";
@@ -281,14 +338,8 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
         }
         // A hot-loop miss uses prepared streaming scratch; no ownership-cache
         // vector or CUDA allocation is permitted there.
-        auto hit = state.entries.end();
-        if (record_count <= state.preparation_limit) {
-            hit = std::find_if(state.entries.begin(), state.entries.end(), [&](const auto &entry) {
-                return entry.valid && entry.dg0 == dg0 && entry.node_count == nodes && same_records(entry.records, state.preparation);
-            });
-        }
         const bool can_prepare_cache = ctx.transfer_audit.audit.hot_loop_depth == 0 &&
-            record_count <= state.preparation_limit;
+            record_count <= state.preparation_limit && count <= state.preparation_limit;
         if (hit != state.entries.end() || can_prepare_cache) {
             if (hit == state.entries.end()) {
                 state.cache_misses += 1;
@@ -302,6 +353,35 @@ int gpu_object_average(Context &ctx, const uint32_t *indices, uint64_t count,
                 }
                 hit->valid = false;
                 hit->records = state.preparation;
+                hit->selector.assign(indices, indices + count);
+                hit->element_set = element_set;
+                if (!state.dependencies_valid) {
+                    state.dependencies_dg0 = dg0;
+                    if (!dg0) {
+                        state.dependency_weights.resize(nodes);
+                        state.dependency_ordinals.clear();
+                        state.dependency_records.clear();
+                        for (size_t node = 0; node < nodes; ++node) {
+                            state.dependency_weights[node] = nodal_weight(node);
+                        }
+                    } else {
+                        const auto &realization = runtime->realization();
+                        const auto &active = realization.active_element_ordinals();
+                        state.dependency_ordinals.assign(active.begin(), active.end());
+                        state.dependency_records.resize(active.size());
+                        state.dependency_weights.resize(active.size());
+                        for (size_t i = 0; i < active.size(); ++i) {
+                            const auto &topology = realization.element_topology(active[i]);
+                            auto &record = state.dependency_records[i];
+                            record.weight = topology.volume_m3;
+                            state.dependency_weights[i] = realization.ms_a_per_m(active[i]);
+                            for (size_t local = 0; local < 4; ++local) {
+                                record.nodes[local] = static_cast<uint32_t>(topology.node_ids[local]);
+                            }
+                        }
+                    }
+                    state.dependencies_valid = true;
+                }
                 if (hit->device_capacity < record_count) {
                     const uint64_t previous_bytes = hit->device_capacity * sizeof(GpuObjectAverageRecord);
                     gpu_device_free_bytes(hit->device_records);

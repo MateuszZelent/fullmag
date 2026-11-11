@@ -1260,7 +1260,7 @@
       "id": "fem-gpu-object-membership-shape",
       "path": "backends/fem/gpu/cuda/reductions/object_average.cpp",
       "symbol": "prepare_membership_shape",
-      "responsibility": "Prepare max(node_count,element_count) host bytes outside the hot loop, preserve shape on failure, invalidate ownership cache on reshape."
+      "responsibility": "Prepare max(N,E) host membership bytes and record capacity outside the hot loop; invalidate ownership dependencies on reshape."
     },
     {
       "id": "fem-gpu-object-large-node-selection",
@@ -1273,6 +1273,12 @@
       "path": "backends/fem/tests/cuda_object_average_contract.cpp",
       "symbol": "void dg0_element_set_larger_than_node_extent_uses_mask_and_rejects_shape_drift",
       "responsibility": "Qualify element IDs beyond node extent, duplicates, invalid selection, alternating node/element masks and no hot-loop resize."
+    },
+    {
+      "id": "fem-gpu-object-large-active-cache",
+      "path": "backends/fem/tests/cuda_object_average_contract.cpp",
+      "symbol": "void large_active_selectors_reuse_records",
+      "responsibility": "Qualify prepared nodal and DG0 selectors with more than 16384 active records; exact observable oracle, no repeated H2D or allocations, and diagnostic reduction timing."
     }
   ],
   "public_api": {

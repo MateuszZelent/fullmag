@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -96,7 +97,7 @@ void nodal_parity_cache_and_chunks()
     near(result[0], 1.0 / 3.0); near(result[1], 2.0 / 3.0);
     check(ctx.gpu_state.device.lifecycle.device_bytes == bytes,
           "weight invalidation never allocates more cache device memory");
-    std::vector<uint32_t> large(kObjectAverageRecordLimit + 7, 1u);
+    std::vector<uint32_t> large(16384 + 7, 1u); // duplicate-heavy: exceeds mesh cache budget
     result = average(backend, large);
     near(result[0], 0, 2e-12); near(result[1], 1, 2e-12); near(result[2], 0, 2e-12);
     std::array<double, 3> unchanged = {7,8,9};
@@ -111,10 +112,121 @@ void nodal_parity_cache_and_chunks()
     gpu_state_destroy(ctx.gpu_state.device);
 }
 
+// SP4-sized active selectors must prepare once and then reuse GPU records.
+void large_active_selectors_reuse_records()
+{
+    using namespace fullmag::fem;
+    constexpr size_t nodes = 18529, elements = 56047;
+    for (bool dg0 : {false, true}) {
+        fullmag_fem_backend backend{};
+        std::vector<double> m(nodes * 3, 0.0);
+        for (size_t node = 0; node < nodes; ++node) {
+            const double position = static_cast<double>(node) / nodes;
+            m[3 * node] = position;
+            m[3 * node + 1] = 1.0 - position;
+            m[3 * node + 2] = static_cast<double>(node % 17) / 32.0 - 0.25;
+        }
+        setup(backend, m, dg0 ? elements : 0u);
+        auto &ctx = backend.context;
+        std::array<long double, 3> integrals{};
+        long double denominator = 0.0L;
+        if (dg0) {
+            std::vector<P1TetrahedronMaterialTopology> topology(elements);
+            std::vector<size_t> active(elements);
+            std::vector<double> ms(elements);
+            for (size_t element = 0; element < elements; ++element) {
+                active[element] = element;
+                const size_t first = (element * 13) % (nodes - 3);
+                topology[element].node_ids = {first, first + 1, first + 2, first + 3};
+                topology[element].volume_m3 = 1.0 + static_cast<double>(element % 7) / 8.0;
+                ms[element] = 1.0 + static_cast<double>(element % 11) / 16.0;
+                const long double weight = static_cast<long double>(ms[element]) * topology[element].volume_m3;
+                denominator += weight;
+                for (size_t component = 0; component < 3; ++component) {
+                    for (size_t local = 0; local < 4; ++local) {
+                        integrals[component] += weight * m[3 * (first + local) + component] / 4.0L;
+                    }
+                }
+            }
+            ctx.material_fields.runtime.emplace(P1TetrahedralMaterialRealization(
+                nodes, topology, active,
+                {MaterialCoefficientLocation::element_dg0, ms},
+                {MaterialCoefficientLocation::uniform, {0.0}}));
+        } else {
+            ctx.mesh.node_volumes.resize(nodes);
+            ctx.material_fields.Ms_field.resize(nodes);
+            for (size_t node = 0; node < nodes; ++node) {
+                ctx.mesh.node_volumes[node] = 1.0 + static_cast<double>(node % 7) / 8.0;
+                ctx.material_fields.Ms_field[node] = 1.0 + static_cast<double>(node % 11) / 16.0;
+                const long double weight = static_cast<long double>(ctx.material_fields.Ms_field[node]) *
+                    ctx.mesh.node_volumes[node];
+                denominator += weight;
+                for (size_t component = 0; component < 3; ++component) {
+                    integrals[component] += weight * m[3 * node + component];
+                }
+            }
+        }
+        std::vector<uint32_t> selection(dg0 ? elements : nodes);
+        for (size_t index = 0; index < selection.size(); ++index) { selection[index] = index; }
+        const auto check_average = [&] {
+            const auto actual = average(backend, selection, dg0);
+            for (size_t component = 0; component < 3; ++component) {
+                near(actual[component], static_cast<double>(integrals[component] / denominator), 5e-12);
+            }
+        };
+        check_average();
+        const auto uploads = ctx.transfer_audit.audit.counters.h2d_bytes;
+        const auto bytes = ctx.gpu_state.device.lifecycle.device_bytes;
+        const auto passes = ctx.gpu_state.device.reductions.object_average.record_generation_passes;
+        {
+            TransferAuditScope hot_loop(ctx.transfer_audit.audit, TransferAuditScopeKind::HotLoop);
+            check_average();
+        }
+        check(ctx.transfer_audit.audit.counters.h2d_bytes == uploads,
+              "large active prepared selector repeats without ownership upload");
+        check(ctx.gpu_state.device.lifecycle.device_bytes == bytes,
+              "large active prepared selector repeats without device allocation");
+        check(ctx.gpu_state.device.reductions.object_average.record_generation_passes == passes,
+              "prepared selector hit skips record generation");
+        auto &state = ctx.gpu_state.device.reductions.object_average;
+        std::array<bool, kObjectAverageCacheEntries> prepared_valid{};
+        for (size_t i = 0; i < state.entries.size(); ++i) { prepared_valid[i] = state.entries[i].valid; }
+        const auto measure_one = [&] {
+            const auto start = std::chrono::steady_clock::now();
+            TransferAuditScope hot_loop(ctx.transfer_audit.audit, TransferAuditScopeKind::HotLoop);
+            check_average();
+            return std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+        };
+        double cached_ms = 0.0, streaming_ms = 0.0;
+        uint64_t cached_uploads = 0, stream_uploads = 0;
+        // Alternate five cached/streaming pairs using unchanged private fixture
+        // payloads; neither path allocates. Fixture construction is not timed.
+        for (int pair = 0; pair < 5; ++pair) {
+            for (size_t i = 0; i < state.entries.size(); ++i) { state.entries[i].valid = prepared_valid[i]; }
+            const auto cached_upload_start = ctx.transfer_audit.audit.counters.h2d_bytes;
+            cached_ms += measure_one();
+            cached_uploads += ctx.transfer_audit.audit.counters.h2d_bytes - cached_upload_start;
+            for (auto &entry : state.entries) { entry.valid = false; }
+            const auto stream_upload_start = ctx.transfer_audit.audit.counters.h2d_bytes;
+            streaming_ms += measure_one();
+            stream_uploads += ctx.transfer_audit.audit.counters.h2d_bytes - stream_upload_start;
+        }
+        check(cached_uploads == 0 && stream_uploads > 0,
+              "microbenchmark compares prepared reuse with real streaming uploads");
+        check(ctx.gpu_state.device.lifecycle.device_bytes == bytes,
+              "cached and streaming microbenchmark perform no device allocation");
+        std::printf("object-average microbenchmark lane=%s records=%zu pairs=5 cached_total_ms=%.3f streaming_total_ms=%.3f cached_h2d=%llu streaming_h2d=%llu\n",
+            dg0 ? "dg0" : "nodal", selection.size(), cached_ms, streaming_ms,
+            static_cast<unsigned long long>(cached_uploads), static_cast<unsigned long long>(stream_uploads));
+        gpu_state_destroy(ctx.gpu_state.device);
+    }
+}
+
 void dg0_large_node_selection_uses_prepared_byte_mask()
 {
     using namespace fullmag::fem;
-    constexpr size_t node_count = 65537;
+    constexpr size_t node_count = 70003;
     fullmag_fem_backend backend{};
     std::vector<double> m(node_count * 3, 0.0);
     const std::array<double, 12> tetra_m = {1,0,0, 0,1,0, 0,0,1, -1,0,0};
@@ -321,6 +433,13 @@ void dg0_parity_membership_and_invalidation()
     topology[1].node_ids = {0,2,4,5};
     material(3e5);
     compare_oracle({1,0}, true);
+    // Replacing the active scope at unchanged N/E must invalidate early hits.
+    ctx.material_fields.runtime.emplace(P1TetrahedralMaterialRealization(
+        6, topology, {0,2},
+        {MaterialCoefficientLocation::element_dg0, {4e5,3e5,6e5}},
+        {MaterialCoefficientLocation::uniform, {0.0}}));
+    compare_oracle({1,0}, true);
+    compare_oracle({0,1,2}, true);
     const uint32_t invalid = 3;
     std::array<double, 3> output = {7,8,9};
     check(fullmag_fem_backend_average_m_for_elements_f64(&backend, &invalid, 1, output.data(), 3)
@@ -345,6 +464,7 @@ void dg0_parity_membership_and_invalidation()
 int main()
 {
     forced_gpu_without_device_state_never_reduces_on_cpu();
+    large_active_selectors_reuse_records();
     nodal_parity_cache_and_chunks();
     dg0_parity_membership_and_invalidation();
     dg0_large_node_selection_uses_prepared_byte_mask();

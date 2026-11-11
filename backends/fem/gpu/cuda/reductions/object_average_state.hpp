@@ -8,10 +8,10 @@
 
 namespace fullmag::fem {
 
-// Fixed cache and chunk budgets are bounded independently of the mesh. The
-// prepared membership mask adds max(node_count, element_count) host bytes.
+// Four LRU payloads, each bounded by max(N,E) records and selector indices.
+// One shared exact dependency snapshot and preparation buffer are O(N+E).
+// Duplicate-heavy selectors beyond max(N,E) retain bounded streaming scratch.
 inline constexpr size_t kObjectAverageCacheEntries = 4;
-inline constexpr size_t kObjectAverageRecordLimit = 16384;
 inline constexpr size_t kObjectAverageChunkRecords = 4096;
 
 struct GpuObjectAverageRecord {
@@ -20,17 +20,10 @@ struct GpuObjectAverageRecord {
     double weight = 0.0;
 };
 static_assert(sizeof(GpuObjectAverageRecord) == 32);
-inline constexpr size_t kObjectAveragePreparedHostBytes =
-    ((kObjectAverageCacheEntries + 1) * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
-        sizeof(GpuObjectAverageRecord);
-inline constexpr size_t kObjectAveragePreparedDeviceBytes =
-    (kObjectAverageCacheEntries * kObjectAverageRecordLimit + kObjectAverageChunkRecords) *
-        sizeof(GpuObjectAverageRecord) + 8 * sizeof(double);
-static_assert(kObjectAveragePreparedHostBytes + kObjectAveragePreparedDeviceBytes <= 6 * 1024 * 1024);
-
-
 struct GpuObjectAverageCacheEntry {
     std::vector<GpuObjectAverageRecord> records;
+    std::vector<uint32_t> selector;
+    bool element_set = false;
     void *device_records = nullptr;
     uint64_t node_count = 0;
     uint64_t last_use = 0;
@@ -44,6 +37,13 @@ struct GpuObjectAverageState {
     std::vector<GpuObjectAverageRecord> preparation;
     std::vector<GpuObjectAverageRecord> chunk;
     std::vector<uint8_t> membership;
+    // Effective nodal weights (invalid/nonpositive becomes zero), or ordered
+    // DG0 active ordinals and their exact topology/weight dependencies.
+    std::vector<double> dependency_weights;
+    std::vector<uint64_t> dependency_ordinals;
+    std::vector<GpuObjectAverageRecord> dependency_records;
+    bool dependencies_valid = false;
+    bool dependencies_dg0 = false;
     uint64_t membership_node_count = 0;
     uint64_t membership_element_count = 0;
     void *device_chunk = nullptr;
@@ -52,6 +52,7 @@ struct GpuObjectAverageState {
     size_t chunk_limit = 0;
     uint64_t device_bytes = 0;
     uint64_t sequence = 0;
+    uint64_t record_generation_passes = 0;
     uint64_t cache_hits = 0;
     uint64_t cache_misses = 0;
     bool allocated = false;
