@@ -621,14 +621,9 @@ study.stages.add_relax(
         fields=[],
     )
 )
-study.stages.add_save_state(
-    artifact_name="relaxed_m.zarr",
-    format="zarr",
-    dataset="m",
-)
 ```
 
-This is the full SP4 authoring shape with `policy="auto"`. It parses and the
+This is a BB-only SP4 authoring example with `policy="auto"`. It parses and the
 StudyBuilder method is present in source; this documentation task does not run
 the scenario or managed GPU runtime. Its runtime, parity, and performance
 support remain unqualified. The method-free repository SP4 scenario remains
@@ -647,6 +642,22 @@ selected), device identity, and residual/iteration diagnostics. `none` is the
 raw device tangent-gradient baseline; `exchange_mass` requests the candidate
 explicitly. These values are serialized solver intent and provenance, not
 physical model parameters.
+
+A nonexecuted `flat_workspace` `TimeEvolution` carrier may preserve this
+hint solely for canonical BB-only pipeline transport. It requires explicit FEM
+GPU intent, no `active_stage_id`, a supported pipeline version, unique nonempty
+node IDs, correctly typed primitive/group nodes, and at least one enabled BB
+relaxation primitive. Every enabled primitive must explicitly select
+`projected_gradient_bb`; contradictory payload kind, entrypoint, or enabled
+values, conflicting algorithm aliases, macros, unknown nodes,
+mixed compute kinds, and malformed payloads reject the carrier. This exception
+does not authorize executing its `TimeEvolution` study: generic planner/native
+legality remains strict. The shared stage materializer clones the carrier and
+sets the concrete BB study before planning. Mesh preparation and magnetization
+Apply borrow only that validated concrete study, retaining the carrier's
+initial magnetization, material, field, and geometry payload unchanged.
+Startup's flags-only metadata command reads the two authored runtime flags
+before IR realization; it produces no executed-IR identity or solver admission.
 
 (round-trip-and-failure-semantics)=
 The method and native setting are being wired in the task branch. Unknown
@@ -684,10 +695,19 @@ binary, mesh, initial state, and actual GPU identity in each receipt.
 (limitations)=
 ### 11.7 Limitations and source-code index
 
-No production promotion or qualification threshold has been chosen. This
-section records the candidate contract; it is not evidence that the module
-compiles, runs on a GPU, preserves SP4 parity, or improves performance. Native
-GPU regression tests and managed SP4 measurements remain required.
+No production promotion is claimed. The numerical thresholds are specified in
+Section 11.6. The native cooperative-PCG hardware oracle passed in the managed
+backend on 2026-11-11, and a complete default-policy SP4 pilot was retained in
+Zarr. Its unpaired timing was 45.692 s versus the historical 409.618 s GPU and
+90.099 s CPU runs. This is not the required alternating five-pair benchmark.
+The pilot's exchange component differs from the historical GPU endpoint by
+5.646 ppm, exceeding the unchanged 2 ppm component threshold, so scientific
+qualification remains open. Independent P1 tetrahedron integration reproduces
+exchange for each of the four retained CPU/GPU endpoint states within a
+relative error of 5.4e-14; this distinguishes different endpoint magnetizations
+from an observed same-state energy-evaluator discrepancy. It does not waive
+the component gate or qualify FEM against MuMax3. See the
+[bounded follow-up evidence](../audits/2026-11-11-fem-gpu-bb-transfer-followup.md).
 
 (implementation-mapping)=
 (source-code-index)=
@@ -711,3 +731,6 @@ GPU regression tests and managed SP4 measurements remain required.
 | Cooperative device PCG recurrence and convergence | `backends/fem/gpu/cuda/relaxation/bb_exchange_mass_kernels.cu` | `gpu_bb_pcg_launch` | FEM GPU | Implemented source; runtime unqualified |
 | StudyBuilder policy entry point | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | FEM GPU request | Implemented source; runtime unqualified |
 | Native context policy setter | `backends/fem/src/api.cpp` | `fullmag_fem_backend_set_gpu_bb_preconditioner` | FEM GPU runtime | Implemented source; runtime unqualified |
+| Nonexecuted BB-only pipeline carrier | `crates/fullmag-ir/src/bb_pipeline.rs` | `is_gpu_bb_pipeline_carrier` | FEM GPU authoring | Source contract; managed bridge validation required |
+| Matching Python pipeline structural validation | `packages/fullmag-py/src/fullmag/model/bb_pipeline.py` | `is_gpu_bb_only_pipeline` | FEM GPU authoring | Interpreted regression tests |
+| BB preparation without stage physical mutations | `crates/fullmag-api/src/script.rs` | `gpu_bb_preparation_study` | FEM GPU preparation | Source regression; managed compile required |

@@ -333,6 +333,24 @@
       "path": "backends/fem/src/api.cpp",
       "symbol": "fullmag_fem_backend_set_gpu_bb_preconditioner",
       "responsibility": "Ustawia typowaną politykę BB w kontekście natywnym FEM."
+    },
+    {
+      "id": "bb-pipeline-carrier",
+      "path": "crates/fullmag-ir/src/bb_pipeline.rs",
+      "symbol": "is_gpu_bb_pipeline_carrier",
+      "responsibility": "Validates a nonexecuted BB-only pipeline carrier; generic execution remains strict."
+    },
+    {
+      "id": "python-bb-pipeline-carrier",
+      "path": "packages/fullmag-py/src/fullmag/model/bb_pipeline.py",
+      "symbol": "is_gpu_bb_only_pipeline",
+      "responsibility": "Matches the canonical BB-only pipeline structural predicate in Python."
+    },
+    {
+      "id": "bb-preparation-study",
+      "path": "crates/fullmag-api/src/script.rs",
+      "symbol": "gpu_bb_preparation_study",
+      "responsibility": "Borrows only validated concrete BB study controls while preserving the base physical payload."
     }
   ],
   "public_api": {
