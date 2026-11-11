@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub mod antenna;
+pub mod bb_pipeline;
 pub mod antenna_current_source;
 pub mod constraint;
 pub mod compute_resources;
@@ -1450,7 +1451,7 @@ impl ProblemIR {
                             algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
                             ..
                         }
-                    ) {
+                    ) && !bb_pipeline::is_gpu_bb_pipeline_carrier(self) {
                         errors.push(
                             "fem.gpu_bb_preconditioner requires projected_gradient_bb relaxation"
                                 .to_string(),

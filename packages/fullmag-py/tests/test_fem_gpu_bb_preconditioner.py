@@ -57,3 +57,62 @@ def test_explicit_policy_rejects_unsupported_execution(tmp_path, device, algorit
 
 def test_omission_preserves_legacy_fem_hint_shape():
     assert "gpu_bb_preconditioner" not in fm.FEM(order=1, hmax=1e-9).to_ir()
+
+
+@pytest.mark.parametrize("policy", ["auto", "none", "exchange_mass"])
+def test_scene_ir_lowering_accepts_typed_bb_authoring_field(tmp_path, policy):
+    from fullmag.runtime.scene_document_ir import _reject_unlowered_scene_fields
+
+    loaded = load(tmp_path, policy=policy)
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    # This boundary runs before Scene lowering; supported authored hints must
+    # not be mistaken for unknown fields or discarded by the renderer.
+    _reject_unlowered_scene_fields(scene)
+    assert build_builder_from_scene_document(scene)["fem_bb_preconditioner"] == policy
+    scene["study"]["unrecognized_bb_policy"] = policy
+    with pytest.raises(ValueError, match="scene_document_unlowered_study_fields"):
+        _reject_unlowered_scene_fields(scene)
+
+
+def test_gpu_bb_pipeline_shared_structural_fixtures():
+    import json
+    from fullmag.model.bb_pipeline import is_gpu_bb_only_pipeline
+    fixture = Path(__file__).resolve().parents[3] / "crates/fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json"
+    for case in json.loads(fixture.read_text()):
+        assert is_gpu_bb_only_pipeline(case["pipeline"]) is case["valid"], case["name"]
+
+
+@pytest.mark.parametrize("policy", ["auto", "none", "exchange_mass"])
+def test_stage_only_policy_survives_entire_no_solve_export_path(tmp_path, policy):
+    from fullmag.runtime.scene_document_ir import scene_document_to_problem_ir, scene_document_to_execution_config
+    from fullmag.runtime.run_config_export import export_run_config, RunConfigExportOptions
+    loaded = load(tmp_path, policy=policy)
+    ir = loaded.to_ir(requested_backend=None, execution_mode=None, execution_precision=None, include_geometry_assets=False)
+    config = export_run_config(loaded, ir, options=RunConfigExportOptions(requested_backend=None, execution_mode=None, execution_precision=None, runtime_device_override=None, include_geometry_assets=False))
+    assert config["stages"]
+    scene = build_scene_document_from_builder(export_builder_draft(loaded))
+    scene_ir = scene_document_to_problem_ir(scene, requested_backend="fem", requested_device="gpu", requested_precision="double", requested_mode="strict", source_root=tmp_path)
+    scene_config = scene_document_to_execution_config(scene, requested_backend="fem", requested_device="gpu", requested_precision="double", requested_mode="strict", source_root=tmp_path)
+    for value in (ir, scene_ir, scene_config["ir"], *(stage["ir"] for stage in config["stages"])):
+        assert value["backend_policy"]["discretization_hints"]["fem"]["gpu_bb_preconditioner"] == policy
+    assert scene_config["ir"]["study"]["kind"] == "time_evolution"
+    assert scene_config["study_pipeline"]
+
+
+def test_nonexecuted_carrier_rejects_malformed_or_active_pipeline(tmp_path):
+    import json
+    from dataclasses import replace
+    loaded = load(tmp_path)
+    base = loaded.pipeline_base_problem(loaded.workspace_problem)
+    fixture = Path(__file__).resolve().parents[3] / "crates/fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json"
+    cases = json.loads(fixture.read_text())
+    for case in cases:
+        if not case["valid"]:
+            with pytest.raises(ValueError, match="gpu_bb_preconditioner requires"):
+                base.to_ir(entrypoint_kind="flat_workspace", study_pipeline=case["pipeline"], include_geometry_assets=False)
+    for active in ("bb", None):
+        problem = replace(base, runtime_metadata={**base.runtime_metadata, "active_stage_id": active})
+        with pytest.raises(ValueError, match="gpu_bb_preconditioner requires"):
+            problem.to_ir(entrypoint_kind="flat_workspace", study_pipeline=cases[0]["pipeline"], include_geometry_assets=False)
+    with pytest.raises(ValueError, match="gpu_bb_preconditioner requires"):
+        base.to_ir(entrypoint_kind="flat_run", study_pipeline=cases[0]["pipeline"], include_geometry_assets=False)

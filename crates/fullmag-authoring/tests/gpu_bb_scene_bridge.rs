@@ -74,3 +74,14 @@ fn gpu_bb_scene_omission_preserves_legacy_serialization_shape() {
     assert_eq!(scene.study.fem_bb_preconditioner, None);
     assert!(serde_json::to_value(&scene).unwrap()["study"].get("fem_bb_preconditioner").is_none());
 }
+
+#[test]
+fn gpu_bb_scene_rejects_non_bb_canonical_pipeline_even_without_legacy_stages() {
+    for algorithm in ["llg_overdamped", "nonlinear_cg"] {
+        let mut value = serde_json::to_value(python_scene("exchange_mass")).unwrap();
+        value["study"]["stages"] = serde_json::json!([]);
+        value["study"]["study_pipeline"]["nodes"][0]["payload"]["relax_algorithm"] = serde_json::json!(algorithm);
+        let scene: SceneDocument = serde_json::from_value(value).unwrap();
+        assert!(validate_scene_document(&scene).unwrap_err().message.contains("fem_bb_preconditioner"));
+    }
+}

@@ -2609,9 +2609,10 @@ pub(crate) async fn materialize_live_scene_preparation_model_with_fem_evidence(
             // uses the same authored SceneDocument capture and declared
             // execution binder, then enters this adapter with native evidence
             // supplied by the already-admitted FEM lane.
-            let authored = crate::script::scene_document_to_authored_problem_ir(
+            let authored = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
                 &input.repo_root,
                 &input.workspace_root,
+                None,
                 &input.scene_document,
                 &input.requested_execution,
             )?;

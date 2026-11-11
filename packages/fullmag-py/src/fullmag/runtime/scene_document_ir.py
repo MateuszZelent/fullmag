@@ -70,6 +70,7 @@ _STUDY_FIELDS = frozenset(
         "execution_layers",
         "compute_resources",
         "fem_demag_solver_policy",
+        "fem_bb_preconditioner",
         "fem_demag_accuracy_contract",
         "exchange_enabled",
         "demag_enabled",

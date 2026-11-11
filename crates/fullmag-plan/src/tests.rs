@@ -20187,7 +20187,9 @@ fn fem_gpu_bb_policy_test_problem(policy: fullmag_ir::FemGpuBbPreconditionerIR) 
         .as_mut()
         .unwrap()
         .gpu_bb_preconditioner = Some(policy);
-    ir.problem_meta.runtime_metadata["runtime_selection"] = serde_json::json!({"device": "gpu"});
+    ir.problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), serde_json::json!({"device": "gpu"}));
     ir.study = fullmag_ir::StudyIR::Relaxation {
         algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
         dynamics: None,
@@ -20219,7 +20221,9 @@ fn gpu_bb_policy_is_typed_and_preserved_in_fem_plan() {
 fn gpu_bb_policy_rejects_cpu_other_algorithm_and_fdm() {
     let base = fem_gpu_bb_policy_test_problem(fullmag_ir::FemGpuBbPreconditionerIR::None);
     let mut cpu = base.clone();
-    cpu.problem_meta.runtime_metadata["runtime_selection"] = serde_json::json!({"device": "cpu"});
+    cpu.problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), serde_json::json!({"device": "cpu"}));
     assert!(plan(&cpu)
         .unwrap_err()
         .reasons
@@ -20241,4 +20245,15 @@ fn gpu_bb_policy_rejects_cpu_other_algorithm_and_fdm() {
         .reasons
         .iter()
         .any(|reason| reason.contains("gpu_bb_preconditioner")));
+}
+
+#[test]
+fn gpu_bb_policy_nonexecuted_pipeline_carrier_cannot_be_planned_as_llg() {
+    let mut ir = fem_gpu_bb_policy_test_problem(fullmag_ir::FemGpuBbPreconditionerIR::ExchangeMass);
+    ir.study = ProblemIR::bootstrap_example().study;
+    ir.problem_meta.entrypoint_kind = "flat_workspace".into();
+    let cases: serde_json::Value = serde_json::from_str(include_str!("../../fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json")).unwrap();
+    ir.problem_meta.runtime_metadata.insert("study_pipeline".into(), cases[0]["pipeline"].clone());
+    ir.validate().expect("nonexecuted carrier preserves intent");
+    assert!(plan(&ir).unwrap_err().reasons.iter().any(|reason| reason.contains("gpu_bb_preconditioner")));
 }

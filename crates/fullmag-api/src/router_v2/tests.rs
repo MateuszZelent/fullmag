@@ -22651,8 +22651,23 @@ study.relax(algorithm="projected_gradient_bb", max_steps=2, tolA=1e-6)
             };
             let problem = crate::script::scene_document_to_authored_problem_ir(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
             problem.validate().expect("GPU BB policy must survive canonical authored-IR validation");
-            assert_eq!(problem.backend_policy.discretization_hints.unwrap().fem.unwrap()
+            assert_eq!(problem.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
                 .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            let stages = crate::script::scene_document_to_authored_stages(&repo_root, workspace.path(), &reloaded, &requested).unwrap();
+            assert!(!stages.is_empty());
+            for stage in &stages {
+                stage.ir.validate().unwrap();
+                assert!(matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb, ..
+                }));
+                assert_eq!(stage.ir.backend_policy.discretization_hints.as_ref().unwrap().fem.as_ref().unwrap()
+                    .gpu_bb_preconditioner.unwrap().as_str(), policy);
+            }
+            let prepared = crate::script::scene_document_to_preparation_problem_ir_with_asset_root(
+                &repo_root, workspace.path(), None, &reloaded, &requested).unwrap();
+            let mut expected = problem.clone();
+            expected.study = prepared.study.clone();
+            assert_eq!(serde_json::to_value(prepared).unwrap(), serde_json::to_value(expected).unwrap());
         }
     }
 }

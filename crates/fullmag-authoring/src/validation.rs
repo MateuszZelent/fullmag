@@ -180,6 +180,15 @@ fn validate_scene_document_with_mode(
                 "study.fem_bb_preconditioner requires explicit FEM GPU execution",
             ));
         }
+        if let Some(pipeline) = &scene.study.study_pipeline {
+            let value = serde_json::to_value(pipeline).map_err(|error|
+                SceneDocumentValidationError::new(error.to_string()))?;
+            if !fullmag_ir::bb_pipeline::is_gpu_bb_only_pipeline(&value) {
+                return Err(SceneDocumentValidationError::new(
+                    "study.fem_bb_preconditioner requires a canonical BB-only pipeline",
+                ));
+            }
+        }
         for stage in &scene.study.stages {
             if stage.extra.get("enabled") == Some(&Value::Bool(false)) {
                 continue;
