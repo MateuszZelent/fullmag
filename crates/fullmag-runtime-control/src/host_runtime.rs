@@ -409,7 +409,8 @@ mod recovery_tests {
         assert!(!format!("{error:#}").contains("ordinal request"));
         assert!(fixture.context.ensure_committed_request(&fixture.request).unwrap_err().chain()
             .any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
-        assert!(!fixture.context.solver_claim_has_pending_launch(&fixture.store, &claim).unwrap());
+        let error = fixture.context.solver_claim_has_pending_launch(&fixture.store, &claim).unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<TransientGpuInventoryUnavailable>()));
         assert_eq!(fixture.ledger.read().unwrap().reservations, before);
         assert!(matches!(before[0].worker_launch_gate,
             Some(fullmag_session::host_resource_ledger::HostWorkerLaunchGate::Pending)));
