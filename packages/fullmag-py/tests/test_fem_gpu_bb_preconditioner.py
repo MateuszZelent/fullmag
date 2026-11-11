@@ -116,3 +116,34 @@ def test_nonexecuted_carrier_rejects_malformed_or_active_pipeline(tmp_path):
             problem.to_ir(entrypoint_kind="flat_workspace", study_pipeline=cases[0]["pipeline"], include_geometry_assets=False)
     with pytest.raises(ValueError, match="gpu_bb_preconditioner requires"):
         base.to_ir(entrypoint_kind="flat_run", study_pipeline=cases[0]["pipeline"], include_geometry_assets=False)
+
+
+def test_nonexecuted_carrier_uses_effective_runtime_device_override(tmp_path):
+    import json
+
+    fixture = Path(__file__).resolve().parents[3] / "crates/fullmag-ir/tests/fixtures/gpu_bb_pipeline_cases.json"
+    pipeline = json.loads(fixture.read_text())[0]["pipeline"]
+    gpu_loaded = load(tmp_path, name="gpu_override")
+    gpu_base = gpu_loaded.pipeline_base_problem(gpu_loaded.workspace_problem)
+    with pytest.raises(ValueError, match="gpu_bb_preconditioner requires"):
+        gpu_base.to_ir(
+            entrypoint_kind="flat_workspace",
+            study_pipeline=pipeline,
+            runtime_device_override="cpu",
+            include_geometry_assets=False,
+        )
+
+    cpu_loaded = load(tmp_path, device="cpu", name="cpu_override")
+    ir = cpu_loaded.to_ir(
+        requested_backend=None,
+        execution_mode=None,
+        execution_precision=None,
+        runtime_device_override="gpu",
+        include_geometry_assets=False,
+    )
+    metadata = ir["problem_meta"]["runtime_metadata"]
+    assert metadata["runtime_selection"]["device"] == "cpu"
+    assert metadata["runtime_device_override"] == {
+        "device": "gpu",
+        "source": "managed_launcher",
+    }

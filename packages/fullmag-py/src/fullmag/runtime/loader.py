@@ -360,6 +360,7 @@ class LoadedProblem:
             asset_cache=asset_cache,
             include_geometry_assets=False,
             study_pipeline=study_pipeline,
+            runtime_device_override=runtime_device_override,
         )
         runtime_metadata = ir["problem_meta"]["runtime_metadata"]
         workspace_runtime_metadata = workspace_ir["problem_meta"]["runtime_metadata"]

@@ -48,6 +48,7 @@ fn gpu_bb_pipeline_carrier_preserves_policy_and_strict_execution_boundary() {
     problem.validate().expect("valid nonexecuted carrier");
     for change in [
         "cpu",
+        "cpu_override",
         "fdm",
         "active",
         "null_active",
@@ -61,6 +62,12 @@ fn gpu_bb_pipeline_carrier_preserves_policy_and_strict_execution_boundary() {
                     .problem_meta
                     .runtime_metadata
                     .insert("runtime_selection".into(), json!({"device":"cpu"}));
+            }
+            "cpu_override" => {
+                invalid.problem_meta.runtime_metadata.insert(
+                    "runtime_device_override".into(),
+                    json!({"device":"cpu", "source":"managed_launcher"}),
+                );
             }
             "fdm" => invalid.backend_policy.requested_backend = BackendTarget::Fdm,
             "active" => {
@@ -96,4 +103,26 @@ fn gpu_bb_pipeline_carrier_preserves_policy_and_strict_execution_boundary() {
             "{change}"
         );
     }
+
+    let mut overridden_gpu = problem.clone();
+    overridden_gpu
+        .problem_meta
+        .runtime_metadata
+        .insert("runtime_selection".into(), json!({"device":"cpu"}));
+    overridden_gpu.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        json!({"device":"gpu", "source":"managed_launcher"}),
+    );
+    assert!(bb_pipeline::is_gpu_bb_pipeline_carrier(&overridden_gpu));
+    overridden_gpu
+        .validate()
+        .expect("effective GPU override preserves nonexecuted carrier");
+    assert_eq!(
+        overridden_gpu.problem_meta.runtime_metadata["runtime_selection"]["device"],
+        "cpu"
+    );
+    assert_eq!(
+        overridden_gpu.problem_meta.runtime_metadata["runtime_device_override"]["device"],
+        "gpu"
+    );
 }

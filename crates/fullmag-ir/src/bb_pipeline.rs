@@ -133,6 +133,11 @@ pub fn is_gpu_bb_only_pipeline(value: &Value) -> bool {
 
 pub fn is_gpu_bb_pipeline_carrier(problem: &ProblemIR) -> bool {
     let metadata = &problem.problem_meta.runtime_metadata;
+    let runtime_device = metadata
+        .get("runtime_device_override")
+        .or_else(|| metadata.get("runtime_selection"))
+        .and_then(|value| value.get("device"))
+        .and_then(Value::as_str);
     problem
         .backend_policy
         .discretization_hints
@@ -144,11 +149,7 @@ pub fn is_gpu_bb_pipeline_carrier(problem: &ProblemIR) -> bool {
         && problem.problem_meta.entrypoint_kind == "flat_workspace"
         && matches!(&problem.study, StudyIR::TimeEvolution { .. })
         && !metadata.contains_key("active_stage_id")
-        && metadata
-            .get("runtime_selection")
-            .and_then(|v| v.get("device"))
-            .and_then(Value::as_str)
-            == Some("gpu")
+        && matches!(runtime_device, Some("gpu" | "cuda"))
         && metadata
             .get("study_pipeline")
             .is_some_and(is_gpu_bb_only_pipeline)

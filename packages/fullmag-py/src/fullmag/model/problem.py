@@ -3136,8 +3136,13 @@ class Problem:
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
         if discretization is not None and discretization.fem is not None and discretization.fem.gpu_bb_preconditioner is not None:
+            effective_device_is_gpu = (
+                runtime_device_override == "gpu"
+                if runtime_device_override is not None
+                else runtime.device_target is DeviceTarget.GPU
+            )
             if (runtime.backend_target is not BackendTarget.FEM
-                    or runtime.device_target is not DeviceTarget.GPU
+                    or not effective_device_is_gpu
                     or not (
                         isinstance(self.study, Relaxation) and self.study.algorithm == "projected_gradient_bb"
                         or isinstance(self.study, TimeEvolution)
