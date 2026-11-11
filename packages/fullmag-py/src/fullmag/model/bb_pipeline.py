@@ -41,7 +41,7 @@ def is_gpu_bb_only_pipeline(value: object) -> bool:
                     if (node["stage_kind"] != "relax" or not algorithms
                             or any(algorithm != "projected_gradient_bb" for algorithm in algorithms)
                             or ("kind" in payload and payload["kind"] != "relax")
-                            or ("entrypoint_kind" in payload and payload["entrypoint_kind"] not in ("flat_relax", "study_pipeline_relax", "build"))
+                            or ("entrypoint_kind" in payload and payload["entrypoint_kind"] not in ("flat_relax", "study_pipeline_relax", "build", "problem"))
                             or ("enabled" in payload and payload["enabled"] is not True)):
                         return False
                     enabled_bb += 1

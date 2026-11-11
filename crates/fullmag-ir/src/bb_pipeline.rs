@@ -98,7 +98,7 @@ pub fn is_gpu_bb_only_pipeline(value: &Value) -> bool {
                         || payload.get("entrypoint_kind").is_some_and(|v| {
                             !matches!(
                                 v.as_str(),
-                                Some("flat_relax" | "study_pipeline_relax" | "build")
+                                Some("flat_relax" | "study_pipeline_relax" | "build" | "problem")
                             )
                         })
                         || payload

@@ -475,5 +475,26 @@
         }
       ]
     }
+  },
+  {
+    "name": "consistent_constructor_problem",
+    "valid": true,
+    "pipeline": {
+      "version": "study_pipeline.v1",
+      "nodes": [
+        {
+          "node_kind": "primitive",
+          "id": "bb",
+          "label": "BB",
+          "stage_kind": "relax",
+          "payload": {
+            "relax_algorithm": "projected_gradient_bb",
+            "kind": "relax",
+            "entrypoint_kind": "problem",
+            "enabled": true
+          }
+        }
+      ]
+    }
   }
 ]

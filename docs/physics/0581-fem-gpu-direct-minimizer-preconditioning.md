@@ -644,7 +644,10 @@ explicitly. These values are serialized solver intent and provenance, not
 physical model parameters.
 
 A nonexecuted `flat_workspace` `TimeEvolution` carrier may preserve this
-hint solely for canonical BB-only pipeline transport. It requires explicit FEM
+hint solely for canonical BB-only pipeline transport. Constructor-origin BB
+primitives use the canonical
+`entrypoint_kind="problem"`; they retain the same explicit BB algorithm and
+FEM GPU requirements as StudyBuilder-origin primitives. The carrier requires explicit FEM
 GPU intent, no `active_stage_id`, a supported pipeline version, unique nonempty
 node IDs, correctly typed primitive/group nodes, and at least one enabled BB
 relaxation primitive. Every enabled primitive must explicitly select
