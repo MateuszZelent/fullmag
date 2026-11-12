@@ -206,7 +206,11 @@ class AuthenticationTests(unittest.TestCase):
             and isinstance(node.items[0].context_expr, ast.Name)
             and node.items[0].context_expr.id == "operation_context")
         # Execute the real startup-diagnostic branch from start, with its actual lease binding.
-        branch = ast.With(items=leased.items, body=[leased.body[0]], type_comment=None)
+        candidates = [node for node in leased.body if isinstance(node, ast.If) and any(
+            isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == '_validate_recreation_resume_records' for call in ast.walk(node))]
+        self.assertEqual(len(candidates), 1, 'The diagnostic revalidation must remain inside the start lease')
+        branch = ast.With(items=leased.items, body=candidates, type_comment=None)
         module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
         operation, metadata, proof = {}, {"schema": restart.SCHEMA}, {"proof": "pinned"}
         calls = []
@@ -218,7 +222,7 @@ class AuthenticationTests(unittest.TestCase):
         scope = {"operation_context": nullcontext(operation), "validated_startup_diagnostic_restart": metadata,
                  "recreation_resume_proof": proof, "_validate_recreation_resume_records": validate,
                  "args": None, "control": None, "selected": None, "identity": None,
-                 "BuildControlError": BuildControlError}
+                 "BuildControlError": BuildControlError, "helper_source_binding": None}
         exec(compile(module, dev.__file__, "exec"), scope)
         self.assertEqual(len(calls), 1)
 
