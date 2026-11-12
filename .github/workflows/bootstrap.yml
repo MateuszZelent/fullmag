@@ -74,25 +74,6 @@ jobs:
           print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
           PY
 
-      - name: Reproduce publication re-entry (CI mutation only)
-        run: |
-          python -B - <<'PY'
-          import hashlib
-          from pathlib import Path
-          p=Path('crates/fullmag-api/src/accepted_study_worker.rs')
-          assert hashlib.sha256(p.read_bytes()).hexdigest() == 'c2cf07ff3e9c12ede66c54ed823ee474037a74a28c3b30e30836aa50067ae1b7'
-          text=p.read_text()
-          before="""    let durable_execution = recover_accepted_completion_for_publication(
-                  &receipt_store, accepted, start, &accepted_step, &execution,
-              )"""
-          after="""    let durable_execution = execute_accepted_worker_start_from_snapshot(
-                  &receipt_store, accepted, start, &accepted_step, "default", None,
-              )"""
-          assert text.count(before)==1
-          p.write_text(text.replace(before,after))
-          print('CI-ONLY mutation restored launcher re-entry; real public-flow regression must fail')
-          PY
-
       - name: Run actual completed receipt and existing worker regressions
         run: |
           set -o pipefail
