@@ -65,13 +65,13 @@ jobs:
           import gzip,hashlib,subprocess
           from pathlib import Path
           packed=Path('.github/antenna-completed-receipt/source.patch.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == 'd59ee0f14ba3133ee036d324f4ec0e60e26ab3afbfb48a9e2578afc5467d5698'
+          assert hashlib.sha256(packed).hexdigest() == '78151f285de239990665046f64683f33a04dd88f14a971cbe21450c984586513'
           patch=gzip.decompress(packed)
-          assert len(patch) == 1482204
-          assert hashlib.sha256(patch).hexdigest() == '12435bb38055975be13cd41e6f1235dbf1412b131f576008b6a9d38d1bb12c6b'
+          assert len(patch) == 1503514
+          assert hashlib.sha256(patch).hexdigest() == '556aeb340c1b0e955ce0d5404fd4f5ea7a6b059cfe1e98c22a26ef669cb367f8'
           subprocess.run(['git','apply','--check','--whitespace=nowarn','-'],input=patch,check=True)
           subprocess.run(['git','apply','--whitespace=nowarn','-'],input=patch,check=True)
-          print('Verified exact Rust source delta: 12435bb38055975be13cd41e6f1235dbf1412b131f576008b6a9d38d1bb12c6b')
+          print('Verified exact Rust source delta: 556aeb340c1b0e955ce0d5404fd4f5ea7a6b059cfe1e98c22a26ef669cb367f8')
           PY
 
       - name: Run actual completed receipt and existing worker regressions
