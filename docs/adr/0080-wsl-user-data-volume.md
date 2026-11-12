@@ -1,0 +1,91 @@
+# ADR 0080: Osobny ext4 dla danych jednej grupy DEV w WSL
+
+Status: decyzja przyjęta 12.11.2026 dla autoryzowanej migracji SP4. Wdrożenie
+etapowe; provisioning, przełączenie grupy i kwalifikacja runtime pozostają
+**NOT VERIFIED** do czasu wykonania i zachowania odpowiednich dowodów.
+
+## Kontekst
+
+Pełne Zarr oraz ślady profilera SP4 zapełniają główny filesystem WSL. Sam nowy
+obraz lub pozostawienie drugiej kopii na tym samym filesystemie nie zwolnią
+miejsca. Jednocześnie zastąpienie ścieżki katalogu nie dowodzi zastąpienia
+bindu widzianego przez Docker Desktop. Istniejący readmit po restarcie celowo
+wymaga zachowania inode i nie kwalifikuje skopiowanego StateRoot.
+
+## Decyzja
+
+1. Dane użytkownika jednej grupy mogą otrzymać osobny, jawnie zarejestrowany
+   ext4 w nowym dynamicznym VHDX. Lokalizację pliku obrazu wybiera operator
+   według obowiązującej decyzji hostowej. Nie przejmujemy markera projektu
+   katalogu nadrzędnego obrazu. Utworzenie używa wyłącznie create-new, bez
+   usuwania, nadpisywania, compact lub resize istniejących obrazów.
+2. Dwa datasety to dokładny katalog `user-data/<compose-project>` oraz dokładny
+   StateRoot danej instancji, obejmujący sesje i dowody admission. Kanoniczne
+   ścieżki i `FULLMAG_PROJECT_STORAGE_ROOT` pozostają zachowane przez bindy.
+   Inne grupy, źródła, prywatne volume control/ledger, shared cache i BuildKit
+   zachowują swoje dotychczasowe granice z ADR 0067 i 0076.
+3. Rejestracja `fullmag.user-data-volume.v1` jest lokalna dla worktree:
+   `storage/index/data-volumes/<worktree_id>.json`. Zamknięty model wiąże
+   projekt, grupę, volume ID, obie postacie ścieżki backing file, FSUUID,
+   mount root, oba datasety i SHA receiptu zakończonej migracji. Istniejący
+   indeks worktree otrzymuje referencję `data_volume_registration` z dokładną
+   ścieżką, SHA pliku i volume ID. Brak obu oznacza zwykłą grupę; obecność
+   tylko jednej strony, drift albo brak mountu oznaczają odmowę.
+4. Rejestracja ma stan `committed` dopiero po kwalifikacji danych, nowej
+   admisji, rzeczywistych bindów i zapisu. Przed rejestracją nie wolno używać
+   zaproponowanej konfiguracji jako dowodu zakończonej migracji. Po rejestracji
+   launcher odmawia przed pierwszym zapisem, jeśli UUID, urządzenie lub inode
+   bindów nie odpowiadają wolumenowi. Nie tworzy cichego zastępczego storage.
+5. Przeniesienie wymaga zarządzanego drainu jednej dokładnej grupy, blokad
+   lifecycle/writer, kontroli konsumentów i niezależnego porównania obu drzew.
+   Manifest obejmuje zawartość, ścieżki, UID/GID, tryb, nanosekundowe mtime,
+   xattrs/ACL i topologię twardych linków. Odrzuca symlinki, pliki specjalne,
+   obce urządzenia oraz drift. Ctime i inode służą kontroli wyścigów; nie są
+   przenośnymi metadanymi porównywanymi pomiędzy filesystemami.
+6. Oryginalne bajty i metadane zachowujemy także w pełnym archiwum PAX na
+   nowym ext4. Chroni to historię, gdy nowy runtime legalnie zmieni katalogi
+   sesji, SQLite lub evidence admission. Archiwum oraz kopia robocza znajdują
+   się na nowym filesystemie, poza przepełnionym WSL root. Budżet uwzględnia
+   obie reprezentacje i zapas na następne Zarr.
+7. Zmiana inode StateRoot otrzymuje osobny, przypięty successor admission.
+   Zachowuje owner token, obrazy, źródła oraz oryginalne pięć plików evidence
+   w archiwum. Samo przygotowanie następcy nie przyznaje namespace ani nie
+   uruchamia runtime; wymagany jest nowy probe z SHA aktualnego certyfikatu
+   i inode nowego rootu. Rebootowy readmit nie zostaje poszerzony.
+8. Usunięcie starych duplikatów WSL wymaga autoryzacji operatora, pełnego
+   porównania/archiwum, dowodu nowego runtime i Zarr oraz świeżej kontroli
+   procesów, mountów, kontenerów, lease i referencji. Receipt nie uchyla tych
+   bramek. Bez kwalifikacji zachowujemy obie kopie. Nigdy nie kasujemy nowego
+   obrazu automatycznie w rollback ani nie dotykamy istniejących danych dysku
+   docelowego.
+
+## Zobowiązania implementacji
+
+Modele i porównania należą do `fullmag_data_volume.py`,
+`fullmag_data_volume_manifest.py` i `fullmag_data_volume_fs.py`. Osobny
+`linux_native_data_volume_migration.py` przygotowuje następstwo admission.
+Guard hosta, sterownik migracji, helper Windows i recepty launchera mają
+odrębne testy. Resolver pozostaje odczytowy: nie tworzy ani nie montuje dysku.
+Migrator musi utrzymywać przypięte FD katalogów docelowych i wyłączną kontrolę
+ich namespace; nie zakładamy ochrony przed wrogim rootem tego samego hosta.
+
+Decyzja nie zmienia Python DSL, ProblemIR, fizyki, backendu realizującego krok,
+OpenAPI ani zachowania UI. Migracja nie powtarza Solve. Dane wymagane do
+interpretacji i wznowienia pozostają na hostowym ext4 lub w pełnym Zarr.
+
+## Awaria i rollback
+
+Przed cutover źródła WSL pozostają aktywne. Po częściowej zmianie bindów grupa
+pozostaje zatrzymana, a journal określa dokładny osiągnięty etap. Recovery
+uzgadnia istniejący własny obraz; nie formatuje go ponownie. Po nowych zapisach
+na ext4 nie wracamy do starszej kopii bez zachowania i uzgodnienia tych zapisów.
+Zerwanie mountu po restarcie powoduje odmowę, nigdy zapis do pustego underlay.
+
+## Weryfikacja
+
+Lekkie testy obejmują zamknięte rejestracje, UUID/inode, aliasowanie datasetów,
+zachowanie ACL/mtime/hardlinków, podmiany namespace, ctime oraz skopiowane
+admission. Nie dowodzą rzeczywistego formatu urządzenia ani działania Dockera.
+Odbiór hostowy wymaga osobno create/attach receipts, identyfikacji nowego
+urządzenia, rzeczywistych mountów hosta i kontenera, kompletności danych,
+świeżego probe oraz kwalifikacji pierwszego pełnego Zarr po migracji.
