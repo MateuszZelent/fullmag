@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { evenMultisliceFractions, resolveMultisliceRange } from "./planarMultislice";
+import { evenMultisliceFractions, multisliceLegendUnit, resolveMultisliceRange } from "./planarMultislice";
 
 describe("resolveMultisliceRange", () => {
   const extents = [{ max: 0.4, min: -0.2 }, { max: 0.9, min: 0.1 }, { max: 0.3, min: -0.7 }];
@@ -25,5 +25,21 @@ describe("evenMultisliceFractions", () => {
     expect(evenMultisliceFractions(3)).toEqual([0.25, 0.5, 0.75]);
     expect(evenMultisliceFractions(9)).toHaveLength(4);
     expect(evenMultisliceFractions(1)).toEqual([1 / 3, 2 / 3]);
+  });
+});
+
+describe("multisliceLegendUnit", () => {
+  const base = { legendUnit: "mT", probeScale: 1000 * 4e-7 * Math.PI };
+
+  it("keeps the base render unit in the legacy model", () => {
+    expect(multisliceLegendUnit(false, "A/m", base)).toBe(base);
+  });
+
+  it("uses the drawn layer's canonical unit from the panel meta in the layers model", () => {
+    expect(multisliceLegendUnit(true, "A/m", base)).toEqual({ legendUnit: "A/m", probeScale: 1 });
+  });
+
+  it("does not borrow the base unit before a layer panel reports one", () => {
+    expect(multisliceLegendUnit(true, null, base)).toEqual({ legendUnit: "", probeScale: 1 });
   });
 });

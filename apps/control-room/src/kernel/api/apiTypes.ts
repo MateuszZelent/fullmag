@@ -231,6 +231,16 @@ export interface PlanarFieldQuery {
   snapshot_id?: string;
   stage_id?: string;
   vector_budget?: number;
+  /**
+   * Sampling window in frame coordinates (ADR 0080, note 0970
+   * `eq-planar-sampling-window`): all four or none. Kept as the exact
+   * decimal strings sent on the wire so the window is part of the
+   * canonical query identity without float re-formatting.
+   */
+  window_u_min_m?: string;
+  window_u_max_m?: string;
+  window_v_min_m?: string;
+  window_v_max_m?: string;
 }
 export interface PlanarFieldProbeQuery
   extends Pick<
@@ -253,12 +263,19 @@ export interface PlanarFieldProbeQuery
     | "scope_region_id"
     | "snapshot_id"
     | "stage_id"
+    | "window_u_min_m"
+    | "window_u_max_m"
+    | "window_v_min_m"
+    | "window_v_max_m"
   > {
+  /** `node` also returns the nearest FEM node or FDM cell centre (ADR 0080). */
+  nearest?: "node";
   u_m: number;
   v_m: number;
 }
 /** Line profile of one planar sample (note 0970, `eq-planar-line-profile`). */
-export interface PlanarFieldProfileQuery extends Omit<PlanarFieldProbeQuery, "u_m" | "v_m"> {
+export interface PlanarFieldProfileQuery
+  extends Omit<PlanarFieldProbeQuery, "nearest" | "u_m" | "v_m"> {
   samples?: number;
   u0_m: number;
   u1_m: number;
@@ -1241,6 +1258,9 @@ type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | impo
 export type PlanarFieldOverlayState = Omit<components["schemas"]["PlanarFieldOverlayState"], "component"> & {
   component: PlanarFieldComponent;
 };
+export type PlanarCropState = components["schemas"]["PlanarCropState"];
+export type PlanarLayerModel = components["schemas"]["PlanarLayerModel"];
+export type PlanarProbeNodeResource = components["schemas"]["PlanarProbeNodeResource"];
 type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component" | "field_overlays"> & {
   field_overlays?: PlanarFieldOverlayState[] | null;
   component?: PlanarFieldComponent | null;

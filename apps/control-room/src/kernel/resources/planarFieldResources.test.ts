@@ -24,6 +24,9 @@ import {
   loadCachedPlanarBinary,
   loadCachedPlanarScalar,
   planarFieldQueryFromMeta,
+  planarProbeRequestQuery,
+  planarWindowFromQuery,
+  planarWindowParams,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
@@ -160,6 +163,86 @@ describe("planar field resources", () => {
     const meta = defaultMetaIdentity();
     for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) meta.links[key] += `&position_m=${value}`;
     expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({ ok: false });
+  });
+
+  it("turns a crop into four window parameters and nothing into none", () => {
+    expect(planarWindowParams(null)).toEqual({});
+    expect(planarWindowParams({ u_min_m: -2.5e-8, u_max_m: 2.5e-8, v_min_m: 0, v_max_m: 1e-8 })).toEqual({
+      window_u_min_m: "-2.5e-8",
+      window_u_max_m: "2.5e-8",
+      window_v_min_m: "0",
+      window_v_max_m: "1e-8",
+    });
+    expect(planarWindowParams({ u_min_m: Number.NaN, u_max_m: 1, v_min_m: 0, v_max_m: 1 })).toEqual({});
+    expect(planarWindowFromQuery({ window_u_min_m: "0" })).toEqual({});
+  });
+
+  it("replays the sampling window of the metadata links and refuses a partial one", () => {
+    const meta = defaultMetaIdentity();
+    for (const key of Object.keys(meta.links) as (keyof typeof meta.links)[]) {
+      meta.links[key] += "&window_u_min_m=-0.000000025&window_u_max_m=0.000000025&window_v_min_m=0&window_v_max_m=0.00000001";
+    }
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, meta)).toMatchObject({
+      ok: true,
+      query: {
+        window_u_min_m: "-0.000000025",
+        window_u_max_m: "0.000000025",
+        window_v_min_m: "0",
+        window_v_max_m: "0.00000001",
+      },
+    });
+    const partial = defaultMetaIdentity();
+    for (const key of Object.keys(partial.links) as (keyof typeof partial.links)[]) partial.links[key] += "&window_u_min_m=0";
+    expect(planarFieldQueryFromMeta("m", { kind: "default" }, partial)).toMatchObject({ ok: false });
+  });
+
+  it("keeps a cropped sample apart from the full frame in the resource cache", () => {
+    const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
+    const window = planarWindowParams({ u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 });
+    const full = resolvePlanarFieldResourceKey("m", { kind: "default" }, query, "1");
+    const cropped = resolvePlanarFieldResourceKey("m", { kind: "default" }, { ...query, ...window }, "1");
+    expect(cropped).not.toBe(full);
+    // The window is part of the canonical query, not a client-side suffix.
+    expect(cropped).not.toContain("#window=");
+    expect(cropped.split("#")[0]).toContain(
+      "&window_u_min_m=0&window_u_max_m=1e-8&window_v_min_m=0&window_v_max_m=1e-8",
+    );
+  });
+
+  it("keeps the canonical key of an unwindowed query and drops a partial window", () => {
+    const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
+    const full = planarFieldResourceKey("m", { kind: "default" }, query);
+    // Same canonical query string as before windows were part of the identity.
+    expect(full.split("?")[1]).toBe(
+      "component=normal&include_mesh=false&quality=interactive&resolution_x=64&resolution_y=64&scope_kind=monitor_target&vector_budget=0",
+    );
+    expect(planarFieldResourceKey("m", { kind: "default" }, { ...query, window_u_min_m: "0" })).toBe(full);
+  });
+
+
+  it("sends the window, the exact position and nearest=node with a probe", () => {
+    const query = planarProbeRequestQuery({
+      component: "normal",
+      nearest: "node",
+      position_m: -1e-9,
+      sample_token: "planar-sample-v3:exact",
+      u_m: 1e-9,
+      v_m: 2e-9,
+      ...planarWindowParams({ u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 }),
+    });
+    expect(query).toEqual({
+      component: "normal",
+      nearest: "node",
+      position_m: -1e-9,
+      sample_token: "planar-sample-v3:exact",
+      u_m: 1e-9,
+      v_m: 2e-9,
+      window_u_max_m: "1e-8",
+      window_u_min_m: "0",
+      window_v_max_m: "1e-8",
+      window_v_min_m: "0",
+    });
+    expect(planarProbeRequestQuery({ u_m: 0, v_m: 0, window_u_min_m: "0" })).toEqual({ u_m: 0, v_m: 0 });
   });
 
   it("rejects metadata links with two competing plane positions", () => {

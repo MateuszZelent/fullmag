@@ -32,6 +32,8 @@ export interface VisualizationDisplayPassItem {
   icon?: ReactNode;
   id: string;
   label: string;
+  /** Short qualifier shown under the label, e.g. a pass hidden by a view mask. */
+  note?: string;
   pressed: boolean;
   onToggle: () => void;
 }
@@ -48,13 +50,15 @@ export function VisualizationDisplayPassesControl({
           key={item.id}
           aria-label={item.ariaLabel ?? `Toggle ${item.label}`}
           aria-pressed={item.pressed}
-          className={`fm-viz-layer-chip${item.pressed ? " fm-viz-layer-chip--on" : ""}`}
+          className={`fm-viz-layer-chip${item.pressed ? " fm-viz-layer-chip--on" : ""}${item.note ? " fm-viz-layer-chip--noted" : ""}`}
           disabled={item.disabled}
+          title={item.note ? `${item.label}: ${item.note}` : undefined}
           type="button"
           onClick={item.onToggle}
         >
           {item.icon}
           {item.label}
+          {item.note ? <span className="fm-viz-layer-chip__note">{item.note}</span> : null}
         </button>
       ))}
     </div>

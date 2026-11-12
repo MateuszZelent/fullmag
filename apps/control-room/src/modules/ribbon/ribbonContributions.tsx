@@ -163,10 +163,6 @@ type RibbonResourceInvalidator = Pick<
   "invalidate"
 >;
 type ClipAxis = VisualizationStateResource["clip"]["axis"];
-type SliceMeshColorScale = VisualizationStateResource["slice"]["mesh_color_scale"];
-type SliceMeshQualityMetric =
-  VisualizationStateResource["slice"]["mesh_quality_metric"];
-type SliceRenderMode = VisualizationStateResource["slice"]["render_mode"];
 
 import {
   homeTab,
@@ -189,35 +185,6 @@ const CLIP_AXIS_ITEMS: Array<{ value: ClipAxis; label: string }> = [
   { value: "y", label: "XZ plane" },
   { value: "x", label: "YZ plane" },
 ];
-const SLICE_RENDER_MODE_ITEMS: Array<{ value: SliceRenderMode; label: string }> = [
-  { value: "heatmap", label: "Heatmap" },
-  { value: "contour", label: "Contour" },
-  { value: "heatmap+contour", label: "Heatmap + contour" },
-  { value: "vectors", label: "Vectors" },
-  { value: "mesh-overlay", label: "Mesh overlay" },
-];
-const SLICE_MESH_QUALITY_ITEMS: Array<{
-  value: SliceMeshQualityMetric;
-  label: string;
-}> = [
-  { value: "skewness", label: "Skewness" },
-  { value: "gamma", label: "Gamma" },
-  { value: "sicn", label: "SICN" },
-  { value: "volume", label: "Volume" },
-  { value: "aspect_ratio", label: "Aspect ratio" },
-  { value: "max_angle", label: "Max angle" },
-  { value: "min_edge", label: "Min edge" },
-];
-const SLICE_MESH_COLOR_SCALE_ITEMS: Array<{
-  value: SliceMeshColorScale;
-  label: string;
-}> = [
-  { value: "jet", label: "Jet" },
-  { value: "viridis", label: "Viridis" },
-  { value: "hot", label: "Hot" },
-  { value: "coolwarm", label: "Coolwarm" },
-];
-
 // statusMenu and separator imported from ./ribbonCommon
 
 function physicsInteractionMenu(
@@ -1018,8 +985,6 @@ export function buildRibbonTabContent(
             ? buildViewOrientationGroup(group, context)
           : group.id === "view-manipulate"
             ? buildViewManipulateGroup(group, context)
-          : group.id === "view-slice-2d"
-            ? buildViewSlice2DGroup(group, context)
           : group.id === "view-display"
             ? buildViewDisplayGroup(group, context)
           : group.id === "view-selected-display"
@@ -2049,204 +2014,6 @@ function buildViewOrientationGroup(
         ? buildHslReferenceAction(context)
         : action,
     ),
-  };
-}
-
-function buildViewSlice2DGroup(
-  group: RibbonTabContent["groups"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number] {
-  return {
-    ...group,
-    actions: group.actions.map((action) =>
-      action.id === "view-slice-plane"
-        ? buildSlicePlaneAction(action, context)
-      : action.id === "view-slice-layers"
-        ? buildSliceLayersAction(action, context)
-      : action.id === "view-slice-quality"
-        ? buildSliceQualityAction(action, context)
-        : action,
-    ),
-  };
-}
-
-function buildSlicePlaneAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "label",
-        id: "slice:plane:header",
-        label: "Slice plane",
-        badge: slice?.axis.toUpperCase() ?? "XY",
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:axis",
-        label: "Plane",
-        value: slice?.axis ?? "z",
-        items: CLIP_AXIS_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (axis: string) =>
-          visualizationStateCommandInput({
-            slice: { axis: axis as ClipAxis },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:plane:mode",
-        label: "Mode",
-        value: slice?.render_mode ?? "heatmap",
-        items: SLICE_RENDER_MODE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (renderMode: string) =>
-          visualizationStateCommandInput({
-            slice: { render_mode: renderMode as SliceRenderMode },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:plane:position",
-        label: "Position",
-        value: Math.min(100, Math.max(0, slice?.position_percent ?? 50)),
-        min: 0,
-        max: 100,
-        step: 0.5,
-        unit: "%",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (positionPercent: number) =>
-          visualizationStateCommandInput({
-            slice: { position_percent: positionPercent },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceLayersAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice?.show_mesh || slice?.show_quantity || slice?.show_vectors),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "checkbox",
-        id: "slice:mesh:wireframe",
-        label: "Mesh wireframe",
-        checked: slice?.show_mesh ?? false,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showMesh: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_mesh: showMesh },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:quantity",
-        label: "Quantity overlay",
-        checked: slice?.show_quantity ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (showQuantity: boolean) =>
-          visualizationStateCommandInput({
-            slice: { show_quantity: showQuantity },
-          }),
-      },
-      {
-        type: "checkbox",
-        id: "slice:layers:auto-contrast",
-        label: "Auto-scale range",
-        checked: slice?.auto_contrast ?? true,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (autoContrast: boolean) =>
-          visualizationStateCommandInput({
-            slice: { auto_contrast: autoContrast },
-          }),
-      },
-    ],
-  };
-}
-
-function buildSliceQualityAction(
-  action: RibbonTabContent["groups"][number]["actions"][number],
-  context: RibbonBuildContext,
-): RibbonTabContent["groups"][number]["actions"][number] {
-  const slice = context.visualizationState?.slice;
-  return {
-    ...action,
-    active: Boolean(slice),
-    disabled: !context.api,
-    menu: [
-      {
-        type: "radio-group",
-        id: "slice:quality:metric",
-        label: "Quality metric",
-        value: slice?.mesh_quality_metric ?? "skewness",
-        items: SLICE_MESH_QUALITY_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (metric: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_quality_metric: metric as SliceMeshQualityMetric },
-          }),
-      },
-      {
-        type: "radio-group",
-        id: "slice:quality:color-scale",
-        label: "Color scale",
-        value: slice?.mesh_color_scale ?? "jet",
-        items: SLICE_MESH_COLOR_SCALE_ITEMS,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (colorScale: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_color_scale: colorScale as SliceMeshColorScale },
-          }),
-      },
-      {
-        type: "text",
-        id: "slice:quality:filter",
-        label: "Element filter",
-        value: slice?.mesh_filter_expression ?? "",
-        placeholder: "quality < 0.3",
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (filterExpression: string) =>
-          visualizationStateCommandInput({
-            slice: { mesh_filter_expression: filterExpression },
-          }),
-      },
-      {
-        type: "slider",
-        id: "slice:quality:shrink",
-        label: "Shrink",
-        value: Math.min(1, Math.max(0.5, slice?.mesh_shrink_factor ?? 1)),
-        min: 0.5,
-        max: 1,
-        step: 0.05,
-        disabled: !context.api,
-        commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
-        commandInput: (shrinkFactor: number) =>
-          visualizationStateCommandInput({
-            slice: { mesh_shrink_factor: shrinkFactor },
-          }),
-      },
-    ],
   };
 }
 

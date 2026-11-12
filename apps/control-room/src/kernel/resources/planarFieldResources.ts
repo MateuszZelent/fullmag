@@ -18,6 +18,7 @@ import {
 } from "../api/apiPaths";
 import type {
   BinaryResourceResult,
+  PlanarCropState,
   PlanarFieldMetaResource,
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
@@ -37,7 +38,7 @@ import {
 import { useKernel } from "../KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
-import { sessionScopedResourceKey } from "./sessionResourceIdentity";
+import { sessionRequestScopeKey, sessionScopedResourceKey } from "./sessionResourceIdentity";
 import { useResource } from "./useResource";
 import { useSessionResourceIdentity } from "./useSessionStatus";
 
@@ -129,6 +130,64 @@ const metaLinkPaths: Record<keyof PlanarFieldMetaResource["links"], SourcePaths>
     monitor: DATA_PLANAR_FIELD_VECTORS_PATH,
   },
 };
+
+/**
+ * Sampling-window query parameters (ADR 0080, note 0970
+ * `eq-planar-sampling-window`). The backend accepts all four or none.
+ */
+export const PLANAR_WINDOW_PARAM_KEYS = [
+  "window_u_min_m",
+  "window_u_max_m",
+  "window_v_min_m",
+  "window_v_max_m",
+] as const;
+
+export type PlanarWindowParamKey = (typeof PLANAR_WINDOW_PARAM_KEYS)[number];
+export type PlanarWindowParams = Pick<PlanarFieldQuery, PlanarWindowParamKey>;
+
+/** Query parameters of a crop window; `{}` without a crop. */
+export function planarWindowParams(
+  crop: PlanarCropState | null | undefined,
+): PlanarWindowParams {
+  if (!crop) return {};
+  const values = [crop.u_min_m, crop.u_max_m, crop.v_min_m, crop.v_max_m];
+  if (!values.every(Number.isFinite)) return {};
+  return {
+    window_u_min_m: String(crop.u_min_m),
+    window_u_max_m: String(crop.u_max_m),
+    window_v_min_m: String(crop.v_min_m),
+    window_v_max_m: String(crop.v_max_m),
+  };
+}
+
+/** The window carried by a query: all four parameters, or `{}`. */
+export function planarWindowFromQuery(query: object | null | undefined): PlanarWindowParams {
+  if (!query) return {};
+  const window: PlanarWindowParams = {};
+  for (const key of PLANAR_WINDOW_PARAM_KEYS) {
+    const value = (query as Readonly<Record<string, unknown>>)[key];
+    if (value === undefined || value === null || value === "") return {};
+    window[key] = String(value);
+  }
+  return window;
+}
+
+function windowFromLink(url: URL): PlanarWindowParams {
+  const present = PLANAR_WINDOW_PARAM_KEYS.filter((key) => url.searchParams.has(key));
+  if (present.length === 0) return {};
+  if (present.length !== PLANAR_WINDOW_PARAM_KEYS.length) {
+    throw new Error("Canonical planar metadata link has a partial sampling window");
+  }
+  const window: PlanarWindowParams = {};
+  for (const key of PLANAR_WINDOW_PARAM_KEYS) {
+    const value = url.searchParams.get(key) ?? "";
+    if (!value.trim() || !Number.isFinite(Number(value))) {
+      throw new Error(`Canonical planar metadata link has invalid ${key}`);
+    }
+    window[key] = value;
+  }
+  return window;
+}
 
 export function planarFieldQueryFromMeta(
   quantityId: string,
@@ -256,6 +315,7 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     throw new Error("Canonical planar metadata link has invalid include_mesh");
   }
 
+  const sampleWindow = windowFromLink(url);
   return normalizePlanarFieldQuery({
     sample_token: required("sample_token"),
     component: required("component"),
@@ -276,6 +336,7 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
     stage_id: url.searchParams.get("stage_id") ?? undefined,
     ...positionOverrideFromLink(url),
+    ...sampleWindow,
   });
 }
 
@@ -507,6 +568,58 @@ export function usePlanarRenderPngResource(
   );
 }
 
+const PROBE_QUERY_KEYS = [
+  "sample_token",
+  "component",
+  "expected_carrier_revision",
+  "expected_field_revision",
+  "expected_mesh_revision",
+  "expected_monitor_revision",
+  "expected_source_revision",
+  "expected_scene_revision",
+  "nearest",
+  "position_fraction",
+  "position_m",
+  "quality",
+  "resolution_x",
+  "resolution_y",
+  "scope_id",
+  "scope_kind",
+  "scope_region_id",
+  "snapshot_id",
+  "stage_id",
+  "u_m",
+  "v_m",
+  ...PLANAR_WINDOW_PARAM_KEYS,
+] as const satisfies readonly (keyof PlanarFieldProbeQuery)[];
+
+const WINDOW_KEY_SET: ReadonlySet<string> = new Set(PLANAR_WINDOW_PARAM_KEYS);
+
+/**
+ * The exact parameters a planar probe sends: the raster's sample identity,
+ * its window (all four or none) and the optional `nearest=node`.
+ */
+export function planarProbeRequestQuery(query: PlanarFieldProbeQuery): PlanarFieldProbeQuery {
+  const window = planarWindowFromQuery(query);
+  const normalized: Record<string, unknown> = {};
+  for (const key of PROBE_QUERY_KEYS) {
+    const value = WINDOW_KEY_SET.has(key)
+      ? window[key as PlanarWindowParamKey]
+      : query[key];
+    if (value !== undefined && value !== null && value !== "") normalized[key] = value;
+  }
+  return normalized as unknown as PlanarFieldProbeQuery;
+}
+
+function planarProbeResourceKey(
+  quantityId: string,
+  source: PlanarFieldSource,
+  query: PlanarFieldProbeQuery,
+): string {
+  const { nearest, u_m: uM, v_m: vM, ...fieldQuery } = query;
+  return `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${uM},${vM}${nearest ? `&nearest=${nearest}` : ""}`;
+}
+
 export function usePlanarProbeResource(
   quantityId: string,
   source: PlanarFieldSource,
@@ -515,67 +628,12 @@ export function usePlanarProbeResource(
 ) {
   const { api } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
-  const stableQuery = useMemo<PlanarFieldProbeQuery>(
-    () => ({
-      sample_token: query.sample_token,
-      component: query.component,
-      expected_carrier_revision: query.expected_carrier_revision,
-      expected_field_revision: query.expected_field_revision,
-      expected_mesh_revision: query.expected_mesh_revision,
-      expected_monitor_revision: query.expected_monitor_revision,
-      expected_source_revision: query.expected_source_revision,
-      expected_scene_revision: query.expected_scene_revision,
-      quality: query.quality,
-      resolution_x: query.resolution_x,
-      resolution_y: query.resolution_y,
-      scope_id: query.scope_id,
-      scope_kind: query.scope_kind,
-      scope_region_id: query.scope_region_id,
-      snapshot_id: query.snapshot_id,
-      stage_id: query.stage_id,
-      u_m: query.u_m,
-      v_m: query.v_m,
-    }),
-    [
-      query.sample_token,
-      query.component,
-      query.expected_carrier_revision,
-      query.expected_field_revision,
-      query.expected_mesh_revision,
-      query.expected_monitor_revision,
-      query.expected_source_revision,
-      query.expected_scene_revision,
-      query.quality,
-      query.resolution_x,
-      query.resolution_y,
-      query.scope_id,
-      query.scope_kind,
-      query.scope_region_id,
-      query.snapshot_id,
-      query.stage_id,
-      query.u_m,
-      query.v_m,
-    ],
+  const queryKey = JSON.stringify(planarProbeRequestQuery(query));
+  const stableQuery = useMemo(
+    () => JSON.parse(queryKey) as PlanarFieldProbeQuery,
+    [queryKey],
   );
-  const fieldQuery: PlanarFieldQuery = {
-    sample_token: stableQuery.sample_token,
-    component: stableQuery.component,
-    expected_carrier_revision: stableQuery.expected_carrier_revision,
-    expected_field_revision: stableQuery.expected_field_revision,
-      expected_mesh_revision: stableQuery.expected_mesh_revision,
-      expected_monitor_revision: stableQuery.expected_monitor_revision,
-      expected_source_revision: stableQuery.expected_source_revision,
-      expected_scene_revision: stableQuery.expected_scene_revision,
-    quality: stableQuery.quality,
-    resolution_x: stableQuery.resolution_x,
-    resolution_y: stableQuery.resolution_y,
-    scope_id: stableQuery.scope_id,
-    scope_kind: stableQuery.scope_kind,
-    scope_region_id: stableQuery.scope_region_id,
-    snapshot_id: stableQuery.snapshot_id,
-    stage_id: stableQuery.stage_id,
-  };
-  const unscopedResourceKey = `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${stableQuery.u_m},${stableQuery.v_m}`;
+  const unscopedResourceKey = planarProbeResourceKey(quantityId, source, stableQuery);
   const resourceKey = sessionIdentity
     ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
     : unscopedResourceKey;
@@ -590,6 +648,36 @@ export function usePlanarProbeResource(
     load,
     resourceKey,
   });
+}
+
+export type PlanarProbeLoader = (
+  quantityId: string,
+  source: PlanarFieldSource,
+  query: PlanarFieldProbeQuery,
+  signal: AbortSignal,
+) => Promise<PlanarFieldProbeResource>;
+
+/**
+ * Session-scoped probe loader for pointer-driven reads (the 2D inspect
+ * tool). Each hover position is a one-shot read that the caller debounces
+ * and aborts, so it does not go through the resource cache.
+ */
+export function usePlanarProbeLoader(): PlanarProbeLoader | null {
+  const { api } = useKernel();
+  const sessionIdentity = useSessionResourceIdentity();
+  const sessionScopeKey = sessionRequestScopeKey(sessionIdentity);
+  return useMemo(
+    () => sessionScopeKey === null
+      ? null
+      : (quantityId, source, query, signal) =>
+          api.data.fields.planar.probe(
+            quantityId,
+            source,
+            planarProbeRequestQuery(query),
+            { sessionScopeKey, signal },
+          ),
+    [api, sessionScopeKey],
+  );
 }
 
 /**
@@ -652,6 +740,8 @@ const PROFILE_QUERY_KEYS = [
   "u1_m",
   "v0_m",
   "v1_m",
+  "position_fraction",
+  "position_m",
 ] as const satisfies readonly (keyof PlanarFieldProfileQuery)[];
 
 function normalizeProfileQuery(query: PlanarFieldProfileQuery): PlanarFieldProfileQuery {
@@ -660,11 +750,14 @@ function normalizeProfileQuery(query: PlanarFieldProfileQuery): PlanarFieldProfi
     const value = query[key];
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
   }
-  return normalized as unknown as PlanarFieldProfileQuery;
+  return { ...normalized, ...planarWindowFromQuery(query) } as PlanarFieldProfileQuery;
 }
 
 function profileFieldQuery(query: PlanarFieldProfileQuery): PlanarFieldQuery {
-  const { samples: _samples, u0_m: _u0, u1_m: _u1, v0_m: _v0, v1_m: _v1, ...fieldQuery } = query;
+  const {
+    samples: _samples, u0_m: _u0, u1_m: _u1, v0_m: _v0, v1_m: _v1,
+    ...fieldQuery
+  } = query;
   return fieldQuery;
 }
 
@@ -755,6 +848,10 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
         snapshot_id: query.snapshot_id,
         stage_id: query.stage_id,
         vector_budget: query.vector_budget,
+        window_u_min_m: query.window_u_min_m,
+        window_u_max_m: query.window_u_max_m,
+        window_v_min_m: query.window_v_min_m,
+        window_v_max_m: query.window_v_max_m,
       }),
     [
       query.sample_token,
@@ -777,6 +874,10 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       query.snapshot_id,
       query.stage_id,
       query.vector_budget,
+      query.window_u_min_m,
+      query.window_u_max_m,
+      query.window_v_min_m,
+      query.window_v_max_m,
     ],
   );
 }
