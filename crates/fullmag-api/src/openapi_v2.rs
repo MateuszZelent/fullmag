@@ -1092,6 +1092,7 @@ use utoipa::OpenApi;
         crate::schemas::runtime::CommandQueueStatusResource,
         crate::schemas::runtime::CommandStatusResource,
         crate::schemas::runtime::CommandDetailResource,
+        crate::schemas::common::IntentDisposition,
         crate::schemas::common::ApiErrorResponse,
         crate::schemas::common::HealthResponse,
         crate::schemas::common::HostEngineEntry,
@@ -1475,6 +1476,26 @@ mod tests {
                 "worktree_state": identity.worktree_state,
                 "source_snapshot_sha256": identity.source_snapshot_sha256,
             })
+        );
+    }
+
+    #[test]
+    fn openapi_exposes_optional_flat_intent_disposition_on_api_errors() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+        let error = &schemas["ApiErrorResponse"];
+        let disposition = &error["properties"]["intent_disposition"];
+
+        assert!(disposition.to_string().contains("IntentDisposition"));
+        assert!(!error["required"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|field| field == "intent_disposition"));
+        assert_eq!(schemas["IntentDisposition"]["type"], "string");
+        assert_eq!(
+            schemas["IntentDisposition"]["enum"],
+            serde_json::json!(["not_accepted"])
         );
     }
 

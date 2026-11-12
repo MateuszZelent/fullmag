@@ -164,6 +164,14 @@ The Study Runtime inspector presents the recovery action only when the original
 request and its captured identity are available. Rendering, dismissal, reload,
 and changes to model drafts never submit that request automatically.
 
+An explicit retry reports its outcome through the existing foreground feedback
+presenter. If that retry loses its ACK, its message states that the original
+request was retried once; the unresolved intent and original body remain owned
+by the same observation store. A server `intent_disposition: "not_accepted"`
+only releases the intent for a current request scope. A late response from an
+obsolete scope cannot clear the current scope's pending observation. HTTP
+status alone and an empty queue remain insufficient evidence.
+
 ### Viewport 3D appearance preferences
 
 `viewport3dStore` owns the viewport's client-side appearance preferences. The

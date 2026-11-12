@@ -5,9 +5,11 @@ use std::sync::Arc;
 use fullmag_session::{LiveComputeRequestReceipt, SessionStore};
 use serde_json::json;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, TerminalComputeRejection};
+use crate::router_v2::middleware::session_scope::ExpectedSessionScope;
 use crate::schemas::commands::{
-    CommandExecutionBinding, CommandResponse, RuntimeCommandTarget, StructuredCommandRequest,
+    CommandExecutionBinding, CommandResponse, RuntimeCommandRunPrecondition,
+    RuntimeCommandTarget, StructuredCommandRequest,
 };
 use crate::types::{
     AppState, CommandLifecycleState, CurrentLiveRequestContext, SessionCommand, TrackedCommandRecord,
@@ -22,6 +24,16 @@ pub(crate) struct LiveComputeRequest {
     command_kind: &'static str,
     client_intent_id: Option<String>,
     requested_target: Option<serde_json::Value>,
+    current_run_pin: Option<Option<String>>,
+    scene_revision_pin: Option<u64>,
+    explicit_scope: Option<ExpectedSessionScope>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ComputeReplayOutcome {
+    NotApplicable,
+    Accepted(CommandResponse),
+    CompletedMiss,
 }
 
 impl LiveComputeRequest {
@@ -31,6 +43,16 @@ impl LiveComputeRequest {
         header_key: Option<&str>,
         request_id: Option<String>,
     ) -> Result<Option<Self>, ApiError> {
+        Self::capture_with_request_scope(context, request, header_key, request_id, None)
+    }
+
+    pub(crate) fn capture_with_request_scope(
+        context: &CurrentLiveRequestContext,
+        request: &StructuredCommandRequest,
+        header_key: Option<&str>,
+        request_id: Option<String>,
+        explicit_scope: Option<ExpectedSessionScope>,
+    ) -> Result<Option<Self>, ApiError> {
         let (command_kind, intent) = match request {
             StructuredCommandRequest::Run { intent, .. } => ("run", intent),
             StructuredCommandRequest::Relax { intent, .. } => ("relax", intent),
@@ -38,6 +60,13 @@ impl LiveComputeRequest {
             _ => return Ok(None),
         };
         let client_intent = intent.client_intent_id.as_deref().filter(|key| !key.is_empty());
+        let precondition = intent.precondition.as_ref();
+        let current_run_pin = precondition.and_then(|precondition| {
+            precondition.current_run.as_ref().map(|run| match run {
+                RuntimeCommandRunPrecondition::None => None,
+                RuntimeCommandRunPrecondition::Run { run_id } => Some(run_id.clone()),
+            })
+        });
         let key = header_key.or(client_intent);
         if header_key.is_some_and(|header_key| client_intent.is_some_and(|id| id != header_key)) {
             return Err(ApiError::bad_request(
@@ -68,6 +97,9 @@ impl LiveComputeRequest {
             requested_target: Some(request.get("target").cloned().unwrap_or_else(|| {
                 if command_kind == "solve" { json!({"kind": "study"}) } else { json!({"kind": "run"}) }
             })),
+            current_run_pin,
+            scene_revision_pin: precondition.and_then(|precondition| precondition.scene_revision),
+            explicit_scope,
         }))
     }
 
@@ -87,12 +119,15 @@ impl LiveComputeRequest {
         &self,
         state: &Arc<AppState>,
         expected: &CurrentLiveRequestContext,
-    ) -> Result<Option<CommandResponse>, ApiError> {
+    ) -> Result<ComputeReplayOutcome, ApiError> {
         if self.legacy_intent_key.is_none() {
-            return Ok(None);
+            return Ok(ComputeReplayOutcome::NotApplicable);
         }
         let current = crate::capture_current_live_read_context(state).await?;
-        if current.session_id != expected.session_id || current.session_epoch != expected.session_epoch {
+        if current.session_id != expected.session_id
+            || current.session_epoch != expected.session_epoch
+            || current.request_scope_epoch != expected.request_scope_epoch
+        {
             return Err(ApiError::conflict("request_context_stale"));
         }
         {
@@ -114,20 +149,134 @@ impl LiveComputeRequest {
             }
         }
         let Some(root) = state.submit_store_root.clone() else {
-            return Ok(None);
+            return Ok(ComputeReplayOutcome::NotApplicable);
         };
         let request = self.clone();
         tokio::task::spawn_blocking(move || {
             match std::fs::symlink_metadata(&root) {
                 Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(ComputeReplayOutcome::NotApplicable)
+                }
                 Err(error) => return Err(store_error(error)),
             }
             let store = SessionStore::open_existing(root).map_err(store_error)?;
-            request.replay(&store, &current)
+            Ok(match request.replay(&store, &current)? {
+                Some(response) => ComputeReplayOutcome::Accepted(response),
+                None => ComputeReplayOutcome::CompletedMiss,
+            })
         })
         .await
         .map_err(store_error)?
+    }
+
+    /// Reconcile a failed admission while the caller holds the session transition fence.
+    /// A marker is attached only after a completed exact receipt scan and a fresh owner/basis check.
+    pub(crate) async fn reconcile_error_under_transition(
+        &self,
+        state: &Arc<AppState>,
+        expected: &CurrentLiveRequestContext,
+        error: &mut ApiError,
+    ) -> Result<Option<CommandResponse>, ApiError> {
+        match self.replay_under_transition(state, expected).await? {
+            ComputeReplayOutcome::Accepted(response) => return Ok(Some(response)),
+            ComputeReplayOutcome::NotApplicable => return Ok(None),
+            ComputeReplayOutcome::CompletedMiss => {}
+        }
+
+        let Some(rejection) = error.terminal_compute_rejection.clone() else {
+            return Ok(None);
+        };
+        if self
+            .terminal_rejection_still_applies(state, expected, &rejection)
+            .await?
+        {
+            error.mark_intent_not_accepted();
+        }
+        Ok(None)
+    }
+
+    async fn terminal_rejection_still_applies(
+        &self,
+        state: &Arc<AppState>,
+        expected: &CurrentLiveRequestContext,
+        rejection: &TerminalComputeRejection,
+    ) -> Result<bool, ApiError> {
+        let Some(explicit_scope) = self.explicit_scope.as_ref() else {
+            return Ok(false);
+        };
+        let current = crate::capture_current_live_read_context(state).await?;
+        if current.session_id != expected.session_id
+            || current.session_epoch != expected.session_epoch
+            || current.request_scope_epoch != expected.request_scope_epoch
+        {
+            return Ok(false);
+        }
+        let snapshot = state.current_live_state.read().await;
+        let Some(snapshot) = snapshot.as_ref() else {
+            return Ok(false);
+        };
+        crate::ensure_current_live_request_context(
+            snapshot,
+            &current,
+            state
+                .current_live_session_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+        )?;
+        // The handler validates this optional transport scope before spawning
+        // the command task. Recheck the same canonical browser scope while the
+        // transition fence is held; accepted receipt replay does not depend on it.
+        if crate::ensure_current_live_request_scope_for_expected(
+            snapshot,
+            &current.request_scope_epoch,
+            explicit_scope,
+        )
+        .is_err()
+        {
+            return Ok(false);
+        }
+
+        match rejection {
+            TerminalComputeRejection::CurrentRunMismatch { expected, observed } => {
+                let actual = snapshot.run.as_ref().map(|run| run.run_id.as_str());
+                let expected_matches_request = match self.current_run_pin.as_ref() {
+                    Some(None) => expected.is_none(),
+                    Some(Some(run_id)) => expected.as_deref() == Some(run_id.as_str()),
+                    None => false,
+                };
+                let observed_matches_snapshot = observed.as_deref() == actual;
+                Ok(expected_matches_request
+                    && observed_matches_snapshot
+                    && expected != observed)
+            }
+            TerminalComputeRejection::MissingSolveMaterial {
+                cause: _,
+                scene_revision,
+                scene_sha256,
+            } => {
+                if *scene_revision == u64::MAX || self.scene_revision_pin != Some(*scene_revision) {
+                    return Ok(false);
+                }
+                let Some(scene) = snapshot.scene_document.as_ref() else {
+                    return Ok(false);
+                };
+                if scene.revision != *scene_revision {
+                    return Ok(false);
+                }
+                Ok(scene_document_sha256(scene).as_deref() == Some(scene_sha256.as_str()))
+            }
+            TerminalComputeRejection::StaleSceneRevision { expected, observed } => {
+                if *expected >= *observed || self.scene_revision_pin != Some(*expected) {
+                    return Ok(false);
+                }
+                let Some(scene) = snapshot.scene_document.as_ref() else {
+                    return Ok(false);
+                };
+                // Scene commits saturate at u64::MAX, so strict ordering is
+                // the only safe pin proof; a future/MAX pin never reaches here.
+                Ok(scene.revision >= *observed && scene.revision > *expected)
+            }
+        }
     }
 
     fn replay(
@@ -537,6 +686,11 @@ fn store_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::internal(format!("reading durable live Compute receipt: {error}"))
 }
 
+pub(crate) fn scene_document_sha256(scene: &fullmag_authoring::SceneDocument) -> Option<String> {
+    let value = serde_json::to_value(scene).ok()?;
+    Some(fullmag_session::canonical_json_sha256(&value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,14 +715,24 @@ mod tests {
     }
 
     fn stale_compute_request(client_intent_id: Option<&str>, current_run: &str) -> serde_json::Value {
-        let mut body = json!({
-            "kind": "solve",
-            "target": {"kind": "study"},
-            "precondition": {
+        keyed_solve_request(
+            client_intent_id,
+            json!({
                 "scene_revision": 12,
                 "mesh_revision": 0,
                 "current_run": {"kind": "run", "run_id": current_run}
-            }
+            }),
+        )
+    }
+
+    fn keyed_solve_request(
+        client_intent_id: Option<&str>,
+        precondition: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut body = json!({
+            "kind": "solve",
+            "target": {"kind": "study"},
+            "precondition": precondition
         });
         if let Some(client_intent_id) = client_intent_id {
             body["client_intent_id"] = json!(client_intent_id);
@@ -782,10 +946,49 @@ mod tests {
         state
     }
 
+    async fn expected_scope_for_context(
+        state: &Arc<AppState>,
+        context: &CurrentLiveRequestContext,
+    ) -> ExpectedSessionScope {
+        let current = state.current_live_state.read().await;
+        let snapshot = current.as_ref().expect("live session fixture");
+        ExpectedSessionScope {
+            session_id: context.session_id.clone(),
+            session_epoch: crate::router_v2::handlers::sessions::current_live_session_epoch(snapshot),
+            request_scope_epoch: context.request_scope_epoch.clone(),
+        }
+    }
+
+    fn session_scope_header(scope: &ExpectedSessionScope) -> String {
+        let encode = crate::router_v2::middleware::session_scope::encode_uri_component;
+        format!(
+            "session={}&epoch={}&request_scope_epoch={}",
+            encode(&scope.session_id),
+            encode(&scope.session_epoch),
+            encode(&scope.request_scope_epoch),
+        )
+    }
+
+    async fn current_session_scope_header(state: &Arc<AppState>) -> String {
+        let context = crate::capture_current_live_request_context(state)
+            .await
+            .expect("current live request context");
+        session_scope_header(&expected_scope_for_context(state, &context).await)
+    }
+
     async fn post_compute_http(
         state: Arc<AppState>,
         body: serde_json::Value,
         idempotency_key: Option<&str>,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        post_compute_http_with_scope(state, body, idempotency_key, None).await
+    }
+
+    async fn post_compute_http_with_scope(
+        state: Arc<AppState>,
+        body: serde_json::Value,
+        idempotency_key: Option<&str>,
+        session_scope: Option<&str>,
     ) -> (axum::http::StatusCode, serde_json::Value) {
         use axum::body::{to_bytes, Body};
         use axum::http::{header, Request};
@@ -797,6 +1000,9 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json");
         if let Some(idempotency_key) = idempotency_key {
             request = request.header("idempotency-key", idempotency_key);
+        }
+        if let Some(session_scope) = session_scope {
+            request = request.header("x-fullmag-session-scope", session_scope);
         }
         let response = crate::router_v2::build_v2_router()
             .with_state(state)
@@ -863,10 +1069,12 @@ mod tests {
         let unkeyed_store_root = unkeyed_dir.path().join("submit-store");
         SessionStore::open(&unkeyed_store_root).unwrap();
         let state = compute_http_test_state(Some(unkeyed_store_root), false, true).await;
-        let (status, body) = post_compute_http(
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
             state,
             stale_compute_request(None, "previous-run"),
             None,
+            Some(&scope),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
@@ -876,15 +1084,257 @@ mod tests {
         // Without a configured store, an apparent replay miss is not a
         // completed owner-scoped durable scan and must stay unresolved.
         let state = compute_http_test_state(None, false, false).await;
-        let (status, body) = post_compute_http(
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
             Some("compute-intent"),
+            Some(&scope),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
         assert_eq!(body["code"], "session_connectivity_degraded");
         assert!(body.get("intent_disposition").is_none());
+
+        let absent_dir = tempfile::tempdir().unwrap();
+        let absent_store_root = absent_dir.path().join("not-created");
+        let state = compute_http_test_state(Some(absent_store_root), false, false).await;
+        let request_context = crate::capture_current_live_request_context(&state)
+            .await
+            .unwrap();
+        let request: StructuredCommandRequest = serde_json::from_value(
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+        )
+        .unwrap();
+        let explicit_scope = expected_scope_for_context(&state, &request_context).await;
+        let request = LiveComputeRequest::capture_with_request_scope(
+            &request_context,
+            &request,
+            Some("compute-intent"),
+            None,
+            Some(explicit_scope),
+        )
+        .unwrap()
+        .unwrap();
+        let _transition = state.current_live_session_transition.lock().await;
+        assert!(matches!(
+            request
+                .replay_under_transition(&state, &request_context)
+                .await
+                .unwrap(),
+            ComputeReplayOutcome::NotApplicable
+        ));
+
+        let mut missing_store_rejection = ApiError::conflict_with_code(
+            "command_current_run_changed",
+            "The current run changed after the command was requested.",
+        )
+        .with_terminal_compute_rejection(TerminalComputeRejection::CurrentRunMismatch {
+            expected: Some("previous-run".into()),
+            observed: None,
+        });
+        assert!(request
+            .reconcile_error_under_transition(&state, &request_context, &mut missing_store_rejection)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(missing_store_rejection.intent_disposition.is_none());
+
+        let owner_dir = tempfile::tempdir().unwrap();
+        let owner_store_root = owner_dir.path().join("submit-store");
+        SessionStore::open(&owner_store_root).unwrap();
+        let mut state = compute_http_test_state(Some(owner_store_root), false, false).await;
+        let request_context = crate::capture_current_live_request_context(&state)
+            .await
+            .unwrap();
+        let request: StructuredCommandRequest = serde_json::from_value(
+            stale_compute_request(Some("compute-intent"), "previous-run"),
+        )
+        .unwrap();
+        let explicit_scope = expected_scope_for_context(&state, &request_context).await;
+        let request = LiveComputeRequest::capture_with_request_scope(
+            &request_context,
+            &request,
+            Some("compute-intent"),
+            None,
+            Some(explicit_scope),
+        )
+        .unwrap()
+        .unwrap();
+        let mut error = ApiError::conflict_with_code(
+            "command_current_run_changed",
+            "The current run changed after the command was requested.",
+        )
+        .with_terminal_compute_rejection(TerminalComputeRejection::CurrentRunMismatch {
+            expected: Some("previous-run".into()),
+            observed: None,
+        });
+        Arc::get_mut(&mut state)
+            .unwrap()
+            .request_scope_instance_id = "replacement-instance".into();
+        let _transition = state.current_live_session_transition.lock().await;
+        let error = request
+            .reconcile_error_under_transition(&state, &request_context, &mut error)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code.as_deref(), Some("request_context_stale"));
+        assert!(error.intent_disposition.is_none());
+
+        // A restore can preserve logical session identity and scene revision
+        // while the API process incarnation changes. The old request scope must
+        // not establish a negative proof; a new current scope may prove the same
+        // restored material basis after its own complete receipt scan.
+        let restore_dir = tempfile::tempdir().unwrap();
+        let restore_store_root = restore_dir.path().join("submit-store");
+        SessionStore::open(&restore_store_root).unwrap();
+        let mut restored_state =
+            compute_http_test_state(Some(restore_store_root), true, false).await;
+        let old_context = crate::capture_current_live_request_context(&restored_state)
+            .await
+            .unwrap();
+        let old_scope = expected_scope_for_context(&restored_state, &old_context).await;
+        let material_request: StructuredCommandRequest = serde_json::from_value(
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({
+                    "scene_revision": 12,
+                    "mesh_revision": 0,
+                    "current_run": {"kind": "none"}
+                }),
+            ),
+        )
+        .unwrap();
+        let old_request = LiveComputeRequest::capture_with_request_scope(
+            &old_context,
+            &material_request,
+            Some("compute-intent"),
+            None,
+            Some(old_scope),
+        )
+        .unwrap()
+        .unwrap();
+        let mut old_rejection = validate_authoring_gate_for_command_with_context(
+            &restored_state,
+            &material_request,
+            Some(&old_context),
+        )
+        .await
+        .expect_err("the same restored scene still has a missing solve material");
+        {
+            let snapshot = restored_state.current_live_state.read().await;
+            let snapshot = snapshot.as_ref().unwrap();
+            assert_eq!(snapshot.session.session_id, old_context.session_id);
+            assert_eq!(old_context.session_epoch, 8);
+            assert_eq!(
+                restored_state
+                    .current_live_session_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                8
+            );
+            assert_eq!(snapshot.scene_document.as_ref().unwrap().revision, 12);
+        }
+        Arc::get_mut(&mut restored_state)
+            .unwrap()
+            .request_scope_instance_id = "restored-api-instance".into();
+        let _transition = restored_state.current_live_session_transition.lock().await;
+        let stale_scope_error = old_request
+            .reconcile_error_under_transition(
+                &restored_state,
+                &old_context,
+                &mut old_rejection,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            stale_scope_error.code.as_deref(),
+            Some("request_context_stale")
+        );
+        assert!(old_rejection.intent_disposition.is_none());
+        drop(_transition);
+
+        let current_context = crate::capture_current_live_request_context(&restored_state)
+            .await
+            .unwrap();
+        let current_scope = expected_scope_for_context(&restored_state, &current_context).await;
+        let current_request = LiveComputeRequest::capture_with_request_scope(
+            &current_context,
+            &material_request,
+            Some("compute-intent"),
+            None,
+            Some(current_scope),
+        )
+        .unwrap()
+        .unwrap();
+        let mut current_rejection = validate_authoring_gate_for_command_with_context(
+            &restored_state,
+            &material_request,
+            Some(&current_context),
+        )
+        .await
+        .expect_err("the current scope must retain the material rejection");
+        let _transition = restored_state.current_live_session_transition.lock().await;
+        assert!(current_request
+            .reconcile_error_under_transition(
+                &restored_state,
+                &current_context,
+                &mut current_rejection,
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            current_rejection.intent_disposition,
+            Some(crate::schemas::common::IntentDisposition::NotAccepted)
+        );
+        drop(_transition);
+
+        // Reusing the same finite revision for a different restored scene
+        // basis cannot inherit the missing-material proof.
+        let basis_context = crate::capture_current_live_request_context(&restored_state)
+            .await
+            .unwrap();
+        let basis_scope = expected_scope_for_context(&restored_state, &basis_context).await;
+        let basis_request = LiveComputeRequest::capture_with_request_scope(
+            &basis_context,
+            &material_request,
+            Some("compute-intent"),
+            None,
+            Some(basis_scope),
+        )
+        .unwrap()
+        .unwrap();
+        let mut basis_rejection = validate_authoring_gate_for_command_with_context(
+            &restored_state,
+            &material_request,
+            Some(&basis_context),
+        )
+        .await
+        .expect_err("the authored material is still missing before the basis changes");
+        {
+            let mut current = restored_state.current_live_state.write().await;
+            current
+                .as_mut()
+                .unwrap()
+                .scene_document
+                .as_mut()
+                .unwrap()
+                .objects[0]
+                .name
+                .push('x');
+        }
+        let _transition = restored_state.current_live_session_transition.lock().await;
+        assert!(
+            basis_request
+                .reconcile_error_under_transition(
+                    &restored_state,
+                    &basis_context,
+                    &mut basis_rejection,
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(basis_rejection.intent_disposition.is_none());
 
         // A matching key used for another body is positive evidence of a
         // prior acceptance; it must not be collapsed into a no-acceptance
@@ -912,27 +1362,37 @@ mod tests {
             .commit_run_intent(&intent)
             .unwrap();
         let state = compute_http_test_state(Some(conflict_store_root), false, false).await;
-        let (status, body) = post_compute_http(
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
             Some("compute-intent"),
+            Some(&scope),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
         assert_eq!(body["code"], "live_compute_idempotency_conflict");
         assert!(body.get("intent_disposition").is_none());
 
-        // The material error is returned before the current implementation's
-        // second replay. The future typed no-acceptance marker must retain the
-        // old HTTP status/code after a successful keyed scan finds no receipt.
+        // A matching scene and mesh basis plus `current_run: none` isolates
+        // the authored-material rejection from stale-run evidence.
         let material_dir = tempfile::tempdir().unwrap();
         let material_store_root = material_dir.path().join("submit-store");
         SessionStore::open(&material_store_root).unwrap();
         let state = compute_http_test_state(Some(material_store_root), true, true).await;
-        let (status, body) = post_compute_http(
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
             state,
-            stale_compute_request(Some("compute-intent"), "previous-run"),
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({
+                    "scene_revision": 12,
+                    "mesh_revision": 0,
+                    "current_run": {"kind": "none"}
+                }),
+            ),
             Some("compute-intent"),
+            Some(&scope),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
@@ -942,6 +1402,51 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
 
+        let headerless_dir = tempfile::tempdir().unwrap();
+        let headerless_store_root = headerless_dir.path().join("submit-store");
+        SessionStore::open(&headerless_store_root).unwrap();
+        let state = compute_http_test_state(Some(headerless_store_root), true, true).await;
+        let (status, body) = post_compute_http(
+            state,
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({
+                    "scene_revision": 12,
+                    "mesh_revision": 0,
+                    "current_run": {"kind": "none"}
+                }),
+            ),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "bad_request");
+        assert!(body.get("intent_disposition").is_none());
+
+        // Missing, future, and saturated scene pins cannot establish that an
+        // authored repair will leave this immutable request stale.
+        for precondition in [
+            json!({"mesh_revision": 0, "current_run": {"kind": "none"}}),
+            json!({"scene_revision": 13, "mesh_revision": 0, "current_run": {"kind": "none"}}),
+            json!({"scene_revision": u64::MAX, "mesh_revision": 0, "current_run": {"kind": "none"}}),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store_root = directory.path().join("submit-store");
+            SessionStore::open(&store_root).unwrap();
+            let state = compute_http_test_state(Some(store_root), true, true).await;
+            let scope = current_session_scope_header(&state).await;
+            let (status, body) = post_compute_http_with_scope(
+                state,
+                keyed_solve_request(Some("compute-intent"), precondition),
+                Some("compute-intent"),
+                Some(&scope),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+            assert_eq!(body["code"], "bad_request");
+            assert!(body.get("intent_disposition").is_none());
+        }
+
         // This request reaches the locked stale-run precondition after its
         // second exact replay. It has the same intended disposition while
         // preserving its established conflict status and code.
@@ -949,10 +1454,12 @@ mod tests {
         let empty_store_root = empty_dir.path().join("submit-store");
         SessionStore::open(&empty_store_root).unwrap();
         let state = compute_http_test_state(Some(empty_store_root), false, true).await;
-        let (status, body) = post_compute_http(
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
             state,
             stale_compute_request(Some("compute-intent"), "previous-run"),
             Some("compute-intent"),
+            Some(&scope),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::CONFLICT);
@@ -962,9 +1469,102 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
 
+        // A retry pinned to a strictly older finite scene revision is terminal
+        // after a user edit, even when the current run still matches. The exact
+        // scope and completed durable miss are required before publishing proof.
+        let stale_scene_dir = tempfile::tempdir().unwrap();
+        let stale_scene_store_root = stale_scene_dir.path().join("submit-store");
+        SessionStore::open(&stale_scene_store_root).unwrap();
+        let state = compute_http_test_state(Some(stale_scene_store_root), false, true).await;
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
+            state,
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({
+                    "scene_revision": 11,
+                    "mesh_revision": 0,
+                    "current_run": {"kind": "none"}
+                }),
+            ),
+            Some("compute-intent"),
+            Some(&scope),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(body["code"], "conflict");
+        assert!(body["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("scene_revision precondition failed")));
+        assert_eq!(body["intent_disposition"], "not_accepted");
+
+        // Future and saturated pins mismatch too, but cannot establish that
+        // later authoring will leave an immutable request stale.
+        for scene_revision in [13, u64::MAX] {
+            let directory = tempfile::tempdir().unwrap();
+            let store_root = directory.path().join("submit-store");
+            SessionStore::open(&store_root).unwrap();
+            let state = compute_http_test_state(Some(store_root), false, true).await;
+            let scope = current_session_scope_header(&state).await;
+            let (status, body) = post_compute_http_with_scope(
+                state,
+                keyed_solve_request(
+                    Some("compute-intent"),
+                    json!({
+                        "scene_revision": scene_revision,
+                        "mesh_revision": 0,
+                        "current_run": {"kind": "none"}
+                    }),
+                ),
+                Some("compute-intent"),
+                Some(&scope),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CONFLICT);
+            assert_eq!(body["code"], "conflict");
+            assert!(body.get("intent_disposition").is_none());
+        }
+
+        // Revision and domain identity pins are not terminal by themselves:
+        // mesh revisions can wrap and domain fingerprints can recur.
+        let mesh_dir = tempfile::tempdir().unwrap();
+        let mesh_store_root = mesh_dir.path().join("submit-store");
+        SessionStore::open(&mesh_store_root).unwrap();
+        let state = compute_http_test_state(Some(mesh_store_root), false, true).await;
+        state.current_live_state.write().await.as_mut().unwrap().mesh_revision = u64::MAX;
+        let (status, body) = post_compute_http(
+            state,
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({"mesh_revision": 0, "current_run": {"kind": "none"}}),
+            ),
+            Some("compute-intent"),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert!(body.get("intent_disposition").is_none());
+
+        let domain_dir = tempfile::tempdir().unwrap();
+        let domain_store_root = domain_dir.path().join("submit-store");
+        SessionStore::open(&domain_store_root).unwrap();
+        let state = compute_http_test_state(Some(domain_store_root), false, true).await;
+        let scope = current_session_scope_header(&state).await;
+        let (status, body) = post_compute_http_with_scope(
+            state,
+            keyed_solve_request(
+                Some("compute-intent"),
+                json!({"domain_generation_id": "non-matching-generation", "current_run": {"kind": "none"}}),
+            ),
+            Some("compute-intent"),
+            Some(&scope),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT);
+        assert!(body.get("intent_disposition").is_none());
+
         // The fixture's no-key, no-root, and body-conflict controls preserve
-        // their existing contracts. The intended semantic RED is only the
-        // missing disposition on the two terminal keyed rejection paths.
+        // their existing contracts. Only the exact terminal keyed paths carry
+        // a disposition.
         assert_eq!(
             [material_disposition, stale_run_disposition],
             [Some("not_accepted".into()), Some("not_accepted".into())],

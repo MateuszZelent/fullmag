@@ -1499,6 +1499,8 @@ async fn patch_current_session() -> Result<Json<Value>, ApiError> {
         code: None,
         message: "session metadata mutation is not yet supported by the local runtime".to_string(),
         diagnostics: Vec::new(),
+        intent_disposition: None,
+        terminal_compute_rejection: None,
     })
 }
 

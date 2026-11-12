@@ -1315,3 +1315,75 @@ Komunikat po utracie ACK ponowienia mówi o jednym ponowieniu oryginalnego
 żądania; regresja nadal wymaga dokładnie dwóch łącznych POST i identycznego
 body. Parser smoke i diff check przechodzą. Nowe zmiany wymagają wykonania
 CI i ponownego odbioru zrzutów; nie są jeszcze wdrożone w kontenerze.
+
+
+### Odbiór Inspector fixture po b1f731c12
+
+Job `131539577363`, bootstrap `43320493521`: PASS. Artefakt
+`13991175464` ma SHA-256
+`50b6f371ebedbd89bd99d6ad51e14ca403a1da330e38f3f12d3d45f71191ec96`
+i jest przypisany do PR HEAD `b1f731c122032d335b917db981fb9ea3d9baef0a`.
+Receipt wskazuje rzeczywisty CI merge candidate
+`de9dec5c85ec53ee6ca05f838d951b288944962f`, niezmieniony digest źródła
+`27ec44b4fe01ca6dc5572e07e3e68225367b7dc8030bacbfb7a6b79c45a1c145`,
+terminal serwera i exit 0. Raport ma 8/8 kroków PASS, dwa callbacki retry
+(klik/Enter) przypięte do `study-compute-a`, zero mutacji API i budżet
+React 5/5 commitów wobec limitu 32.
+
+Obejrzano wszystkie cztery zrzuty Retry (dark/light, 300/380 px): wskaźnik
+Next nie zasłania już Fit view; Retry i footer pozostają czytelne. Smoke
+przechodzi rzeczywiste hit-testy trzech punktów obu przycisków, kontrole
+overflow, zachowania węzłów i fokusu. Jest to fixture callback-only, bez
+backendu, solvera i nauki. Pełne testy jednostkowe są oddzielną bramką.
+
+Przegląd producenta API wykazał brak jawnego scope w dowodzie odrzucenia:
+handler przechodzi do tokio::spawn, który nie dziedziczy task-local nagłówka.
+Potwierdzono, że restore może zachować sesję i epoch. Wymagana poprawka
+przenosi kanoniczny scope do zadania, sprawdza go pod transition i pomija
+marker dla legacy/headerless, bez zmiany klucza ani pozytywnego replay ACK.
+Tri-state durable miss i ograniczenia materiału finite/MAX są już poprawnie
+rozdzielone w roboczej implementacji. Testy nowego producenta pozostają wymagane.
+
+
+### Odświeżony inwentarz miejsca WSL (12.11, bez usuwania)
+
+`df -h / /mnt/c`: WSL 542 MiB wolnego, C: 29 GiB. Odczyt `du -sx`
+dla kanonicznego `storage/builds` daje 1 282 048 B (około 1,22 MiB):
+same zakończone metadane buildów nie zapewnią zapasu wymaganego przez S46.
+Dawne `/tmp/mumax-hook-go-cache`, `/tmp/mumax-abc-go-cache`,
+`/tmp/fullmag-ctx7-npm-cache`, `/tmp/fullmag-mcp-context7-cache` i
+`/tmp/p22-ctx7-20261109` obecnie nie istnieją; nie usunięto ich w tej próbie.
+
+| Kandydat | Zajętość `du` | Decyzja bieżąca |
+|---|---:|---|
+| `/home/kkingstoun/.cache/go-build` | 353 447 936 B (337 MiB) | Zachować: brak pełnego dowodu właściciela i konsumentów. |
+| `/tmp/node-compile-cache` | 31 723 520 B (30,3 MiB) | Zachować: brak pełnej kwalifikacji konsumentów. |
+| `/home/kkingstoun/.npm/_npx` | 328 130 560 B (313 MiB) | Zachować: m.in. narzędzie hooka Git; nie jest prywatnym buildem zadania. |
+
+To inwentarz, nie zgoda ani receipt usuwania. Sesje, wyniki, control/ledger,
+źródła i współdzielone zależności pozostają zachowane. Nawet usunięcie obu
+pierwszych cache nie gwarantowałoby wymaganego 1 GiB wolnego na WSL.
+
+
+Frontend job `131539576993` (bootstrap `43320493521`) zakończył się SUCCESS.
+Odczytany log potwierdza 939 plików PASS / 1 pominięty, 9824 testy PASS /
+13 pominiętych, dodatkowe 3 testy performance PASS oraz typecheck, lint,
+resource-first/API hygiene, architecture hygiene, idle/Compute performance
+i produkcyjny build Next PASS. To CI merge candidate tego PR; nie zbudowano
+jeszcze bieżącego backendu lokalnego. Hook Git zgłosił istniejący wcześniej
+warning array-index-key w mapie Runtime warnings; nie był to pełny PASS
+React Doctor i nie zmieniano hooka ani nie wyciszano reguły.
+
+
+Roboczy producent odrzucenia zachowuje typowaną podstawę błędu i wykonuje
+końcowy replay także dla admission 400. Rozróżnia brak skanu od trwałego miss;
+ACK ma pierwszeństwo. Scope jest przechwytywany przed tokio::spawn i ponownie
+sprawdzany pod transition. Regresje obejmują headerless, restore z tym samym
+id/epoch/rewizją i nową instancją, zmianę podstawy sceny oraz ACK race.
+Starsza skończona rewizja sceny ma oddzielny dowód (`expected < observed`);
+future/MAX i fingerprint domeny pozostają bez niego. Wspierane commity
+sceny saturują rewizję, a import zmienia session epoch. Dodano asercję, że
+aktualizacja snapshot bez run nie usuwa istniejącego runu. Negatywne kontrole
+no-key/store/domain/body-conflict mają jawny prawidłowy scope, aby brak
+nagłówka nie maskował błędu w innych bramkach. Parser rustfmt i diff check
+przechodzą; nowe testy backendu nie zostały jeszcze wykonane.

@@ -177,6 +177,8 @@ pub(super) fn configured_root(state: &AppState) -> Result<PathBuf, ApiError> {
             code: Some("execution_profile_store_unavailable".into()),
             message: "Execution profiles require a configured accepted-run store.".into(),
             diagnostics: vec![],
+            intent_disposition: None,
+            terminal_compute_rejection: None,
         })
 }
 

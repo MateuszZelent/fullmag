@@ -57,11 +57,19 @@ pub struct ApiErrorDiagnosticResponse {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentDisposition {
+    NotAccepted,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorResponse {
     pub code: String,
     pub error: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_disposition: Option<IntentDisposition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

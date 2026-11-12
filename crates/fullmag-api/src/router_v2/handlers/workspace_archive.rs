@@ -70,6 +70,8 @@ fn too_large(message: String) -> ApiError {
         code: Some("workspace_archive_too_large".into()),
         message,
         diagnostics: Vec::new(),
+        intent_disposition: None,
+        terminal_compute_rejection: None,
     }
 }
 
