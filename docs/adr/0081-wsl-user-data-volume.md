@@ -1,4 +1,4 @@
-# ADR 0080: Osobny ext4 dla danych jednej grupy DEV w WSL
+# ADR 0081: Osobny ext4 dla danych jednej grupy DEV w WSL
 
 Status: decyzja przyjęta 12.11.2026 dla autoryzowanej migracji SP4. Wdrożenie
 etapowe; provisioning, przełączenie grupy i kwalifikacja runtime pozostają

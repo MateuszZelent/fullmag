@@ -3,6 +3,23 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
+import {
+  PLANAR_TOOL_LABELS,
+  REMOVED_CANVAS_CONTROL_LABELS,
+  assertCroppedPlanarMeta,
+  assertFullFramePlanarMeta,
+  assertLayerFlagsUnchanged,
+  assertLayerMoved,
+  assertLegendCardCount,
+  assertMigratedLayers,
+  assertNodeReadoutHeading,
+  assertPlanarToolbarSnapshot,
+  assertTicksWithinRange,
+  countPositionCommits,
+  drawnFieldLayers,
+  expectedMigratedLayers,
+  frameIntervalWorldRange,
+} from "./lib/planar-toolbar-smoke.mjs";
 
 const source = await readFile(
   new URL("./smoke-viewport-2d.mjs", import.meta.url),
@@ -163,4 +180,130 @@ test("2D smoke binds browser pass to the fail-closed science report", () => {
   assert.match(source, /scienceReport\.head === currentGitHead/);
   assert.match(source, /scienceReport\.runtime_bundle_identity/);
   assert.match(source, /scienceReport\.qualification_complete === true/);
+});
+
+test("2D smoke drives the toolbar, crop, node inspector and field-layer scenarios", () => {
+  for (const caseId of [
+    "toolbar-six-tools",
+    "toolbar-zoom-box",
+    "toolbar-crop-window",
+    "toolbar-inspect-node-",
+    "toolbar-field-layer-list",
+    "toolbar-vector-mask",
+    "toolbar-section-slider",
+    "toolbar-legacy-session-image",
+  ]) {
+    assert.match(source, new RegExp(caseId));
+  }
+  assert.match(source, /\.\.\.toolbarCases/);
+  assert.match(source, /getByRole\("toolbar", \{ name: "2D view tools", exact: true \}\)/);
+  // The plot is measured on the visible slot's canvas; the tool overlay only
+  // mounts while a shape is drawn.
+  assert.match(source, /\[data-planar-composition-slot\]\[aria-hidden='false'\] canvas\.fm-field-map__canvas/);
+  assert.match(source, /data-planar-node-readout='hover'/);
+  assert.match(source, /data-planar-axis-tick/);
+  assert.match(source, /data-planar-crop/);
+  assert.match(source, /CONTROL_ROOM_PLANAR_LEGACY_FIXTURE/);
+  assert.doesNotMatch(source, /2D view controls/);
+});
+
+test("toolbar snapshot requires the six tools in order and no removed canvas controls", () => {
+  const snapshot = { tools: [...PLANAR_TOOL_LABELS], checked: ["Navigate"], removedHits: [] };
+  assert.equal(assertPlanarToolbarSnapshot(snapshot), true);
+  assert.throws(() => assertPlanarToolbarSnapshot({ ...snapshot, tools: snapshot.tools.slice(1) }), /2D view tools expose/);
+  assert.throws(() => assertPlanarToolbarSnapshot({ ...snapshot, checked: [] }), /Exactly one canvas tool/);
+  assert.throws(() => assertPlanarToolbarSnapshot({ ...snapshot, removedHits: ["Quantity"] }), /still rendered: Quantity/);
+  assert.deepEqual([...REMOVED_CANVAS_CONTROL_LABELS], ["Quantity", "Scope", "Free section", "Single layer"]);
+});
+
+test("crop metadata must describe the clipped window with a new sample token", () => {
+  const crop = { u_min_m: -3e-8, u_max_m: 1e-8, v_min_m: -1e-8, v_max_m: 1e-8 };
+  const meta = {
+    frame: { bounds_uv_m: [-2e-8, 1e-8, -1e-8, 1e-8], full_bounds_uv_m: [-2e-8, 2e-8, -2e-8, 2e-8] },
+    sample_token: "planar-sample-v3:crop",
+  };
+  assert.deepEqual(assertCroppedPlanarMeta(meta, crop, "planar-sample-v3:full"), [-2e-8, 1e-8, -1e-8, 1e-8]);
+  assert.throws(() => assertCroppedPlanarMeta(meta, crop, "planar-sample-v3:crop"), /kept the uncropped sample token/);
+  assert.throws(
+    () => assertCroppedPlanarMeta({ ...meta, frame: { ...meta.frame, bounds_uv_m: meta.frame.full_bounds_uv_m } }, crop, "x"),
+    /differ from crop/,
+  );
+  assert.equal(assertFullFramePlanarMeta({ frame: { bounds_uv_m: [0, 1, 0, 1], full_bounds_uv_m: [0, 1, 0, 1] } }), true);
+  assert.throws(() => assertFullFramePlanarMeta(meta), /not the full frame/);
+});
+
+test("axis ticks are checked against the crop's world range", () => {
+  const frame = { origin_m: [1e-8, 0, 0], u_axis: [1, 0, 0], v_axis: [0, 0, -1] };
+  assert.deepEqual(frameIntervalWorldRange(frame, "u", -1e-8, 1e-8), [0, 2e-8]);
+  assert.deepEqual(frameIntervalWorldRange(frame, "v", 0, 1e-8), [-1e-8, 0]);
+  assert.equal(assertTicksWithinRange([0, 1e-8, 2e-8], [0, 2e-8], "Horizontal"), true);
+  assert.throws(() => assertTicksWithinRange([0, 3e-8], [0, 2e-8], "Horizontal"), /fall outside the crop/);
+  assert.throws(() => assertTicksWithinRange([1e-8], [0, 2e-8], "Vertical"), /fewer than two ticks/);
+});
+
+test("node readout headings name FEM nodes and FDM cell centres", () => {
+  assert.equal(assertNodeReadoutHeading("film · m · node 18,204", "fem"), true);
+  assert.equal(assertNodeReadoutHeading("All objects · m · cell 42", "fdm"), true);
+  assert.throws(() => assertNodeReadoutHeading("film · m · cell 3", "fem"), /node number/);
+  assert.throws(() => assertNodeReadoutHeading("film · m", "fdm"), /cell number/);
+});
+
+test("legend cards follow the visible layers that draw, and masks keep layer flags", () => {
+  const planar = {
+    layers: { raster: true, vectors: false },
+    field_overlays: [
+      { id: "object:film", visible: true, raster_visible: true },
+      { id: "airbox", visible: false, raster_visible: true },
+      { id: "all", visible: true, raster_visible: false, vectors_visible: true },
+    ],
+  };
+  assert.deepEqual(drawnFieldLayers(planar).map((layer) => layer.id), ["object:film"]);
+  assert.equal(assertLegendCardCount(planar, 1), 1);
+  assert.throws(() => assertLegendCardCount(planar, 3), /3 cards for 1 visible/);
+  assert.equal(assertLegendCardCount({ ...planar, viewport_colorbar_visible: false }, 0), 0);
+  assert.equal(assertLayerMoved(["a", "b", "c"], ["a", "c", "b"], "c", 1), true);
+  assert.throws(() => assertLayerMoved(["a", "b", "c"], ["c", "a", "b"], "c", 1), /Layer order/);
+  assert.equal(assertLayerFlagsUnchanged(planar.field_overlays, planar.field_overlays.map((layer) => ({ ...layer }))), true);
+  assert.throws(
+    () => assertLayerFlagsUnchanged(planar.field_overlays, [{ ...planar.field_overlays[0], raster_visible: false }, ...planar.field_overlays.slice(1)]),
+    /flags changed/,
+  );
+});
+
+test("slider commits are counted from display PATCH bodies", () => {
+  assert.equal(countPositionCommits([
+    { planar: { default_slice: { position_fraction: 0.4 } } },
+    { planar: { interaction: { zoom: 2 } } },
+    { planar: { default_slice: { plane: "xz" } } },
+    null,
+  ]), 1);
+});
+
+test("a legacy session migrates to the same image: base field becomes the bottom layer", () => {
+  const legacy = {
+    layer_model: "legacy",
+    quantity_id: "H_demag",
+    component: "magnitude",
+    layers: { raster: true, vectors: false },
+    field_overlays: [{ id: "object:film", quantity_id: "m", component: "magnitude", visible: false }],
+  };
+  assert.deepEqual(expectedMigratedLayers(legacy), [
+    { id: "object:film", quantity_id: "m", component: "magnitude", visible: true },
+    { id: "all", quantity_id: "H_demag", component: "magnitude", visible: true, raster_visible: true, vectors_visible: false },
+  ]);
+  assert.deepEqual(
+    expectedMigratedLayers({ ...legacy, field_overlays: [{ id: "all", quantity_id: "m", component: "x" }] }).map((layer) => layer.id),
+    ["all", "all-2"],
+  );
+  assert.deepEqual(expectedMigratedLayers({ ...legacy, layers: { raster: false, vectors: false } }).map((layer) => layer.id), ["object:film"]);
+  const restored = {
+    layer_model: "layers",
+    field_overlays: expectedMigratedLayers(legacy).map((layer) => ({ ...layer, colormap: "viridis" })),
+  };
+  assert.deepEqual(assertMigratedLayers(legacy, restored), ["object:film", "all"]);
+  assert.throws(() => assertMigratedLayers(legacy, { ...restored, layer_model: "legacy" }), /layer_model legacy/);
+  assert.throws(
+    () => assertMigratedLayers(legacy, { ...restored, field_overlays: restored.field_overlays.slice().reverse() }),
+    /Restored layer 0 id/,
+  );
 });

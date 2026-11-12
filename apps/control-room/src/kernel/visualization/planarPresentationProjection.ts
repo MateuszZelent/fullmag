@@ -2,6 +2,40 @@ import type { VisualizationStateResource } from "../api/apiTypes";
 
 type VisualizationState = VisualizationStateResource;
 type Planar = NonNullable<VisualizationState["planar"]>;
+type FieldLayer = NonNullable<Planar["field_overlays"]>[number];
+
+/**
+ * Field layers as the inspector left them (ADR 0080): the optimistic list
+ * order, added and removed layers, and every presentation flag show at once.
+ * A layer whose sample identity (quantity, component, scope) changed keeps
+ * its authoritative identity until the server acknowledges the new sample.
+ */
+function projectFieldLayers(
+  authoritative: readonly FieldLayer[] | null | undefined,
+  optimistic: readonly FieldLayer[] | null | undefined,
+): FieldLayer[] {
+  if (!optimistic) return authoritative ? [...authoritative] : [];
+  return optimistic.map((pending) => {
+    const layer = authoritative?.find((entry) => entry.id === pending.id);
+    if (!layer) return pending;
+    const base = pending.quantity_id !== layer.quantity_id || pending.component !== layer.component ||
+      JSON.stringify(pending.view_scope) !== JSON.stringify(layer.view_scope)
+      ? layer
+      : { ...layer, colormap: pending.colormap, range: pending.range };
+    return {
+      ...base,
+      contours_visible: pending.contours_visible,
+      mesh_visible: pending.mesh_visible,
+      points_visible: pending.points_visible,
+      raster_opacity: pending.raster_opacity,
+      raster_visible: pending.raster_visible,
+      streamlines_visible: pending.streamlines_visible,
+      vector_style: pending.vector_style,
+      vectors_visible: pending.vectors_visible,
+      visible: pending.visible,
+    };
+  });
+}
 
 /**
  * Identity controls select data and must wait for the server-owned resource.
@@ -40,16 +74,8 @@ export function projectPlanarPresentationState(
     vector_style: optimistic.vector_style,
     viewport_colorbar_visible: optimistic.viewport_colorbar_visible,
     target_overrides: optimistic.target_overrides ?? authoritative.target_overrides,
-    ...(authoritative.field_overlays ? {
-      field_overlays: authoritative.field_overlays.flatMap((layer) => {
-        const pending = optimistic.field_overlays?.find((entry) => entry.id === layer.id);
-        if (!pending) return optimistic.field_overlays ? [] : [layer];
-        if (pending.quantity_id !== layer.quantity_id || pending.component !== layer.component ||
-            JSON.stringify(pending.view_scope) !== JSON.stringify(layer.view_scope)) return [layer];
-        return [{ ...layer, colormap: pending.colormap, range: pending.range,
-          raster_opacity: pending.raster_opacity, raster_visible: pending.raster_visible,
-          vectors_visible: pending.vectors_visible, vector_style: pending.vector_style }];
-      }),
+    ...(authoritative.field_overlays || optimistic.field_overlays ? {
+      field_overlays: projectFieldLayers(authoritative.field_overlays, optimistic.field_overlays),
     } : {}),
     wireframe_style: optimistic.wireframe_style,
   };

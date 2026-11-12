@@ -864,3 +864,202 @@ button:hover > .fm-inspector-group-icon-box {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--fm-space-1);
 }
+
+/* ── 2D tab: one-line status (plan §2.4 block 1) ── */
+.fm-planar-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--fm-space-3);
+  margin: 0;
+  padding: 0 var(--fm-space-1);
+  font-size: var(--fm-font-size-xs);
+  color: var(--fm-text-muted);
+}
+
+.fm-planar-status-line__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+}
+
+.fm-planar-status-line__item::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--fm-radius-pill);
+  background: var(--fm-text-muted);
+}
+
+.fm-planar-status-line__item[data-tone="success"]::before {
+  background: var(--fm-success);
+}
+
+.fm-planar-status-line__item[data-tone="degraded"]::before {
+  background: var(--fm-warning);
+}
+
+/* ── 2D tab: field layer list (block 2) ── */
+.fm-planar-layer-list {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-planar-layer-list__rows {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fm-planar-layer-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--fm-space-1);
+  min-height: var(--fm-inspector-control-height);
+  padding: 0 var(--fm-space-1);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-md);
+}
+
+.fm-planar-layer-row[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-accent) 8%, var(--fm-bg-panel-raised));
+}
+
+.fm-planar-layer-row[data-visible="false"] .fm-planar-layer-row__label {
+  color: var(--fm-text-muted);
+}
+
+.fm-planar-layer-row__handle {
+  display: inline-flex;
+  color: var(--fm-text-muted);
+  cursor: grab;
+}
+
+.fm-planar-layer-row__eye,
+.fm-planar-layer-row__chip,
+.fm-planar-layer-row__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--fm-space-7);
+  height: var(--fm-space-7);
+  border: 1px solid transparent;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+}
+
+.fm-planar-layer-row__eye:hover,
+.fm-planar-layer-row__chip:hover:not(:disabled),
+.fm-planar-layer-row__remove:hover {
+  background: var(--fm-bg-hover);
+  color: var(--fm-text-secondary);
+}
+
+.fm-planar-layer-row__chip--on {
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, transparent);
+  color: var(--fm-accent);
+}
+
+.fm-planar-layer-row__chip[data-pass-state="masked"] {
+  border-style: dashed;
+}
+
+.fm-planar-layer-row__chip:disabled {
+  cursor: not-allowed;
+}
+
+.fm-planar-layer-row__label {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 var(--fm-space-1);
+  border: 0;
+  background: transparent;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-inspector-control-font-size);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fm-planar-layer-list__add {
+  display: grid;
+  justify-items: start;
+  gap: var(--fm-space-1);
+}
+
+.fm-planar-layer-list__menu {
+  display: grid;
+  min-width: 12rem;
+  padding: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+}
+
+.fm-planar-layer-list__menu-item {
+  min-height: var(--fm-inspector-control-height);
+  padding: 0 var(--fm-space-2);
+  border: 0;
+  border-radius: var(--fm-radius-sm);
+  background: transparent;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-inspector-control-font-size);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fm-planar-layer-list__menu-item:hover {
+  background: var(--fm-bg-hover);
+}
+
+.fm-planar-layer-list__empty,
+.fm-planar-layer-list__refusal,
+.fm-planar-layer-editor__empty,
+.fm-planar-layer-editor__reasons {
+  margin: 0;
+  font-size: var(--fm-font-size-help);
+  color: var(--fm-text-muted);
+}
+
+/* A pass hidden by a whole-view mask stays "on" and says why it is not drawn. */
+.fm-viz-layer-chip--noted {
+  flex-direction: column;
+  gap: 0;
+  height: auto;
+  min-height: var(--fm-panel-header-height);
+}
+
+.fm-viz-layer-chip__note {
+  font-size: var(--fm-font-size-2xs);
+  font-weight: var(--fm-font-weight-normal);
+  color: var(--fm-text-muted);
+}
+
+/* ── 2D tab: section position and crop (blocks 4 and 5) ── */
+.fm-planar-section-position {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--fm-space-1);
+}
+
+.fm-planar-section-position__steps {
+  display: inline-flex;
+  gap: var(--fm-space-1);
+}
+
+.fm-planar-crop-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--fm-space-2);
+}

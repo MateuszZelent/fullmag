@@ -228,12 +228,45 @@ pub struct PlanarVisualizationState {
     pub interaction: PlanarInteractionState,
     #[serde(default = "default_planar_multislice_state")]
     pub multislice: PlanarMultisliceState,
-    /// Additional quantities in the same physical planar view.
+    /// Field layers of the planar view (the wire name is kept for persisted
+    /// sessions). Under `layer_model = layers` this is the only list of drawn
+    /// fields; under `legacy` it holds the additional fields over the base.
     #[serde(default)]
     pub field_overlays: Vec<PlanarFieldOverlayState>,
+    /// `legacy` for state persisted before field layers; restore migrates it
+    /// to `layers` with [`migrate_planar_layer_model`].
+    #[serde(default)]
+    pub layer_model: PlanarLayerModel,
+    /// Sampling window (crop) in the u/v axes of the current frame; `None`
+    /// samples the full frame.
+    #[serde(default)]
+    pub crop: Option<PlanarCropState>,
 }
 
-/// Presentation of an additional field on the base source's physical plane.
+/// How the planar view composes its fields.
+///
+/// `Legacy`: the base fields (`quantity_id`, `component`, `colormap`, ...) are
+/// drawn under `field_overlays`. `Layers`: `field_overlays` is the single
+/// field-layer list and the base sample only provides frame and section meta.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanarLayerModel {
+    #[default]
+    Legacy,
+    Layers,
+}
+
+/// Session crop of the planar view: the sampled u/v window in meters.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarCropState {
+    pub u_min_m: f64,
+    pub u_max_m: f64,
+    pub v_min_m: f64,
+    pub v_max_m: f64,
+}
+
+/// One field layer on the base source's physical plane.
 /// Source, operator, resolution and interaction are shared with the base view.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -248,9 +281,69 @@ pub struct PlanarFieldOverlayState {
     pub raster_visible: bool,
     pub vectors_visible: bool,
     pub vector_style: PlanarVectorStyleState,
+    /// Layer visibility; absent in layers persisted before the flag.
+    #[serde(default = "default_planar_field_layer_visible")]
+    pub visible: bool,
+    #[serde(default)]
+    pub points_visible: bool,
+    #[serde(default)]
+    pub mesh_visible: bool,
+    #[serde(default)]
+    pub contours_visible: bool,
+    #[serde(default)]
+    pub streamlines_visible: bool,
 }
 
-pub const PLANAR_FIELD_OVERLAYS_MAX: usize = 4;
+fn default_planar_field_layer_visible() -> bool {
+    true
+}
+
+pub const PLANAR_FIELD_LAYERS_MAX: usize = 16;
+
+/// Identity of the field layer created from the legacy base field and of the
+/// default layer of a new session.
+pub const PLANAR_ALL_FIELD_LAYER_ID: &str = "all";
+
+/// Converts `legacy` planar state into the field-layer model (ADR 0080,
+/// plan § 3.1). A visible base field (raster or vectors) becomes the last
+/// layer, drawn beneath the existing overlays, which keep their order and
+/// become visible. Idempotent: `layers` state is left unchanged.
+pub(crate) fn migrate_planar_layer_model(state: &mut PlanarVisualizationState) {
+    if state.layer_model == PlanarLayerModel::Layers {
+        return;
+    }
+    for overlay in &mut state.field_overlays {
+        overlay.visible = true;
+    }
+    if state.layers.raster || state.layers.vectors {
+        let mut id = PLANAR_ALL_FIELD_LAYER_ID.to_string();
+        let mut suffix = 2;
+        while state.field_overlays.iter().any(|overlay| overlay.id == id) {
+            id = format!("{PLANAR_ALL_FIELD_LAYER_ID}-{suffix}");
+            suffix += 1;
+        }
+        state.field_overlays.push(PlanarFieldOverlayState {
+            id,
+            quantity_id: state.quantity_id.clone(),
+            component: state.component,
+            view_scope: state.view_scope.clone(),
+            colormap: state.colormap.clone(),
+            range: state.range.clone(),
+            raster_opacity: state.raster_opacity,
+            raster_visible: state.layers.raster,
+            vectors_visible: state.layers.vectors,
+            vector_style: state.vector_style.clone(),
+            visible: true,
+            // The base field alone carried these presentations before layers;
+            // copying them keeps the restored image unchanged.
+            points_visible: state.layers.points,
+            mesh_visible: state.layers.mesh,
+            contours_visible: state.layers.contours,
+            streamlines_visible: state.layers.streamlines,
+        });
+    }
+    state.layer_model = PlanarLayerModel::Layers;
+}
 
 /// Multislice presentation (F6 B2, note 0970 § Multislice panels): panels of
 /// the Default source at fixed position fractions along the current plane
@@ -299,6 +392,11 @@ pub struct PlanarVisualizationPatch {
     pub multislice: Option<PlanarMultisliceState>,
     /// Omitted preserves the list; a supplied list replaces it atomically.
     pub field_overlays: Option<Vec<PlanarFieldOverlayState>>,
+    pub layer_model: Option<PlanarLayerModel>,
+    /// Omitted preserves the crop (unless the plane or source changes);
+    /// `null` clears it.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub crop: Option<Option<PlanarCropState>>,
 }
 
 /// The source selected by the session-scoped planar viewport state.
@@ -486,7 +584,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
     PlanarVisualizationState {
         visible: true,
         source: PlanarSourceSelectionState::Default,
-        field_overlays: Vec::new(),
+        field_overlays: default_planar_field_layers(),
         default_slice: DefaultPlanarSliceState {
             plane: PlanarAxisPlane::Xy,
             position_fraction: 0.5,
@@ -529,20 +627,48 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
             opacity: 1.0,
             size: 3.0,
         },
-        vector_style: PlanarVectorStyleState {
-            length_mode: "uniform".to_string(),
-            color_mode: "orientation".to_string(),
-            scale: 1.0,
-            opacity: 1.0,
-            thickness: 1.0,
-            monochrome_color: "var(--fm-text-primary)".to_string(),
-        },
+        vector_style: default_planar_vector_style_state(),
         interaction: PlanarInteractionState {
             zoom: 1.0,
             pan_u_m: 0.0,
             pan_v_m: 0.0,
         },
         multislice: default_planar_multislice_state(),
+        layer_model: PlanarLayerModel::Layers,
+        crop: None,
+    }
+}
+
+/// The single layer of a new session: magnetization direction over all
+/// objects of the monitor target.
+fn default_planar_field_layers() -> Vec<PlanarFieldOverlayState> {
+    vec![PlanarFieldOverlayState {
+        id: PLANAR_ALL_FIELD_LAYER_ID.to_string(),
+        quantity_id: "m".to_string(),
+        component: PlanarFieldComponent::Magnitude,
+        view_scope: PlanarViewScopeState::MonitorTarget,
+        colormap: crate::field_render_png::DIRECTION_COLORMAP.to_string(),
+        range: default_planar_color_range_state(),
+        raster_opacity: default_planar_raster_opacity(),
+        raster_visible: true,
+        vectors_visible: false,
+        vector_style: default_planar_vector_style_state(),
+        visible: true,
+        points_visible: false,
+        mesh_visible: false,
+        contours_visible: false,
+        streamlines_visible: false,
+    }]
+}
+
+fn default_planar_vector_style_state() -> PlanarVectorStyleState {
+    PlanarVectorStyleState {
+        length_mode: "uniform".to_string(),
+        color_mode: "orientation".to_string(),
+        scale: 1.0,
+        opacity: 1.0,
+        thickness: 1.0,
+        monochrome_color: "var(--fm-text-primary)".to_string(),
     }
 }
 

@@ -345,6 +345,65 @@ describe("field-map commands", () => {
     );
   });
 
+  it("exports the server PNG of the current source with the crop window, and a monitor PNG in full", async () => {
+    const crop = { u_min_m: -1e-8, u_max_m: 1e-8, v_min_m: 0, v_max_m: 2e-8 };
+    const visualizationState = vi.fn().mockResolvedValue({
+      planar: {
+        component: "magnitude",
+        crop,
+        layers: { mesh: false },
+        quantity_id: "m",
+        resolution: { height: 256, vector_budget: 64, width: 512 },
+        source: { kind: "default" },
+        view_scope: { kind: "monitor_target" },
+      },
+    });
+    const meta = vi.fn().mockResolvedValue({});
+    const renderPng = vi.fn().mockResolvedValue({ status: "not-modified" });
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-png")!;
+    const api = {
+      data: { fields: { planar: { meta, renderPng } } },
+      model: { planarMonitors: { get: vi.fn().mockResolvedValue({ monitor: { name: "Plane" } }) } },
+      visualization: { state: visualizationState },
+    } as never;
+    const window = {
+      window_u_min_m: "-1e-8",
+      window_u_max_m: "1e-8",
+      window_v_min_m: "0",
+      window_v_max_m: "2e-8",
+    };
+
+    await command.run({ api, source: "test" });
+    expect(renderPng).toHaveBeenLastCalledWith("m", { kind: "default" }, expect.objectContaining(window), undefined);
+    expect(meta).toHaveBeenLastCalledWith("m", { kind: "default" }, expect.objectContaining(window), undefined);
+
+    await command.run({ api, input: { monitorId: "plane-1" }, source: "test" });
+    expect(renderPng.mock.lastCall?.[2]).not.toHaveProperty("window_u_min_m");
+  });
+
+  it("clears an active crop in the same patch that selects another source", async () => {
+    const queuePatch = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.select-monitor")!;
+    await command.run({
+      input: { monitorId: "plane-1" },
+      layout: { setActiveViewportMainModule: vi.fn(), setFocusedSlot: vi.fn() } as never,
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: {
+          planar: {
+            crop: { u_min_m: 0, u_max_m: 1e-8, v_min_m: 0, v_max_m: 1e-8 },
+            default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+            source: { kind: "default" },
+          },
+        },
+      },
+      source: "test",
+      visualizationSync: { queuePatch } as never,
+    });
+    expect(queuePatch).toHaveBeenCalledExactlyOnceWith({
+      planar: { crop: null, source: { kind: "monitor", monitor_id: "plane-1" } },
+    });
+  });
+
   it("exports the currently visible 2D capture without fetching a base-only server PNG", async () => {
     const sessionScopeKey = "session=session-1&epoch=session-1%401";
     const blob = new Blob(["composite"], { type: "image/png" });

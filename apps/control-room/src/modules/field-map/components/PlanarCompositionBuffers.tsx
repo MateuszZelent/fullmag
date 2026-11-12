@@ -11,7 +11,7 @@ import {
 } from "../model/planarCompositionBuffers";
 import { PlanarSurface } from "../renderer/PlanarSurface";
 import { PlanarOverlaySurface } from "../renderer/PlanarOverlaySurface";
-import { PlanarColorLegend } from "./PlanarColorLegend";
+import { PlanarLayerLegendList, type PlanarLayerLegendEntry } from "./PlanarColorLegend";
 
 type SurfaceProps = Omit<ComponentProps<typeof PlanarSurface>, "model" | "fieldOverlayContent">;
 export interface PlanarCompositionBuffersProps {
@@ -43,6 +43,26 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
     reportedRef.current = identity;
     callbackRef.current?.(visible.baseEvidence);
   }, [scopeKey, visibleId, visible]);
+  // The node inspector probes the layers on screen, so it follows the visible stack.
+  const frameCallbackRef = useRef(surfaceProps.onCompositionFrame);
+  useLayoutEffect(() => { frameCallbackRef.current = surfaceProps.onCompositionFrame; }, [surfaceProps.onCompositionFrame]);
+  const visibleFrame = visible?.frame ?? null;
+  // The frame holds overlays bottom-first; legends follow list order (top first).
+  const legendEntries = useMemo((): PlanarLayerLegendEntry[] => (visibleFrame?.overlays ?? [])
+    .map((layer) => ({
+      colormap: layer.model.colormap,
+      component: layer.model.component,
+      id: layer.id,
+      legendUnit: layer.model.display.legendUnit,
+      probeScale: layer.model.display.probeScale,
+      quantityId: layer.meta.quantity_id,
+      range: layer.model.range,
+      targetLabel: targetLabels?.[layer.id] ?? (layer.meta.scope_kind === "airbox" ? "Airbox" : layer.meta.scope_id ?? layer.id),
+    }))
+    .reverse(), [targetLabels, visibleFrame]);
+  useEffect(() => {
+    if (visibleFrame) frameCallbackRef.current?.(visibleFrame);
+  }, [visibleFrame]);
   return <><div className="fm-field-map__composition-buffers"
     data-planar-composition-state={pending ? "pending" : visible?.frame.coherence ?? "unavailable"}
     data-planar-composition-visible-slot={visibleId ?? "none"}
@@ -58,14 +78,13 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
     })}
     {!visible ? <div role="status" className="fm-field-map__diagnostic">{statusReason ?? "Loading the requested field layers."}</div> : null}
   </div>
-    {visible ? <div className="fm-field-map__composition-legends" style={{ position: "relative", pointerEvents: "none" }}>
+    {visible ? <div className="fm-field-map__composition-legends" style={{ pointerEvents: "none" }}>
       {renderBaseLegend?.(visible.frame.base.model, visible.frame.base.meta)}
-      {visible.frame.overlays.map((layer) => <PlanarColorLegend key={layer.id}
-        colormap={layer.model.colormap} component={layer.model.component}
-        legendUnit={layer.model.display.legendUnit} probeScale={layer.model.display.probeScale}
-        targetLabel={targetLabels?.[layer.id] ?? layer.meta.scope_id ?? layer.id}
-        quantityId={layer.meta.quantity_id} range={layer.model.range}
-        rangeState={pending ? "stale-compatible" : "current"} />)}
+      <PlanarLayerLegendList
+        layers={legendEntries}
+        rangeState={pending ? "stale-compatible" : "current"}
+        visible={surfaceProps.legendsVisible !== false}
+      />
       {pending || statusReason ? <span role="status" className="fm-field-map__diagnostic">
         {statusReason ?? "Preparing the requested field layers."}
       </span> : null}
@@ -88,7 +107,23 @@ function BufferedSlot({ id, slot, store, surfaceProps, interactive, payloadPendi
     profileSegment={interactive && !payloadPending ? surfaceProps.profileSegment : null}
     probeOverlay={interactive && !payloadPending ? surfaceProps.probeOverlay : null}
     onRenderEvidence={reportBase}
-    fieldOverlayContent={slot.frame.overlays.map((layer) => <PlanarOverlaySurface
-      key={layer.id} id={layer.id} quantityId={layer.meta.quantity_id} model={layer.model}
-      onRenderEvidence={(evidence) => store.acknowledge(id, slot.generation, planarCompositionOverlayLayer(layer.id), evidence)} />)} />;
+    fieldOverlayContent={slot.frame.overlays.map((layer) => <BufferedOverlay
+      key={layer.id} layerId={layer.id} quantityId={layer.meta.quantity_id} model={layer.model}
+      slotId={id} generation={slot.generation} store={store} />)} />;
+}
+
+/**
+ * The overlay replays its completed evidence whenever its callback identity
+ * changes, so the callback is stable per slot generation: a re-render of the
+ * slot must not trigger another evidence replay (and state update) cycle.
+ */
+function BufferedOverlay({ layerId, quantityId, model, slotId, generation, store }: {
+  layerId: string; quantityId: string; model: FieldMapRenderModel;
+  slotId: PlanarCompositionSlotId; generation: number;
+  store: ReturnType<typeof createPlanarCompositionBufferStore>;
+}) {
+  const acknowledge = useCallback((evidence: PlanarRenderEvidence) => {
+    store.acknowledge(slotId, generation, planarCompositionOverlayLayer(layerId), evidence);
+  }, [store, slotId, generation, layerId]);
+  return <PlanarOverlaySurface id={layerId} quantityId={quantityId} model={model} onRenderEvidence={acknowledge} />;
 }
