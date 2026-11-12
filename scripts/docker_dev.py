@@ -930,6 +930,18 @@ def _ensure_development_base(args: argparse.Namespace, repo: Path,
     return base
 
 
+def _verify_registered_data_volume(layout, project, *, state_root=None, user_data_root=None):
+    """Refuse a missing explicit Linux data volume before creating host state."""
+    if os.name == "nt":
+        return None
+    from fullmag_data_volume_guard import verify_registered_volume
+    try:
+        return verify_registered_volume(layout, project, state_root=state_root,
+                                        user_data_root=user_data_root)
+    except (ValueError, OSError) as error:
+        raise _fail("registered data volume is unavailable: " + str(error)) from error
+
+
 def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str, object]]:
     from docker_development_inputs import select_checkout
     from fullmag_storage import initialize_runtime, resolve_layout
@@ -938,6 +950,7 @@ def _select_source(repo: Path, source_root: Path | None) -> tuple[Path, dict[str
     if not selected.is_dir() or selected.is_symlink():
         raise _fail(f"selected source is not a real checkout: {selected}")
     layout = resolve_layout(selected, STORAGE_PROFILE)
+    _verify_registered_data_volume(layout, _compose_identity(layout)["project_name"])
     initialize_runtime(layout)
     return selected, layout
 

@@ -2211,6 +2211,15 @@ def _preflight_prepared_start_budget(control, operation, maintenance, recovery, 
     return document
 
 
+def _create_session_state_root(layout, project, token):
+    from docker_dev import _verify_registered_data_volume
+    state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
+                                  layout["storage_root"], "session storage")
+    _verify_registered_data_volume(layout, project, state_root=state)
+    state.mkdir(parents=True, exist_ok=False)
+    return state
+
+
 def start(args, *, reuse_state=None, control=None, operation=None, prepared=None,
           recovery_environment=None, recovery_metadata=None, previous_config_sha256=None,
           native_restart_metadata=None, accepted_reattach_environment=None,
@@ -2218,7 +2227,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
           cold_budget_restore=None, prepared_recovery_constraints=None):
-    from docker_dev import (_select_source, _compose_identity,
+    from docker_dev import (_select_source, _compose_identity, _verify_registered_data_volume,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
@@ -2554,10 +2563,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                                               layout["runtime_root"], "isolated session storage")
                 if not state.is_dir() or state.resolve(strict=True) != state:
                     raise BuildControlError("Copied session state is missing or noncanonical")
+                _verify_registered_data_volume(layout, control.project, state_root=state)
             else:
-                state = storage.validate_path(Path(layout["runtime_root"]) / "docker-volume-dev" / token,
-                                              layout["storage_root"], "session storage")
-                state.mkdir(parents=True, exist_ok=False)
+                state = _create_session_state_root(layout, control.project, token)
             if os.name == "nt":
                 operation["receipt"]["windows_runtime_directories"] = list(
                     _precreate_new_windows_runtime_state(state)
@@ -2602,6 +2610,7 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             reuse_state["state"] = state
             reuse_state["host_certificate"] = certificate_path
             reuse_state["owner_marker"] = owner_marker
+            _verify_registered_data_volume(layout, control.project, state_root=state)
         operation["receipt"]["state_root"] = str(state)
         if validated_post_build_generation is not None:
             # BuildKit has already completed and the new development lease is

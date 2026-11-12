@@ -68,6 +68,13 @@ def mount_observations(registration=None):
 
 
 class RegistrationValidationTests(unittest.TestCase):
+    def test_registration_preserves_resolver_identifiers_and_compose_projection(self):
+        value = registration_fixture()
+        value['project_id'] = 'fullmag.main-0123456789abcdef'
+        value['worktree_id'] = 'fullmag.test-fedcba9876543210'
+        value['compose_project'] = 'fullmag-worktree-fullmag-test-fedcba9876543210'
+        self.assertEqual(data_volume.validate_registration(value), value)
+
     def test_valid_registration_is_an_unchanged_independent_copy(self):
         value = registration_fixture()
         before = copy.deepcopy(value)

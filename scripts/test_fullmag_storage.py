@@ -18,6 +18,22 @@ import fullmag_storage as storage
 
 
 class StorageTests(unittest.TestCase):
+    def test_registration_update_preserves_explicit_data_volume_reference(self):
+        layout = self.resolve()
+        with patch.object(storage, 'git', side_effect=lambda repo, *args:
+                          'a' * 40 if args[-1] == 'HEAD' else 'codex/fixture'):
+            storage.register(layout, 'fixture-task', 'fixture-owner', 'storage test')
+            path = Path(layout['storage_root']) / 'index' / (layout['worktree_id'] + '.json')
+            document = json.loads(path.read_text())
+            reference = {'path': '/srv/fixture/data-volume.json',
+                         'sha256': 'b' * 64, 'volume_id': 'c' * 32}
+            document['data_volume_registration'] = reference
+            path.write_text(json.dumps(document))
+            observed = storage.register(layout, 'fixture-task', 'fixture-owner',
+                                        'qualified stage', state='review')
+        self.assertEqual(observed.get('data_volume_registration'), reference)
+        self.assertEqual(json.loads(path.read_text())['data_volume_registration'], reference)
+
     def test_logged_command_preserves_unicode_log_with_legacy_console(self):
         payload = "\u2009WARN\u2009 dependencies\n".encode("utf-8")
         log_path = self.project / "compiler.log"

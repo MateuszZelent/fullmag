@@ -45,8 +45,8 @@ _DATASET_OBSERVATION_KEYS = frozenset(
     }
 )
 
-_IDENTIFIER_RE = re.compile(r"[a-z0-9_-]{1,128}\Z", re.ASCII)
-_PROJECT_ID_RE = re.compile(r"fullmag-[0-9a-f]{16}\Z", re.ASCII)
+_IDENTIFIER_RE = re.compile(r"[a-z0-9_][a-z0-9._-]{0,127}\Z", re.ASCII)
+_PROJECT_ID_RE = re.compile(r"[a-z0-9_][a-z0-9._-]{0,31}-[0-9a-f]{16}\Z", re.ASCII)
 _VOLUME_ID_RE = re.compile(r"[0-9a-f]{32}\Z", re.ASCII)
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z", re.ASCII)
 _WINDOWS_LOCAL_PATH_RE = re.compile(r"([A-Za-z]):\\(.+)\Z", re.ASCII)
@@ -188,16 +188,17 @@ def _validate_registration(value: dict) -> dict:
 
     project_id = _require_string(value["project_id"], "project_id")
     if _PROJECT_ID_RE.fullmatch(project_id) is None:
-        _fail("project_id must match fullmag-<16 lowercase hexadecimal characters>")
+        _fail("project_id must match the resolver's bounded slug and 16 hexadecimal characters")
 
     worktree_id = _require_string(value["worktree_id"], "worktree_id")
     if _IDENTIFIER_RE.fullmatch(worktree_id) is None:
         _fail("worktree_id must use bounded lowercase ASCII identifier characters")
 
     compose_project = _require_string(value["compose_project"], "compose_project")
+    compose_segment = re.sub(r"[^a-z0-9_-]+", "-", worktree_id).strip("-")
     if compose_project not in {
         "fullmag-master",
-        f"fullmag-worktree-{worktree_id}",
+        f"fullmag-worktree-{compose_segment}",
     }:
         _fail("compose_project does not match the registered worktree")
 
