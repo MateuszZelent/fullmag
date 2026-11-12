@@ -79,6 +79,12 @@ interface PlanarSurfaceProps {
   legendsVisible?: boolean;
 }
 
+/** CSS size of a canvas at the moment it is read. */
+function measuredCanvasSize(canvas: HTMLCanvasElement): { height: number; width: number } {
+  const rect = canvas.getBoundingClientRect();
+  return { height: rect.height, width: rect.width };
+}
+
 export function PlanarSurface({
   model,
   onInteraction,
@@ -176,14 +182,10 @@ export function PlanarSurface({
     fullBounds,
     viewport: model.viewport,
   });
-  const canvasSize = (canvas: HTMLCanvasElement) => {
-    const rect = canvas.getBoundingClientRect();
-    return { height: rect.height, width: rect.width };
-  };
   // Measured at commit time: the observed plot size can lag a resize.
   const commitCrop = (canvas: HTMLCanvasElement | null) => {
     const commit = resolvePlanarCropCommit({
-      canvas: canvas ? canvasSize(canvas) : plotSize,
+      canvas: canvas ? measuredCanvasSize(canvas) : plotSize,
       draft: planarToolStore.getSnapshot().cropDraft,
       fullBounds,
       viewport: model.viewport,
@@ -354,7 +356,7 @@ export function PlanarSurface({
               toolDragRef.current = null;
               const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
               const result = resolvePlanarToolDrag({
-                canvas: canvasSize(event.currentTarget),
+                canvas: measuredCanvasSize(event.currentTarget),
                 end: { u_m: u, v_m: v },
                 endClient: [event.clientX, event.clientY],
                 frameBounds: model.bounds,

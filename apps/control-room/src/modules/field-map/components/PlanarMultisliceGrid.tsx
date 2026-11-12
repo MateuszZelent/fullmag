@@ -43,8 +43,11 @@ export interface PlanarMultisliceGridProps {
   requestVectors: boolean;
   range: PlanarDisplayRange | null;
   rasterOpacity: number;
-  /** Shared colour legend, rendered with the union range. */
-  renderLegend: (range: { max: number; min: number } | null) => ReactNode;
+  /**
+   * Shared colour legend, rendered with the union range and the canonical
+   * unit the panels' metadata reports (`null` until the first panel loads).
+   */
+  renderLegend: (range: { max: number; min: number } | null, panelCanonicalUnit: string | null) => ReactNode;
   /**
    * Layers model (ADR 0080 W7): the panels draw this layer — the first visible
    * one — instead of the base field. `null` means no layer is visible.
@@ -98,6 +101,14 @@ function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
   // One panel per distinct position: a repeated fraction is the same sample.
   const fractions = useMemo(() => [...new Set(props.positionFractions)], [props.positionFractions]);
   const count = fractions.length;
+  // Every panel samples the same quantity, so the first panel's metadata (the
+  // same resource the panel itself loads) names the legend unit.
+  const firstQuery = useMemo(
+    () => ({ ...props.baseQuery, position_fraction: fractions[0] }),
+    [fractions, props.baseQuery],
+  );
+  const firstMeta = usePlanarFieldMetaResource(props.quantityId, props.source, firstQuery, { enabled: count > 0 });
+  const panelUnit = firstMeta.data?.canonical_unit ?? null;
   const onExtent = useCallback((index: number, extent: MultisliceExtent | null) => {
     setExtents((current) => {
       const previous = current[index] ?? null;
@@ -128,7 +139,7 @@ function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
           />
         ))}
       </div>
-      {props.renderLegend(sharedRange)}
+      {props.renderLegend(sharedRange, panelUnit)}
     </div>
   );
 }

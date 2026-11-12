@@ -202,8 +202,23 @@ describe("planar field resources", () => {
     const full = resolvePlanarFieldResourceKey("m", { kind: "default" }, query, "1");
     const cropped = resolvePlanarFieldResourceKey("m", { kind: "default" }, { ...query, ...window }, "1");
     expect(cropped).not.toBe(full);
-    expect(cropped).toContain("#window=0,1e-8,0,1e-8");
+    // The window is part of the canonical query, not a client-side suffix.
+    expect(cropped).not.toContain("#window=");
+    expect(cropped.split("#")[0]).toContain(
+      "&window_u_min_m=0&window_u_max_m=1e-8&window_v_min_m=0&window_v_max_m=1e-8",
+    );
   });
+
+  it("keeps the canonical key of an unwindowed query and drops a partial window", () => {
+    const query = { component: "normal", resolution_x: 64, resolution_y: 64 };
+    const full = planarFieldResourceKey("m", { kind: "default" }, query);
+    // Same canonical query string as before windows were part of the identity.
+    expect(full.split("?")[1]).toBe(
+      "component=normal&include_mesh=false&quality=interactive&resolution_x=64&resolution_y=64&scope_kind=monitor_target&vector_budget=0",
+    );
+    expect(planarFieldResourceKey("m", { kind: "default" }, { ...query, window_u_min_m: "0" })).toBe(full);
+  });
+
 
   it("sends the window, the exact position and nearest=node with a probe", () => {
     const query = planarProbeRequestQuery({

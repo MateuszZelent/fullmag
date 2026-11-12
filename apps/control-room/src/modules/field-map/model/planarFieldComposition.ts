@@ -1,4 +1,4 @@
-import type { PlanarFieldMetaResource, VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { PlanarFieldMetaResource, PlanarFieldQuery, VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { FieldMapRenderModel, PlanarFrame } from "./fieldMapRenderModel";
 
 type Planar = NonNullable<VisualizationStateResource["planar"]>;
@@ -43,6 +43,38 @@ export function alignPlanarFieldFrames(base: PlanarFieldMetaResource, overlay: P
     return { ok: false, reason: "The field layers do not sample the same physical plane." };
   }
   return { ok: true, shift: [dot(base.frame.u_axis), dot(base.frame.v_axis)] };
+}
+
+type PlanarWindowQuery = Pick<PlanarFieldQuery, "window_u_min_m" | "window_u_max_m" | "window_v_min_m" | "window_v_max_m">;
+
+/**
+ * The base crop window expressed in an overlay's own frame. Overlay frame
+ * coordinates plus `shift` give base coordinates (`placePlanarOverlay`), so
+ * the overlay window is the base window minus the shift. A zero shift keeps
+ * the base strings so both samples share one canonical window identity.
+ */
+export function overlayPlanarWindow(baseWindow: PlanarWindowQuery, shift: readonly [number, number]): PlanarWindowQuery {
+  const { window_u_min_m: uMin, window_u_max_m: uMax, window_v_min_m: vMin, window_v_max_m: vMax } = baseWindow;
+  if (uMin === undefined || uMax === undefined || vMin === undefined || vMax === undefined) return {};
+  const [du, dv] = shift;
+  if (du === 0 && dv === 0) return { window_u_min_m: uMin, window_u_max_m: uMax, window_v_min_m: vMin, window_v_max_m: vMax };
+  const values = [Number(uMin) - du, Number(uMax) - du, Number(vMin) - dv, Number(vMax) - dv];
+  if (!values.every(Number.isFinite)) return {};
+  return {
+    window_u_min_m: String(values[0]), window_u_max_m: String(values[1]),
+    window_v_min_m: String(values[2]), window_v_max_m: String(values[3]),
+  };
+}
+
+/**
+ * A sampling window that misses a layer's frame is answered with
+ * `400 invalid_planar_window: window does not intersect the frame`: that
+ * layer is empty inside the crop, not failed.
+ */
+export function isPlanarWindowMissError(error: Error | null | undefined): boolean {
+  if (!error) return false;
+  const message = error.message.trim();
+  return message.startsWith("invalid_planar_window") && message.includes("does not intersect");
 }
 
 /** The raster keeps its own resolution and physical extent in the base UV frame. */

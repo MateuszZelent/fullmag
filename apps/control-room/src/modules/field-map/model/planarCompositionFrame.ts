@@ -20,9 +20,13 @@ export function createPlanarCompositionFrameStore() {
   let key: string | null = null;
   let base: PlanarLayerFrame | null = null;
   let ids: readonly string[] = [];
+  let idSet: ReadonlySet<string> = new Set();
   let allowUnverified = false;
   const candidates = new Map<string, PlanarLayerFrame>();
   const errors = new Map<string, string>();
+  // Layers with no sample inside the crop window: they draw nothing and do
+  // not hold the composite back.
+  const empties = new Set<string>();
   const listeners = new Set<() => void>();
   let snapshot: PlanarCompositionSnapshot = { key, frame: null, pending: true, reason: null };
   const publish = (frame: PlanarCompositionFrame | null, pending: boolean, reason: string | null) => {
@@ -35,6 +39,7 @@ export function createPlanarCompositionFrameStore() {
     const layers: (PlanarLayerFrame & { id: string })[] = [];
     let coherence: PlanarCompositionFrame["coherence"] = "verified";
     for (const id of ids) {
+      if (empties.has(id)) continue;
       const candidate = candidates.get(id);
       if (errors.has(id) || !candidate) {
         publish(snapshot.frame, true, errors.get(id) ?? "Loading the requested field layers.");
@@ -81,21 +86,29 @@ export function createPlanarCompositionFrameStore() {
     getServerSnapshot: () => snapshot,
     configure(nextKey: string, nextBase: PlanarLayerFrame, nextIds: readonly string[], terminal: boolean) {
       if (key !== nextKey) {
-        key = nextKey; candidates.clear(); errors.clear(); previousModels.clear();
+        key = nextKey; candidates.clear(); errors.clear(); empties.clear(); previousModels.clear();
         snapshot = { key, frame: null, pending: true, reason: null };
       }
-      base = nextBase; ids = nextIds; allowUnverified = terminal;
-      for (const id of candidates.keys()) if (!ids.includes(id)) candidates.delete(id);
+      base = nextBase; ids = nextIds; idSet = new Set(nextIds); allowUnverified = terminal;
+      for (const id of candidates.keys()) if (!idSet.has(id)) candidates.delete(id);
+      for (const id of empties) if (!idSet.has(id)) empties.delete(id);
       resolve();
     },
     accept(requestKey: string, id: string, candidate: PlanarLayerFrame | null, error: string | null = null) {
-      if (requestKey !== key || !ids.includes(id)) return;
+      if (requestKey !== key || !idSet.has(id)) return;
+      empties.delete(id);
       if (candidate) candidates.set(id, candidate);
       else candidates.delete(id);
       if (error) errors.set(id, error); else errors.delete(id);
       resolve();
     },
-    dispose() { candidates.clear(); errors.clear(); previousModels.clear(); listeners.clear(); base = null; },
+    /** The layer has no sample inside the window; it is drawn as empty. */
+    acceptEmpty(requestKey: string, id: string) {
+      if (requestKey !== key || !idSet.has(id)) return;
+      empties.add(id); candidates.delete(id); errors.delete(id);
+      resolve();
+    },
+    dispose() { candidates.clear(); errors.clear(); empties.clear(); previousModels.clear(); listeners.clear(); base = null; },
   };
 }
 export type PlanarCompositionFrameStore = ReturnType<typeof createPlanarCompositionFrameStore>;

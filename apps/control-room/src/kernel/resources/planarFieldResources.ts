@@ -143,12 +143,12 @@ export const PLANAR_WINDOW_PARAM_KEYS = [
 ] as const;
 
 export type PlanarWindowParamKey = (typeof PLANAR_WINDOW_PARAM_KEYS)[number];
-export type PlanarWindowParams = Partial<Record<PlanarWindowParamKey, string>>;
+export type PlanarWindowParams = Pick<PlanarFieldQuery, PlanarWindowParamKey>;
 
 /** Query parameters of a crop window; `{}` without a crop. */
 export function planarWindowParams(
   crop: PlanarCropState | null | undefined,
-): Record<string, string> {
+): PlanarWindowParams {
   if (!crop) return {};
   const values = [crop.u_min_m, crop.u_max_m, crop.v_min_m, crop.v_max_m];
   if (!values.every(Number.isFinite)) return {};
@@ -170,18 +170,6 @@ export function planarWindowFromQuery(query: object | null | undefined): PlanarW
     window[key] = String(value);
   }
   return window;
-}
-
-/**
- * Resource-key suffix of a windowed sample. `planarFieldResourceKey` names
- * only the shared field query, so a crop must not share a cache entry with
- * the full frame.
- */
-function planarWindowKeySuffix(query: object): string {
-  const window = planarWindowFromQuery(query);
-  return window.window_u_min_m === undefined
-    ? ""
-    : `#window=${PLANAR_WINDOW_PARAM_KEYS.map((key) => window[key]).join(",")}`;
 }
 
 function windowFromLink(url: URL): PlanarWindowParams {
@@ -328,7 +316,7 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
   }
 
   const sampleWindow = windowFromLink(url);
-  return withPlanarWindow(normalizePlanarFieldQuery({
+  return normalizePlanarFieldQuery({
     sample_token: required("sample_token"),
     component: required("component"),
     expected_carrier_revision: revision("expected_carrier_revision"),
@@ -348,15 +336,8 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
     stage_id: url.searchParams.get("stage_id") ?? undefined,
     ...positionOverrideFromLink(url),
-  }), sampleWindow);
-}
-
-/** `normalizePlanarFieldQuery` keeps the shared keys; the window rides along. */
-function withPlanarWindow(
-  query: PlanarFieldQuery,
-  window: PlanarWindowParams,
-): PlanarFieldQuery {
-  return window.window_u_min_m === undefined ? query : { ...query, ...window };
+    ...sampleWindow,
+  });
 }
 
 /** Carry the exact physical plane (or the existing multislice fraction) into replay. */
@@ -395,7 +376,7 @@ export function resolvePlanarFieldResourceKey(
   revision: ResourceRevision | null,
   path?: string,
 ): string {
-  return `${planarFieldResourceKey(quantityId, source, query, path)}${planarWindowKeySuffix(query)}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return `${planarFieldResourceKey(quantityId, source, query, path)}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
 }
 
 export function usePlanarFieldMetaResource(
@@ -587,13 +568,6 @@ export function usePlanarRenderPngResource(
   );
 }
 
-/** Probe request options beyond the shared sample identity (ADR 0080). */
-export type PlanarProbeRequestQuery = PlanarFieldProbeQuery &
-  PlanarWindowParams & {
-    /** `node` also returns the nearest FEM node or FDM cell centre. */
-    nearest?: "node";
-  };
-
 const PROBE_QUERY_KEYS = [
   "sample_token",
   "component",
@@ -617,53 +591,46 @@ const PROBE_QUERY_KEYS = [
   "u_m",
   "v_m",
   ...PLANAR_WINDOW_PARAM_KEYS,
-] as const satisfies readonly (keyof PlanarProbeRequestQuery)[];
+] as const satisfies readonly (keyof PlanarFieldProbeQuery)[];
+
+const WINDOW_KEY_SET: ReadonlySet<string> = new Set(PLANAR_WINDOW_PARAM_KEYS);
 
 /**
  * The exact parameters a planar probe sends: the raster's sample identity,
  * its window (all four or none) and the optional `nearest=node`.
  */
-export function planarProbeRequestQuery(query: PlanarProbeRequestQuery): PlanarProbeRequestQuery {
+export function planarProbeRequestQuery(query: PlanarFieldProbeQuery): PlanarFieldProbeQuery {
   const window = planarWindowFromQuery(query);
   const normalized: Record<string, unknown> = {};
   for (const key of PROBE_QUERY_KEYS) {
-    const value = (PLANAR_WINDOW_PARAM_KEYS as readonly string[]).includes(key)
+    const value = WINDOW_KEY_SET.has(key)
       ? window[key as PlanarWindowParamKey]
       : query[key];
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
   }
-  return normalized as unknown as PlanarProbeRequestQuery;
+  return normalized as unknown as PlanarFieldProbeQuery;
 }
 
 function planarProbeResourceKey(
   quantityId: string,
   source: PlanarFieldSource,
-  query: PlanarProbeRequestQuery,
+  query: PlanarFieldProbeQuery,
 ): string {
-  const {
-    nearest,
-    u_m: uM,
-    v_m: vM,
-    window_u_min_m: _uMin,
-    window_u_max_m: _uMax,
-    window_v_min_m: _vMin,
-    window_v_max_m: _vMax,
-    ...fieldQuery
-  } = query;
-  return `${planarFieldResourceKey(quantityId, source, fieldQuery)}${planarWindowKeySuffix(query)}#probe=${uM},${vM}${nearest ? `&nearest=${nearest}` : ""}`;
+  const { nearest, u_m: uM, v_m: vM, ...fieldQuery } = query;
+  return `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${uM},${vM}${nearest ? `&nearest=${nearest}` : ""}`;
 }
 
 export function usePlanarProbeResource(
   quantityId: string,
   source: PlanarFieldSource,
-  query: PlanarProbeRequestQuery,
+  query: PlanarFieldProbeQuery,
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
   const queryKey = JSON.stringify(planarProbeRequestQuery(query));
   const stableQuery = useMemo(
-    () => JSON.parse(queryKey) as PlanarProbeRequestQuery,
+    () => JSON.parse(queryKey) as PlanarFieldProbeQuery,
     [queryKey],
   );
   const unscopedResourceKey = planarProbeResourceKey(quantityId, source, stableQuery);
@@ -686,7 +653,7 @@ export function usePlanarProbeResource(
 export type PlanarProbeLoader = (
   quantityId: string,
   source: PlanarFieldSource,
-  query: PlanarProbeRequestQuery,
+  query: PlanarFieldProbeQuery,
   signal: AbortSignal,
 ) => Promise<PlanarFieldProbeResource>;
 
@@ -720,18 +687,18 @@ export function usePlanarProbeLoader(): PlanarProbeLoader | null {
 export function usePlanarProfileResource(
   quantityId: string,
   source: PlanarFieldSource,
-  query: PlanarProfileRequestQuery | null,
+  query: PlanarFieldProfileQuery | null,
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const sessionIdentity = useSessionResourceIdentity();
   const queryKey = query ? JSON.stringify(normalizeProfileQuery(query)) : null;
-  const stableQuery = useMemo<PlanarProfileRequestQuery | null>(
-    () => (queryKey ? (JSON.parse(queryKey) as PlanarProfileRequestQuery) : null),
+  const stableQuery = useMemo<PlanarFieldProfileQuery | null>(
+    () => (queryKey ? (JSON.parse(queryKey) as PlanarFieldProfileQuery) : null),
     [queryKey],
   );
   const unscopedResourceKey = stableQuery
-    ? `${planarFieldResourceKey(quantityId, source, profileFieldQuery(stableQuery))}${planarWindowKeySuffix(stableQuery)}#profile=${stableQuery.u0_m},${stableQuery.v0_m},${stableQuery.u1_m},${stableQuery.v1_m},${stableQuery.samples ?? ""}`
+    ? `${planarFieldResourceKey(quantityId, source, profileFieldQuery(stableQuery))}#profile=${stableQuery.u0_m},${stableQuery.v0_m},${stableQuery.u1_m},${stableQuery.v1_m},${stableQuery.samples ?? ""}`
     : `planar-profile:${quantityId}:none`;
   const resourceKey = sessionIdentity
     ? sessionScopedResourceKey(sessionIdentity, unscopedResourceKey)
@@ -777,22 +744,18 @@ const PROFILE_QUERY_KEYS = [
   "position_m",
 ] as const satisfies readonly (keyof PlanarFieldProfileQuery)[];
 
-/** Profile request options: the raster's sample identity plus its window. */
-export type PlanarProfileRequestQuery = PlanarFieldProfileQuery & PlanarWindowParams;
-
-function normalizeProfileQuery(query: PlanarProfileRequestQuery): PlanarProfileRequestQuery {
+function normalizeProfileQuery(query: PlanarFieldProfileQuery): PlanarFieldProfileQuery {
   const normalized: Record<string, unknown> = {};
   for (const key of PROFILE_QUERY_KEYS) {
     const value = query[key];
     if (value !== undefined && value !== null && value !== "") normalized[key] = value;
   }
-  return { ...normalized, ...planarWindowFromQuery(query) } as unknown as PlanarProfileRequestQuery;
+  return { ...normalized, ...planarWindowFromQuery(query) } as PlanarFieldProfileQuery;
 }
 
-function profileFieldQuery(query: PlanarProfileRequestQuery): PlanarFieldQuery {
+function profileFieldQuery(query: PlanarFieldProfileQuery): PlanarFieldQuery {
   const {
     samples: _samples, u0_m: _u0, u1_m: _u1, v0_m: _v0, v1_m: _v1,
-    window_u_min_m: _wu0, window_u_max_m: _wu1, window_v_min_m: _wv0, window_v_max_m: _wv1,
     ...fieldQuery
   } = query;
   return fieldQuery;
@@ -862,10 +825,9 @@ function useResourceRevision(resourceKey: string): ResourceRevision | null {
 }
 
 function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
-  const windowKey = JSON.stringify(planarWindowFromQuery(query));
   return useMemo(
     () =>
-      withPlanarWindow(normalizePlanarFieldQuery({
+      normalizePlanarFieldQuery({
         sample_token: query.sample_token,
         component: query.component,
         expected_carrier_revision: query.expected_carrier_revision,
@@ -886,9 +848,12 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
         snapshot_id: query.snapshot_id,
         stage_id: query.stage_id,
         vector_budget: query.vector_budget,
-      }), JSON.parse(windowKey) as PlanarWindowParams),
+        window_u_min_m: query.window_u_min_m,
+        window_u_max_m: query.window_u_max_m,
+        window_v_min_m: query.window_v_min_m,
+        window_v_max_m: query.window_v_max_m,
+      }),
     [
-      windowKey,
       query.sample_token,
       query.component,
       query.expected_carrier_revision,
@@ -909,6 +874,10 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       query.snapshot_id,
       query.stage_id,
       query.vector_budget,
+      query.window_u_min_m,
+      query.window_u_max_m,
+      query.window_v_min_m,
+      query.window_v_max_m,
     ],
   );
 }

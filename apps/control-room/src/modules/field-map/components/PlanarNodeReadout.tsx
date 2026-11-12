@@ -225,14 +225,16 @@ export function PlanarNodeInspector({
   const hovering = activeTool === "inspect" && cursor !== null;
   const hover = usePlanarNodeProbes({ enabled: hovering, layers, uv: hovering ? cursor : null });
   const pinnedResults = usePlanarNodeProbes({ enabled: pinned !== null, layers, uv: pinned });
-  const rings = useMemo(
-    () => [...(hovering ? hover : []), ...pinnedResults].flatMap((result) => result.node ? [result.node] : []),
-    [hover, hovering, pinnedResults],
-  );
+  // One ring per probed layer and readout; layer ids are unique in the list.
+  const rings = useMemo(() => {
+    const ringOf = (readout: "hover" | "pinned") => (result: PlanarNodeProbeResult) =>
+      result.node ? [{ key: `${readout}:${result.layerId}`, node: result.node }] : [];
+    return [...(hovering ? hover.flatMap(ringOf("hover")) : []), ...pinnedResults.flatMap(ringOf("pinned"))];
+  }, [hover, hovering, pinnedResults]);
   return (
     <>
-      {rings.map((node, index) => (
-        <PlanarNodeRing key={`${node.kind}:${node.node_id}:${index}`} node={node} viewport={viewport} />
+      {rings.map(({ key, node }) => (
+        <PlanarNodeRing key={key} node={node} viewport={viewport} />
       ))}
       {pinned ? (
         <PlanarNodeReadout

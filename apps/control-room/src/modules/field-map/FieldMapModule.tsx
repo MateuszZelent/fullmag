@@ -61,6 +61,7 @@ import { PlanarCompositionSurface } from "./components/PlanarCompositionSurface"
 import { registerFieldMapCapture } from "./fieldMapCaptureRegistry";
 import { captureVisibleFieldMapPng } from "./fieldMapPngCapture";
 import { PlanarMultisliceGrid } from "./components/PlanarMultisliceGrid";
+import { multisliceLegendUnit } from "./model/planarMultislice";
 import { PlanarSnapshotNavigator } from "./components/PlanarSnapshotNavigator";
 import { PlanarNodeInspector } from "./components/PlanarNodeReadout";
 import type { PlanarFieldLayerRuntime } from "./hooks/usePlanarNodeProbes";
@@ -271,7 +272,7 @@ function useFieldMapModuleController() {
       viewScope: canonicalPlanar?.view_scope,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
       layerModel: canonicalPlanar?.layer_model,
-      window: windowParams,
+      cropWindow: windowParams,
     }),
     [
       active,
@@ -677,9 +678,9 @@ function useFieldMapModuleController() {
     const lengthUnit = resolvePlanarAxes(axisFrame, renderModel.bounds, renderModel.viewport, 1, 1).displayLengthUnit;
     const length = (metres: number) => formatValueWithUnit(metres * lengthUnit.scale, lengthUnit.symbol);
     return {
-      crop: (window: PlanarUvRect) => {
-        const low = resolvePlanarProbeCoordinates(axisFrame, window.u_min_m, window.v_min_m);
-        const high = resolvePlanarProbeCoordinates(axisFrame, window.u_max_m, window.v_max_m);
+      crop: (rect: PlanarUvRect) => {
+        const low = resolvePlanarProbeCoordinates(axisFrame, rect.u_min_m, rect.v_min_m);
+        const high = resolvePlanarProbeCoordinates(axisFrame, rect.u_max_m, rect.v_max_m);
         return (["horizontal", "vertical"] as const)
           .map((axis) => {
             const values = [low[axis].valueMetres, high[axis].valueMetres].sort((a, b) => a - b);
@@ -708,23 +709,28 @@ function useFieldMapModuleController() {
     const layers: PlanarFieldLayerRuntime[] = [];
     if (compositionActive && compositionFrame) {
       // The frame holds overlays bottom-first; the readout follows list order.
-      for (const overlay of [...compositionFrame.overlays].reverse()) {
-        const parsed = planarFieldQueryFromMeta(overlay.meta.quantity_id, plan.source, overlay.meta);
+      const { overlays } = compositionFrame;
+      for (let index = overlays.length - 1; index >= 0; index -= 1) {
+        const { id, meta: layerMeta, model: layerModel } = overlays[index]!;
+        const quantityId = layerMeta.quantity_id;
+        const parsed = planarFieldQueryFromMeta(quantityId, plan.source, layerMeta);
         if (!parsed.ok) continue;
-        const ownBounds = overlay.meta.frame.bounds_uv_m;
+        const ownBounds = layerMeta.frame.bounds_uv_m;
+        const placedBounds = layerModel.bounds;
+        const scopeLabel = targetLabels[id] ?? (layerMeta.scope_kind === "airbox" ? "Airbox" : layerMeta.scope_id ?? id);
         layers.push({
-          bounds: overlay.model.bounds,
-          id: overlay.id,
-          label: `${targetLabels[overlay.id] ?? (overlay.meta.scope_kind === "airbox" ? "Airbox" : overlay.meta.scope_id ?? overlay.id)} · ${quantityDisplayName(overlay.meta.quantity_id)}`,
-          mask: overlay.model.mask,
-          meta: overlay.meta,
-          quantityId: overlay.meta.quantity_id,
+          bounds: placedBounds,
+          id,
+          label: `${scopeLabel} · ${quantityDisplayName(quantityId)}`,
+          mask: layerModel.mask,
+          meta: layerMeta,
+          quantityId,
           query: parsed.query,
-          resolution: overlay.model.resolution,
-          scale: overlay.model.display.probeScale,
-          shift: [overlay.model.bounds[0] - (ownBounds[0] ?? 0), overlay.model.bounds[2] - (ownBounds[2] ?? 0)],
+          resolution: layerModel.resolution,
+          scale: layerModel.display.probeScale,
+          shift: [placedBounds[0] - (ownBounds[0] ?? 0), placedBounds[2] - (ownBounds[2] ?? 0)],
           source: plan.source,
-          unit: overlay.model.display.legendUnit,
+          unit: layerModel.display.legendUnit,
         });
       }
     }
@@ -1097,17 +1103,23 @@ export default function FieldMapModule() {
             quantityId={plan.quantityId}
             range={normalizePlanarColorRange(presentationPlanar.range)}
             rasterOpacity={presentationPlanar.raster_opacity ?? 1}
-            renderLegend={(range) => presentationPlanar.viewport_colorbar_visible !== false ? (
-              <PlanarColorLegend
-                colormap={multisliceFieldLayer?.colormap ?? renderModel.colormap ?? presentationPlanar.colormap}
-                component={multisliceFieldLayer?.component ?? presentationPlanar.component}
-                legendUnit={renderModel.display.legendUnit}
-                probeScale={renderModel.display.probeScale}
-                quantityId={multisliceFieldLayer?.quantity_id ?? plan.quantityId}
-                range={range}
-                rangeState={range ? "current" : "pending"}
-              />
-            ) : null}
+            renderLegend={(range, panelUnit) => {
+              if (presentationPlanar.viewport_colorbar_visible === false) return null;
+              // Layers model: the panels draw a layer, so its unit comes from the panel meta.
+              const legendLayer = metaOnlyBase ? multisliceFieldLayer : null;
+              const legend = multisliceLegendUnit(legendLayer !== null, panelUnit, renderModel.display);
+              return (
+                <PlanarColorLegend
+                  colormap={legendLayer?.colormap ?? renderModel.colormap ?? presentationPlanar.colormap}
+                  component={legendLayer?.component ?? presentationPlanar.component}
+                  legendUnit={legend.legendUnit}
+                  probeScale={legend.probeScale}
+                  quantityId={legendLayer?.quantity_id ?? plan.quantityId}
+                  range={range}
+                  rangeState={range ? "current" : "pending"}
+                />
+              );
+            }}
             requestVectors={plan.requestVectors}
             source={plan.source}
           />

@@ -98,15 +98,15 @@ describe("PlanarSurface lifecycle", () => {
       dom.restore();
     }
   });
-  it("places the pinned-probe overlay inside the canvas stack", () => {
+  it("places the probe readout overlay inside the canvas stack", () => {
     const html = renderToStaticMarkup(
       <PlanarSurface
         model={makeRenderModel([1, 2], [0, 2, 0, 1])}
-        probeOverlay={<table className="fm-field-map__pinned-probe"><tbody /></table>}
+        probeOverlay={<table className="fm-planar-node-readout__table"><tbody /></table>}
       />,
     );
     expect(html).toMatch(
-      /<div class="fm-field-map__canvas-stack"[^>]*>[\s\S]*<table class="fm-field-map__pinned-probe">[\s\S]*<\/table>[\s\S]*<\/div>/,
+      /<div class="fm-field-map__canvas-stack"[^>]*>[\s\S]*<table class="fm-planar-node-readout__table">[\s\S]*<\/table>[\s\S]*<\/div>/,
     );
     expect(html).not.toContain("fm-field-map__field-overlays");
     expect(html.match(/<canvas\b/g)).toHaveLength(2);

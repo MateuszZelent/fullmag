@@ -12,7 +12,6 @@ import { runViewportLayoutBrowserQa } from "./lib/viewport-layout-browser-qa.mjs
 import { runViewportQaFixtureBrowser } from "./lib/viewport-qa-fixture-browser.mjs";
 import { runViewportCameraBrowserQa } from "./lib/viewport-camera-browser-qa.mjs";
 import { runTerminalFooterTelemetryBrowserQa } from "./docker-dev-terminal-telemetry.mjs";
-import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
 
 const require = createRequire(import.meta.url);
 const playwrightPackage = require("playwright/package.json");
@@ -537,10 +536,6 @@ const canonicalizeJsonValue = (value) => {
 const sameCanonicalJsonValue = (left, right) =>
   JSON.stringify(canonicalizeJsonValue(left)) === JSON.stringify(canonicalizeJsonValue(right));
 
-const planarProfileRangeIsRestorable = (range) =>
-  (range?.mode === "auto" && range.min === null && range.max === null) ||
-  (range?.mode === "manual" && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min < range.max);
-
 const expectedAirboxDefaultFrame = (layout, planar) => {
   const airbox = layout?.airbox;
   const cells = airbox?.cells;
@@ -635,28 +630,6 @@ const waitForPlanarAirboxMeta = async (firstIndex) => {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("The browser did not load planar-default metadata for scope_kind=airbox without scope_id");
-};
-
-const assertPlanarFieldMapCanvas = async (page) => {
-  const canvas = page.locator(".fm-field-map__canvas[aria-label='Planar scalar field']:visible").first();
-  await canvas.waitFor({ state: "visible", timeout });
-  await page.waitForFunction(() => {
-    const node = [...document.querySelectorAll(".fm-field-map__canvas[aria-label='Planar scalar field']")]
-      .find((candidate) => getComputedStyle(candidate).visibility !== "hidden");
-    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return false;
-    const rect = node.getBoundingClientRect();
-    const style = getComputedStyle(node);
-    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return false;
-    const context = node.getContext("2d");
-    if (!context) return false;
-    const pixels = context.getImageData(0, 0, node.width, node.height).data;
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index] !== 0) return true;
-    return false;
-  }, null, { timeout });
-  return canvas.evaluate((node) => {
-    const rect = node.getBoundingClientRect();
-    return { visible: rect.width > 0 && rect.height > 0, width: node.width, height: node.height, non_transparent: true };
-  });
 };
 
 const capturePlanarFieldMapScreenshot = async (page) => {
@@ -786,29 +759,49 @@ const exportVisiblePlanarComposition = async (page, expected) => {
   }
 };
 
-const selectToolbarOption = async (page, trigger, label, description) => {
-  await trigger.click();
-  const option = page.getByRole("option", { name: label, exact: true });
-  await option.waitFor({ state: "visible", timeout });
-  if ((await option.getAttribute("aria-disabled")) === "true") {
-    throw new Error(`${description} is disabled in the current field catalog`);
-  }
-  if ((await option.getAttribute("aria-selected")) === "true") {
-    await page.keyboard.press("Escape");
-    return false;
-  }
+/** Run one UI action and wait for the display-state PATCH it causes. */
+const withDisplayStatePatch = async (page, action, description) => {
   const acknowledgement = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return response.request().method() === "PATCH" && url.pathname === "/v2/sessions/current/visualization/state";
   }, { timeout });
-  await option.click();
+  await action();
   const response = await acknowledgement;
   if (response.status() < 200 || response.status() >= 300) {
     throw new Error(`${description} display-state acknowledgement returned ${response.status()}`);
   }
-  return true;
 };
 
+/** Pixel proof of one field layer's raster canvas in the visible composition slot. */
+const assertPlanarLayerRasterCanvas = async (page, layerId) => {
+  const handle = await page.waitForFunction((id) => {
+    const slot = document.querySelector('[data-planar-composition-slot][aria-hidden="false"]');
+    const node = slot && [...slot.querySelectorAll("canvas[data-planar-overlay-id]")]
+      .find((candidate) => candidate.getAttribute("data-planar-overlay-id") === id &&
+        candidate.getAttribute("data-planar-overlay-layer") === "raster");
+    if (!(node instanceof HTMLCanvasElement) || node.width <= 0 || node.height <= 0) return null;
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    if (rect.width <= 0 || rect.height <= 0 || style.display === "none" || style.visibility === "hidden" || Number(style.opacity) <= 0) return null;
+    const context = node.getContext("2d");
+    if (!context) return null;
+    const pixels = context.getImageData(0, 0, node.width, node.height).data;
+    for (let index = 3; index < pixels.length; index += 4) {
+      if (pixels[index] !== 0) return { visible: true, width: node.width, height: node.height, non_transparent: true };
+    }
+    return null;
+  }, layerId, { timeout });
+  return handle.jsonValue();
+};
+
+/**
+ * Airbox H_demag through the 2D field layers (ADR 0080). Quantity and scope
+ * left the canvas toolbar ("2D view tools"); the Airbox field is a layer in
+ * the inspector's layer list whose quantity and component are set in the
+ * selected-layer editor. The base sample only names the frame, so the proof
+ * binds the Airbox layer's own metadata, overlay canvases and export, and
+ * restores the original layer list exactly.
+ */
 const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   const sessionBefore = await currentSessionRunIdentity(page);
   for (const key of ["session_id", "session_epoch", "request_scope_epoch"]) {
@@ -821,20 +814,14 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   if (planar?.source?.kind !== "default") {
     throw new Error("Planar Airbox QA requires the loaded session's existing default field source");
   }
-  const originalScopeKind = planar.view_scope?.kind;
-  if (!["monitor_target", "airbox"].includes(originalScopeKind)) {
-    throw new Error(`Planar Airbox QA cannot safely restore the existing ${String(originalScopeKind)} scope`);
+  if (planar.layer_model !== "layers") {
+    throw new Error("Planar Airbox QA requires the field-layer model (layer_model = layers)");
   }
-  if (!["m", "H_demag"].includes(planar.quantity_id) || planar.component !== "magnitude") {
-    throw new Error("Planar Airbox QA supports only restorable m or H_demag magnitude profiles");
+  if (planar.layers?.raster !== true) {
+    throw new Error("Planar Airbox QA requires the toolbar raster mask to be on");
   }
-  if (planar.quantity_id === "m" && originalScopeKind !== "monitor_target") {
-    throw new Error("Planar Airbox QA requires an m field to start in Monitor target scope");
-  }
-  if (planar.quantity_id === "m" &&
-      (!["viridis", "hsl_direction"].includes(planar.colormap) || !planarProfileRangeIsRestorable(planar.range))) {
-    throw new Error("Planar Airbox QA cannot safely restore the existing m palette and color range");
-  }
+  const originalLayers = Array.isArray(planar.field_overlays) ? planar.field_overlays : [];
+  const originalAirboxLayer = originalLayers.find((layer) => layer.id === "airbox") ?? null;
   const layout = await readPlanarAirboxJson(
     page, "/v2/sessions/current/data/domain/fdm-multilayer-layout", "FDM multilayer layout",
   );
@@ -848,15 +835,16 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   const open2d = page.getByRole("tab", { name: "2D View", exact: true });
   const originalViewWas2d = (await open2d.getAttribute("aria-selected")) === "true";
   if (!originalViewWas2d) await open2d.click();
-  const toolbar = page.getByRole("toolbar", { name: "2D view controls", exact: true });
+  const toolbar = page.getByRole("toolbar", { name: "2D view tools", exact: true });
   await toolbar.waitFor({ state: "visible", timeout });
-  const quantity = toolbar.getByRole("combobox", { name: "Quantity", exact: true });
-  const scope = toolbar.getByRole("combobox", { name: "Scope", exact: true });
-  if (await quantity.count() !== 1 || await scope.count() !== 1) {
-    throw new Error("2D Field Map did not expose one Quantity and one Scope selector");
+  for (const name of ["Quantity", "Scope"]) {
+    if (await toolbar.getByRole("combobox", { name, exact: true }).count() !== 0) {
+      throw new Error(`2D view tools still expose a ${name} selector; it belongs to the inspector's field layers`);
+    }
   }
-  const originalQuantityLabel = (await quantity.innerText()).trim();
-  const originalScopeLabel = (await scope.innerText()).trim();
+  const layerList = page.locator('[data-slot="planar-field-layer-list"]');
+  await layerList.waitFor({ state: "visible", timeout });
+  const airboxRow = layerList.locator('li[data-layer-id="airbox"]');
   const metadataStart = planarAirboxMetaResponses.length;
   const patchStart = displayPatchRequestCount;
   const catalog = await readPlanarAirboxJson(
@@ -867,56 +855,84 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
   if (demagEntries.length !== 1 || demagEntries[0].available !== true) {
     throw new Error("The live field catalog did not expose one available H_demag quantity");
   }
-  const demagLabel = `${demagEntries[0].label}${demagEntries[0].unit ? ` (${demagEntries[0].unit})` : ""}`;
   let presentationRestored = false;
   let originalViewRestored = originalViewWas2d;
   let observation = null;
+  const selectAirboxLayer = async () => {
+    await airboxRow.waitFor({ state: "visible", timeout });
+    await airboxRow.getByRole("button", { name: /^Edit / }).click();
+    const quantity = page.getByRole("combobox", { name: "Quantity", exact: true });
+    const component = page.getByRole("combobox", { name: "Component", exact: true });
+    await quantity.waitFor({ state: "visible", timeout });
+    if (await quantity.count() !== 1 || await component.count() !== 1) {
+      throw new Error("The selected-layer editor did not expose one Quantity and one Component selector");
+    }
+    return { quantity, component };
+  };
+  const setSelect = async (select, value, description) => {
+    if ((await select.inputValue()) === value) return;
+    await withDisplayStatePatch(page, () => select.selectOption(value), description);
+  };
+  const setPressed = async (button, pressed, description) => {
+    if (((await button.getAttribute("aria-pressed")) === "true") === pressed) return;
+    await withDisplayStatePatch(page, () => button.click(), description);
+  };
   try {
-    await selectToolbarOption(page, quantity, demagLabel, "H_demag quantity");
-    await selectToolbarOption(page, scope, "Universe / Airbox", "Universe / Airbox scope");
+    if (!originalAirboxLayer) {
+      await layerList.getByRole("button", { name: "Add field", exact: true }).click();
+      const item = layerList.getByRole("menu", { name: "Add field for" })
+        .getByRole("menuitem").filter({ hasText: /airbox/i });
+      if (await item.count() !== 1) throw new Error("The Add field menu did not offer one Airbox target");
+      await withDisplayStatePatch(page, () => item.click(), "Add Airbox field layer");
+    }
+    const editor = await selectAirboxLayer();
+    await setSelect(editor.quantity, "H_demag", "Airbox layer H_demag quantity");
+    await setSelect(editor.component, "magnitude", "Airbox layer magnitude component");
+    await setPressed(airboxRow.getByRole("button", { name: /^(Show|Hide) / }), true, "Show Airbox layer");
+    await setPressed(airboxRow.getByRole("button", { name: /^Raster for / }), true, "Airbox layer raster");
     const metaRequest = await waitForPlanarAirboxMeta(metadataStart);
     const meta = metaRequest.payload;
-    const evidenceHandle = await page.waitForFunction((expected) => {
+    const evidenceHandle = await page.waitForFunction(() => {
       const raw = document.querySelector("[aria-label='Planar field evidence']")?.getAttribute("data-planar-evidence");
       if (!raw) return null;
       try {
         const evidence = JSON.parse(raw);
-        return evidence.status === "ready" && evidence.quantityId === "H_demag" &&
-          evidence.sourceKind === "default" && evidence.sourceId === "default" &&
-          evidence.component === "magnitude" && evidence.metaIdentity === expected.etag &&
-          evidence.sampleToken === expected.sample_token ? evidence : null;
+        return evidence.status === "ready" && evidence.sourceKind === "default" && evidence.sourceId === "default" &&
+          Number.isFinite(evidence.resolvedCoordinateM) ? evidence : null;
       } catch {
         return null;
       }
-    }, { etag: meta.etag, sample_token: meta.sample_token }, { timeout });
+    }, null, { timeout });
+    // The base evidence names the shared frame; every layer samples its exact plane.
     const evidence = await evidenceHandle.jsonValue();
-    assertPlanarEvidenceReady(evidence, {
-      component: "magnitude",
-      sourceKind: "default",
-      sourceId: "default",
-      operatorKind: expectedFrame.operatorKind,
-      quantityId: "H_demag",
-      defaultPlane: expectedFrame.plane,
-      positionFraction: expectedFrame.positionFraction,
-      resolvedCoordinateM: expectedFrame.resolvedCoordinateM,
-    }, meta);
-    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, expectedFrame);
-    if (evidence.domainGenerationId !== layout.domain_generation_id ||
-        !evidence.sampleToken || evidence.sampleToken !== meta.sample_token ||
-        !evidence.raster?.checksum || evidence.raster.sampleCount <= 0) {
-      throw new Error("Planar Airbox raster evidence is not bound to the current metadata/layout identities");
+    if (evidence.domainGenerationId !== layout.domain_generation_id) {
+      throw new Error("Planar base evidence is not bound to the current domain layout");
     }
-    const canvas = await assertPlanarFieldMapCanvas(page);
-    const requestedLayers = (planar.field_overlays ?? [])
-      .filter((layer) => layer.raster_visible || layer.vectors_visible)
+    const normalAxis = expectedFrame.normal.findIndex((value) => value !== 0);
+    const layerFrame = {
+      ...expectedFrame,
+      originM: expectedFrame.originM.map((value, axis) => axis === normalAxis ? evidence.resolvedCoordinateM : value),
+    };
+    const matchedFrame = assertPlanarFrameMatchesAirbox(meta, layerFrame);
+    if (meta.quantity_id !== "H_demag" || meta.component !== "magnitude" || !meta.sample_token) {
+      throw new Error("Airbox layer metadata does not describe the H_demag magnitude sample");
+    }
+    const layerState = await readPlanarAirboxJson(
+      page, "/v2/sessions/current/visualization/state", "Airbox layer state",
+    );
+    const requestedLayers = (layerState?.planar?.field_overlays ?? [])
+      .filter((layer) => layer.visible !== false && (layer.raster_visible || layer.vectors_visible))
       .map((layer) => ({
         id: layer.id,
         quantity_id: layer.quantity_id,
         raster_visible: layer.raster_visible,
         vectors_visible: layer.vectors_visible,
       }));
+    if (!requestedLayers.some((layer) => layer.id === "airbox" && layer.quantity_id === "H_demag")) {
+      throw new Error("Visualization state has no visible Airbox H_demag field layer");
+    }
     let composition = null;
-    if (requestedLayers.length) {
+    {
       const handle = await page.waitForFunction((expected) => {
         const buffers = document.querySelector("[data-planar-composition-state]");
         if (!buffers || !["verified", "unverified"].includes(buffers.getAttribute("data-planar-composition-state"))) return null;
@@ -954,6 +970,12 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       }, requestedLayers, { timeout });
       composition = await handle.jsonValue();
     }
+    const airboxSurface = composition?.layers?.find((layer) => layer.id === "airbox")
+      ?.surfaces?.find((surface) => surface.kind === "raster");
+    if (!airboxSurface || airboxSurface.sample_identity !== meta.etag) {
+      throw new Error("Airbox layer raster is not bound to the Airbox layer metadata identity");
+    }
+    const canvas = await assertPlanarLayerRasterCanvas(page, "airbox");
     const screenshot = await capturePlanarFieldMapScreenshot(page);
     const exportProof = await exportVisiblePlanarComposition(page, {
       expectedFrame,
@@ -968,6 +990,8 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       source_id: "default",
       scope_kind: "airbox",
       scope_id: null,
+      layer_id: "airbox",
+      layer_added: originalAirboxLayer === null,
       session_before: sessionBefore,
       session_after: null,
       meta_request: {
@@ -994,7 +1018,7 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
           cell_size_m: airbox.cell_size_m,
         },
       },
-      expected_frame: expectedFrame,
+      expected_frame: layerFrame,
       matched_frame: matchedFrame,
       canvas,
       composition,
@@ -1007,25 +1031,24 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       presentation_restored: false,
     };
   } finally {
-    const currentScopeLabel = (await scope.innerText().catch(() => "")).trim();
-    if (currentScopeLabel !== originalScopeLabel) {
-      await selectToolbarOption(page, scope, originalScopeLabel, "Original scope restoration");
-    }
-    const restoredScopeState = await readPlanarAirboxJson(
-      page, "/v2/sessions/current/visualization/state", "Restored planar scope",
-    );
-    if (!sameCanonicalJsonValue(restoredScopeState?.planar?.view_scope, planar.view_scope)) {
-      throw new Error("Planar Airbox QA could not restore the original scope before restoring quantity");
-    }
-    const currentQuantityLabel = (await quantity.innerText().catch(() => "")).trim();
-    if (currentQuantityLabel !== originalQuantityLabel) {
-      await selectToolbarOption(page, quantity, originalQuantityLabel, "Original quantity restoration");
+    if (!originalAirboxLayer) {
+      if (await airboxRow.count() === 1) {
+        await withDisplayStatePatch(
+          page, () => airboxRow.getByRole("button", { name: /^Remove / }).click(), "Airbox layer removal",
+        );
+      }
+    } else if (await airboxRow.count() === 1) {
+      const editor = await selectAirboxLayer();
+      await setSelect(editor.quantity, originalAirboxLayer.quantity_id, "Original Airbox quantity restoration");
+      await setSelect(editor.component, String(originalAirboxLayer.component), "Original Airbox component restoration");
+      await setPressed(airboxRow.getByRole("button", { name: /^Raster for / }), Boolean(originalAirboxLayer.raster_visible), "Original Airbox raster restoration");
+      await setPressed(airboxRow.getByRole("button", { name: /^(Show|Hide) / }), originalAirboxLayer.visible !== false, "Original Airbox visibility restoration");
     }
     const restoredState = await readPlanarAirboxJson(
       page, "/v2/sessions/current/visualization/state", "Restored visualization state",
     );
     presentationRestored = sameCanonicalJsonValue(planar, restoredState?.planar);
-    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original default-source presentation");
+    if (!presentationRestored) throw new Error("Planar Airbox QA could not restore the original field layers");
     if (!originalViewWas2d) {
       await page.getByRole("tab", { name: "3D Viewport", exact: true }).click();
     }

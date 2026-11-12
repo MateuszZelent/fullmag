@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PlanarFieldMetaResource } from "@/kernel/api/apiTypes";
 import { buildFieldMapRenderModel } from "./fieldMapRenderModel";
-import { alignPlanarFieldFrames, placePlanarOverlay, planarMetaFrame, planarPhysicalPosition } from "./planarFieldComposition";
+import {
+  alignPlanarFieldFrames, isPlanarWindowMissError, overlayPlanarWindow, placePlanarOverlay, planarMetaFrame, planarPhysicalPosition,
+} from "./planarFieldComposition";
 import { planarScopeQuery } from "./fieldMapDataPlan";
 import { createPlanarCompositionFrameStore } from "./planarCompositionFrame";
 
@@ -125,5 +127,57 @@ describe("placePlanarOverlay sample points", () => {
     const placed = placePlanarOverlay(model as never, base as never, [1, -0.5]);
     expect(placed.samplePoints).toEqual([{ index: 0, u: 1.25, v: 0.25 }]);
     expect(placed.bounds).toEqual([1, 2, -0.5, 0.5]);
+  });
+});
+
+describe("crop window of a field layer", () => {
+  const baseWindow = { window_u_min_m: "-1e-8", window_u_max_m: "2e-8", window_v_min_m: "0", window_v_max_m: "1e-8" };
+
+  it("keeps the base window strings when the layer shares the base frame origin", () => {
+    expect(overlayPlanarWindow(baseWindow, [0, 0])).toEqual(baseWindow);
+  });
+
+  it("shifts the window into the layer's own frame so placement maps it back onto the crop", () => {
+    const shift = [1e-8, -2.5e-9] as const;
+    const window = overlayPlanarWindow(baseWindow, shift);
+    expect(Number(window.window_u_min_m)).toBeCloseTo(-2e-8, 18);
+    expect(Number(window.window_u_max_m)).toBeCloseTo(1e-8, 18);
+    expect(Number(window.window_v_min_m)).toBeCloseTo(2.5e-9, 18);
+    expect(Number(window.window_v_max_m)).toBeCloseTo(1.25e-8, 18);
+    // placePlanarOverlay adds the shift back: the layer covers exactly the crop.
+    expect(Number(window.window_u_min_m) + shift[0]).toBeCloseTo(-1e-8, 18);
+    expect(Number(window.window_v_max_m) + shift[1]).toBeCloseTo(1e-8, 18);
+  });
+
+  it("sends no window without a complete base window", () => {
+    expect(overlayPlanarWindow({}, [1, 1])).toEqual({});
+    expect(overlayPlanarWindow({ window_u_min_m: "0" }, [0, 0])).toEqual({});
+  });
+
+  it("treats only a window that misses the frame as an empty layer", () => {
+    expect(isPlanarWindowMissError(new Error("invalid_planar_window: window does not intersect the frame"))).toBe(true);
+    expect(isPlanarWindowMissError(new Error("invalid_planar_window: window bounds must be finite with min < max"))).toBe(false);
+    expect(isPlanarWindowMissError(new Error("Field quantity is not available"))).toBe(false);
+    expect(isPlanarWindowMissError(null)).toBe(false);
+  });
+
+  it("composes an empty layer as absent instead of holding the frame back", () => {
+    const store = createPlanarCompositionFrameStore();
+    store.configure("crop", frame("H_demag"), ["film", "airbox"], false);
+    store.accept("crop", "film", frame("m"));
+    expect(store.getSnapshot().frame).toBeNull();
+    store.acceptEmpty("crop", "airbox");
+    expect(store.getSnapshot()).toMatchObject({ pending: false, reason: null });
+    expect(store.getSnapshot().frame?.overlays.map((layer) => layer.id)).toEqual(["film"]);
+    // A later sample for the same layer replaces the empty state.
+    store.accept("crop", "airbox", frame("m"));
+    expect(store.getSnapshot().frame?.overlays.map((layer) => layer.id)).toEqual(["film", "airbox"]);
+  });
+
+  it("ignores an empty answer from another view", () => {
+    const store = createPlanarCompositionFrameStore();
+    store.configure("crop", frame("H_demag"), ["airbox"], false);
+    store.acceptEmpty("old-view", "airbox");
+    expect(store.getSnapshot().frame).toBeNull();
   });
 });

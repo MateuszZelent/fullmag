@@ -8,6 +8,11 @@ import type {
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
 
+type PlanarWindowQuery = Pick<
+  PlanarFieldQuery,
+  "window_u_min_m" | "window_u_max_m" | "window_v_min_m" | "window_v_max_m"
+>;
+
 type PlanarMeshInput = {
   layers: { mesh?: boolean };
   layer_model?: "legacy" | "layers" | null;
@@ -85,7 +90,7 @@ export interface FieldMapDataPlanInput {
    */
   layerModel?: "legacy" | "layers" | null;
   /** Crop window parameters (`planarWindowParams`); every request carries them. */
-  window?: Readonly<Record<string, string>>;
+  cropWindow?: PlanarWindowQuery;
 }
 
 export interface FieldMapDataPlan {
@@ -140,7 +145,7 @@ export function buildFieldMapDataPlan(
       snapshot_id: input.snapshotId ?? undefined,
       stage_id: input.stageId ?? undefined,
       vector_budget: baseField && needsVectors ? input.vectorBudget : 0,
-      ...input.window,
+      ...input.cropWindow,
     },
     requestMask: baseField,
     requestMesh: enabled && input.includeMesh,

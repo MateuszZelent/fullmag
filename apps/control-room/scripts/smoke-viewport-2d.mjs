@@ -4,6 +4,21 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
+import {
+  REMOVED_CANVAS_CONTROL_LABELS,
+  assertCroppedPlanarMeta,
+  assertFullFramePlanarMeta,
+  assertLayerFlagsUnchanged,
+  assertLayerMoved,
+  assertLegendCardCount,
+  assertMigratedLayers,
+  assertNodeReadoutHeading,
+  assertPlanarToolbarSnapshot,
+  assertTicksWithinRange,
+  countPositionCommits,
+  drawnFieldLayers,
+  frameIntervalWorldRange,
+} from "./lib/planar-toolbar-smoke.mjs";
 
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3194/workspace";
@@ -364,6 +379,16 @@ async function runDefaultSliceSmoke(playwright) {
       errors.push(`Planar meta inspection failed: ${String(error)}`);
     }
   });
+  const displayPatches = [];
+  page.on("request", (request) => {
+    if (request.method() !== "PATCH") return;
+    if (new URL(request.url()).pathname !== "/v2/sessions/current/visualization/state") return;
+    try {
+      displayPatches.push(request.postDataJSON());
+    } catch (error) {
+      errors.push(`Display PATCH inspection failed: ${String(error)}`);
+    }
+  });
   await installPlanarWorkerAudit(page, apiBase);
 
   try {
@@ -400,6 +425,11 @@ async function runDefaultSliceSmoke(playwright) {
         "default-source.png",
       ),
     };
+    const toolbarCases = await runToolbarLayerScenarios(
+      page,
+      observedPlanarMeta,
+      displayPatches,
+    );
 
     const defaultCases = [];
     for (const [plane, positionFraction] of [
@@ -546,6 +576,7 @@ async function runDefaultSliceSmoke(playwright) {
         status.runtime_bundle_version;
     const qualificationCases = [
       ...defaultCases,
+      ...toolbarCases,
       {
         case_id: "default-vs-monitor",
         identities_distinct: monitorEvidence.sourceKind === "monitor",
@@ -617,6 +648,422 @@ async function runDefaultSliceSmoke(playwright) {
   } finally {
     await browser.close();
   }
+}
+
+// --- 2D toolbar, crop, node inspector and field-layer scenarios -----------
+// Plan 2026-11-12 Task 12 Step 1. Each case asserts data-planar-* evidence or
+// visualization state plus the DOM, and restores the presentation it changed.
+
+const VISUALIZATION_STATE_PATH = "/v2/sessions/current/visualization/state";
+
+async function readPlanarState() {
+  return (await getJson(VISUALIZATION_STATE_PATH)).planar;
+}
+
+async function waitForPlanarState(predicate, label) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readPlanarState();
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${label}: visualization state did not settle: ${JSON.stringify(last)?.slice(0, 400)}`);
+}
+
+async function readPlanarBaseEvidence(page) {
+  const raw = await page
+    .locator("[aria-label='Planar field evidence']")
+    .first()
+    .getAttribute("data-planar-evidence");
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function waitForPlanarBaseEvidence(page, predicate, label) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await readPlanarBaseEvidence(page).catch(() => null);
+    if (last && predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${label}: planar evidence did not settle: ${JSON.stringify(last)?.slice(0, 400)}`);
+}
+
+async function waitForObservedMetaByToken(observedPlanarMeta, sampleToken, label) {
+  const deadline = Date.now() + Math.min(timeoutMs, 10_000);
+  while (Date.now() < deadline) {
+    const match = [...observedPlanarMeta].reverse().find((entry) => entry.payload?.sample_token === sampleToken);
+    if (match) return match.payload;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`${label}: no observed planar metadata has sample token ${sampleToken}`);
+}
+
+/** Screen box of the 2D plot (the tool overlay covers it exactly). */
+async function planarPlotBox(page) {
+  const overlay = page.locator("[data-planar-tool-overlay]").first();
+  await overlay.waitFor({ state: "attached", timeout: timeoutMs });
+  const box = await overlay.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) throw new Error("2D plot has no measurable box");
+  return box;
+}
+
+async function dragInPlot(page, box, from, to) {
+  await page.mouse.move(box.x + box.width * from[0], box.y + box.height * from[1]);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    const t = step / 8;
+    await page.mouse.move(
+      box.x + box.width * (from[0] + (to[0] - from[0]) * t),
+      box.y + box.height * (from[1] + (to[1] - from[1]) * t),
+    );
+  }
+  await page.mouse.up();
+}
+
+async function selectPlanarTool(page, name) {
+  const tool = page
+    .getByRole("toolbar", { name: "2D view tools", exact: true })
+    .getByRole("radio", { name, exact: true });
+  await tool.click();
+  await page.waitForFunction(
+    (label) => [...document.querySelectorAll("[role='radio']")]
+      .some((node) => node.getAttribute("aria-label") === label && node.getAttribute("aria-checked") === "true"),
+    name,
+    { timeout: timeoutMs },
+  );
+}
+
+async function withPlanarPatch(page, action, label) {
+  const acknowledgement = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "PATCH" && url.pathname === VISUALIZATION_STATE_PATH;
+  }, { timeout: timeoutMs });
+  await action();
+  const response = await acknowledgement;
+  if (response.status() < 200 || response.status() >= 300) {
+    throw new Error(`${label}: display-state PATCH returned ${response.status()}`);
+  }
+}
+
+function toolbarCase(caseId, details, passed) {
+  return { case_id: caseId, passed, required: true, status: passed ? "passed" : "blocked", ...details };
+}
+
+/** Scenario 1: six tools, no Quantity/Scope/Free section above the canvas. */
+async function toolbarShapeCase(page) {
+  const toolbar = page.getByRole("toolbar", { name: "2D view tools", exact: true });
+  await toolbar.waitFor({ state: "visible", timeout: timeoutMs });
+  const snapshot = await page.evaluate((removed) => {
+    const group = document.querySelector("[role='toolbar'][aria-label='2D view tools'] [role='radiogroup'][aria-label='Canvas tool']");
+    const radios = group ? [...group.querySelectorAll("[role='radio']")] : [];
+    const stage = document.querySelector(".fm-field-map");
+    const labelled = stage ? [...stage.querySelectorAll("label, [aria-label], button, [role='combobox']")] : [];
+    const names = new Set(labelled.flatMap((node) => [node.getAttribute("aria-label") ?? "", node.textContent?.trim() ?? ""]));
+    return {
+      tools: radios.map((node) => node.getAttribute("aria-label")),
+      checked: radios.filter((node) => node.getAttribute("aria-checked") === "true").map((node) => node.getAttribute("aria-label")),
+      removedHits: removed.filter((label) => names.has(label)),
+    };
+  }, [...REMOVED_CANVAS_CONTROL_LABELS]);
+  assertPlanarToolbarSnapshot(snapshot);
+  return toolbarCase("toolbar-six-tools", { snapshot }, true);
+}
+
+/** Scenario 2: box zoom raises planar.interaction.zoom; F fits back to 1. */
+async function zoomBoxCase(page) {
+  await selectPlanarTool(page, "Zoom to box");
+  const box = await planarPlotBox(page);
+  await dragInPlot(page, box, [0.3, 0.3], [0.7, 0.7]);
+  const zoomed = await waitForPlanarState((planar) => (planar?.interaction?.zoom ?? 1) > 1.01, "Zoom to box");
+  const toolAfter = await page
+    .getByRole("radio", { name: "Navigate", exact: true })
+    .getAttribute("aria-checked");
+  await page.keyboard.press("f");
+  const fitted = await waitForPlanarState((planar) => Math.abs((planar?.interaction?.zoom ?? 0) - 1) < 1e-9, "Fit view (F)");
+  await page.screenshot({ fullPage: true, path: path.join(outputDir, "toolbar-zoom-box.png") });
+  const passed = zoomed.interaction.zoom > 1 && fitted.interaction.zoom === 1 && toolAfter === "true";
+  return toolbarCase("toolbar-zoom-box", {
+    fitted_zoom: fitted.interaction.zoom,
+    tool_returned_to_navigate: toolAfter === "true",
+    zoom: zoomed.interaction.zoom,
+  }, passed);
+}
+
+/**
+ * Scenario 3: a committed crop is resampled as its own window: the metadata
+ * bounds equal the crop, the sample token changes and the axis ticks show
+ * the crop range; "Clear crop" in the status bar restores the full frame.
+ */
+async function cropCase(page, observedPlanarMeta) {
+  const before = await waitForPlanarBaseEvidence(page, (evidence) => evidence.status === "ready", "Crop baseline");
+  await selectPlanarTool(page, "Crop");
+  const box = await planarPlotBox(page);
+  await dragInPlot(page, box, [0.25, 0.25], [0.75, 0.75]);
+  const apply = page.getByRole("button", { name: "Apply crop", exact: true });
+  await apply.waitFor({ state: "visible", timeout: timeoutMs });
+  await withPlanarPatch(page, () => apply.click(), "Apply crop");
+  const cropped = await waitForPlanarState((planar) => planar?.crop != null, "Crop commit");
+  const evidence = await waitForPlanarBaseEvidence(
+    page,
+    (candidate) => candidate.status === "ready" && candidate.sampleToken && candidate.sampleToken !== before.sampleToken,
+    "Cropped sample",
+  );
+  const meta = await waitForObservedMetaByToken(observedPlanarMeta, evidence.sampleToken, "Cropped sample");
+  const cropWindow = assertCroppedPlanarMeta(meta, cropped.crop, before.sampleToken);
+  const ticks = await page.evaluate(() => {
+    const read = (prefix) => [...document.querySelectorAll(`[role='group'][aria-label^='${prefix}'] [data-planar-axis-tick]`)]
+      .map((node) => Number(node.getAttribute("data-planar-axis-tick")));
+    return { horizontal: read("Horizontal"), vertical: read("Vertical") };
+  });
+  assertTicksWithinRange(ticks.horizontal, frameIntervalWorldRange(meta.frame, "u", cropWindow[0], cropWindow[1]), "Horizontal");
+  assertTicksWithinRange(ticks.vertical, frameIntervalWorldRange(meta.frame, "v", cropWindow[2], cropWindow[3]), "Vertical");
+  const statusCrop = page.locator("[data-planar-crop]");
+  await statusCrop.waitFor({ state: "visible", timeout: timeoutMs });
+  await page.screenshot({ fullPage: true, path: path.join(outputDir, "toolbar-crop.png") });
+  await withPlanarPatch(page, () => statusCrop.getByRole("button", { name: "Clear crop", exact: true }).click(), "Clear crop");
+  await waitForPlanarState((planar) => planar?.crop == null, "Clear crop");
+  const cleared = await waitForPlanarBaseEvidence(
+    page,
+    (candidate) => candidate.status === "ready" && candidate.sampleToken !== evidence.sampleToken,
+    "Uncropped sample",
+  );
+  const fullMeta = await waitForObservedMetaByToken(observedPlanarMeta, cleared.sampleToken, "Uncropped sample");
+  assertFullFramePlanarMeta(fullMeta);
+  return toolbarCase("toolbar-crop-window", {
+    crop: cropped.crop,
+    cropped_bounds_uv_m: meta.frame.bounds_uv_m,
+    cropped_sample_token: evidence.sampleToken,
+    full_bounds_uv_m: meta.frame.full_bounds_uv_m,
+    restored_bounds_uv_m: fullMeta.frame.bounds_uv_m,
+    ticks,
+    uncropped_sample_token: before.sampleToken,
+  }, (await statusCrop.count()) === 0);
+}
+
+/** Scenario 4: hovering in Inspect node names the FEM node or FDM cell. */
+async function nodeInspectCase(page) {
+  await selectPlanarTool(page, "Inspect node");
+  const box = await planarPlotBox(page);
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  const heading = page
+    .locator("[data-planar-node-readout='hover'] tbody[data-planar-node-status='ok'] .fm-planar-node-readout__heading")
+    .first();
+  await heading.waitFor({ state: "visible", timeout: timeoutMs });
+  const text = (await heading.innerText()).trim();
+  assertNodeReadoutHeading(text, backend);
+  const rings = await page.locator("[data-planar-node-ring]").count();
+  await page.screenshot({ fullPage: true, path: path.join(outputDir, `toolbar-inspect-${backend}.png`) });
+  await selectPlanarTool(page, "Navigate");
+  return toolbarCase(`toolbar-inspect-node-${backend}`, {
+    entity: backend === "fem" ? "fem_node" : "fdm_cell_center",
+    heading: text,
+    ring_count: rings,
+  }, rings > 0);
+}
+
+async function legendCardCount(page) {
+  return page.locator("[role='group'][aria-label='Field layer legends'] > *").count();
+}
+
+/**
+ * Scenario 5: add an object layer (and the Airbox when the domain has one),
+ * hide one, reorder with Alt+Up; the legend shows one card per visible layer.
+ */
+async function fieldLayerListCase(page) {
+  const original = await readPlanarState();
+  const list = page.locator("[data-slot='planar-field-layer-list']");
+  await list.waitFor({ state: "visible", timeout: timeoutMs });
+  const addFor = async (pattern) => {
+    await list.getByRole("button", { name: "Add field", exact: true }).click();
+    const menu = list.getByRole("menu", { name: "Add field for" });
+    const item = menu.getByRole("menuitem").filter({ hasText: pattern }).first();
+    if (await menu.count() === 0 || await item.count() === 0) {
+      await page.keyboard.press("Escape");
+      return false;
+    }
+    await withPlanarPatch(page, () => item.click(), `Add field for ${pattern}`);
+    return true;
+  };
+  const beforeIds = (original.field_overlays ?? []).map((layer) => layer.id);
+  try {
+    // Objects are the menu items that are neither "All objects" nor the Airbox.
+    const objectAdded = await addFor(/^(?!All objects$)(?!.*airbox).+$/i);
+    if (!objectAdded) throw new Error("The Add field menu offered no object target");
+    const airboxAdded = await addFor(/airbox/i);
+    const added = await readPlanarState();
+    const objectLayer = added.field_overlays.find((layer) => !beforeIds.includes(layer.id) && layer.id.startsWith("object:"));
+    if (!objectLayer) throw new Error("Adding an object field layer did not create an object:<id> layer");
+    const objectRow = list.locator(`li[data-layer-id="${objectLayer.id}"]`);
+    await withPlanarPatch(page, () => objectRow.getByRole("button", { name: /^Hide / }).click(), "Hide object layer");
+    const hidden = await waitForPlanarState(
+      (planar) => planar.field_overlays.find((layer) => layer.id === objectLayer.id)?.visible === false,
+      "Hide object layer",
+    );
+    const orderBefore = hidden.field_overlays.map((layer) => layer.id);
+    const lastId = orderBefore.at(-1);
+    const lastRow = list.locator(`li[data-layer-id="${lastId}"]`);
+    await lastRow.getByRole("button", { name: /^Edit / }).focus();
+    await withPlanarPatch(page, () => page.keyboard.press("Alt+ArrowUp"), "Reorder layer");
+    const reordered = await waitForPlanarState(
+      (planar) => planar.field_overlays.map((layer) => layer.id).join() !== orderBefore.join(),
+      "Reorder layer",
+    );
+    assertLayerMoved(orderBefore, reordered.field_overlays.map((layer) => layer.id), lastId, orderBefore.length - 2);
+    const expectedCards = reordered.viewport_colorbar_visible === false ? 0 : drawnFieldLayers(reordered).length;
+    await page.waitForFunction(
+      (count) => document.querySelectorAll("[role='group'][aria-label='Field layer legends'] > *").length === count,
+      expectedCards,
+      { timeout: timeoutMs },
+    );
+    const cards = await legendCardCount(page);
+    assertLegendCardCount(reordered, cards);
+    await page.screenshot({ fullPage: true, path: path.join(outputDir, "toolbar-field-layers.png") });
+    return toolbarCase("toolbar-field-layer-list", {
+      airbox_added: airboxAdded,
+      legend_cards: cards,
+      order_after: reordered.field_overlays.map((layer) => layer.id),
+      order_before: orderBefore,
+    }, true);
+  } finally {
+    await patchJson(VISUALIZATION_STATE_PATH, { planar: { field_overlays: original.field_overlays ?? [] } });
+  }
+}
+
+/** Scenario 6: the toolbar vector mask hides every layer's vectors, flags untouched. */
+async function vectorMaskCase(page) {
+  const original = await readPlanarState();
+  const layers = original.field_overlays ?? [];
+  if (layers.length === 0) throw new Error("Vector mask scenario needs at least one field layer");
+  // Give the first layer vectors so the mask has something to hide.
+  const seeded = layers.map((layer, index) => (index === 0 ? { ...layer, visible: true, vectors_visible: true } : layer));
+  try {
+    await patchJson(VISUALIZATION_STATE_PATH, {
+      planar: { field_overlays: seeded, layers: { ...original.layers, vectors: true } },
+    });
+    const before = await waitForPlanarState((planar) => planar.layers.vectors === true, "Vector mask on");
+    const toggle = page
+      .getByRole("toolbar", { name: "2D view tools", exact: true })
+      .getByRole("button", { name: "Vectors", exact: true });
+    await withPlanarPatch(page, () => toggle.click(), "Vector mask off");
+    const after = await waitForPlanarState((planar) => planar.layers.vectors === false, "Vector mask off");
+    assertLayerFlagsUnchanged(before.field_overlays, after.field_overlays);
+    const pressed = await toggle.getAttribute("aria-pressed");
+    await page.waitForFunction(() => {
+      const slot = document.querySelector("[data-planar-composition-slot][aria-hidden='false']");
+      if (!slot) return false;
+      return [...slot.querySelectorAll("canvas[data-planar-overlay-layer='vectors']")].every((node) => {
+        const evidence = JSON.parse(node.getAttribute("data-planar-overlay-rendered-evidence") ?? "null");
+        return evidence !== null && (evidence.glyphCount ?? 0) === 0;
+      });
+    }, null, { timeout: timeoutMs });
+    return toolbarCase("toolbar-vector-mask", {
+      layer_flags_unchanged: true,
+      toggle_pressed_after: pressed,
+    }, pressed === "false");
+  } finally {
+    await patchJson(VISUALIZATION_STATE_PATH, {
+      planar: { field_overlays: layers, layers: original.layers },
+    });
+  }
+}
+
+/** Scenario 7: dragging the status-bar slider commits one position on release. */
+async function sectionSliderCase(page, displayPatches) {
+  const original = await readPlanarState();
+  const slider = page
+    .getByRole("group", { name: "2D view status", exact: true })
+    .getByRole("slider", { name: /^(Position|Layer) along / });
+  await slider.waitFor({ state: "visible", timeout: timeoutMs });
+  const thumb = await slider.boundingBox();
+  const track = await slider.locator("xpath=ancestor::*[contains(@class,'fm-planar-statusbar__slider')][1]").boundingBox();
+  if (!thumb || !track) throw new Error("Section slider has no measurable box");
+  const startCommits = countPositionCommits(displayPatches);
+  await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+  await page.mouse.down();
+  const targetX = Math.min(track.x + track.width - 2, thumb.x + thumb.width / 2 + track.width * 0.3);
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(thumb.x + thumb.width / 2 + (targetX - thumb.x - thumb.width / 2) * (step / 10), thumb.y + thumb.height / 2);
+  }
+  const duringDrag = countPositionCommits(displayPatches) - startCommits;
+  await page.mouse.up();
+  const moved = await waitForPlanarState(
+    (planar) => planar.default_slice?.position_fraction !== original.default_slice?.position_fraction,
+    "Section slider commit",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const commits = countPositionCommits(displayPatches) - startCommits;
+  await setDefaultSliceViaApi("xy", 0.5, "plane_sample");
+  return toolbarCase("toolbar-section-slider", {
+    commits_after_release: commits,
+    commits_during_drag: duringDrag,
+    position_fraction: moved.default_slice.position_fraction,
+  }, duringDrag === 0 && commits === 1);
+}
+
+/**
+ * Scenario 8 (Review Focus 1): a session saved before field layers opens with
+ * the same image. Runs when CONTROL_ROOM_PLANAR_LEGACY_FIXTURE names the JSON
+ * `{ "planar": <legacy planar state> }` of the session this group restored.
+ */
+async function legacySessionCase(page) {
+  const fixturePath = process.env.CONTROL_ROOM_PLANAR_LEGACY_FIXTURE;
+  if (!fixturePath) {
+    return {
+      case_id: "toolbar-legacy-session-image",
+      passed: false,
+      reason: "CONTROL_ROOM_PLANAR_LEGACY_FIXTURE is not set; no legacy session was restored",
+      required: true,
+      status: "not_run",
+    };
+  }
+  const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8"));
+  const restored = await readPlanarState();
+  const expectedIds = assertMigratedLayers(fixture.planar, restored);
+  const drawnIds = drawnFieldLayers(restored).map((layer) => layer.id);
+  await page.waitForFunction((ids) => {
+    const slot = document.querySelector("[data-planar-composition-slot][aria-hidden='false']");
+    if (!slot) return false;
+    const rendered = new Set([...slot.querySelectorAll("canvas[data-planar-overlay-id]")]
+      .filter((node) => node.getAttribute("data-planar-overlay-rendered-current") === "true")
+      .map((node) => node.getAttribute("data-planar-overlay-id")));
+    return ids.every((id) => rendered.has(id)) && rendered.size === ids.length;
+  }, drawnIds, { timeout: timeoutMs });
+  await page.screenshot({ fullPage: true, path: path.join(outputDir, "toolbar-legacy-session.png") });
+  return toolbarCase("toolbar-legacy-session-image", {
+    drawn_layer_ids: drawnIds,
+    migrated_layer_ids: expectedIds,
+  }, true);
+}
+
+async function runToolbarLayerScenarios(page, observedPlanarMeta, displayPatches) {
+  const scenarios = [
+    ["toolbar-legacy-session-image", () => legacySessionCase(page)],
+    ["toolbar-six-tools", () => toolbarShapeCase(page)],
+    ["toolbar-zoom-box", () => zoomBoxCase(page)],
+    ["toolbar-crop-window", () => cropCase(page, observedPlanarMeta)],
+    [`toolbar-inspect-node-${backend}`, () => nodeInspectCase(page)],
+    ["toolbar-field-layer-list", () => fieldLayerListCase(page)],
+    ["toolbar-vector-mask", () => vectorMaskCase(page)],
+    ["toolbar-section-slider", () => sectionSliderCase(page, displayPatches)],
+  ];
+  const cases = [];
+  for (const [caseId, run] of scenarios) {
+    try {
+      cases.push(await run());
+    } catch (error) {
+      cases.push({
+        case_id: caseId,
+        error: error instanceof Error ? error.message : String(error),
+        passed: false,
+        required: true,
+        status: "blocked",
+      });
+      await page.screenshot({ fullPage: true, path: path.join(outputDir, `${caseId}-failure.png`) }).catch(() => {});
+    }
+  }
+  return cases;
 }
 
 async function installPlanarWorkerAudit(page, baseUrl) {

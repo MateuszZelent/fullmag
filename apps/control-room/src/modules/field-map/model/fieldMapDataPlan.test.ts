@@ -103,7 +103,7 @@ describe("field-map data plan", () => {
       window_v_min_m: "0",
       window_v_max_m: "1e-8",
     };
-    const plan = buildFieldMapDataPlan({ ...layerInput, window });
+    const plan = buildFieldMapDataPlan({ ...layerInput, cropWindow: window });
     expect(plan.query).toMatchObject(window);
     expect(buildFieldMapProbeQuery(plan.query, 1e-9, 2e-9)).toMatchObject({ ...window, u_m: 1e-9, v_m: 2e-9 });
     expect(buildFieldMapProfileQuery(plan.query, { u0: 0, u1: 1e-9, v0: 0, v1: 0 }, 8))

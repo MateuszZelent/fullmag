@@ -99,6 +99,43 @@ vitest napisane, nieuruchomione (zakaz kompilacji testów).
 | Smoke przeglądarkowy FEM CPU | — | **session smoke PASS** (2026-10-28) | osobna grupa DEV `viewport-2d-fem-smoke-20261028` (checkout `ce1d587ff`; od gałęzi różni się tylko importami testów runnera, więc runtime jest ten sam), fixture `examples/viewport_2d_fem_mixed_smoke.py` (Prism6 ×3 warstwy + powłoka Pyramid5 + powietrze Tet4, CPU double; ścieżka mieszana przyjmuje 1–3 warstwy, więc fixture ma 3). Playwright 1.62.1 + Chromium 1234 headless: 2D otwiera się, 4 przystanki `fem_node_planes` [−4,5; −1,5; 1,5; 4,5] nm, krok `]` bez placeholdera, składowa `z`, 25 strzałek, WebGL zdrowy po powrocie do 3D, 0 błędów konsoli. Smoke wykrył dwa błędy frontendu (wieczne „loading” dla żądania między płaszczyznami; krok `]` z pozycji między płaszczyznami pomijał płaszczyznę), naprawione i sprawdzone ponownie: 0 → 1,5 → 4,5 → 1,5 → −1,5 → −4,5 nm. Pierwsze wejście na nową płaszczyznę (budowa operatora) do ~3,8 s pod SwiftShader; budżety D2D-12 niezmierzone. Grupa zadania nadal zablokowana: aktywacja `7a668d411d4a4ec9ae7e1aa8854149c1` `outcome-unknown-resources-retained` (HTTP 409) oraz odmowa podłączenia runtime po restarcie bez launchera |
 | Smoke przeglądarkowy FEM GPU, FDM GPU | — | NOT VERIFIED | FDM GPU zweryfikowane osobno (2026-10-28); FEM GPU **BLOCKED** — 2026-10-30 na `aee17a54d` run `fem_relax_gpu_smoke.py` kończy się SIGSEGV accepted workera w natywnym `fem_native_gpu` po `initial_pending_drain` (0 kroków), więc nie ma pola z toru GPU do pokazania w 2D |
 
+## Pasek ikon, narzędzia, kadr, inspektor węzła i lista warstw (2026-11-12)
+
+Plan `docs/superpowers/plans/2026-11-12-viewport-2d-toolbar-layers-crop-node-inspect.md`,
+ADR 0080, nota 0970 (`eq-planar-sampling-window`, `eq-planar-nearest-node`),
+gałąź `codex/viewport-2d-toolbar-20261112`. Pasek kontrolek nad mapą i pasek
+sekcji z wierszy F1 (`PlanarSectionStrip`, kontrolki Quantity/Scope nad płótnem)
+zostały zastąpione przez pasek ikon „2D view tools”, pasek stanu i inspektor 2D;
+tamte wiersze opisują już tylko stan historyczny.
+
+Stan dowodów dla całej sekcji:
+
+- **Implementacja: IMPLEMENTED** (frontend i backend w worktree; Vitest,
+  `tsc --noEmit` i ESLint frontendu uruchomione lokalnie).
+- **Weryfikacja przeglądarkowa: NOT VERIFIED.** Grupa Docker DEV worktree nie
+  wystartowała: dysk hosta C: poniżej progu 32 GiB wolnego miejsca wymaganego
+  przez launcher. Scenariusze są gotowe w `apps/control-room/scripts/smoke-viewport-2d.mjs`
+  (przypadki `toolbar-*`, pomocnicze sprawdzenia w `scripts/lib/planar-toolbar-smoke.mjs`,
+  testy `node --test`) i `scripts/smoke-inspector.mjs`
+  (`qualifyPlanarLayerListStability`), ale nie zostały uruchomione.
+- **Testy jednostkowe Rust (Zadania 2–4): NOT RUN** — zakaz kompilacji testów
+  jednostkowych.
+- Pomiary wydajności z Zadania 12 Krok 4 (czas od zatwierdzenia kadru do
+  pierwszej klatki, liczba zapytań przy 1, 4 i 16 warstwach): **nie zmierzone**.
+
+| Element | FDM CPU | FEM CPU/GPU | Dowód |
+|---|---|---|---|
+| Pasek ikon „2D view tools”: sześć narzędzi (Navigate, Zoom to box, Crop, Inspect node, Line profile, Measure), nawigacja, maski widoku, eksport; jeden rejestr komend z wstążką i skrótami `H B C I P R F` | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarToolbar`, `fieldMapToolCommands`, `planarToolStore`, `ribbonStructure`; browser NOT VERIFIED (`toolbar-six-tools`) |
+| Pasek stanu: płaszczyzna, suwak pozycji zatwierdzany raz po puszczeniu, kursor, zoom, znacznik kadru | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarStatusBar`; browser NOT VERIFIED (`toolbar-section-slider`) |
+| Zoom ramką i linijka (próg 4 px ekranu) | IMPLEMENTED | IMPLEMENTED | Vitest `planarToolGeometry`, `PlanarToolOverlay`; browser NOT VERIFIED (`toolbar-zoom-box`) |
+| Kadr z ponownym próbkowaniem: `planar.crop`, okno `window_*` w zapytaniach meta/scalar/vectors/mask/mesh/probe/profile/PNG/CSV, `full_bounds_uv_m`, okno w tożsamości próbki i kanonicznym kluczu zasobu, czyszczenie kadru przy zmianie płaszczyzny lub źródła | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldResources`, `fieldMapDataPlan`, `planarCropPatch`, `VisualizationRegistrySyncController`; testy Rust `resolve_planar_window` NOT RUN; browser NOT VERIFIED (`toolbar-crop-window`) |
+| Warstwy pola w kadrze próbkowane w rozdzielczości kadru, w ramce własnej warstwy; warstwa bez przecięcia z kadrem (`invalid_planar_window … does not intersect`) rysowana jako pusta, bez komunikatu błędu | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarCompositionSurface.window`, `planarFieldComposition`; browser NOT VERIFIED |
+| Inspektor węzła (`/probe?nearest=node`): FEM — najbliższy węzeł elementu zawierającego punkt, FDM — środek komórki; debounce 80 ms, przerywanie starych żądań, najwyżej 4 warstwy, przypięcie | IMPLEMENTED | IMPLEMENTED | Vitest `usePlanarNodeProbes`, `PlanarNodeReadout`; testy Rust `nearest_node` NOT RUN; browser NOT VERIFIED (`toolbar-inspect-node-fem`, `toolbar-inspect-node-fdm`) |
+| Lista warstw pola w inspektorze (model `layers`, najwyżej 16 warstw, Obiekt/Airbox/Wszystkie obiekty, oko, przebiegi, kolejność przeciąganiem i `Alt+↑/↓`), edytor wybranej warstwy (wielkość, składowa, styl), reguła „maska widoku AND flaga warstwy”, legenda — jedna karta na widoczną warstwę | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldLayers`, `PlanarFieldLayerList`, `PlanarTargetFieldSection`, `PlanarVisualizationSection`, `PlanarCompositionSurface`; browser NOT VERIFIED (`toolbar-field-layer-list`, `toolbar-vector-mask`; regresja Obiektu i Airboxa bez remontowania i resetu przewijania w `smoke-inspector.mjs`) |
+| Multislice w modelu `layers`: panele rysują pierwszą widoczną warstwę; legenda w jednostce kanonicznej warstwy z meta panelu | IMPLEMENTED | IMPLEMENTED | Vitest `planarMultislice`, `PlanarCompositionSurface`; browser NOT VERIFIED |
+| Sekcje inspektora „Płaszczyzna przekroju” i „Kadr i widok”; „Fit view” zależny od aktywnego modułu | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarSectionPlaneSection` (obejmuje też `PlanarCropViewSection`), `inspectorFitCommand`; browser NOT VERIFIED |
+| Migracja sesji `legacy → layers` (pole bazowe jako ostatnia warstwa `all`, nakładki z `visible = true`, idempotentna) | IMPLEMENTED | IMPLEMENTED | testy Rust `migrate_planar_layer_model` NOT RUN; browser NOT VERIFIED (`toolbar-legacy-session-image` wymaga fixture `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`, którego jeszcze nie ma) |
+
 ## Status Language
 
 Use these messages consistently:
