@@ -59,6 +59,47 @@ na globalny ledger ani nie tworzymy ukrytego named volume. Jednorazowy helper
 montowania jest narzędziem utrzymania; frontend i backend pozostają dwiema
 usługami aplikacji. Frontend nie otrzymuje ledgeru, GPU ani accepted store.
 
+## Wewnętrzna realizacja Poissona CG na GPU — 2026-11-11
+
+Status kandydata: przygotowane źródła; kompilacja, runtime i kwalifikacja
+naukowa pozostają **NOT VERIFIED** do uzyskania przypiętych dowodów.
+
+Requested `CG/AMG` zachowuje swoją semantykę, tolerancję i limit iteracji.
+Dla kwalifikowanego profilu strict GPU (MPI_COMM_SELF, relax/coarse type 18,
+print level 0) kandydat pozostawia skalary PCG i test zakończenia na GPU.
+Pierwsza partia ma najwyżej pięć iteracji, kolejne najwyżej osiem, każda
+ograniczona pozostałym limitem iteracji. Używa tej samej
+macierzy MFEM i zachowanej hierarchii HYPRE AMG. Po pierwszym osiągnięciu
+kryterium GPU zamraża rozwiązanie; niezależny certyfikat rzeczywistego
+residuum pozostaje obowiązkowy. Pozostałe legalne profile zachowują HYPRE GPU.
+Po terminalnym statusie GPU może pozostać najwyżej siedem dodatkowych
+wywołań API AMG w pozostałej części apply, w tym do dwóch wywołań przed
+pierwszą partią i wywołania już zakolejkowane. To liczba wywołań API HYPRE,
+nie pomiar cykli GPU. Awaria wybranego silnika kończy solve; nie uruchamia
+drugiego solvera.
+
+Właścicielem numeryki pozostaje `backends/fem/gpu/cuda/demag_poisson`.
+Runner wyłącznie odczytuje wersjonowane, addytywne gettery i publikuje
+`resolved_linear_engine`, `device_pcg_physical` oraz `device_pcg_hot_loop`
+w istniejącej provenance Poissona i metadanych demag. Nie zmienia to
+rozmiarów dotychczasowych struktur ABI ani publicznego Python/ProblemIR,
+i nie wprowadza nowej komendy API ani drzewa UI.
+
+Dwa zakresy liczników mają odrębnych właścicieli: physical lifetime w GPU
+performance state, HotLoop w transfer audit z dokładnym warunkiem
+`hot_loop_depth>0`. Liczników physical nie wolno odejmować od agregatu
+HotLoop. Bramki odejmują wyłącznie dokładne odczyty statusu PCG należące do
+tego samego zakresu, po czym egzekwują dotychczasowy budżet pozostałych
+synchronizacji i bajtów. Nowa etykieta silnika nie zwalnia z bramek GPU,
+energii, torque ani residuum. Szczegóły numeryczne i źródła:
+[nota 0532](../physics/0532-fem-demag-solver-policy-and-runtime-threading.md).
+
+Wymagane dowody: managed `fem-demag-poisson` z oracle i testami zakresów,
+regresje getterów/provenance oraz powtarzane SP4 z niezmiennymi wejściami,
+pełnym Zarr i porównaniem wszystkich składowych energii. Wycofanie realizacji
+polega na przywróceniu wyboru HYPRE GPU przy zachowaniu addytywnych odczytów
+provenance i istniejących wyników. Sam ten zapis nie dowodzi wdrożenia.
+
 ## Trwały cache frontendu developerskiego
 
 Rzeczywisty start na Docker Desktop ujawnił koszt operacji metadata na bindzie

@@ -1410,6 +1410,119 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
                         runtime_manifest=manifest,
                     )
 
+    def test_device_scalar_pcg_status_reads_use_a_separate_exact_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cpu = self._write_valid_bundle(root, "cpu")
+            gpu = self._write_valid_bundle(root, "gpu")
+            metadata = json.loads((gpu[2] / "metadata.json").read_text(encoding="utf-8"))
+            execution = metadata["execution_provenance"]
+            execution["hot_loop_host_sync_count"] = 9
+            execution["hot_loop_control_scalar_host_sync_count"] = 9
+            execution["hot_loop_control_scalar_d2h_bytes"] = 264
+            qualification = metadata["fem_gpu_relaxation_qualification"]
+            qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"] = 9
+            metadata["demag_runtime"].update(
+                {
+                    "resolved_linear_engine": "device_scalar_pcg_amg",
+                    "runtime_solver": "DeviceScalarPCG",
+                    "runtime_preconditioner": "HypreBoomerAMG",
+                    "max_iterations": 16,
+                    "device_pcg_hot_loop": {
+                        "status_readbacks": 2,
+                        "status_record_bytes": 104,
+                        "control_d2h_bytes": 208,
+                        "solves": 1,
+                        "active_iterations": 12,
+                    },
+                    "device_pcg_physical": {
+                        "status_readbacks": 40,
+                        "status_record_bytes": 104,
+                        "control_d2h_bytes": 4160,
+                        "solves": 30,
+                        "active_iterations": 400,
+                    },
+                }
+            )
+            (gpu[2] / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+            cpu_summary = validate_runtime_artifacts(
+                cpu[0], cpu[1], cpu[2], device="cpu", runtime_log=cpu[3], runtime_manifest=cpu[4]
+            )
+            gpu_summary = validate_runtime_artifacts(
+                gpu[0], gpu[1], gpu[2], device="gpu", runtime_log=gpu[3], runtime_manifest=gpu[4]
+            )
+            verifier.compare_runtime_summaries(
+                cpu_summary, gpu_summary, cpu_artifacts=cpu[2], gpu_artifacts=gpu[2]
+            )
+
+        telemetry = gpu_summary["gpu_transfer_telemetry"]
+        self.assertEqual(telemetry["resolved_linear_engine"], "device_scalar_pcg_amg")
+        self.assertEqual(telemetry["device_pcg_status_readbacks"], 2)
+        self.assertEqual(telemetry["device_pcg_status_record_bytes"], 104)
+        self.assertEqual(telemetry["device_pcg_control_d2h_bytes"], 208)
+        self.assertEqual(telemetry["unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["unattributed_control_scalar_d2h_bytes"], 56)
+        self.assertEqual(telemetry["allowed_unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["allowed_unattributed_control_scalar_d2h_bytes"], 1792)
+        self.assertEqual(telemetry["allowed_control_scalar_host_sync_count"], 9)
+        self.assertEqual(telemetry["allowed_control_scalar_d2h_bytes"], 2000)
+
+    def test_legacy_hypre_budget_still_rejects_unattributed_overage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, bounded, artifacts, runtime_log, manifest, metadata = (
+                self._write_valid_bundle(root, "gpu")
+            )
+            metadata["execution_provenance"]["hot_loop_host_sync_count"] = 8
+            metadata["execution_provenance"]["hot_loop_control_scalar_host_sync_count"] = 8
+            metadata["execution_provenance"]["hot_loop_control_scalar_d2h_bytes"] = 64
+            metadata["fem_gpu_relaxation_qualification"]["device_policy"][
+                "hot_loop_control_scalar_host_sync_count"
+            ] = 8
+            (artifacts / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+            with self.assertRaisesRegex(ContractError, "bounded PGBB budget"):
+                validate_runtime_artifacts(
+                    source,
+                    bounded,
+                    artifacts,
+                    device="gpu",
+                    runtime_log=runtime_log,
+                    runtime_manifest=manifest,
+                )
+
+    def test_validate_accepts_hypre_pcg_with_null_hot_loop_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gpu = self._write_valid_bundle(root, "gpu")
+            metadata_path = gpu[2] / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["demag_runtime"].update(
+                {
+                    "resolved_linear_engine": "hypre_pcg",
+                    "runtime_solver": "HyprePCG",
+                    "device_pcg_hot_loop": None,
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            summary = validate_runtime_artifacts(
+                gpu[0],
+                gpu[1],
+                gpu[2],
+                device="gpu",
+                runtime_log=gpu[3],
+                runtime_manifest=gpu[4],
+            )
+
+        telemetry = summary["gpu_transfer_telemetry"]
+        self.assertEqual(telemetry["resolved_linear_engine"], "hypre_pcg")
+        self.assertEqual(telemetry["control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["control_scalar_d2h_bytes"], 56)
+        self.assertEqual(telemetry["allowed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["allowed_control_scalar_d2h_bytes"], 1792)
+        self.assertNotIn("device_pcg_status_readbacks", telemetry)
+
     def test_validate_rejects_each_gpu_identity_residency_and_telemetry_violation(self) -> None:
         cases = {
             "device_name": "Different GPU",
@@ -1987,6 +2100,358 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         self.assertIn("git rev-parse --path-format=absolute --git-common-dir", gate_recipe)
         self.assertIn('FULLMAG_PYTHON="$managed_python" just fem-managed-headless cpu', gate_recipe)
         self.assertIn('FULLMAG_PYTHON="$managed_python" just fem-managed-headless gpu', gate_recipe)
+
+
+class DeviceScalarPcgControlAccountingTests(unittest.TestCase):
+    def test_physical_lifetime_cannot_omit_completed_hot_loop_work(self) -> None:
+        runtime = self._runtime()
+        runtime["device_pcg_physical"] = {
+            "status_readbacks": 0, "status_record_bytes": 104,
+            "control_d2h_bytes": 0, "solves": 0, "active_iterations": 0,
+        }
+        with self.assertRaisesRegex(ContractError, "physical"):
+            verifier.validated_gpu_control_scalar_accounting(runtime, 9, 264)
+
+    def test_completed_device_pcg_requires_physical_lifetime_observation(self) -> None:
+        runtime = self._runtime()
+        runtime.pop("device_pcg_physical", None)
+        with self.assertRaisesRegex(ContractError, "physical"):
+            verifier.validated_gpu_control_scalar_accounting(runtime, 9, 264)
+
+    @staticmethod
+    def _runtime(
+        *,
+        solver: str = "DeviceScalarPCG",
+        engine: str = "device_scalar_pcg_amg",
+        hot_loop: dict[str, object] | None = None,
+        max_iterations: int = 16,
+    ) -> dict[str, object]:
+        counters = hot_loop or {
+            "status_readbacks": 2, "status_record_bytes": 104,
+            "control_d2h_bytes": 208, "solves": 1, "active_iterations": 12,
+        }
+        return {
+            "resolved_linear_engine": engine,
+            "runtime_solver": solver,
+            "runtime_preconditioner": "HypreBoomerAMG",
+            "max_iterations": max_iterations,
+            "device_pcg_hot_loop": counters,
+            "device_pcg_physical": dict(counters),
+        }
+
+    def test_legacy_hypre_pcg_keeps_all_control_transfers_in_old_pool(self) -> None:
+        for runtime in (
+            {"runtime_solver": "HyprePCG"},
+            {"resolved_linear_engine": "hypre_pcg", "runtime_solver": "HyprePCG"},
+            {
+                "resolved_linear_engine": "hypre_pcg",
+                "runtime_solver": "HyprePCG",
+                "device_pcg_hot_loop": None,
+            },
+        ):
+            with self.subTest(runtime=runtime):
+                accounting = verifier.validated_gpu_control_scalar_accounting(runtime, 7, 56)
+                self.assertEqual(accounting["engine"], "hypre_pcg")
+                self.assertEqual(
+                    accounting["unattributed_control_scalar_host_sync_count"], 7
+                )
+                self.assertEqual(
+                    accounting["unattributed_control_scalar_d2h_bytes"], 56
+                )
+
+    def test_device_pcg_subtracts_exact_status_readbacks(self) -> None:
+        accounting = verifier.validated_gpu_control_scalar_accounting(
+            self._runtime(), 9, 264
+        )
+        self.assertEqual(accounting["engine"], "device_scalar_pcg_amg")
+        self.assertEqual(accounting["device_pcg_status_readbacks"], 2)
+        self.assertEqual(accounting["device_pcg_control_d2h_bytes"], 208)
+        self.assertEqual(accounting["unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(accounting["unattributed_control_scalar_d2h_bytes"], 56)
+
+    def test_physical_profile_does_not_replace_or_augment_hot_loop_counts(self) -> None:
+        runtime = self._runtime()
+        runtime["device_pcg_physical"] = {
+            "status_readbacks": 80,
+            "status_record_bytes": 104,
+            "control_d2h_bytes": 8320,
+            "solves": 40,
+            "active_iterations": 600,
+        }
+        accounting = verifier.validated_gpu_control_scalar_accounting(runtime, 9, 264)
+        self.assertEqual(accounting["device_pcg_status_readbacks"], 2)
+        self.assertEqual(accounting["device_pcg_control_d2h_bytes"], 208)
+        self.assertEqual(accounting["unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(accounting["unattributed_control_scalar_d2h_bytes"], 56)
+
+    def test_rejects_wrong_engine_missing_counters_and_legacy_contradictions(self) -> None:
+        cases = (
+            ({"resolved_linear_engine": "device_scalar_pcg_amg", "runtime_solver": "HyprePCG"}, "engine"),
+            ({"runtime_solver": "DeviceScalarPCG"}, "engine"),
+            ({"resolved_linear_engine": "hypre_pcg", "runtime_solver": "DeviceScalarPCG"}, "engine"),
+            ({"resolved_linear_engine": "hypre_gmres", "runtime_solver": "HypreGMRES"}, "engine"),
+            ({**self._runtime(), "device_pcg_hot_loop": None}, "device_pcg_hot_loop"),
+            ({
+                "resolved_linear_engine": "device_scalar_pcg_amg",
+                "runtime_solver": "DeviceScalarPCG",
+                "runtime_preconditioner": "HypreBoomerAMG",
+                "max_iterations": 16,
+                "device_pcg_physical": {"status_readbacks": 1},
+            }, "device_pcg_hot_loop"),
+            ({"runtime_solver": "HyprePCG", "device_pcg_hot_loop": {}}, "legacy"),
+        )
+        for runtime, expected in cases:
+            with self.subTest(runtime=runtime):
+                with self.assertRaisesRegex(ContractError, expected):
+                    verifier.validated_gpu_control_scalar_accounting(runtime, 9, 264)
+
+    def test_rejects_non_u64_device_pcg_fields(self) -> None:
+        fields = (
+            "status_readbacks",
+            "status_record_bytes",
+            "control_d2h_bytes",
+            "solves",
+            "active_iterations",
+        )
+        for field in fields:
+            for invalid in (-1, 1.0, True):
+                physical = {
+                    "status_readbacks": 2,
+                    "status_record_bytes": 104,
+                    "control_d2h_bytes": 208,
+                    "solves": 2,
+                    "active_iterations": 12,
+                }
+                physical[field] = invalid
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ContractError, "u64"):
+                        verifier.validated_gpu_control_scalar_accounting(
+                            self._runtime(hot_loop=physical), 9, 264
+                        )
+
+    def test_rejects_malformed_record_bytes_and_status_byte_mismatch(self) -> None:
+        for record_bytes in (0, 7, 264):
+            physical = {
+                "status_readbacks": 2,
+                "status_record_bytes": record_bytes,
+                "control_d2h_bytes": 208,
+                "solves": 2,
+                "active_iterations": 12,
+            }
+            with self.subTest(record_bytes=record_bytes):
+                with self.assertRaisesRegex(ContractError, "record"):
+                    verifier.validated_gpu_control_scalar_accounting(
+                        self._runtime(hot_loop=physical), 9, 264
+                    )
+        physical = {
+            "status_readbacks": 2,
+            "status_record_bytes": 104,
+            "control_d2h_bytes": 200,
+            "solves": 2,
+            "active_iterations": 12,
+        }
+        with self.assertRaisesRegex(ContractError, "status D2H bytes"):
+            verifier.validated_gpu_control_scalar_accounting(
+                self._runtime(hot_loop=physical), 9, 256
+            )
+
+    def test_accepts_first_short_batch_readback_boundaries(self) -> None:
+        for iterations, expected_reads in ((0, 1), (5, 1), (6, 2), (13, 2), (14, 3), (500, 63)):
+            record_bytes = 104
+            counters = {
+                "status_readbacks": expected_reads,
+                "status_record_bytes": record_bytes,
+                "control_d2h_bytes": expected_reads * record_bytes,
+                "solves": 1,
+                "active_iterations": iterations,
+            }
+            with self.subTest(iterations=iterations):
+                accounting = verifier.validated_gpu_control_scalar_accounting(
+                    self._runtime(max_iterations=500, hot_loop=counters),
+                    expected_reads, expected_reads * record_bytes,
+                )
+                self.assertEqual(accounting["device_pcg_status_readbacks"], expected_reads)
+
+    def test_zero_active_iterations_keep_strict_one_readback_per_solve_bound(self) -> None:
+        record_bytes = 104
+        for reads, accepted in ((4, True), (5, False)):
+            counters = {
+                "status_readbacks": reads,
+                "status_record_bytes": record_bytes,
+                "control_d2h_bytes": reads * record_bytes,
+                "solves": 4,
+                "active_iterations": 0,
+            }
+            with self.subTest(reads=reads):
+                if accepted:
+                    accounting = verifier.validated_gpu_control_scalar_accounting(
+                        self._runtime(max_iterations=500, hot_loop=counters),
+                        reads, reads * record_bytes,
+                    )
+                    self.assertEqual(accounting["device_pcg_status_readbacks"], 4)
+                else:
+                    with self.assertRaisesRegex(ContractError, "readback count"):
+                        verifier.validated_gpu_control_scalar_accounting(
+                            self._runtime(max_iterations=500, hot_loop=counters),
+                            reads, reads * record_bytes,
+                        )
+
+    def test_rejects_readback_count_above_new_bound(self) -> None:
+        counters = {
+            "status_readbacks": 3,
+            "status_record_bytes": 104,
+            "control_d2h_bytes": 312,
+            "solves": 1,
+            "active_iterations": 6,
+        }
+        with self.assertRaisesRegex(ContractError, "readback count"):
+            verifier.validated_gpu_control_scalar_accounting(
+                self._runtime(max_iterations=500, hot_loop=counters), 3, 312
+            )
+
+    def test_rejects_readback_overbound_and_aggregate_underflow(self) -> None:
+        overbound = {
+            "status_readbacks": 5,
+            "status_record_bytes": 104,
+            "control_d2h_bytes": 520,
+            "solves": 2,
+            "active_iterations": 12,
+        }
+        with self.assertRaisesRegex(ContractError, "readback count"):
+            verifier.validated_gpu_control_scalar_accounting(
+                self._runtime(hot_loop=overbound), 11, 472
+            )
+        with self.assertRaisesRegex(ContractError, "underflow"):
+            verifier.validated_gpu_control_scalar_accounting(self._runtime(), 1, 264)
+        with self.assertRaisesRegex(ContractError, "underflow"):
+            verifier.validated_gpu_control_scalar_accounting(self._runtime(), 9, 207)
+
+    def test_rejects_impossible_iteration_counts_and_counter_shape(self) -> None:
+        too_many_iterations = {
+            "status_readbacks": 2,
+            "status_record_bytes": 104,
+            "control_d2h_bytes": 208,
+            "solves": 2,
+            "active_iterations": 33,
+        }
+        with self.assertRaisesRegex(ContractError, "max_iterations"):
+            verifier.validated_gpu_control_scalar_accounting(
+                self._runtime(hot_loop=too_many_iterations), 9, 264
+            )
+        for solves, iterations, reads in ((0, 1, 0), (0, 0, 1), (2, 0, 1)):
+            physical = {
+                "status_readbacks": reads,
+                "status_record_bytes": 104,
+                "control_d2h_bytes": reads * 104,
+                "solves": solves,
+                "active_iterations": iterations,
+            }
+            with self.subTest(solves=solves, iterations=iterations, reads=reads):
+                with self.assertRaises(ContractError):
+                    verifier.validated_gpu_control_scalar_accounting(
+                        self._runtime(hot_loop=physical), reads, reads * 104
+                    )
+        with self.assertRaisesRegex(ContractError, "exactly"):
+            verifier.validated_gpu_control_scalar_accounting(
+                self._runtime(hot_loop={
+                    "status_readbacks": 2,
+                    "status_record_bytes": 104,
+                    "control_d2h_bytes": 208,
+                    "solves": 2,
+                    "active_iterations": 12,
+                    "unrecognized": 1,
+                }),
+                9,
+                264,
+            )
+
+
+
+
+class MandatoryControlAttributionTests(unittest.TestCase):
+    def test_physical_lifetime_cannot_be_zero_with_completed_hot_loop_controls(self):
+        controls = self.controls()
+        controls["physical"] = {key: 0 for key in controls["physical"]}
+        with self.assertRaisesRegex(ContractError, "physical"):
+            verifier.validated_gpu_control_scalar_accounting(
+                {"runtime_solver": "HyprePCG"}, 800, 70816,
+                mandatory_controls=controls)
+
+    @staticmethod
+    def controls():
+        hot = {
+            "bb_certificate_record_bytes":96,"bb_certificate_readbacks":92,"bb_certificate_bytes":8832,
+            "bb_descent_readbacks":92,"bb_descent_bytes":736,
+            "poisson_certificate_readbacks":226,"poisson_certificate_bytes":1808,
+            "confirmation_observations":2,"confirmation_metric_readbacks":4,"confirmation_metric_bytes":656,
+        }
+        return {"physical":dict(hot),"hot_loop":hot}
+
+    def test_actual_auto_bb_800_fences_closes_unchanged_budget(self):
+        result=verifier.validated_gpu_control_scalar_accounting(
+            {"runtime_solver":"HyprePCG"},800,70816,mandatory_controls=self.controls())
+        self.assertEqual(result["mandatory_control_readbacks"],414)
+        self.assertEqual(result["mandatory_control_bytes"],12032)
+        self.assertEqual(result["unattributed_control_scalar_host_sync_count"],386)
+        self.assertEqual(result["unattributed_control_scalar_d2h_bytes"],58784)
+        budget=verifier.validated_algorithm_counter_budget("projected_gradient_bb",92,202,18)
+        self.assertEqual(budget["control_sync_budget"],389)
+        self.assertEqual(budget["minimum_rhs_evals"],202)
+        self.assertLessEqual(386,budget["control_sync_budget"])
+        self.assertLessEqual(58784,256*budget["control_sync_budget"])
+
+    def test_actual_bb_plus_device_pcg_status_is_not_double_subtracted(self):
+        runtime={"resolved_linear_engine":"device_scalar_pcg_amg","runtime_solver":"DeviceScalarPCG",
+            "runtime_preconditioner":"HypreBoomerAMG","max_iterations":500,
+            "device_pcg_hot_loop":{"status_readbacks":50,"status_record_bytes":104,
+                "control_d2h_bytes":5200,"solves":10,"active_iterations":400}}
+        runtime["device_pcg_physical"] = dict(runtime["device_pcg_hot_loop"])
+        result=verifier.validated_gpu_control_scalar_accounting(runtime,850,76016,mandatory_controls=self.controls())
+        self.assertEqual(result["unattributed_control_scalar_host_sync_count"],386)
+        self.assertEqual(result["unattributed_control_scalar_d2h_bytes"],58784)
+
+    def test_physical_only_missing_and_malformed_hot_loop_refuse_credit(self):
+        for mutate in (lambda c:c.pop("hot_loop"),lambda c:c.update(hot_loop=None),
+                       lambda c:c.update(physical=None),
+                       lambda c:c["hot_loop"].pop("bb_descent_bytes"),
+                       lambda c:c["hot_loop"].update(confirmation_observations=True)):
+            controls=self.controls();mutate(controls)
+            with self.subTest(controls=controls),self.assertRaises(ContractError):
+                verifier.validated_gpu_control_scalar_accounting({"runtime_solver":"HyprePCG"},800,70816,mandatory_controls=controls)
+
+    def test_bad_record_sizes_bytes_or_overlapping_confirmation_fail(self):
+        for change in ({"bb_certificate_bytes":8833},{"bb_descent_bytes":744},
+                       {"poisson_certificate_bytes":1816},
+                       {"confirmation_metric_readbacks":8,"confirmation_metric_bytes":688},
+                       {"confirmation_metric_bytes":688}):
+            controls=self.controls();controls["hot_loop"].update(change)
+            with self.subTest(change=change),self.assertRaises(ContractError):
+                verifier.validated_gpu_control_scalar_accounting({"runtime_solver":"HyprePCG"},800,70816,mandatory_controls=controls)
+
+    def test_underflow_never_increases_or_reclassifies_budget(self):
+        for syncs,bytes_ in [(413,70816),(800,12031)]:
+            with self.subTest(syncs=syncs,bytes=bytes_),self.assertRaisesRegex(ContractError,"underflow"):
+                verifier.validated_gpu_control_scalar_accounting({"runtime_solver":"HyprePCG"},syncs,bytes_,mandatory_controls=self.controls())
+
+    def test_legacy_null_has_no_mandatory_credit(self):
+        for controls in (None,{"physical":None,"hot_loop":None}):
+            result=verifier.validated_gpu_control_scalar_accounting({"runtime_solver":"HyprePCG"},800,70816,mandatory_controls=controls)
+            self.assertEqual(result["unattributed_control_scalar_host_sync_count"],800)
+            self.assertEqual(result["mandatory_control_readbacks"],0)
+
+    def test_confirmation_rhs_exemption_requires_explicit_rejection_scope(self):
+        # Accepted CSV backtracks18 stay eighteen; typed confirmations do not reduce them.
+        self.assertEqual(verifier.validated_algorithm_counter_budget("projected_gradient_bb",92,202,18,
+            confirmation_observations=2)["minimum_rhs_evals"],202)
+        with self.assertRaises(ContractError):
+            verifier.validated_algorithm_counter_budget("projected_gradient_bb",92,184,2)
+        result=verifier.validated_algorithm_counter_budget("projected_gradient_bb",92,184,2,
+            confirmation_observations=2,rejected_attempts_include_confirmations=True)
+        self.assertEqual(result["minimum_rhs_evals"],184)
+        self.assertEqual(result["control_sync_budget"],371)
+        with self.assertRaises(ContractError):
+            verifier.validated_algorithm_counter_budget("projected_gradient_bb",92,184,1,
+                confirmation_observations=2,rejected_attempts_include_confirmations=True)
 
 
 if __name__ == "__main__":

@@ -4279,10 +4279,56 @@ FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_state_info(
     fullmag_fem_gpu_state_info *out_info
 );
 
-/*
- * Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
- * when not applicable.
- */
+/* Actual initialized GPU Poisson engine: 0 not applicable/uninitialized,
+ * 1 HYPRE PCG, 2 HYPRE GMRES, 3 device-scalar PCG with retained HYPRE AMG.
+ * Additive getter; does not change existing structure layouts. */
+enum fullmag_fem_poisson_linear_engine {
+    FULLMAG_FEM_POISSON_ENGINE_NOT_APPLICABLE = 0,
+    FULLMAG_FEM_POISSON_ENGINE_HYPRE_PCG = 1,
+    FULLMAG_FEM_POISSON_ENGINE_HYPRE_GMRES = 2,
+    FULLMAG_FEM_POISSON_ENGINE_DEVICE_SCALAR_PCG_AMG = 3
+};
+typedef struct fullmag_fem_poisson_device_pcg_counters_v1 {
+    uint64_t status_readbacks;
+    uint64_t status_record_bytes;
+    uint64_t control_d2h_bytes;
+    uint64_t solves;
+    uint64_t active_iterations;
+} fullmag_fem_poisson_device_pcg_counters_v1;
+
+typedef struct fullmag_fem_gpu_mandatory_control_counters_v1 {
+    uint64_t bb_certificate_record_bytes;
+    uint64_t bb_certificate_readbacks;
+    uint64_t bb_certificate_bytes;
+    uint64_t bb_descent_readbacks;
+    uint64_t bb_descent_bytes;
+    uint64_t poisson_certificate_readbacks;
+    uint64_t poisson_certificate_bytes;
+    uint64_t confirmation_observations;
+    uint64_t confirmation_metric_readbacks;
+    uint64_t confirmation_metric_bytes;
+} fullmag_fem_gpu_mandatory_control_counters_v1;
+
+/* Generic solver-control attribution; independent of demag being enabled. */
+FULLMAG_FEM_API int fullmag_fem_backend_get_mandatory_control_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope,
+    fullmag_fem_gpu_mandatory_control_counters_v1 *out_counters);
+
+enum fullmag_fem_poisson_pcg_counter_scope {
+    FULLMAG_FEM_POISSON_PCG_SCOPE_PHYSICAL = 0,
+    FULLMAG_FEM_POISSON_PCG_SCOPE_HOT_LOOP = 1
+};
+/* Scope 0: performance physical lifetime, excluding active outer attempt.
+ * Scope 1: exact TransferAudit hot_loop_depth>0, with its copy/reset/rollback.
+ * Unknown scopes are invalid; old structure layouts are unchanged. */
+FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope, fullmag_fem_poisson_device_pcg_counters_v1 *out_counters);
+
+FULLMAG_FEM_API int fullmag_fem_backend_get_poisson_linear_engine_v1(
+    fullmag_fem_backend *handle, uint32_t *out_engine);
+
+/* Returns the initialized GPU Poisson AMG coarse-cycle relax type, or -1
+ * when not applicable. */
 FULLMAG_FEM_API int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
     fullmag_fem_backend *handle,
     int32_t *out_relax_type

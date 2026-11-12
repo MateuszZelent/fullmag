@@ -4427,6 +4427,49 @@ impl NativeFemBackend {
         Ok(audit)
     }
 
+    fn mandatory_control_counters(&self, scope: u32) -> Result<Option<crate::types::GpuMandatoryControlCounters>, RunError> {
+        let mut counters=ffi::fullmag_fem_gpu_mandatory_control_counters_v1::default();
+        let rc=unsafe { ffi::fullmag_fem_backend_get_mandatory_control_counters_v1(self.handle,scope,&mut counters) };
+        if rc != ffi::FULLMAG_FEM_OK { return Err(self.last_error_or("FEM mandatory control counter query failed")); }
+        Ok(Some(crate::types::GpuMandatoryControlCounters {
+            bb_certificate_record_bytes: counters.bb_certificate_record_bytes,
+            bb_certificate_readbacks: counters.bb_certificate_readbacks,
+            bb_certificate_bytes: counters.bb_certificate_bytes,
+            bb_descent_readbacks: counters.bb_descent_readbacks,
+            bb_descent_bytes: counters.bb_descent_bytes,
+            poisson_certificate_readbacks: counters.poisson_certificate_readbacks,
+            poisson_certificate_bytes: counters.poisson_certificate_bytes,
+            confirmation_observations: counters.confirmation_observations,
+            confirmation_metric_readbacks: counters.confirmation_metric_readbacks,
+            confirmation_metric_bytes: counters.confirmation_metric_bytes,
+        }))
+    }
+
+    fn poisson_device_pcg_counters(&self, scope: u32) -> Result<Option<crate::types::FemPoissonDevicePcgCounters>, RunError> {
+        let mut counters=ffi::fullmag_fem_poisson_device_pcg_counters_v1::default();
+        let rc=unsafe { ffi::fullmag_fem_backend_get_poisson_device_pcg_counters_v1(self.handle,scope,&mut counters) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM Poisson device PCG counters query failed"));
+        }
+        if counters.status_record_bytes==0 { return Ok(None); }
+        Ok(Some(crate::types::FemPoissonDevicePcgCounters {
+            status_readbacks:counters.status_readbacks,status_record_bytes:counters.status_record_bytes,
+            control_d2h_bytes:counters.control_d2h_bytes,solves:counters.solves,
+            active_iterations:counters.active_iterations,
+        }))
+    }
+
+    fn poisson_linear_engine(&self) -> Result<Option<String>, RunError> {
+        let mut engine = 0;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_get_poisson_linear_engine_v1(self.handle, &mut engine)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM Poisson linear engine query failed"));
+        }
+        poisson_linear_engine_name(engine)
+    }
+
     fn gpu_demag_amg_coarse_relax_type(&self) -> Result<Option<i32>, RunError> {
         let mut coarse_relax_type = -1;
         let rc = unsafe {
@@ -4932,6 +4975,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -5398,6 +5446,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -5768,6 +5821,11 @@ impl NativeFemBackend {
             demag_hypre_timed_solve_count: stats.demag_hypre_timed_solve_count,
             demag_solver_setup_reused: stats.demag_solver_setup_reused != 0,
             demag_amg_relax_type: stats.demag_amg_relax_type,
+            demag_resolved_linear_engine: self.poisson_linear_engine()?,
+            demag_device_pcg_physical: self.poisson_device_pcg_counters(0)?,
+            demag_device_pcg_hot_loop: self.poisson_device_pcg_counters(1)?,
+            gpu_mandatory_controls_physical: self.mandatory_control_counters(0)?,
+            gpu_mandatory_controls_hot_loop: self.mandatory_control_counters(1)?,
             demag_amg_coarse_relax_type: self.gpu_demag_amg_coarse_relax_type()?,
             demag_amg_coarsening: stats.demag_amg_coarsening,
             demag_amg_interpolation: stats.demag_amg_interpolation,
@@ -12942,4 +13000,35 @@ mod tests {
             );
         }
     }
+}
+
+fn poisson_linear_engine_name(engine: u32) -> Result<Option<String>, crate::types::RunError> {
+    match engine {
+        0 => Ok(None),
+        1 => Ok(Some("hypre_pcg".to_string())),
+        2 => Ok(Some("hypre_gmres".to_string())),
+        3 => Ok(Some("device_scalar_pcg_amg".to_string())),
+        value => Err(crate::types::RunError {
+            message: format!("unknown FEM Poisson linear engine {value}"),
+        }),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn poisson_linear_engine_mapping_uses_actual_native_engine() {
+    assert_eq!(poisson_linear_engine_name(0).unwrap(), None);
+    assert_eq!(
+        poisson_linear_engine_name(1).unwrap().as_deref(),
+        Some("hypre_pcg")
+    );
+    assert_eq!(
+        poisson_linear_engine_name(2).unwrap().as_deref(),
+        Some("hypre_gmres")
+    );
+    assert_eq!(
+        poisson_linear_engine_name(3).unwrap().as_deref(),
+        Some("device_scalar_pcg_amg")
+    );
+    assert!(poisson_linear_engine_name(4).is_err());
 }

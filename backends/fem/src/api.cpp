@@ -6613,6 +6613,45 @@ int fullmag_fem_backend_get_gpu_state_info(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_get_mandatory_control_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope,
+    fullmag_fem_gpu_mandatory_control_counters_v1 *out_counters
+) {
+    if (!handle || !out_counters || scope>1) {
+        fullmag_fem_set_handle_error(handle,"Invalid mandatory control counter handle/output/scope");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_counters=scope==1 ? handle->context.transfer_audit.audit.mandatory_controls_hot_loop
+        : fullmag::fem::gpu_performance_mandatory_controls_snapshot(handle->context.gpu_state.performance_counters);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_poisson_device_pcg_counters_v1(
+    fullmag_fem_backend *handle, uint32_t scope, fullmag_fem_poisson_device_pcg_counters_v1 *out_counters
+) {
+    if (handle == nullptr || out_counters == nullptr) {
+        fullmag_fem_set_handle_error(handle,"Poisson device PCG counters require handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (scope != FULLMAG_FEM_POISSON_PCG_SCOPE_PHYSICAL && scope != FULLMAG_FEM_POISSON_PCG_SCOPE_HOT_LOOP) {
+        fullmag_fem_set_handle_error(handle,"Unknown Poisson device PCG counter scope");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_counters=fullmag::fem::demag_poisson_device_pcg_counters(handle->context,scope);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_get_poisson_linear_engine_v1(
+    fullmag_fem_backend *handle, uint32_t *out_engine
+) {
+    if (handle == nullptr || out_engine == nullptr) {
+        fullmag_fem_set_handle_error(handle,"Poisson linear engine getter requires handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_engine=fullmag::fem::demag_poisson_resolved_linear_engine(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_get_gpu_demag_amg_coarse_relax_type_v1(
     fullmag_fem_backend *handle,
     int32_t *out_relax_type

@@ -6485,6 +6485,8 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     })
@@ -6619,6 +6621,8 @@ fn cuda_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     })
@@ -6796,6 +6800,8 @@ fn fem_gpu_execution_provenance(
         resolved_cpu_threads: None,
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: None,
         fem_bem_demag: None,
     };

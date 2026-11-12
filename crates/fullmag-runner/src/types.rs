@@ -826,6 +826,17 @@ pub struct StepStats {
     /// Effective native BoomerAMG policy copied from the native step-stats ABI.
     #[serde(default)]
     pub demag_amg_relax_type: i32,
+    /// Actual initialized native GPU Poisson engine; historical/unconfigured paths omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_resolved_linear_engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_device_pcg_physical: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demag_device_pcg_hot_loop: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_physical: Option<GpuMandatoryControlCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_hot_loop: Option<GpuMandatoryControlCounters>,
     /// Effective GPU coarse-cycle type, queried from HYPRE after configuration.
     /// Historical results and unconfigured/non-GPU paths have no observation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1173,6 +1184,11 @@ impl Default for StepStats {
             demag_solver: None,
             demag_preconditioner: None,
             demag_amg_relax_type: 0,
+            demag_resolved_linear_engine: None,
+            demag_device_pcg_physical: None,
+            demag_device_pcg_hot_loop: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             demag_amg_coarse_relax_type: None,
             demag_amg_coarsening: 0,
             demag_amg_interpolation: 0,
@@ -4275,6 +4291,12 @@ pub struct FemEigenNativeExecutionAttestation {
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct FemPoissonDemagProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pcg_physical: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pcg_hot_loop: Option<FemPoissonDevicePcgCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_linear_engine: Option<String>,
     pub linear_solver: String,
     pub preconditioner: String,
     pub rtol: f64,
@@ -4795,6 +4817,10 @@ pub struct ExecutionProvenance {
     /// FEM Poisson demag solver policy and observed solve result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_physical: Option<GpuMandatoryControlCounters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_mandatory_controls_hot_loop: Option<GpuMandatoryControlCounters>,
     /// Measured body-only Fredkin-Koehler FEM/BEM operator provenance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_bem_demag: Option<FemBemDemagProvenance>,
@@ -6266,4 +6292,29 @@ pub struct TerminalOutputScheduleBinding {
     pub schedule_index: u64,
     pub name: String,
     pub every_seconds: f64,
+}
+
+/// Physical lifetime subaccounting of completed PCG status readbacks.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemPoissonDevicePcgCounters {
+    pub status_readbacks: u64,
+    pub status_record_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub solves: u64,
+    pub active_iterations: u64,
+}
+
+/// Source-owned solver controls, independent of demag being enabled.
+#[derive(Debug,Clone,Copy,Default,Serialize,Deserialize,PartialEq,Eq)]
+pub struct GpuMandatoryControlCounters {
+    pub bb_certificate_record_bytes: u64,
+    pub bb_certificate_readbacks: u64,
+    pub bb_certificate_bytes: u64,
+    pub bb_descent_readbacks: u64,
+    pub bb_descent_bytes: u64,
+    pub poisson_certificate_readbacks: u64,
+    pub poisson_certificate_bytes: u64,
+    pub confirmation_observations: u64,
+    pub confirmation_metric_readbacks: u64,
+    pub confirmation_metric_bytes: u64,
 }

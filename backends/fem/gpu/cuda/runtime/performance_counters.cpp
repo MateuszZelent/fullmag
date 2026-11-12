@@ -4,6 +4,7 @@
 #include <cstddef>
 
 static_assert(sizeof(fullmag_fem_gpu_performance_snapshot_v1) == 480);
+static_assert(sizeof(fullmag_fem_poisson_device_pcg_counters_v1) == 5*sizeof(uint64_t));
 static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v1, completed_step) == 32);
 static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v1, physical_rhs_evaluations) == 80);
 static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v1, accepted_rhs_evaluations) == 240);
@@ -41,6 +42,7 @@ void copy_state_fields(
 
 void add_delta(GpuPerformanceCounterDelta &target, const GpuPerformanceCounterDelta &delta)
 {
+    add_mandatory_control_counters(target.mandatory_controls,delta.mandatory_controls);
     target.rhs_evaluations += delta.rhs_evaluations;
     target.exchange_applies += delta.exchange_applies;
     target.exchange_launches += delta.exchange_launches;
@@ -58,6 +60,10 @@ void add_delta(GpuPerformanceCounterDelta &target, const GpuPerformanceCounterDe
     target.endpoint_cache_invalidations += delta.endpoint_cache_invalidations;
     target.device_to_device_bytes += delta.device_to_device_bytes;
     target.control_d2h_bytes += delta.control_d2h_bytes;
+    target.device_pcg_status_readbacks += delta.device_pcg_status_readbacks;
+    target.device_pcg_control_d2h_bytes += delta.device_pcg_control_d2h_bytes;
+    target.device_pcg_solves += delta.device_pcg_solves;
+    target.device_pcg_active_iterations += delta.device_pcg_active_iterations;
     target.bulk_d2h_bytes += delta.bulk_d2h_bytes;
     target.exchange_elapsed_ns += delta.exchange_elapsed_ns;
     target.demag_assemble_elapsed_ns += delta.demag_assemble_elapsed_ns;
@@ -249,10 +255,18 @@ void gpu_performance_note(
     const GpuPerformanceCounterDelta &delta)
 {
     const std::lock_guard<std::mutex> lock(state.mutex);
-    if (!state.attempt_active) {
-        return;
+    if (state.attempt_active) {
+        add_delta(state.active, delta);
+    } else if (state.available) {
+        // Additive physical counters also cover setup/initialization work.
+        // Legacy aggregates retain their attempt-only publication contract.
+        auto &physical = state.physical_lifetime;
+        add_mandatory_control_counters(physical.mandatory_controls, delta.mandatory_controls);
+        physical.device_pcg_status_readbacks += delta.device_pcg_status_readbacks;
+        physical.device_pcg_control_d2h_bytes += delta.device_pcg_control_d2h_bytes;
+        physical.device_pcg_solves += delta.device_pcg_solves;
+        physical.device_pcg_active_iterations += delta.device_pcg_active_iterations;
     }
-    add_delta(state.active, delta);
 }
 
 void gpu_performance_commit_attempt(GpuPerformanceCounterState &state)
@@ -342,3 +356,61 @@ fullmag_fem_gpu_performance_snapshot_v1 gpu_performance_snapshot(
 }
 
 } // namespace fullmag::fem
+
+namespace fullmag::fem {
+fullmag_fem_poisson_device_pcg_counters_v1 gpu_performance_device_pcg_snapshot(
+    const GpuPerformanceCounterState &state, uint64_t status_record_bytes)
+{
+    const std::lock_guard<std::mutex> lock(state.mutex);
+    const auto &physical=state.physical_lifetime;
+    return {physical.device_pcg_status_readbacks,status_record_bytes,
+            physical.device_pcg_control_d2h_bytes,physical.device_pcg_solves,
+            physical.device_pcg_active_iterations};
+}
+}
+
+namespace fullmag::fem {
+static_assert(sizeof(fullmag_fem_gpu_mandatory_control_counters_v1)==10*sizeof(uint64_t));
+void add_mandatory_control_counters(fullmag_fem_gpu_mandatory_control_counters_v1 &target,
+    const fullmag_fem_gpu_mandatory_control_counters_v1 &delta)
+{
+    if (delta.bb_certificate_record_bytes) target.bb_certificate_record_bytes=delta.bb_certificate_record_bytes;
+    target.bb_certificate_readbacks += delta.bb_certificate_readbacks;
+    target.bb_certificate_bytes += delta.bb_certificate_bytes;
+    target.bb_descent_readbacks += delta.bb_descent_readbacks;
+    target.bb_descent_bytes += delta.bb_descent_bytes;
+    target.poisson_certificate_readbacks += delta.poisson_certificate_readbacks;
+    target.poisson_certificate_bytes += delta.poisson_certificate_bytes;
+    target.confirmation_observations += delta.confirmation_observations;
+    target.confirmation_metric_readbacks += delta.confirmation_metric_readbacks;
+    target.confirmation_metric_bytes += delta.confirmation_metric_bytes;
+}
+fullmag_fem_gpu_mandatory_control_counters_v1 gpu_performance_mandatory_controls_snapshot(
+    const GpuPerformanceCounterState &state)
+{
+    const std::lock_guard<std::mutex> lock(state.mutex);
+    return state.physical_lifetime.mandatory_controls;
+}
+}
+
+namespace fullmag::fem {
+bool resolve_confirmation_control_delta(const std::array<uint64_t,6> &before,
+    const std::array<uint64_t,6> &after, fullmag_fem_gpu_mandatory_control_counters_v1 &out)
+{
+    out={};
+    for (size_t i=0;i<6;++i) if (after[i]<before[i]) return false;
+    auto reads=after[0]-before[0];
+    auto bytes=after[1]-before[1];
+    // Sequential checked subtraction also avoids overflowing an excluded sum.
+    for (size_t i=2;i<6;i+=2) {
+        const auto excluded=after[i]-before[i];
+        const auto excluded_bytes=after[i+1]-before[i+1];
+        if (excluded>reads || excluded_bytes>bytes) return false;
+        reads-=excluded; bytes-=excluded_bytes;
+    }
+    out.confirmation_observations=1;
+    out.confirmation_metric_readbacks=reads;
+    out.confirmation_metric_bytes=bytes;
+    return true;
+}
+}

@@ -356,6 +356,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
+            gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu

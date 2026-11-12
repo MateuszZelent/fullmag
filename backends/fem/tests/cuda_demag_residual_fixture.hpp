@@ -12,6 +12,7 @@
 #endif
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
+#include <HYPRE_utilities.h>
 #include <cuda_runtime.h>
 
 #include <array>
@@ -26,6 +27,8 @@ inline void check_gpu_hypre_demag_residual(
     void (*check)(bool, const char *),
     void (*check_stream_interop)(HypreStreamInterop &, std::string &) = nullptr)
 {
+    check(HYPRE_GetError() == 0,
+          "strict GPU residual fixture requires a clean incoming HYPRE status");
     fullmag::fem::Context ctx;
     ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
     ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
@@ -69,6 +72,8 @@ inline void check_gpu_hypre_demag_residual(
     workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
     check(fullmag::fem::fullmag_wait_for_hypre(workspace.stream_interop, nullptr, error),
           "strict GPU fixture orders the solve before residual certification");
+    check(HYPRE_GetError() == HYPRE_ERROR_CONV,
+          "controlled one-iteration solve produces only the expected HYPRE convergence error");
 
     int iterations = -1;
     double residual = -1.0;
@@ -233,6 +238,14 @@ inline void check_gpu_hypre_demag_residual(
     ctx.gpu_state.device.demag_poisson.poisson_solution = nullptr;
     ctx.gpu_state.device.demag_poisson.poisson_rhs = nullptr;
     ctx.poisson_demag.poisson_bc_op = nullptr;
+    // Keep the expected sticky bit throughout independent certification, then
+    // consume only this fixture's error. Unexpected bits must fail before clear.
+    check(HYPRE_GetError() == HYPRE_ERROR_CONV,
+          "strict GPU residual fixture preserves only its expected convergence error through teardown");
+    check(HYPRE_ClearError(HYPRE_ERROR_CONV) == 0,
+          "strict GPU residual fixture consumes its expected convergence error");
+    check(HYPRE_GetError() == 0,
+          "strict GPU residual fixture leaves a clean HYPRE status for later owners");
 }
 
 } // namespace fullmag::fem::test

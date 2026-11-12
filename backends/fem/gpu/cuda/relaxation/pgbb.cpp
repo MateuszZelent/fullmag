@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/constraints/frozen_spins.cuh"
@@ -671,6 +672,27 @@ int gpu_relax_projected_gradient_bb_step(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
 
+    const auto capture_confirmation_controls = [&](bool hot) {
+        std::array<uint64_t,6> value{};
+        if (hot) {
+            const auto &a=ctx.transfer_audit.audit;
+            value={a.counters.hot_loop_control_scalar_host_sync_count,a.counters.hot_loop_control_scalar_d2h_bytes,
+                a.mandatory_controls_hot_loop.poisson_certificate_readbacks,a.mandatory_controls_hot_loop.poisson_certificate_bytes,
+                a.device_pcg_hot_loop.status_readbacks,a.device_pcg_hot_loop.control_d2h_bytes};
+        } else {
+            const auto &s=ctx.gpu_state.performance_counters;
+            const std::lock_guard<std::mutex> lock(s.mutex);
+            const auto &p=s.physical_lifetime; const auto &a=s.active;
+            value={p.control_fences+a.control_fences,p.control_d2h_bytes+a.control_d2h_bytes,
+                p.mandatory_controls.poisson_certificate_readbacks+a.mandatory_controls.poisson_certificate_readbacks,
+                p.mandatory_controls.poisson_certificate_bytes+a.mandatory_controls.poisson_certificate_bytes,
+                p.device_pcg_status_readbacks+a.device_pcg_status_readbacks,
+                p.device_pcg_control_d2h_bytes+a.device_pcg_control_d2h_bytes};
+        }
+        return value;
+    };
+    const auto confirmation_physical_before=capture_confirmation_controls(false);
+    const auto confirmation_hot_before=capture_confirmation_controls(true);
     GpuPgbbCurrentMetrics current_metrics{};
     const double field_evaluation_time_s = ctx.state.current_time;
     if (!gpu_relax_compute_current_metrics(
@@ -705,6 +727,15 @@ int gpu_relax_projected_gradient_bb_step(
             error = reason;
             return FULLMAG_FEM_ERR_INTERNAL;
         }
+        GpuPerformanceCounterDelta confirmation{};
+        fullmag_fem_gpu_mandatory_control_counters_v1 hot_confirmation{};
+        if (!resolve_confirmation_control_delta(confirmation_physical_before,capture_confirmation_controls(false),confirmation.mandatory_controls) ||
+            !resolve_confirmation_control_delta(confirmation_hot_before,capture_confirmation_controls(true),hot_confirmation)) {
+            error="GPU torque confirmation control attribution underflow";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        gpu_performance_note(ctx.gpu_state.performance_counters,confirmation);
+        note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,hot_confirmation);
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;
@@ -769,7 +800,7 @@ int gpu_relax_projected_gradient_bb_step(
             !gpu_bb_exchange_mass_solve(*gpu.relaxation.bb_exchange_mass,
                 gpu.rk.k[0], gpu.relaxation.bb_preconditioned_gradient,
                 trial_step, reinterpret_cast<void *>(stream),
-                ctx.transfer_audit.audit, reason)) {
+                ctx.transfer_audit.audit, reason, &ctx.gpu_state.performance_counters)) {
             return gpu_relax_restore_previous_magnetization_after_failure(
                 ctx, stream, "exchange-mass direction solve failure", reason, error);
         }
@@ -794,6 +825,11 @@ int gpu_relax_projected_gradient_bb_step(
             return gpu_relax_restore_previous_magnetization_after_failure(
                 ctx, stream, "exchange-mass descent check failure", reason, error);
         }
+        GpuPerformanceCounterDelta descent_counter{};
+        descent_counter.mandatory_controls.bb_descent_readbacks=1;
+        descent_counter.mandatory_controls.bb_descent_bytes=sizeof(direction_dot_gradient);
+        gpu_performance_note(ctx.gpu_state.performance_counters,descent_counter);
+        note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,descent_counter.mandatory_controls);
         if (!std::isfinite(direction_dot_gradient)) {
             reason = "non-finite FEM GPU BB preconditioned descent metric";
             return gpu_relax_restore_previous_magnetization_after_failure(

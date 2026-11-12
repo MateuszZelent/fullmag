@@ -1065,6 +1065,16 @@ Własność implementacji:
   albo pod przyszłym jawnym natywnym właścicielem GPU BEM/FMM,
 - ścisłe requesty GPU nie mogą po cichu spadać do CPU Poisson.
 
+Kandydat `device_scalar_pcg_amg` zachowuje requested `CG/AMG` i należy do
+właściciela `gpu/cuda/demag_poisson`; nie przenosi iteracji numerycznych do
+runnera. Addytywne gettery publikują rzeczywisty silnik i oddzielne liczniki
+physical lifetime oraz HotLoop, bez zmiany istniejących struktur ABI.
+Kryterium PCG, certyfikat, zakres i bramki opisuje
+[nota 0532](../physics/0532-fem-demag-solver-policy-and-runtime-threading.md),
+a kontrakt provenance [ADR 0060](../adr/0060-accepted-fem-gpu-docker-workspace.md).
+Status tej realizacji pozostaje **NOT VERIFIED** do przejścia przypiętych
+bramek managed runtime i nauki; obecność źródeł nie promuje capability.
+
 Bieżący Fredkin-Koehler/FEM-BEM ma rozpoznawalny wariant w `ProblemIR`,
 plannerze i native provenance, a istniejący opis capability `Demag` obejmuje
 body-only FK CPU source path. Publiczna capability projection runnera jest

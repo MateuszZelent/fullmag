@@ -859,41 +859,105 @@ def _validate_gpu_execution(
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ExecutionError(f"GPU qualification {label} must be a nonnegative integer")
     assert isinstance(total_rhs_evals, int) and isinstance(rejected_attempts, int)
+    demag = _object(metadata.get("demag_runtime"), "GPU demag runtime")
     try:
-        counter_contract = bounded_gate.validated_algorithm_counter_budget(
-            str(algorithm), executed_steps, total_rhs_evals, rejected_attempts
+        control_accounting = bounded_gate.validated_gpu_control_scalar_accounting(
+            demag, control_syncs, control_bytes,
+            mandatory_controls=metadata.get("fem_gpu_solver_controls"),
         )
     except bounded_gate.ContractError as error:
+        raise ExecutionError(f"GPU Poisson control-scalar accounting failed: {error}") from error
+    rejection_scope=qualification.get("rejected_attempts_scope","accepted_step_trials")
+    if rejection_scope not in {"accepted_step_trials","execution_attempts"}:
+        raise ExecutionError("unknown rejected-attempt counter scope")
+    if rejection_scope=="execution_attempts":
+        receipt=_object(execution.get("fem_gpu_minimizer_execution_receipt"),"GPU minimizer receipt")
+        accounting=_object(receipt.get("accounting"),"GPU minimizer accounting")
+        if (receipt.get("schema_version")!="fullmag.fem.gpu.minimizer-execution-receipt.v1" or
+            receipt.get("algorithm")!=algorithm or accounting.get("accounting_valid") is not True or
+            accounting.get("executed")!="cuda_fem" or
+            isinstance(accounting.get("rejected_attempt_count"),bool) or
+            accounting.get("rejected_attempt_count") != rejected_attempts):
+            raise ExecutionError("execution rejection scope differs from typed native receipt")
+    try:
+        counter_contract=bounded_gate.validated_algorithm_counter_budget(
+            str(algorithm),executed_steps,total_rhs_evals,rejected_attempts,
+            confirmation_observations=control_accounting["mandatory_confirmation_observations"],
+            rejected_attempts_include_confirmations=rejection_scope=="execution_attempts")
+    except bounded_gate.ContractError as error:
         raise ExecutionError(f"GPU algorithm counter contract failed: {error}") from error
-    sync_budget = counter_contract["control_sync_budget"]
-    byte_budget = (
-        sync_budget * bounded_gate.GPU_SCALAR_RESULT_SLOTS * bounded_gate.DOUBLE_BYTES
-    )
-    if control_syncs > sync_budget or control_bytes > byte_budget:
+    sync_budget=counter_contract["control_sync_budget"]
+    byte_budget=sync_budget*bounded_gate.GPU_SCALAR_RESULT_SLOTS*bounded_gate.DOUBLE_BYTES
+    unattributed_syncs = control_accounting[
+        "unattributed_control_scalar_host_sync_count"
+    ]
+    unattributed_bytes = control_accounting[
+        "unattributed_control_scalar_d2h_bytes"
+    ]
+    if unattributed_syncs > sync_budget or unattributed_bytes > byte_budget:
         raise ExecutionError("GPU control-scalar readbacks exceed the bounded gate budget")
     if control_bytes % bounded_gate.DOUBLE_BYTES != 0:
         raise ExecutionError("GPU control-scalar bytes must contain complete doubles")
     if (control_syncs == 0) != (control_bytes == 0):
         raise ExecutionError("GPU control-scalar bytes and syncs disagree")
-    demag = _object(metadata.get("demag_runtime"), "GPU demag runtime")
+    if unattributed_bytes % bounded_gate.DOUBLE_BYTES != 0:
+        raise ExecutionError("Unattributed GPU control-scalar bytes must contain complete doubles")
+    if (unattributed_syncs == 0) != (unattributed_bytes == 0):
+        raise ExecutionError("Unattributed GPU control-scalar bytes and syncs disagree")
     if demag.get("hypre_version") != native_build.get("hypre_version"):
         raise ExecutionError("GPU Hypre identity does not match pinned runtime")
     if demag.get("mfem_device") != "cuda":
         raise ExecutionError("GPU demag runtime mfem_device must be exactly 'cuda'")
-    if demag.get("runtime_solver") != "HyprePCG" or demag.get("runtime_preconditioner") != "HypreBoomerAMG":
-        raise ExecutionError("GPU demag runtime must prove HyprePCG/HypreBoomerAMG")
+    if demag.get("runtime_preconditioner") != "HypreBoomerAMG":
+        raise ExecutionError("GPU demag runtime must prove HypreBoomerAMG")
     tolerance = _finite(demag.get("relative_tolerance"), "GPU demag tolerance")
     residual = _finite(demag.get("final_residual_norm"), "GPU demag residual")
     if not 0.0 < tolerance <= 1.0e-12 or not 0.0 <= residual <= tolerance:
         raise ExecutionError("GPU demag residual must satisfy the strict tolerance")
-    return {
+    result: dict[str, object] = {
         **telemetry,
+        "resolved_linear_engine": control_accounting["engine"],
         "allowed_control_scalar_host_sync_count": sync_budget,
         "allowed_control_scalar_d2h_bytes": byte_budget,
         "total_rhs_evals": total_rhs_evals,
         "rejected_attempts": rejected_attempts,
         "minimum_rhs_evals": counter_contract["minimum_rhs_evals"],
     }
+    if rejection_scope=="execution_attempts":
+        result["rejected_attempts_scope"]=rejection_scope
+
+    if control_accounting["engine"] == bounded_gate.DEVICE_SCALAR_PCG_ENGINE:
+        status_readbacks = control_accounting["device_pcg_status_readbacks"]
+        status_bytes = control_accounting["device_pcg_control_d2h_bytes"]
+        result.update(
+            {
+                "demag_runtime_control": control_accounting["demag_runtime_control"],
+                "device_pcg_status_readbacks": status_readbacks,
+                "device_pcg_status_record_bytes": control_accounting[
+                    "device_pcg_status_record_bytes"
+                ],
+                "device_pcg_control_d2h_bytes": status_bytes,
+                "unattributed_control_scalar_host_sync_count": unattributed_syncs,
+                "unattributed_control_scalar_d2h_bytes": unattributed_bytes,
+                "allowed_unattributed_control_scalar_host_sync_count": sync_budget,
+                "allowed_unattributed_control_scalar_d2h_bytes": byte_budget,
+                "allowed_control_scalar_host_sync_count": sync_budget + status_readbacks,
+                "allowed_control_scalar_d2h_bytes": byte_budget + status_bytes,
+            }
+        )
+    if control_accounting["mandatory_controls"] is not None:
+        result.update(
+            mandatory_controls=control_accounting["mandatory_controls"],
+            mandatory_control_readbacks=control_accounting["mandatory_control_readbacks"],
+            mandatory_control_bytes=control_accounting["mandatory_control_bytes"],
+            unattributed_control_scalar_host_sync_count=unattributed_syncs,
+            unattributed_control_scalar_d2h_bytes=unattributed_bytes,
+            allowed_unattributed_control_scalar_host_sync_count=sync_budget,
+            allowed_unattributed_control_scalar_d2h_bytes=byte_budget,
+            allowed_control_scalar_host_sync_count=sync_budget+control_accounting["device_pcg_status_readbacks"]+control_accounting["mandatory_control_readbacks"],
+            allowed_control_scalar_d2h_bytes=byte_budget+control_accounting["device_pcg_control_d2h_bytes"]+control_accounting["mandatory_control_bytes"],
+        )
+    return result
 
 
 def _object(value: object, label: str) -> dict[str, object]:
@@ -1478,7 +1542,7 @@ def _validate_case_artifacts(
         )
     if recorded_norm_defect > MAX_MAGNETIZATION_NORM_DEFECT:
         raise ExecutionError("final magnetization norm defect exceeds the frozen bound")
-    gpu_telemetry: dict[str, int] | None = None
+    gpu_telemetry: dict[str, object] | None = None
     if spec["device"] == "gpu":
         gpu_telemetry = _validate_gpu_execution(
             metadata,

@@ -3428,6 +3428,8 @@ pub(crate) fn apply_native_fem_runtime_contract(
     gpu_state: Option<&NativeFemGpuStateInfo>,
     gpu_rk_plan: Option<&NativeFemGpuRkPlanInfo>,
 ) {
+    provenance.gpu_mandatory_controls_physical=stats.and_then(|entry| entry.gpu_mandatory_controls_physical);
+    provenance.gpu_mandatory_controls_hot_loop=stats.and_then(|entry| entry.gpu_mandatory_controls_hot_loop);
     provenance.fem_execution_mode = Some(native_fem_execution_mode(plan).to_string());
     provenance.fem_gpu_qualification_status =
         Some(native_fem_gpu_qualification_status(plan, stats, gpu_rk_plan).to_string());
@@ -3796,6 +3798,8 @@ fn execute_native_fem(
         effective_fem_omp_threads: initial_stats.and_then(|stats| {
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
         ..Default::default()
     };
@@ -3980,6 +3984,9 @@ pub(crate) fn fem_poisson_demag_provenance(
     });
 
     Some(FemPoissonDemagProvenance {
+        device_pcg_physical: stats.and_then(|entry| entry.demag_device_pcg_physical),
+        device_pcg_hot_loop: stats.and_then(|entry| entry.demag_device_pcg_hot_loop),
+        resolved_linear_engine: stats.and_then(|entry| entry.demag_resolved_linear_engine.clone()),
         linear_solver: policy.solver,
         preconditioner: policy.preconditioner,
         rtol: policy.rtol,
@@ -5112,6 +5119,15 @@ mod tests {
             boundary_marker_source: Some("mesh_marker_99".to_string()),
         });
         let stats = StepStats {
+            demag_device_pcg_physical: Some(crate::types::FemPoissonDevicePcgCounters {
+                status_readbacks:2,status_record_bytes:104,control_d2h_bytes:208,
+                solves:1,active_iterations:9,
+            }),
+            demag_device_pcg_hot_loop: Some(crate::types::FemPoissonDevicePcgCounters {
+                status_readbacks:1,status_record_bytes:104,control_d2h_bytes:104,
+                solves:1,active_iterations:0,
+            }),
+            demag_resolved_linear_engine: Some("hypre_gmres".to_string()),
             poisson_iterations: 13,
             poisson_final_residual: 4.0e-9,
             demag_potential_order: 2,
@@ -5124,6 +5140,12 @@ mod tests {
         let provenance = fem_poisson_demag_provenance(&plan, Some(&stats))
             .expect("poisson demag provenance should be present");
 
+        assert_eq!(
+            provenance.resolved_linear_engine.as_deref(),
+            Some("hypre_gmres")
+        );
+        assert_eq!(provenance.device_pcg_physical,stats.demag_device_pcg_physical);
+        assert_eq!(provenance.device_pcg_hot_loop,stats.demag_device_pcg_hot_loop);
         assert_eq!(provenance.linear_solver, "GMRES");
         assert_eq!(provenance.preconditioner, "Jacobi");
         assert_eq!(provenance.rtol, 1e-6);
@@ -10234,6 +10256,27 @@ mod tests {
             "CUDA multilayer completion must not publish unavailable torque"
         );
     }
+    #[cfg(feature="fem-gpu")]
+    #[test]
+    fn mandatory_controls_runtime_mapping_does_not_require_demag() {
+        let mut plan=tiny_fem_plan();plan.enable_demag=false;
+        let stats=StepStats {
+            gpu_mandatory_controls_physical:Some(crate::types::GpuMandatoryControlCounters {
+                bb_certificate_record_bytes:96,bb_certificate_readbacks:2,bb_certificate_bytes:192,
+                ..Default::default()
+            }),
+            gpu_mandatory_controls_hot_loop:Some(crate::types::GpuMandatoryControlCounters {
+                bb_certificate_record_bytes:96,bb_certificate_readbacks:1,bb_certificate_bytes:96,
+                ..Default::default()
+            }),..Default::default()
+        };
+        let mut provenance=ExecutionProvenance::default();
+        apply_native_fem_runtime_contract(&mut provenance,&plan,Some(&stats),None,None);
+        assert!(provenance.fem_poisson_demag.is_none());
+        assert_eq!(provenance.gpu_mandatory_controls_physical,stats.gpu_mandatory_controls_physical);
+        assert_eq!(provenance.gpu_mandatory_controls_hot_loop,stats.gpu_mandatory_controls_hot_loop);
+    }
+
 }
 
 #[cfg(all(test, any(feature = "fem-gpu", feature = "fem-native")))]

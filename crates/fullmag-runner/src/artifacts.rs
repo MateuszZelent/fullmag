@@ -203,6 +203,11 @@ struct RunMetadata<'a> {
     sampling_resolution: Option<&'a serde_json::Value>,
 }
 
+fn fem_gpu_solver_controls_metadata(provenance: &crate::types::ExecutionProvenance) -> serde_json::Value {
+    serde_json::json!({"physical":provenance.gpu_mandatory_controls_physical,
+                       "hot_loop":provenance.gpu_mandatory_controls_hot_loop})
+}
+
 impl serde::Serialize for RunMetadata<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -210,7 +215,7 @@ impl serde::Serialize for RunMetadata<'_> {
     {
         use serde::ser::SerializeMap;
 
-        let mut map = serializer.serialize_map(Some(26))?;
+        let mut map = serializer.serialize_map(Some(27))?;
         map.serialize_entry("problem_name", &self.problem.problem_meta.name)?;
         map.serialize_entry("ir_version", &self.problem.ir_version)?;
         map.serialize_entry("source_hash", &self.problem.problem_meta.source_hash)?;
@@ -231,6 +236,8 @@ impl serde::Serialize for RunMetadata<'_> {
         map.serialize_entry("execution_provenance", self.execution_provenance)?;
         map.serialize_entry("runtime_threading", self.runtime_threading)?;
         map.serialize_entry("demag_runtime", self.demag_runtime)?;
+        map.serialize_entry("fem_gpu_solver_controls",
+            &fem_gpu_solver_controls_metadata(self.execution_provenance.execution))?;
         map.serialize_entry(
             "fem_cpu_relaxation_qualification",
             self.fem_cpu_relaxation_qualification,
@@ -1240,10 +1247,19 @@ fn demag_runtime_metadata(
                 provenance.fem_demag_operator_mode.as_deref(),
                 Some("device_hypre_poisson") | Some("device_hypre_fem_bem")
             ) {
-                let solver = match linear_solver.as_str() {
-                    "CG" => Some("HyprePCG"),
-                    "GMRES" => Some("HypreGMRES"),
-                    _ => None,
+                let actual_engine =
+                    resolved_policy.and_then(|entry| entry.resolved_linear_engine.as_deref());
+                let solver = match actual_engine {
+                    Some("device_scalar_pcg_amg") => Some("DeviceScalarPCG"),
+                    Some("hypre_pcg") => Some("HyprePCG"),
+                    Some("hypre_gmres") => Some("HypreGMRES"),
+                    // Historical files lack the additive observed-engine field.
+                    Some(_) => None,
+                    None => match linear_solver.as_str() {
+                        "CG" => Some("HyprePCG"),
+                        "GMRES" => Some("HypreGMRES"),
+                        _ => None,
+                    },
                 };
                 let preconditioner = match preconditioner.as_str() {
                     "AMG" => Some("HypreBoomerAMG"),
@@ -1279,6 +1295,9 @@ fn demag_runtime_metadata(
                 "linear_solver": linear_solver,
                 "preconditioner": preconditioner,
                 "runtime_solver": runtime_solver,
+                "resolved_linear_engine": resolved_policy.and_then(|entry| entry.resolved_linear_engine.as_deref()),
+                "device_pcg_physical": resolved_policy.and_then(|entry| entry.device_pcg_physical),
+                "device_pcg_hot_loop": resolved_policy.and_then(|entry| entry.device_pcg_hot_loop),
                 "runtime_preconditioner": runtime_preconditioner,
                 "amg_profile": amg_profile,
                 "relative_tolerance": relative_tolerance,
@@ -7042,6 +7061,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                 linear_solver: "GMRES".to_string(),
                 preconditioner: "JACOBI".to_string(),
@@ -7068,6 +7089,8 @@ mod tests {
         let provenance = ExecutionProvenance {
             execution_engine: "fem_native_gpu".to_string(),
             fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                 linear_solver: "CG".to_string(),
                 preconditioner: "NONE".to_string(),
@@ -10219,6 +10242,8 @@ mod tests {
                     reason: "native_fem_gpu_unavailable".to_string(),
                     message: "native FEM GPU unavailable in test".to_string(),
                 }),
+                gpu_mandatory_controls_physical: None,
+                gpu_mandatory_controls_hot_loop: None,
                 fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
                     potential_order: Some(2),
                     potential_true_dof_count: Some(9876),
@@ -12096,6 +12121,8 @@ mod tests {
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: None,
             fem_bem_demag: None,
         };
@@ -13006,6 +13033,8 @@ mod tests {
             resolved_cpu_threads: None,
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
             fem_poisson_demag: None,
             fem_bem_demag: None,
         };
@@ -13763,5 +13792,68 @@ mod tests {
         );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }    #[cfg(test)]
+    #[test]
+    fn gpu_demag_metadata_reports_observed_device_scalar_engine() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("FEM fixture");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin);
+        let provenance = crate::types::ExecutionProvenance {
+            fem_demag_operator_mode: Some("device_hypre_poisson".to_string()),
+            gpu_mandatory_controls_physical: None,
+            gpu_mandatory_controls_hot_loop: None,
+            fem_poisson_demag: Some(crate::types::FemPoissonDemagProvenance {
+                device_pcg_physical:Some(crate::types::FemPoissonDevicePcgCounters {
+                    status_readbacks:2,status_record_bytes:104,control_d2h_bytes:208,
+                    solves:1,active_iterations:9,
+                }),
+                device_pcg_hot_loop:Some(crate::types::FemPoissonDevicePcgCounters {
+                    status_readbacks:1,status_record_bytes:104,control_d2h_bytes:104,
+                    solves:1,active_iterations:0,
+                }),
+                resolved_linear_engine: Some("device_scalar_pcg_amg".to_string()),
+                linear_solver: "CG".to_string(),
+                preconditioner: "AMG".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["resolved_linear_engine"], "device_scalar_pcg_amg");
+        assert_eq!(metadata["device_pcg_physical"]["status_readbacks"],2);
+        assert_eq!(metadata["device_pcg_physical"]["status_record_bytes"],104);
+        assert_eq!(metadata["device_pcg_physical"]["control_d2h_bytes"],208);
+        assert_eq!(metadata["device_pcg_physical"]["solves"],1);
+        assert_eq!(metadata["device_pcg_physical"]["active_iterations"],9);
+        assert_eq!(metadata["device_pcg_hot_loop"]["status_readbacks"],1);
+        assert_eq!(metadata["device_pcg_hot_loop"]["control_d2h_bytes"],104);
+        assert_eq!(metadata["device_pcg_hot_loop"]["active_iterations"],0);
+        assert_eq!(metadata["runtime_solver"], "DeviceScalarPCG");
+        assert_eq!(metadata["linear_solver"], "CG");
+        assert_eq!(metadata["preconditioner"], "AMG");
     }
+    #[test]
+    fn mandatory_controls_metadata_preserves_bb_without_poisson() {
+        let counters=crate::types::GpuMandatoryControlCounters {
+            bb_certificate_record_bytes:96,bb_certificate_readbacks:1,bb_certificate_bytes:96,
+            bb_descent_readbacks:1,bb_descent_bytes:8,..Default::default()
+        };
+        let provenance=crate::types::ExecutionProvenance {
+            gpu_mandatory_controls_physical:Some(counters),
+            gpu_mandatory_controls_hot_loop:Some(counters),..Default::default()
+        };
+        assert!(provenance.fem_poisson_demag.is_none());
+        let metadata=fem_gpu_solver_controls_metadata(&provenance);
+        assert_eq!(metadata["hot_loop"]["bb_certificate_readbacks"],1);
+        assert_eq!(metadata["physical"]["bb_descent_bytes"],8);
+        let root=serde_json::to_value(&provenance).unwrap();
+        assert_eq!(root["gpu_mandatory_controls_hot_loop"]["bb_certificate_bytes"],96);
+        let decoded:crate::types::ExecutionProvenance=serde_json::from_value(root).unwrap();
+        assert_eq!(decoded.gpu_mandatory_controls_hot_loop,Some(counters));
+        assert!(fem_gpu_solver_controls_metadata(&Default::default())["hot_loop"].is_null());
+    }
+
 }

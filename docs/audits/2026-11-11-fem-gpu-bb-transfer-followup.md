@@ -103,6 +103,13 @@ CSV nie mają luk ani utraconych wierszy.
 | GPU bez prekondycjonera | 1945 | 535,705042 | 8,502109e-9 | 4,107678e-13 |
 | GPU z exchange-mass | 113 | 48,947291 | 8,895426e-9 | 4,117029e-13 |
 
+CPU zachował requested/resolved 30 wątków, a zmierzona wartość
+`effective_fem_omp_threads` wyniosła 16; GPU raportował 1 wątek hostowy MFEM.
+Optymalna liczba wątków CPU wymaga oddzielnego benchmarku.
+Średnie obserwowane odstępy callbacków wyniosły odpowiednio 0,864958 s,
+0,265291 s i 0,263806 s. Obejmują sterowanie i obserwację; osobny pomiar
+pojedynczego kernela GPU nie jest z nich wyprowadzany.
+
 Wszystkie osiem składowych/energii przeszło bramki we wszystkich trzech
 parach. Największa różnica względna exchange wynosi 0,217735 ppm (CPU/raw),
 demag 0,033119 ppm, a energii całkowitej 3,493e-14. Para dwóch GPU różni się
@@ -123,15 +130,109 @@ aktywacji w UI ani wymaganym benchmarkiem pięciu naprzemiennych par.
 Wynik nie zmienia kwalifikacji historycznych stanów przy luźniejszym progu
 1e-6 T ani nie rozstrzyga różnicy dyskretyzacji FEM i MuMax3 GPU.
 
-## Poisson — następny pomiar
+## Poisson — pierwszy pomiar 12.11.2026
 
-Profil105 zaakceptowanych kroków z dokładniejszym stopem wykazał131 solve
-HYPRE i8665 iteracji:23,325 s host API oraz23,311 s przedziałów CUDA.
+Profil 105 zaakceptowanych kroków z dokładniejszym stopem wykazał 131 solve
+HYPRE i 8665 iteracji: 23,325 s host API oraz 23,311 s przedziałów CUDA.
 Przedziały obejmują przerwy launchów i nie są sumą aktywnych kerneli.
-Hierarchia AMG jest już zachowywana. Kandydat przenosi skalary PCG i test
-zbieżności na GPU, z odczytem statusu najwyżej co8 iteracji; nadal używa tej
-samej macierzy, hierarchii AMG i niezależnego certyfikatu. Jego kompilacja,
-runtime, parytet oraz przyspieszenie pozostają **NOT VERIFIED**.
+Kandydat przenosi skalary PCG i test zbieżności na GPU. Pierwsza paczka ma
+najwyżej 5 iteracji, następne 8; macierz, AMG i niezależny certyfikat pozostają
+takie same. Biblioteka `69de34b3…` przeszła zarządzany test
+`fem-demag-poisson` (4,212311 s), obejmujący zero RHS, dokładny warm start,
+Nonfinite, limity paczek i księgowanie zakresów. Snapshot źródeł:
+`2b6cf43905212371bf2dbbf06ef2e648a16c765891294a99350b81053b2d11ea`.
+
+Przed pomiarem przywrócono historyczny budżet grupy 40 CPU / 32 GiB.
+Odtworzenie usług początkowo przyjęło domyślne 8 CPU / 64 GiB; istniejąca
+procedura `cold-resume-restore-stored-budget` odrzuciła ten rozjazd i
+przywróciła zapisany budżet bez zmiany ledgeru. Pomiar nie używał limitu 8 CPU.
+
+Pierwszy kompletny SP4 (`sp4_gpu_poisson_device_01_20261111`) wykonał 92 kroki
+w 45,124280 s, z torque 8,573588e-7 T i certyfikatem 4,114078e-13.
+Pełny Zarr jest zachowany; osiem energii przechodzi niezmienione bramki
+względem wszystkich trzech wcześniejszych powtórzeń. Pojedynczy czas nie
+potwierdza przyspieszenia względem wcześniejszej mediany 43,431922 s.
+
+Kwalifikacja całości pozostaje **niezaliczona**: HotLoop zarejestrował 113
+solve, 7477 iteracji i 1017 odczytów statusu po 104 B, ale PhysicalLifetime
+oraz mandatory Physical pozostały zerowe. Gałąź direct minimizer otwierała
+execution receipt bez cyklu liczników performance. Testy natywne ręcznie
+otwierały ten cykl, przez co nie wykryły błędu rzeczywistej ścieżki BB.
+HotLoop zachował prawidłową resztę 386 odczytów / 58784 B przy budżecie 389;
+nie zastępuje to brakujących obserwacji Physical. Dowód:
+`sp4_gpu_poisson_device_01_20261111.physics-observation.json`.
+Kolejne powtórzenia wstrzymano do naprawy zakresu lifetime; tego pilota nie
+należy mieszać z późniejszą kohortą innej biblioteki.
+
+## Aktualizacja: lifecycle v2 i ponowne użycie AMG, 12.11.2026
+
+Pierwszy niezaliczony pilot zachowano. Po naprawie rzeczywistego cyklu
+performance direct minimizer, biblioteka `35d15e3f…` przeszła native gate i
+trzy SP4: 44,536875 / 44,611956 / 44,748926 s. Physical i HotLoop są poprawne;
+niezmienione bramki energii, torque, residuum i pełnego Zarr są zaliczone.
+Mediana 44,611956 s wobec poprzednich 43,431922 s nie wykazała przyspieszenia.
+
+Następna poprawka dotyczy tylko deklarowanego zerowego startu PCG.
+Ponieważ r0=b, zachowuje pierwsze z=Cb i kopiuje D=b^TCb do rho na urządzeniu.
+Pomija drugie początkowe AMG, matvec A*x0 i ponowny dot; warm start pozostaje
+bez zmian. Kopia8B D2D jest rozliczana. Brak nowej alokacji, odczytu skalaru
+na CPU, fallbacku, zmiany tolerancji, paczek5/8 i certyfikatu residuum.
+
+Zarządzany native gate `2a6aa743ff164657b17b1c5f80123e3c` przeszedł w5,514 s:
+fresh wymaga queued+1 AMG, warm nadal queued+2; obejmuje też zero RHS,
+NaN, czyszczenie odrzuconego kandydata i40B dla pięciu fresh apply.
+Snapshot `a90bb40e93e072a93ea3099e568bc19708c67834ba9b489d5a52711446d11f94`,
+biblioteka `0bd7e6f11fceb5eafa7d22e546c636f9dc7c24259895326a4f997a4031986494`.
+
+| Wielkość | Lifecycle v2, 3 próby | Fresh reuse, 3 próby |
+|---|---:|---:|
+| Mediana czasu workera [s] |44,611956|42,858635|
+| Zakres [s] |44,536875–44,748926|42,625113–46,091595|
+| Mediana sumy Poissona [s] |19,719933|20,276239|
+| Mediana sumy materializacji pól [s] |2,076776|0,643992|
+| Zaakceptowane kroki |92|92|
+
+Nowe czasy to46,091595 /42,858635 /42,625113 s. Mediana workera spadła o3,93%,
+ale mediana inkluzywnego licznika Poissona wzrosła o2,82%. Fazy mogą się
+nakładać; spadek całkowitego czasu nie dowodzi zysku samego AMG. Próby były
+sekwencyjne, nie naprzemiennie parowane; rozrzut nowej kohorty jest znaczny.
+Nie podajemy izolowanego czasu kroku lub kernela.
+
+Wszystkie numeryczne tablice Zarr trzech nowych biegów są bitowo identyczne
+z pierwszą bazą v2. Osiem energii, torque8,573588023048801e-7T i rzeczywisty
+certyfikat4,1140783817602217e-13 przechodzą niezmienione bramki.
+HotLoop ma113solve /7477aktywnych iteracji /1017odczytów po104B;
+Physical114 /7544 /1026. Pozostały budżet to386odczytów /58784B przy limicie389.
+Skrypty, pełne Zarr i provenance zachowano na WSL. Utracono tylko uchwyt
+klienta pierwszego biegu; jego terminalny stan odzyskano odczytowo przez
+przypięty API/run/session, bez ponowienia Solve.
+
+Dowody: `2026-11-12-poisson-device-v2-comparison.json`,
+`2026-11-12-poisson-fresh-reuse-comparison.json`, `poisson-runtime-fresh-reuse.json`
+i `2026-11-12-progress-v7.json` w tym samym katalogu kampanii.
+Oddzielny właściwy profil CUPTI Activity nie jest częścią median OFF.
+Jego 92-krokowy SP4 również przeszedł kontrolę energii, torque, certyfikatu
+i pełnego Zarr. Tożsamość śladu zweryfikowano przez PID z osobnego receiptu
+supervisora, accepted claim i UUID przydzielonej RTX4080 SUPER.
+Zapis zatrzymał limit512MiB: 1021904 rekordy, 5690 dropped records,
+`limit_flags=1`, status `partial`, timing qualification `not_verified`.
+Zachowane rekordy zawierają383414 kerneli,54711 wywołań `cudaMemcpy`
+i55505 kopii D2D. Są to niepełne liczniki, bez kwalifikacji czasów całego
+przebiegu lub wykorzystania sprzętu. Dalszy profil powinien objąć krótszy,
+jawnie opisany workload; nie zwiększono limitów i nie skopiowano dużego
+surowego śladu. Dowód: `2026-11-12-poisson-fresh-reuse-cupti.json`, ze
+wskazaniem kanonicznego śladu na WSL. To kieruje dalszą diagnozę na dużą
+liczbę uruchomień SpMV i synchronicznych kopii wewnątrz ścieżki HYPRE;
+nie dowodzi, że każda taka kopia jest transferem CPU/GPU.
+
+Review integracji ABI i liczników nie znalazł problemu implementacyjnego.
+Wykrył za to, że bezpośredni entrypoint modułu testowego poprzedzał osiem
+nowych testów. Reprodukcja RED nie znajdowała klasy; po przeniesieniu
+entrypointu na koniec przechodzi osiem testów bezpośrednio i wszystkie110
+testów verifier/matrix. Wcześniejszy tryb `python -m unittest` obejmował
+te testy już przed naprawą.
+Pięć naprzemiennych par BB, wszystkie cztery solvery względem MuMax3 GPU
+oraz integracja tych późniejszych zmian z masterem pozostają otwarte.
 
 ## Źródła
 

@@ -1,4 +1,5 @@
 #include "gpu/cuda/relaxation/bb_exchange_mass.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/relaxation/bb_exchange_mass_kernels.hpp"
 #include "context.hpp"
 #include "gpu/cuda/state/device_memory.hpp"
@@ -135,7 +136,7 @@ bool gpu_bb_exchange_mass_create(
 bool gpu_bb_exchange_mass_solve(
     GpuBbExchangeMassWorkspace &w, const FemGpuComponentField &gradient,
     const FemGpuComponentField &direction, double step_m_per_a,
-    void *compute_stream, TransferAudit &audit, std::string &error)
+    void *compute_stream, TransferAudit &audit, std::string &error, GpuPerformanceCounterState *performance)
 {
     if (!std::isfinite(step_m_per_a) || step_m_per_a <= 0.0 ||
         gradient.x == nullptr || gradient.y == nullptr || gradient.z == nullptr ||
@@ -157,6 +158,14 @@ bool gpu_bb_exchange_mass_solve(
     // One small terminal result only. Every inner dot, alpha/beta update,
     // stopping decision and true residual action stayed inside one GPU launch.
     record_device_control_scalar_to_host(audit, sizeof(w.last));
+    GpuPerformanceCounterDelta counter{};
+    // This read was already audited; also expose it in physical performance totals.
+    counter.control_fences=1; counter.control_d2h_bytes=sizeof(w.last);
+    counter.mandatory_controls.bb_certificate_record_bytes=sizeof(w.last);
+    counter.mandatory_controls.bb_certificate_readbacks=1;
+    counter.mandatory_controls.bb_certificate_bytes=sizeof(w.last);
+    note_hot_loop_mandatory_controls(audit,counter.mandatory_controls);
+    if (performance) gpu_performance_note(*performance,counter);
     if (w.last.status != 1) {
         error = "cooperative FEM GPU BB PCG failed: status=" + std::to_string(w.last.status) +
             " iterations=" + std::to_string(w.last.iterations);

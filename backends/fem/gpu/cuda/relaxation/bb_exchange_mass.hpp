@@ -9,6 +9,7 @@ namespace mfem { class SparseMatrix; }
 namespace fullmag::fem {
 struct Context;
 struct TransferAudit;
+struct GpuPerformanceCounterState;
 struct GpuBbExchangeMassWorkspace;
 
 // Numerical policy only: physical fields, energy, torque and Poisson
@@ -33,7 +34,7 @@ bool gpu_bb_exchange_mass_solve(
     double step_m_per_a,
     void *compute_stream,
     TransferAudit &audit,
-    std::string &error);
+    std::string &error, GpuPerformanceCounterState *performance = nullptr);
 
 double gpu_bb_exchange_mass_last_relative_residual(
     const GpuBbExchangeMassWorkspace &workspace);

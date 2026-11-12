@@ -106,6 +106,7 @@ bool gpu_demag_poisson_initialize(Context &ctx, std::string &error)
         return false;
     }
 
+    device_bytes = workspace->device_bytes;
     workspace->ready = true;
     ctx.poisson_demag.gpu_workspace = workspace.release();
     ctx.poisson_demag.gpu_workspace_ready = true;

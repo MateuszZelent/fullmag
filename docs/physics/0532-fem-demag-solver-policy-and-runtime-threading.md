@@ -1074,3 +1074,307 @@ managed-runtime qualification.
 | native-linear-iteration-work | `backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp` | `note_successful_demag_linear_iterations` | Saturating sum of successfully certified/recovered linear work. | FEM CPU/GPU | Numeric and rollback regressions added; execution pending. | Unpublished task candidate. |
 | native-openmp-runtime | `backends/fem/tests/cpu_threads_contract.cpp` | `class ScopedOpenMpRuntimeState` | Probe the library runtime setters after seeding distinct OpenMP control values. | FEM CPU/GPU host control | Existing package defect confirmed; corrected runtime test pending. | Unpublished task candidate. |
 | mfem-element-parallel-policy | `backends/fem/cpu/mfem/runtime/element_parallel_policy.hpp` | `mfem_shared_element_evaluation_parallel_safe` | Require thread-safe MFEM scratch before parallel element evaluation. | FEM CPU host element kernels | Provider flags inspected; runtime parity pending. | Unpublished task candidate. |
+
+
+(device-scalar-poisson-pcg)=
+## Device-scalar PCG with the retained GPU AMG hierarchy (candidate)
+
+The strict FEM GPU `CG/AMG` implementation retains the existing MFEM matrix
+and BoomerAMG hierarchy. It caps the first batch at five iterations and later
+batches at eight, always limited by the remaining iteration cap.
+This is an internal realization of the same requested policy, not a new Python,
+ProblemIR, or native ABI selector. CPU, GPU Jacobi and GMRES are unchanged.
+No failed device-PCG solve may retry through another engine or CPU fallback.
+Managed native and selected-point SP4 evidence is recorded below. These
+measurements do not qualify all four solver lanes or FEM against MuMax3.
+
+With the existing `two_norm=0` convention, let $C$ denote one fixed AMG V-cycle,
+$b$ the Poisson RHS, $x$ its potential, $r=b-Ax$, and $p$ the CG direction.
+The quantities $D=b^T Cb$ and $\rho=r^T Cr$ use the same discrete units as the
+existing preconditioned inner products; their ratio and the relative tolerance
+are dimensionless. The absolute tolerance retains HYPRE's preconditioned-norm
+convention. The production stopping comparison is strictly
+$\rho/D < \max(\tau_{\mathrm{inner}}^2,a_{\mathrm{tol}}^2/D)$.
+For warm starts $D$ is computed from $b$, never from the initial residual.
+For a declared fresh zero guess, $x_0=0$ and $r_0=b$: the implementation
+reuses the first $z=C b$ and copies $D$ to $\rho$ on the borrowed device
+stream. This avoids a second initial AMG application, the $A x_0$ matvec
+and the repeated initial dot product. Warm guesses retain both initial AMG
+applications and the $b^T Cb$ denominator. The eight-byte device-to-device
+copy is included in the existing transfer counters; no host scalar or new
+allocation is introduced. The independent true-residual certificate, inner
+tolerance, terminal-latch policy and iteration cap are unchanged. Native
+regression and three same-input profiler-off SP4 runs passed on library
+`0bd7e6f1…`, with bitwise-identical numeric Zarr arrays. The worker median
+changed from 44.611956 to 42.858635 s, while the inclusive Poisson phase
+median increased from 19.719933 to 20.276239 s. This is not an isolated AMG
+speedup or an alternating paired benchmark; the earlier device-PCG
+measurements belong to a different binary cohort.
+The recurrence is $q=Ap$, $\alpha=\rho/(p^Tq)$,
+$x\leftarrow x+\alpha p$, $r\leftarrow r-\alpha q$,
+$z=Cr$, $\beta=(r^Tz)/\rho$, and $p\leftarrow z+\beta p$.
+The existing inner tolerance factor, configured iteration limit, and independent
+true-residual certificate remain unchanged.
+
+The GPU latches the first converged iteration and freezes the candidate before
+host status collection. Remaining queued calls receive zero preconditioner
+inputs. True zero RHS returns zero potential; a zero preconditioned product
+with nonzero RHS, nonfinite data, nonpositive curvature or unsafe division
+fails closed. A final short batch never exceeds the configured iteration cap.
+`HyprePCG` statistics cannot describe the unexecuted outer solver: the workspace
+reports the actual device-PCG iteration count and recurrence residual instead.
+
+The owned workspace preallocates device vectors and CUB scratch. All recurrence,
+matvec and AMG work uses the borrowed HYPRE stream; Fullmag producer/consumer
+events retain their existing ordering. Raw `HYPRE_BoomerAMGSolve` preserves
+explicit library status checking, and its output is zeroed for every apply.
+Debug AMG norm logging is suppressed for this internal fixed preconditioner;
+setup and final Fullmag certificate still validate the unchanged operator.
+
+Acceptance requires native zero-RHS/exact-warm/Nonfinite/breakdown/batch-boundary
+oracles, no per-iteration D2H or allocation, one retained hierarchy setup, and
+the same SP4 torque, independent certificate, full Zarr and 2 ppm component-energy
+gates. The first five-iteration batch and later eight-iteration batches preserve
+the configured cap. After a device terminal latch, at most seven additional
+AMG API calls can be issued across the remainder of the apply, including up to
+two pre-loop applies and the first queued batch. This counts HYPRE API calls,
+not measured GPU cycles; no speedup is claimed.
+The no-inner-norm claim applies to the qualified l1-Jacobi AMG smoother
+(relax type 18 and coarse type 18). The engine explicitly requires `MPI_COMM_SELF`, relax/coarse type 18 and
+`print_level=0`; explicit verbose requests keep the existing HYPRE GPU engine
+and its diagnostics. Positive row/iteration counts and finite positive relative
+and finite nonnegative active absolute tolerances are checked before enqueue
+or any pinned host-status read.
+Other previously legal AMG smoothers keep the existing GPU HYPRE implementation.
+This setup-time selection changes neither the requested parameters nor CPU/GPU
+placement. Once device PCG is selected, errors cannot retry the old solver.
+An additive native getter reports the actual initialized engine;
+`fem_poisson_demag.resolved_linear_engine` preserves that result in provenance
+without changing existing ABI structures. CPU or uninitialized contexts return
+not applicable; the runner does not infer an engine from requests.
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Device-scalar outer PCG | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `apply_demag_poisson_device_pcg` | First batch capped at five, later batches at eight; API-call diagnostics are internal; managed tests required |
+| Initial terminal-batch regression | `backends/fem/tests/demag_poisson_contract.cpp` | `mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step` | Counts actual AMG calls for fresh/warm/zero/Nonfinite states, including fresh reuse and its D2D bytes; managed gate `2a6aa743…` passed |
+| Actual engine provenance | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_poisson_linear_engine_v1` | Candidate source; managed tests required |
+| GPU recurrence and stopping | `backends/fem/gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu` | `pcg_finish_rho_kernel` | Candidate source; managed tests required |
+
+
+```{math}
+:label: eq-fem-poisson-device-pcg-recurrence
+\begin{aligned}
+ D &= b^T C b, & r &= b-Ax, & z &= Cr, & \rho &= r^Tz, \\
+ q &= Ap, & \alpha &= \rho/(p^Tq), & x^+ &= x+\alpha p, & r^+ &= r-\alpha q, \\
+ z^+ &= Cr^+, & \rho^+ &= (r^+)^Tz^+, & \beta &= \rho^+/\rho, & p^+ &= z^++\beta p, \\
+ \rho/D &< \max(\tau_{\mathrm{inner}}^2,a_{\mathrm{tol}}^2/D).
+\end{aligned}
+```
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $A$ | FE Poisson stiffness operator | $\mathrm{m}$ |
+| $C$ | Fixed AMG approximation to inverse stiffness | $\mathrm{m}^{-1}$ |
+| $b$, $r$, $q$ | Load, residual, and stiffness applied to direction | $\mathrm{A}\,\mathrm{m}$ |
+| $x$, $z$, $p$ | Scalar potential, preconditioned residual, and direction | $\mathrm{A}$ |
+| $D$, $\rho$ | Preconditioned squared products | $\mathrm{A}^2\,\mathrm{m}$ |
+| $\alpha$, $\beta$, $\tau_{\mathrm{inner}}$ | Recurrence scalars and inner relative tolerance | $1$ |
+| $a_{\mathrm{tol}}$ | Preconditioned absolute tolerance | $\mathrm{A}\,\mathrm{m}^{1/2}$ |
+
+The superscript $+$ denotes the next CG iterate. The equation applies to the
+same constrained SPD FE system and fixed preconditioner as the existing CG
+realization; it changes no magnetic field, energy, or boundary operator.
+
+
+(device-scalar-poisson-pcg-accounting)=
+### Scoped PCG control-transfer subaccounting (candidate)
+
+The additive `fullmag_fem_backend_get_poisson_device_pcg_counters_v1` getter
+accepts a scope enum (`Physical=0`, `HotLoop=1`) and returns a new record of
+five `uint64_t` fields: `status_readbacks`, `status_record_bytes`,
+`control_d2h_bytes`, `solves`, and `active_iterations`. Unknown scopes fail;
+existing ABI structure sizes and requested CG/AMG policy remain unchanged.
+`status_record_bytes` is `sizeof(DemagPcgState)`.
+
+Physical counters belong to `GpuPerformanceCounterState.physical_lifetime`,
+updated through the same `gpu_performance_note` as aggregate physical control
+fences/bytes. Active outer attempts remain excluded until commit/reject/fail;
+rejected/failed work survives rollback. The existing GPU lifecycle reset resets
+these totals, while rebuilding the Poisson workspace does not.
+
+HotLoop counters belong to `TransferAudit.device_pcg_hot_loop` and use exactly
+the existing audit predicate `audit.hot_loop_depth>0`. They share the existing
+audit's immediate visibility, value-copy/reset and rollback boundaries. A solve
+records its scoped start before first enqueue; every completed status readback
+records scoped bytes and active-iteration delta under that same condition.
+The solve scope cannot change during an apply. Each readback remains in the
+existing aggregate transfer audit and performance counters; no transfer is
+hidden or reclassified as bulk.
+
+`solves` counts valid invocations starting enqueue. `active_iterations` adds
+differences of the GPU first-stop iteration counter after each completed
+readback, including a terminal numerical rejection. Neither scope is inferred
+from last-step or accepted-row solve/iteration statistics. A CUDA failure before
+the first readback may leave `solves>0` and zero readbacks; this is not a
+qualified complete-run claim.
+
+The runner preserves distinct `StepStats.demag_device_pcg_physical` and
+`StepStats.demag_device_pcg_hot_loop` observations. The corresponding provenance
+and `demag_runtime` fields are `device_pcg_physical` and `device_pcg_hot_loop`,
+each containing the same five keys. Adjacent `resolved_linear_engine` comes
+from the context getter; `runtime_preconditioner=HypreBoomerAMG` remains.
+Historical and unchanged HYPRE engines may omit the additive observations.
+
+For either consistent scope of a completed converged run, let $R$ denote its
+cumulative status readbacks, $N$ the record size in bytes, $T$ PCG control
+bytes, $S$ started solves, and $I$ cumulative active iterations. For one solve,
+$R(I)$ has the bound shown below; summing it across $S$ solves gives the
+cumulative bound:
+
+```{math}
+:label: eq-fem-poisson-device-pcg-transfer-bound
+\begin{aligned}
+ R(I) &= 1+\lfloor (I+2)/8\rfloor && (S=1), \\
+ T &= RN, \\
+ R_{\max} &=
+ \begin{cases}
+ 0, & S=0\quad (I=0),\\
+ S, & S>0\quad (I=0),\\
+ S+\lfloor (I+2S)/8\rfloor, & I>0,
+ \end{cases} \\
+ S &\le R \le R_{\max}.
+\end{aligned}
+```
+
+| Symbol | Meaning | Unit |
+|---|---|---|
+| $R$ | Cumulative completed PCG status readbacks | $1$ |
+| $N$ | Size of one PCG status record | $\mathrm{byte}$ |
+| $T$ | Cumulative PCG control bytes | $\mathrm{byte}$ |
+| $S$ | Cumulative valid PCG invocations starting enqueue | $1$ |
+| $I$ | Cumulative GPU-reported active iterations | $1$ |
+| $R_{\max}$ | Cumulative readback upper bound for the selected batch sizes | $1$ |
+
+Status is still read once at each batch boundary: the initial boundary is now
+five iterations, while later boundaries are at most eight. This can add an
+ordinary batch-status read for a solve that continues beyond iteration five;
+there is no per-iteration or separate terminal-status D2H readback. The counter
+fixture covers $S=4,I=0$ and $I=0,5,6,13,14,500$, and rejects arithmetic
+overflow in its fixed-width native helper. The Python validator uses
+arbitrary-precision integers and enforces $R\le R_{\max}$ before subtracting exact status bytes.
+This bound does not relax the existing compute, exchange, row-parity, or
+independent residual gates.
+
+The existing HotLoop validators subtract **only** the exact $R$ and $T$ from
+`device_pcg_hot_loop`, never `device_pcg_physical`, from HotLoop aggregate
+control fences/bytes. They first require nonnegative subtraction, $T=RN$ and
+the cumulative PCG bound. The unchanged prior PGBB budget applies to the
+remainder: `B=3+4*steps+max(0,rhs_evals-2*steps)` fences and `256*B` bytes.
+Physical-only evidence cannot qualify this subtraction. Unchanged HYPRE PCG
+paths retain their existing validation route and budgets.
+
+For a completed observation, additive PhysicalLifetime includes setup outside
+attempts and every completed accepted, rejected or failed attempt. Direct GPU
+minimizers must open the performance lifecycle alongside their execution
+receipt; an accepted step commits, a terminal observation without a step
+rejects, and an unclosed error path fails. In-flight attempt deltas stay private.
+This lifecycle is independent of the profiler setting. Legacy 480-byte
+`physical_control_*` aggregates remain attempt-scoped: setup counted by additive
+Physical must not be subtracted from those legacy aggregates. Only matching
+HotLoop scopes justify the core-budget subtraction.
+
+Completed-run validation requires both PCG scopes, identical status-record size,
+valid cumulative bounds, and Physical counters at least as large as HotLoop.
+Mandatory-control lifetime counts must likewise contain the completed HotLoop
+counts. Persisted summaries retain both records for revalidation. A live active
+attempt is intentionally not a completed-run certificate.
+
+The first full-Zarr device-PCG SP4 pilot passed all component-energy, torque and
+true-residual checks, but failed this lifetime gate: its direct-minimizer path
+had not opened a performance attempt. Its 45.124280 s single-run measurement
+does not establish a speedup. The lifecycle fix and real direct-path regression
+remain candidates until the managed native gate and a new SP4 cohort pass.
+
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Physical subaccounting owner | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `gpu_performance_device_pcg_snapshot` | Source candidate; managed gate pending |
+| HotLoop subaccounting owner | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `record_device_pcg_status_to_host` | Source candidate; managed gate pending |
+| Scope/subtraction regression | `backends/fem/tests/poisson_device_pcg_counter_fixture.hpp` | `device_pcg_physical_subaccounting_survives_rollback` | Source candidate; managed gate pending |
+| Direct minimizer lifecycle | `backends/fem/cpu/mfem/runtime/backend_step.cpp` | `run_backend_relaxation_step` | Source candidate; new managed gate pending |
+| Attempt guard | `backends/fem/gpu/cuda/runtime/performance_counters.hpp` | `class GpuPerformanceAttemptScope` | Source candidate; active exclusion and exactly one terminal boundary |
+| Real direct-path regression | `backends/fem/tests/demag_poisson_contract.cpp` | `void direct_pgbb_performance_lifecycle_contract` | Source candidate; profiler OFF/ON and two confirmations; managed execution pending |
+
+The shared fixture proves outside-HotLoop physical growth with zero HotLoop
+counts, inside-HotLoop accounting, reject/fail/copy/reset/rollback behavior and
+exact subtraction only from the matching aggregate. It runs in the existing
+`fem-demag-poisson` gate (`device_pcg_scope_accounting_contract`) and the
+existing performance unit; no extra gate selector is required.
+
+
+(mandatory-gpu-controls)=
+## Mandatory GPU controls and unchanged core readback budget (candidate)
+
+Typed source attribution separates BB certificate/descent, independent Poisson
+certificate and same-step torque-confirmation metrics from the legacy core
+PG-BB budget. This changes no readback, tolerance, field, energy, step count or
+stopping rule. New telemetry is source-only until managed regression/runtime
+qualification. Physical counters share the performance owner; HotLoop counters
+share TransferAudit and exactly its depth/copy/reset/rollback semantics.
+
+Generic provenance fields `gpu_mandatory_controls_physical` and
+`gpu_mandatory_controls_hot_loop` publish through `fem_gpu_solver_controls`
+(`physical`, `hot_loop`), including BB without demag. A new versioned getter
+returns ten uint64 counters, scope0 Physical/scope1 HotLoop; old ABI layouts
+are unchanged. Legacy null/missing records earn no attribution credit.
+
+For the saved SP4 observation, accepted callbacks end at792 fences/70128B;
+two same-step torque confirmations add8 fences/688B, yielding800/70816.
+Exclusive source buckets are BB184/9568B, Poisson certificate226/1808B and
+confirmation metrics4/656B. Confirmation excludes BOTH certificate and device
+PCG status subcounts. The remainder386/58784 satisfies unchangedB389 and256B
+per allowed fence. Confirmation observations never become accepted steps or
+CSV RHS evaluations. Rejected-attempt counts must declare whether they include
+confirmations before RHS minima can exclude those observations.
+
+
+The additive record fields have type `uint64_t`, default zero, no ProblemIR
+or authoring destination, and support FEM GPU controls independently of demag.
+CPU counters remain zero; FDM has no realization of this native FEM getter.
+
+| Record field | Meaning | Unit |
+|---|---|---|
+| `bb_certificate_record_bytes` | Actual size of one terminal BB result | $\mathrm{byte}$ |
+| `bb_certificate_readbacks` | Completed BB certificate reads | $1$ |
+| `bb_certificate_bytes` | BB certificate data transferred | $\mathrm{byte}$ |
+| `bb_descent_readbacks` | Completed projected-direction descent reads | $1$ |
+| `bb_descent_bytes` | Descent data transferred | $\mathrm{byte}$ |
+| `poisson_certificate_readbacks` | Independent RHS/residual norm reads | $1$ |
+| `poisson_certificate_bytes` | Independent certificate data transferred | $\mathrm{byte}$ |
+| `confirmation_observations` | Same-step torque observations, not accepted steps | $1$ |
+| `confirmation_metric_readbacks` | Exclusive current/final confirmation reads | $1$ |
+| `confirmation_metric_bytes` | Exclusive confirmation data, excluding Poisson certificate and PCG status | $\mathrm{byte}$ |
+
+Physical BB certificate reads previously existed in TransferAudit but lacked
+a performance aggregate note; the new source note also closes that accounting
+gap without adding a readback. Descent and Poisson certificate aggregate notes
+are retained exactly once. Confirmation only attributes previously recorded
+reads; it does not increment aggregate counts again.
+
+Accepted-CSV rejection counts remain line-search trials. An explicit
+`execution_attempts` rejection scope may exclude only the typed confirmation
+count from the RHS minimum and must agree with the native execution receipt.
+Neither case changesB: `3+4*steps+max(0,rhs_evals-2*steps)` or the256B allowance.
+
+| Claim | Repository path | Stable symbol | Evidence |
+|---|---|---|---|
+| Physical mandatory controls | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `gpu_performance_mandatory_controls_snapshot` | Source candidate; native gate pending |
+| HotLoop mandatory controls | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `note_hot_loop_mandatory_controls` | Source candidate; native gate pending |
+| Exclusive confirmation attribution | `backends/fem/gpu/cuda/runtime/performance_counters.cpp` | `resolve_confirmation_control_delta` | Source candidate; native gate pending |
+| Additive C ABI scopes | `backends/fem/src/api.cpp` | `fullmag_fem_backend_get_mandatory_control_counters_v1` | Source candidate; ABI/native gate pending |
+| Real SP4 and scope regression | `backends/fem/tests/mandatory_control_counter_fixture.hpp` | `mandatory_control_accounting_contract` | Source candidate; native gate pending |
+
+Pure Python source tests preserve the existing95 guard cases and add9 cases for
+actual800/70816 accounting, combined PCG statuses, bad scopes/missing records,
+underflow/double attribution and explicit rejection domains. These are mocked
+transport/source tests, not managed runtime or scientific qualification.

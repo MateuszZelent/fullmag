@@ -989,7 +989,7 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             )
 
     def test_gpu_transfer_budget_is_algorithm_specific(self) -> None:
-        for algorithm in ("llg_overdamped", "nonlinear_cg"):
+        for algorithm in ("llg_overdamped", "nonlinear_cg", "projected_gradient_bb"):
             spec = next(
                 case
                 for case in executor.collect_execution_cases(self._plans())
@@ -1003,17 +1003,171 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                 self._successful_launch(spec, artifacts, {}, log_path)
                 metadata_path = artifacts / "metadata.json"
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-                metadata["execution_provenance"]["hot_loop_host_sync_count"] = 7
-                metadata["execution_provenance"]["hot_loop_control_scalar_host_sync_count"] = 7
-                metadata["execution_provenance"]["hot_loop_control_scalar_d2h_bytes"] = 56
+                excess_syncs = 8 if algorithm == "projected_gradient_bb" else 7
+                metadata["execution_provenance"]["hot_loop_host_sync_count"] = excess_syncs
+                metadata["execution_provenance"]["hot_loop_control_scalar_host_sync_count"] = excess_syncs
+                metadata["execution_provenance"]["hot_loop_control_scalar_d2h_bytes"] = excess_syncs * 8
                 qualification = metadata["fem_gpu_relaxation_qualification"]
-                qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"] = 7
+                qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"] = excess_syncs
                 metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
                 with self.assertRaisesRegex(executor.ExecutionError, "bounded gate budget"):
                     executor._validate_case_artifacts(
                         spec, artifacts, log_path, 1, self.execution_identity
                     )
+
+    def test_device_scalar_pcg_readbacks_get_an_exact_separate_pool(self) -> None:
+        spec = next(
+            case
+            for case in executor.collect_execution_cases(self._plans())
+            if case["device"] == "gpu"
+            and case["relaxation_algorithm"] == "projected_gradient_bb"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            log_path = root / executor.RUNTIME_LOG
+            self._successful_launch(spec, artifacts, {}, log_path)
+            metadata_path = artifacts / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            execution = metadata["execution_provenance"]
+            execution["hot_loop_host_sync_count"] = 9
+            execution["hot_loop_control_scalar_host_sync_count"] = 9
+            execution["hot_loop_control_scalar_d2h_bytes"] = 264
+            qualification = metadata["fem_gpu_relaxation_qualification"]
+            qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"] = 9
+            metadata["demag_runtime"].update(
+                {
+                    "resolved_linear_engine": "device_scalar_pcg_amg",
+                    "runtime_solver": "DeviceScalarPCG",
+                    "runtime_preconditioner": "HypreBoomerAMG",
+                    "max_iterations": 16,
+                    "device_pcg_hot_loop": {
+                        "status_readbacks": 2,
+                        "status_record_bytes": 104,
+                        "control_d2h_bytes": 208,
+                        "solves": 1,
+                        "active_iterations": 12,
+                    },
+                    "device_pcg_physical": {
+                        "status_readbacks": 2,
+                        "status_record_bytes": 104,
+                        "control_d2h_bytes": 208,
+                        "solves": 1,
+                        "active_iterations": 12,
+                    },
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            evidence = executor._validate_case_artifacts(
+                spec, artifacts, log_path, 1, self.execution_identity
+            )
+
+        telemetry = evidence["gpu_transfer_telemetry"]
+        self.assertEqual(telemetry["resolved_linear_engine"], "device_scalar_pcg_amg")
+        self.assertEqual(telemetry["hot_loop_control_scalar_host_sync_count"], 9)
+        self.assertEqual(telemetry["hot_loop_control_scalar_d2h_bytes"], 264)
+        self.assertEqual(telemetry["device_pcg_status_readbacks"], 2)
+        self.assertEqual(telemetry["device_pcg_control_d2h_bytes"], 208)
+        self.assertEqual(telemetry["unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["unattributed_control_scalar_d2h_bytes"], 56)
+        self.assertEqual(telemetry["allowed_unattributed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["allowed_unattributed_control_scalar_d2h_bytes"], 1792)
+        self.assertEqual(telemetry["allowed_control_scalar_host_sync_count"], 9)
+        self.assertEqual(telemetry["allowed_control_scalar_d2h_bytes"], 2000)
+
+    def test_hypre_pcg_null_hot_loop_counter_preserves_legacy_budget(self) -> None:
+        spec = next(
+            case
+            for case in executor.collect_execution_cases(self._plans())
+            if case["device"] == "gpu"
+            and case["relaxation_algorithm"] == "projected_gradient_bb"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = root / "artifacts"
+            log_path = root / executor.RUNTIME_LOG
+            self._successful_launch(spec, artifacts, {}, log_path)
+            metadata_path = artifacts / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["demag_runtime"].update(
+                {
+                    "resolved_linear_engine": "hypre_pcg",
+                    "runtime_solver": "HyprePCG",
+                    "device_pcg_hot_loop": None,
+                }
+            )
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            evidence = executor._validate_case_artifacts(
+                spec, artifacts, log_path, 1, self.execution_identity
+            )
+
+        telemetry = evidence["gpu_transfer_telemetry"]
+        self.assertEqual(telemetry["resolved_linear_engine"], "hypre_pcg")
+        self.assertEqual(telemetry["hot_loop_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["hot_loop_control_scalar_d2h_bytes"], 56)
+        self.assertEqual(telemetry["allowed_control_scalar_host_sync_count"], 7)
+        self.assertEqual(telemetry["allowed_control_scalar_d2h_bytes"], 1792)
+        self.assertNotIn("device_pcg_status_readbacks", telemetry)
+
+    def test_gpu_mandatory_controls_flow_through_sp4_guard_without_budget_change(self) -> None:
+        spec=next(case for case in executor.collect_execution_cases(self._plans())
+                  if case["device"]=="gpu" and case["relaxation_algorithm"]=="projected_gradient_bb")
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);artifacts=root/"artifacts";log_path=root/executor.RUNTIME_LOG
+            self._successful_launch(spec,artifacts,{},log_path)
+            path=artifacts/"metadata.json";metadata=json.loads(path.read_text())
+            hot={"bb_certificate_record_bytes":96,"bb_certificate_readbacks":1,"bb_certificate_bytes":96,
+                "bb_descent_readbacks":1,"bb_descent_bytes":8,"poisson_certificate_readbacks":2,
+                "poisson_certificate_bytes":16,"confirmation_observations":0,
+                "confirmation_metric_readbacks":0,"confirmation_metric_bytes":0}
+            metadata["fem_gpu_solver_controls"]={"physical":dict(hot),"hot_loop":hot}
+            execution=metadata["execution_provenance"]
+            execution["hot_loop_control_scalar_host_sync_count"]+=4
+            execution["hot_loop_host_sync_count"]+=4
+            execution["hot_loop_control_scalar_d2h_bytes"]+=120
+            qualification=metadata["fem_gpu_relaxation_qualification"]
+            qualification["device_policy"]["hot_loop_control_scalar_host_sync_count"]+=4
+            path.write_text(json.dumps(metadata))
+            evidence=executor._validate_case_artifacts(spec,artifacts,log_path,1,self.execution_identity)
+        telemetry=evidence["gpu_transfer_telemetry"]
+        self.assertEqual(telemetry["mandatory_control_readbacks"],4)
+        self.assertEqual(telemetry["unattributed_control_scalar_host_sync_count"],7)
+        self.assertEqual(telemetry["allowed_unattributed_control_scalar_host_sync_count"],7)
+
+    def test_typed_confirmation_rejections_use_receipt_not_accepted_csv(self) -> None:
+        spec=next(case for case in executor.collect_execution_cases(self._plans())
+                  if case["device"]=="gpu" and case["relaxation_algorithm"]=="projected_gradient_bb")
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);artifacts=root/"artifacts";log_path=root/executor.RUNTIME_LOG
+            self._successful_launch(spec,artifacts,{},log_path)
+            path=artifacts/"metadata.json";metadata=json.loads(path.read_text())
+            hot={"bb_certificate_record_bytes":96,"bb_certificate_readbacks":1,"bb_certificate_bytes":96,
+                "bb_descent_readbacks":1,"bb_descent_bytes":8,"poisson_certificate_readbacks":6,
+                "poisson_certificate_bytes":48,"confirmation_observations":2,
+                "confirmation_metric_readbacks":4,"confirmation_metric_bytes":656}
+            metadata["fem_gpu_solver_controls"]={"physical":dict(hot),"hot_loop":hot}
+            execution=metadata["execution_provenance"]
+            execution["hot_loop_control_scalar_host_sync_count"]+=12
+            execution["hot_loop_host_sync_count"]+=12
+            execution["hot_loop_control_scalar_d2h_bytes"]+=808
+            execution["fem_gpu_minimizer_execution_receipt"]={
+                "schema_version":"fullmag.fem.gpu.minimizer-execution-receipt.v1",
+                "algorithm":"projected_gradient_bb",
+                "accounting":{"rejected_attempt_count":2,"accounting_valid":True,"executed":"cuda_fem"}}
+            q=metadata["fem_gpu_relaxation_qualification"]
+            q["rejected_attempts"]=2;q["rejected_attempts_scope"]="execution_attempts"
+            q["device_policy"]["hot_loop_control_scalar_host_sync_count"]+=12
+            path.write_text(json.dumps(metadata))
+            evidence=executor._validate_case_artifacts(spec,artifacts,log_path,1,self.execution_identity)
+            self.assertEqual(evidence["gpu_transfer_telemetry"]["minimum_rhs_evals"],2)
+            self.assertEqual(evidence["gpu_transfer_telemetry"]["rejected_attempts"],2)
+            execution["fem_gpu_minimizer_execution_receipt"]["accounting"]["rejected_attempt_count"]=3
+            path.write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(executor.ExecutionError,"native receipt"):
+                executor._validate_case_artifacts(spec,artifacts,log_path,1,self.execution_identity)
 
     def test_gpu_algorithm_counters_reject_impossible_relationships(self) -> None:
         mutations = {

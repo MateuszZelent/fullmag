@@ -31,6 +31,7 @@
 namespace fullmag::fem {
 
 struct Context;
+struct GpuDemagDevicePcgWorkspace;
 
 struct DeviceCsrTriple {
     uint64_t rows = 0;
@@ -100,11 +101,15 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::HypreParVector> b_par;
     std::unique_ptr<mfem::HypreParVector> x_par;
     std::unique_ptr<mfem::HypreParVector> residual;
+    std::shared_ptr<GpuDemagDevicePcgWorkspace> device_pcg;
 #endif
     uint64_t device_bytes = 0;
     uint64_t solver_setup_count = 0;
     uint64_t fresh_zero_guess_count = 0;
     uint64_t warm_start_count = 0;
+    // Per-apply diagnostic counts for real HYPRE calls and PCG iteration enqueues.
+    uint64_t last_enqueued_iterations = 0;
+    uint64_t last_amg_apply_calls = 0;
     bool solver_setup_complete = false;
     bool ready = false;
 };

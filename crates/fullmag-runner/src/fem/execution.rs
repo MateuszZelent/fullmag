@@ -364,6 +364,8 @@ fn execute_native_fem(
         effective_fem_omp_threads: initial_stats.and_then(|stats| {
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
+        gpu_mandatory_controls_physical: None,
+        gpu_mandatory_controls_hot_loop: None,
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
         fem_bem_demag,
         ..Default::default()

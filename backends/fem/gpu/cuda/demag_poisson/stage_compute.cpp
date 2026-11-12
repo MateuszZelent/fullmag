@@ -304,7 +304,7 @@ bool compute_device_demag_for_device_stage_impl(
                 const auto host_api_start = timings.enabled
                     ? FemSteadyClock::now()
                     : FemSteadyClock::time_point{};
-                workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                if (!apply_demag_poisson_hypre_device_solver(ctx,*workspace,reason)) return false;
                 if (timings.enabled) {
                     ctx.poisson_demag.step_hypre_host_api_wall_time_ns +=
                         elapsed_ns(host_api_start);

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md",
-    "reviewed_revision": "70d35b84dae4e840e8cc881c35ef45014c604284"
+    "reviewed_revision": "50c84284edc9c45c4befbab67235621fca8451ca"
   },
   "backend_matrix": [
     {
@@ -55,6 +55,39 @@
       "sources": [
         "cpu-poisson-solve",
         "gpu-poisson-validation"
+      ]
+    },
+    {
+      "id": "eq-fem-poisson-device-pcg-recurrence",
+      "symbols": [
+        "pcg-A",
+        "pcg-C",
+        "pcg-loads",
+        "pcg-potential",
+        "pcg-products",
+        "pcg-scalars",
+        "pcg-atol"
+      ],
+      "sources": [
+        "device-scalar-poisson-pcg",
+        "device-pcg-recurrence"
+      ]
+    },
+    {
+      "id": "eq-fem-poisson-device-pcg-transfer-bound",
+      "symbols": [
+        "pcg-R",
+        "pcg-N",
+        "pcg-T",
+        "pcg-S",
+        "pcg-I",
+        "pcg-Rmax"
+      ],
+      "sources": [
+        "device-pcg-physical-counters",
+        "device-pcg-subaccounting-regression",
+        "device-pcg-hot-loop-counters",
+        "device-pcg-initial-batch-regression"
       ]
     }
   ],
@@ -136,6 +169,84 @@
       "latex": "\\mathrm{atol}",
       "meaning": "Absolute residual tolerance for the unscaled system",
       "si_unit": "\\mathrm{A\\,m}"
+    },
+    {
+      "id": "pcg-A",
+      "latex": "A",
+      "meaning": "FE Poisson stiffness operator",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "pcg-C",
+      "latex": "C",
+      "meaning": "Fixed AMG approximation to inverse stiffness",
+      "si_unit": "\\mathrm{m}^{-1}"
+    },
+    {
+      "id": "pcg-loads",
+      "latex": "b",
+      "meaning": "Load, residual, and stiffness applied to direction",
+      "si_unit": "\\mathrm{A}\\,\\mathrm{m}"
+    },
+    {
+      "id": "pcg-potential",
+      "latex": "x",
+      "meaning": "Scalar potential, preconditioned residual, and direction",
+      "si_unit": "\\mathrm{A}"
+    },
+    {
+      "id": "pcg-products",
+      "latex": "D",
+      "meaning": "Preconditioned squared products",
+      "si_unit": "\\mathrm{A}^2\\,\\mathrm{m}"
+    },
+    {
+      "id": "pcg-scalars",
+      "latex": "\\alpha",
+      "meaning": "Recurrence scalars and inner relative tolerance",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-atol",
+      "latex": "a_{\\mathrm{tol}}",
+      "meaning": "Preconditioned absolute tolerance",
+      "si_unit": "\\mathrm{A}\\,\\mathrm{m}^{1/2}"
+    },
+    {
+      "id": "pcg-R",
+      "latex": "R",
+      "meaning": "Cumulative completed PCG status readbacks",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-N",
+      "latex": "N",
+      "meaning": "Size of one PCG status record",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "pcg-T",
+      "latex": "T",
+      "meaning": "Cumulative PCG control bytes",
+      "si_unit": "\\mathrm{byte}"
+    },
+    {
+      "id": "pcg-S",
+      "latex": "S",
+      "meaning": "Cumulative valid PCG invocations starting enqueue",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-I",
+      "latex": "I",
+      "meaning": "Cumulative GPU-reported active iterations",
+      "si_unit": "1"
+    },
+    {
+      "id": "pcg-Rmax",
+      "latex": "R_{\\max}",
+      "meaning": "Cumulative readback upper bound for the selected batch sizes",
+      "si_unit": "1"
     }
   ],
   "sources": [
@@ -343,6 +454,96 @@
       "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
       "symbol": "take_pgbb_accepted_stats",
       "responsibility": "Checks exact endpoint buffers and operator dependency keys before static CPU BB reuse. Runtime parity pending."
+    },
+    {
+      "id": "device-scalar-poisson-pcg",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "symbol": "apply_demag_poisson_device_pcg",
+      "responsibility": "Runs device-scalar PCG with a first batch capped at five and later batches at eight; retains the independent certificate and counts actual internal AMG API calls. Fresh-zero initialization reuses initial Cb and its product as rho, skipping the duplicate AMG, SpMV and dot; warm starts retain both applies and D=b^TCb."
+    },
+    {
+      "id": "device-pcg-recurrence",
+      "path": "backends/fem/gpu/cuda/demag_poisson/pcg_device_scalar_kernels.cu",
+      "symbol": "pcg_finish_rho_kernel",
+      "responsibility": "Owns GPU recurrence, first-stop latching and fail-closed status."
+    },
+    {
+      "id": "poisson-engine-provenance",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_poisson_linear_engine_v1",
+      "responsibility": "Additive getter reports actual initialized GPU Poisson engine without altering existing ABI layouts."
+    },
+    {
+      "id": "device-pcg-physical-counters",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "gpu_performance_device_pcg_snapshot",
+      "responsibility": "Returns stable additive physical PCG lifetime, including setup outside attempts; legacy aggregate counters have the narrower attempt scope."
+    },
+    {
+      "id": "device-pcg-subaccounting-regression",
+      "path": "backends/fem/tests/poisson_device_pcg_counter_fixture.hpp",
+      "symbol": "device_pcg_physical_subaccounting_survives_rollback",
+      "responsibility": "Verifies active exclusion, reject/fail/copy/reset, exact aggregate subtraction, and cumulative readback-bound boundaries including the first short batch."
+    },
+    {
+      "id": "device-pcg-hot-loop-counters",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "record_device_pcg_status_to_host",
+      "responsibility": "Records PCG and existing control audit under identical hot_loop_depth predicate; preserves audit owner lifecycle."
+    },
+    {
+      "id": "mandatory-physical",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "gpu_performance_mandatory_controls_snapshot",
+      "responsibility": "Reads stable physical mandatory control records."
+    },
+    {
+      "id": "mandatory-hot",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "note_hot_loop_mandatory_controls",
+      "responsibility": "Attributes mandatory records at the exact audit depth predicate."
+    },
+    {
+      "id": "mandatory-confirmation",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "symbol": "resolve_confirmation_control_delta",
+      "responsibility": "Excludes independent Poisson certificate and PCG statuses from confirmation metrics."
+    },
+    {
+      "id": "mandatory-abi",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_backend_get_mandatory_control_counters_v1",
+      "responsibility": "Additive versioned getter with strict scope validation."
+    },
+    {
+      "id": "mandatory-regression",
+      "path": "backends/fem/tests/mandatory_control_counter_fixture.hpp",
+      "symbol": "mandatory_control_accounting_contract",
+      "responsibility": "Checks saved SP4 arithmetic, scopes, rollback and no double attribution inside existing managed gate."
+    },
+    {
+      "id": "device-pcg-initial-batch-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step",
+      "responsibility": "Counts actual AMG API calls and enqueued iterations for zero-RHS, exact nonzero warm, initial Nonfinite and invalid-configuration states; verifies reset and terminal-batch limits. Fresh nonzero, zero and Nonfinite cases require one initial AMG and account for the8B D2D reuse; warm cases retain two initial AMG calls."
+    },
+    {
+      "id": "direct-gpu-performance-lifecycle",
+      "path": "backends/fem/cpu/mfem/runtime/backend_step.cpp",
+      "symbol": "run_backend_relaxation_step",
+      "responsibility": "Direct GPU minimizers open the existing counter transaction alongside their execution receipt and close it exactly once on each terminal path."
+    },
+    {
+      "id": "direct-gpu-performance-guard",
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.hpp",
+      "symbol": "class GpuPerformanceAttemptScope",
+      "responsibility": "Owns commit/reject/fail publication and active exclusion without new CUDA events, allocation or ABI fields."
+    },
+    {
+      "id": "direct-gpu-performance-regression",
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "symbol": "void direct_pgbb_performance_lifecycle_contract",
+      "responsibility": "Existing native gate exercises real public-ABI accepted PGBB and repeated terminal confirmations with profiler off/on; managed native gate passed on library0bd7e6f1; same-binary SP4 validates both additive scopes."
     }
   ],
   "public_api": {
@@ -435,6 +636,10 @@
     "object_example": "Policy.to_ir checked without Solve.",
     "gpu_residual_norm": "Managed native corrupted-potential RED/GREEN passed, followed by a seven-step 50 fs full-Zarr OFF parity check with independent relative residuals 2.16e-13..2.86e-13 <= 1e-12. Full 1 ns SP4 and corrected-source CUPTI remain unqualified.",
     "unchanged_tolerances": "SP4 uses rtol1e-12,atolNone,max500; the transport probe did not change these.",
-    "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed."
+    "shared_acceptance": "Independent certificates already form an explicit alternative to solver-reported convergence; no new acceptance relaxation is proposed.",
+    "device_scalar_pcg": "First69de pilot remains retained with failed PhysicalLifetime containment. Lifecycle-fixed35d15e3f native gate and3same-binary SP4 runs pass Physical/HotLoop,8energies,torque and independent true residual. No Poisson speedup was established for that change.",
+    "mandatory_controls": "110 Python verifier/matrix tests passed including missing/zero Physical rejection. Real direct-BB profiler-off/on native regression and3fresh-reuse SP4 runs pass scopes and unchanged residual control budget. No Physical subtraction from narrower legacy aggregates. Direct-module entrypoint moved after all classes: targeted RED becomes8PASS; full110tests PASS25.582s.",
+    "fresh_zero_initialization_reuse": "Native gate2a6aa743 PASS5.514010441s, library0bd7e6f1; fresh initial AMG count drops by1, warm unchanged. Three92-step SP4 runs preserve all numeric Zarr arrays bitwise; worker median44.611956→42.858635s, inclusive Poisson median19.719933→20.276239s. No isolated AMG or statistical paired speedup claim.",
+    "fresh_reuse_cupti": "Separate full92-step SP4 with solver_profile+cuda_trace passes science/control/Zarr. CUPTI is accepted as attempt/PID/GPU-bound but partial at512MiB,1021904records,5690drops,limit_flags1; timing qualification not_verified. Counts are incomplete; no full-run GPU timing/utilization or AMG speedup inferred."
   }
 }
