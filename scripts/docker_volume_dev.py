@@ -709,6 +709,17 @@ def _frontend(control, operation, selected, state, port, image):
     else:
         volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
+    if grouped and isinstance(previous_inputs, dict):
+        previous_hashes = {item["relative"]: item["sha256"] for item in previous_inputs.get("files", [])}
+        for record in files:
+            if record["relative"] not in ("apps/control-room/tsconfig.json", "apps/control-room/next-env.d.ts"):
+                continue
+            # A legitimate tsconfig edit can follow a Next rewrite of the old
+            # seed. Authenticate its frozen original before accepting variants.
+            previous_source = control.read_bytes("private/frontend/frozen-inputs/" + record["relative"], optional=True)
+            if previous_source is not None and hashlib.sha256(previous_source).hexdigest() == previous_hashes.get(record["relative"]):
+                record["generated_sha256"].extend(hashlib.sha256(value).hexdigest() for value in
+                    _next_generated_seed_variants(record["relative"], previous_source))
     request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs, "group_storage": grouped})
     if len(request) > 8 * 1024 * 1024:
         raise BuildControlError("Frontend metadata exceeds transfer budget")

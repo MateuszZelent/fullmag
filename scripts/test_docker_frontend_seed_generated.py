@@ -21,7 +21,7 @@ def seed_transaction():
 
 
 class GeneratedFrontendSeedTests(unittest.TestCase):
-    def execute(self, relative, original, actual):
+    def execute(self, relative, original, actual, previous_source=None):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -30,8 +30,11 @@ class GeneratedFrontendSeedTests(unittest.TestCase):
         target.parent.mkdir(parents=True)
         target.write_bytes(actual)
         digest = lambda value: hashlib.sha256(value).hexdigest()
+        accepted = _next_generated_seed_variants(relative, original)
+        if previous_source is not None:
+            accepted |= _next_generated_seed_variants(relative, previous_source)
         request = {"files": [{"relative": relative, "data": base64.b64encode(original).decode(),
-            "generated_sha256": [digest(value) for value in _next_generated_seed_variants(relative, original)]}],
+            "generated_sha256": [digest(value) for value in accepted]}],
             "inputs": {}, "previous_inputs": {"files": [{"relative": relative, "sha256": digest(original)}]},
             "group_storage": True}
         script = seed_transaction().replace("/data/", str(root) + "/")
@@ -46,6 +49,15 @@ class GeneratedFrontendSeedTests(unittest.TestCase):
         result, target = self.execute(relative, original, generated)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(target.read_bytes(), original)
+
+    def test_changed_seed_accepts_only_authenticated_variants_of_previous_seed(self):
+        relative = "apps/control-room/next-env.d.ts"
+        previous = b'import "./.next/types/routes.d.ts";\n'
+        current = previous + b"// changed source metadata\n"
+        generated = next(value for value in _next_generated_seed_variants(relative, previous) if value != previous)
+        result, target = self.execute(relative, current, generated, previous_source=previous)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.read_bytes(), current)
 
     def test_unknown_generated_file_is_retained_and_rejected(self):
         actual = b"unknown generated input with local modifications"
