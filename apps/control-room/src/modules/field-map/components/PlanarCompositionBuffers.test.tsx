@@ -22,7 +22,7 @@ vi.mock("../renderer/PlanarOverlaySurface", () => ({ PlanarOverlaySurface: (prop
   renderer.callbacks.set(`overlay:${props.model.sampleIdentity}`, props.onRenderEvidence);
   return <canvas data-test-overlay={props.model.sampleIdentity} />;
 } }));
-vi.mock("./PlanarColorLegend", () => ({ PlanarColorLegend: () => null }));
+vi.mock("./PlanarColorLegend", () => ({ PlanarColorLegend: () => null, PlanarLayerLegendList: () => null }));
 
 function frame(sample: string): PlanarCompositionFrame {
   const model = buildFieldMapRenderModel({ bounds: [0, 1, 0, 1], canonicalUnit: "1", component: "magnitude",

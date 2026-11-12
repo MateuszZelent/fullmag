@@ -53,6 +53,10 @@ export function placePlanarOverlay(model: FieldMapRenderModel, base: FieldMapRen
     bounds: [model.bounds[0] + u, model.bounds[1] + u, model.bounds[2] + v, model.bounds[3] + v],
     boundsCenter: [model.boundsCenter[0] + u, model.boundsCenter[1] + v],
     boundsOutline: null,
+    // Sample markers carry frame coordinates, so they move with the raster.
+    samplePoints: u === 0 && v === 0
+      ? model.samplePoints
+      : model.samplePoints.map((point) => ({ ...point, u: point.u + u, v: point.v + v })),
     frame: base.frame,
     viewport: base.viewport,
     interaction: base.interaction,

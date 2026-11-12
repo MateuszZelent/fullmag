@@ -192,7 +192,18 @@ const navigationSpecs: ToolCommandSpec[] = [
     id: "field-map.fit",
     shortcut: "F",
     title: "Fit 2D View",
+    // The view fits the sampled frame, which is the crop window when one is
+    // active (setting a crop also resets the interaction).
     run: (context) => queueInteraction(context, { panU: 0, panV: 0, zoom: 1 }),
+  },
+  {
+    id: "field-map.clear-crop",
+    title: "Clear 2D Crop",
+    reason: (planar) => planar && !planar.crop ? "No crop is active." : null,
+    run: (context) => {
+      context.visualizationSync!.queuePlanarCropPatch(null);
+      return { status: "completed" };
+    },
   },
 ];
 

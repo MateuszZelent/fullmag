@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFieldMapDataPlan,
   buildFieldMapProbeQuery,
+  buildFieldMapProfileQuery,
+  planarMeshDrawn,
 } from "./fieldMapDataPlan";
 
 describe("field-map data plan", () => {
@@ -54,6 +56,59 @@ describe("field-map data plan", () => {
         vector_budget: 768,
       },
     });
+  });
+
+  const layerInput = {
+    active: true,
+    component: "normal",
+    includeMesh: false,
+    source: { kind: "default" as const },
+    quality: "interactive" as const,
+    quantityId: "m",
+    resolution: [128, 64] as const,
+    showVectors: true,
+    vectorBudget: 512,
+  };
+
+  it("requests only metadata for the base sample of the layer model", () => {
+    expect(buildFieldMapDataPlan({ ...layerInput, layerModel: "layers" })).toMatchObject({
+      enabled: true,
+      requestMask: false,
+      requestMesh: false,
+      requestScalar: false,
+      requestVectors: false,
+      query: { vector_budget: 0 },
+    });
+    expect(buildFieldMapDataPlan({ ...layerInput, includeMesh: true, layerModel: "layers" }))
+      .toMatchObject({ requestMesh: true, requestScalar: false });
+    expect(buildFieldMapDataPlan({ ...layerInput, layerModel: "legacy" }))
+      .toMatchObject({ requestMask: true, requestScalar: true, requestVectors: true });
+  });
+
+  it("draws the base mesh once: view mask, plus a visible layer asking for it in the layer model", () => {
+    expect(planarMeshDrawn({ layers: { mesh: true } })).toBe(true);
+    expect(planarMeshDrawn({ layer_model: "legacy", layers: { mesh: true }, field_overlays: [] })).toBe(true);
+    expect(planarMeshDrawn({ layer_model: "layers", layers: { mesh: true }, field_overlays: [{}] })).toBe(false);
+    expect(planarMeshDrawn({ layer_model: "layers", layers: { mesh: true }, field_overlays: [{ mesh_visible: true }] })).toBe(true);
+    expect(planarMeshDrawn({
+      layer_model: "layers", layers: { mesh: true }, field_overlays: [{ mesh_visible: true, visible: false }],
+    })).toBe(false);
+    expect(planarMeshDrawn({ layer_model: "layers", layers: { mesh: false }, field_overlays: [{ mesh_visible: true }] })).toBe(false);
+  });
+
+  it("adds the crop window to the base sample query and every derived request", () => {
+    const window = {
+      window_u_min_m: "-2.5e-8",
+      window_u_max_m: "2.5e-8",
+      window_v_min_m: "0",
+      window_v_max_m: "1e-8",
+    };
+    const plan = buildFieldMapDataPlan({ ...layerInput, window });
+    expect(plan.query).toMatchObject(window);
+    expect(buildFieldMapProbeQuery(plan.query, 1e-9, 2e-9)).toMatchObject({ ...window, u_m: 1e-9, v_m: 2e-9 });
+    expect(buildFieldMapProfileQuery(plan.query, { u0: 0, u1: 1e-9, v0: 0, v1: 0 }, 8))
+      .toMatchObject({ ...window, samples: 8 });
+    expect(buildFieldMapDataPlan(layerInput).query).not.toHaveProperty("window_u_min_m");
   });
 
   it("does not substitute scene or global field revisions for exact sample revisions", () => {
@@ -111,9 +166,10 @@ describe("field-map data plan", () => {
     // through the user-facing planar error copy (PR 350), not raw text.
     expect(source).toContain("canonicalSampleError ??");
     expect(source).toContain("describePlanarError(sampleError)");
-    // Scalar, mask, vectors, mesh overlay, probe and line profile all wait
-    // for the canonical sample.
-    expect(source.match(/canonicalSampleReady/g)).toHaveLength(7);
+    // Scalar, mask, vectors, mesh overlay and line profile wait for the
+    // canonical sample; node probes replay each layer's canonical meta links.
+    expect(source.match(/canonicalSampleReady/g)).toHaveLength(6);
+    expect(source).toContain("planarFieldQueryFromMeta(plan.quantityId, plan.source, sample.meta)");
   });
 
   it.each([

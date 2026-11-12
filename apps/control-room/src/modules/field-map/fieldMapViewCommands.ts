@@ -7,6 +7,7 @@ import type {
   PlanarFieldSource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { planarWindowParams } from "@/kernel/resources/planarFieldResources";
 import { stepSectionFraction } from "@/kernel/visualization/planarSectionModel";
 
 import { downloadPlanarBlob, planarDataCsv, planarExportFilename } from "./fieldMapExport";
@@ -108,6 +109,8 @@ async function exportPlanarData(context: CommandContext): Promise<CommandResult>
         ? planar.view_scope.scope_id
         : undefined,
     scope_kind: planar.view_scope.kind,
+    // The crop belongs to the current source's plane; another monitor exports in full.
+    ...(typeof input?.monitorId === "string" ? {} : planarWindowParams(planar.crop)),
   };
   const [meta, scalar, mask] = await Promise.all([
     context.api.data.fields.planar.meta(planar.quantity_id, source, query, options),

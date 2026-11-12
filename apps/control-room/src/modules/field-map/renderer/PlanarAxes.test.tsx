@@ -56,4 +56,20 @@ describe("PlanarAxes", () => {
     expect(html).not.toContain("u (");
     expect(html).not.toContain("v (");
   });
+
+  it("ticks only the crop window when the sampled frame is the window", () => {
+    // A cropped sample reports the window as `bounds_uv_m` and fits it (zoom 1).
+    const window = [2e-8, 6e-8, -1e-8, 1e-8] as const;
+    const html = renderToStaticMarkup(
+      <PlanarAxes bounds={window} frame={cases[0]![1]} plotSize={{ height: 200, width: 400 }} viewport={window} />,
+    );
+    const horizontal = html.split('aria-label="Vertical')[0]!;
+    const values = [...horizontal.matchAll(/data-planar-axis-tick="([^"]+)"/g)].map((match) => Number(match[1]));
+    expect(values.length).toBeGreaterThanOrEqual(2);
+    // Horizontal world x = origin x (1 µm) + u.
+    for (const value of values) {
+      expect(value).toBeGreaterThanOrEqual(1e-6 + window[0] - 1e-15);
+      expect(value).toBeLessThanOrEqual(1e-6 + window[1] + 1e-15);
+    }
+  });
 });

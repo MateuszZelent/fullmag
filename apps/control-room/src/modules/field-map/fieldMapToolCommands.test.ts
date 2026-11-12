@@ -146,6 +146,26 @@ describe("field-map tool commands", () => {
     expect(command("field-map.toggle-streamlines").disabledReason?.(ctx)).toContain("scalar");
   });
 
+  it("fits a cropped view to the crop and clears the crop with one patch", async () => {
+    const crop = { u_min_m: -1e-8, u_max_m: 1e-8, v_min_m: 0, v_max_m: 2e-8 };
+    fieldMapSurfaceStore.set({ planar: planarState({ crop } as Partial<PlanarState>) });
+    const queuePlanarCropPatch = vi.fn();
+    const ctx = context();
+    const withCrop = { ...ctx, visualizationSync: { ...ctx.visualizationSync, queuePlanarCropPatch } as never };
+
+    // The sampled frame is the crop window, so fitting resets the interaction.
+    await command("field-map.fit").run(withCrop);
+    expect(ctx.queuePatch).toHaveBeenLastCalledWith({
+      planar: { interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 } },
+    });
+    expect(command("field-map.clear-crop").isEnabled?.(withCrop)).toBe(true);
+    await command("field-map.clear-crop").run(withCrop);
+    expect(queuePlanarCropPatch).toHaveBeenCalledExactlyOnceWith(null);
+
+    fieldMapSurfaceStore.set({ planar: planarState() });
+    expect(command("field-map.clear-crop").disabledReason?.(withCrop)).toBe("No crop is active.");
+  });
+
   it("sets the slice panel count and the legend mask", async () => {
     const planar = planarState();
     fieldMapSurfaceStore.set({ planar });

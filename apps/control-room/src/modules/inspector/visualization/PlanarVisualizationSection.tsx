@@ -531,6 +531,11 @@ function componentItemsFor(
  * Base field of a session still in the legacy model, where the base quantity
  * is drawn under the layers. Persisted sessions migrate to layers on restore.
  */
+const LEGACY_BASE_PALETTE_ITEMS = [
+  { label: "Direction (HSL, mumax3)", value: DIRECTION_COLORMAP },
+  ...SCALAR_COLOR_PALETTE_ITEMS,
+];
+
 function LegacyBaseFieldSection({
   capabilities,
   componentItems,
@@ -556,7 +561,7 @@ function LegacyBaseFieldSection({
 }) {
   const range = planar.range ?? { mode: "auto" as const, min: null, max: null };
   const scalarReason = capabilityReason(capabilities.raster);
-  const paletteItems = [{ label: "Direction (HSL, mumax3)", value: DIRECTION_COLORMAP }, ...SCALAR_COLOR_PALETTE_ITEMS];
+  const paletteItems = LEGACY_BASE_PALETTE_ITEMS;
   const renderModeOptions = capabilities.mesh.enabled
     ? (["surface", "surface+edges", "wireframe", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const)
     : (["surface", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const);

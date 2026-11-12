@@ -16,10 +16,10 @@ import {
   usePlanarFieldMetaResource,
   usePlanarMaskResource,
   usePlanarMeshOverlayResource,
-  usePlanarProbeResource,
   usePlanarProfileResource,
   usePlanarScalarResource,
   usePlanarVectorResource,
+  planarWindowParams,
 } from "@/kernel/resources/planarFieldResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
@@ -48,7 +48,11 @@ import {
   resolvePlanarSectionGeometryFromMeta,
   stepSectionFraction,
 } from "@/kernel/visualization/planarSectionModel";
-import { planarToolStore, type PlanarCursorUv } from "@/kernel/visualization/planarToolStore";
+import {
+  planarToolStore,
+  type PlanarCursorUv,
+  type PlanarUvRect,
+} from "@/kernel/visualization/planarToolStore";
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
 import { FieldMapAuxiliaryDiagnostics } from "./components/FieldMapAuxiliaryDiagnostics";
@@ -58,7 +62,11 @@ import { registerFieldMapCapture } from "./fieldMapCaptureRegistry";
 import { captureVisibleFieldMapPng } from "./fieldMapPngCapture";
 import { PlanarMultisliceGrid } from "./components/PlanarMultisliceGrid";
 import { PlanarSnapshotNavigator } from "./components/PlanarSnapshotNavigator";
-import { PlanarPinnedProbe } from "./components/PlanarPinnedProbe";
+import { PlanarNodeInspector } from "./components/PlanarNodeReadout";
+import type { PlanarFieldLayerRuntime } from "./hooks/usePlanarNodeProbes";
+import type { PlanarCompositionFrame } from "./model/planarCompositionFrame";
+import { withStalePlanarCropCleared } from "./model/planarCropPatch";
+import { layerVisible, multisliceLayer } from "@/modules/inspector/public";
 import { PlanarProfileChart } from "./components/PlanarProfileChart";
 import { quantityDisplayName } from "@/kernel/api/quantityIds";
 import { PlanarStatusBar } from "./components/PlanarStatusBar";
@@ -67,8 +75,8 @@ import { describePlanarError, isSupersededPlanarError } from "./model/planarErro
 
 import {
   buildFieldMapDataPlan,
-  buildFieldMapProbeQuery,
   buildFieldMapProfileQuery,
+  planarMeshDrawn,
 } from "./model/fieldMapDataPlan";
 import {
   buildFieldMapRenderModel,
@@ -95,10 +103,14 @@ import { useRetainedPlanarFrame } from "./hooks/useRetainedPlanarFrame";
 import { fieldMapSurfaceStore as fieldMapStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 
 type SectionDefaultSlice = NonNullable<VisualizationStateResource["planar"]>["default_slice"];
-type PlanarPatch = NonNullable<Parameters<ReturnType<typeof useKernel>["visualizationSync"]["queuePatch"]>[0]["planar"]>;
+
 
 /** Uniform samples per line profile; FEM adds the element-face crossings. */
 const PROFILE_SAMPLES = 512;
+
+/** The toolbar reads the command registry itself; one element serves every render. */
+const PLANAR_TOOLBAR = <PlanarToolbar />;
+
 
 /** A requested overlay is settled once its request finished, with data or not. */
 function planarLayerSettled(requested: boolean, status: ResourceStatus): boolean {
@@ -108,7 +120,8 @@ function planarLayerSettled(requested: boolean, status: ResourceStatus): boolean
 function useFieldMapModuleController() {
   const { layout, visualizationSync } = useKernel();
   const { resourceKey: sessionFrameKey, sessionIdentity } = useSessionScopedResourceKey("planar-render-frame");
-  const [pinned, setPinned] = useState<readonly [number, number] | null>(null);
+  const [pinned, setPinned] = useState<PlanarCursorUv | null>(null);
+  const [compositionFrame, setCompositionFrame] = useState<PlanarCompositionFrame | null>(null);
   const [renderEvidence, setRenderEvidence] =
     useState<PlanarRenderEvidence | null>(null);
   const active = layout.get().activeViewportMainModuleId === "field-map";
@@ -121,8 +134,16 @@ function useFieldMapModuleController() {
     ),
     [visualization.data, visualization.optimisticData],
   );
-  const activePinned = canonicalPlanar?.visible !== false && canonicalPlanar?.layers.probes ? pinned : null;
-  const activeRenderEvidence = presentationBase?.visible !== false && presentationBase?.layers.raster ? renderEvidence : null;
+  // A pinned readout stays across tool changes until it is closed.
+  const activePinned = canonicalPlanar?.visible !== false ? pinned : null;
+  // ADR 0080: in the layer model the field layers draw every field and the
+  // base sample only names the frame; legacy keeps the base field.
+  const metaOnlyBase = canonicalPlanar?.layer_model === "layers";
+  const crop = canonicalPlanar?.crop ?? null;
+  const windowParams = useMemo(() => planarWindowParams(crop), [crop]);
+  const activeRenderEvidence = presentationBase?.visible !== false && (metaOnlyBase || presentationBase?.layers.raster)
+    ? renderEvidence
+    : null;
   const canonicalSourceKind = canonicalPlanar?.source.kind;
   const canonicalSourceMonitorId = canonicalSourceKind === "monitor"
     ? canonicalPlanar?.source.monitor_id
@@ -233,7 +254,7 @@ function useFieldMapModuleController() {
       component: clientComponents ? PLANAR_VECTOR_CARRIER_COMPONENT : canonicalPlanar?.component ?? "",
       discretization:
         domain.data?.discretization ?? runtime ?? null,
-      includeMesh: (canonicalPlanar?.layers.mesh ?? false) || (canonicalPlanar?.layers.boundaries ?? false),
+      includeMesh: planarMeshDrawn(canonicalPlanar) || (canonicalPlanar?.layers.boundaries ?? false),
       source,
       quality: canonicalPlanar?.quality ?? "interactive",
       quantityId: canonicalPlanar?.quantity_id ?? "",
@@ -249,9 +270,12 @@ function useFieldMapModuleController() {
       stageId: selectedFieldContext.stageId,
       viewScope: canonicalPlanar?.view_scope,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
+      layerModel: canonicalPlanar?.layer_model,
+      window: windowParams,
     }),
     [
       active,
+      windowParams,
       clientComponents,
       domain.data?.discretization,
       canonicalPlanar,
@@ -310,12 +334,7 @@ function useFieldMapModuleController() {
     dataQuery,
     { enabled: plan.requestMesh && canonicalSampleReady },
   );
-  const probe = usePlanarProbeResource(
-    plan.quantityId,
-    plan.source,
-    buildFieldMapProbeQuery(dataQuery, activePinned?.[0] ?? 0, activePinned?.[1] ?? 0),
-    { enabled: plan.enabled && canonicalSampleReady && activePinned !== null },
-  );
+
   const frame = useMemo(
     () =>
       meta.data
@@ -361,17 +380,18 @@ function useFieldMapModuleController() {
   const onInteraction = useCallback((interaction: { panU: number; panV: number; zoom: number }) => {
     interactionPublisher?.push(interaction);
   }, [interactionPublisher]);
-  const onPlanarPatch = useCallback((patch: PlanarPatch) => {
-    visualizationSync.queuePatch({ planar: patch });
-    // Quantity, component and section are sample identity: send them now
-    // instead of after the debounce window (D2D-12).
-    if (patch.quantity_id !== undefined || patch.component !== undefined || patch.default_slice !== undefined) {
-      void visualizationSync.flushNow?.();
-    }
-  }, [visualizationSync]);
+
   const onSectionChange = useCallback((defaultSlice: SectionDefaultSlice) => {
-    visualizationSync.queuePatch({ planar: { default_slice: defaultSlice } });
+    visualizationSync.queuePatch({
+      planar: withStalePlanarCropCleared(canonicalPlanar, { default_slice: defaultSlice }),
+    });
     void visualizationSync.flushNow?.();
+  }, [canonicalPlanar, visualizationSync]);
+  const onCropCommit = useCallback((rect: PlanarUvRect) => {
+    visualizationSync.queuePlanarCropPatch(rect);
+  }, [visualizationSync]);
+  const onClearCrop = useCallback(() => {
+    visualizationSync.queuePlanarCropPatch(null);
   }, [visualizationSync]);
   const sectionDefaultSlice =
     canonicalPlanar?.source.kind === "default"
@@ -396,12 +416,20 @@ function useFieldMapModuleController() {
   // A client-derived component waits for its vectors; falling back to the
   // carrier scalar would label a magnitude raster as x, y or z.
   const clientDerived = clientComponents && isClientDerivablePlanarComponent(displayComponent);
+  const metaResolution = meta.data?.resolution;
   const scalarValues = useMemo(
-    () => clientDerived
-      ? worldVectorValues ? derivePlanarComponentScalar(worldVectorValues, displayComponent) : null
-      : scalar.data ? decodeFieldVector(scalar.data.data).values : null,
-    [clientDerived, displayComponent, scalar.data, worldVectorValues],
+    () => metaOnlyBase
+      // The base draws no field; the renderer still needs a sized buffer.
+      ? metaResolution ? new Float64Array((metaResolution[0] ?? 0) * (metaResolution[1] ?? 0)) : null
+      : clientDerived
+        ? worldVectorValues ? derivePlanarComponentScalar(worldVectorValues, displayComponent) : null
+        : scalar.data ? decodeFieldVector(scalar.data.data).values : null,
+    [clientDerived, displayComponent, metaOnlyBase, metaResolution, scalar.data, worldVectorValues],
   );
+  const baseIdentity = metaOnlyBase
+    ? meta.status === "ready" ? meta.data?.etag ?? null : null
+    : scalar.data ? scalar.data.etag : null;
+  const baseReady = metaOnlyBase ? baseIdentity !== null : scalar.data !== null && scalar.data !== undefined;
   // Publish a frame only once every requested layer of the same sample has
   // settled, so overlays do not vanish and return on each live refresh.
   const layersSettled =
@@ -464,18 +492,18 @@ function useFieldMapModuleController() {
   // Only the decoded sample is retained; presentation (pan, zoom, styles)
   // always comes from the current state, so a refresh never snaps it back.
   const freshSample = useMemo(() => {
-    if (!meta.data || !scalar.data || !scalarValues || !frame || !layersSettled) return null;
+    if (!meta.data || !baseReady || !scalarValues || !frame || !layersSettled) return null;
     return {
       frame,
       mask: maskValues,
       meshOverlay: meshOverlay.data,
       meta: meta.data,
-      sampleIdentity: planarRenderIdentity(scalar.data.etag, componentPresentationKey),
+      sampleIdentity: planarRenderIdentity(baseIdentity, componentPresentationKey),
       scalar: scalarValues,
       vectors: frameVectorValues,
       worldVectors: worldVectorValues,
     };
-  }, [componentPresentationKey, frame, frameVectorValues, layersSettled, maskValues, meshOverlay.data, meta.data, scalar.data, scalarValues, worldVectorValues]);
+  }, [baseIdentity, baseReady, componentPresentationKey, frame, frameVectorValues, layersSettled, maskValues, meshOverlay.data, meta.data, scalarValues, worldVectorValues]);
   const sample = useRetainedPlanarFrame(
     sessionIdentity === null ? null : planarViewIdentityKey,
     freshSample,
@@ -513,13 +541,14 @@ function useFieldMapModuleController() {
       layers: {
         boundaries: presentationPlanar.layers.boundaries,
         bounds: presentationPlanar.layers.bounds,
-        contours: presentationPlanar.layers.contours,
-        mesh: presentationPlanar.layers.mesh,
-        points: presentationPlanar.layers.points,
+        // A meta-only base draws frame overlays only; its field passes stay off.
+        contours: !metaOnlyBase && presentationPlanar.layers.contours,
+        mesh: planarMeshDrawn(presentationPlanar),
+        points: !metaOnlyBase && presentationPlanar.layers.points,
         probes: presentationPlanar.layers.probes,
-        raster: presentationPlanar.layers.raster,
-        streamlines: presentationPlanar.layers.streamlines ?? false,
-        vectors: presentationPlanar.layers.vectors,
+        raster: !metaOnlyBase && presentationPlanar.layers.raster,
+        streamlines: !metaOnlyBase && (presentationPlanar.layers.streamlines ?? false),
+        vectors: !metaOnlyBase && presentationPlanar.layers.vectors,
       },
       mask: sample.mask,
       meshOverlayDescriptor,
@@ -544,35 +573,7 @@ function useFieldMapModuleController() {
       vectors: sample.vectors,
       worldVectors: sample.worldVectors,
     });
-  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, meshOverlayDescriptor, presentationPlanar, sample]);
-  // The pinned probe resamples with every revision; keep its last reading.
-  const probeData = useRetainedPlanarFrame(
-    activePinned ? `${planarViewIdentityKey}|${activePinned.join(",")}` : null,
-    probe.data ?? null,
-  );
-  const pinnedAxisState = useMemo(() => {
-    if (!renderModel || !probeData) return null;
-    const axisFrame = {
-      normal: renderModel.frame.normal,
-      origin: renderModel.frame.origin,
-      uAxis: renderModel.frame.uAxis,
-      vAxis: renderModel.frame.vAxis,
-    };
-    return {
-      axes: resolvePlanarAxes(
-        axisFrame,
-        renderModel.bounds,
-        renderModel.viewport,
-        1,
-        1,
-      ),
-      coordinates: resolvePlanarProbeCoordinates(
-        axisFrame,
-        probeData.u_m,
-        probeData.v_m,
-      ),
-    };
-  }, [probeData, renderModel]);
+  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, meshOverlayDescriptor, metaOnlyBase, presentationPlanar, sample]);
   // F6 B1: a line profile is a derived resource of the current sample. The
   // segment belongs to one view identity, so a new source, plane or quantity
   // drops it, while a layer step re-evaluates it on the new sample.
@@ -621,14 +622,22 @@ function useFieldMapModuleController() {
     : null, [activeProfileSegment, renderModel]);
 
 
-  const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
-    metaIdentity: meta.data?.etag,
-    metaStatus: meta.status,
-    presentationKey: componentPresentationKey,
-    renderEvidence: activeRenderEvidence,
-    scalarIdentity: scalar.data?.etag,
-    scalarStatus: scalar.status,
-  });
+  const evidenceStatus: PlanarEvidenceStatus = metaOnlyBase
+    // A meta-only base has no raster: its frame is ready once it rendered.
+    ? meta.status === "error"
+      ? "error"
+      : meta.status === "ready" && baseIdentity &&
+          activeRenderEvidence?.sampleIdentity === planarRenderIdentity(baseIdentity, componentPresentationKey)
+        ? "ready"
+        : "loading"
+    : resolvePlanarEvidenceStatus({
+        metaIdentity: meta.data?.etag,
+        metaStatus: meta.status,
+        presentationKey: componentPresentationKey,
+        renderEvidence: activeRenderEvidence,
+        scalarIdentity: scalar.data?.etag,
+        scalarStatus: scalar.status,
+      });
   const metaSection = meta.status === "ready" ? meta.data?.section ?? null : null;
   const sectionGeometry = useMemo(
     () => canonicalPlanar?.source.kind === "default"
@@ -656,8 +665,8 @@ function useFieldMapModuleController() {
       onSectionChange({ ...sectionDefaultSlice, position_fraction: fraction });
     }
   }, [onSectionChange, sectionDefaultSlice, sectionGeometry]);
-  // Cursor readout in the plane's world axes and the frame's length unit.
-  const formatCursor = useMemo(() => {
+  // Cursor, node and crop readouts in the plane's world axes and the frame's length unit.
+  const readoutFormat = useMemo(() => {
     if (!renderModel?.frame) return undefined;
     const axisFrame = {
       normal: renderModel.frame.normal,
@@ -666,13 +675,80 @@ function useFieldMapModuleController() {
       vAxis: renderModel.frame.vAxis,
     };
     const lengthUnit = resolvePlanarAxes(axisFrame, renderModel.bounds, renderModel.viewport, 1, 1).displayLengthUnit;
-    return (cursor: PlanarCursorUv) => {
-      const coordinates = resolvePlanarProbeCoordinates(axisFrame, cursor.u_m, cursor.v_m);
-      return [coordinates.horizontal, coordinates.vertical]
-        .map((axis) => `${axis.label} ${formatValueWithUnit(axis.valueMetres * lengthUnit.scale, lengthUnit.symbol)}`)
-        .join(" · ");
+    const length = (metres: number) => formatValueWithUnit(metres * lengthUnit.scale, lengthUnit.symbol);
+    return {
+      crop: (window: PlanarUvRect) => {
+        const low = resolvePlanarProbeCoordinates(axisFrame, window.u_min_m, window.v_min_m);
+        const high = resolvePlanarProbeCoordinates(axisFrame, window.u_max_m, window.v_max_m);
+        return (["horizontal", "vertical"] as const)
+          .map((axis) => {
+            const values = [low[axis].valueMetres, high[axis].valueMetres].sort((a, b) => a - b);
+            return `${low[axis].label} ${length(values[0]!)}…${length(values[1]!)}`;
+          })
+          .join(" · ");
+      },
+      cursor: (cursor: PlanarCursorUv) => {
+        const coordinates = resolvePlanarProbeCoordinates(axisFrame, cursor.u_m, cursor.v_m);
+        return [coordinates.horizontal, coordinates.vertical]
+          .map((axis) => `${axis.label} ${length(axis.valueMetres)}`)
+          .join(" · ");
+      },
+      length,
     };
   }, [renderModel]);
+  const targetLabels = useMemo(
+    () => Object.fromEntries((visualization.data?.targets?.objects ?? []).map((target) => [`object:${target.scope_id}`, target.label])) as Record<string, string>,
+    [visualization.data?.targets?.objects],
+  );
+  const compositionActive = !multislice && Boolean(presentationPlanar?.field_overlays?.length) && sample !== null;
+  // The inspect tool probes the layers on screen, top of the list first; a
+  // legacy base field is drawn under the field layers, so it comes last.
+  const probeLayers = useMemo((): PlanarFieldLayerRuntime[] => {
+    if (multislice || !renderModel) return [];
+    const layers: PlanarFieldLayerRuntime[] = [];
+    if (compositionActive && compositionFrame) {
+      // The frame holds overlays bottom-first; the readout follows list order.
+      for (const overlay of [...compositionFrame.overlays].reverse()) {
+        const parsed = planarFieldQueryFromMeta(overlay.meta.quantity_id, plan.source, overlay.meta);
+        if (!parsed.ok) continue;
+        const ownBounds = overlay.meta.frame.bounds_uv_m;
+        layers.push({
+          bounds: overlay.model.bounds,
+          id: overlay.id,
+          label: `${targetLabels[overlay.id] ?? (overlay.meta.scope_kind === "airbox" ? "Airbox" : overlay.meta.scope_id ?? overlay.id)} · ${quantityDisplayName(overlay.meta.quantity_id)}`,
+          mask: overlay.model.mask,
+          meta: overlay.meta,
+          quantityId: overlay.meta.quantity_id,
+          query: parsed.query,
+          resolution: overlay.model.resolution,
+          scale: overlay.model.display.probeScale,
+          shift: [overlay.model.bounds[0] - (ownBounds[0] ?? 0), overlay.model.bounds[2] - (ownBounds[2] ?? 0)],
+          source: plan.source,
+          unit: overlay.model.display.legendUnit,
+        });
+      }
+    }
+    if (!metaOnlyBase && sample) {
+      const parsed = planarFieldQueryFromMeta(plan.quantityId, plan.source, sample.meta);
+      if (parsed.ok) {
+        layers.push({
+          bounds: renderModel.bounds,
+          id: "base",
+          label: quantityDisplayName(plan.quantityId),
+          mask: sample.mask,
+          meta: sample.meta,
+          quantityId: plan.quantityId,
+          query: parsed.query,
+          resolution: renderModel.resolution,
+          scale: renderModel.display.probeScale,
+          shift: [0, 0],
+          source: plan.source,
+          unit: renderModel.display.legendUnit,
+        });
+      }
+    }
+    return layers;
+  }, [compositionActive, compositionFrame, metaOnlyBase, multislice, plan.quantityId, plan.source, renderModel, sample, targetLabels]);
   const evidenceSource = meta.data?.source;
   const sourceKind = evidenceSource?.kind ?? source.kind;
   const sourceId = evidenceSource?.kind === "monitor"
@@ -771,15 +847,12 @@ function useFieldMapModuleController() {
     meshOverlay,
     meta,
     onInteraction,
-    onPlanarPatch,
     onRenderEvidence,
     onSectionChange,
     activeProfileSegment,
     onProfileSegment,
-    pinnedAxisState,
     plan,
     presentationPlanar,
-    probeData,
     profile,
     profileLengthUnit,
     retainedProfile,
@@ -788,14 +861,22 @@ function useFieldMapModuleController() {
     metaSection,
     objectLayers,
     onSectionStep,
-    formatCursor,
+    readoutFormat,
     sectionDefaultSlice,
+    activePinned,
     setPinned,
     shownCoordinateM,
     vectors,
     visualization,
     multislice,
     multisliceClientComponent: clientComponents ? displayComponent : null,
+    crop,
+    onCropCommit,
+    onClearCrop,
+    metaOnlyBase,
+    targetLabels,
+    probeLayers,
+    setCompositionFrame,
   };
 }
 
@@ -811,15 +892,12 @@ export default function FieldMapModule() {
     meshOverlay,
     meta,
     onInteraction,
-    onPlanarPatch,
     onRenderEvidence,
     onSectionChange,
     activeProfileSegment,
     onProfileSegment,
-    pinnedAxisState,
     plan,
     presentationPlanar,
-    probeData,
     profile,
     profileLengthUnit,
     retainedProfile,
@@ -831,14 +909,22 @@ export default function FieldMapModule() {
     metaSection,
     objectLayers,
     onSectionStep,
-    formatCursor,
+    readoutFormat,
     sectionDefaultSlice,
+    activePinned,
     setPinned,
     shownCoordinateM,
     vectors,
     visualization,
     multislice,
     multisliceClientComponent,
+    crop,
+    onCropCommit,
+    onClearCrop,
+    metaOnlyBase,
+    targetLabels,
+    probeLayers,
+    setCompositionFrame,
   } = useFieldMapModuleController();
   useEffect(() => {
     if (!active || !sessionScopeKey) return;
@@ -848,11 +934,12 @@ export default function FieldMapModule() {
       return captureVisibleFieldMapPng(root);
     });
   }, [active, sessionScopeKey]);
-  const toolbar = <PlanarToolbar />;
+  const toolbar = PLANAR_TOOLBAR;
   const statusBar = presentationPlanar ? (
     <PlanarStatusBar
-      crop={null}
-      formatCursor={formatCursor}
+      crop={crop}
+      formatCrop={readoutFormat?.crop}
+      formatCursor={readoutFormat?.cursor}
       objectLayers={objectLayers}
       operator={sectionDefaultSlice?.operator}
       planeLabel={sectionDefaultSlice
@@ -862,8 +949,7 @@ export default function FieldMapModule() {
       section={metaSection}
       shownCoordinateM={shownCoordinateM}
       zoom={presentationPlanar.interaction?.zoom ?? 1}
-      // Crop state arrives with the backend crop contract (Task 8).
-      onClearCrop={() => undefined}
+      onClearCrop={onClearCrop}
       onPositionCommit={(fraction) => {
         if (sectionDefaultSlice) onSectionChange({ ...sectionDefaultSlice, position_fraction: fraction });
       }}
@@ -902,7 +988,7 @@ export default function FieldMapModule() {
       />
     );
   }
-  if (meta.status === "ready" && sampleSettled && (!meta.data || !scalar.data) && !renderModel) {
+  if (meta.status === "ready" && sampleSettled && (!meta.data || (!metaOnlyBase && !scalar.data)) && !renderModel) {
     return (
       <FieldMapStatus
         message="No planar field is published for this revision."
@@ -924,6 +1010,27 @@ export default function FieldMapModule() {
   const ambiguousSurfaceMeta = meta.data && surfaceProjectionStatus(meta.data) === "ambiguous"
     ? meta.data
     : null;
+  // Hidden layers create no data requests (ADR 0080).
+  const visibleFieldLayers = (presentationPlanar.field_overlays ?? []).filter(layerVisible);
+  const multisliceFieldLayer = multisliceLayer(presentationPlanar.field_overlays ?? []);
+  const nodeInspector = readoutFormat ? (
+    <PlanarNodeInspector
+      formatLength={readoutFormat.length}
+      formatPosition={readoutFormat.cursor}
+      layers={probeLayers}
+      pinned={activePinned}
+      viewport={renderModel.viewport}
+      onClosePinned={() => setPinned(null)}
+    />
+  ) : null;
+  const toolProps = {
+    cropFullBounds: (sampleMeta?.frame.full_bounds_uv_m ?? sampleMeta?.frame.bounds_uv_m ?? renderModel.bounds) as
+      readonly [number, number, number, number],
+    onClosePinned: () => setPinned(null),
+    onCropCommit,
+    onPin: (u: number, v: number) => setPinned({ u_m: u, v_m: v }),
+    pinnedOpen: activePinned !== null,
+  };
 
   return (
     <section ref={captureRootRef} className={activeProfileSegment ? "fm-field-map fm-field-map--with-profile" : "fm-field-map"}>
@@ -978,13 +1085,10 @@ export default function FieldMapModule() {
         ) : null}
       </div>
       <div className="fm-field-map__stage">
-        {multislice && presentationPlanar.field_overlays?.length ? (
-          <div role="status" className="fm-field-map__diagnostic">
-            Combined object fields require a single shared section.
-            <button type="button" onClick={() => onPlanarPatch({ multislice: { ...multislice, enabled: false } })}>Use single section</button>
-          </div>
-        ) : multislice ? (
+        {multislice ? (
           <PlanarMultisliceGrid
+            // ADR 0080 W7: in the layer model the panels draw the first visible layer.
+            {...(metaOnlyBase ? { fieldLayer: multisliceFieldLayer } : {})}
             baseQuery={plan.query}
             clientComponent={multisliceClientComponent}
             colorByDirection={renderModel.directionVectors !== null}
@@ -994,7 +1098,15 @@ export default function FieldMapModule() {
             range={normalizePlanarColorRange(presentationPlanar.range)}
             rasterOpacity={presentationPlanar.raster_opacity ?? 1}
             renderLegend={(range) => presentationPlanar.viewport_colorbar_visible !== false ? (
-              <PlanarColorLegend colormap={renderModel.colormap ?? presentationPlanar.colormap} component={presentationPlanar.component} legendUnit={renderModel.display.legendUnit} probeScale={renderModel.display.probeScale} quantityId={plan.quantityId} range={range} rangeState={range ? "current" : "pending"} />
+              <PlanarColorLegend
+                colormap={multisliceFieldLayer?.colormap ?? renderModel.colormap ?? presentationPlanar.colormap}
+                component={multisliceFieldLayer?.component ?? presentationPlanar.component}
+                legendUnit={renderModel.display.legendUnit}
+                probeScale={renderModel.display.probeScale}
+                quantityId={multisliceFieldLayer?.quantity_id ?? plan.quantityId}
+                range={range}
+                rangeState={range ? "current" : "pending"}
+              />
             ) : null}
             requestVectors={plan.requestVectors}
             source={plan.source}
@@ -1002,54 +1114,43 @@ export default function FieldMapModule() {
         ) : (
         (presentationPlanar.field_overlays?.length && sampleMeta ? (
         <PlanarCompositionSurface
+          {...toolProps}
           model={renderModel}
           active={active}
           baseMeta={sampleMeta}
           baseQuery={plan.query}
           source={plan.source}
-          profiles={presentationPlanar.field_overlays ?? []}
-          targetLabels={Object.fromEntries((visualization.data?.targets?.objects ?? []).map((target) => [`object:${target.scope_id}`, target.label]))}
+          profiles={visibleFieldLayers}
+          targetLabels={targetLabels}
           vectorBudget={canonicalPlanar?.resolution.vector_budget ?? 2000}
-          renderBaseLegend={(shownModel, shownMeta) => presentationPlanar.viewport_colorbar_visible !== false ? (
+          onCompositionFrame={setCompositionFrame}
+          legendsVisible={presentationPlanar.viewport_colorbar_visible !== false}
+          viewMasks={presentationPlanar.layers}
+          renderBaseLegend={(shownModel, shownMeta) => presentationPlanar.viewport_colorbar_visible !== false && !metaOnlyBase ? (
             <PlanarColorLegend targetLabel={shownMeta.scope_kind === "airbox" ? "Airbox" : undefined} colormap={shownModel.colormap} component={shownModel.component}
               legendUnit={shownModel.display.legendUnit} probeScale={shownModel.display.probeScale}
               quantityId={shownMeta.quantity_id} range={shownModel.range}
               rangeState={shownModel.range ? "current" : "unavailable"} />
           ) : null}
           onInteraction={onInteraction}
-          onPin={(u, v) => setPinned([u, v])}
           onProfileSegment={onProfileSegment}
           onRenderEvidence={onRenderEvidence}
           profileSegment={activeProfileSegment}
-          probeOverlay={presentationPlanar.layers.probes && probeData ? (
-            <PlanarPinnedProbe
-              axisState={pinnedAxisState}
-              legendUnit={renderModel.display.legendUnit}
-              probe={probeData}
-              probeScale={renderModel.display.probeScale}
-            />
-          ) : null}
+          probeOverlay={nodeInspector}
         />
         ) : (
         <PlanarSurface
+          {...toolProps}
           model={renderModel}
           onInteraction={onInteraction}
-          onPin={(u, v) => setPinned([u, v])}
           onProfileSegment={onProfileSegment}
           onRenderEvidence={onRenderEvidence}
           profileSegment={activeProfileSegment}
-          probeOverlay={presentationPlanar.layers.probes && probeData ? (
-            <PlanarPinnedProbe
-              axisState={pinnedAxisState}
-              legendUnit={renderModel.display.legendUnit}
-              probe={probeData}
-              probeScale={renderModel.display.probeScale}
-            />
-          ) : null}
+          probeOverlay={nodeInspector}
         />
         ))
         )}
-        {presentationPlanar.viewport_colorbar_visible !== false && !multislice && !presentationPlanar.field_overlays?.length ? (
+        {presentationPlanar.viewport_colorbar_visible !== false && !multislice && !metaOnlyBase && !presentationPlanar.field_overlays?.length ? (
           <PlanarColorLegend
             colormap={renderModel.colormap ?? presentationPlanar.colormap}
             component={presentationPlanar.component}

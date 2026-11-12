@@ -54,6 +54,8 @@ export interface PlanarStatusBarProps {
   shownCoordinateM?: number | null;
   /** Formats the cursor position in the plane's world axes. */
   formatCursor?: (cursor: PlanarCursorUv) => string;
+  /** Formats the crop window in the plane's world axes. */
+  formatCrop?: (crop: PlanarUvRect) => string;
 }
 
 function defaultCursorLabel(cursor: PlanarCursorUv): string {
@@ -83,6 +85,7 @@ export function PlanarStatusBar({
   objectLayers = [],
   shownCoordinateM = null,
   formatCursor = defaultCursorLabel,
+  formatCrop = cropLabel,
 }: PlanarStatusBarProps) {
   const cursor = usePlanarCursorUv();
   const plane = planeLabel ? (planeLabel.toLowerCase() as PlanarSectionPlane) : null;
@@ -219,7 +222,7 @@ export function PlanarStatusBar({
       {crop ? (
         <span className="fm-planar-statusbar__crop" data-planar-crop="">
           <Crop aria-hidden="true" size={12} />
-          <span>{cropLabel(crop)}</span>
+          <span>{formatCrop(crop)}</span>
           <Button
             aria-label="Clear crop"
             size="icon"

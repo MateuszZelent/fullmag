@@ -117,3 +117,13 @@ describe("accepted observation composition barrier", () => {
     expect(store.getSnapshot()).toBe(first);
   });
 });
+
+describe("placePlanarOverlay sample points", () => {
+  it("moves sample markers with the shifted raster", () => {
+    const model = { bounds: [0, 1, 0, 1], boundsCenter: [0.5, 0.5], samplePoints: [{ index: 0, u: 0.25, v: 0.75 }] };
+    const base = { frame: {}, viewport: [0, 2, 0, 2], interaction: { panU: 0, panV: 0, zoom: 1 } };
+    const placed = placePlanarOverlay(model as never, base as never, [1, -0.5]);
+    expect(placed.samplePoints).toEqual([{ index: 0, u: 1.25, v: 0.25 }]);
+    expect(placed.bounds).toEqual([1, 2, -0.5, 0.5]);
+  });
+});

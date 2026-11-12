@@ -8,6 +8,23 @@ import type {
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
 
+type PlanarMeshInput = {
+  layers: { mesh?: boolean };
+  layer_model?: "legacy" | "layers" | null;
+  field_overlays?: readonly { visible?: boolean | null; mesh_visible?: boolean | null }[] | null;
+};
+
+/**
+ * The mesh overlay is drawn once, from the base sample (ADR 0080): the view
+ * mask must be on and, in the layer model, at least one visible layer must
+ * ask for it; the legacy model has no layer flags, so the mask alone decides.
+ */
+export function planarMeshDrawn(planar: PlanarMeshInput | null | undefined): boolean {
+  if (!planar?.layers.mesh) return false;
+  if (planar.layer_model !== "layers") return true;
+  return (planar.field_overlays ?? []).some((layer) => layer.visible !== false && layer.mesh_visible === true);
+}
+
 export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox" | "layer" | "region" | "object";
 
 /** The planar profile is the source of truth for scope identity. */
@@ -61,6 +78,14 @@ export interface FieldMapDataPlanInput {
   stageId?: string | null;
   vectorBudget: number;
   viewScope?: FieldMapViewScope | null;
+  /**
+   * `layers` (ADR 0080): the field layers draw every field, so the base
+   * sample only names the frame (meta) and the mesh overlay. Absent or
+   * `legacy` keeps the base sample as a drawn field.
+   */
+  layerModel?: "legacy" | "layers" | null;
+  /** Crop window parameters (`planarWindowParams`); every request carries them. */
+  window?: Readonly<Record<string, string>>;
 }
 
 export interface FieldMapDataPlan {
@@ -93,6 +118,8 @@ export function buildFieldMapDataPlan(
   const enabled = input.active && scope.enabled && projectionAllowed;
   const needsVectors = tensorProjectionOutputKind(input.component) !== "scalar" &&
     (input.showVectors || input.colorByDirection === true);
+  // The layer model draws no base field: meta (and the mesh overlay) only.
+  const baseField = enabled && input.layerModel !== "layers";
   const availability: FieldMapDataPlanAvailability = !scope.enabled || !projectionAllowed
     ? "not-applicable"
     : enabled
@@ -112,12 +139,13 @@ export function buildFieldMapDataPlan(
       ...planarScopeQuery(viewScope),
       snapshot_id: input.snapshotId ?? undefined,
       stage_id: input.stageId ?? undefined,
-      vector_budget: needsVectors ? input.vectorBudget : 0,
+      vector_budget: baseField && needsVectors ? input.vectorBudget : 0,
+      ...input.window,
     },
-    requestMask: enabled,
+    requestMask: baseField,
     requestMesh: enabled && input.includeMesh,
-    requestScalar: enabled,
-    requestVectors: enabled && needsVectors,
+    requestScalar: baseField,
+    requestVectors: baseField && needsVectors,
     unavailableReason,
   };
 }

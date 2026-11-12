@@ -331,6 +331,25 @@ describe("VisualizationRegistrySyncController", () => {
     });
   });
 
+  it("sends a crop at once and resets the view to fit it (ADR 0080)", async () => {
+    const { controller, patchSpy } = createController({ now: () => 0 });
+    const crop = { u_min_m: -2.5e-8, u_max_m: 2.5e-8, v_min_m: 0, v_max_m: 1e-8 };
+
+    controller.queuePlanarCropPatch(crop);
+    await Promise.resolve();
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    expect(patchSpy).toHaveBeenLastCalledWith({
+      planar: { crop, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+    await controller.flushNow();
+
+    controller.queuePlanarCropPatch(null);
+    await Promise.resolve();
+    expect(patchSpy).toHaveBeenLastCalledWith({
+      planar: { crop: null, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+  });
+
   it("sends a patch queued during an explicit in-flight flush right after it (D2D-12)", async () => {
     let time = 0;
     const inflight: { release?: () => void } = {};

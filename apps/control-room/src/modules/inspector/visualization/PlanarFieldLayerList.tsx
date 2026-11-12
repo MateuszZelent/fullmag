@@ -71,7 +71,7 @@ export function PlanarFieldLayerList({
 
   const move = (id: string, toIndex: number) => {
     const next = moveFieldLayer(layers, id, toIndex);
-    if (next.every((layer, index) => layer.id === layers[index]?.id)) return;
+    if (next.length === layers.length && next.every((layer, index) => layer.id === layers[index]?.id)) return;
     onWrite(next, id);
   };
   const patch = (id: string, value: Partial<PlanarFieldLayer>) => onWrite(patchFieldLayer(layers, id, value), id);

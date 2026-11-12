@@ -11,7 +11,7 @@ import {
 } from "../model/planarCompositionBuffers";
 import { PlanarSurface } from "../renderer/PlanarSurface";
 import { PlanarOverlaySurface } from "../renderer/PlanarOverlaySurface";
-import { PlanarColorLegend } from "./PlanarColorLegend";
+import { PlanarLayerLegendList, type PlanarLayerLegendEntry } from "./PlanarColorLegend";
 
 type SurfaceProps = Omit<ComponentProps<typeof PlanarSurface>, "model" | "fieldOverlayContent">;
 export interface PlanarCompositionBuffersProps {
@@ -43,6 +43,26 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
     reportedRef.current = identity;
     callbackRef.current?.(visible.baseEvidence);
   }, [scopeKey, visibleId, visible]);
+  // The node inspector probes the layers on screen, so it follows the visible stack.
+  const frameCallbackRef = useRef(surfaceProps.onCompositionFrame);
+  useLayoutEffect(() => { frameCallbackRef.current = surfaceProps.onCompositionFrame; }, [surfaceProps.onCompositionFrame]);
+  const visibleFrame = visible?.frame ?? null;
+  // The frame holds overlays bottom-first; legends follow list order (top first).
+  const legendEntries = useMemo((): PlanarLayerLegendEntry[] => (visibleFrame?.overlays ?? [])
+    .map((layer) => ({
+      colormap: layer.model.colormap,
+      component: layer.model.component,
+      id: layer.id,
+      legendUnit: layer.model.display.legendUnit,
+      probeScale: layer.model.display.probeScale,
+      quantityId: layer.meta.quantity_id,
+      range: layer.model.range,
+      targetLabel: targetLabels?.[layer.id] ?? (layer.meta.scope_kind === "airbox" ? "Airbox" : layer.meta.scope_id ?? layer.id),
+    }))
+    .reverse(), [targetLabels, visibleFrame]);
+  useEffect(() => {
+    if (visibleFrame) frameCallbackRef.current?.(visibleFrame);
+  }, [visibleFrame]);
   return <><div className="fm-field-map__composition-buffers"
     data-planar-composition-state={pending ? "pending" : visible?.frame.coherence ?? "unavailable"}
     data-planar-composition-visible-slot={visibleId ?? "none"}
@@ -60,12 +80,11 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
   </div>
     {visible ? <div className="fm-field-map__composition-legends" style={{ position: "relative", pointerEvents: "none" }}>
       {renderBaseLegend?.(visible.frame.base.model, visible.frame.base.meta)}
-      {visible.frame.overlays.map((layer) => <PlanarColorLegend key={layer.id}
-        colormap={layer.model.colormap} component={layer.model.component}
-        legendUnit={layer.model.display.legendUnit} probeScale={layer.model.display.probeScale}
-        targetLabel={targetLabels?.[layer.id] ?? layer.meta.scope_id ?? layer.id}
-        quantityId={layer.meta.quantity_id} range={layer.model.range}
-        rangeState={pending ? "stale-compatible" : "current"} />)}
+      <PlanarLayerLegendList
+        layers={legendEntries}
+        rangeState={pending ? "stale-compatible" : "current"}
+        visible={surfaceProps.legendsVisible !== false}
+      />
       {pending || statusReason ? <span role="status" className="fm-field-map__diagnostic">
         {statusReason ?? "Preparing the requested field layers."}
       </span> : null}

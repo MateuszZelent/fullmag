@@ -15,10 +15,12 @@ import {
   beginPlanarMonitorDraft,
   type PlanarMonitorCreateIntent,
 } from "@/kernel/workspace/crossSectionWorkspace";
+import { planarWindowParams } from "@/kernel/resources/planarFieldResources";
 
 import { downloadPlanarBlob, downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
 import { getRegisteredFieldMapCapture } from "./fieldMapCaptureRegistry";
 import { planarScopeQuery } from "./model/fieldMapDataPlan";
+import { withStalePlanarCropCleared } from "./model/planarCropPatch";
 
 const commandTitles = {
   "field-map.export-png": "Export 2D PNG",
@@ -38,12 +40,12 @@ function queuePlanarSourceSelection(
 ): boolean {
   if (!context.visualizationSync || !state?.planar) return false;
   context.visualizationSync.queuePatch({
-    planar: {
+    planar: withStalePlanarCropCleared(state.planar, {
       source:
         source.kind === "default"
           ? { kind: "default" }
           : { kind: "monitor", monitor_id: source.monitorId },
-    },
+    }),
   });
   return true;
 }
@@ -342,6 +344,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         resolution_y: planar.resolution.height,
         ...planarScopeQuery(planar.view_scope),
         vector_budget: planar.resolution.vector_budget,
+        // The crop belongs to the current source's plane; another monitor exports in full.
+        ...(explicitMonitorExport ? {} : planarWindowParams(planar.crop)),
       };
       const [meta, monitor, png] = await Promise.all([
         context.api.data.fields.planar.meta(

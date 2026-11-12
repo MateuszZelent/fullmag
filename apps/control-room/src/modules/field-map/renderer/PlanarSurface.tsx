@@ -7,17 +7,32 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
 
-import { planarToolStore } from "@/kernel/visualization/planarToolStore";
+import {
+  planarToolStore,
+  usePlanarActiveTool,
+  type PlanarUvRect,
+} from "@/kernel/visualization/planarToolStore";
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 
 import type { PlanarRenderEvidence } from "../model/fieldMapEvidence";
 import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { resolvePlanarAxes } from "../model/planarAxisModel";
+import type { PlanarCompositionFrame } from "../model/planarCompositionFrame";
+import { normalizeUvRect } from "../model/planarToolGeometry";
+import {
+  isPlanarDragTool,
+  planarToolKeyAction,
+  resolvePlanarCropCommit,
+  resolvePlanarToolDrag,
+  type PlanarDragTool,
+} from "../model/planarToolGestures";
 import { PlanarAxes } from "./PlanarAxes";
+import { PlanarToolOverlay } from "./PlanarToolOverlay";
 import {
   fitPlanarInteraction,
   panPlanarInteraction,
@@ -45,6 +60,23 @@ interface PlanarSurfaceProps {
   probeOverlay?: ReactNode;
   /** Additional composited fields; children are renderer-owned and non-interactive. */
   fieldOverlayContent?: ReactNode;
+  /** Full frame of the sample (`meta.frame.full_bounds_uv_m`); a crop is clipped to it. */
+  cropFullBounds?: readonly [number, number, number, number];
+  /** Commits a crop rectangle (already clipped to `cropFullBounds`). */
+  onCropCommit?: (rect: PlanarUvRect) => void;
+  /** A pinned node readout is open; Escape in the inspect tool closes it. */
+  pinnedOpen?: boolean;
+  onClosePinned?: () => void;
+  /**
+   * Receives the displayed composition frame. Consumed by
+   * `PlanarCompositionBuffers`, which renders this surface; ignored here.
+   */
+  onCompositionFrame?: (frame: PlanarCompositionFrame) => void;
+  /**
+   * The toolbar legend toggle for the field-layer legends. Consumed by
+   * `PlanarCompositionBuffers`; ignored here.
+   */
+  legendsVisible?: boolean;
 }
 
 export function PlanarSurface({
@@ -56,9 +88,21 @@ export function PlanarSurface({
   probeOverlay,
   fieldOverlayContent,
   profileSegment = null,
+  cropFullBounds,
+  onCropCommit,
+  pinnedOpen = false,
+  onClosePinned,
 }: PlanarSurfaceProps) {
+  const activeTool = usePlanarActiveTool();
   const segmentDragRef = useRef<{ pointerId: number; u0: number; v0: number } | null>(null);
+  const toolDragRef = useRef<{
+    tool: PlanarDragTool;
+    pointerId: number;
+    start: { u_m: number; v_m: number };
+    startClient: readonly [number, number];
+  } | null>(null);
   const [draftSegment, setDraftSegment] = useState<PlanarProfileSegment | null>(null);
+  const [zoomBox, setZoomBox] = useState<PlanarUvRect | null>(null);
   const shownSegment = draftSegment ?? profileSegment;
   const hasFieldOverlayContent = Children.count(fieldOverlayContent) > 0;
   const hoverFrameRef = useRef<number | null>(null);
@@ -124,6 +168,30 @@ export function PlanarSurface({
   const summaryId = useId();
   const length = (metres: number) =>
     formatValueWithUnit(metres * axes.displayLengthUnit.scale, axes.displayLengthUnit.symbol);
+  const fullBounds = cropFullBounds ?? model.bounds;
+  const cropDraft = useCropDraft();
+  const cropCommit = resolvePlanarCropCommit({
+    canvas: plotSize,
+    draft: cropDraft,
+    fullBounds,
+    viewport: model.viewport,
+  });
+  const canvasSize = (canvas: HTMLCanvasElement) => {
+    const rect = canvas.getBoundingClientRect();
+    return { height: rect.height, width: rect.width };
+  };
+  // Measured at commit time: the observed plot size can lag a resize.
+  const commitCrop = (canvas: HTMLCanvasElement | null) => {
+    const commit = resolvePlanarCropCommit({
+      canvas: canvas ? canvasSize(canvas) : plotSize,
+      draft: planarToolStore.getSnapshot().cropDraft,
+      fullBounds,
+      viewport: model.viewport,
+    });
+    if (!commit.rect || !onCropCommit) return;
+    onCropCommit(commit.rect);
+    planarToolStore.setActiveTool("navigate");
+  };
   const summary = [
     `2D field map, ${axes.horizontal.label} from ${length(axes.horizontal.rangeMetres[0])} to ${length(axes.horizontal.rangeMetres[1])}`,
     `${axes.vertical.label} from ${length(axes.vertical.rangeMetres[0])} to ${length(axes.vertical.rangeMetres[1])}`,
@@ -132,7 +200,7 @@ export function PlanarSurface({
       : model.range
         ? `colour range ${formatValueWithUnit(model.range.min * model.display.probeScale, model.display.legendUnit)} to ${formatValueWithUnit(model.range.max * model.display.probeScale, model.display.legendUnit)}`
         : "colour range unavailable",
-    "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe, Shift and drag draws a line profile, Escape clears it.",
+    "Arrow keys pan, plus and minus zoom, 0 fits, Enter pins a probe or applies a crop, Shift and drag draws a line profile, Escape cancels the current tool.",
   ].join("; ");
   return (
     <div className="fm-field-map__plot-area">
@@ -160,7 +228,7 @@ export function PlanarSurface({
               gestureMovedRef.current = false;
               return;
             }
-            if (!model.layers.probes) return;
+            if (activeTool !== "inspect" && (activeTool !== "navigate" || !model.layers.probes)) return;
             const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
             onPin?.(u, v);
           }}
@@ -170,9 +238,16 @@ export function PlanarSurface({
               onProfileSegment?.(null);
               return;
             }
-            if (event.key === "Escape") {
+            const toolState = planarToolStore.getSnapshot();
+            const toolAction = planarToolKeyAction(event.key, { ...toolState, pinned: pinnedOpen });
+            if (toolAction) {
+              event.preventDefault();
+              if (toolAction === "commit-crop") commitCrop(event.currentTarget);
+              else if (toolAction === "cancel-crop") planarToolStore.setCropDraft(null);
+              else if (toolAction === "clear-measure") planarToolStore.setMeasure(null);
+              else if (toolAction === "close-pinned") onClosePinned?.();
               // Esc returns to the navigate tool (plan 2.2).
-              planarToolStore.setActiveTool("navigate");
+              else planarToolStore.setActiveTool("navigate");
               return;
             }
             if (event.key === "0") {
@@ -222,10 +297,24 @@ export function PlanarSurface({
               clientY: event.clientY,
             });
             const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+            // Shift + drag draws a line profile in every tool.
             if (pointersRef.current.size === 1 && event.shiftKey && onProfileSegment) {
               gestureMovedRef.current = true;
               segmentDragRef.current = { pointerId: event.pointerId, u0: u, v0: v };
               setDraftSegment({ u0: u, u1: u, v0: v, v1: v });
+            } else if (
+              pointersRef.current.size === 1 &&
+              isPlanarDragTool(activeTool) &&
+              (activeTool !== "profile" || onProfileSegment) &&
+              (activeTool !== "crop" || onCropCommit)
+            ) {
+              gestureMovedRef.current = false;
+              toolDragRef.current = {
+                pointerId: event.pointerId,
+                start: { u_m: u, v_m: v },
+                startClient: [event.clientX, event.clientY],
+                tool: activeTool,
+              };
             } else if (pointersRef.current.size === 1) {
               gestureMovedRef.current = false;
               dragRef.current = { pointerId: event.pointerId, u, v };
@@ -246,6 +335,12 @@ export function PlanarSurface({
                 };
                 gestureMovedRef.current = true;
                 dragRef.current = null;
+                // A second finger turns a tool drag into a pinch zoom.
+                if (toolDragRef.current) {
+                  toolDragRef.current = null;
+                  setZoomBox(null);
+                  setDraftSegment(null);
+                }
               }
             }
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -254,6 +349,37 @@ export function PlanarSurface({
             releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
             pinchRef.current = null;
             if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+            const toolDrag = toolDragRef.current;
+            if (toolDrag && toolDrag.pointerId === event.pointerId) {
+              toolDragRef.current = null;
+              const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+              const result = resolvePlanarToolDrag({
+                canvas: canvasSize(event.currentTarget),
+                end: { u_m: u, v_m: v },
+                endClient: [event.clientX, event.clientY],
+                frameBounds: model.bounds,
+                start: toolDrag.start,
+                startClient: toolDrag.startClient,
+                tool: toolDrag.tool,
+                viewport: model.viewport,
+              });
+              setZoomBox(null);
+              setDraftSegment(null);
+              if (result.kind === "interaction") {
+                // One interaction patch on release, then back to navigate.
+                interactionRef.current = result.interaction;
+                onInteraction?.(result.interaction);
+                planarToolStore.setActiveTool("navigate");
+              } else if (result.kind === "crop-draft") {
+                planarToolStore.setCropDraft(result.rect);
+              } else if (result.kind === "measure") {
+                planarToolStore.setMeasure(result.segment);
+              } else if (result.kind === "profile") {
+                const segment = result.segment;
+                onProfileSegment?.({ u0: segment.u0_m, u1: segment.u1_m, v0: segment.v0_m, v1: segment.v1_m });
+              }
+              return;
+            }
             const segmentDrag = segmentDragRef.current;
             if (segmentDrag && segmentDrag.pointerId === event.pointerId) {
               segmentDragRef.current = null;
@@ -269,7 +395,9 @@ export function PlanarSurface({
             pinchRef.current = null;
             dragRef.current = null;
             segmentDragRef.current = null;
+            toolDragRef.current = null;
             setDraftSegment(null);
+            setZoomBox(null);
           }}
           onWheel={(event) => {
             event.preventDefault();
@@ -294,6 +422,17 @@ export function PlanarSurface({
             const segmentDrag = segmentDragRef.current;
             if (segmentDrag && segmentDrag.pointerId === event.pointerId) {
               setDraftSegment({ u0: segmentDrag.u0, u1: u, v0: segmentDrag.v0, v1: v });
+              return;
+            }
+            const toolDrag = toolDragRef.current;
+            if (toolDrag && toolDrag.pointerId === event.pointerId) {
+              gestureMovedRef.current = true;
+              const end = { u_m: u, v_m: v };
+              if (toolDrag.tool === "zoom-box") setZoomBox(normalizeUvRect(toolDrag.start, end));
+              else if (toolDrag.tool === "crop") planarToolStore.setCropDraft(normalizeUvRect(toolDrag.start, end));
+              else if (toolDrag.tool === "measure") {
+                planarToolStore.setMeasure({ u0_m: toolDrag.start.u_m, u1_m: u, v0_m: toolDrag.start.v_m, v1_m: v });
+              } else setDraftSegment({ u0: toolDrag.start.u_m, u1: u, v0: toolDrag.start.v_m, v1: v });
               return;
             }
             const pinch = pinchRef.current;
@@ -375,11 +514,28 @@ export function PlanarSurface({
             />
           </svg>
         ) : null}
+        <PlanarToolOverlay
+          axisLabels={{ horizontal: axes.horizontal.label, vertical: axes.vertical.label }}
+          cropDisabledReason={cropCommit.disabledReason}
+          formatLength={length}
+          viewport={model.viewport}
+          zoomBox={zoomBox}
+          onCropCancel={() => planarToolStore.setCropDraft(null)}
+          onCropCommit={() => commitCrop(canvasRef.current)}
+        />
         <p className="fm-visually-hidden" id={summaryId}>{summary}</p>
         {probeOverlay}
       </div>
     </div>
   );
+}
+
+const cropDraftSnapshot = () => planarToolStore.getSnapshot().cropDraft;
+const noCropDraft = () => null;
+
+/** The uncommitted crop rectangle; this surface re-renders only when it changes. */
+function useCropDraft(): PlanarUvRect | null {
+  return useSyncExternalStore(planarToolStore.subscribe, cropDraftSnapshot, noCropDraft);
 }
 
 function pointerUv(

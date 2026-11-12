@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   metaAvailable: true,
   domain: null as DomainMetaResource | null,
   section: null as PlanarFieldMetaResource["section"] | null,
-  probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
+
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
   renderReady: false,
@@ -172,7 +172,16 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   // published only after every requested layer finished loading.
   usePlanarMaskResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: mocks.renderReady ? "ready" : "idle" }),
-  usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
+  planarWindowParams: (crop: { u_min_m: number; u_max_m: number; v_min_m: number; v_max_m: number } | null | undefined) =>
+    crop
+      ? {
+          window_u_min_m: String(crop.u_min_m),
+          window_u_max_m: String(crop.u_max_m),
+          window_v_min_m: String(crop.v_min_m),
+          window_v_max_m: String(crop.v_max_m),
+        }
+      : {},
+  usePlanarProbeLoader: () => null,
   usePlanarProfileResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarScalarResource: () => mocks.renderReady && !mocks.scalarPending
     ? { data: mocks.scalarData, error: null, status: "ready" }
@@ -245,7 +254,7 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.scalarPending = false;
     mocks.metaPending = false;
     mocks.sourceDefinitionHash = null;
-    mocks.probeData = null;
+
     mocks.selection = emptySelection();
   });
 
@@ -703,7 +712,6 @@ describe("FieldMapModule planar state ownership", () => {
       range: { max: 2_000, min: -1_000 },
     }));
 
-    mocks.probeData = { occupancy: "occupied", scalar: 1_000, u_m: 2, v_m: 3 };
     const html = renderToStaticMarkup(<FieldMapModule />);
 
     expect(html).toContain('class="fm-field-map__colorbar"');
@@ -725,10 +733,9 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain(
       '<div class="fm-field-map__canvas-stack"><output data-planar-render-layers=',
     );
-    // Since PR 350 the probe reading is retained per pinned point; with no
-    // point pinned (static render) no stale reading is shown. Axis rows are
-    // covered by PlanarPinnedProbe, placement by PlanarSurface.
-    expect(html).not.toContain('class="fm-field-map__pinned-probe"');
+    // With no point pinned (static render) no node readout is shown; its
+    // content is covered by PlanarNodeReadout, placement by PlanarSurface.
+    expect(html).not.toContain("Pinned planar probe");
   });
 
   it("resolves Airbox and object wireframes without changing the field query or sample identity", () => {
