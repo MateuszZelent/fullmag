@@ -46,7 +46,8 @@ wymaga zachowania inode i nie kwalifikuje skopiowanego StateRoot.
    nowym ext4. Chroni to historię, gdy nowy runtime legalnie zmieni katalogi
    sesji, SQLite lub evidence admission. Archiwum oraz kopia robocza znajdują
    się na nowym filesystemie, poza przepełnionym WSL root. Budżet uwzględnia
-   obie reprezentacje i zapas na następne Zarr.
+   dwukrotność rozmiaru logicznego danych oraz co najmniej 25 GiB zapasu na
+   następne Zarr. Brak tego miejsca blokuje kopiowanie przed utworzeniem archiwum.
 7. Zmiana inode StateRoot otrzymuje osobny, przypięty successor admission.
    Zachowuje owner token, obrazy, źródła oraz oryginalne pięć plików evidence
    w archiwum. Samo przygotowanie następcy nie przyznaje namespace ani nie

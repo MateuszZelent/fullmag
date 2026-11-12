@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import struct
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -13,6 +14,34 @@ from scripts import fullmag_data_volume_manifest as manifests
 
 @unittest.skipUnless(os.name == 'posix' and shutil.which('tar'), 'Unix archive tooling')
 class DataVolumeArchiveTests(unittest.TestCase):
+    def setUp(self):
+        # Real small-file tar/ACL fixtures must not need 25 GiB of disk space.
+        # Only the capacity observation is mocked; all archive I/O remains real.
+        capacity = mock.patch.object(volume_fs.os, 'fstatvfs',
+            return_value=SimpleNamespace(f_bavail=128*1024**3, f_frsize=1))
+        capacity.start(); self.addCleanup(capacity.stop)
+
+    def test_copy_never_consumes_the_reserved_campaign_headroom(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory); source = base/'source'; target = base/'target'
+            source.mkdir(); target.mkdir()
+            user = source/'user'; state = source/'state'; user.mkdir(); state.mkdir()
+            content = b'full retained scientific chunk'
+            (user/'m.zarr').write_bytes(content)
+            # Enough for both representations, but one byte below the approved
+            # 25 GiB reserve. The former 16 MiB gate accepted this observation.
+            available = 2*len(content)+25*1024**3-1
+            with mock.patch.object(volume_fs.os, 'fstatvfs',
+                    return_value=SimpleNamespace(f_bavail=available, f_frsize=1)), \
+                    mock.patch.object(volume_fs, '_run_to_file',
+                        side_effect=AssertionError('archive started below the approved reserve')) as archive, \
+                    self.assertRaisesRegex(ValueError, '25 GiB'):
+                volume_fs.archive_and_extract(source, {'user_data':user, 'state':state},
+                    target/'original.tar', target/'payload')
+            archive.assert_not_called()
+            self.assertEqual(list(target.iterdir()), [])
+            self.assertEqual((user/'m.zarr').read_bytes(), content)
+
     def test_payload_replacement_before_open_does_not_write_existing_tree(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory); source = base / 'source'; target = base / 'target'

@@ -19,6 +19,9 @@ except ImportError:
     from fullmag_data_volume_manifest import inventory_datasets, require_matching_data
 
 
+COPY_HEADROOM_BYTES = 25 * 1024**3
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
@@ -121,8 +124,8 @@ def archive_and_extract(storage_root, roots, archive_path, payload_root):
         if os.fstat(archive_parent_fd).st_dev != os.fstat(payload_parent_fd).st_dev:
             raise ValueError('Archive and copied payload must share the new filesystem')
         available = os.fstatvfs(archive_parent_fd)
-        if available.f_bavail * available.f_frsize < 2*before['totals']['logical_bytes'] + 16*1024**2:
-            raise ValueError('Destination lacks archive plus payload headroom')
+        if available.f_bavail * available.f_frsize < 2*before['totals']['logical_bytes'] + COPY_HEADROOM_BYTES:
+            raise ValueError('Destination lacks archive plus payload and 25 GiB campaign headroom')
         output = stack.enter_context(_exclusive_at(archive_parent_fd, archive.name))
         create = ['tar', '--format=pax', '--acls', '--xattrs', '--numeric-owner',
                   '--one-file-system', '--pax-option=delete=atime,delete=ctime',
