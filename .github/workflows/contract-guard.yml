@@ -38,6 +38,17 @@ jobs:
           test_backend_group_cache_cleanup test_docker_group_frontend_seed
           test_docker_dev_defaults test_bootstrap_docker_toolchain
           test_docker_volume_post_build_integration
+      - name: Check Linux data-volume copy and admission contracts
+        if: runner.os == 'Linux'
+        env:
+          PYTHONPATH: scripts
+        run: >-
+          python -B -m unittest
+          scripts.test_fullmag_data_volume scripts.test_fullmag_data_volume_manifest
+          scripts.test_fullmag_data_volume_fs scripts.test_fullmag_data_volume_guard
+          scripts.test_linux_native_data_volume_migration scripts.test_linux_native_host
+          scripts.test_linux_native_readmission scripts.test_docker_linux_native_readmission
+          scripts.test_linux_native_probe scripts.test_docker_dev_storage
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 
