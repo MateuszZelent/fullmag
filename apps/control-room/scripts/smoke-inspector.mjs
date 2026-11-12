@@ -4599,7 +4599,14 @@ async function installInspectorFixtureApi(page, fixture) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
-    if (fixture.planarLayerListEnabled && request.method() === "GET" && /\/planar-(default|monitors)\//.test(path)) {
+    // The mounted 2D stage also reads the geometry realization for its object
+    // section list; this fixture has none, so it is unavailable like the samples.
+    if (
+      fixture.planarLayerListEnabled &&
+      request.method() === "GET" &&
+      (/\/planar-(default|monitors)\//.test(path) ||
+        path === "/v2/sessions/current/model/geometry/realizations/current")
+    ) {
       fixture.planarDataRequests.push(`${request.method()} ${path}`);
       return fulfillJson(
         route,
