@@ -65,7 +65,9 @@ function maskDisabledReason(planar: PlanarState | null, layer: PlanarMaskLayer):
 function multisliceDisabledReason(planar: PlanarState | null): string | null {
   if (!planar) return null;
   if (planar.source.kind !== "default") return "Slice panels apply to the Default source.";
-  if (planar.field_overlays?.length && !planar.multislice?.enabled) {
+  // Only the legacy base+overlay model cannot slice combined fields; in the
+  // layers model the panels draw the first visible layer (ADR 0080, W7).
+  if (planar.layer_model !== "layers" && planar.field_overlays?.length && !planar.multislice?.enabled) {
     return "Combined object fields use one shared section.";
   }
   return null;

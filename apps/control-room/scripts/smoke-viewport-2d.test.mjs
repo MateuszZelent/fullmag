@@ -197,7 +197,9 @@ test("2D smoke drives the toolbar, crop, node inspector and field-layer scenario
   }
   assert.match(source, /\.\.\.toolbarCases/);
   assert.match(source, /getByRole\("toolbar", \{ name: "2D view tools", exact: true \}\)/);
-  assert.match(source, /data-planar-tool-overlay/);
+  // The plot is measured on the visible slot's canvas; the tool overlay only
+  // mounts while a shape is drawn.
+  assert.match(source, /\[data-planar-composition-slot\]\[aria-hidden='false'\] canvas\.fm-field-map__canvas/);
   assert.match(source, /data-planar-node-readout='hover'/);
   assert.match(source, /data-planar-axis-tick/);
   assert.match(source, /data-planar-crop/);

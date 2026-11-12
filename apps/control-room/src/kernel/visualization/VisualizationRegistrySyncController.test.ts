@@ -1079,6 +1079,40 @@ describe("VisualizationRegistrySyncController", () => {
     await secondFlush;
   });
 
+  it("keeps the order of a full field-layer list: a reorder and a layer added on top", async () => {
+    // The list order is the draw order (ADR 0080); found in the browser: the
+    // merge kept the remote order, so Alt+Up and "add on top" were lost.
+    const sentPatches: VisualizationStatePatch[] = [];
+    const overlayA = planarFieldOverlay("object:a");
+    const overlayB = planarFieldOverlay("object:b");
+    const overlayN = planarFieldOverlay("object:n");
+    const remote = visualizationState(10, {
+      planar: { field_overlays: [overlayA, overlayB] } as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(11 + sentPatches.length, {
+          planar: { field_overlays: patch.planar?.field_overlays ?? [] } as NonNullable<VisualizationStateResource["planar"]>,
+        });
+      },
+    });
+    controller.observeRemoteState(remote);
+
+    controller.queuePlanarFieldOverlayPatch({ planar: { field_overlays: [overlayB, overlayA] } }, overlayB.id);
+    expect(controller.applyOptimisticState(remote)?.planar?.field_overlays).toEqual([overlayB, overlayA]);
+    await controller.flushNow();
+    expect(sentPatches[0]?.planar?.field_overlays).toEqual([overlayB, overlayA]);
+
+    controller.observeRemoteState(visualizationState(20, {
+      planar: { field_overlays: [overlayB, overlayA] } as NonNullable<VisualizationStateResource["planar"]>,
+    }));
+    controller.queuePlanarFieldOverlayPatch({ planar: { field_overlays: [overlayN, overlayB, overlayA] } }, overlayN.id);
+    await controller.flushNow();
+    expect(sentPatches[1]?.planar?.field_overlays).toEqual([overlayN, overlayB, overlayA]);
+  });
+
   it("removes only the explicitly touched overlay id and preserves other remote profiles", async () => {
     const sentPatches: VisualizationStatePatch[] = [];
     const overlayA = planarFieldOverlay("object:a");

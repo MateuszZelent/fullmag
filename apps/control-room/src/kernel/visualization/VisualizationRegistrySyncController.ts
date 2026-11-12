@@ -1090,7 +1090,17 @@ function mergeQueuedPlanarFieldOverlays(
       result.push(profile);
     }
   }
-  return result;
+  // The list order is the draw order (ADR 0080). A patch that lists every
+  // current layer was authored from the whole list (reorder, add on top) and
+  // its order wins; a partial patch from a stale closure keeps the remote
+  // order and appends what it adds.
+  const nextIndex = new Map(next.map((profile, index) => [profile.id, index]));
+  const fullList = current.every((profile) => nextIndex.has(profile.id) || touched.has(profile.id));
+  if (!fullList) return result;
+  return result
+    .map((profile, index) => ({ index, order: nextIndex.get(profile.id) ?? Number.POSITIVE_INFINITY, profile }))
+    .sort((left, right) => left.order - right.order || left.index - right.index)
+    .map(({ profile }) => profile);
 }
 
 function mergeQueuedPlanarTargetOverrides(

@@ -430,6 +430,14 @@ async function runDefaultSliceSmoke(playwright) {
       observedPlanarMeta,
       displayPatches,
     );
+    if (process.env.CONTROL_ROOM_PLANAR_TOOLBAR_ONLY === "1") {
+      // Diagnostic loop for the toolbar cases only; not a qualification run.
+      console.log(JSON.stringify({ toolbar_cases: toolbarCases }, null, 2));
+      if (toolbarCases.some((entry) => entry.required && !entry.passed && entry.status !== "not_run")) {
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     const defaultCases = [];
     for (const [plane, positionFraction] of [
@@ -700,11 +708,20 @@ async function waitForObservedMetaByToken(observedPlanarMeta, sampleToken, label
   throw new Error(`${label}: no observed planar metadata has sample token ${sampleToken}`);
 }
 
-/** Screen box of the 2D plot (the tool overlay covers it exactly). */
+/**
+ * Screen box of the 2D plot: the raster canvas of the visible composition
+ * slot (the tool overlay only mounts while a shape is drawn), or the single
+ * map canvas without a composition.
+ */
 async function planarPlotBox(page) {
-  const overlay = page.locator("[data-planar-tool-overlay]").first();
-  await overlay.waitFor({ state: "attached", timeout: timeoutMs });
-  const box = await overlay.boundingBox();
+  const visibleSlotCanvas = page.locator(
+    "[data-planar-composition-slot][aria-hidden='false'] canvas.fm-field-map__canvas",
+  ).first();
+  const canvas = (await visibleSlotCanvas.count()) > 0
+    ? visibleSlotCanvas
+    : page.locator("canvas.fm-field-map__canvas").first();
+  await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+  const box = await canvas.boundingBox();
   if (!box || box.width <= 0 || box.height <= 0) throw new Error("2D plot has no measurable box");
   return box;
 }
@@ -813,7 +830,9 @@ async function cropCase(page, observedPlanarMeta) {
   const meta = await waitForObservedMetaByToken(observedPlanarMeta, evidence.sampleToken, "Cropped sample");
   const cropWindow = assertCroppedPlanarMeta(meta, cropped.crop, before.sampleToken);
   const ticks = await page.evaluate(() => {
-    const read = (prefix) => [...document.querySelectorAll(`[role='group'][aria-label^='${prefix}'] [data-planar-axis-tick]`)]
+    // The hidden composition slot keeps the previous (full-frame) axes.
+    const root = document.querySelector("[data-planar-composition-slot][aria-hidden='false']") ?? document;
+    const read = (prefix) => [...root.querySelectorAll(`[role='group'][aria-label^='${prefix}'] [data-planar-axis-tick]`)]
       .map((node) => Number(node.getAttribute("data-planar-axis-tick")));
     return { horizontal: read("Horizontal"), vertical: read("Vertical") };
   });
@@ -873,6 +892,9 @@ async function legendCardCount(page) {
  */
 async function fieldLayerListCase(page) {
   const original = await readPlanarState();
+  // The layer list lives in the 2D tab of a visualization Inspector; select
+  // the first visualization node of the model tree to open it.
+  await page.getByRole("treeitem", { name: "Visualization" }).first().click();
   const list = page.locator("[data-slot='planar-field-layer-list']");
   await list.waitFor({ state: "visible", timeout: timeoutMs });
   const addFor = async (pattern) => {
@@ -982,7 +1004,10 @@ async function sectionSliderCase(page, displayPatches) {
   const startCommits = countPositionCommits(displayPatches);
   await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
   await page.mouse.down();
-  const targetX = Math.min(track.x + track.width - 2, thumb.x + thumb.width / 2 + track.width * 0.3);
+  // Drag to the far end of the track: a layered section may have only two
+  // stops, and a partial drag would round back to the committed one.
+  const startX = thumb.x + thumb.width / 2;
+  const targetX = startX < track.x + track.width / 2 ? track.x + track.width - 1 : track.x + 1;
   for (let step = 1; step <= 10; step += 1) {
     await page.mouse.move(thumb.x + thumb.width / 2 + (targetX - thumb.x - thumb.width / 2) * (step / 10), thumb.y + thumb.height / 2);
   }
@@ -1053,9 +1078,11 @@ async function runToolbarLayerScenarios(page, observedPlanarMeta, displayPatches
     try {
       cases.push(await run());
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[smoke-viewport-2d] ${caseId} blocked: ${message}`);
       cases.push({
         case_id: caseId,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
         passed: false,
         required: true,
         status: "blocked",
@@ -1416,16 +1443,32 @@ async function timedMonitorSwitch(
   return { duration, evidence };
 }
 
+// In the field-layer model the base sample only carries frame meta and is
+// not drawn: the raster lives in the overlay canvases of the visible
+// composition slot. Without a composition the first map canvas is the raster.
+function shownFieldMapRasterCanvases() {
+  const slot = [...document.querySelectorAll("[data-planar-composition-slot]")]
+    .find((element) => element instanceof HTMLElement && element.style.visibility === "visible");
+  if (slot) {
+    return [...slot.querySelectorAll("canvas.fm-field-map__canvas")]
+      .filter((canvas) => canvas instanceof HTMLCanvasElement);
+  }
+  const first = document.querySelector(".fm-field-map__canvas");
+  return first instanceof HTMLCanvasElement ? [first] : [];
+}
+
 async function assertFieldMapCanvas(page) {
   await page.locator(".fm-field-map__canvas").first().waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
   await waitForCanvasPaint(page);
-  const proof = await page.locator(".fm-field-map__canvas").first().evaluate(
-    (canvas) => {
+  const proof = await page.evaluate((source) => {
+    const canvases = new Function(`${source}; return shownFieldMapRasterCanvases();`)();
+    let best = { height: 0, nonTransparent: false, width: 0 };
+    for (const canvas of canvases) {
       const context = canvas.getContext("2d");
-      if (!context) return { height: 0, nonTransparent: false, width: 0 };
+      if (!context || canvas.width <= 0 || canvas.height <= 0) continue;
       const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
       let nonTransparent = false;
       for (let index = 3; index < data.length; index += 4) {
@@ -1434,13 +1477,13 @@ async function assertFieldMapCanvas(page) {
           break;
         }
       }
-      return {
-        height: canvas.height,
-        nonTransparent,
-        width: canvas.width,
-      };
-    },
-  );
+      if (nonTransparent || best.width === 0) {
+        best = { height: canvas.height, nonTransparent, width: canvas.width };
+      }
+      if (nonTransparent) break;
+    }
+    return best;
+  }, shownFieldMapRasterCanvases.toString());
   if (proof.width <= 0 || proof.height <= 0 || !proof.nonTransparent) {
     throw new Error(`2D canvas is blank: ${JSON.stringify(proof)}`);
   }
@@ -1498,6 +1541,25 @@ async function assertPlanarEvidence(page, expected, observedPlanarMeta) {
   );
   const value = await evidence.jsonValue();
   const matchingMeta = await waitForObservedPlanarMeta(observedPlanarMeta, value, expected);
+  if (!value.raster) {
+    // Field-layer model (ADR 0080): the base sample carries frame and section
+    // evidence only; the drawn raster is the top visible layer's render.
+    value.raster = await page.waitForFunction(() => {
+      const slot = [...document.querySelectorAll("[data-planar-composition-slot]")]
+        .find((element) => element instanceof HTMLElement && element.style.visibility === "visible");
+      for (const canvas of slot?.querySelectorAll("canvas[data-planar-overlay-layer='raster']") ?? []) {
+        const raw = canvas.getAttribute("data-planar-overlay-rendered-evidence");
+        if (!raw || canvas.getAttribute("data-planar-overlay-rendered-current") !== "true") continue;
+        try {
+          const rendered = JSON.parse(raw);
+          if (rendered.raster?.checksum) return rendered.raster;
+        } catch {
+          // keep looking
+        }
+      }
+      return null;
+    }, undefined, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
+  }
   return assertPlanarEvidenceReady(value, expected, matchingMeta);
 }
 
@@ -1520,23 +1582,19 @@ async function waitForObservedPlanarMeta(observedPlanarMeta, evidence, expected)
 async function waitForCanvasPaint(page) {
   try {
     await page.waitForFunction(
-      () => {
-        const canvas = document.querySelector(".fm-field-map__canvas");
-        if (!(canvas instanceof HTMLCanvasElement)) return false;
-        const context = canvas.getContext("2d");
-        if (!context || canvas.width <= 0 || canvas.height <= 0) return false;
-        const pixels = context.getImageData(
-          0,
-          0,
-          canvas.width,
-          canvas.height,
-        ).data;
-        for (let index = 3; index < pixels.length; index += 4) {
-          if (pixels[index] !== 0) return true;
-        }
-        return false;
+      (source) => {
+            const canvases = new Function(`${source}; return shownFieldMapRasterCanvases();`)();
+        return canvases.some((canvas) => {
+          const context = canvas.getContext("2d");
+          if (!context || canvas.width <= 0 || canvas.height <= 0) return false;
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] !== 0) return true;
+          }
+          return false;
+        });
       },
-      undefined,
+      shownFieldMapRasterCanvases.toString(),
       { timeout: timeoutMs },
     );
   } catch (error) {

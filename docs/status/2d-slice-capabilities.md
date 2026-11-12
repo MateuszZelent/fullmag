@@ -133,16 +133,34 @@ Stan dowodów dla całej sekcji:
   `/probe?nearest=node` → `fdm_cell_center` (2,5; 2,5) nm, odległość 1,265 nm;
   `nearest=cell` → 400; odwrócony kadr → 400 `invalid_planar_crop`; zmiana
   płaszczyzny bez kadru w patchu czyści kadr.
-- **Skrypty smoke NIE URUCHOMIONE:** `smoke-viewport-2d.mjs` (przypadki `toolbar-*`)
-  wymaga raportu naukowego dla bieżącego HEAD, a przypadek sesji legacy — fixture
-  `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`; `smoke-inspector.mjs`
-  (`qualifyPlanarLayerListStability`) przechodzi w CI `browser-fixture-smoke`.
+- **Smoke `smoke-viewport-2d.mjs`, tryb `default`, FDM CPU (grupa DEV, sesja
+  `examples/fdm_cpu_relax_smoke.py`):** przypadki `toolbar-six-tools`,
+  `toolbar-zoom-box`, `toolbar-crop-window`, `toolbar-inspect-node-fdm`,
+  `toolbar-field-layer-list`, `toolbar-vector-mask`, `toolbar-section-slider`
+  **PASS** (przebieg diagnostyczny `CONTROL_ROOM_PLANAR_TOOLBAR_ONLY=1`);
+  `toolbar-legacy-session-image` **NOT RUN** (brak fixture'u odtworzonej sesji
+  sprzed modelu warstw, `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`). Pełny przebieg
+  kwalifikacyjny **BLOCKED**: fixture `examples/viewport_2d_default_slice_fdm_smoke.py`
+  jest odrzucany już na `master` (etap `hysteresis` nie jest wykonywalny przez
+  runtime), a walidator naukowy uruchamia własny solver tego fixture'u. Bramka
+  pamięci (100 przełączeń 2D↔3D, próg 96 MiB) **FAIL**: 127 MiB (~1,27 MiB/cykl;
+  na `master` ta bramka też była czerwona, ~0,86 MiB/cykl — patrz tabela F1).
+  Uruchomienie smoke ujawniło i naprawiło dwa błędy produktu (scalanie łatek
+  `field_overlays` gubiło kolejność warstw; przełącznik wieloprzekroju był
+  zawsze wyłączony w modelu warstw) oraz pięć założeń skryptu niezgodnych z
+  modelem warstw (płótno bazowe vs warstwa, dowód rastra, pomiar płótna,
+  podziałki ukrytego bufora, suwak dwóch warstw).
+- `smoke-inspector.mjs` (`qualifyPlanarLayerListStability`) przechodzi w CI
+  `browser-fixture-smoke`.
 - **FEM w przeglądarce: NOT VERIFIED** (najbliższy węzeł FEM sprawdzony tylko
   testami Rust, które nie są uruchamiane).
 - **Testy jednostkowe Rust (Zadania 2–4): NOT RUN** — zakaz kompilacji testów
   jednostkowych.
-- Pomiary wydajności z Zadania 12 Krok 4 (czas od zatwierdzenia kadru do
-  pierwszej klatki, liczba zapytań przy 1, 4 i 16 warstwach): **nie zmierzone**.
+- **Pomiary (Zadanie 12 Krok 4), FDM CPU, Next dev, checkout na ścieżce Windows:**
+  zatwierdzenie kadru → pierwsza klatka kadru 0,60 s (5 żądań 2D); warstwy o
+  różnych próbkach: 1 warstwa 0 nowych żądań (cache), 159 ms; 4 warstwy 9 żądań
+  (meta, skalar, maska na nową warstwę), 1,35 s; 16 warstw 34 żądania, 1,13 s.
+  Warstwy o tej samej próbce nie generują żądań (deduplikacja zasobów).
 
 | Element | FDM CPU | FEM CPU/GPU | Dowód |
 |---|---|---|---|

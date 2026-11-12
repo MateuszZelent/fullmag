@@ -184,4 +184,15 @@ describe("field-map tool commands", () => {
       "Slice panels apply to the Default source.",
     );
   });
+
+  it("allows slice panels in the layers model, where every view has a layer", () => {
+    const layer = { id: "all" } as NonNullable<PlanarState["field_overlays"]>[number];
+    const ctx = context();
+    fieldMapSurfaceStore.set({ planar: planarState({ field_overlays: [layer], layer_model: "layers" }) });
+    expect(command("field-map.toggle-multislice").disabledReason?.(ctx) ?? null).toBeNull();
+    fieldMapSurfaceStore.set({ planar: planarState({ field_overlays: [layer], layer_model: "legacy" }) });
+    expect(command("field-map.toggle-multislice").disabledReason?.(ctx)).toBe(
+      "Combined object fields use one shared section.",
+    );
+  });
 });
