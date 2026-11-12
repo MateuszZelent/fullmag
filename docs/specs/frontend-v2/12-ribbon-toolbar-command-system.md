@@ -84,6 +84,45 @@ Common toolbar groups:
 - selection tools: pick, box select, isolate, clear;
 - diagnostics: render stats, resource counts, capture snapshot.
 
+### 5.1 2D view toolbar (`field-map`)
+
+The 2D view toolbar (`PlanarToolbar`, layout and gestures in
+[spec 15 §4.1–4.2](15-viewport-2d-module.md#41-layout-toolbar-direction-colours-and-keyboard),
+decision record [ADR 0080](../../adr/0080-planar-field-layers-crop-and-node-probe.md))
+takes no data props: it renders these command-registry entries, and the ribbon
+group `view-slice-2d`, shortcuts and the command palette render the same ids.
+
+| Group | Command id | Kind | Effect |
+|---|---|---|---|
+| Tools | `field-map.tool.navigate` | radio (`isActive`) | pan/zoom tool |
+| Tools | `field-map.tool.zoom-box` | radio | box zoom (`planar.interaction` only) |
+| Tools | `field-map.tool.crop` | radio | crop rectangle → `planar.crop`, backend resampling |
+| Tools | `field-map.tool.inspect` | radio | nearest-node readout (`/probe?nearest=node`) |
+| Tools | `field-map.tool.profile` | radio | line profile |
+| Tools | `field-map.tool.measure` | radio | ruler (client only) |
+| Navigation | `field-map.zoom-in` | action | `interaction.zoom × 1.25` about the view centre |
+| Navigation | `field-map.zoom-out` | action | `interaction.zoom ÷ 1.25` about the view centre |
+| Navigation | `field-map.fit` | action | fit the frame, or the crop when one is active |
+| Navigation | `field-map.clear-crop` | action | `planar.crop = null`, interaction reset (status-bar crop chip, Inspector; no toolbar button) |
+| View masks | `field-map.toggle-vectors` | toggle (`aria-pressed`) | `planar.layers.vectors` |
+| View masks | `field-map.toggle-points` | toggle | `planar.layers.points` |
+| View masks | `field-map.toggle-mesh` | toggle | `planar.layers.mesh` |
+| View masks | `field-map.toggle-streamlines` | toggle | `planar.layers.streamlines` |
+| View masks | `field-map.toggle-contours` | toggle | `planar.layers.contours` |
+| View masks | `field-map.toggle-multislice` | toggle | `planar.multislice.enabled` |
+| View masks | `field-map.toggle-legend` | toggle | `planar.viewport_colorbar_visible` |
+| Export | `field-map.export-png`, `field-map.export-data` | action (existing) | PNG / CSV, including the crop window |
+
+The active tool is ephemeral client state (`planarToolStore`) and the only
+non-resource state these commands touch; every other effect is a
+`visualization/state.planar` patch. All entries are disabled with a
+`disabledReason` while the active centre module is not `field-map`; an
+unavailable entry stays visible with its reason. The pre-existing commands
+`field-map.toggle-vectors` (`A`), `field-map.toggle-mesh` (`G`) and
+`field-map.toggle-contours` are reused by the toolbar unchanged; the new
+toggles follow the same hyphenated naming, so each mask has exactly one
+command.
+
 ## 6. Shortcuts
 
 Shortcut ownership belongs to command registry. A shortcut cannot call a module function directly.
@@ -97,6 +136,28 @@ Shortcut conflicts are resolved by scope:
 5. global.
 
 The command palette must show the currently effective shortcut.
+
+2D view shortcuts (active-viewport scope, `field-map` only; never fire over
+the 3D viewport or in a focused input):
+
+| Shortcut | Command |
+|---|---|
+| `H`, `Esc` | `field-map.tool.navigate` (`Esc` first cancels a crop draft, ruler or pinned readout of the active tool) |
+| `B` | `field-map.tool.zoom-box` |
+| `C` | `field-map.tool.crop` |
+| `I` | `field-map.tool.inspect` |
+| `P` | `field-map.tool.profile` |
+| `R` | `field-map.tool.measure` |
+| `F`, `0` | `field-map.fit` |
+| `+` | `field-map.zoom-in` |
+| `-` | `field-map.zoom-out` |
+| `Enter` | commit the crop draft (inside the `crop` tool) |
+
+Existing 2D shortcuts are unchanged: `[` / `]` layer, `Shift+{` / `Shift+}`
+±10 layers, `V X Y Z M` component presets, `A` vectors mask
+(`field-map.toggle-vectors`), `G` mesh mask (`field-map.toggle-mesh`). The
+new letters `H B C I P R F` must not repeat any of them; this is a registry
+test.
 
 ## 7. Command Execution
 
