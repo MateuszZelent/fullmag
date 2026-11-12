@@ -258,6 +258,26 @@ async function assertNoHorizontalOverflow(label) {
   assert.ok(widths.runtimeToolbar.scroll <= widths.runtimeToolbar.client, label + " caused Runtime toolbar horizontal overflow");
 }
 
+async function assertControlHitTargets(control, label) {
+  const points = await control.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return [0.25, 0.5, 0.75].map((fraction) => {
+      const x = rect.left + rect.width * fraction;
+      const y = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return {
+        fraction,
+        reachable: hit !== null && button.contains(hit),
+        interceptedBy: hit?.tagName ?? null,
+      };
+    });
+  });
+  for (const point of points) {
+    assert.equal(point.reachable, true,
+      `${label} has a blocked pointer target at ${point.fraction}: ${point.interceptedBy}`);
+  }
+}
+
 async function assertStudyRetryVisibleInScrollViewport(retry, label) {
   await retry.scrollIntoViewIfNeeded();
   const bounds = await retry.evaluate((control) => {
@@ -465,6 +485,8 @@ try {
         await page.setViewportSize({ width, height: 844 });
         const label = theme + " retry UI at " + width + "px";
         await assertStudyRetryVisibleInScrollViewport(retry, label);
+        await assertControlHitTargets(retry, label + " Retry");
+        await assertControlHitTargets(fitView, label + " Fit view");
         await assertStudyRetryIdentity(label);
         await assertNoHorizontalOverflow(label);
         await capture(`inspector-actions-study-retry-${theme}-${width}.png`);

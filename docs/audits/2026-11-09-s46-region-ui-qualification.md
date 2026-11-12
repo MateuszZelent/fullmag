@@ -1288,3 +1288,30 @@ również wnętrze Inspectora i normalny toolbar. Kontrola no-body czeka na dok�
 stan, nie tylko wcześniejsze null. Parser Node i diff check przechodzą; właściwe
 browser wykonanie oraz obejrzenie nowych zrzutów są nadal wymagane. Raport jasno
 ogranicza ten dowód do synthetic callback, przy zerowych mutacjach API.
+
+
+## Wznowienie 12.11: Docker, recovery i przyciski Inspectora
+
+Bieżący HEAD pozostaje `6654b0e921312081002eef83c727e5a9d44431cf`.
+Odczyt terminalnego CI bootstrap `42718282198` potwierdził PASS frontendowych
+kontraktów, Inspector browser smoke i deterministycznego generatora API. Rust
+pozostaje FAIL; nie jest to pełny zielony odbiór ani dowód natywnego runtime.
+
+Silnik Docker odpowiada (29.9.3), ale dokładna para grupy T8 na porcie 3243
+ma `Exited (255)`, wspólny FinishedAt `2026-11-10T14:25:25Z`, PID 0. Dawny
+exec typecheck `5e3a4b847b6a400927f66e70b1ed4df4fc34b02225d02381c7ebdb688f94a6aa`
+nie istnieje. Read-only odczyt control volume potwierdza zachowany development
+receipt oraz process-tree `failed_outcome_retained` z diagnostycznym API.
+Obecne abrupt recovery odmawia na tym stanie; nie zmieniono starych dowodów,
+nie uruchomiono Solve ani restartu globalnego. Pozostaje wymagane właściwe
+recovery tej pary. Na WSL odczytano 542 MiB wolnego: bramka S46 >=1 GiB
+nadal nie jest spełniona. Nie usunięto danych.
+
+Następny fragment UI usuwa nakładający się wskaźnik Next DEV przez
+`devIndicators: false`; smoke sprawdza rzeczywisty hit-test trzech punktów
+Retry oraz Fit view w obu motywach i szerokościach 300/380 px. Inspector
+kieruje wynik jawnego ponowienia do istniejącego foreground feedback.
+Komunikat po utracie ACK ponowienia mówi o jednym ponowieniu oryginalnego
+żądania; regresja nadal wymaga dokładnie dwóch łącznych POST i identycznego
+body. Parser smoke i diff check przechodzą. Nowe zmiany wymagają wykonania
+CI i ponownego odbioru zrzutów; nie są jeszcze wdrożone w kontenerze.

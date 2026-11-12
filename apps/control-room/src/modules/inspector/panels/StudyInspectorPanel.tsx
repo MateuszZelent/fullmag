@@ -1088,7 +1088,11 @@ export function useStudyInspectorPanelController(
     }
   };
   const runCommand = (commandId: string, input?: unknown) => {
-    void kernel.commands.execute(commandId, commandContext, input);
+    // Recovery has no inline terminal-result presenter in this panel.
+    const context = commandId === "study.retry-compute"
+      ? { ...commandContext, feedback: "foreground" as const }
+      : commandContext;
+    void kernel.commands.execute(commandId, context, input);
   };
   const inspectImportFile = async (file: File | null) => {
     const generation = ++importInspectionGeneration.current;

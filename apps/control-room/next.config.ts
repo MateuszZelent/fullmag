@@ -409,6 +409,8 @@ function securityHeaders() {
 export const CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS = (30 + 90 + 1800) * 1000 + 250;
 
 const nextConfig: NextConfig = {
+  // Floating dev tools overlap the Inspector's bottom controls at narrow widths.
+  devIndicators: false,
   experimental: { proxyTimeout: CONTROL_ROOM_SYNC_COMMAND_PROXY_TIMEOUT_MS },
   allowedDevOrigins,
   distDir,

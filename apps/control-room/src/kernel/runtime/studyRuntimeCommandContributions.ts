@@ -1726,7 +1726,9 @@ async function postRuntimeCommand(
       clientIntentKind: clientIntentId ? refreshedCommand.kind : undefined,
       message: reconciledCommandId
         ? "Command accepted; waiting for the backend result."
-        : "Submission confirmation is pending. The command was not sent again.",
+        : retry
+          ? "The original request was retried once; confirmation is still pending."
+          : "Submission confirmation is pending. The command was not sent again.",
       observation,
       status: "pending",
     };

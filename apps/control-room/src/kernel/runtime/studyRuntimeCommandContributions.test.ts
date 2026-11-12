@@ -640,6 +640,7 @@ describe("study runtime command contributions", () => {
 
       expect(await f.registry.execute("study.retry-compute", f.context)).toMatchObject({
         status: "pending", clientIntentId: original.client_intent_id, observation: "publication-unconfirmed",
+        message: "The original request was retried once; confirmation is still pending.",
       });
       expect(f.submit).toHaveBeenCalledTimes(2);
       expect(JSON.stringify(f.submit.mock.calls[1][0])).toBe(JSON.stringify(original));
