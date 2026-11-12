@@ -20,6 +20,7 @@ from docker_data_volume_linux import _wsl_executable
 import fullmag_storage as storage
 from fullmag_data_volume_guard import _open_directory_nofollow
 from fullmag_data_volume_linux_request import validate_linux_request
+from fullmag_data_volume_runtime_binding import load_plan
 from linux_data_volume_copy import COMPONENTS, validate_request
 from linux_data_volume_format import _document
 import linux_data_volume_provision as qualification
@@ -52,15 +53,15 @@ def prepare_command(fence, source, distro, request_path, request_sha256):
     qualification.require(request_path == op/'linux-copy-request.json' and
         request['storage_root'] == layout['storage_root'] and fence.control.project == identity['project_name'],
         'Copy job is outside the selected source group')
-    _, plan = qualification._read(op/'plan.json')
+    _, linux_raw = qualification._read(op/'linux-provision-request.json',request['linux_request_sha256'])
+    linux = validate_linux_request(linux_raw)
+    _, plan, _binding = load_plan(op,linux)
     qualification.require(plan.get('source_root') == str(source) and
         plan.get('project_id') == identity['project_id'] and plan.get('worktree_id') == identity['worktree_id'] and
         plan.get('compose_project') == identity['project_name'] and
         plan.get('provision_request',{}).get('wsl_distro') == distro and
         plan.get('runtime_pins',{}).get('image_id') == fence.control.image,
         'Copy job plan belongs to another checkout, image or WSL distro')
-    _, linux_raw = qualification._read(op/'linux-provision-request.json',request['linux_request_sha256'])
-    linux = validate_linux_request(linux_raw)
     qualification.require(plan.get('volume_id') == request['volume_id'] and
         linux['volume_id'] == request['volume_id'] and linux['storage_root'] == request['storage_root'] and
         linux['source_roots'] == plan['observation']['datasets'] and

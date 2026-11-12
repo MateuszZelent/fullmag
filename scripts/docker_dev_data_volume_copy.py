@@ -26,6 +26,7 @@ import fullmag_storage as storage
 from fullmag_data_volume_guard import verify_registered_volume
 from fullmag_data_volume_journal import append_started, append_terminal, next_phase
 from fullmag_data_volume_linux_request import validate_linux_request
+from fullmag_data_volume_runtime_binding import load_plan
 import linux_data_volume_copy as root_copy
 from linux_data_volume_format import _document, _publish_journal
 import linux_data_volume_provision as qualification
@@ -33,7 +34,7 @@ import linux_data_volume_provision as qualification
 
 PARENT_COMPONENTS = ('docker_dev_data_volume_copy.py','docker_data_volume_stopped_group.py',
                      'docker_data_volume_copy_job.py','docker_data_volume_copy_guard.py',
-                     'fullmag_data_volume_pending.py')
+                     'fullmag_data_volume_pending.py','fullmag_data_volume_runtime_binding.py')
 NEW_ARTIFACTS = ('group-drain-inputs.json','group-drained.json','group-drain-source-proof.json',
                  'copy-fence-ready.json','linux-copy-request.json','linux-copy-started.json',
                  'linux-copy-result.json','linux-copy-failed.json','linux-copy-client-intent.json',
@@ -66,6 +67,8 @@ def _load_source(source_root,volume_id):
     _runtime_pins(plan['runtime_pins'])
     linux_raw,linux_value=qualification._read(op/'linux-provision-request.json')
     linux=validate_linux_request(linux_value)
+    original_raw,plan,binding=load_plan(op,linux)
+    qualification.require(original_raw == plan_raw,'Original migration plan changed while resolving its runtime')
     qualification.require(linux['source_roots'] == plan['observation']['datasets'] and
         linux['volume_id'] == volume_id and linux['storage_root'] == layout['storage_root'] and
         linux['mount_root'] == plan['mount_root'],'Copy datasets differ from the provisioned plan')
@@ -87,7 +90,8 @@ def _load_source(source_root,volume_id):
         'plan_sha256':hashlib.sha256(plan_raw).hexdigest(),'linux':linux,
         'linux_request_sha256':hashlib.sha256(linux_raw).hexdigest(),
         'provision_result_sha256':hashlib.sha256(provision_raw).hexdigest(),
-        'journal_path':journal_path,'journal':journal}
+        'journal_path':journal_path,'journal':journal,'runtime_binding':binding,
+        'runtime_binding_sha256':linux.get('runtime_binding_sha256')}
 
 
 def _existing_control(identity,image):
@@ -115,6 +119,7 @@ def _copy_under_host_lock(context,stop_attempt,stop_sha256):
     control=_existing_control(context['identity'],plan['runtime_pins']['image_id'])
     inputs={'source_root':str(source),'image_id':control.image,'volume_id':volume_id,
         'plan_sha256':context['plan_sha256'],'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
+            'runtime_binding_sha256':context.get('runtime_binding_sha256'),
         'parent_components':parents,'root_components':components,'fence_components':fence_components}
     # Use the existing 32GiB operation admission; no build-space policy change.
     with control.operation('data-volume-migration',inputs) as operation:

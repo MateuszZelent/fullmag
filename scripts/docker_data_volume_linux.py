@@ -14,6 +14,7 @@ from docker_development_inputs import select_checkout
 from docker_dev_host import validate_host_path
 import fullmag_storage as storage
 from fullmag_data_volume_linux_request import validate_linux_request
+from fullmag_data_volume_runtime_binding import load_plan
 from linux_data_volume_provision import _read, require
 
 
@@ -50,7 +51,10 @@ def command_for_stage(source, layout, identity, stage, distro, request_path=None
         op = Path(layout['storage_root'])/'migrations/data-volumes'/request['volume_id']
         require(Path(request_path) == op/'linux-provision-request.json' and
                  request['storage_root'] == layout['storage_root'], 'Request is outside the selected storage scope')
-        _, plan = _read(op/'plan.json')
+        if 'runtime_binding_sha256' in request:
+            _,plan,_binding=load_plan(op,request)
+        else:
+            _,plan=_read(op/'plan.json')
         require(plan.get('source_root') == str(source) and
                  plan.get('project_id') == identity['project_id'] and
                  plan.get('worktree_id') == identity['worktree_id'] and

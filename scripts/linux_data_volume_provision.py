@@ -117,7 +117,8 @@ def _selected_journal(op):
 
 
 def load_lineage(request, op):
-    plan_raw, plan = _read(op/'plan.json')
+    from fullmag_data_volume_runtime_binding import load_plan
+    plan_raw, plan, _binding = load_plan(op, request)
     journal_path, journal = _selected_journal(op)
     require(journal['volume_id'] == request['volume_id'] and
              journal['request_sha256'] == digest(plan_raw) and next_phase(journal) == 'ext4-mounted',

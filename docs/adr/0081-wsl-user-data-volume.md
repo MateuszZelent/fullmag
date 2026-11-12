@@ -59,6 +59,11 @@ wymaga zachowania inode i nie kwalifikuje skopiowanego StateRoot.
    bramek. Bez kwalifikacji zachowujemy obie kopie. Nigdy nie kasujemy nowego
    obrazu automatycznie w rollback ani nie dotykamy istniejących danych dysku
    docelowego.
+9. Przebudowa grupy przed migracją nie zmienia zatwierdzonego planu ani
+   receiptów Create/Attach. Jawny, niezmienny rekord następcy runtime może
+   wskazać nową parę kontenerów na tych samych fizycznych datasetach i przy
+   tych samych budżetach. Nie przyznaje prawa do drainu, kopii, admission ani
+   cutover; każdy z tych etapów nadal wymaga własnych aktualnych dowodów.
 
 ## Zobowiązania implementacji
 
@@ -73,6 +78,29 @@ dystrybucję WSL oraz SHA requestu i źródeł, utrzymując blokadę grupy podcz
 formatowania. Recepty `just` przekazują wyłącznie zamknięte argv; nie uruchamiają
 ogólnego `prepare-links` z innym profilem storage. Wywołanie WSL korzysta
 z chronionej ścieżki System32, bez wyszukiwania programu przez PATH.
+
+`fullmag_data_volume_runtime_binding` definiuje zamknięty rekord
+`fullmag.data-volume-runtime-binding.v1` w
+`migrations/data-volumes/<volume_id>/runtime-bindings/<sha256>.json`.
+Producent kwalifikuje dokładne receipty stopu, odtworzenia usług i nowego
+udanego startu oraz bieżące kontenery, obraz, konfigurację, źródła, admission
+i niezmienione device/inode obu rootów. Wspólny uwierzytelniony stop wiąże
+odtworzenie i start jako `diamond-by-common-stop`; sam ten związek nie dowodzi
+bezpośredniej przyczynowości ani wyłączności pomiędzy tymi operacjami.
+Rekord zachowuje SHA obecnego certyfikatu, owner markera i probe oraz wyłącznie
+hash obecnego owner tokenu. Nie dowodzi jego historycznej ciągłości:
+`historical_owner_continuity=not-proven`. Tę granicę zachowują także dwa
+obowiązkowe pola `namespace_admitted=false` i `data_migrated=false`.
+
+Request `fullmag.data-volume-linux-provision.v2` wybiera wyłącznie jawny,
+niepusty SHA takiego rekordu. Przypina on także bajty modułu odczytującego
+binding. Request v1 zachowuje dotychczasowe zachowanie i nigdy sam nie wybiera
+ostatniego znalezionego rekordu. Konsumenci otrzymują oddzielnie oryginalne
+bajty planu oraz pochodny widok z nowymi `runtime_pins` i obserwacjami usług;
+oryginalny plan i jego SHA w journalu pozostają niezmienione. Pozostałe
+historyczne obserwacje nie stają się przez to świeżymi dowodami. Etap kopii
+przypina SHA requestu Linux, zachowując powiązanie z tym samym bindingiem,
+i ponawia pełną obserwację zatrzymanej grupy pod żywymi guardami.
 
 `linux_data_volume_provision.py` wymaga zgodnych receiptów Create/Attach,
 inwentaryzacji sprzed Attach, tego samego bootu i trwałej przestrzeni mountów

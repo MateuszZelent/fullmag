@@ -37,7 +37,57 @@ def valid_request():
     }
 
 
+def valid_runtime_binding_request():
+    value = valid_request()
+    value["schema"] = "fullmag.data-volume-linux-provision.v2"
+    value["runtime_binding_sha256"] = "2" * 64
+    return value
+
+
 class LinuxDataVolumeRequestTests(unittest.TestCase):
+    def test_v2_accepts_exact_runtime_binding_sha256(self):
+        value = valid_runtime_binding_request()
+        before = copy.deepcopy(value)
+
+        result = linux_request.validate_linux_request(value)
+
+        self.assertEqual(result, before)
+        self.assertEqual(value, before)
+        self.assertIsNot(result, value)
+
+    def test_v2_requires_a_nonzero_lowercase_sha256_binding(self):
+        mutations = []
+
+        missing = valid_runtime_binding_request()
+        del missing["runtime_binding_sha256"]
+        mutations.append(("missing", missing))
+
+        for label, replacement in (
+            ("null", None),
+            ("boolean", True),
+            ("uppercase", "A" * 64),
+            ("wrong_length", "b" * 63),
+            ("non_hex", "g" * 64),
+        ):
+            value = valid_runtime_binding_request()
+            value["runtime_binding_sha256"] = replacement
+            mutations.append((label, value))
+
+        for label, value in mutations:
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                linux_request.validate_linux_request(value)
+
+    def test_v1_and_v2_remain_closed_around_runtime_binding_key(self):
+        legacy_with_binding = valid_request()
+        legacy_with_binding["runtime_binding_sha256"] = "2" * 64
+        with self.assertRaises(ValueError):
+            linux_request.validate_linux_request(legacy_with_binding)
+
+        extended_v2 = valid_runtime_binding_request()
+        extended_v2["authorization"] = True
+        with self.assertRaises(ValueError):
+            linux_request.validate_linux_request(extended_v2)
+
     def test_valid_request_returns_unchanged_independent_copy(self):
         value = valid_request()
         before = copy.deepcopy(value)

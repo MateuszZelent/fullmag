@@ -7,6 +7,7 @@ from uuid import UUID
 
 
 SCHEMA = "fullmag.data-volume-linux-provision.v1"
+SCHEMA_WITH_RUNTIME_BINDING = "fullmag.data-volume-linux-provision.v2"
 MIN_CAPACITY_BYTES = 1024**3
 MAX_CAPACITY_BYTES = 1024**4
 
@@ -108,9 +109,14 @@ def _strict_descendant(path: PurePosixPath, root: PurePosixPath) -> bool:
 def validate_linux_request(value: dict) -> dict:
     """Validate a Linux provision request and return an unchanged deep copy."""
 
-    value = _exact_dict(value, _REQUEST_KEYS, "Linux request")
-    if value["schema"] != SCHEMA:
+    if type(value) is not dict:
+        _fail("Linux request must be an object with string keys")
+    bound = value.get("schema") == SCHEMA_WITH_RUNTIME_BINDING
+    value = _exact_dict(value, _REQUEST_KEYS | {"runtime_binding_sha256"} if bound else _REQUEST_KEYS, "Linux request")
+    if value["schema"] not in (SCHEMA, SCHEMA_WITH_RUNTIME_BINDING):
         _fail("Linux request has an unsupported schema")
+    if bound:
+        _digest(value["runtime_binding_sha256"], "runtime_binding_sha256")
 
     volume_id = value["volume_id"]
     if (

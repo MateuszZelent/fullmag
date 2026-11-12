@@ -21,6 +21,7 @@ from fullmag_data_volume_fs import archive_and_extract
 from fullmag_data_volume_guard import _open_directory_nofollow
 from fullmag_data_volume_journal import append_started, append_terminal, next_phase
 from fullmag_data_volume_linux_request import validate_linux_request
+from fullmag_data_volume_runtime_binding import load_plan
 from linux_data_volume_format import _document, _publish_journal
 
 
@@ -28,7 +29,8 @@ SCHEMA = 'fullmag.data-volume-linux-copy-request.v1'
 COMPONENTS = ('linux_data_volume_copy.py', 'fullmag_data_volume_fs.py',
               'fullmag_data_volume_manifest.py', 'fullmag_data_volume_guard.py',
               'fullmag_data_volume_journal.py', 'fullmag_data_volume_linux_request.py',
-              'linux_data_volume_provision.py', 'linux_data_volume_format.py')
+              'linux_data_volume_provision.py', 'linux_data_volume_format.py',
+              'fullmag_data_volume_runtime_binding.py')
 REQUEST_KEYS = {'schema', 'volume_id', 'storage_root', 'token', 'linux_request_sha256',
                 'provision_result_sha256', 'drain_sha256', 'fence_ready_sha256', 'components'}
 
@@ -139,7 +141,7 @@ def load_context(request_path, request_sha256):
                           linux['storage_root'] == request['storage_root'], 'Copy Linux provision scope differs')
     host = qualification.probe_host()
     qualification.require(host['boot_id'] == linux['boot_id'], 'Copy must use the provisioned WSL boot and namespace')
-    plan_raw, plan = qualification._read(op/'plan.json')
+    plan_raw, plan, _binding = load_plan(op, linux)
     qualification.require(plan.get('volume_id') == request['volume_id'] and
         plan.get('storage_root') == linux['storage_root'] and plan.get('mount_root') == linux['mount_root'] and
         plan.get('observation', {}).get('datasets') == linux['source_roots'], 'Copy plan source scope differs')
