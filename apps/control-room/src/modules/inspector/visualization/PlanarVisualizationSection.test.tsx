@@ -4,6 +4,7 @@ import { renderToString, renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
+  PlanarCropState,
   PlanarFieldMetaResource,
   QuantityCatalogResource,
   VisualizationStateResource,
@@ -11,128 +12,100 @@ import type {
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { fieldMapSurfaceStore } from "@/kernel/visualization/fieldMapSurfaceStore";
 import { resolvePlanarSectionGeometryFromMeta } from "@/kernel/visualization/planarSectionModel";
-import type { PlanarTargetFieldProfile } from "./planarTargetFieldProfile";
-
-import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
 import {
+  findElements,
   installSimulationPreparationTestDom,
   TestElement,
   TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
+import { createInspectorEditSessionStore, InspectorEditSessionProvider } from "../InspectorEditSession";
+import { createFieldLayer, type PlanarFieldLayer } from "./planarFieldLayers";
+import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
+
+type Planar = NonNullable<VisualizationStateResource["planar"]>;
+
 const mocks = vi.hoisted(() => ({
   components: 3,
-  quantityProviderAvailable: true,
   discretization: "fem",
-  metaCalls: 0,
-  maskCalls: 0,
-  section: null as PlanarFieldMetaResource["section"] | null,
-  optimisticPlanar: null as (NonNullable<VisualizationStateResource["planar"]> & { field_overlays?: PlanarTargetFieldProfile[] }) | null,
+  section: null as unknown,
+  optimisticPlanar: null as unknown,
   queuePatch: vi.fn(),
   queuePlanarFieldOverlayPatch: vi.fn(),
   queuePlanarTargetOverride: vi.fn(),
+  queuePlanarCropPatch: vi.fn(),
+  flushNow: vi.fn(async () => undefined),
+  execute: vi.fn(async () => ({ status: "completed" })),
   targets: {
-    airbox: { scope: "airbox", scope_id: "airbox" },
-    objects: [{ scope: "object", scope_id: "free-layer" }],
+    airbox: { scope: "airbox", scope_id: "airbox", label: "Airbox" },
+    objects: [{ scope: "object", scope_id: "free-layer", label: "film" }] as { scope: string; scope_id: string; label?: string }[],
     parts: [{ scope: "part", scope_id: "tetrahedra" }],
   },
-  maskStatus: "ready" as "error" | "idle" | "loading" | "ready" | "stale",
-  overlay: {
-    available: true,
-    boundary_classification: "exact",
-    codec: "fmcs.v4",
-  },
-  planar: {
+  planar: null as unknown as Record<string, unknown>,
+}));
+
+function basePlanar(): Planar {
+  return {
     visible: true,
-    colormap: "viridis",
+    layer_model: "layers",
+    colormap: "hsl_direction",
     component: "magnitude",
-    display_unit: "A/m",
+    display_unit: null,
+    crop: null,
     layers: {
-      boundaries: true,
+      boundaries: false,
       bounds: false,
       contours: false,
       mesh: true,
       points: false,
       probes: true,
       raster: true,
+      streamlines: false,
       vectors: false,
     },
-    quantity_id: "h_eff",
-    source: { kind: "monitor", monitor_id: "plane-1" } as
-      | { kind: "default" }
-      | { kind: "monitor"; monitor_id: string },
-    default_slice: {
-      operator: { kind: "plane_sample" },
-      plane: "xy" as const,
-      position_fraction: 0.5,
-    },
-    range: { mode: "manual", min: -1, max: 1 },
+    quantity_id: "m",
+    source: { kind: "default" },
+    default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+    range: { mode: "auto", min: null, max: null },
     raster_opacity: 1,
     viewport_colorbar_visible: true,
     wireframe_style: { color: "#94a3b8", opacity: 1 },
     target_overrides: [
-      {
-        scope: "object",
-        scope_id: "free-layer",
-        wireframe_style: { color: "#ff0000", opacity: 0.4 },
-      },
-      {
-        scope: "airbox",
-        scope_id: "airbox",
-        wireframe_style: { color: "#00ff00", opacity: 0.6 },
-      },
-      {
-        scope: "part",
-        scope_id: "tetrahedra",
-        wireframe_style: { color: "#0000ff", opacity: 0.8 },
-      },
-    ] as NonNullable<
-      NonNullable<VisualizationStateResource["planar"]>["target_overrides"]
-    >,
+      { scope: "object", scope_id: "free-layer", wireframe_style: { color: "#ff0000", opacity: 0.4 } },
+      { scope: "airbox", scope_id: "airbox", wireframe_style: { color: "#00ff00", opacity: 0.6 } },
+    ],
     point_style: { color: "#89b4fa", opacity: 1, size: 3 },
     interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
     quality: "interactive",
-    resolution: { height: 256, vector_budget: 512, width: 512 },
+    resolution: { height: 512, vector_budget: 2000, width: 512 },
     vector_style: {
-      color_mode: "orientation",
-      length_mode: "uniform",
-      monochrome_color: "#cdd6f4",
-      opacity: 1,
-      scale: 1,
-      thickness: 1,
+      color_mode: "orientation", length_mode: "uniform", monochrome_color: "#cdd6f4",
+      opacity: 1, scale: 1, thickness: 1,
     },
-    field_overlays: [] as PlanarTargetFieldProfile[],
-    view_scope: { kind: "monitor_target" } as
-      | { kind: "monitor_target" }
-      | { kind: "mesh_part"; scope_id: string }
-      | { kind: "airbox" },
-  },
-}));
-
-function planarFieldOverlay(
-  overrides: Partial<PlanarTargetFieldProfile> = {},
-): PlanarTargetFieldProfile {
-  return {
-    id: "object:free-layer",
-    quantity_id: "m",
-    component: "magnitude",
-    view_scope: { kind: "object", scope_id: "free-layer" },
-    colormap: "hsl_direction",
-    range: { mode: "auto", min: null, max: null },
-    raster_opacity: 1,
-    raster_visible: true,
-    vectors_visible: false,
-    vector_style: { ...mocks.planar.vector_style },
-    ...overrides,
-  };
+    field_overlays: [createFieldLayer("all")],
+    multislice: { enabled: false, position_fractions: [0.25, 0.5, 0.75] },
+    view_scope: { kind: "monitor_target" },
+  } as Planar;
 }
+
+function planar(): Planar {
+  return mocks.planar as unknown as Planar;
+}
+
+const filmLayer = (overrides: Partial<PlanarFieldLayer> = {}): PlanarFieldLayer => ({
+  ...createFieldLayer({ id: "object:free-layer", kind: "object" }),
+  ...overrides,
+});
 
 vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/kernel/KernelContext")>()),
   useKernel: () => ({
+    commands: { execute: mocks.execute, getSessionScopeKey: () => null },
     visualizationSync: {
+      flushNow: mocks.flushNow,
       queuePatch: mocks.queuePatch,
+      queuePlanarCropPatch: mocks.queuePlanarCropPatch,
       queuePlanarFieldOverlayPatch: mocks.queuePlanarFieldOverlayPatch,
       queuePlanarTargetOverride: mocks.queuePlanarTargetOverride,
     },
@@ -141,66 +114,41 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
   planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
-  usePlanarFieldMetaResource: () => {
-    mocks.metaCalls += 1;
-    return {
-      data: {
-      canonical_unit: "A/m",
+  usePlanarFieldMetaResource: () => ({
+    data: {
+      canonical_unit: "1",
       component: "magnitude",
       field_backend: "fem",
       field_device: "cpu",
       field_precision: "double",
       field_source: "live",
-      mesh_overlay_descriptor: mocks.overlay,
+      frame: {
+        bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
+        full_bounds_uv_m: [-25e-9, 25e-9, -30e-9, 30e-9],
+      },
+      mesh_overlay_descriptor: { available: true, boundary_classification: "exact", codec: "fmcs.v4" },
       occupancy: { occupied_measure: 1 },
       operator: { kind: "plane_sample" },
       section: mocks.section,
-      source: {
-        kind: "monitor",
-        monitor_hash: "sha256:monitor",
-        monitor_id: "plane-1",
-        monitor_revision: "2",
-      },
-      sampling_method: "fdm_cell_constant",
+      source: { kind: "default", default_slice_hash: "sha256:slice", default_slice_revision: "1" },
+      sampling_method: "fem_plane_sample",
       sampling_execution: "cpu",
-    },
-      error: null,
-      status: "ready",
-    };
-  },
-  usePlanarMaskResource: () => {
-    mocks.maskCalls += 1;
-    return {
-      data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null,
-      error: null,
-      status: mocks.maskStatus,
-    };
-  },
-}));
-
-vi.mock("@/kernel/resources/planarMonitorResources", () => ({
-  usePlanarMonitorsResource: () => ({
-    data: {
-      monitors: [{ id: "plane-1", name: "Mid-plane" }],
-    },
-  }),
-}));
-
-vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
-  useDomainMetaResource: () => ({
-    data: {
-      bounds: { min: [10, 20, 30], max: [14, 26, 42] },
     },
     error: null,
     status: "ready",
   }),
+  usePlanarMaskResource: () => ({ data: new ArrayBuffer(1), error: null, status: "ready" }),
+}));
+
+vi.mock("@/kernel/resources/planarMonitorResources", () => ({
+  usePlanarMonitorsResource: () => ({ data: { monitors: [{ id: "plane-1", name: "Mid-plane" }] } }),
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useQuantityCatalogResource: () => ({
     data: {
       schema_version: "1.0",
-      quantities: ["m", "h_eff"].map((id) => ({
+      quantities: ["m", "h_eff", "H_demag"].map((id) => ({
         id, label: id, description: "", domain: "magnetic_only",
         shape: mocks.components === 1 ? "spatial_scalar" : "vector_field",
         unit: id === "m" ? "1" : "A/m", n_comp: mocks.components, location: "node",
@@ -210,7 +158,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
         solver_capability: "supported", requestable: true, renderable: true,
         materializable: true, materialization_state: "complete", publication_state: "interactive",
         resolved_capability: {
-          quantity_id: id, provider: mocks.quantityProviderAvailable ? "available" : "unavailable",
+          quantity_id: id, provider: "available",
           request: "field_vector", materialization: "materialized", render: "renderable",
           publication: "interactive", scope: "object", lane: "test", precision: "double", carriers: [],
         },
@@ -222,20 +170,9 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFieldCatalogResource: () => ({
     data: {
       quantities: [
-        {
-          available: true,
-          components: mocks.components,
-          label: "Magnetization",
-          quantity_id: "m",
-          unit: "1",
-        },
-        {
-          available: true,
-          components: mocks.components,
-          label: "Effective field",
-          quantity_id: "h_eff",
-          unit: "A/m",
-        },
+        { available: true, components: mocks.components, label: "Magnetization", quantity_id: "m", unit: "1" },
+        { available: true, components: mocks.components, label: "Effective field", quantity_id: "h_eff", unit: "A/m" },
+        { available: true, components: mocks.components, label: "Demagnetizing field", quantity_id: "H_demag", unit: "A/m" },
       ],
     },
   }),
@@ -249,13 +186,12 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
     data: { planar: mocks.planar, targets: mocks.targets },
-    optimisticData: mocks.optimisticPlanar
-      ? { planar: mocks.optimisticPlanar, targets: mocks.targets }
-      : null,
+    optimisticData: mocks.optimisticPlanar ? { planar: mocks.optimisticPlanar, targets: mocks.targets } : null,
+    status: "ready",
   }),
 }));
 
-const selection: Selection = {
+const objectSelection: Selection = {
   kind: "model.object",
   label: "Free layer",
   moduleSource: "inspector",
@@ -266,7 +202,7 @@ const selection: Selection = {
 
 const airboxSelection: Selection = {
   kind: "airbox.visualization",
-  label: "Free layer",
+  label: "Airbox",
   moduleSource: "inspector",
   nodeId: "model:airbox:visualization",
   objectId: null,
@@ -275,22 +211,6 @@ const airboxSelection: Selection = {
     nodeId: "model:airbox:visualization",
     type: "airbox",
     visualizationTargetId: "airbox",
-  },
-};
-
-const partSelection: Selection = {
-  kind: "mesh-part",
-  label: "Free layer",
-  moduleSource: "inspector",
-  nodeId: "part:tetrahedra",
-  objectId: null,
-  ref: {
-    carrierPartId: "tetrahedra",
-    kind: "mesh-part",
-    nodeId: "part:tetrahedra",
-    objectId: null,
-    type: "mesh-part",
-    visualizationTargetId: "part:tetrahedra",
   },
 };
 
@@ -309,739 +229,319 @@ const regionSelection: Selection = {
     visualizationTargetId: "region:free-layer:r1",
   },
 };
+
+const sceneSelection: Selection = {
+  kind: "scene",
+  label: "Scene",
+  moduleSource: "inspector",
+  nodeId: "model:scene",
+  objectId: null,
+  ref: null,
+};
+
+async function mount(selection: Selection) {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  const root = createRoot(container as unknown as Element);
+  const store = createInspectorEditSessionStore();
+  const render = () => root.render(
+    <InspectorEditSessionProvider store={store}>
+      <PlanarVisualizationSection selection={selection} />
+    </InspectorEditSessionProvider>,
+  );
+  await act(async () => render());
+  return {
+    container,
+    dom,
+    rerender: () => act(async () => render()),
+    store,
+    unmount: async () => {
+      await act(async () => root.unmount());
+      dom.restore();
+    },
+  };
+}
+
+function lastOverlayWrite(): { layers: PlanarFieldLayer[]; touched: string } {
+  const call = mocks.queuePlanarFieldOverlayPatch.mock.calls.at(-1);
+  if (!call) throw new Error("No field layer write");
+  return { layers: call[0].planar.field_overlays, touched: call[1] };
+}
+
 describe("PlanarVisualizationSection", () => {
   beforeEach(() => {
     fieldMapSurfaceStore.reset();
-    mocks.queuePatch.mockClear();
-    mocks.queuePlanarFieldOverlayPatch.mockClear();
-    mocks.overlay.available = true;
-    mocks.overlay.boundary_classification = "exact";
-    mocks.overlay.codec = "fmcs.v4";
-    mocks.components = 3;
-    mocks.quantityProviderAvailable = true;
-    mocks.maskStatus = "ready";
-    mocks.discretization = "fem";
-    mocks.planar.source = { kind: "monitor", monitor_id: "plane-1" };
-    mocks.planar.view_scope = { kind: "monitor_target" };
-    mocks.planar.field_overlays = [];
-    mocks.queuePlanarTargetOverride.mockClear();
+    mocks.planar = basePlanar() as unknown as Record<string, unknown>;
     mocks.optimisticPlanar = null;
-    mocks.metaCalls = 0;
-    mocks.maskCalls = 0;
+    mocks.components = 3;
     mocks.section = null;
-    mocks.targets.airbox = { scope: "airbox", scope_id: "airbox" };
-    mocks.targets.objects = [
-      { scope: "object", scope_id: "free-layer" },
-    ];
-    mocks.targets.parts = [
-      { scope: "part", scope_id: "tetrahedra" },
-    ];
-    mocks.planar.target_overrides = [
-      {
-        scope: "object",
-        scope_id: "free-layer",
-        wireframe_style: { color: "#ff0000", opacity: 0.4 },
-      },
-      {
-        scope: "airbox",
-        scope_id: "airbox",
-        wireframe_style: { color: "#00ff00", opacity: 0.6 },
-      },
-      {
-        scope: "part",
-        scope_id: "tetrahedra",
-        wireframe_style: { color: "#0000ff", opacity: 0.8 },
-      },
-    ];
+    for (const fn of [mocks.queuePatch, mocks.queuePlanarFieldOverlayPatch, mocks.queuePlanarTargetOverride,
+      mocks.queuePlanarCropPatch, mocks.flushNow, mocks.execute]) fn.mockClear();
   });
 
-  it("queues only the selected Object target override", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () =>
-        root.render(<PlanarVisualizationSection selection={selection} />),
-      );
-      await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.2"),
-      );
+  it("shows one status line instead of four overview tiles", () => {
+    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={sceneSelection} />);
+    expect(html).toContain('aria-label="2D view status"');
+    expect(html).toContain("2D view closed");
+    expect(html).toContain("Mesh ready");
+    expect(html).not.toContain("Display Passes");
+    expect(html).not.toContain("Quantity Source");
+    expect(html).toContain("1 / 16");
+  });
 
-      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
-        kind: "upsert",
-        target: {
-          id: "object:free-layer",
-          kind: "object",
-          label: "Free layer",
-        },
-        wireframeStyle: { color: "#ff0000", opacity: 0.2 },
-      });
-      expect(mocks.queuePatch).not.toHaveBeenCalled();
+  it("selects the layer of the object selected in the model tree", async () => {
+    planar().field_overlays = [createFieldLayer("all"), filmLayer()];
+    const view = await mount(objectSelection);
+    try {
+      const rows = findElements(view.container, (element) => element.getAttribute("data-layer-id") !== null);
+      expect(rows.map((row) => row.getAttribute("data-layer-id"))).toEqual(["all", "object:free-layer"]);
+      expect(rows[1]!.getAttribute("aria-current")).toBe("true");
+      expect(rows[1]!.textContent).toContain("film · m · direction");
+      expect(view.container.textContent).toContain("Selected layer: film");
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await view.unmount();
     }
   });
 
-  it("patches Airbox independently despite an Object-label collision", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+  it("offers Add field for an object without a layer and never writes on selection", async () => {
+    const view = await mount(objectSelection);
     try {
-      await act(async () =>
-        root.render(
-          <PlanarVisualizationSection selection={airboxSelection} />,
-        ),
-      );
-      await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.25"),
-      );
+      expect(mocks.queuePlanarFieldOverlayPatch).not.toHaveBeenCalled();
+      expect(view.container.textContent).toContain("film has no 2D field layer.");
+      await act(async () => clickButton(view.container, "Add field for film"));
+      const write = lastOverlayWrite();
+      expect(write.touched).toBe("object:free-layer");
+      expect(write.layers.map((layer) => layer.id)).toEqual(["object:free-layer", "all"]);
+      expect(write.layers[0]!.view_scope).toEqual({ kind: "object", scope_id: "free-layer" });
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  });
 
+  it("adds an Airbox layer without changing the base view scope", async () => {
+    const view = await mount(airboxSelection);
+    try {
+      await act(async () => clickButton(view.container, "Add field for Airbox"));
+      const write = lastOverlayWrite();
+      expect(write.touched).toBe("airbox");
+      expect(write.layers[0]).toMatchObject({ id: "airbox", quantity_id: "H_demag", view_scope: { kind: "airbox" } });
+      const patch = mocks.queuePlanarFieldOverlayPatch.mock.calls.at(-1)![0].planar;
+      expect(Object.keys(patch)).toEqual(["field_overlays"]);
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(planar().view_scope).toEqual({ kind: "monitor_target" });
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("renders a masked pass as on with a toolbar note", async () => {
+    planar().field_overlays = [filmLayer({ vectors_visible: true })];
+    const view = await mount(objectSelection);
+    try {
+      const vectors = findControl(view.container, "Toggle Vectors");
+      expect(vectors.getAttribute("aria-pressed")).toBe("true");
+      expect(vectors.textContent).toContain("hidden in toolbar");
+      expect(findControl(view.container, "Toggle Points").getAttribute("aria-pressed")).toBe("false");
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("flushes a quantity change at once and writes only the selected layer", async () => {
+    const all = createFieldLayer("all");
+    planar().field_overlays = [filmLayer(), all];
+    const view = await mount(objectSelection);
+    try {
+      await act(async () => change(findControl(view.container, "Quantity"), "h_eff"));
+      const write = lastOverlayWrite();
+      expect(write.touched).toBe("object:free-layer");
+      expect(write.layers[0]).toMatchObject({ quantity_id: "h_eff", component: "magnitude" });
+      expect(write.layers[1]).toBe(all);
+      expect(mocks.flushNow).toHaveBeenCalledTimes(1);
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(mocks.execute).not.toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it.each([
+    { name: "Object", selected: objectSelection, layer: () => filmLayer() },
+    { name: "Airbox", selected: airboxSelection, layer: () => createFieldLayer({ id: "airbox", kind: "airbox" }) },
+  ])("preserves the $name Inspector root, focus and scroll through pending and ACK", async ({ selected, layer }) => {
+    planar().field_overlays = [layer()];
+    const view = await mount(selected);
+    try {
+      const findPanel = () => findElements(view.container, (element) =>
+        (element.getAttribute("class") ?? "").split(" ").includes("fm-inspector-panel"))[0];
+      const panel = findPanel()!;
+      const opacity = findControl(view.container, "Raster opacity");
+      panel.scrollTop = 127;
+      opacity.focus();
+      await act(async () => change(opacity, "0.5"));
+      const pending = lastOverlayWrite().layers;
+      mocks.optimisticPlanar = { ...planar(), field_overlays: pending };
+      await view.rerender();
+      expect(findPanel()).toBe(panel);
+      mocks.planar = { ...planar(), field_overlays: pending } as unknown as Record<string, unknown>;
+      mocks.optimisticPlanar = null;
+      await view.rerender();
+      expect(findPanel()).toBe(panel);
+      expect(view.dom.document.activeElement).toBe(opacity);
+      expect(panel.scrollTop).toBe(127);
+      expect(findControl(view.container, "Quantity").disabled).toBe(false);
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("queues only the selected Object and Airbox wireframe overrides", async () => {
+    const view = await mount(objectSelection);
+    try {
+      await act(async () => change(findControl(view.container, "Wireframe opacity"), "0.2"));
+      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
+        kind: "upsert",
+        target: { id: "object:free-layer", kind: "object", label: "Free layer" },
+        wireframeStyle: { color: "#ff0000", opacity: 0.2 },
+      });
+    } finally {
+      await view.unmount();
+    }
+    const airbox = await mount(airboxSelection);
+    try {
+      await act(async () => change(findControl(airbox.container, "Wireframe opacity"), "0.25"));
       expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
         kind: "upsert",
         target: { id: "airbox", kind: "airbox", label: "Airbox" },
         wireframeStyle: { color: "#00ff00", opacity: 0.25 },
       });
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("supports Part and reset removes only its exact override", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () =>
-        root.render(<PlanarVisualizationSection selection={partSelection} />),
-      );
-      expect(findControl(container, "Wireframe color value").value).toBe(
-        "#0000ff",
-      );
-      await act(async () =>
-        clickButton(container, "Reset wireframe override"),
-      );
-
-      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
-        kind: "remove",
-        target: {
-          id: "part:tetrahedra",
-          kind: "part",
-          label: "Free layer",
-        },
-      });
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("shows unsupported target wireframe as read-only fallback and cannot mutate global style", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () =>
-        root.render(<PlanarVisualizationSection selection={regionSelection} />),
-      );
-      expect(container.textContent).toContain(
-        "Planar wireframe overrides support only Airbox, objects, and mesh parts.",
-      );
-      expect(findControl(container, "Wireframe color value").disabled).toBe(
-        true,
-      );
-      expect(findControl(container, "Wireframe opacity").disabled).toBe(true);
-      await act(async () =>
-        change(findControl(container, "Wireframe opacity"), "0.1"),
-      );
       expect(mocks.queuePatch).not.toHaveBeenCalled();
     } finally {
-      expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
-      await act(async () => root.unmount());
-      dom.restore();
+      await airbox.unmount();
     }
   });
 
-  it("keeps a missing Object target dormant and reactivates only its exact registry identity", async () => {
-    mocks.targets.objects = [
-      { scope: "object", scope_id: "other-object" },
-    ];
-    const savedOverride = mocks.planar.target_overrides[0];
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+  it("keeps unsupported target wireframes read-only", async () => {
+    const view = await mount(regionSelection);
     try {
-      await act(async () =>
-        root.render(<PlanarVisualizationSection selection={selection} />),
-      );
-      expect(container.textContent).toContain(
-        "The selected target is absent from the current visualization registry",
-      );
-      expect(findControl(container, "Wireframe color value").value).toBe(
-        "#94a3b8",
-      );
-      expect(findControl(container, "Wireframe opacity").disabled).toBe(true);
-      expect(mocks.planar.target_overrides[0]).toBe(savedOverride);
-
-      mocks.targets.objects = [
-        { scope: "object", scope_id: "free-layer" },
-      ];
-      await act(async () =>
-        root.render(<PlanarVisualizationSection selection={selection} />),
-      );
-      expect(findControl(container, "Wireframe color value").value).toBe(
-        "#ff0000",
-      );
-      expect(findControl(container, "Wireframe opacity").disabled).toBe(false);
+      expect(findControl(view.container, "Wireframe opacity").disabled).toBe(true);
+      expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await view.unmount();
     }
   });
 
-  it.each([
-    {
-      name: "Object",
-      selected: selection,
-      target: {
-        id: "object:free-layer",
-        kind: "object" as const,
-        label: "Free layer",
-      },
-      scopeId: "free-layer",
-      color: "#ff0000",
-    },
-    {
-      name: "Airbox",
-      selected: airboxSelection,
-      target: {
-        id: "airbox",
-        kind: "airbox" as const,
-        label: "Airbox",
-      },
-      scopeId: "airbox",
-      color: "#00ff00",
-    },
-  ])(
-    "preserves the $name Inspector root, focus, scroll, and unrelated controls through pending and ACK",
-    async ({ selected, target, scopeId, color }) => {
-      if (target.kind === "object") {
-        mocks.planar.field_overlays = [planarFieldOverlay()];
-      } else {
-        mocks.planar.view_scope = { kind: "airbox" };
-        mocks.planar.source = { kind: "default" };
-      }
-      const dom = installSimulationPreparationTestDom();
-      const container = dom.document.createElement("div");
-      const root = createRoot(container as unknown as Element);
-      try {
-        await act(async () =>
-          root.render(<PlanarVisualizationSection selection={selected} />),
-        );
-        const panel = findElements(container, (element) =>
-          (element.getAttribute("class") ?? "")
-            .split(" ")
-            .includes("fm-inspector-panel"),
-        )[0];
-        if (!panel) throw new Error("Missing planar Inspector root");
-        const wireframeOpacity = findControl(
-          container,
-          "Wireframe opacity",
-        );
-        const rasterOpacity = findControl(container, "Raster opacity");
-        panel.scrollTop = 127;
-        wireframeOpacity.focus();
-        const unrelatedState = {
-          className: rasterOpacity.getAttribute("class"),
-          disabled: rasterOpacity.disabled,
-        };
-        const initialMetaCalls = mocks.metaCalls;
-        const initialMaskCalls = mocks.maskCalls;
-
-        await act(async () => change(wireframeOpacity, "0.2"));
-        expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
-        expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
-          kind: "upsert",
-          target,
-          wireframeStyle: { color, opacity: 0.2 },
-        });
-
-        const acknowledgedOverrides = mocks.planar.target_overrides.map(
-          (entry) =>
-            entry.scope === target.kind && entry.scope_id === scopeId
-              ? {
-                  ...entry,
-                  wireframe_style: {
-                    ...entry.wireframe_style,
-                    opacity: 0.2,
-                  },
-                }
-              : entry,
-        );
-        mocks.optimisticPlanar = {
-          ...mocks.planar,
-          target_overrides: acknowledgedOverrides,
-        } as NonNullable<VisualizationStateResource["planar"]> & { field_overlays?: PlanarTargetFieldProfile[] };
-        await act(async () =>
-          root.render(<PlanarVisualizationSection selection={selected} />),
-        );
-
-        expect(
-          findElements(container, (element) =>
-            (element.getAttribute("class") ?? "")
-              .split(" ")
-              .includes("fm-inspector-panel"),
-          )[0],
-        ).toBe(panel);
-        expect(dom.document.activeElement).toBe(wireframeOpacity);
-        expect(panel.scrollTop).toBe(127);
-        expect(findControl(container, "Raster opacity").disabled).toBe(
-          unrelatedState.disabled,
-        );
-        expect(
-          findControl(container, "Raster opacity").getAttribute("class"),
-        ).toBe(unrelatedState.className);
-
-        mocks.planar.target_overrides = acknowledgedOverrides;
-        mocks.optimisticPlanar = null;
-        await act(async () =>
-          root.render(<PlanarVisualizationSection selection={selected} />),
-        );
-        expect(
-          findElements(container, (element) =>
-            (element.getAttribute("class") ?? "")
-              .split(" ")
-              .includes("fm-inspector-panel"),
-          )[0],
-        ).toBe(panel);
-        expect(dom.document.activeElement).toBe(wireframeOpacity);
-        expect(panel.scrollTop).toBe(127);
-        expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
-        expect(mocks.queuePatch).not.toHaveBeenCalled();
-        expect(mocks.metaCalls).toBe(initialMetaCalls + 2);
-        expect(mocks.maskCalls).toBe(initialMaskCalls + 2);
-      } finally {
-        await act(async () => root.unmount());
-        dom.restore();
-      }
-    },
-  );
-
-  it("always offers Default and exposes plane/position controls without a monitor", () => {
-    mocks.planar.source = { kind: "default" };
-    mocks.planar.default_slice = {
-      operator: { kind: "plane_sample" },
-      plane: "xy",
-      position_fraction: 0.5,
-    };
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={selection} />,
-    );
-
-    expect(html).toContain('aria-label="Source"');
-    expect(html).toContain(">Default<");
-    expect(html).toContain('aria-label="Plane"');
-    expect(html).toContain('aria-label="Position"');
-    expect(html).toContain('aria-label="Coordinate (z)"');
-    expect(html).toContain('aria-label="Sampling"');
-    expect(html).not.toContain("Select monitor");
-  });
-
-  it("uses the base Airbox section for global controls, not selected-object metadata", async () => {
-    mocks.planar.source = { kind: "default" };
-    mocks.planar.view_scope = { kind: "airbox" };
-    mocks.planar.default_slice = {
-      operator: { kind: "plane_sample" },
-      plane: "xy",
-      position_fraction: 0.5,
-    };
+  it("converts a position in nm to the slice fraction and rejects non-numbers", async () => {
     mocks.section = {
-      cut_element_count: null,
-      layer_count: 12,
-      layer_index: 5,
-      layer_spacing_m: 2.5e-9,
-      layer_stops_m: [],
-      navigation_step_kind: "fdm_cell",
-      navigation_step_m: 2.5e-9,
-      normal_axis: "z",
-      normal_max_m: 40e-9,
-      normal_min_m: 10e-9,
-      plane: "xy",
-      requested_coordinate_m: 25e-9,
-      requested_fraction: 0.5,
-      resolved_coordinate_m: 23.75e-9,
-      stops_kind: "fdm_cell_layers",
-    };
-    const baseAirbox = {
-      cut_element_count: null,
-      layer_count: 26,
-      layer_index: 12,
-      layer_spacing_m: 2.5e-9,
-      layer_stops_m: [],
-      navigation_step_kind: "fdm_cell",
-      navigation_step_m: 2.5e-9,
-      normal_axis: "z",
-      normal_max_m: 60e-9,
-      normal_min_m: -5e-9,
-      plane: "xy",
-      requested_coordinate_m: 27.5e-9,
-      requested_fraction: 0.5,
-      resolved_coordinate_m: 26.25e-9,
-      stops_kind: "fdm_cell_layers",
+      cut_element_count: 12, layer_count: null, layer_index: null, layer_spacing_m: null,
+      layer_stops_m: [], navigation_step_kind: "continuous", navigation_step_m: null,
+      normal_axis: "z", normal_max_m: 50e-9, normal_min_m: 0, plane: "xy",
+      requested_coordinate_m: 25e-9, requested_fraction: 0.5, resolved_coordinate_m: 25e-9,
+      stops_kind: "continuous",
     } as NonNullable<PlanarFieldMetaResource["section"]>;
     fieldMapSurfaceStore.set({
-      sectionGeometry: resolvePlanarSectionGeometryFromMeta(baseAirbox, "xy"),
+      sectionGeometry: resolvePlanarSectionGeometryFromMeta(mocks.section as PlanarFieldMetaResource["section"], "xy"),
     });
-
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+    const view = await mount(sceneSelection);
     try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
-
-      const layer = findControl(container, "Layer");
-      expect(layer.getAttribute("max")).toBe("25");
-      expect(layer.getAttribute("aria-valuetext")).toBe("Layer 12 of 26");
-      expect(container.textContent).toContain("z 27.5 nm → 26.3 nm (cell layer 12 / 25)");
-      expect(container.textContent).not.toContain("23.8 nm");
+      const position = findControl(view.container, "Position (z)");
+      expect(position.value).toBe("25");
+      await act(async () => change(position, "abc"));
+      await act(async () => commit(position));
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+      expect(view.container.textContent).toContain("Position must be a finite value in nm.");
+      await act(async () => change(position, "12.5"));
+      await act(async () => commit(position));
+      const slice = mocks.queuePatch.mock.calls.at(-1)![0].planar.default_slice;
+      expect(slice).toMatchObject({ plane: "xy", operator: { kind: "plane_sample" } });
+      expect(slice.position_fraction).toBeCloseTo(0.25, 12);
+      await act(async () => change(position, "900"));
+      await act(async () => commit(position));
+      expect(mocks.queuePatch.mock.calls.at(-1)![0].planar.default_slice.position_fraction).toBe(1);
+      for (const label of ["Source", "Plane", "Mode"]) expect(findControl(view.container, label)).toBeTruthy();
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await view.unmount();
     }
   });
 
-  it("keeps common section coordinates unavailable when only object metadata exists", async () => {
-    mocks.planar.source = { kind: "default" };
-    mocks.planar.view_scope = { kind: "airbox" };
-    mocks.section = {
-      cut_element_count: null,
-      layer_count: 12,
-      layer_index: 5,
-      layer_spacing_m: 2.5e-9,
-      layer_stops_m: [],
-      navigation_step_kind: "fdm_cell",
-      navigation_step_m: 2.5e-9,
-      normal_axis: "z",
-      normal_max_m: 40e-9,
-      normal_min_m: 10e-9,
-      plane: "xy",
-      requested_coordinate_m: 25e-9,
-      requested_fraction: 0.5,
-      resolved_coordinate_m: 23.75e-9,
-      stops_kind: "fdm_cell_layers",
-    };
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+  it("clears the crop with a source change and keeps monitor planes read-only", async () => {
+    const view = await mount(sceneSelection);
     try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
-
-      expect(findControl(container, "Coordinate (z)").disabled).toBe(true);
-      expect(container.textContent).not.toContain("Requested → resolved");
-      expect(container.textContent).not.toContain("23.8 nm");
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("keeps source and slice controls global while Airbox quantity belongs to its base profile", () => {
-    mocks.planar.source = { kind: "default" };
-    mocks.planar.view_scope = { kind: "airbox" };
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={airboxSelection} />,
-    );
-
-    expect(html).toMatch(
-      /<div(?=[^>]*aria-label="Planar field selection controls")(?=[^>]*role="group")[^>]*>/,
-    );
-    for (const label of ["Source", "Quantity", "Component", "Plane"]) {
-      expect(html).toContain(`aria-label="${label}"`);
-    }
-  });
-
-  it("edits one object's palette and vector visibility without touching other profiles or base planar fields", async () => {
-    const objectA = planarFieldOverlay();
-    const objectB = planarFieldOverlay({
-      id: "object:other-body",
-      view_scope: { kind: "object", scope_id: "other-body" },
-      colormap: "inferno",
-      vectors_visible: true,
-    });
-    mocks.planar.field_overlays = [objectA, objectB];
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
-      expect(findElements(container, (element) => element.getAttribute("aria-label") === "Toggle Visible")).toHaveLength(0);
-      await act(async () => change(findControl(container, "Color map"), "inferno"));
-      expect(mocks.queuePlanarFieldOverlayPatch).toHaveBeenLastCalledWith({
-        planar: {
-          field_overlays: [
-            { ...objectA, colormap: "inferno" },
-            objectB,
-          ],
-        },
-      }, objectA.id);
-      await act(async () => clickControl(container, "Toggle Vectors"));
-      expect(mocks.queuePlanarFieldOverlayPatch).toHaveBeenLastCalledWith({
-        planar: {
-          field_overlays: [
-            { ...objectA, vectors_visible: true },
-            objectB,
-          ],
-        },
-      }, objectA.id);
-      await act(async () => change(findControl(container, "Vector scale"), "1.5"));
-      expect(mocks.queuePlanarFieldOverlayPatch).toHaveBeenLastCalledWith({
-        planar: {
-          field_overlays: [
-            { ...objectA, vector_style: { ...objectA.vector_style, scale: 1.5 } },
-            objectB,
-          ],
-        },
-      }, objectA.id);
-      expect(mocks.planar.layers).toEqual({
-        boundaries: true,
-        bounds: false,
-        contours: false,
-        mesh: true,
-        points: false,
-        probes: true,
-        raster: true,
-        vectors: false,
-      });
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("activates Airbox through the base profile and resets the source to Default", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={airboxSelection} />));
-      await act(async () => clickButton(container, "Show Airbox field"));
+      await act(async () => change(findControl(view.container, "Source"), "plane-1"));
       expect(mocks.queuePatch).toHaveBeenLastCalledWith({
-        planar: {
-          visible: true,
-          source: { kind: "default" },
-          view_scope: { kind: "airbox" },
-          quantity_id: "h_eff",
-          component: "magnitude",
-          layers: { ...mocks.planar.layers, raster: true },
-        },
-      });
-      expect(mocks.queuePatch.mock.calls.at(-1)?.[0].planar).not.toHaveProperty("field_overlays");
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("fails closed for points while the canonical occupancy mask is unavailable", () => {
-    mocks.maskStatus = "loading";
-    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={partSelection} />);
-    expect(html).toContain('aria-label="Toggle Points"');
-    expect(html).toContain("disabled");
-    expect(html).toContain("Sample points require the canonical occupancy mask.");
-  });
-
-  it("server-renders shared quantity, component, unit, range and scope controls", () => {
-    mocks.planar.source = { kind: "default" };
-    mocks.planar.view_scope = { kind: "airbox" };
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={airboxSelection} />,
-    );
-
-    expect(html).toContain("Display");
-    expect(html).toContain("Mid-plane");
-    expect(html).toContain("Effective field (A/m)");
-    expect(html).toContain("in plane magnitude");
-    expect(html).toContain("Display unit");
-    expect(html).toContain('aria-label="Range mode"');
-    expect(html).toContain('aria-label="Toggle Raster"');
-    expect(html).not.toContain("Use target scope");
-    expect(html).not.toContain("sessions/current");
-  });
-
-  it("shows runtime field provenance in the planar inspector", () => {
-    mocks.planar.field_overlays = [planarFieldOverlay()];
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={selection} />,
-    );
-
-    expect(html).toContain("Field backend");
-    expect(html).toContain("fem");
-    expect(html).toContain("Field device");
-    expect(html).toContain("cpu");
-    expect(html).toContain("Field precision");
-    expect(html).toContain("double");
-    expect(html).toContain("Field source");
-    expect(html).toContain("live");
-  });
-
-  it("renders the same visualization Inspector composition as 3D plus planar controls", () => {
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={partSelection} />,
-    );
-
-    for (const section of [
-      "Display",
-      "Surface Coloring",
-      "Vectors",
-      "Wireframe",
-      "Source &amp; Slice",
-      "Sampling &amp; Resolution",
-    ]) {
-      expect(html).toContain(section);
-    }
-    for (const label of [
-      "Render mode",
-      "Toggle Visible",
-      "Toggle Bounds",
-      "Toggle Vectors",
-      "Raster opacity",
-      "Range mode",
-      "Viewport colorbar",
-      "Wireframe color value",
-      "Wireframe opacity",
-      "Vector density",
-      "Vector scale",
-      "Vector opacity",
-      "Vector thickness",
-      "Vector length mode",
-      "Vector color mode",
-      "Render quality",
-      "Resolution width",
-      "Resolution height",
-      "Interaction zoom",
-    ]) {
-      expect(html).toContain(`aria-label="${label}"`);
-    }
-    expect(html).not.toContain("Geometry layers");
-  });
-
-  it("uses the canonical icon and summary navigation style for planar sections", () => {
-    mocks.planar.field_overlays = [planarFieldOverlay({
-      colormap: "viridis",
-      range: { mode: "manual", min: -1, max: 1 },
-    })];
-    const html = renderToStaticMarkup(
-      <PlanarVisualizationSection selection={selection} />,
-    );
-
-    expect(html).toContain("lucide-scan-line");
-    expect(html).toContain("lucide-palette");
-    expect(html).toContain("lucide-arrow-right-left");
-    expect(html).toContain("Mid-plane • Monitor");
-    expect(html).toContain("Viridis");
-    expect(html).toContain("Quiver");
-  });
-
-  it("maps Shaded to a continuous heatmap without mesh or boundaries", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={partSelection} />));
-      await act(async () => clickControl(container, "Shaded"));
-      expect(mocks.queuePatch).toHaveBeenCalledWith({
-        planar: {
-          layers: {
-            ...mocks.planar.layers,
-            boundaries: false,
-            mesh: false,
-            points: false,
-            raster: true,
-          },
-        },
+        planar: { source: { kind: "monitor", monitor_id: "plane-1" }, crop: null },
       });
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await view.unmount();
     }
-  });
-
-  it("does not offer cached fields whose resolved provider is unavailable", () => {
-    mocks.quantityProviderAvailable = false;
-    mocks.planar.view_scope = { kind: "monitor_target" };
-
-    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
-
-    expect(html).not.toContain("Effective field (A/m)");
-    expect(html).not.toContain("Magnetization (1)");
-  });
-
-  it("patches every planar presentation control through the canonical resource", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+    planar().source = { kind: "monitor", monitor_id: "plane-1" };
+    const monitor = await mount(sceneSelection);
     try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={partSelection} />));
-      await act(async () => change(findControl(container, "Source"), "plane-1"));
-      await act(async () => change(findControl(container, "Quantity"), "m"));
-      await act(async () => change(findControl(container, "Component"), "normal"));
-      await act(async () => change(findControl(container, "Color map"), "inferno"));
-      await act(async () => change(findControl(container, "Display unit"), "kA/m"));
-      await act(async () => change(findControl(container, "Range mode"), "symmetric"));
-      await act(async () => change(findControl(container, "Range minimum"), "-2"));
-      await act(async () => change(findControl(container, "Range maximum"), "4"));
-      await act(async () => change(findControl(container, "Raster opacity"), "0.5"));
-      await act(async () => clickControl(container, "Toggle Bounds"));
-      await act(async () => clickControl(container, "Toggle Contours"));
-      await act(async () => clickControl(container, "Toggle Points"));
-      await act(async () => clickControl(container, "Toggle Vectors"));
-      await act(async () => clickControl(container, "Toggle Probes"));
-      await act(async () => change(findControl(container, "Vector density"), "768"));
-      await act(async () => change(findControl(container, "Vector scale"), "1.5"));
-      await act(async () => change(findControl(container, "Vector opacity"), "0.5"));
-      await act(async () => change(findControl(container, "Vector thickness"), "2"));
-      await act(async () => change(findControl(container, "Render quality"), "export"));
-      await act(async () => change(findControl(container, "Resolution width"), "768"));
-      await act(async () => change(findControl(container, "Resolution height"), "384"));
-      await act(async () => change(findControl(container, "Interaction zoom"), "2"));
-      await act(async () => change(findControl(container, "Vector length mode"), "magnitude"));
-      await act(async () => change(findControl(container, "Vector color mode"), "monochrome"));
-      await act(async () => clickButton(container, "Use target scope"));
-
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { source: { kind: "monitor", monitor_id: "plane-1" } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "magnitude", quantity_id: "m" } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "normal" } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { colormap: "inferno" } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { display_unit: "kA/m" } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "symmetric", min: null, max: null } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -2, max: 1 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -1, max: 4 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { raster_opacity: 0.5 } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: true, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: true, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: true, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: true } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: false, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 256, vector_budget: 768, width: 512 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, scale: 1.5 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, opacity: 0.5 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, thickness: 2 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { quality: "export" } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 256, vector_budget: 512, width: 768 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 384, vector_budget: 512, width: 512 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 2 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, length_mode: "magnitude" } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, color_mode: "monochrome" } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { view_scope: { kind: "mesh_part", scope_id: "tetrahedra" } } });
+      expect(monitor.container.textContent).toContain("Defined by the monitor");
+      expect(findControl(monitor.container, "Position (z)").disabled).toBe(true);
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await monitor.unmount();
     }
+  });
+
+  it("edits the crop window with field validation and clears it", async () => {
+    const view = await mount(sceneSelection);
+    try {
+      expect(findControl(view.container, "x min").getAttribute("placeholder")).toBe("-25");
+      expect(findControl(view.container, "y max").getAttribute("placeholder")).toBe("30");
+      await act(async () => change(findControl(view.container, "x min"), "40"));
+      await act(async () => commit(findControl(view.container, "x min")));
+      expect(mocks.queuePlanarCropPatch).not.toHaveBeenCalled();
+      expect(view.container.textContent).toContain("Minimum must be below the maximum.");
+      await act(async () => change(findControl(view.container, "x min"), "-20"));
+      await act(async () => commit(findControl(view.container, "x min")));
+      const sent = mocks.queuePlanarCropPatch.mock.calls.at(-1)![0] as PlanarCropState;
+      expect(sent.u_min_m).toBeCloseTo(-20e-9);
+      expect(sent.u_max_m).toBeCloseTo(25e-9);
+    } finally {
+      await view.unmount();
+    }
+    planar().crop = { u_min_m: -10e-9, u_max_m: 10e-9, v_min_m: -5e-9, v_max_m: 5e-9 };
+    const cropped = await mount(sceneSelection);
+    try {
+      expect(findControl(cropped.container, "x min").value).toBe("-10");
+      await act(async () => clickButton(cropped.container, "Clear crop"));
+      expect(mocks.queuePlanarCropPatch).toHaveBeenLastCalledWith(null);
+      await act(async () => clickButton(cropped.container, "Fit"));
+      expect(mocks.execute.mock.calls.at(-1)?.[0]).toBe("field-map.fit");
+    } finally {
+      await cropped.unmount();
+    }
+  });
+
+  it("registers a live edit session whose reset keeps source and default slice", async () => {
+    planar().layers = { ...planar().layers, vectors: true };
+    const view = await mount(sceneSelection);
+    try {
+      const session = view.store.getCurrentSession();
+      expect(session?.mode).toBe("liveViewport");
+      expect(session?.dirty).toBe(true);
+      await act(async () => { await session!.reset(); });
+      const patch = mocks.queuePatch.mock.calls.at(-1)![0].planar;
+      expect(patch).not.toHaveProperty("source");
+      expect(patch).not.toHaveProperty("default_slice");
+      expect(patch).toMatchObject({ layer_model: "layers", crop: null, layers: { vectors: false, raster: true } });
+      expect(patch.field_overlays).toEqual([createFieldLayer("all")]);
+      expect(mocks.flushNow).toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("shows the legacy base field controls only in the legacy model", () => {
+    expect(renderToStaticMarkup(<PlanarVisualizationSection selection={sceneSelection} />)).not.toContain("Base field (legacy)");
+    planar().layer_model = "legacy";
+    expect(renderToStaticMarkup(<PlanarVisualizationSection selection={sceneSelection} />)).toContain("Base field (legacy)");
   });
 
   it("hydrates its server snapshot without a mismatch", async () => {
-    const serverHtml = renderToString(<PlanarVisualizationSection selection={selection} />);
+    const serverHtml = renderToString(<PlanarVisualizationSection selection={objectSelection} />);
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
@@ -1049,83 +549,14 @@ describe("PlanarVisualizationSection", () => {
     let root: ReturnType<typeof hydrateRoot>;
     try {
       await act(async () => {
-        root = hydrateRoot(container as unknown as Element, <PlanarVisualizationSection selection={selection} />, {
-          onRecoverableError: (error) => recoverableErrors.push(
-            error instanceof Error ? error : new Error(String(error)),
-          ),
+        root = hydrateRoot(container as unknown as Element, <PlanarVisualizationSection selection={objectSelection} />, {
+          onRecoverableError: (error) => recoverableErrors.push(error instanceof Error ? error : new Error(String(error))),
         });
         await Promise.resolve();
       });
       expect(recoverableErrors).toEqual([]);
     } finally {
       await act(async () => root!.unmount());
-      dom.restore();
-    }
-  });
-
-  it("fails closed for degraded mesh-boundary descriptors with an explicit reason", () => {
-    mocks.overlay.available = true;
-    mocks.overlay.boundary_classification = "degraded_v3";
-    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={partSelection} />);
-    expect(html).toContain("Exact boundaries are unavailable for this overlay descriptor.");
-    mocks.overlay.boundary_classification = "exact";
-  });
-
-  it("fails closed for unavailable FDM boundary evidence with an explicit reason", () => {
-    mocks.overlay.available = false;
-    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={partSelection} />);
-    expect(html).not.toContain('aria-label="Shaded + Wireframe"');
-    expect(html).toContain("Mesh overlay is unavailable for this sample.");
-    mocks.overlay.available = true;
-  });
-
-  it.each([
-    [
-      "an unsupported fmcs.v3 descriptor",
-      () => { mocks.overlay.codec = "fmcs.v3"; },
-      "Mesh overlay",
-      "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.",
-    ],
-    [
-      "an FDM mesh-part scope",
-      () => {
-        mocks.discretization = "fdm";
-        mocks.planar.view_scope = { kind: "mesh_part", scope_id: "part-1" };
-      },
-      "Mesh overlay",
-      "Structured FDM sampling does not support mesh-part scope.",
-    ],
-    [
-      "a FEM native-layer scope",
-      () => {
-        mocks.discretization = "fem";
-        mocks.planar.view_scope = { kind: "layer", scope_id: "bottom" };
-      },
-      "Mesh overlay",
-      "Native layer scope requires an FDM multilayer carrier.",
-    ],
-    [
-      "a scalar quantity vector control",
-      () => { mocks.components = 1; },
-      "Vector density",
-      "The selected scalar quantity has no vector components.",
-    ],
-  ])("renders disabled controls and a visible reason for %s", async (_name, configure, label, reason) => {
-    configure();
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(<PlanarVisualizationSection selection={partSelection} />));
-      if (label === "Mesh overlay") {
-        expect(container.textContent).toContain("Mesh overlay");
-        expect(findElements(container, (element) => element.getAttribute("aria-label") === "Shaded + Wireframe")).toHaveLength(0);
-      } else {
-        expect(findControl(container, label).disabled).toBe(true);
-      }
-      expect(container.textContent).toContain(reason);
-    } finally {
-      await act(async () => root.unmount());
       dom.restore();
     }
   });
@@ -1138,45 +569,23 @@ function findControl(root: TestNode, label: string): TestElement {
 }
 
 function change(element: TestElement, value: string): void {
-  const tracker = (element as TestElement & {
-    _valueTracker?: { setValue: (next: string) => void };
-  })._valueTracker;
+  const tracker = (element as TestElement & { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   const previous = element.value;
   element.value = value;
   tracker?.setValue(previous);
-  element.dispatchEvent(new TestEvent(
-    element.tagName === "INPUT" ? "input" : "change",
-    { bubbles: true },
-  ));
+  element.dispatchEvent(new TestEvent(element.tagName === "INPUT" ? "input" : "change", { bubbles: true }));
 }
 
+/**
+ * Commits a number draft the way leaving the field does. The test DOM cannot
+ * dispatch keydown on inputs (React's input-event polyfill needs attachEvent).
+ */
+function commit(element: TestElement): void {
+  element.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+}
 
 function clickButton(root: TestNode, label: string): void {
-  const button = findElements(
-    root,
-    (element) => element.tagName === "BUTTON" && element.textContent === label,
-  )[0];
+  const button = findElements(root, (element) => element.tagName === "BUTTON" && element.textContent.trim() === label)[0];
   if (!button) throw new Error(`Missing button ${label}`);
   button.click();
-}
-
-function clickControl(root: TestNode, label: string): void {
-  const button = findElements(
-    root,
-    (element) =>
-      element.tagName === "BUTTON" && element.getAttribute("aria-label") === label,
-  )[0];
-  if (!button) throw new Error(`Missing button ${label}`);
-  button.click();
-}
-
-
-function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
-  const found: TestElement[] = [];
-  const visit = (node: TestNode) => {
-    if (node instanceof TestElement && predicate(node)) found.push(node);
-    node.childNodes.forEach(visit);
-  };
-  visit(root);
-  return found;
 }

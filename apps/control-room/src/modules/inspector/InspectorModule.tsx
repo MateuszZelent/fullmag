@@ -19,6 +19,7 @@ import {
   useInspectorEditSessionStore,
 } from "./InspectorEditSession";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
+import { inspectorFitCommandId } from "./inspectorFitCommand";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveUnknownInspectorRoute } from "./inspectorRouteCatalog";
 import { InspectorShell } from "./InspectorShell";
@@ -66,7 +67,13 @@ function LiveInspectorModule() {
 
   const handleFocus = useCallback(() => {
     if (projectOnly) return;
-    void kernel.commands.execute("viewport-3d.fit", {
+    const commandId = inspectorFitCommandId(kernel.layout.get().activeViewportMainModuleId);
+    if (commandId === "field-map.fit") {
+      // The 2D fit writes the planar interaction through visualization sync.
+      void kernel.commands.execute(commandId, createCommandContext("inspector", kernel));
+      return;
+    }
+    void kernel.commands.execute(commandId, {
       source: "inspector",
       layout: kernel.layout,
       selection: kernel.selection,

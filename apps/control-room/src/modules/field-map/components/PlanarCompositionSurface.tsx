@@ -10,6 +10,7 @@ import {
 import { useSessionScopedResourceKey } from "@/kernel/resources/useSessionScopedResourceKey";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
+import { effectivePass, layerVisible, type PlanarLayerPass, type PlanarLayerState } from "@/modules/inspector/public";
 import { buildFieldMapRenderModel, normalizePlanarColorRange, projectPlanarVectors, type FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { createPlanarCompositionFrameStore, type PlanarCompositionFrameStore, type PlanarLayerFrame } from "../model/planarCompositionFrame";
 import { planarMetaFrame, planarPhysicalPosition, type PlanarFieldOverlay } from "../model/planarFieldComposition";
@@ -26,17 +27,56 @@ type Props = Omit<ComponentProps<typeof PlanarSurface>, "fieldOverlayContent"> &
   vectorBudget?: number;
   targetLabels?: Readonly<Record<string, string>>;
   renderBaseLegend?: (model: FieldMapRenderModel, meta: PlanarFieldMetaResource) => ReactNode;
+  /**
+   * Whole-view masks (`planar.layers`, ADR 0080 W5). A pass is drawn when the
+   * mask AND the layer flag are on; omitted, every layer flag applies as is.
+   */
+  viewMasks?: PlanarLayerState;
 };
+
+const ALL_MASKS_ON: PlanarLayerState = {
+  boundaries: true, bounds: true, contours: true, mesh: true, points: true,
+  probes: true, raster: true, streamlines: true, vectors: true,
+};
+const DRAWN_PASSES: readonly PlanarLayerPass[] = ["raster", "vectors", "points", "contours", "streamlines"];
+type LayerPasses = Readonly<Record<PlanarLayerPass, boolean>>;
+
+/** Passes a layer draws: view mask AND layer flag; a hidden layer draws nothing. */
+export function planarLayerPasses(profile: PlanarFieldOverlay, viewMasks: PlanarLayerState): LayerPasses {
+  const on = (pass: PlanarLayerPass) => effectivePass(profile, viewMasks, pass) === "on";
+  return {
+    raster: on("raster"), vectors: on("vectors"), points: on("points"),
+    mesh: on("mesh"), contours: on("contours"), streamlines: on("streamlines"),
+  };
+}
+
+/**
+ * Layers that take part in the composite, bottom first: the list is drawn from
+ * its end to its start so the first layer is on top. Hidden layers and layers
+ * without a drawn pass are left out and therefore request no data.
+ */
+export function planarCompositionLayers(
+  profiles: readonly PlanarFieldOverlay[],
+  viewMasks: PlanarLayerState,
+): { profile: PlanarFieldOverlay; passes: LayerPasses }[] {
+  return profiles
+    .filter(layerVisible)
+    .map((profile) => ({ profile, passes: planarLayerPasses(profile, viewMasks) }))
+    .filter(({ passes }) => DRAWN_PASSES.some((pass) => passes[pass]))
+    .reverse();
+}
 
 /** One surface and one bounded atomic frame for independently requested fields. */
 export function PlanarCompositionSurface({
-  active, baseMeta, baseQuery, source, profiles, renderBaseLegend, vectorBudget = 2000, targetLabels, ...surface
+  active, baseMeta, baseQuery, source, profiles, renderBaseLegend, vectorBudget = 2000, targetLabels,
+  viewMasks = ALL_MASKS_ON, ...surface
 }: Props) {
   const store = useMemo(() => createPlanarCompositionFrameStore(), []);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getServerSnapshot);
   const { resourceKey: sessionKey } = useSessionScopedResourceKey("planar-composition");
   const terminal = useSessionStatusSelector((status) => status.data?.lifecycle.solver === "completed", { enabled: active });
-  const enabledProfiles = useMemo(() => profiles.filter((profile) => profile.raster_visible || profile.vectors_visible), [profiles]);
+  const drawn = useMemo(() => planarCompositionLayers(profiles, viewMasks), [profiles, viewMasks]);
+  const enabledProfiles = useMemo(() => drawn.map(({ profile }) => profile), [drawn]);
   const key = useMemo(() => JSON.stringify([
     sessionKey, source, baseQuery.snapshot_id, baseQuery.stage_id, baseMeta.scene_revision,
     baseMeta.generation_id, baseMeta.quantity_id, baseMeta.component,
@@ -52,11 +92,12 @@ export function PlanarCompositionSurface({
   const pending = !frame || snapshot.pending;
   const status = snapshot.key === key ? snapshot.reason : "Loading the requested field layers.";
   return <>
-    {enabledProfiles.map((profile) => <PlanarOverlayLoader
+    {drawn.map(({ profile, passes }) => <PlanarOverlayLoader
       active={active}
       baseMeta={baseMeta}
       baseQuery={baseQuery}
       key={profile.id}
+      passes={passes}
       profile={profile}
       requestKey={key}
       source={source}
@@ -75,11 +116,11 @@ export function PlanarCompositionSurface({
   </>;
 }
 
-function PlanarOverlayLoader({ active, baseMeta, baseQuery, source, profile, requestKey, store, vectorBudget }: {
-  active: boolean; baseMeta: PlanarFieldMetaResource; baseQuery: PlanarFieldQuery;
+function PlanarOverlayLoader({ active, baseMeta, baseQuery, source, passes, profile, requestKey, store, vectorBudget }: {
+  active: boolean; baseMeta: PlanarFieldMetaResource; baseQuery: PlanarFieldQuery; passes: LayerPasses;
   source: PlanarFieldSource; profile: PlanarFieldOverlay; requestKey: string; store: PlanarCompositionFrameStore; vectorBudget: number;
 }) {
-  const needsVectors = profile.vectors_visible || isDirectionColormap(profile.colormap);
+  const needsVectors = passes.vectors || passes.streamlines || (passes.raster && isDirectionColormap(profile.colormap));
   const query = useMemo<PlanarFieldQuery>(() => ({
     component: profile.component,
     ...planarScopeQuery(profile.view_scope),
@@ -116,7 +157,10 @@ function PlanarOverlayLoader({ active, baseMeta, baseQuery, source, profile, req
       const model = buildFieldMapRenderModel({
         bounds: meta.data.frame.bounds_uv_m as [number, number, number, number],
         canonicalUnit: meta.data.canonical_unit, colormap: profile.colormap, component: profile.component,
-        frame, layers: { contours: false, mesh: false, probes: false, raster: profile.raster_visible, vectors: profile.vectors_visible },
+        frame, layers: {
+          contours: passes.contours, mesh: false, points: passes.points, probes: false,
+          raster: passes.raster, streamlines: passes.streamlines, vectors: passes.vectors,
+        },
         mask: occupancy, range: normalizePlanarColorRange(profile.range), rasterOpacity: profile.raster_opacity,
         resolution: meta.data.resolution as [number, number], sampleIdentity: meta.data.etag, scalar: values,
         vectors: worldVectors ? projectPlanarVectors(worldVectors, frame) : null, worldVectors,
@@ -130,7 +174,7 @@ function PlanarOverlayLoader({ active, baseMeta, baseQuery, source, profile, req
     }
   }, [parsed, meta.data, meta.status, meta.error, scalar.data, scalar.status, scalar.error,
     mask.data, mask.status, mask.error, vectors.data, vectors.status, vectors.error,
-    needsVectors, profile, vectorBudget]);
+    needsVectors, passes, profile, vectorBudget]);
   const publish = useCallback(() => store.accept(requestKey, profile.id, candidate.frame, candidate.error),
     [store, requestKey, profile.id, candidate]);
   useEffect(publish, [publish]);
