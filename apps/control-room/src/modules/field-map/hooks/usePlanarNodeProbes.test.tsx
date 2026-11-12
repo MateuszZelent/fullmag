@@ -107,6 +107,22 @@ describe("usePlanarNodeProbes", () => {
     expect(loader.mock.calls[0]![2]).toMatchObject({ u_m: 1.5, v_m: 1.5 });
   });
 
+  it("still probes when the parent re-renders equal layers during the debounce", async () => {
+    // A busy 2D view rebuilds its layer objects on every render; the debounce
+    // must follow the request identity, not object identity, or no probe is
+    // ever sent (found in the browser: the readout stayed "Loading…").
+    loader.mockResolvedValue(probe(1));
+    const uv = { u_m: 0.5, v_m: 0.5 };
+    for (let step = 0; step < 8; step += 1) {
+      await render({ enabled: true, layers: [layer("a", true)], uv: { ...uv } });
+      await act(async () => { vi.advanceTimersByTime(NODE_PROBE_DEBOUNCE_MS / 2); });
+    }
+    // Re-renders are still arriving; the probe for this position went out.
+    expect(loader).toHaveBeenCalledTimes(1);
+    await act(async () => { await Promise.resolve(); });
+    expect(results.map((result) => result.status)).toEqual(["ok"]);
+  });
+
   it("aborts the old request and drops its late answer", async () => {
     const answers: ((value: PlanarFieldProbeResource) => void)[] = [];
     const signals: AbortSignal[] = [];

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type {
   PlanarFieldMetaResource,
@@ -154,11 +154,19 @@ export function usePlanarNodeProbes({
     : null;
   const [settled, setSettled] = useState<{ key: string; results: PlanarNodeProbeResult[] } | null>(null);
   const pending = useMemo(() => selected.map((layer) => emptyResult(layer, "loading")), [selected]);
+  // The request is identified by `requestKey`; a parent re-render that
+  // rebuilds equal layer objects must not restart the debounce, or a busy
+  // view never sends the probe. The latest inputs are read from a ref.
+  const inputsRef = useRef({ loader, selected, uv });
+  useLayoutEffect(() => { inputsRef.current = { loader, selected, uv }; }, [loader, selected, uv]);
+  const loaderReady = loader !== null;
 
   useEffect(() => {
-    if (requestKey === null || uv === null || loader === null) return;
+    if (requestKey === null || !loaderReady) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
+      const { loader, selected, uv } = inputsRef.current;
+      if (uv === null || loader === null) return;
       const results = selected.map((layer) => emptyResult(layer, "loading"));
       const publish = (index: number, result: PlanarNodeProbeResult) => {
         if (controller.signal.aborted) return;
@@ -186,7 +194,7 @@ export function usePlanarNodeProbes({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [loader, requestKey, selected, uv]);
+  }, [loaderReady, requestKey]);
 
   if (requestKey === null) return EMPTY_RESULTS;
   return settled?.key === requestKey ? settled.results : pending;

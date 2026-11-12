@@ -122,10 +122,30 @@ export function PlanarCompositionSurface({
   </>;
 }
 
-function PlanarOverlayLoader({ active, baseMeta, baseQuery, source, passes, profile, requestKey, store, vectorBudget }: {
+/**
+ * The parent rebuilds the layer list and pass objects on every render. A new
+ * object with equal content must not rebuild the layer model: that publishes
+ * a new composite frame, which re-renders the parent, which rebuilds the
+ * objects again (an idle 2D view regenerated its frame ~12 times a second).
+ */
+function useValueStable<T>(value: T): T {
+  const key = JSON.stringify(value);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed by value on purpose
+  return useMemo(() => value, [key]);
+}
+
+function PlanarOverlayLoader({
+  active, baseMeta: baseMetaInput, baseQuery: baseQueryInput, source: sourceInput,
+  passes: passesInput, profile: profileInput, requestKey, store, vectorBudget,
+}: {
   active: boolean; baseMeta: PlanarFieldMetaResource; baseQuery: PlanarFieldQuery; passes: LayerPasses;
   source: PlanarFieldSource; profile: PlanarFieldOverlay; requestKey: string; store: PlanarCompositionFrameStore; vectorBudget: number;
 }) {
+  const passes = useValueStable(passesInput);
+  const profile = useValueStable(profileInput);
+  const source = useValueStable(sourceInput);
+  const baseQuery = useValueStable(baseQueryInput);
+  const baseMeta = useValueStable(baseMetaInput);
   const needsVectors = passes.vectors || passes.streamlines || (passes.raster && isDirectionColormap(profile.colormap));
   // The crop window is sampled at crop resolution for every layer, in the
   // layer's own frame. Until that frame's offset to the base is known, the

@@ -136,6 +136,33 @@ describe("field layers inside a crop window", () => {
     } finally { await cleanup(); }
   });
 
+  it("keeps a layer's request identity when the parent re-renders equal inputs", async () => {
+    // New-but-equal layer, mask and query objects on every parent render
+    // rebuilt the layer model and published a new composite frame, which
+    // re-rendered the parent again (idle 2D view, ~12 frames per second).
+    harness.metaQueries.length = 0; harness.payloadEnabled.length = 0; harness.buffers.length = 0;
+    harness.respond = (query) => ({ data: layerMeta(query), error: null });
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const render = () => act(async () => root.render(<PlanarCompositionSurface
+      active
+      baseMeta={baseMeta()}
+      baseQuery={{ ...cropQuery }}
+      model={{ sampleIdentity: "base" } as unknown as FieldMapRenderModel}
+      onRenderEvidence={() => undefined}
+      profiles={[layer("film")]}
+      source={{ kind: "default" }}
+      viewMasks={{ boundaries: true, bounds: true, contours: false, mesh: false, points: false, probes: true, raster: true, streamlines: false, vectors: false }}
+    />));
+    try {
+      await render();
+      const settled = harness.metaQueries.at(-1);
+      await render();
+      await render();
+      expect(harness.metaQueries.at(-1)).toBe(settled);
+    } finally { await act(async () => root.unmount()); dom.restore(); }
+  });
+
   it("still reports other layer failures", async () => {
     harness.metaQueries.length = 0; harness.payloadEnabled.length = 0; harness.buffers.length = 0;
     harness.respond = () => ({ data: null, error: new Error("quantity unavailable") });
