@@ -207,6 +207,18 @@ docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_
 docker-dev-data-volume-plan source_root runtime_pins backing_file mount_root wsl_distro capacity_gib="128":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev_data_volume.py" plan --source-root {{quote(source_root)}} --runtime-pins {{quote(runtime_pins)}} --backing-file {{quote(backing_file)}} --mount-root {{quote(mount_root)}} --wsl-distro {{quote(wsl_distro)}} --capacity-gib {{quote(capacity_gib)}}
 
+# Read-only inventory in the persistent Linux host namespace.
+docker-dev-data-volume-probe source_root wsl_distro:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" probe --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}}
+
+# Qualify one new empty disk from the authenticated pre-Attach inventory.
+docker-dev-data-volume-preflight source_root wsl_distro request request_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" preflight --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}}
+
+# One-shot, journaled format/mount; failures never replay this stage.
+docker-dev-data-volume-format source_root wsl_distro request request_sha256 formatter_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" format-mount --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --formatter-sha256 {{quote(formatter_sha256)}}
+
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}

@@ -50,6 +50,9 @@ jobs:
           scripts.test_linux_native_readmission scripts.test_docker_linux_native_readmission
           scripts.test_linux_native_probe scripts.test_docker_dev_storage
           scripts.test_fullmag_data_volume_journal scripts.test_docker_dev_data_volume
+          scripts.test_fullmag_data_volume_linux_request scripts.test_linux_data_volume_provision
+          scripts.test_linux_data_volume_format scripts.test_docker_data_volume_linux
+          scripts.test_just_data_volume_shell
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 

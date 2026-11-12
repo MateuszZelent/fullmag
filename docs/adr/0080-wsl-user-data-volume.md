@@ -66,6 +66,26 @@ Modele i porównania należą do `fullmag_data_volume.py`,
 `linux_native_data_volume_migration.py` przygotowuje następstwo admission.
 Guard hosta, sterownik migracji, helper Windows i recepty launchera mają
 odrębne testy. Resolver pozostaje odczytowy: nie tworzy ani nie montuje dysku.
+Etapy Linux rozdzielają odczytowy `probe` i `preflight` od jednorazowego
+`format-mount`. `docker_data_volume_linux.py` wiąże wybrany checkout, grupę,
+dystrybucję WSL oraz SHA requestu i źródeł, utrzymując blokadę grupy podczas
+formatowania. Recepty `just` przekazują wyłącznie zamknięte argv; nie uruchamiają
+ogólnego `prepare-links` z innym profilem storage. Wywołanie WSL korzysta
+z chronionej ścieżki System32, bez wyszukiwania programu przez PATH.
+
+`linux_data_volume_provision.py` wymaga zgodnych receiptów Create/Attach,
+inwentaryzacji sprzed Attach, tego samego bootu i trwałej przestrzeni mountów
+PID 1. Wybiera dokładnie jedno nowe, puste urządzenie o zadanej pojemności;
+odrzuca partycje, sygnatury, UUID istniejących filesystemów i urządzenie
+oryginałów. `linux_data_volume_format.py` utrzymuje przypięty FD urządzenia,
+sprawdza chronionego rodzica mountu przed `mkfs` i nie używa wymuszenia formatu.
+Nie przyjmuje ścieżki `/dev` od operatora.
+
+Terminalnie nieudana próba pozostaje zachowana. Jawne recovery wskazuje SHA
+poprzedniego, nieudanego dziennika oraz nowy dziennik tej samej operacji;
+przy ponowieniu Attach wykorzystuje zweryfikowany receipt Create. Stan
+`started`, błąd lub nieznany wynik formatowania blokują jego powtórzenie.
+Zielone testy tych etapów nie zastępują rzeczywistego Attach, formatu i mountu.
 Migrator musi utrzymywać przypięte FD katalogów docelowych i wyłączną kontrolę
 ich namespace; nie zakładamy ochrony przed wrogim rootem tego samego hosta.
 

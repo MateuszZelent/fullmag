@@ -87,6 +87,40 @@ fi
 
 # Closed scientific route, before diagnostic/storage shortcuts; never eval argv.
 case "${recipe}" in
+  *"scripts/docker_data_volume_linux.py"*)
+    linux_volume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_data_volume_linux.py\" (probe|preflight|format-mount) --source-root '([^']+)' --wsl-distro '([A-Za-z0-9_-]{1,80})'( --request '([^']+)' --request-sha256 '([0-9a-f]{64})')?( --formatter-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${linux_volume_pattern} ]]; then
+      echo "[fullmag just] invalid Linux data-volume stage recipe" >&2
+      exit 2
+    fi
+    linux_volume_args=("${BASH_REMATCH[1]}" --source-root "${BASH_REMATCH[2]}" --wsl-distro "${BASH_REMATCH[3]}")
+    if [[ "${BASH_REMATCH[1]}" == probe ]]; then
+      if [[ -n "${BASH_REMATCH[4]:-}" || -n "${BASH_REMATCH[7]:-}" ]]; then exit 2; fi
+    else
+      if [[ -z "${BASH_REMATCH[4]:-}" ]]; then exit 2; fi
+      linux_volume_args+=(--request "${BASH_REMATCH[5]}" --request-sha256 "${BASH_REMATCH[6]}")
+      if [[ "${BASH_REMATCH[1]}" == format-mount ]]; then
+        if [[ -z "${BASH_REMATCH[7]:-}" ]]; then exit 2; fi
+        linux_volume_args+=(--formatter-sha256 "${BASH_REMATCH[8]}")
+      elif [[ -n "${BASH_REMATCH[7]:-}" ]]; then exit 2
+      fi
+    fi
+    # This controller resolves the explicit source itself and holds its group
+    # lock for formatting. Generic prepare-links would select the wrong profile.
+    exec "${python_cmd}" -B "${script_dir}/docker_data_volume_linux.py" "${linux_volume_args[@]}"
+    ;;
+  *"scripts/docker_dev_data_volume.py"*)
+    volume_plan_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_data_volume.py\" plan --source-root '([^']+)' --runtime-pins '([^']+)' --backing-file '([^']+)' --mount-root '([^']+)' --wsl-distro '([A-Za-z0-9_-]{1,80})' --capacity-gib '([0-9]{1,5})'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${volume_plan_pattern} ]]; then
+      echo "[fullmag just] invalid data-volume plan recipe" >&2
+      exit 2
+    fi
+    # Planning is read-only: do not initialize host storage or compatibility links.
+    exec "${python_cmd}" -B "${script_dir}/docker_dev_data_volume.py" plan \
+      --source-root "${BASH_REMATCH[1]}" --runtime-pins "${BASH_REMATCH[2]}" \
+      --backing-file "${BASH_REMATCH[3]}" --mount-root "${BASH_REMATCH[4]}" \
+      --wsl-distro "${BASH_REMATCH[5]}" --capacity-gib "${BASH_REMATCH[6]}"
+    ;;
   *"scripts/docker_volume_no_spawn_cancellation.py"*)
     no_spawn_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_volume_no_spawn_cancellation.py\" --source-root '([^']+)' --backend-container-id '([0-9a-f]{64})' --image-id '(sha256:[0-9a-f]{64})' --process-receipt-sha256 '([0-9a-f]{64})' --request '([^']+)' --request-sha256 '([0-9a-f]{64})'( --apply)?( --reconcile-loader-failure '([0-9a-f]{32})' --failed-receipt-sha256 '([0-9a-f]{64})')?( --runtime-witness '((resume|iteration)/attempts/[0-9a-f]{32}/terminal\.json)' --runtime-witness-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${no_spawn_pattern} ]]; then
