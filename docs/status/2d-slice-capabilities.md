@@ -145,6 +145,13 @@ Stan dowodów dla całej sekcji:
   runtime), a walidator naukowy uruchamia własny solver tego fixture'u. Bramka
   pamięci (100 przełączeń 2D↔3D, próg 96 MiB) **FAIL**: 127 MiB (~1,27 MiB/cykl;
   na `master` ta bramka też była czerwona, ~0,86 MiB/cykl — patrz tabela F1).
+  Bramka czyta `usedJSHeapSize` bez wymuszenia GC. Z wymuszonym GC (CDP) sterta
+  zatrzymana rośnie liniowo o ~620 KiB/cykl w modelu `layers` i ~695 KiB/cykl w
+  modelu `legacy` — wyciek nie pochodzi z kompozycji warstw. Różnica migawek
+  sterty po 20 cyklach: na cykl 1 `WebGL2RenderingContext`, ~57
+  `MeshBasicMaterial`, ~59 `BufferGeometry`, setki `Vector3`/`Matrix4` — to
+  cykl życia widoku 3D przy ponownym montowaniu (poza zakresem planu 2D; osobne
+  zadanie). Z widoku 2D może pochodzić 1 `CanvasRenderingContext2D`/cykl (~32 KiB).
   Uruchomienie smoke ujawniło i naprawiło dwa błędy produktu (scalanie łatek
   `field_overlays` gubiło kolejność warstw; przełącznik wieloprzekroju był
   zawsze wyłączony w modelu warstw) oraz pięć założeń skryptu niezgodnych z
