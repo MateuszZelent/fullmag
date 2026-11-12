@@ -689,10 +689,13 @@ def _owned_volume(control, role, key):
 
 
 def _frontend(control, operation, selected, state, port, image):
-    from docker_development_inputs import metadata_cache_key, seed
+    from docker_development_inputs import metadata_cache_key, seed, _next_generated_seed_variants
     files = []
     inputs = seed(selected, state, port, write_file=lambda relative, data: files.append({
         "relative": relative, "data": base64.b64encode(data).decode("ascii")}))
+    for record in files:
+        record["generated_sha256"] = [hashlib.sha256(value).hexdigest() for value in
+            _next_generated_seed_variants(record["relative"], base64.b64decode(record["data"]))]
     previous_inputs = control.read("frontend/development-inputs.json", optional=True)
     if (isinstance(previous_inputs, dict)
             and all(previous_inputs.get(key) == inputs.get(key) for key in
@@ -732,10 +735,12 @@ if grouped:
             for part in relative.parts:
                 node=node/part
                 if node.is_symlink(): raise RuntimeError('Frontend metadata ancestry is a link')
-            if node.exists() and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+            if node.exists():
                 actual=hashlib.sha256(node.read_bytes()).hexdigest()
                 requested=hashlib.sha256(base64.b64decode(record['data'],validate=True)).hexdigest()
-                if actual not in (requested,allowed.get(record['relative'])):
+                generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+                accepted=record.get('generated_sha256',[]) if generated else (requested,allowed.get(record['relative']))
+                if actual not in accepted:
                     raise RuntimeError('Frontend metadata has unknown changes; all state retained')
 freeze=pathlib.Path('/data/inputs-freeze.json')
 if freeze.exists() or freeze.is_symlink():
@@ -798,11 +803,15 @@ for record in request['files']:
     data=base64.b64decode(record['data'],validate=True)
     if target.is_symlink(): raise RuntimeError('Frontend seed is a link')
     if target.exists():
-        if target.read_bytes()!=data and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+        if target.read_bytes()!=data:
+            generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+            if generated and not grouped:
+                continue
             if not grouped or not isinstance(previous,dict):
                 raise RuntimeError('Frontend metadata changed; cache retained')
             allowed={item['relative']:item['sha256'] for item in previous.get('files',[])}
-            if hashlib.sha256(target.read_bytes()).hexdigest()!=allowed.get(record['relative']):
+            accepted=record.get('generated_sha256',[]) if generated else (allowed.get(record['relative']),)
+            if hashlib.sha256(target.read_bytes()).hexdigest() not in accepted:
                 raise RuntimeError('Frontend metadata contains unknown changes; retained')
             temporary=target.with_name(target.name+'.group-seed.tmp')
             if temporary.is_symlink(): raise RuntimeError('Frontend metadata staging is a link')
