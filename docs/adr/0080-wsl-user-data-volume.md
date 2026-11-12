@@ -109,6 +109,27 @@ we wszystkich istniejących przodkach. Nie zmienia to ścisłego probe aktywnych
 bindów ani readmission runtime. Stan kontenera i proof trzeba odświeżyć przed
 przełączeniem; cache dotyczy tylko jednego snapshotu i uwzględnia stan kontenera.
 
+Kopiowanie wymaga nowego, uwierzytelnionego stop-only receiptu. Historyczny
+witness udanego startu nie dowodzi późniejszego drainu. Oprócz blokady hosta
+i lease kontrolera trzeba utrzymać pięć istniejących blokad: `STARTUP-GATE`,
+`LAUNCH`, `OWNER`, writer ledgera, następnie writer accepted-store. Odczytowy
+snapshot zwalniający FD przed kopiowaniem nie spełnia tego warunku.
+
+Moduły `data_volume_copy_fences.py` i `data_volume_copy_fence_service.py`
+utrzymują te FD przez całą chronioną operację. Native Ready→Drained jest
+uwierzytelniany kodem z przypiętego obrazu backendu. Wspólny walidator
+`data_volume_released_state.py` sprawdza release proofs i obie rodziny lease;
+dotychczasowy krótki snapshot i nowy dłuższy guard używają tej samej walidacji.
+
+`docker_data_volume_copy_guard.py` wymaga zatrzymanego backendu i aktywnego
+lease tej migracji. Helper techniczny ma readonly mounty i oddzielną sesję
+procesu; Docker nie przekazuje do niego sygnałów klienta. Zerwanie IPC,
+nieprawidłowa wiadomość albo wyjście sterownika bez potwierdzonego wyniku
+kopii zachowują guardy i stan nieznanego wyniku. Dopiero jawny terminalny SHA
+kopii pozwala na release. [Opcja Docker](https://docs.docker.com/reference/cli/docker/container/run/).
+Te moduły nie wykonują samego transferu, drainu ani admission; ich integracja
+z pełnym sterownikiem i rzeczywiste wykonanie pozostają **NOT VERIFIED**.
+
 ## Weryfikacja
 
 Lekkie testy obejmują zamknięte rejestracje, UUID/inode, aliasowanie datasetów,

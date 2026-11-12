@@ -59,6 +59,9 @@ jobs:
           scripts.test_linux_data_volume_format scripts.test_docker_data_volume_linux
           scripts.test_just_data_volume_shell
           scripts.test_data_volume_stopped_windows_bind
+          scripts.test_data_volume_released_state scripts.test_data_volume_copy_fences
+          scripts.test_data_volume_copy_fence_service scripts.test_docker_data_volume_copy_guard
+          scripts.test_docker_volume_cold_budget_restore scripts.test_docker_volume_startup_diagnostic_restart
       - name: Check frontend cleanup boundaries
         run: node --test scripts/clean-control-room-next.test.mjs
 
