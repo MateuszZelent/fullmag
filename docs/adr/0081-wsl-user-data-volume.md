@@ -89,6 +89,11 @@ przy ponowieniu Attach wykorzystuje zweryfikowany receipt Create. Stan
 Zielone testy tych etapów nie zastępują rzeczywistego Attach, formatu i mountu.
 Migrator musi utrzymywać przypięte FD katalogów docelowych i wyłączną kontrolę
 ich namespace; nie zakładamy ochrony przed wrogim rootem tego samego hosta.
+Kontekst `docker_dev_data_volume_copy.copied_group` zachowuje hostlock również
+przez kontynuację po zweryfikowanej kopii. Kończy operację Docker kopii przed
+oddaniem sterowania, aby następna faza mogła uzyskać własny lease bez
+zagnieżdżania operacji. Samodzielne `copy_data_volume` pozostaje etapem kopii;
+nie zastępuje pełnego migratora i nie uprawnia do wznowienia grupy.
 
 Decyzja nie zmienia Python DSL, ProblemIR, fizyki, backendu realizującego krok,
 OpenAPI ani zachowania UI. Migracja nie powtarza Solve. Dane wymagane do

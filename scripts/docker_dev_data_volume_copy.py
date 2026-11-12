@@ -6,6 +6,7 @@ retirement. A separate managed capture-terminal stop must precede this stage.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -101,70 +102,90 @@ def _existing_control(identity,image):
     return control
 
 
-def copy_data_volume(source_root,volume_id,stop_attempt,stop_sha256):
-    """One copy transaction; retain both originals and leave the group stopped."""
+def _copy_under_host_lock(context,stop_attempt,stop_sha256):
+    """Finish the copy operation before the caller starts another managed stage."""
+    source=context['source'];op=context['operation_root'];plan=context['plan']
+    volume_id=context['linux']['volume_id']
+    parents=_pins(source,PARENT_COMPONENTS);components=_pins(source,root_copy.COMPONENTS)
+    fence_components=_pins(source,FENCE_COMPONENTS)
+    qualification.require(components['linux_data_volume_format.py'] ==
+        qualification._read(op/'linux-provision-result.json')[1].get('formatter_sha256'),
+        'Formatter source differs from the completed volume stage')
+    control=_existing_control(context['identity'],plan['runtime_pins']['image_id'])
+    inputs={'source_root':str(source),'image_id':control.image,'volume_id':volume_id,
+        'plan_sha256':context['plan_sha256'],'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
+        'parent_components':parents,'root_components':components,'fence_components':fence_components}
+    # Use the existing 32GiB operation admission; no build-space policy change.
+    with control.operation('data-volume-migration',inputs) as operation:
+        snapshot=observe_stopped_group(control,source,plan,stop_attempt,stop_sha256)
+        token=operation['receipt']['attempt']
+        fence_request={'schema':'fullmag.data-copy-fence-request.v1','token':token,'volume_id':volume_id,
+            'process_receipt_sha256':snapshot['process_receipt_sha256'],'components':fence_components,
+            'source_roots':{role:{k:v[k] for k in ('device','inode')}
+                            for role,v in context['linux']['source_roots'].items()}}
+        with CopyFence(control,snapshot['actual']['backend'],source,fence_request) as fence:
+            # Refresh the complete consumer and native stop proofs while
+            # all five guards are held, not just before acquiring them.
+            guarded=observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,fence=fence)
+            qualification.require(guarded['process_receipt_sha256'] == snapshot['process_receipt_sha256'] and
+                guarded['source_proof'] == snapshot['source_proof'],'Terminal source state changed before its guard')
+            qualification.require(_pins(source,PARENT_COMPONENTS) == parents and
+                _pins(source,root_copy.COMPONENTS) == components,'Migration source components changed under guards')
+            drain_inputs={'schema':'fullmag.data-volume-group-drain-inputs.v1','volume_id':volume_id,
+                'token':token,'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
+                'plan_sha256':context['plan_sha256'],'source_proof_sha256':hashlib.sha256(canonical(guarded['source_proof'])).hexdigest()}
+            input_sha=_document(op,'group-drain-inputs.json',drain_inputs)
+            started=append_started(context['journal'],'group-drained',input_sha)
+            _publish_journal(context['journal_path'],context['journal'],started)
+            _document(op,'group-drain-source-proof.json',guarded['source_proof'])
+            drain={'schema':'fullmag.data-volume-group-drained.v1','volume_id':volume_id,'token':token,
+                'plan_sha256':context['plan_sha256'],'source_roots':context['linux']['source_roots'],
+                'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
+                'process_receipt_sha256':guarded['process_receipt_sha256'],
+                'containers':{k:plan['runtime_pins'][k] for k in ('backend','frontend')}}
+            drain_sha=_document(op,'group-drained.json',drain)
+            _publish_journal(context['journal_path'],started,append_terminal(started,'succeeded',drain_sha))
+            ready_sha=_document(op,'copy-fence-ready.json',fence.ready)
+            request={'schema':root_copy.SCHEMA,'volume_id':volume_id,'token':token,
+                'storage_root':context['layout']['storage_root'],'linux_request_sha256':context['linux_request_sha256'],
+                'provision_result_sha256':context['provision_result_sha256'],
+                'drain_sha256':drain_sha,'fence_ready_sha256':ready_sha,'components':components}
+            root_copy.validate_request(request)
+            request_sha=_document(op,'linux-copy-request.json',request)
+            terminal=run_root_copy(fence,source,plan['provision_request']['wsl_distro'],
+                op/'linux-copy-request.json',request_sha)
+            qualification.require(terminal['state'] == 'copied-and-verified-not-switched' and
+                fence.released is True and operation['daemon_pending'] is False,
+                'Root copy returned without its verified terminal acknowledgement')
+        operation['receipt'].update(state='succeeded',image_id=control.image,
+            copy_receipt_sha256=terminal['receipt_sha256'],volume_id=volume_id,
+            data_migrated=False,copy_state=terminal['state'],originals_retired=False)
+        return terminal
+
+
+@contextmanager
+def copied_group(source_root,volume_id,stop_attempt,stop_sha256):
+    """Keep the host lock through a caller's copy-to-cutover continuation.
+
+    The copy's Docker operation and native fence have a confirmed terminal
+    before yielding. A subsequent managed stage can obtain its own operation
+    without nesting Docker leases. The group remains stopped; this context
+    neither switches binds nor admits or retires any dataset.
+    """
     qualification.require(type(stop_attempt) is str and re.fullmatch('[0-9a-f]{32}',stop_attempt) and
         type(stop_sha256) is str and re.fullmatch('[0-9a-f]{64}',stop_sha256),'Exact completed stop pins required')
     context=_load_source(source_root,volume_id)
     with storage.build_lock(context['layout']):
-        context_again=_load_source(source_root,volume_id)
-        qualification.require(context_again == context,'Copy source scope changed before the host lock')
-        source=context['source'];op=context['operation_root'];plan=context['plan']
-        parents=_pins(source,PARENT_COMPONENTS);components=_pins(source,root_copy.COMPONENTS)
-        fence_components=_pins(source,FENCE_COMPONENTS)
-        qualification.require(components['linux_data_volume_format.py'] ==
-            qualification._read(op/'linux-provision-result.json')[1].get('formatter_sha256'),
-            'Formatter source differs from the completed volume stage')
-        control=_existing_control(context['identity'],plan['runtime_pins']['image_id'])
-        inputs={'source_root':str(source),'image_id':control.image,'volume_id':volume_id,
-            'plan_sha256':context['plan_sha256'],'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
-            'parent_components':parents,'root_components':components,'fence_components':fence_components}
-        # Use the existing 32GiB operation admission; no build-space policy change.
-        with control.operation('data-volume-migration',inputs) as operation:
-            snapshot=observe_stopped_group(control,source,plan,stop_attempt,stop_sha256)
-            token=operation['receipt']['attempt']
-            fence_request={'schema':'fullmag.data-copy-fence-request.v1','token':token,'volume_id':volume_id,
-                'process_receipt_sha256':snapshot['process_receipt_sha256'],'components':fence_components,
-                'source_roots':{role:{k:v[k] for k in ('device','inode')}
-                                for role,v in context['linux']['source_roots'].items()}}
-            with CopyFence(control,snapshot['actual']['backend'],source,fence_request) as fence:
-                # Refresh the complete consumer and native stop proofs while
-                # all five guards are held, not just before acquiring them.
-                guarded=observe_stopped_group(control,source,plan,stop_attempt,stop_sha256,fence=fence)
-                qualification.require(guarded['process_receipt_sha256'] == snapshot['process_receipt_sha256'] and
-                    guarded['source_proof'] == snapshot['source_proof'],'Terminal source state changed before its guard')
-                qualification.require(_pins(source,PARENT_COMPONENTS) == parents and
-                    _pins(source,root_copy.COMPONENTS) == components,'Migration source components changed under guards')
-                drain_inputs={'schema':'fullmag.data-volume-group-drain-inputs.v1','volume_id':volume_id,
-                    'token':token,'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
-                    'plan_sha256':context['plan_sha256'],'source_proof_sha256':hashlib.sha256(canonical(guarded['source_proof'])).hexdigest()}
-                input_sha=_document(op,'group-drain-inputs.json',drain_inputs)
-                started=append_started(context['journal'],'group-drained',input_sha)
-                _publish_journal(context['journal_path'],context['journal'],started)
-                _document(op,'group-drain-source-proof.json',guarded['source_proof'])
-                drain={'schema':'fullmag.data-volume-group-drained.v1','volume_id':volume_id,'token':token,
-                    'plan_sha256':context['plan_sha256'],'source_roots':context['linux']['source_roots'],
-                    'stop_attempt':stop_attempt,'stop_sha256':stop_sha256,
-                    'process_receipt_sha256':guarded['process_receipt_sha256'],
-                    'containers':{k:plan['runtime_pins'][k] for k in ('backend','frontend')}}
-                drain_sha=_document(op,'group-drained.json',drain)
-                _publish_journal(context['journal_path'],started,append_terminal(started,'succeeded',drain_sha))
-                ready_sha=_document(op,'copy-fence-ready.json',fence.ready)
-                request={'schema':root_copy.SCHEMA,'volume_id':volume_id,'token':token,
-                    'storage_root':context['layout']['storage_root'],'linux_request_sha256':context['linux_request_sha256'],
-                    'provision_result_sha256':context['provision_result_sha256'],
-                    'drain_sha256':drain_sha,'fence_ready_sha256':ready_sha,'components':components}
-                root_copy.validate_request(request)
-                request_sha=_document(op,'linux-copy-request.json',request)
-                terminal=run_root_copy(fence,source,plan['provision_request']['wsl_distro'],
-                    op/'linux-copy-request.json',request_sha)
-                qualification.require(terminal['state'] == 'copied-and-verified-not-switched' and
-                    fence.released is True and operation['daemon_pending'] is False,
-                    'Root copy returned without its verified terminal acknowledgement')
-            operation['receipt'].update(state='succeeded',image_id=control.image,
-                copy_receipt_sha256=terminal['receipt_sha256'],volume_id=volume_id,
-                data_migrated=False,copy_state=terminal['state'],originals_retired=False)
-            return terminal
+        qualification.require(_load_source(source_root,volume_id) == context,
+                              'Copy source scope changed before the host lock')
+        terminal=_copy_under_host_lock(context,stop_attempt,stop_sha256)
+        yield {'context':context,'terminal':terminal}
+
+
+def copy_data_volume(source_root,volume_id,stop_attempt,stop_sha256):
+    """One copy transaction; retain both originals and leave the group stopped."""
+    with copied_group(source_root,volume_id,stop_attempt,stop_sha256) as copied:
+        return copied['terminal']
 
 
 def main(argv=None):

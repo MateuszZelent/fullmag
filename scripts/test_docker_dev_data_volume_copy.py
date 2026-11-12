@@ -3,7 +3,10 @@ from contextlib import contextmanager,ExitStack
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -173,6 +176,42 @@ class CopyParentSequencingTests(unittest.TestCase):
         self.assertEqual(self.control.op['receipt']['state'],'succeeded')
         self.assertFalse(self.control.op['receipt']['data_migrated'])
         self.assertFalse(self.control.op['receipt']['originals_retired'])
+
+    def test_continuation_keeps_host_lock_but_closes_copy_control_operation(self):
+        with self.patches():
+            with parent.copied_group(self.source,self.volume,self.stop,self.stop_sha) as copied:
+                self.assertEqual(self.calls,['host-held'])
+                self.assertIsNone(self.control._active_operation)
+                self.assertIs(copied['context'],self.context)
+                self.assertEqual(copied['terminal']['receipt_sha256'],'9'*64)
+                self.assertEqual(self.control.op['receipt']['state'],'succeeded')
+            self.assertEqual(self.calls,['host-held','host-released'])
+
+    @unittest.skipUnless(os.name=='posix','POSIX flock contract')
+    def test_other_process_cannot_enter_until_continuation_finishes_even_on_error(self):
+        actual_lock=parent.storage.build_lock
+        storage_root=self.op/'storage';(storage_root/'locks').mkdir(parents=True)
+        lock_layout={'storage_root':str(storage_root),'worktree_id':'fixture'}
+        probe=[sys.executable,'-B','-c',
+            'import fcntl,sys; f=open(sys.argv[1],"a+b"); '
+            'fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)',str(storage_root/'locks/fixture.lock')]
+        @contextmanager
+        def tracked_lock(_layout):
+            with actual_lock(lock_layout):
+                self.calls.append('host-held')
+                try:yield
+                finally:self.calls.append('host-released')
+        with self.patches(),mock.patch.object(parent.storage,'build_lock',side_effect=tracked_lock):
+            with self.assertRaisesRegex(RuntimeError,'cutover refused'):
+                with parent.copied_group(self.source,self.volume,self.stop,self.stop_sha):
+                    blocked=subprocess.run(probe,capture_output=True,text=True,timeout=10)
+                    self.assertNotEqual(blocked.returncode,0)
+                    self.assertIn('BlockingIOError',blocked.stderr)
+                    self.assertIsNone(self.control._active_operation)
+                    raise RuntimeError('cutover refused')
+        free=subprocess.run(probe,capture_output=True,text=True,timeout=10)
+        self.assertEqual(free.returncode,0,free.stderr)
+        self.assertEqual(self.calls,['host-held','host-released'])
 
     def test_native_snapshot_failure_cannot_launch_root_or_publish_a_drain(self):
         with self.patches(),mock.patch.object(parent,'observe_stopped_group',side_effect=ValueError('stop changed')),self.assertRaisesRegex(ValueError,'stop changed'):
