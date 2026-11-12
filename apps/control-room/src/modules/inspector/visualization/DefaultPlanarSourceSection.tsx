@@ -11,8 +11,11 @@ import {
   fractionFromLayerIndex,
   fullThicknessSlabOperator,
   layerIndexFromFraction,
+  matchObjectLayer,
+  objectLayerSlice,
   resolvedSectionCoordinate,
   sectionReduction,
+  type ObjectSectionLayer,
   type PlanarSectionGeometry,
   type PlanarSectionPlane,
   type PlanarSectionReduction,
@@ -38,14 +41,20 @@ const REDUCTIONS = [
   { label: "Average", value: "average" },
 ] as const;
 
+const FREE_SECTION = "__free_section__";
+const NO_OBJECT_LAYERS: readonly ObjectSectionLayer[] = [];
+
 export function DefaultPlanarSourceSection({
   defaultSlice,
   geometry,
+  objectLayers = NO_OBJECT_LAYERS,
   patch,
 }: {
   defaultSlice: DefaultSlice;
   /** Current base sample's authoritative section geometry; null while unavailable. */
   geometry: PlanarSectionGeometry | null;
+  /** Realized objects along the current normal; each is a named slab section. */
+  objectLayers?: readonly ObjectSectionLayer[];
   patch: (next: PlanarPatch) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +68,7 @@ export function DefaultPlanarSourceSection({
     ? currentGeometry.normalMin + positionFraction * currentGeometry.normalExtent
     : null;
   const layerCount = currentGeometry?.layerCount ?? null;
+  const objectLayer = matchObjectLayer(defaultSlice, currentGeometry, objectLayers);
   const layerIndex = layerCount !== null
     ? layerIndexFromFraction(positionFraction, layerCount)
     : null;
@@ -155,6 +165,24 @@ export function DefaultPlanarSourceSection({
           onValueChange={setReduction}
         />
       </div>
+      {currentGeometry && objectLayers.length > 0 ? (
+        <FormField
+          label="Section"
+          type="select"
+          value={objectLayer?.objectId ?? FREE_SECTION}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setError(null);
+            const layer = objectLayers.find((item) => item.objectId === value);
+            patchSlice(layer ? objectLayerSlice(currentGeometry, layer) : { operator: { kind: "plane_sample" } });
+          }}
+        >
+          <option value={FREE_SECTION}>Free section</option>
+          {objectLayers.map((layer) => (
+            <option key={layer.objectId} value={layer.objectId}>{layer.name}</option>
+          ))}
+        </FormField>
+      ) : null}
       {requestedCoordinate !== null && coordinate !== null && reduction !== "average" ? (
         <FieldRow
           label="Requested → resolved"

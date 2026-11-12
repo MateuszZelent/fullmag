@@ -45,6 +45,18 @@ vi.mock("@/kernel/KernelContext", async (importOriginal) => ({
   }),
 }));
 
+// The toolbar renders the command registry; PlanarToolbar.test.tsx covers it.
+vi.mock("./components/PlanarToolbar", () => ({
+  PlanarToolbar: () => <div aria-label="2D view tools" role="toolbar" />,
+}));
+
+// Radix Slider needs HTMLInputElement, which the test DOM does not provide.
+vi.mock("@/shared/ui/Slider", () => ({
+  Slider: ({ "aria-label": label, value }: { "aria-label"?: string; value: number[] }) => (
+    <input aria-label={label} readOnly type="range" value={value[0]} />
+  ),
+}));
+
 vi.mock("@/kernel/api/codecs", () => ({
   decodeFieldVector: () => ({ values: new Float64Array([1]) }),
 }));
@@ -588,7 +600,7 @@ describe("FieldMapModule planar state ownership", () => {
     }
   });
 
-  it("keeps source selection in the Inspector and exposes the D2D-01 toolbar over the same state", () => {
+  it("keeps display selection in the Inspector: an icon toolbar above and a status bar below", () => {
     mocks.visualization.data = {
       planar: {
         colormap: "viridis",
@@ -599,7 +611,7 @@ describe("FieldMapModule planar state ownership", () => {
           position_fraction: 0.5,
         },
         display_unit: "A/m",
-        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1.5 },
         layers: { mesh: true, raster: true, vectors: false },
         quantity_id: "m",
         quality: "interactive",
@@ -617,10 +629,40 @@ describe("FieldMapModule planar state ownership", () => {
 
     expect(html).not.toContain('aria-label="Planar field selection controls"');
     expect(html).not.toContain('aria-label="Source"');
-    // D2D-01: quantity, component, plane and layer controls sit above the map
-    // and write the same visualization/state.planar as the Inspector.
-    expect(html).toContain('aria-label="2D view controls"');
-    expect(html).toContain('aria-label="Component"');
+    // U1: quantity, component, scope, plane, operator and section selection
+    // live in the 2D Inspector; only tools sit above the map.
+    expect(html).toContain('aria-label="2D view tools"');
+    expect(html).not.toContain('aria-label="2D view controls"');
+    for (const label of ["Quantity", "Scope", "Free section", "Single layer", "No sample"]) {
+      expect(html).not.toContain(label);
+    }
+    expect(html).toContain('aria-label="2D view status"');
+    expect(html).toContain(">XY<");
+    expect(html).toContain(">150%<");
+    expect(html.indexOf('aria-label="2D view tools"')).toBeLessThan(html.indexOf("fm-field-map__canvas-stack"));
+    expect(html.indexOf("fm-field-map__canvas-stack")).toBeLessThan(html.indexOf('aria-label="2D view status"'));
+  });
+
+  it("keeps the toolbar and status bar over the loading state", () => {
+    mocks.visualization.data = {
+      planar: {
+        component: "magnitude", quantity_id: "m", source: { kind: "default" },
+        default_slice: { operator: { kind: "plane_sample" }, plane: "xz", position_fraction: 0.5 },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: { raster: true, mesh: false, vectors: false },
+        resolution: { width: 256, height: 128 }, view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    mocks.scalarPending = true;
+
+    const html = renderToStaticMarkup(<FieldMapModule />);
+
+    expect(html).toContain("Loading planar field");
+    expect(html).toContain('aria-label="2D view tools"');
+    expect(html).toContain('aria-label="2D view status"');
+    expect(html).toContain(">XZ<");
   });
 
   it("renders a horizontal scalar instrument with min, ramp, and max in display units", () => {

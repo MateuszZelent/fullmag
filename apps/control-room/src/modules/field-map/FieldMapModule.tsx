@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
 import { normalizeTensorProjection } from "@/kernel/api/tensorFieldProjection";
-import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsSpatialVisualization } from "@/kernel/api/quantityIds";
+import { quantityCatalogEntrySupportsSpatialVisualization } from "@/kernel/api/quantityIds";
 import { useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import type {
   PlanarFieldSource,
@@ -23,7 +23,6 @@ import {
 } from "@/kernel/resources/planarFieldResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { useGeometryRealizationResource } from "@/kernel/resources/useGeometryRealizationResource";
 import { resolveSessionDiscretization } from "@/kernel/resources/sessionDiscretization";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -47,9 +46,11 @@ import {
   objectSectionLayers,
   planarSectionAxes,
   resolvePlanarSectionGeometryFromMeta,
+  stepSectionFraction,
 } from "@/kernel/visualization/planarSectionModel";
+import { planarToolStore, type PlanarCursorUv } from "@/kernel/visualization/planarToolStore";
+import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 import { isDirectionColormap } from "@/shared/visualization/directionColor";
-import { FieldMapToolbar, type FieldMapToolbarQuantity } from "./components/FieldMapToolbar";
 import { FieldMapAuxiliaryDiagnostics } from "./components/FieldMapAuxiliaryDiagnostics";
 import { PlanarColorLegend } from "./components/PlanarColorLegend";
 import { PlanarCompositionSurface } from "./components/PlanarCompositionSurface";
@@ -60,7 +61,8 @@ import { PlanarSnapshotNavigator } from "./components/PlanarSnapshotNavigator";
 import { PlanarPinnedProbe } from "./components/PlanarPinnedProbe";
 import { PlanarProfileChart } from "./components/PlanarProfileChart";
 import { quantityDisplayName } from "@/kernel/api/quantityIds";
-import { PlanarSectionStrip } from "./components/PlanarSectionStrip";
+import { PlanarStatusBar } from "./components/PlanarStatusBar";
+import { PlanarToolbar } from "./components/PlanarToolbar";
 import { describePlanarError, isSupersededPlanarError } from "./model/planarErrorCopy";
 
 import {
@@ -138,7 +140,6 @@ function useFieldMapModuleController() {
     return { kind: "default", sliceKey: canonicalSliceKey };
   }, [canonicalSliceKey, canonicalSourceKind, canonicalSourceMonitorId]);
   const domain = useDomainMetaResource({ enabled: active });
-  const fieldCatalog = useFieldCatalogResource({ enabled: active });
   const runtime = useSessionStatusSelector(
     (status) => resolveSessionDiscretization(status.data),
     { enabled: active },
@@ -193,22 +194,6 @@ function useFieldMapModuleController() {
     enabled: active,
     stageId: selectedFieldContext.stageId,
   });
-  const toolbarQuantities = useMemo<FieldMapToolbarQuantity[]>(
-    () => (fieldCatalog.data?.quantities ?? [])
-      .filter((quantity) => quantity.available)
-      .map((quantity) => {
-        const entry = quantityCatalog.data?.quantities.find((candidate) => candidate.id === quantity.quantity_id);
-        return {
-          components: quantity.components ?? 3,
-          label: quantity.label,
-          quantityId: quantity.quantity_id,
-          unit: quantity.unit,
-          tensor: entry?.tensor != null || entry?.shape === "tensor_field" || quantity.components === 9,
-          projections: quantityCatalogEntrySpatialProjections(entry),
-        };
-      }),
-    [fieldCatalog.data, quantityCatalog.data],
-  );
   const selectedQuantity = quantityCatalog.data?.quantities.find(
     (entry) => entry.id === canonicalPlanar?.quantity_id,
   );
@@ -657,9 +642,37 @@ function useFieldMapModuleController() {
   // Publish derived facts for keyboard commands and the Inspector (one owner).
   useEffect(() => {
     if (!active) return;
-    fieldMapStore.set({ evidenceStatus, planar: presentationPlanar ?? null, sectionGeometry });
-  }, [active, evidenceStatus, presentationPlanar, sectionGeometry]);
-  useEffect(() => () => fieldMapStore.reset(), []);
+    fieldMapStore.set({ evidenceStatus, objectLayers, planar: presentationPlanar ?? null, sectionGeometry });
+  }, [active, evidenceStatus, objectLayers, presentationPlanar, sectionGeometry]);
+  // Closing or switching away from the 2D view returns the tool to navigate.
+  useEffect(() => () => {
+    fieldMapStore.reset();
+    planarToolStore.reset();
+  }, []);
+  const onSectionStep = useCallback((direction: -1 | 1) => {
+    if (!sectionDefaultSlice) return;
+    const fraction = stepSectionFraction(sectionDefaultSlice.position_fraction, sectionGeometry, direction);
+    if (fraction !== sectionDefaultSlice.position_fraction) {
+      onSectionChange({ ...sectionDefaultSlice, position_fraction: fraction });
+    }
+  }, [onSectionChange, sectionDefaultSlice, sectionGeometry]);
+  // Cursor readout in the plane's world axes and the frame's length unit.
+  const formatCursor = useMemo(() => {
+    if (!renderModel?.frame) return undefined;
+    const axisFrame = {
+      normal: renderModel.frame.normal,
+      origin: renderModel.frame.origin,
+      uAxis: renderModel.frame.uAxis,
+      vAxis: renderModel.frame.vAxis,
+    };
+    const lengthUnit = resolvePlanarAxes(axisFrame, renderModel.bounds, renderModel.viewport, 1, 1).displayLengthUnit;
+    return (cursor: PlanarCursorUv) => {
+      const coordinates = resolvePlanarProbeCoordinates(axisFrame, cursor.u_m, cursor.v_m);
+      return [coordinates.horizontal, coordinates.vertical]
+        .map((axis) => `${axis.label} ${formatValueWithUnit(axis.valueMetres * lengthUnit.scale, lengthUnit.symbol)}`)
+        .join(" · ");
+    };
+  }, [renderModel]);
   const evidenceSource = meta.data?.source;
   const sourceKind = evidenceSource?.kind ?? source.kind;
   const sourceId = evidenceSource?.kind === "monitor"
@@ -774,10 +787,11 @@ function useFieldMapModuleController() {
     scalar,
     metaSection,
     objectLayers,
+    onSectionStep,
+    formatCursor,
     sectionDefaultSlice,
     setPinned,
     shownCoordinateM,
-    toolbarQuantities,
     vectors,
     visualization,
     multislice,
@@ -816,10 +830,11 @@ export default function FieldMapModule() {
     scalar,
     metaSection,
     objectLayers,
+    onSectionStep,
+    formatCursor,
     sectionDefaultSlice,
     setPinned,
     shownCoordinateM,
-    toolbarQuantities,
     vectors,
     visualization,
     multislice,
@@ -833,23 +848,28 @@ export default function FieldMapModule() {
       return captureVisibleFieldMapPng(root);
     });
   }, [active, sessionScopeKey]);
-  const sectionStrip = sectionDefaultSlice ? (
-    <PlanarSectionStrip
-      defaultSlice={sectionDefaultSlice}
+  const toolbar = <PlanarToolbar />;
+  const statusBar = presentationPlanar ? (
+    <PlanarStatusBar
+      crop={null}
+      formatCursor={formatCursor}
       objectLayers={objectLayers}
+      operator={sectionDefaultSlice?.operator}
+      planeLabel={sectionDefaultSlice
+        ? sectionDefaultSlice.plane.toUpperCase() as "XY" | "XZ" | "YZ"
+        : null}
+      positionFraction={sectionDefaultSlice?.position_fraction ?? 0}
       section={metaSection}
-      shownCoordinate={shownCoordinateM}
-      onChange={onSectionChange}
+      shownCoordinateM={shownCoordinateM}
+      zoom={presentationPlanar.interaction?.zoom ?? 1}
+      // Crop state arrives with the backend crop contract (Task 8).
+      onClearCrop={() => undefined}
+      onPositionCommit={(fraction) => {
+        if (sectionDefaultSlice) onSectionChange({ ...sectionDefaultSlice, position_fraction: fraction });
+      }}
+      onStep={onSectionStep}
     />
   ) : null;
-  const toolbar = presentationPlanar ? (
-    <FieldMapToolbar
-      planar={presentationPlanar}
-      quantities={toolbarQuantities}
-      sectionStrip={sectionStrip}
-      onPatch={onPlanarPatch}
-    />
-  ) : sectionStrip;
   if (visualization.status === "error") {
     return (
       <FieldMapStatus
@@ -876,6 +896,7 @@ export default function FieldMapModule() {
         kind={copy.kind === "failed" || copy.kind === "unsupported" ? "error" : "status"}
         message={copy.message}
         planarStatus="error"
+        statusBar={statusBar}
         technical={copy.technical}
         toolbar={toolbar}
       />
@@ -885,6 +906,7 @@ export default function FieldMapModule() {
     return (
       <FieldMapStatus
         message="No planar field is published for this revision."
+        statusBar={statusBar}
         toolbar={toolbar}
       />
     );
@@ -894,6 +916,7 @@ export default function FieldMapModule() {
       <FieldMapStatus
         message="Loading planar field…"
         planarStatus="loading"
+        statusBar={statusBar}
         toolbar={toolbar}
       />
     );
@@ -944,8 +967,8 @@ export default function FieldMapModule() {
         data-planar-quantity-id={evidence.quantityId}
         hidden
       />
-      <header className="fm-field-map__toolbar">
-        {toolbar}
+      <header className="fm-field-map__toolbar">{toolbar}</header>
+      <div className="fm-field-map__subbar">
         <PlanarSnapshotNavigator status={evidence.status} />
         {ambiguousSurfaceMeta ? (
           <span className="fm-field-map__diagnostic" role="status">
@@ -953,7 +976,7 @@ export default function FieldMapModule() {
             {ambiguousSurfaceMeta.fold_count} folds
           </span>
         ) : null}
-      </header>
+      </div>
       <div className="fm-field-map__stage">
         {multislice && presentationPlanar.field_overlays?.length ? (
           <div role="status" className="fm-field-map__diagnostic">
@@ -1046,6 +1069,7 @@ export default function FieldMapModule() {
           />
         ) : null}
       </div>
+      {statusBar}
       {activeProfileSegment ? (
         <PlanarProfileChart
           display={{
@@ -1080,12 +1104,14 @@ function FieldMapStatus({
   kind = "status",
   message,
   planarStatus,
+  statusBar = null,
   technical = null,
   toolbar = null,
 }: {
   kind?: "error" | "status";
   message: string;
   planarStatus?: PlanarEvidenceStatus;
+  statusBar?: ReactNode;
   technical?: string | null;
   toolbar?: ReactNode;
 }) {
@@ -1112,6 +1138,7 @@ function FieldMapStatus({
     <section className="fm-field-map">
       <header className="fm-field-map__toolbar">{toolbar}</header>
       {status}
+      {statusBar}
     </section>
   );
 }

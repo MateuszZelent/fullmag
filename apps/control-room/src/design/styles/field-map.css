@@ -1,17 +1,20 @@
+/* Layout A/B/C/D (plan 2.1): toolbar, stage with the legend, status bar. */
 .fm-field-map {
   position: relative;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   height: 100%;
   color: var(--fm-text-primary);
   background: var(--fm-bg-canvas);
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .fm-field-map--status,
 .fm-field-map--error {
-  place-items: center;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
   padding: var(--fm-space-6);
   color: var(--fm-text-secondary);
 }
@@ -78,36 +81,130 @@
 }
 
 .fm-field-map__toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+}
+
+/* A: one line of icon groups; never wraps, extra actions sit in the menu. */
+.fm-planar-toolbar {
   display: flex;
+  flex-wrap: nowrap;
+  gap: var(--fm-space-1);
+  align-items: center;
+  height: 34px;
+  min-width: 0;
+  padding: 0 var(--fm-space-2);
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.fm-planar-toolbar__group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+}
+
+.fm-planar-toolbar__separator {
+  align-self: stretch;
+  margin: var(--fm-space-2) var(--fm-space-1);
+  background: var(--fm-border-subtle);
+}
+
+.fm-planar-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+/* Narrow panes keep export in the overflow menu only. */
+@container (max-width: 560px) {
+  .fm-planar-toolbar__export,
+  .fm-planar-toolbar__export-separator {
+    display: none;
+  }
+}
+
+.fm-field-map__subbar {
+  display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: var(--fm-space-3);
   align-items: center;
-  min-height: var(--fm-inspector-nav-icon-size);
-  padding: 0 var(--fm-space-3);
-  border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
-  font-variant-numeric: tabular-nums;
-}
-
-.fm-field-map__section {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--fm-space-2) var(--fm-space-3);
-  align-items: center;
   min-width: 0;
-  margin-left: auto;
-  padding: var(--fm-space-1) 0;
+  padding: 0 var(--fm-space-3);
 }
 
-.fm-field-map__section-slider {
-  width: clamp(96px, 16vw, 220px);
-  accent-color: var(--fm-accent);
+.fm-field-map__subbar:empty {
+  display: none;
 }
 
-.fm-field-map__section-caption {
+/* D: plane, position slider, coordinate, cursor, zoom and crop chip. */
+.fm-planar-statusbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: var(--fm-space-3);
+  align-items: center;
+  height: 28px;
+  min-width: 0;
+  padding: 0 var(--fm-space-3);
+  overflow: hidden;
+  border-top: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.fm-planar-statusbar__plane {
+  color: var(--fm-text-primary);
+  font-weight: 600;
+}
+
+.fm-planar-statusbar__section {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: var(--fm-space-1);
+  align-items: center;
+  min-width: 0;
+}
+
+.fm-planar-statusbar__slider {
+  width: clamp(96px, 16vw, 220px);
+}
+
+.fm-planar-statusbar__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-planar-statusbar__separator {
+  align-self: stretch;
+  margin: var(--fm-space-1) 0;
+  background: var(--fm-border-subtle);
+}
+
+.fm-planar-statusbar__cursor {
+  min-width: 10rem;
+  font-family: var(--fm-font-mono);
+}
+
+.fm-planar-statusbar__zoom {
+  margin-left: auto;
+}
+
+.fm-planar-statusbar__crop {
+  display: inline-flex;
+  gap: var(--fm-space-1);
+  align-items: center;
+  padding: 0 0 0 var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-elevated);
 }
 
 .fm-field-map__diagnostic {
@@ -117,6 +214,7 @@
 
 .fm-field-map__stage {
   position: relative;
+  flex: 1 1 auto;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   row-gap: calc(var(--fm-space-6) + 1.75rem);
@@ -177,8 +275,15 @@
 /* A line profile shares the module height with the map. Neither is squeezed
    below a usable size: in a short pane the module scrolls instead. */
 .fm-field-map--with-profile {
-  grid-template-rows: max-content minmax(320px, 1fr) minmax(220px, 34%);
   overflow-y: auto;
+}
+
+.fm-field-map--with-profile > .fm-field-map__stage {
+  flex: 1 0 320px;
+}
+
+.fm-field-map--with-profile > .fm-field-map__profile {
+  flex: 0 0 max(220px, 34%);
 }
 
 .fm-field-map__profile {
@@ -205,17 +310,6 @@
   width: 100%;
   height: 100%;
   min-height: 100px;
-}
-
-.fm-field-map__probe {
-  position: absolute;
-  right: var(--fm-space-2);
-  bottom: var(--fm-space-2);
-  padding: var(--fm-space-1) var(--fm-space-2);
-  color: var(--fm-text-primary);
-  background: var(--fm-bg-overlay);
-  font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
 }
 
 .fm-field-map__pinned-probe {
@@ -489,47 +583,10 @@
   }
 }
 
-/* 2D toolbar: one row of mumax3-style display decisions above the map. */
-.fm-field-map__controls {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: var(--fm-space-2) var(--fm-space-3);
-  align-items: center;
-  min-width: 0;
-  padding: var(--fm-space-1) 0;
-}
-
-.fm-field-map__control {
-  display: inline-flex;
-  gap: var(--fm-space-2);
-  align-items: center;
-  min-width: 0;
-}
-
 .fm-field-map__control-label {
   color: var(--fm-text-tertiary);
   font-size: var(--fm-font-size-xs);
   white-space: nowrap;
-}
-
-.fm-field-map__quantity-trigger {
-  min-width: 9rem;
-  max-width: 16rem;
-}
-
-.fm-field-map__component {
-  min-width: 15rem;
-}
-
-.fm-field-map__toggles {
-  display: inline-flex;
-  gap: var(--fm-space-1);
-  align-items: center;
-}
-
-.fm-field-map__controls .fm-field-map__section {
-  margin-left: 0;
 }
 
 .fm-field-map__direction-legend {

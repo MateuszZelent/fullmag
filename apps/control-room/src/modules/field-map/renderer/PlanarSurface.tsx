@@ -11,16 +11,13 @@ import {
   type ReactNode,
 } from "react";
 
+import { planarToolStore } from "@/kernel/visualization/planarToolStore";
 import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
 
 import type { PlanarRenderEvidence } from "../model/fieldMapEvidence";
 import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
-import {
-  resolvePlanarAxes,
-  resolvePlanarProbeCoordinates,
-} from "../model/planarAxisModel";
+import { resolvePlanarAxes } from "../model/planarAxisModel";
 import { PlanarAxes } from "./PlanarAxes";
-import { localProbe } from "../model/fieldMapProbe";
 import {
   fitPlanarInteraction,
   panPlanarInteraction,
@@ -76,20 +73,13 @@ export function PlanarSurface({
     interaction: PlanarInteraction;
   } | null>(null);
   const gestureMovedRef = useRef(false);
-  const [hoverProbe, setHoverProbe] = useState<{
-    u: number;
-    v: number;
-    value: number | null;
-  } | null>(null);
   const {
     canvasRef,
     drawOverlayRef,
-    maskRef,
     modelRef,
     overlayRef,
     plotSize,
     renderStateRef,
-    valuesRef,
   } = usePlanarSurfaceRenderer(model, onRenderEvidence);
   const axisFrame = useMemo(() => ({
     normal: model.frame.normal,
@@ -107,28 +97,25 @@ export function PlanarSurface({
     ),
     [axisFrame, model.bounds, model.viewport, plotSize.height, plotSize.width],
   );
-  const hoverCoordinates = hoverProbe
-    ? resolvePlanarProbeCoordinates(axisFrame, hoverProbe.u, hoverProbe.v)
-    : null;
 
   useEffect(() => {
     interactionRef.current = model.interaction;
   }, [model.interaction]);
 
+  // The cursor position belongs to this surface: clear it when it unmounts.
   useEffect(() => () => {
-    if (hoverFrameRef.current !== null) cancelAnimationFrame(hoverFrameRef.current);
-  }, []);
-
-  useEffect(() => {
-    if (model.layers.probes) return;
     if (hoverFrameRef.current !== null && hoverFrameRef.current !== -1) {
       cancelAnimationFrame(hoverFrameRef.current);
     }
     hoverFrameRef.current = null;
-    hoverPointerRef.current = null;
+    planarToolStore.setCursorUv(null);
+  }, []);
+
+  // The axis crosshair follows the probes layer; the cursor readout does not.
+  useEffect(() => {
+    if (model.layers.probes) return;
     renderStateRef.current.axisPointer = null;
     drawOverlayRef.current();
-    resetHoverProbe(setHoverProbe);
   }, [drawOverlayRef, model.layers.probes, renderStateRef]);
 
   // The plot area is a size container so the canvas keeps the physical
@@ -181,6 +168,11 @@ export function PlanarSurface({
             if (event.key === "Escape" && profileSegment) {
               event.preventDefault();
               onProfileSegment?.(null);
+              return;
+            }
+            if (event.key === "Escape") {
+              // Esc returns to the navigate tool (plan 2.2).
+              planarToolStore.setActiveTool("navigate");
               return;
             }
             if (event.key === "0") {
@@ -327,9 +319,8 @@ export function PlanarSurface({
               gestureMovedRef.current = true;
               onInteraction?.(interactionRef.current);
             }
-            if (!model.layers.probes) return;
-            const values = valuesRef.current;
-            if (!values) return;
+            // Publish the cursor at most once per animation frame; the
+            // status bar reads it from the tool store.
             hoverPointerRef.current = [u, v];
             if (hoverFrameRef.current !== null) return;
             hoverFrameRef.current = -1;
@@ -338,29 +329,20 @@ export function PlanarSurface({
               if (hoverFrameRef.current !== -1 && hoverFrameRef.current !== frame) return;
               hoverFrameRef.current = null;
               const point = hoverPointerRef.current;
-              const latestValues = valuesRef.current;
-              const current = modelRef.current;
-              if (!current.layers.probes || !point || !latestValues) return;
-              const probe = localProbe(
-                point[0],
-                point[1],
-                current.bounds,
-                current.resolution,
-                latestValues,
-                maskRef.current ?? undefined,
-              );
+              if (!point) return;
+              planarToolStore.setCursorUv({ u_m: point[0], v_m: point[1] });
+              if (!modelRef.current.layers.probes) return;
               renderStateRef.current.axisPointer = { u: point[0], v: point[1] };
               drawOverlayRef.current();
-              setHoverProbe({ u: point[0], v: point[1], value: probe.value });
             });
             if (hoverFrameRef.current === -1) hoverFrameRef.current = frame;
           }}
           onPointerLeave={() => {
             if (dragRef.current) return;
             hoverPointerRef.current = null;
+            planarToolStore.setCursorUv(null);
             renderStateRef.current.axisPointer = null;
             drawOverlayRef.current();
-            resetHoverProbe(setHoverProbe);
           }}
         />
         <canvas
@@ -395,24 +377,6 @@ export function PlanarSurface({
         ) : null}
         <p className="fm-visually-hidden" id={summaryId}>{summary}</p>
         {probeOverlay}
-        <output className="fm-field-map__probe" aria-live="polite">
-          {!model.layers.probes || hoverProbe?.value === null || !hoverCoordinates
-            ? "No sample"
-            : [
-                `${hoverCoordinates.horizontal.label} ${formatValueWithUnit(
-                  hoverCoordinates.horizontal.valueMetres * axes.displayLengthUnit.scale,
-                  axes.displayLengthUnit.symbol,
-                )}`,
-                `${hoverCoordinates.vertical.label} ${formatValueWithUnit(
-                  hoverCoordinates.vertical.valueMetres * axes.displayLengthUnit.scale,
-                  axes.displayLengthUnit.symbol,
-                )}`,
-                formatValueWithUnit(
-                  hoverProbe!.value! * model.display.probeScale,
-                  model.display.legendUnit,
-                ),
-              ].join(" · ")}
-        </output>
       </div>
     </div>
   );
@@ -440,12 +404,6 @@ function viewportX(u: number, viewport: readonly [number, number, number, number
 
 function viewportY(v: number, viewport: readonly [number, number, number, number]): number {
   return ((viewport[3] - v) / (viewport[3] - viewport[2])) * 100;
-}
-
-function resetHoverProbe(
-  setHoverProbe: (value: { u: number; v: number; value: number | null } | null) => void,
-): void {
-  setHoverProbe(null);
 }
 
 function pointerDistance(

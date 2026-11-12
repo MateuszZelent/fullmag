@@ -83,6 +83,10 @@ import type { Selection } from "@/kernel/selection/selectionTypes";
 const currentFieldMapSectionGeometry = () =>
   fieldMapSurfaceStore.get().sectionGeometry;
 const serverFieldMapSectionGeometry = () => null;
+const currentFieldMapObjectLayers = () =>
+  fieldMapSurfaceStore.get().objectLayers;
+const SERVER_OBJECT_LAYERS: readonly never[] = [];
+const serverFieldMapObjectLayers = () => SERVER_OBJECT_LAYERS;
 
 type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarRange = NonNullable<PlanarState["range"]>;
@@ -175,6 +179,12 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     fieldMapSurfaceStore.subscribe,
     currentFieldMapSectionGeometry,
     serverFieldMapSectionGeometry,
+  );
+  // Named object sections come from the mounted 2D surface (one owner).
+  const objectLayers = useSyncExternalStore(
+    fieldMapSurfaceStore.subscribe,
+    currentFieldMapObjectLayers,
+    serverFieldMapObjectLayers,
   );
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const quantityCatalog = useQuantityCatalogResource({ enabled: coverage.supported });
@@ -449,7 +459,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           <option value="default">Default</option>
           <optgroup label="Monitors">{(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}</optgroup>
         </FormField>
-        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} geometry={sectionGeometry} patch={patch} /> : null}
+        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} geometry={sectionGeometry} objectLayers={objectLayers} patch={patch} /> : null}
       </div>
     </InspectorGroup>
   );
