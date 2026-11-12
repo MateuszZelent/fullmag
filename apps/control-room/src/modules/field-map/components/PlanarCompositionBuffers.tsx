@@ -78,7 +78,7 @@ export function PlanarCompositionBuffers({ frame, scopeKey, payloadPending, surf
     })}
     {!visible ? <div role="status" className="fm-field-map__diagnostic">{statusReason ?? "Loading the requested field layers."}</div> : null}
   </div>
-    {visible ? <div className="fm-field-map__composition-legends" style={{ position: "relative", pointerEvents: "none" }}>
+    {visible ? <div className="fm-field-map__composition-legends" style={{ pointerEvents: "none" }}>
       {renderBaseLegend?.(visible.frame.base.model, visible.frame.base.meta)}
       <PlanarLayerLegendList
         layers={legendEntries}
@@ -107,7 +107,23 @@ function BufferedSlot({ id, slot, store, surfaceProps, interactive, payloadPendi
     profileSegment={interactive && !payloadPending ? surfaceProps.profileSegment : null}
     probeOverlay={interactive && !payloadPending ? surfaceProps.probeOverlay : null}
     onRenderEvidence={reportBase}
-    fieldOverlayContent={slot.frame.overlays.map((layer) => <PlanarOverlaySurface
-      key={layer.id} id={layer.id} quantityId={layer.meta.quantity_id} model={layer.model}
-      onRenderEvidence={(evidence) => store.acknowledge(id, slot.generation, planarCompositionOverlayLayer(layer.id), evidence)} />)} />;
+    fieldOverlayContent={slot.frame.overlays.map((layer) => <BufferedOverlay
+      key={layer.id} layerId={layer.id} quantityId={layer.meta.quantity_id} model={layer.model}
+      slotId={id} generation={slot.generation} store={store} />)} />;
+}
+
+/**
+ * The overlay replays its completed evidence whenever its callback identity
+ * changes, so the callback is stable per slot generation: a re-render of the
+ * slot must not trigger another evidence replay (and state update) cycle.
+ */
+function BufferedOverlay({ layerId, quantityId, model, slotId, generation, store }: {
+  layerId: string; quantityId: string; model: FieldMapRenderModel;
+  slotId: PlanarCompositionSlotId; generation: number;
+  store: ReturnType<typeof createPlanarCompositionBufferStore>;
+}) {
+  const acknowledge = useCallback((evidence: PlanarRenderEvidence) => {
+    store.acknowledge(slotId, generation, planarCompositionOverlayLayer(layerId), evidence);
+  }, [store, slotId, generation, layerId]);
+  return <PlanarOverlaySurface id={layerId} quantityId={quantityId} model={model} onRenderEvidence={acknowledge} />;
 }

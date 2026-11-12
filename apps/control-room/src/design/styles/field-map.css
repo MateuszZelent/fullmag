@@ -866,27 +866,27 @@
   color: var(--fm-text-secondary);
 }
 
-/* Independent quantities retain distinct legends and SI units in one row. */
+/* Layer legends overlay the bottom-left of the plot (plan §2.1 C) instead of
+   taking a grid row from it; independent quantities keep distinct SI units. */
 .fm-field-map__composition-legends {
+  position: absolute;
+  left: calc(var(--fm-space-6) + 4.5rem + var(--fm-space-2));
+  bottom: calc(var(--fm-space-4) + var(--fm-space-6) + 1.75rem + var(--fm-space-2));
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  align-items: start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--fm-space-2);
-  min-width: 0;
-}
-.fm-field-map__composition-legends > .fm-field-map__colorbar {
-  flex: 1 1 20rem;
+  max-width: min(22rem, 45%);
+  max-height: calc(100% - 2 * var(--fm-space-6));
+  overflow: hidden;
 }
 
-/* Field-layer legend stack (plan §2.1 C): one compact card per drawn layer,
-   top layer first. */
+/* Field-layer legend stack: one compact card per drawn layer, top layer first. */
 .fm-field-map__layer-legends {
   display: flex;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
-  align-items: start;
-  justify-content: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--fm-space-2);
   min-width: 0;
 }

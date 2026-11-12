@@ -1197,7 +1197,9 @@ export default function FieldMapModule() {
           status={profile.status === "error" ? `unavailable: ${String((profile.error as Error | null)?.message ?? "error")}` : "loading"}
         />
       ) : null}
-      {renderModel.diagnostics.length ? (
+      {/* In the layers model the base sample only carries frame and section
+          meta; its presentation diagnostics describe nothing that is drawn. */}
+      {!metaOnlyBase && renderModel.diagnostics.length ? (
         <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">
           {renderModel.diagnostics.map((message) => <p key={message}>{message}</p>)}
         </div>
