@@ -95,6 +95,20 @@ oddaniem sterowania, aby następna faza mogła uzyskać własny lease bez
 zagnieżdżania operacji. Samodzielne `copy_data_volume` pozostaje etapem kopii;
 nie zastępuje pełnego migratora i nie uprawnia do wznowienia grupy.
 
+Prymityw `fullmag_data_volume_bind.switch_roots` nie ma samodzielnego CLI.
+Po świeżym porównaniu obu drzew zachowuje oryginały przez atomowe
+`renameat2(RENAME_NOREPLACE)`, tworzy root-owned underlay `000` i przypina
+bindy do FD zweryfikowanych kopii. Przed zmianą propagacji nowego bindu musi
+potwierdzić dokładny nowy device/inode; błąd pozostawia wszystkie zasoby.
+Mount zawierający każdy oryginalny parent musi być `private` przed pierwszym
+rename i przy ponownej kontroli przed mutacją. Prywatność źródła nie izoluje
+operacji pod `shared` parentem
+([semantyka bind kernela](https://docs.kernel.org/filesystems/sharedsubtree.html)).
+Prymityw nie wykonuje admission, startu ani usuwania. Przed jego podłączeniem
+do rzeczywistego migratora wymagany jest trwały interlock blokujący zwykły
+startup w częściowo przełączonym stanie; sam hostlock nie przetrwa zabicia
+całego supervisora. To zobowiązanie integracji, nie dowód jej wykonania.
+
 Decyzja nie zmienia Python DSL, ProblemIR, fizyki, backendu realizującego krok,
 OpenAPI ani zachowania UI. Migracja nie powtarza Solve. Dane wymagane do
 interpretacji i wznowienia pozostają na hostowym ext4 lub w pełnym Zarr.
