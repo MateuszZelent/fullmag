@@ -1416,3 +1416,40 @@ autoryzacji ani nie uruchomiono/przebudowano usług. Ta odmowa wymaga sprawdzeni
 wobec uprzednio zatwierdzonego group-local recovery (własny volume, bezpośrednie
 bindy, blokady i hashe; bez fizycznego badania cudzych checkoutów). Cudzy
 kontener pozostał nietknięty. Runtime nadal **NOT VERIFIED**.
+
+
+### Reattest WSL oraz stan CI po 3feb9c820
+
+Kontrola retained storage wykryła wyłącznie zmianę host_device po restarcie
+WSL: 2096 → 2128. Inode i pozostałe cechy katalogu pozostały zgodne. Istniejąca
+procedura `reattest-host-device-volume` przeszła preview i apply, operacja
+`022278a18b4d45dfb4ad81c4482a7416` ma terminal succeeded. Stary certyfikat
+SHA-256 `7a3d38121b8625d0774de60be7b05f11e09913e8a79712fc6e3edfc4ef40a007`
+zachowano w journalu, nowy ma
+`40a5294d3b2fe39e342fc021b5991f8be2d6160338b08b29aad6218d7c61944e`.
+Niezależne wywołanie `_validate_reused_session_before_removal` przechodzi.
+Nie zmieniono profilu Linux ani lokalizacji danych. Dokładna para aplikacji
+nadal Exited(255); nie jest to dowód gotowości backendu.
+
+PR423 pokazuje CONFLICTING/DIRTY z brakiem potentialMergeCommit, ale lokalny
+graf i bezpośredni compare GitHuba zgodnie potwierdzają, że base
+`da795b554bfdf66d55cee04cbf0e978aafed2a5a` jest przodkiem HEAD
+`3feb9c820bb616590ffe8f07f7b0e34c428c0afa`: 39 ahead, 0 behind.
+Merge-tree nie daje konfliktów ani różnic po stronie base; checkout nie jest
+shallow i nie ma replace refs. Nie wykonywano zbędnego merge. Nowe przebiegi
+pull_request nie powstały. Uruchomiono istniejący workflow_dispatch bootstrap
+z contract_scope=bootstrap dla tego brancha (polecenie zaakceptowane, exit 0).
+To osobna ścieżka CI; trzeba odczytać rzeczywisty run/source pin i wyniki.
+Nie zastępuje wymaganych kontroli oraz poprawnego stanu PR przed scaleniem.
+
+
+Workflow_dispatch `43328570802` jest potwierdzony in_progress dla dokładnego
+HEAD `3feb9c820bb616590ffe8f07f7b0e34c428c0afa`. Generator
+`131567194379` wygenerował kontrakt; jego bramka diff jest FAIL z powodu
+niezapisanych jeszcze wyników generowania. Artefakt `13993243910`, SHA-256
+`3c61946d67f43b8b4bd48c654178fb290ce783ced03f573462fa691737c5b860`,
+zawiera siedem plików. Zastosowano wyłącznie oryginalne bajty trzech zmienionych
+plików: OpenAPI JSON, TypeScript types i Python models. Pozostałe cztery są
+identyczne. Strukturalny diff JSON ma wyłącznie opcjonalne intent_disposition
+i enum IntentDisposition, a zbiór eksportów Python dodaje tylko ten enum.
+SDK nie edytowano ręcznie. Determinizm na nowym HEAD wymaga kolejnego CI.

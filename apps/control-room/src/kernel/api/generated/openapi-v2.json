@@ -4687,6 +4687,16 @@
           "error": {
             "type": "string"
           },
+          "intent_disposition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IntentDisposition"
+              }
+            ]
+          },
           "message": {
             "type": "string"
           },
@@ -19844,6 +19854,12 @@
           "current"
         ],
         "type": "object"
+      },
+      "IntentDisposition": {
+        "enum": [
+          "not_accepted"
+        ],
+        "type": "string"
       },
       "ItemDetail": {
         "description": "Inspector document of one workspace item.",
