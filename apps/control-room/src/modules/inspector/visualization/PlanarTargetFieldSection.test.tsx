@@ -68,21 +68,39 @@ function change(element: TestElement, value: string): void {
   element.dispatchEvent(new TestEvent("change", { bubbles: true }));
 }
 
+function button(root: TestNode, text: string): TestElement {
+  const element = findElements(root, (candidate) => candidate.tagName === "BUTTON" && candidate.textContent === text)[0];
+  if (!element) throw new Error(`Missing button ${text}`);
+  return element;
+}
+
+const filmCandidate = { id: "object:film", label: "film", target: { id: "object:film", kind: "object" as const } };
+
 describe("PlanarTargetFieldSection", () => {
-  it("renders the six passes, with a masked pass on and noted", () => {
+  it("shows Color and Arrows directly and keeps the other passes under More drawing", () => {
     const html = renderToStaticMarkup(render({ ...film, vectors_visible: true, mesh_visible: true }));
-    for (const pass of ["Raster", "Vectors", "Points", "Mesh", "Contours", "Streamlines"]) {
+    expect(html).toContain("Field in film");
+    expect(html).toContain("Own setting · Magnetization · direction");
+    for (const pass of ["Color", "Arrows", "Points", "Mesh", "Contours", "Streamlines"]) {
       expect(html).toContain(`aria-label="Toggle ${pass}"`);
     }
-    expect(html).toMatch(/aria-label="Toggle Vectors" aria-pressed="true"[^>]*>.*?hidden in toolbar/);
+    expect(html.indexOf('aria-label="Toggle Arrows"')).toBeLessThan(html.indexOf("More drawing"));
+    expect(html.indexOf("More drawing")).toBeLessThan(html.indexOf('aria-label="Toggle Mesh"'));
+    expect(html).toMatch(/aria-label="Toggle Arrows" aria-pressed="true"[^>]*>.*?hidden in toolbar/);
     expect(html).toMatch(/aria-label="Toggle Mesh" aria-pressed="true"/);
-    expect(html).not.toMatch(/aria-label="Toggle Mesh"[^>]*>.*?hidden in toolbar<\/span><\/button><button aria-label="Toggle Contours"/);
   });
 
-  it("disables every pass of a hidden layer and keeps its configured flags", () => {
-    const html = renderToStaticMarkup(render({ ...film, visible: false }));
-    expect(html).toContain("Hidden. Show the layer to change what it draws.");
-    expect(html).toMatch(/aria-label="Toggle Raster" aria-pressed="false"[^>]*disabled/);
+  it("disables every pass of a hidden layer and offers to show it again", async () => {
+    const onWrite = vi.fn();
+    const layer = { ...film, visible: false };
+    expect(renderToStaticMarkup(render(layer))).toMatch(/aria-label="Toggle Color" aria-pressed="false"[^>]*disabled/);
+    const view = await mount(render(layer, onWrite));
+    try {
+      await act(async () => button(view.container, "Show film in the 2D view").click());
+      expect(onWrite).toHaveBeenCalledWith([{ ...layer, visible: true }], "object:film", undefined);
+    } finally {
+      await view.unmount();
+    }
   });
 
   it("flushes a quantity change and drops vector passes of a scalar quantity", async () => {
@@ -108,17 +126,37 @@ describe("PlanarTargetFieldSection", () => {
     const html = renderToStaticMarkup(render(createFieldLayer({ id: "airbox", kind: "airbox" })));
     expect(html).not.toContain("Magnetization (1)");
     expect(html).toContain("Demagnetizing field (A/m)");
+    expect(html).toContain("Remove from 2D view");
   });
 
-  it("shows the empty state with one Add field action for a target without a layer", async () => {
+  it("names the inherited All objects field and creates the own layer from a chosen quantity", async () => {
     const onAdd = vi.fn();
-    const candidate = { id: "object:film", label: "film", target: { id: "object:film", kind: "object" as const } };
-    const view = await mount(render(null, vi.fn(), { emptyTarget: candidate, onAdd }));
+    const all = createFieldLayer("all");
+    const view = await mount(render(null, vi.fn(), { emptyTarget: filmCandidate, inherited: all, layers: [all], onAdd }));
     try {
-      expect(view.container.textContent).toContain("film has no 2D field layer.");
-      const add = findElements(view.container, (element) => element.tagName === "BUTTON" && element.textContent === "Add field for film")[0]!;
-      await act(async () => add.click());
-      expect(onAdd).toHaveBeenCalledWith(candidate);
+      expect(view.container.textContent).toContain("Inherited from All objects · Magnetization · direction");
+      expect(view.container.textContent).not.toContain("Add field");
+      await act(async () => change(control(view.container, "Quantity"), "H_demag"));
+      expect(onAdd).toHaveBeenCalledWith(filmCandidate, "H_demag");
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("says a target without any layer is not drawn", () => {
+    const airbox = { id: "airbox", label: "Airbox", target: { id: "airbox", kind: "airbox" as const } };
+    const html = renderToStaticMarkup(render(null, vi.fn(), { emptyTarget: airbox }));
+    expect(html).toContain("Not drawn in the 2D view");
+    expect(html).not.toContain("Magnetization (1)");
+  });
+
+  it("returns an object to the All objects setting by removing its own layer", async () => {
+    const onWrite = vi.fn();
+    const all = createFieldLayer("all");
+    const view = await mount(render(film, onWrite, { layers: [film, all] }));
+    try {
+      await act(async () => button(view.container, "Use All objects setting").click());
+      expect(onWrite).toHaveBeenCalledWith([all], "object:film", { flush: true });
     } finally {
       await view.unmount();
     }

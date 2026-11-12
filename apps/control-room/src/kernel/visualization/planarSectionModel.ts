@@ -1,6 +1,7 @@
 import type {
   DomainMetaResource,
   PlanarFieldMetaResource,
+  VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 
@@ -439,4 +440,23 @@ export function matchObjectLayer(
   return layers.find((layer) =>
     Math.abs(layer.max - layer.min - thickness) <= tolerance &&
     Math.abs((layer.min + layer.max) / 2 - centre) <= tolerance) ?? null;
+}
+
+/**
+ * Section-plane patch of the whole 2D view, shared by the 2D toolbar plane
+ * commands and the Inspector. A slab average or object section belongs to the
+ * previous normal and a crop to the previous frame, so both reset.
+ */
+export function planarSectionPlanePatch(
+  defaultSlice: DefaultSlice,
+  plane: PlanarSectionPlane,
+): NonNullable<VisualizationStatePatch["planar"]> {
+  return {
+    default_slice: {
+      ...defaultSlice,
+      plane,
+      ...(defaultSlice.operator.kind === "plane_sample" ? {} : { operator: { kind: "plane_sample" as const } }),
+    },
+    crop: null,
+  };
 }

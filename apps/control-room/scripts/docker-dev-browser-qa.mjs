@@ -842,6 +842,7 @@ const runPlanarAirboxBrowserQa = async (page, expectedSession) => {
       throw new Error(`2D view tools still expose a ${name} selector; it belongs to the inspector's field layers`);
     }
   }
+  await openPlanarViewGroup(page);
   const layerList = page.locator('[data-slot="planar-field-layer-list"]');
   await layerList.waitFor({ state: "visible", timeout });
   const airboxRow = layerList.locator('li[data-layer-id="airbox"]');
@@ -2814,4 +2815,11 @@ try {
     partial_proof: partialProof,
   }));
   process.exitCode = 1;
+}
+
+/** Opens the collapsible "2D view" Inspector group that holds the field layer list (spec 23 §5). */
+async function openPlanarViewGroup(scope) {
+  const trigger = scope.locator('[data-slot="inspector-group-trigger"]').filter({ hasText: /^2D view/ }).first();
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
 }

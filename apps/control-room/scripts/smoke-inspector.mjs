@@ -1657,6 +1657,7 @@ async function qualifyPlanarLayerListStability(page, inspector, fixture) {
         .getByRole("radiogroup", { name: "Visualization context" })
         .getByRole("radio", { name: "2D", exact: true });
       if ((await planarContext.getAttribute("aria-checked")) !== "true") await planarContext.click();
+      await openPlanarViewGroup(inspector);
       const list = inspector.locator('[data-slot="planar-field-layer-list"]');
       await list.waitFor({ state: "visible", timeout: 30_000 });
       const row = list.locator(`li[data-layer-id="${target.layerId}"]`);
@@ -6804,4 +6805,11 @@ async function qualifyFirstRunGuideRouting(page, inspector, screenshotFiles, fix
   await guide.getByRole("button", { name: "Hide steps", exact: true }).click();
   assert(!(await guide.getByRole("list", { name: "Model readiness checklist" }).count()), "Hide steps must release workspace space for expert navigation.");
   await assertHealthyViewportCanvas(page, "Collapsed first-run guide");
+}
+
+/** Opens the collapsible "2D view" Inspector group that holds the field layer list (spec 23 §5). */
+async function openPlanarViewGroup(scope) {
+  const trigger = scope.locator('[data-slot="inspector-group-trigger"]').filter({ hasText: /^2D view/ }).first();
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
 }
