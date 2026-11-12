@@ -420,6 +420,33 @@ Frontend obserwuje katalogi `app`, `src`, `public`, `scripts` i aktualizuje UI
 przez HMR. Zmiana helperów obrazu wymaga przygotowania nowego obrazu i jawnego
 odtworzenia usług; sam restart zachowuje przypięty obraz.
 
+#### Odzyskanie zatrzymanej grupy po nieznanym wyniku nadzoru API
+
+Użyj wyłącznie dla dokładnej pary kontenerów zakończonej z PID 0, gdy receipt
+failed_outcome_retained zachował API w trybie diagnostycznym, api_liveness.state
+wynosi observation_unknown, failure fence wskazuje ten sam błąd i bieżący
+OWNER.json nadal potwierdza tę samą tożsamość Ready. Wymagane są również puste
+katalogi/run records zaakceptowanego store, wszystkie rezerwacje ledgeru w stanie
+Released, niezmienione surowe receipts, brak innych konsumentów oraz zgodność
+sieci, storage i dokładnych pinów Compose. Proof v5 archiwizuje oryginalny
+process receipt i bajty failure fence. Nie edytuj tych dokumentów ani nie
+zamieniaj failed_outcome_retained na shutdown_unknown.
+
+Najpierw wykonaj bezmutacyjny podgląd z jawnym wyborem wariantu:
+
+    python3 -B scripts/docker_prepare_container_recovery.py --repo-root <main-checkout> --source-root <registered-worktree> --operator-pins <exact-operator-pins.json> --failed-outcome-retained
+
+Publikacja proofu i operator authorization pod blokadą tej grupy wymaga dopisania
+--publish; nie uruchamia usług. Następnie jawny
+
+    just docker-dev-recover-container <development-attempt> <compose-config-sha256> <registered-worktree> <port> runtime-services/container-recovery/<request-uuid>/operator.json
+
+przechodzi przez native empty-request v1 i zwykły managed start. Recovery przekazuje
+script=None: nie ponawia Solve, Compute ani Stop, a stary process receipt i
+nieznany wynik pozostają w immutable proof. Wszelki niepusty store, nierozliczona
+rezerwacja, zmiana fence/owner/kontenerów lub obcy konsument blokuje tę ścieżkę;
+nie zastępuj jej zwykłym resume, nowym namespace ani świeżym stanem.
+
 `docker-dev-resume` wznawia obserwację konkretnego potwierdzonego nieudanego
 startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backend, również po wcześniej udanym starcie.
 Po wcześniej udanym starcie `docker-dev-resume` może również odzyskać frontend

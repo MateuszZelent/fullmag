@@ -76,6 +76,20 @@ class PreparationTests(unittest.TestCase):
         self.proof_validator.assert_called_once()
         self.assertFalse(result['application_started'])
 
+    def test_failed_outcome_mode_is_an_explicit_preparer_opt_in(self):
+        result = module.prepare(self.control, self.pins, {}, failed_outcome_retained=True,
+                                publish=True)
+        self.assertEqual(result['state'], 'prepared-awaiting-explicit-start')
+        self.assertEqual(self.builder.call_count, 2)
+        for call in self.builder.call_args_list:
+            self.assertIs(call.kwargs['failed_outcome_retained'], True)
+
+    def test_failed_outcome_mode_rejects_retained_run_or_bootstrap_options(self):
+        with self.assertRaisesRegex(BuildControlError, 'empty v1'):
+            module.prepare(self.control, self.pins, {}, failed_outcome_retained=True,
+                           retained_terminal_runs=[])
+        self.builder.assert_not_called()
+
     def test_drift_after_admission_does_not_publish(self):
         self.builder.side_effect = [self.proof, {**self.proof, 'bytes': 'changed'}]
         with self.assertRaisesRegex(BuildControlError, 'changed before publication'):

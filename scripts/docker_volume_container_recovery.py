@@ -52,6 +52,7 @@ HELD_MANUAL_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v4"
 ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
 ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA = "fullmag.docker-abrupt-stop-proof.v3"
 ABRUPT_PROOF_BOOTSTRAP_SCHEMA = "fullmag.docker-abrupt-stop-proof.v4"
+ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA = "fullmag.docker-abrupt-stop-proof.v5"
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
@@ -799,7 +800,9 @@ def _runtime_config(control: BuildControl) -> tuple[dict[str, object], bytes, st
     return config, raw, _sha256(raw)
 
 
-def _runtime_process_receipt(control: BuildControl, *, abrupt: bool = False) -> tuple[dict[str, object], bytes, str]:
+def _runtime_process_receipt(
+    control: BuildControl, *, abrupt: bool = False, failed_outcome_retained: bool = False
+) -> tuple[dict[str, object], bytes, str]:
     receipt, raw = _control_json(
         control, f"{RUNTIME_CONTROL_RELATIVE}/runtime-service/process-tree.json"
     )
@@ -807,11 +810,59 @@ def _runtime_process_receipt(control: BuildControl, *, abrupt: bool = False) -> 
         _fail("runtime-service process receipt is missing from the control volume")
     if receipt.get("schema") != "fullmag.docker-process-tree.v1":
         _fail("runtime-service process receipt schema differs from the image-owned schema")
-    if receipt.get("state") not in ({"ready", "shutdown_unknown"} if abrupt else {"shutdown_unknown"}):
+    if failed_outcome_retained:
+        if not abrupt or receipt.get("state") != "failed_outcome_retained":
+            _fail("failed_outcome_retained requires its explicit abrupt recovery proof")
+        if (receipt.get("api_diagnostic_only") is not True
+                or not isinstance(receipt.get("api_liveness"), Mapping)
+                or receipt["api_liveness"].get("state") != "observation_unknown"):
+            _fail("failed_outcome_retained receipt is not diagnostic-only with unknown liveness")
+    elif receipt.get("state") not in ({"ready", "shutdown_unknown"} if abrupt else {"shutdown_unknown"}):
         _fail("container recovery requires the current shutdown_unknown process receipt")
     if "startup_activation" in receipt:
         _fail("container recovery cannot consume an internal startup activation receipt")
     return receipt, raw, _sha256(raw)
+
+
+def _failed_outcome_fence_relative(process: Mapping[str, object]) -> str:
+    value = _require_text(process.get("api_failure_fence"), "diagnostic API failure-fence path", 4096)
+    prefix = f"/opt/fullmag/{RUNTIME_CONTROL_RELATIVE}/runtime-service/"
+    parsed = PurePosixPath(value)
+    if (not value.startswith(prefix) or str(parsed) != value
+            or str(parsed.parent) != prefix.rstrip("/") or ".." in parsed.parts
+            or "\\" in value):
+        _fail("diagnostic API failure fence escapes the exact runtime-control directory")
+    name = parsed.name
+    if re.fullmatch(r"api-failure-[0-9a-f]{32}\.json", name) is None:
+        _fail("diagnostic API failure-fence filename is not canonical")
+    return f"{RUNTIME_CONTROL_RELATIVE}/runtime-service/{name}"
+
+
+def _validate_failed_outcome_diagnostic(
+    process: Mapping[str, object], owner: Mapping[str, object], fence: Mapping[str, object]
+) -> None:
+    if (process.get("schema") != "fullmag.docker-process-tree.v1"
+            or process.get("state") != "failed_outcome_retained"
+            or process.get("api_diagnostic_only") is not True
+            or not isinstance(process.get("api_liveness"), Mapping)
+            or process["api_liveness"].get("state") != "observation_unknown"
+            or type(process.get("api_pid")) is not int or process["api_pid"] <= 0
+            or process.get("runtime_pid") is not None
+            or "terminal_service_owner" in process
+            or "startup_activation" in process
+            or not isinstance(process.get("error"), str) or not process["error"]):
+        _fail("failed_outcome_retained process is not the exact diagnostic-only unknown-liveness receipt")
+    if owner.get("state") != "ready":
+        _fail("failed_outcome_retained recovery requires its matching Ready owner")
+    _validate_process_receipt_owner(process, owner)
+    api_instance_id = fence.get("api_instance_id")
+    if (fence.get("schema") != "fullmag.api-runtime-failure-fence.v1"
+            or fence.get("stage") != "runtime_supervision"
+            or fence.get("reason") != process["error"]
+            or fence.get("api_pid") != process["api_pid"]
+            or not isinstance(api_instance_id, str)
+            or REQUEST_ID_RE.fullmatch(api_instance_id) is None):
+        _fail("diagnostic API failure fence does not match the retained process receipt")
 
 
 def _application_pin(control: BuildControl, config_sha256: str) -> dict[str, str]:
@@ -1863,6 +1914,12 @@ def _assert_request_matches_abrupt_retained_pins(
     if (proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA
             and request.get("schema_version") != TERMINAL_REQUEST_SCHEMA):
         _fail("bootstrap stop proof requires native terminal recovery v3")
+    if proof.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+        if (request.get("schema_version") != REQUEST_SCHEMA
+                or any(key in request for key in (
+                    "retained_cancelled_runs", "retained_terminal_runs",
+                    "retained_held_manual_runs", "retained_attempt_histories"))):
+            _fail("failed_outcome_retained proof requires the native empty v1 request")
     if request.get("retained_terminal_runs") != proof.get("retained_terminal_runs"):
         _fail("prepared request terminal pins differ from abrupt proof")
     if proof.get("schema") in {ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA}:
@@ -2240,7 +2297,7 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None
+    bootstrap_stop_reference=None, failed_outcome_retained=False
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -2249,6 +2306,12 @@ def prepare_abrupt_stop_proof(
     stop journal, modifies OWNER/process-tree, removes containers, or runs Solve.
     """
     pins = _abrupt_pins(authorization_pins)
+    if type(failed_outcome_retained) is not bool:
+        _fail("failed_outcome_retained selector must be a boolean")
+    if failed_outcome_retained and any(value is not None for value in (
+            retained_terminal_runs, retained_held_manual_runs, retained_attempt_histories,
+            bootstrap_stop_reference)):
+        _fail("failed_outcome_retained recovery is exclusive with retained runs and requires the empty v1 request")
     bootstrap = None
     if bootstrap_stop_reference is not None:
         if retained_held_manual_runs is not None or retained_attempt_histories is not None:
@@ -2279,12 +2342,24 @@ def prepare_abrupt_stop_proof(
     auth = {**pins, "schema_version": ABRUPT_OPERATOR_SCHEMA,
             "services": {service: {"container_id": pins[service + "_container_id"]} for service in ("backend", "frontend")}}
     backend, frontend = _inspect_pair(auth, control.project, compose)
-    process, process_raw, process_sha = _runtime_process_receipt(control, abrupt=True)
+    process, process_raw, process_sha = _runtime_process_receipt(
+        control, abrupt=True, failed_outcome_retained=failed_outcome_retained)
     owner, owner_raw, owner_sha = _runtime_owner(control)
     launch, launch_raw, launch_sha = _runtime_launch(control)
     config, config_raw, config_sha = _runtime_config(control)
     if bootstrap is None:
         _validate_process_receipt_owner(process, owner)
+    diagnostic_fence = None
+    diagnostic_fence_raw = None
+    diagnostic_fence_sha = None
+    diagnostic_fence_path = None
+    if failed_outcome_retained:
+        diagnostic_fence_path = _failed_outcome_fence_relative(process)
+        diagnostic_fence, diagnostic_fence_raw = _control_json(control, diagnostic_fence_path)
+        if diagnostic_fence is None or diagnostic_fence_raw is None:
+            _fail("failed_outcome_retained receipt has no raw API failure-fence record")
+        _validate_failed_outcome_diagnostic(process, owner, diagnostic_fence)
+        diagnostic_fence_sha = _sha256(diagnostic_fence_raw)
     _validate_owner_host(owner, backend)
     raw_records = {}
     for key, raw, sha, path in (
@@ -2296,6 +2371,12 @@ def prepare_abrupt_stop_proof(
             _fail(f"abrupt {key} bytes differ from operator pins")
         raw_records[key] = {"path": RUNTIME_CONTROL_RELATIVE + "/" + path,
                             "raw_utf8": raw.decode("utf-8"), "sha256": sha}
+    if failed_outcome_retained:
+        raw_records["api_failure_fence"] = {
+            "path": diagnostic_fence_path,
+            "raw_utf8": diagnostic_fence_raw.decode("utf-8"),
+            "sha256": diagnostic_fence_sha,
+        }
     if bootstrap is not None:
         from docker_volume_bootstrap_recovery import validate
         validated = validate(bootstrap, pins, raw_records, backend, control=control)
@@ -2308,7 +2389,12 @@ def prepare_abrupt_stop_proof(
                                               retained_attempt_histories=retained_attempt_histories)
     if _docker_engine_sha() != engine_sha:
         _fail("Docker engine changed during abrupt proof preparation")
-    proof = {"schema": ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None else (ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None else ABRUPT_PROOF_SCHEMA),
+    proof = {"schema": (
+                 ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA if failed_outcome_retained
+                 else ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None
+                 else ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None
+                 else ABRUPT_PROOF_SCHEMA
+             ),
              "authorization_pins": pins,
              "docker_engine_id_sha256": engine_sha, "raw_records": raw_records,
              "containers": {"backend": _stable_container_observation(backend),
@@ -2341,7 +2427,8 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
             or (proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA and set(proof) != held_fields)
             or (proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA and set(proof) != history_fields)
             or (proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and set(proof) != bootstrap_fields)
-            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA}):
+            or (proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA and set(proof) != legacy_fields)
+            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA, ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA}):
         _fail("abrupt stop proof does not match its frozen schema")
     if proof["authorization_pins"] != _abrupt_authorization_pins(authorization):
         _fail("abrupt proof operator pins differ")
@@ -2349,6 +2436,12 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     terminal_pins = proof["retained_terminal_runs"]
     held_pins = proof.get("retained_held_manual_runs")
     history_pins = proof.get("retained_attempt_histories")
+    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+        if terminal_pins is not None or held_pins is not None or history_pins is not None:
+            _fail("failed_outcome_retained proof must select the empty v1 recovery request")
+        storage = _require_mapping(proof.get("storage_proof"), "failed-outcome storage proof")
+        if storage.get("run_directories") != [] or storage.get("run_records") != []:
+            _fail("failed_outcome_retained proof requires an empty accepted namespace")
     if proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA:
         expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA, "retained_terminal_runs": terminal_pins})
         storage = _require_mapping(proof.get("storage_proof"), "bootstrap storage proof")
@@ -2375,24 +2468,39 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     elif terminal_pins is not None:
         expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA, "retained_terminal_runs": terminal_pins})
     records = _require_mapping(proof["raw_records"], "abrupt raw records")
-    if set(records) != {"process_receipt", "owner", "launch", "config"}:
-        _fail("abrupt raw record inventory differs")
     expected_paths = {"process_receipt": "runtime-service/process-tree.json", "owner": "runtime-services/OWNER.json", "launch": "runtime-services/LAUNCH.json", "config": "runtime-service/docker-all.json"}
+    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+        process_record = _require_mapping(records.get("process_receipt"), "abrupt process receipt record")
+        if not isinstance(process_record.get("raw_utf8"), str):
+            _fail("failed_outcome_retained process receipt record is malformed")
+        archived_process = _parse_json(
+            process_record["raw_utf8"].encode("utf-8"), "abrupt original process receipt")
+        expected_paths["api_failure_fence"] = _failed_outcome_fence_relative(archived_process).removeprefix(RUNTIME_CONTROL_RELATIVE + "/")
+    if set(records) != set(expected_paths):
+        _fail("abrupt raw record inventory differs")
     decoded = {}
     for key, item in records.items():
         if not isinstance(item, Mapping) or set(item) != {"path", "raw_utf8", "sha256"} or not isinstance(item["raw_utf8"], str):
             _fail("abrupt original record has an invalid shape")
         raw = item["raw_utf8"].encode("utf-8")
-        if item["path"] != RUNTIME_CONTROL_RELATIVE + "/" + expected_paths[key] or _sha256(raw) != authorization[key + "_sha256"] or item["sha256"] != _sha256(raw):
+        expected_path = expected_paths[key]
+        expected_authorized_sha = authorization.get(key + "_sha256")
+        if (item["path"] != RUNTIME_CONTROL_RELATIVE + "/" + expected_path
+                or item["sha256"] != _sha256(raw)
+                or (key != "api_failure_fence" and _sha256(raw) != expected_authorized_sha)):
             _fail("abrupt original record bytes or path differ")
         decoded[key] = _parse_json(raw, "abrupt original " + key)
         if control is not None and _control_bytes(control, item["path"]) != raw:
             _fail("abrupt raw proof is stale: " + key)
     process = decoded["process_receipt"]
-    if process.get("schema") != "fullmag.docker-process-tree.v1" or process.get("state") not in {"ready", "shutdown_unknown"} or "startup_activation" in process:
-        _fail("abrupt archived process state is unsupported")
-    owner = _owner_for_native(decoded["owner"])
-    _validate_proof_process_owner(process, owner, proof, authorization, control=control)
+    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+        owner = _owner_for_native(decoded["owner"])
+        _validate_failed_outcome_diagnostic(process, owner, decoded["api_failure_fence"])
+    else:
+        if process.get("schema") != "fullmag.docker-process-tree.v1" or process.get("state") not in {"ready", "shutdown_unknown"} or "startup_activation" in process:
+            _fail("abrupt archived process state is unsupported")
+        owner = _owner_for_native(decoded["owner"])
+        _validate_proof_process_owner(process, owner, proof, authorization, control=control)
     containers = _require_mapping(proof["containers"], "abrupt archived containers")
     if set(containers) != {"backend", "frontend"}:
         _fail("abrupt archived service inventory differs")
@@ -3034,7 +3142,10 @@ def _revalidate_recovery_boundary(
         )
         if backend.get("Id") != expected_backend.get("Id") or frontend.get("Id") != expected_frontend.get("Id"):
             _fail("prepared recovery manifest changed before the destructive boundary")
-    process_receipt, _, process_receipt_sha = _runtime_process_receipt(control, abrupt=_is_abrupt(authorization))
+    process_receipt, _, process_receipt_sha = _runtime_process_receipt(
+        control, abrupt=_is_abrupt(authorization),
+        failed_outcome_retained=(journal.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA),
+    )
     if process_receipt_sha != expected_process_receipt_sha:
         _fail("shutdown_unknown process receipt changed before the destructive boundary")
     owner, owner_raw, owner_sha = _runtime_owner(control)
@@ -3336,7 +3447,10 @@ def recover(args: argparse.Namespace) -> None:
     else:
         backend, frontend = transition["backend"], transition["frontend"]
         network_name = transition["network_name"]
-    process_receipt, process_receipt_raw, process_receipt_sha = _runtime_process_receipt(control, abrupt=_is_abrupt(authorization))
+    process_receipt, process_receipt_raw, process_receipt_sha = _runtime_process_receipt(
+        control, abrupt=_is_abrupt(authorization),
+        failed_outcome_retained=(journal.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA),
+    )
     if process_receipt_sha != authorization["process_receipt_sha256"]:
         _fail("current shutdown_unknown process receipt differs from operator authorization")
     owner, owner_raw, observed_owner_sha = _runtime_owner(control)
@@ -3675,6 +3789,7 @@ __all__ = [
     "OPERATOR_AUTHORIZATION_SCHEMA",
     "ABRUPT_OPERATOR_SCHEMA",
     "ABRUPT_PROOF_SCHEMA",
+    "ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA",
     "TERMINAL_REQUEST_SCHEMA",
     "prepare_abrupt_stop_proof",
     "validate_abrupt_stop_proof",

@@ -87,6 +87,147 @@ class AbruptStopTests(unittest.TestCase):
             'abrupt_stop_proof': 'verification/abrupt-proof.json', 'abrupt_stop_proof_sha256': r._sha256(r._canonical(proof))})
         return proof, auth, compose
 
+    def failed_outcome_fixture(self):
+        proof, _, compose = self.fixture()
+        process_path = proof['raw_records']['process_receipt']['path']
+        fence_path = '/opt/fullmag/runtime-control/runtime-service/api-failure-' + '1' * 32 + '.json'
+        process = json.loads(proof['raw_records']['process_receipt']['raw_utf8'])
+        process.update(state='failed_outcome_retained', api_pid=18984,
+                       api_diagnostic_only=True, api_liveness={'state': 'observation_unknown'},
+                       api_failure_fence=fence_path, error='process.error')
+        process_raw = (json.dumps(process, indent=3) + '\n').encode()
+        fence = {'schema': 'fullmag.api-runtime-failure-fence.v1',
+                 'stage': 'runtime_supervision', 'reason': 'process.error',
+                 'api_pid': 18984, 'api_instance_id': '22222222-3333-4333-8333-444444444444'}
+        fence_raw = (json.dumps(fence, indent=2) + '\n').encode()
+        proof['schema'] = r.ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA
+        proof['storage_proof']['run_directories'] = []
+        proof['raw_records']['process_receipt'] = {
+            'path': process_path, 'raw_utf8': process_raw.decode(), 'sha256': r._sha256(process_raw)}
+        proof['raw_records']['api_failure_fence'] = {
+            'path': 'runtime-control/runtime-service/' + Path(fence_path).name,
+            'raw_utf8': fence_raw.decode(), 'sha256': r._sha256(fence_raw)}
+        pins = proof['authorization_pins']
+        pins['process_receipt_sha256'] = r._sha256(process_raw)
+        auth = r.validate_operator_authorization({
+            **pins, 'schema_version': r.ABRUPT_OPERATOR_SCHEMA,
+            'abrupt_stop_proof': 'verification/failed-outcome-proof.json',
+            'abrupt_stop_proof_sha256': r._sha256(r._canonical(proof)),
+        })
+        return proof, auth, compose
+
+    def rebind_failed_outcome_process(self, proof, auth, process):
+        raw = (json.dumps(process, indent=3) + '\n').encode()
+        record = proof['raw_records']['process_receipt']
+        record.update(raw_utf8=raw.decode(), sha256=r._sha256(raw))
+        proof['authorization_pins']['process_receipt_sha256'] = r._sha256(raw)
+        auth['process_receipt_sha256'] = r._sha256(raw)
+
+    def test_failed_outcome_proof_is_explicit_and_archives_failure_fence_bytes(self):
+        proof, auth, compose = self.failed_outcome_fixture()
+        records = {item['path']: item['raw_utf8'].encode()
+                   for item in proof['raw_records'].values()}
+        control = SimpleNamespace(project=compose['name'])
+        with patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(records[path]), records[path])), \
+             patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_assert_no_foreign_storage_consumers') as consumers, \
+             patch.object(r, '_ledger_and_store_snapshot', return_value=proof['storage_proof']), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64), \
+             patch.object(r, '_abrupt_network', return_value=proof['network']):
+            observed = r.prepare_abrupt_stop_proof(
+                control, proof['authorization_pins'], compose, failed_outcome_retained=True)
+        self.assertEqual(observed, proof)
+        self.assertEqual(observed['schema'], r.ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA)
+        r._assert_request_matches_abrupt_retained_pins(
+            {'schema_version': r.REQUEST_SCHEMA}, observed)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'native empty v1'):
+            r._assert_request_matches_abrupt_retained_pins(
+                {'schema_version': r.RETAINED_REQUEST_SCHEMA, 'retained_cancelled_runs': []}, observed)
+        extra = {**observed, 'unfrozen': True}
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'frozen schema'):
+            r.validate_abrupt_stop_proof(extra, auth)
+        missing = dict(observed)
+        missing.pop('network')
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'frozen schema'):
+            r.validate_abrupt_stop_proof(missing, auth)
+        self.assertIn('api_failure_fence', observed['raw_records'])
+        self.assertIn(observed['raw_records']['api_failure_fence']['raw_utf8'],
+                      [record['raw_utf8'] for record in observed['raw_records'].values()])
+        consumers.assert_called_once()
+        r.validate_abrupt_stop_proof(observed, auth)
+
+    def test_failed_outcome_receipt_requires_explicit_preparer_opt_in(self):
+        proof, _, compose = self.failed_outcome_fixture()
+        paths = {item['path']: item['raw_utf8'].encode()
+                 for item in proof['raw_records'].values()}
+        with patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(paths[path]), paths[path])), \
+             patch.object(r, '_docker_engine_sha', return_value='f'*64):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'shutdown_unknown'):
+                r.prepare_abrupt_stop_proof(
+                    SimpleNamespace(project=compose['name']), proof['authorization_pins'], compose)
+
+    def test_failed_outcome_proof_rejects_diagnostic_and_liveness_drift(self):
+        for field, value in (('api_diagnostic_only', False),
+                             ('api_liveness', {'state': 'ready'}),
+                             ('api_pid', True), ('state', 'shutdown_unknown'),
+                             ('api_failure_fence', '/opt/fullmag/runtime-control/runtime-service/../outside.json'),
+                             ('api_failure_fence', '/opt/fullmag/runtime-control/runtime-service/subdir/api-failure-' + '1'*32 + '.json')):
+            proof, auth, _ = self.failed_outcome_fixture()
+            process = json.loads(proof['raw_records']['process_receipt']['raw_utf8'])
+            process[field] = value
+            self.rebind_failed_outcome_process(proof, auth, process)
+            with self.subTest(field=field), self.assertRaises(r.ContainerRecoveryError):
+                r.validate_abrupt_stop_proof(proof, auth)
+
+    def test_failed_outcome_proof_requires_ready_owner_and_matching_fence(self):
+        proof, auth, _ = self.failed_outcome_fixture()
+        owner = json.loads(proof['raw_records']['owner']['raw_utf8'])
+        owner['state'] = 'unknown'
+        owner_raw = (json.dumps(owner, indent=3) + '\n').encode()
+        owner_record = proof['raw_records']['owner']
+        owner_record.update(raw_utf8=owner_raw.decode(), sha256=r._sha256(owner_raw))
+        proof['authorization_pins']['owner_sha256'] = r._sha256(owner_raw)
+        auth['owner_sha256'] = r._sha256(owner_raw)
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'Ready'):
+            r.validate_abrupt_stop_proof(proof, auth)
+
+        proof, auth, _ = self.failed_outcome_fixture()
+        fence_record = proof['raw_records']['api_failure_fence']
+        fence = json.loads(fence_record['raw_utf8'])
+        fence['reason'] = 'another failure'
+        fence_raw = (json.dumps(fence, indent=2) + '\n').encode()
+        fence_record.update(raw_utf8=fence_raw.decode(), sha256=r._sha256(fence_raw))
+        with self.assertRaisesRegex(r.ContainerRecoveryError, 'failure fence'):
+            r.validate_abrupt_stop_proof(proof, auth)
+
+    def test_failed_outcome_proof_keeps_foreign_consumer_fence(self):
+        proof, _, compose = self.failed_outcome_fixture()
+        paths = {item['path']: item['raw_utf8'].encode()
+                 for item in proof['raw_records'].values()}
+        with patch.object(r, '_inspect_pair', return_value=tuple(proof['containers'].values())), \
+             patch.object(r, '_control_json', side_effect=lambda _c, path: (json.loads(paths[path]), paths[path])), \
+             patch.object(r, '_assert_no_foreign_storage_consumers',
+                          side_effect=r.ContainerRecoveryError('foreign storage consumer')), \
+             patch.object(r, '_ledger_and_store_snapshot') as snapshot:
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'foreign storage consumer'):
+                r.prepare_abrupt_stop_proof(
+                    SimpleNamespace(project=compose['name']), proof['authorization_pins'], compose,
+                    failed_outcome_retained=True)
+        snapshot.assert_not_called()
+
+    def test_failed_outcome_proof_rechecks_raw_failure_fence_cas(self):
+        proof, auth, compose = self.failed_outcome_fixture()
+        records = {item['path']: item['raw_utf8'].encode()
+                   for item in proof['raw_records'].values()}
+        fence_path = proof['raw_records']['api_failure_fence']['path']
+        def read(control, path):
+            return records[path] + (b' ' if path == fence_path else b'')
+        with patch.object(r, '_control_bytes', side_effect=read):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, 'stale: api_failure_fence'):
+                r.validate_abrupt_stop_proof(
+                    proof, auth, control=SimpleNamespace(project=compose['name']), compose=compose)
+
     def test_v2_frozen_fields_and_original_ready_bytes(self):
         proof, auth, _ = self.fixture()
         r.validate_abrupt_stop_proof(proof, auth)

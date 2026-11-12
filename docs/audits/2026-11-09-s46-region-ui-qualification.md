@@ -1387,3 +1387,32 @@ aktualizacja snapshot bez run nie usuwa istniejącego runu. Negatywne kontrole
 no-key/store/domain/body-conflict mają jawny prawidłowy scope, aby brak
 nagłówka nie maskował błędu w innych bramkach. Parser rustfmt i diff check
 przechodzą; nowe testy backendu nie zostały jeszcze wykonane.
+
+
+### Jawny wariant recovery dla failed_outcome_retained
+
+Dodano host proof `fullmag.docker-abrupt-stop-proof.v5`, wybierany wyłącznie
+przez `--failed-outcome-retained`. Nie jest to native request v5: używa
+wyłącznie istniejącego empty request v1. Przypina oryginalne process/OWNER/
+LAUNCH/config i dokładny failure fence; wymaga diagnostycznego API z unknown
+liveness, matching Ready owner, zatrzymanej pary i pustego store. Dotychczasowe
+warianty pozostają bez zmian. Podczas review poprawiono dokładny katalog fence
+na `/opt/fullmag/runtime-control/runtime-service`, odrzucono zagnieżdżone
+ścieżki oraz dodatkowe/brakujące pola nowego proofu.
+
+81 testów PASS w trzech istniejących modułach unittest:
+`test_docker_volume_container_recovery`, `test_docker_volume_abrupt_stop_recovery`,
+`test_docker_prepare_container_recovery`. To lekkie testy metadanych z mockami
+Docker; nie uruchamiają aplikacji ani kompilacji hostowej. Parsery i diff check
+PASS. Bieżąca kontrola control volume potwierdziła brak `/control/active`.
+
+Rzeczywisty preview z pinami
+`/tmp/p22-current-recovery-pins.json`, request
+`6e00825f-9e01-4673-b7fd-82bacbc29232`, doszedł do kontroli konsumentów i odmówił:
+foreign Windows bind kontenera
+`011cba60386b345dab03dad226a0f98f6ef7d31874ff2d1c653150e4d83c19f2`
+nie ma referencji poświadczającej exact Linux root. Nie opublikowano
+autoryzacji ani nie uruchomiono/przebudowano usług. Ta odmowa wymaga sprawdzenia
+wobec uprzednio zatwierdzonego group-local recovery (własny volume, bezpośrednie
+bindy, blokady i hashe; bez fizycznego badania cudzych checkoutów). Cudzy
+kontener pozostał nietknięty. Runtime nadal **NOT VERIFIED**.
