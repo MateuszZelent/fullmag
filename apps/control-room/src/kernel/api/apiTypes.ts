@@ -1241,6 +1241,9 @@ type PlanarFieldComponent = components["schemas"]["PlanarFieldComponent"] | impo
 export type PlanarFieldOverlayState = Omit<components["schemas"]["PlanarFieldOverlayState"], "component"> & {
   component: PlanarFieldComponent;
 };
+export type PlanarCropState = components["schemas"]["PlanarCropState"];
+export type PlanarLayerModel = components["schemas"]["PlanarLayerModel"];
+export type PlanarProbeNodeResource = components["schemas"]["PlanarProbeNodeResource"];
 type PlanarVisualizationPatch = Omit<components["schemas"]["PlanarVisualizationPatch"], "component" | "field_overlays"> & {
   field_overlays?: PlanarFieldOverlayState[] | null;
   component?: PlanarFieldComponent | null;

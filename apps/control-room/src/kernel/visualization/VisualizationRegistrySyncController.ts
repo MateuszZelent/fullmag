@@ -3,7 +3,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
-import type { ResourceRevision } from "../api/apiTypes";
+import type { PlanarCropState, ResourceRevision } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -654,6 +654,18 @@ export class VisualizationRegistrySyncController {
       [targetId],
       EMPTY_TARGET_IDS,
     );
+  }
+
+  /**
+   * Sets or clears the 2D crop window (ADR 0080). A crop changes the sampled
+   * frame, so the view resets to fit it and the patch is sent at once.
+   */
+  queuePlanarCropPatch(crop: PlanarCropState | null): VisualizationPatchReceipt {
+    const receipt = this.queuePatch({
+      planar: { crop, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+    void this.flushNow();
+    return receipt;
   }
 
   queuePlanarFieldOverlayPatch(

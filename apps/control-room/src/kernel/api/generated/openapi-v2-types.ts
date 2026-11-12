@@ -12175,6 +12175,7 @@ export interface components {
         PlanarFieldComponent: "c0" | "c1" | "c2" | "c3" | "c4" | "c5" | "c6" | "c7" | "c8" | "frobenius" | "spin_flow_x" | "spin_flow_y" | "spin_flow_z" | "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
         PlanarFieldFrameResource: {
             bounds_uv_m: number[];
+            full_bounds_uv_m: number[];
             normal: number[];
             origin_m: number[];
             u_axis: number[];
@@ -12256,21 +12257,28 @@ export interface components {
         PlanarFieldOverlayState: {
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
+            contours_visible?: boolean;
             id: string;
+            mesh_visible?: boolean;
+            points_visible?: boolean;
             quantity_id: string;
             range: components["schemas"]["PlanarColorRangeState"];
             /** Format: double */
             raster_opacity: number;
             raster_visible: boolean;
+            streamlines_visible?: boolean;
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             vectors_visible: boolean;
             view_scope: components["schemas"]["PlanarViewScopeState"];
+            visible?: boolean;
         };
         PlanarFieldProbeResource: {
             /** Format: int32 */
             cell_id?: number | null;
             /** Format: int32 */
             element_id?: number | null;
+            nearest_node?: null | components["schemas"]["PlanarProbeNodeResource"];
+            nearest_node_status: string;
             occupancy: string;
             quantity_id: string;
             sampling_method: string;
@@ -12315,6 +12323,16 @@ export interface components {
             u_axis: number[];
             v_axis: number[];
         };
+        PlanarCropState: {
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+        };
         PlanarInteractionState: {
             /** Format: double */
             pan_u_m: number;
@@ -12323,6 +12341,8 @@ export interface components {
             /** Format: double */
             zoom: number;
         };
+        /** @enum {string} */
+        PlanarLayerModel: "legacy" | "layers";
         PlanarLayerState: {
             boundaries: boolean;
             bounds: boolean;
@@ -12433,6 +12453,23 @@ export interface components {
             opacity: number;
             /** Format: double */
             size: number;
+        };
+        PlanarProbeNodeResource: {
+            /** Format: double */
+            in_plane_distance_m: number;
+            kind: string;
+            /** Format: int32 */
+            node_id: number;
+            /** Format: double */
+            normal_offset_m: number;
+            /** Format: double */
+            scalar?: number | null;
+            /** Format: double */
+            u_m: number;
+            /** Format: double */
+            v_m: number;
+            vector?: number[] | null;
+            world_m: number[];
         };
         PlanarProfilePointResource: {
             /**
@@ -12609,11 +12646,14 @@ export interface components {
         PlanarVisualizationPatch: {
             colormap?: string | null;
             component?: null | components["schemas"]["PlanarFieldComponent"];
+            /** @description Omitted preserves the crop (unless the plane or source changes); `null` clears it. */
+            crop?: null | components["schemas"]["PlanarCropState"];
             default_slice?: null | components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
             /** @description Omitted preserves the list; a supplied list replaces it atomically. */
             field_overlays?: components["schemas"]["PlanarFieldOverlayState"][] | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
+            layer_model?: null | components["schemas"]["PlanarLayerModel"];
             layers?: null | components["schemas"]["PlanarLayerState"];
             multislice?: null | components["schemas"]["PlanarMultisliceState"];
             point_style?: null | components["schemas"]["PlanarPointStyleState"];
@@ -12634,11 +12674,13 @@ export interface components {
         PlanarVisualizationState: {
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
+            crop?: null | components["schemas"]["PlanarCropState"];
             default_slice: components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
             /** @description Additional quantities in the same physical planar view. */
             field_overlays?: components["schemas"]["PlanarFieldOverlayState"][];
             interaction: components["schemas"]["PlanarInteractionState"];
+            layer_model?: components["schemas"]["PlanarLayerModel"];
             layers: components["schemas"]["PlanarLayerState"];
             multislice?: components["schemas"]["PlanarMultisliceState"];
             point_style: components["schemas"]["PlanarPointStyleState"];
