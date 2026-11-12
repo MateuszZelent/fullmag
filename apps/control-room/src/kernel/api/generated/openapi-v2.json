@@ -27981,6 +27981,35 @@
         ],
         "type": "object"
       },
+      "PlanarCropState": {
+        "additionalProperties": false,
+        "description": "Session crop of the planar view: the sampled u/v window in meters.",
+        "properties": {
+          "u_max_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "u_min_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_max_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "v_min_m": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "u_min_m",
+          "u_max_m",
+          "v_min_m",
+          "v_max_m"
+        ],
+        "type": "object"
+      },
       "PlanarEmptyPolicySchema": {
         "enum": [
           "exclude_empty",
@@ -28113,6 +28142,15 @@
       "PlanarFieldFrameResource": {
         "properties": {
           "bounds_uv_m": {
+            "description": "Sampled u/v window; equals `full_bounds_uv_m` without a window.",
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "full_bounds_uv_m": {
+            "description": "Full u/v bounds of the resolved frame.",
             "items": {
               "format": "double",
               "type": "number"
@@ -28153,7 +28191,8 @@
           "u_axis",
           "v_axis",
           "normal",
-          "bounds_uv_m"
+          "bounds_uv_m",
+          "full_bounds_uv_m"
         ],
         "type": "object"
       },
@@ -28434,7 +28473,7 @@
       },
       "PlanarFieldOverlayState": {
         "additionalProperties": false,
-        "description": "Presentation of an additional field on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
+        "description": "One field layer on the base source's physical plane.\nSource, operator, resolution and interaction are shared with the base view.",
         "properties": {
           "colormap": {
             "type": "string"
@@ -28442,8 +28481,17 @@
           "component": {
             "$ref": "#/components/schemas/PlanarFieldComponent"
           },
+          "contours_visible": {
+            "type": "boolean"
+          },
           "id": {
             "type": "string"
+          },
+          "mesh_visible": {
+            "type": "boolean"
+          },
+          "points_visible": {
+            "type": "boolean"
           },
           "quantity_id": {
             "type": "string"
@@ -28458,6 +28506,9 @@
           "raster_visible": {
             "type": "boolean"
           },
+          "streamlines_visible": {
+            "type": "boolean"
+          },
           "vector_style": {
             "$ref": "#/components/schemas/PlanarVectorStyleState"
           },
@@ -28466,6 +28517,10 @@
           },
           "view_scope": {
             "$ref": "#/components/schemas/PlanarViewScopeState"
+          },
+          "visible": {
+            "description": "Layer visibility; absent in layers persisted before the flag.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -28499,6 +28554,21 @@
               "integer",
               "null"
             ]
+          },
+          "nearest_node": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarProbeNodeResource",
+                "description": "Nearest FEM node or FDM cell centre when `nearest=node` was requested\nand `nearest_node_status` is `ok`."
+              }
+            ]
+          },
+          "nearest_node_status": {
+            "description": "`not_requested`, `ok`, `empty`, `unsupported_operator` or\n`unsupported_quantity`.",
+            "type": "string"
           },
           "occupancy": {
             "type": "string"
@@ -28552,7 +28622,8 @@
           "v_m",
           "world_m",
           "occupancy",
-          "sampling_method"
+          "sampling_method",
+          "nearest_node_status"
         ],
         "type": "object"
       },
@@ -28706,6 +28777,14 @@
           "pan_v_m"
         ],
         "type": "object"
+      },
+      "PlanarLayerModel": {
+        "description": "How the planar view composes its fields.\n\n`Legacy`: the base fields (`quantity_id`, `component`, `colormap`, ...) are\ndrawn under `field_overlays`. `Layers`: `field_overlays` is the single\nfield-layer list and the base sample only provides frame and section meta.",
+        "enum": [
+          "legacy",
+          "layers"
+        ],
+        "type": "string"
       },
       "PlanarLayerState": {
         "properties": {
@@ -29109,6 +29188,73 @@
           "color",
           "opacity",
           "size"
+        ],
+        "type": "object"
+      },
+      "PlanarProbeNodeResource": {
+        "description": "Nearest discretization node of a probe point (`eq-planar-nearest-node`):\nthe closest vertex of the containing FEM element, or the containing FDM\ncell centre, with its value without interpolation.",
+        "properties": {
+          "in_plane_distance_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "kind": {
+            "description": "`fem_node` or `fdm_cell_center`.",
+            "type": "string"
+          },
+          "node_id": {
+            "description": "Mesh node index or cell index.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "normal_offset_m": {
+            "description": "Signed distance of the node from the plane along the frame normal.",
+            "format": "double",
+            "type": "number"
+          },
+          "scalar": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "u_m": {
+            "description": "Projection of the node onto the frame.",
+            "format": "double",
+            "type": "number"
+          },
+          "v_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vector": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "world_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kind",
+          "node_id",
+          "world_m",
+          "u_m",
+          "v_m",
+          "in_plane_distance_m",
+          "normal_offset_m"
         ],
         "type": "object"
       },
@@ -29655,6 +29801,17 @@
               }
             ]
           },
+          "crop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarCropState",
+                "description": "Omitted preserves the crop (unless the plane or source changes);\n`null` clears it."
+              }
+            ]
+          },
           "default_slice": {
             "oneOf": [
               {
@@ -29688,6 +29845,16 @@
               },
               {
                 "$ref": "#/components/schemas/PlanarInteractionState"
+              }
+            ]
+          },
+          "layer_model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarLayerModel"
               }
             ]
           },
@@ -29837,6 +30004,17 @@
           "component": {
             "$ref": "#/components/schemas/PlanarFieldComponent"
           },
+          "crop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarCropState",
+                "description": "Sampling window (crop) in the u/v axes of the current frame; `None`\nsamples the full frame."
+              }
+            ]
+          },
           "default_slice": {
             "$ref": "#/components/schemas/DefaultPlanarSliceState"
           },
@@ -29847,7 +30025,7 @@
             ]
           },
           "field_overlays": {
-            "description": "Additional quantities in the same physical planar view.",
+            "description": "Field layers of the planar view (the wire name is kept for persisted\nsessions). Under `layer_model = layers` this is the only list of drawn\nfields; under `legacy` it holds the additional fields over the base.",
             "items": {
               "$ref": "#/components/schemas/PlanarFieldOverlayState"
             },
@@ -29855,6 +30033,10 @@
           },
           "interaction": {
             "$ref": "#/components/schemas/PlanarInteractionState"
+          },
+          "layer_model": {
+            "$ref": "#/components/schemas/PlanarLayerModel",
+            "description": "`legacy` for state persisted before field layers; restore migrates it\nto `layers` with [`migrate_planar_layer_model`]."
           },
           "layers": {
             "$ref": "#/components/schemas/PlanarLayerState"
@@ -58402,6 +58584,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -58635,6 +58854,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -58885,6 +59141,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -59047,6 +59340,15 @@
             }
           },
           {
+            "description": "`node` additionally returns the nearest FEM node or FDM cell centre\n(`eq-planar-nearest-node`); any other value is rejected.",
+            "in": "query",
+            "name": "nearest",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -59129,6 +59431,43 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -59405,6 +59744,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -59649,6 +60025,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -59879,6 +60292,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -60119,6 +60569,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -60374,6 +60861,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -60615,6 +61139,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -60870,6 +61431,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -61040,6 +61638,15 @@
             }
           },
           {
+            "description": "`node` additionally returns the nearest FEM node or FDM cell centre\n(`eq-planar-nearest-node`); any other value is rejected.",
+            "in": "query",
+            "name": "nearest",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "sample_token",
             "required": false,
@@ -61122,6 +61729,43 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
             }
           },
           {
@@ -61406,6 +62050,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -61658,6 +62339,43 @@
             }
           },
           {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
             "in": "query",
             "name": "expected_scene_revision",
             "required": false,
@@ -61896,6 +62614,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",
@@ -62144,6 +62899,43 @@
             "description": "Default source only: position fraction along the plane normal for this\nrequest instead of the session's `default_slice.position_fraction`\n(multislice panels, note 0970). The source hash, and with it the sample\nidentity, follows the overridden slice.",
             "in": "query",
             "name": "position_fraction",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "description": "Sampling window (crop) in the frame's u/v axes, meters. All four or\nnone; clipped to the full frame bounds (`eq-planar-sampling-window`).",
+            "in": "query",
+            "name": "window_u_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_u_max_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_min_m",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "window_v_max_m",
             "required": false,
             "schema": {
               "format": "double",

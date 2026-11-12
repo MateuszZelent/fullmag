@@ -12142,6 +12142,17 @@ export interface components {
             min?: number | null;
             mode: components["schemas"]["PlanarColorRangeMode"];
         };
+        /** @description Session crop of the planar view: the sampled u/v window in meters. */
+        PlanarCropState: {
+            /** Format: double */
+            u_max_m: number;
+            /** Format: double */
+            u_min_m: number;
+            /** Format: double */
+            v_max_m: number;
+            /** Format: double */
+            v_min_m: number;
+        };
         /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
@@ -12174,7 +12185,9 @@ export interface components {
         /** @enum {string} */
         PlanarFieldComponent: "c0" | "c1" | "c2" | "c3" | "c4" | "c5" | "c6" | "c7" | "c8" | "frobenius" | "spin_flow_x" | "spin_flow_y" | "spin_flow_z" | "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
         PlanarFieldFrameResource: {
+            /** @description Sampled u/v window; equals `full_bounds_uv_m` without a window. */
             bounds_uv_m: number[];
+            /** @description Full u/v bounds of the resolved frame. */
             full_bounds_uv_m: number[];
             normal: number[];
             origin_m: number[];
@@ -12251,7 +12264,7 @@ export interface components {
             partial: number;
         };
         /**
-         * @description Presentation of an additional field on the base source's physical plane.
+         * @description One field layer on the base source's physical plane.
          *     Source, operator, resolution and interaction are shared with the base view.
          */
         PlanarFieldOverlayState: {
@@ -12270,6 +12283,7 @@ export interface components {
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             vectors_visible: boolean;
             view_scope: components["schemas"]["PlanarViewScopeState"];
+            /** @description Layer visibility; absent in layers persisted before the flag. */
             visible?: boolean;
         };
         PlanarFieldProbeResource: {
@@ -12278,6 +12292,10 @@ export interface components {
             /** Format: int32 */
             element_id?: number | null;
             nearest_node?: null | components["schemas"]["PlanarProbeNodeResource"];
+            /**
+             * @description `not_requested`, `ok`, `empty`, `unsupported_operator` or
+             *     `unsupported_quantity`.
+             */
             nearest_node_status: string;
             occupancy: string;
             quantity_id: string;
@@ -12323,16 +12341,6 @@ export interface components {
             u_axis: number[];
             v_axis: number[];
         };
-        PlanarCropState: {
-            /** Format: double */
-            u_max_m: number;
-            /** Format: double */
-            u_min_m: number;
-            /** Format: double */
-            v_max_m: number;
-            /** Format: double */
-            v_min_m: number;
-        };
         PlanarInteractionState: {
             /** Format: double */
             pan_u_m: number;
@@ -12341,7 +12349,14 @@ export interface components {
             /** Format: double */
             zoom: number;
         };
-        /** @enum {string} */
+        /**
+         * @description How the planar view composes its fields.
+         *
+         *     `Legacy`: the base fields (`quantity_id`, `component`, `colormap`, ...) are
+         *     drawn under `field_overlays`. `Layers`: `field_overlays` is the single
+         *     field-layer list and the base sample only provides frame and section meta.
+         * @enum {string}
+         */
         PlanarLayerModel: "legacy" | "layers";
         PlanarLayerState: {
             boundaries: boolean;
@@ -12454,17 +12469,32 @@ export interface components {
             /** Format: double */
             size: number;
         };
+        /**
+         * @description Nearest discretization node of a probe point (`eq-planar-nearest-node`):
+         *     the closest vertex of the containing FEM element, or the containing FDM
+         *     cell centre, with its value without interpolation.
+         */
         PlanarProbeNodeResource: {
             /** Format: double */
             in_plane_distance_m: number;
+            /** @description `fem_node` or `fdm_cell_center`. */
             kind: string;
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Mesh node index or cell index.
+             */
             node_id: number;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Signed distance of the node from the plane along the frame normal.
+             */
             normal_offset_m: number;
             /** Format: double */
             scalar?: number | null;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Projection of the node onto the frame.
+             */
             u_m: number;
             /** Format: double */
             v_m: number;
@@ -12646,7 +12676,6 @@ export interface components {
         PlanarVisualizationPatch: {
             colormap?: string | null;
             component?: null | components["schemas"]["PlanarFieldComponent"];
-            /** @description Omitted preserves the crop (unless the plane or source changes); `null` clears it. */
             crop?: null | components["schemas"]["PlanarCropState"];
             default_slice?: null | components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
@@ -12677,9 +12706,17 @@ export interface components {
             crop?: null | components["schemas"]["PlanarCropState"];
             default_slice: components["schemas"]["DefaultPlanarSliceState"];
             display_unit?: string | null;
-            /** @description Additional quantities in the same physical planar view. */
+            /**
+             * @description Field layers of the planar view (the wire name is kept for persisted
+             *     sessions). Under `layer_model = layers` this is the only list of drawn
+             *     fields; under `legacy` it holds the additional fields over the base.
+             */
             field_overlays?: components["schemas"]["PlanarFieldOverlayState"][];
             interaction: components["schemas"]["PlanarInteractionState"];
+            /**
+             * @description `legacy` for state persisted before field layers; restore migrates it
+             *     to `layers` with [`migrate_planar_layer_model`].
+             */
             layer_model?: components["schemas"]["PlanarLayerModel"];
             layers: components["schemas"]["PlanarLayerState"];
             multislice?: components["schemas"]["PlanarMultisliceState"];
@@ -23895,6 +23932,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -23993,6 +24038,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24098,6 +24151,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24181,6 +24242,11 @@ export interface operations {
                 position_m?: number;
                 u_m: number;
                 v_m: number;
+                /**
+                 * @description `node` additionally returns the nearest FEM node or FDM cell centre
+                 *     (`eq-planar-nearest-node`); any other value is rejected.
+                 */
+                nearest?: string;
                 sample_token?: string;
                 component?: string;
                 resolution_x?: number;
@@ -24192,6 +24258,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24286,6 +24360,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24378,6 +24460,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24469,6 +24559,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24567,6 +24665,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24665,6 +24771,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24764,6 +24878,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24863,6 +24985,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -24947,6 +25077,11 @@ export interface operations {
                 position_m?: number;
                 u_m: number;
                 v_m: number;
+                /**
+                 * @description `node` additionally returns the nearest FEM node or FDM cell centre
+                 *     (`eq-planar-nearest-node`); any other value is rejected.
+                 */
+                nearest?: string;
                 sample_token?: string;
                 component?: string;
                 resolution_x?: number;
@@ -24958,6 +25093,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -25053,6 +25196,14 @@ export interface operations {
                 scope_region_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -25146,6 +25297,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -25238,6 +25397,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
@@ -25337,6 +25504,14 @@ export interface operations {
                  *     identity, follows the overridden slice.
                  */
                 position_fraction?: number;
+                /**
+                 * @description Sampling window (crop) in the frame's u/v axes, meters. All four or
+                 *     none; clipped to the full frame bounds (`eq-planar-sampling-window`).
+                 */
+                window_u_min_m?: number;
+                window_u_max_m?: number;
+                window_v_min_m?: number;
+                window_v_max_m?: number;
                 expected_scene_revision?: string;
                 expected_monitor_revision?: string;
                 expected_source_revision?: string;
