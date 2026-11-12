@@ -144,8 +144,26 @@ rozpoczęta faza i błąd blokują automatyczne ponowienie. Błąd publikacji jo
 po zapisaniu wyniku jest stanem nieznanym, nie potwierdzeniem sukcesu.
 Archiwizacja używa wyłącznie `/usr/bin/tar` z minimalnym środowiskiem;
 odziedziczone `PATH` i `TAR_OPTIONS` nie mogą zmienić uprzywilejowanej operacji.
-Integracja etapu z nadrzędnym sterownikiem i wykonanie rzeczywistej kopii nadal
-pozostają **NOT VERIFIED**.
+`docker_dev_data_volume_copy.py` wiąże etap z istniejącym stopem grupy,
+blokadą hosta, lease kontrolera i żywym helperem pięciu guardów. Przed kopią
+ponawia pełną obserwację zatrzymanych kontenerów i konsumentów pod guardami.
+Zmiana ID, StartedAt, konfiguracji lub native stop proof powoduje odmowę.
+Recepta `docker-dev-data-volume-copy` przyjmuje zamknięte argv i nie wykonuje
+drainu, uruchomienia ani ponowienia Solve.
+
+`docker_data_volume_copy_job.py` obserwuje ten sam proces WSL aż do jego
+zakończenia oraz zgodnego terminalnego receiptu i journalu. Kontrolowany błąd
+obserwacji, brak receiptu lub przerwanie nie wypuszczają supervisora poza
+zakres hostowego flock. Pierwszy błąd jest zachowany i zgłaszany po bezpiecznym
+potwierdzeniu terminalu; nie uruchamia się nowego procesu i nie zabija starego.
+Jeśli potwierdzenie nie jest możliwe, supervisor i guardy pozostają zachowane
+do recovery. Twarda śmierć całego supervisora wymaga osobnego uzgodnienia
+zachowanych lease i native guardów; nie deklarujemy przeżycia hostowego flock
+po `SIGKILL` jego właściciela.
+
+Integracja źródłowa obejmuje wyłącznie kopię. Rzeczywista kopia, przełączenie
+bindów, admission, odtworzenie grupy, kwalifikacja Zarr, rejestracja i usunięcie
+starych duplikatów pozostają **NOT VERIFIED**.
 
 ## Weryfikacja
 

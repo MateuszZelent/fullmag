@@ -79,6 +79,22 @@ class DataVolumeShellTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(result.stdout)
 
+    def test_copy_recipe_is_closed_and_does_not_prepare_storage(self):
+        repo=Path(__file__).resolve().parents[1]
+        source='/selected/worktree with spaces/$(printf injected);literal'
+        args=[source,'a'*32,'b'*32,'c'*64]
+        dry=subprocess.run(['just','--justfile',str(repo/'justfile'),'--dry-run',
+            'docker-dev-data-volume-copy',*args],capture_output=True,timeout=15)
+        self.assertEqual(dry.returncode,0,dry.stderr)
+        recipe=dry.stderr.decode().strip()
+        result=self.dispatch(recipe,'docker_dev_data_volume_copy.py')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.split(b'\0'),[b'--source-root',source.encode(),b'--volume-id',b'a'*32,
+            b'--stop-attempt',b'b'*32,b'--stop-sha256',b'c'*64])
+        for tail in ('; printf injected',' --force',' --request bad'):
+            bad=self.dispatch(recipe+tail,'docker_dev_data_volume_copy.py')
+            self.assertEqual(bad.returncode,2);self.assertFalse(bad.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

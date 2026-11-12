@@ -87,6 +87,16 @@ fi
 
 # Closed scientific route, before diagnostic/storage shortcuts; never eval argv.
 case "${recipe}" in
+  *"scripts/docker_dev_data_volume_copy.py"*)
+    volume_copy_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_dev_data_volume_copy.py\" --source-root '([^']+)' --volume-id '([0-9a-f]{32})' --stop-attempt '([0-9a-f]{32})' --stop-sha256 '([0-9a-f]{64})'[[:space:]]*$"
+    if [[ ! "${recipe}" =~ ${volume_copy_pattern} ]]; then
+      echo "[fullmag just] invalid guarded data-volume copy recipe" >&2
+      exit 2
+    fi
+    exec "${python_cmd}" -B "${script_dir}/docker_dev_data_volume_copy.py" \
+      --source-root "${BASH_REMATCH[1]}" --volume-id "${BASH_REMATCH[2]}" \
+      --stop-attempt "${BASH_REMATCH[3]}" --stop-sha256 "${BASH_REMATCH[4]}"
+    ;;
   *"scripts/docker_data_volume_linux.py"*)
     linux_volume_pattern="^[^[:space:]]+ \"[^\"]+/scripts/docker_data_volume_linux.py\" (probe|preflight|format-mount) --source-root '([^']+)' --wsl-distro '([A-Za-z0-9_-]{1,80})'( --request '([^']+)' --request-sha256 '([0-9a-f]{64})')?( --formatter-sha256 '([0-9a-f]{64})')?[[:space:]]*$"
     if [[ ! "${recipe}" =~ ${linux_volume_pattern} ]]; then

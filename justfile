@@ -219,6 +219,10 @@ docker-dev-data-volume-preflight source_root wsl_distro request request_sha256:
 docker-dev-data-volume-format source_root wsl_distro request request_sha256 formatter_sha256:
     @{{storage_python}} "{{repo_root}}/scripts/docker_data_volume_linux.py" format-mount --source-root {{quote(source_root)}} --wsl-distro {{quote(wsl_distro)}} --request {{quote(request)}} --request-sha256 {{quote(request_sha256)}} --formatter-sha256 {{quote(formatter_sha256)}}
 
+# Copy an already mounted volume after an exact managed terminal stop; no cutover.
+docker-dev-data-volume-copy source_root volume_id stop_attempt stop_sha256:
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_data_volume_copy.py" --source-root {{quote(source_root)}} --volume-id {{quote(volume_id)}} --stop-attempt {{quote(stop_attempt)}} --stop-sha256 {{quote(stop_sha256)}}
+
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
