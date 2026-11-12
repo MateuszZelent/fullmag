@@ -160,6 +160,24 @@ class DataVolumeArchiveTests(unittest.TestCase):
             self.assertEqual((occupied / 'keep').read_bytes(), b'other')
             self.assertFalse((base / 'new.tar').exists())
 
+    def test_archive_does_not_inherit_tar_options_or_a_path_lookalike(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory); source = base/'source'; target = base/'target'
+            source.mkdir(); target.mkdir()
+            user = source/'user'; state = source/'state'; user.mkdir(); state.mkdir()
+            (user/'chunk').write_bytes(b'complete saved result')
+            binaries = base/'bin'; binaries.mkdir()
+            fake = binaries/'tar'
+            fake.write_text('#!/bin/sh\nexit 89\n'); fake.chmod(0o700)
+            # Previously the inherited PATH selected this unrelated executable;
+            # TAR_OPTIONS could also silently exclude every scientific chunk.
+            with mock.patch.dict(os.environ, {'PATH':str(binaries)+':'+os.environ.get('PATH',''),
+                                             'TAR_OPTIONS':'--exclude=*'}):
+                report = volume_fs.archive_and_extract(source, {'user_data':user,'state':state},
+                    target/'original.tar',target/'payload')
+            self.assertEqual(report['state'],'copied-and-verified')
+            self.assertEqual((target/'payload/user/chunk').read_bytes(),b'complete saved result')
+
     def test_new_device_selection_refuses_prior_or_ambiguous_devices(self):
         old = [{'path': '/dev/sda', 'type': 'disk', 'size': 100, 'fstype': 'ext4',
                 'uuid': 'source', 'mountpoints': ['/'], 'children': [], 'ro': False}]

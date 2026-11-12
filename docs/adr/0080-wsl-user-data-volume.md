@@ -130,6 +130,23 @@ kopii pozwala na release. [Opcja Docker](https://docs.docker.com/reference/cli/d
 Te moduły nie wykonują samego transferu, drainu ani admission; ich integracja
 z pełnym sterownikiem i rzeczywiste wykonanie pozostają **NOT VERIFIED**.
 
+Etap `linux_data_volume_copy.py` wykonuje zachowującą metadane kopię dopiero po
+uwierzytelnieniu pierwotnych inode, bootu WSL, receiptu formattera, UUID/dev/inode
+nowego mountu i markera jego własności. Zamknięty request przypina źródła etapu,
+terminalny drain grupy i obserwację pięciu guardów. Zapisana obserwacja nie
+zastępuje ich żywej blokady: nadrzędny sterownik musi utrzymywać helper i lease
+do potwierdzonego zakończenia procesu kopii, także po przerwaniu kanału IPC.
+
+Etap tworzy nowe archiwum PAX oraz payload, porównuje pełny manifest i zapisuje
+osobny terminalny receipt `copied-and-verified-not-switched`. Nie zmienia bindów,
+admission, rejestracji ani oryginałów. Częściowe pliki zachowuje; istniejący cel,
+rozpoczęta faza i błąd blokują automatyczne ponowienie. Błąd publikacji journalu
+po zapisaniu wyniku jest stanem nieznanym, nie potwierdzeniem sukcesu.
+Archiwizacja używa wyłącznie `/usr/bin/tar` z minimalnym środowiskiem;
+odziedziczone `PATH` i `TAR_OPTIONS` nie mogą zmienić uprzywilejowanej operacji.
+Integracja etapu z nadrzędnym sterownikiem i wykonanie rzeczywistej kopii nadal
+pozostają **NOT VERIFIED**.
+
 ## Weryfikacja
 
 Lekkie testy obejmują zamknięte rejestracje, UUID/inode, aliasowanie datasetów,

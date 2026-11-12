@@ -20,6 +20,7 @@ except ImportError:
 
 
 COPY_HEADROOM_BYTES = 25 * 1024**3
+ARCHIVE_ENV = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C', 'LANG':'C'}
 
 
 def sha256_file(path):
@@ -84,8 +85,11 @@ def _require_owned_parent(descriptor):
 
 
 def _run_to_file(argv, output, error_name, *, parent_fd, pass_fds=()):
+    if not argv or argv[0] != '/usr/bin/tar':
+        raise ValueError('Only the fixed system archive tool is allowed')
     with _exclusive_at(parent_fd, error_name) as errors:
         result = subprocess.run(argv, stdout=output, stderr=errors,
+                                stdin=subprocess.DEVNULL, env=ARCHIVE_ENV,
                                 pass_fds=pass_fds, check=False)
         errors.flush(); os.fsync(errors.fileno())
         if result.returncode:
@@ -127,7 +131,7 @@ def archive_and_extract(storage_root, roots, archive_path, payload_root):
         if available.f_bavail * available.f_frsize < 2*before['totals']['logical_bytes'] + COPY_HEADROOM_BYTES:
             raise ValueError('Destination lacks archive plus payload and 25 GiB campaign headroom')
         output = stack.enter_context(_exclusive_at(archive_parent_fd, archive.name))
-        create = ['tar', '--format=pax', '--acls', '--xattrs', '--numeric-owner',
+        create = ['/usr/bin/tar', '--format=pax', '--acls', '--xattrs', '--numeric-owner',
                   '--one-file-system', '--pax-option=delete=atime,delete=ctime',
                   '-c', '-f', '-', '-C', '/proc/self/fd/' + str(source_fd), '--', *relatives]
         _run_to_file(create, output, archive.name + '.create.stderr',
@@ -155,7 +159,7 @@ def archive_and_extract(storage_root, roots, archive_path, payload_root):
                 opened.st_uid != os.geteuid() or stat.S_IMODE(opened.st_mode) != 0o700 or
                 os.listdir(payload_fd)):
             raise ValueError('New extraction root was replaced before it was pinned')
-        extract = ['tar', '--acls', '--xattrs', '--xattrs-include=*', '--numeric-owner',
+        extract = ['/usr/bin/tar', '--acls', '--xattrs', '--xattrs-include=*', '--numeric-owner',
                    '--same-owner', '--same-permissions', '--delay-directory-restore',
                    '--keep-old-files', '-x', '-f', '/proc/self/fd/' + str(output.fileno()),
                    '-C', '/proc/self/fd/' + str(payload_fd)]
