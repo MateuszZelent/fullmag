@@ -94,10 +94,23 @@ class Client:
         return json.loads(self.get(path, query))
 
 
+def current_identity(client):
+    status = json.loads(client.get("/v2/sessions/current/status", expected_status=(200, 404)))
+    require(isinstance(status, dict), "invalid current workspace status")
+    if status.get("code") == "not_found":
+        require(status.get("error") == "no active local live workspace"
+                and status.get("message") == "no active local live workspace",
+                "unexpected missing workspace response")
+        return None
+    require("code" not in status and isinstance(status.get("session"), dict) and "run" in status
+            and (status["run"] is None or isinstance(status["run"], dict)), "invalid current workspace status")
+    return {key: status[key] for key in ("session", "run")}
+
+
 def verify_http(client, expectations):
     require(expectations["schema"] == "fullmag.archived_solution_http_expectations.v1"
             and len(expectations["runs"]) == 4, "four pinned archived runs required")
-    status_before = client.json("/v2/sessions/current/status")
+    status_before = current_identity(client)
     discovery = []
     for project in sorted({run["project_id"] for run in expectations["runs"]}):
         route = "/v2/persistence/projects/" + quote(project, safe="") + "/runs"
@@ -166,9 +179,8 @@ def verify_http(client, expectations):
                 proof["geometry_nodes"] = int(geometry["node_count"])
             fields.append({"field_id": expected["field_id"], **proof})
         results.append({"run_id": run["run_id"], "label": run["label"], "execution_status": run["execution_status"], "fields": fields})
-    status_after = client.json("/v2/sessions/current/status")
-    for key in ("session", "run"):
-        require(status_before.get(key) == status_after.get(key), "current authoring identity changed during GET checks")
+    status_after = current_identity(client)
+    require(status_before == status_after, "current authoring identity changed during GET checks")
     return {"schema": "fullmag.archived_solution_http_readback.v1", "status": "pass", "request_count": client.requests,
             "runs": results, "run_discovery": discovery, "new_solve": False, "mutating_http_requests": 0,
             "qualification": "NOT VERIFIED", "qualified_basis": False,

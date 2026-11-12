@@ -4,8 +4,9 @@ import hashlib
 import json
 import struct
 import unittest
+from unittest.mock import Mock
 
-from verify_archived_solution_http import Client, MAX_METADATA, verify_slice
+from verify_archived_solution_http import Client, MAX_METADATA, current_identity, verify_slice
 
 
 class ArchivedSliceVerificationTests(unittest.TestCase):
@@ -88,6 +89,29 @@ class ArchivedSliceVerificationTests(unittest.TestCase):
         for raw in (b"FMDS\x01\x00\x00\x00" + struct.pack("<I", MAX_METADATA + 1), self.body()[:20], b"wrong"):
             with self.subTest(length=len(raw)), self.assertRaises(ValueError):
                 verify_slice(raw, self.expected, self.run)
+
+    def test_current_identity_accepts_an_absent_live_workspace(self):
+        client = Mock()
+        client.get.return_value = json.dumps(dict(code="not_found", error="no active local live workspace",
+                                                 message="no active local live workspace")).encode()
+        self.assertIsNone(current_identity(client))
+        client.get.assert_called_once_with("/v2/sessions/current/status", expected_status=(200, 404))
+
+    def test_current_identity_preserves_active_session_and_run(self):
+        client = Mock()
+        status = dict(session=dict(session_id="session-a"), run=dict(run_id="run-a"), metrics=dict(step=12))
+        client.get.return_value = json.dumps(status).encode()
+        self.assertEqual(current_identity(client), dict(session=status["session"], run=status["run"]))
+        client.get.return_value = json.dumps(dict(status, run=None)).encode()
+        self.assertEqual(current_identity(client), dict(session=status["session"], run=None))
+
+    def test_current_identity_rejects_other_errors_and_malformed_status(self):
+        for status in (None, [], {}, dict(code="not_found", error="different missing resource"),
+                       dict(code="store_busy", error="no active local live workspace")):
+            client = Mock()
+            client.get.return_value = json.dumps(status).encode()
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                current_identity(client)
 
     def test_http_origin_cannot_redirect_to_remote_authority(self):
         for origin in ("https://127.0.0.1", "http://example.com", "http://user@127.0.0.1", "http://127.0.0.1/path"):
