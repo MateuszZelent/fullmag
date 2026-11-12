@@ -109,6 +109,18 @@ do rzeczywistego migratora wymagany jest trwały interlock blokujący zwykły
 startup w częściowo przełączonym stanie; sam hostlock nie przetrwa zabicia
 całego supervisora. To zobowiązanie integracji, nie dowód jej wykonania.
 
+Odczytowy interlock `fullmag_data_volume_pending` rozpoznaje niezmienny marker
+`index/data-volumes/<worktree_id>.pending.json`. Migrator ma go opublikować
+po potwierdzonej kopii i przed pierwszym rename, poza oboma datasetami, pod
+ciągłymi guardami. Marker wiąże dokładny projekt, checkout, grupę, wolumen,
+oba kanoniczne rooty oraz SHA planu, requestu Linux i kopii. Domyślny launcher
+odmawia przed pierwszym zapisem, także gdy brak zwykłej rejestracji. Uszkodzony,
+obcy lub niepełny marker oznacza odmowę; nie uruchamia recovery automatycznie.
+Końcowa pasująca rejestracja nadal musi przejść pełne guardy UUID/inode.
+Marker pozostaje historycznie zachowany. Grupy bez markerów nie zmieniają
+zachowania. Implementacja interlocka nie publikuje markerów i nie udziela
+wyjątku migracyjnemu recreate; te dwa etapy wymagają osobnej integracji.
+
 Decyzja nie zmienia Python DSL, ProblemIR, fizyki, backendu realizującego krok,
 OpenAPI ani zachowania UI. Migracja nie powtarza Solve. Dane wymagane do
 interpretacji i wznowienia pozostają na hostowym ext4 lub w pełnym Zarr.

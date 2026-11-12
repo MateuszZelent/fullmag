@@ -51,6 +51,7 @@ jobs:
           python -B -m unittest
           scripts.test_fullmag_data_volume scripts.test_fullmag_data_volume_manifest
           scripts.test_fullmag_data_volume_fs scripts.test_fullmag_data_volume_guard
+          scripts.test_fullmag_data_volume_pending
           scripts.test_linux_native_data_volume_migration scripts.test_linux_native_host
           scripts.test_linux_native_readmission scripts.test_docker_linux_native_readmission
           scripts.test_linux_native_probe scripts.test_docker_dev_storage

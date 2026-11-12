@@ -328,6 +328,11 @@ def verify_registered_volume(
     registration_path = (
         storage_root / "index" / "data-volumes" / f"{worktree_id}.json"
     )
+    try:
+        from .fullmag_data_volume_pending import read_pending, require_registration
+    except ImportError:
+        from fullmag_data_volume_pending import read_pending, require_registration
+    pending = read_pending(layout, compose_project)
 
     index_raw = _read_optional_regular(
         index_path, "worktree index", maximum=_MAX_INDEX_BYTES
@@ -342,10 +347,12 @@ def verify_registered_volume(
         else None
     )
     if index is None and registration_raw is None:
+        require_registration(pending, None)
         return None
     if (registration_raw is None) != (reference is None):
         _fail("data-volume registration and worktree index reference must both exist")
     if registration_raw is None or reference is None:
+        require_registration(pending, None)
         return None
 
     if type(compose_project) is not str or not compose_project or "/" in compose_project or "\\" in compose_project:
@@ -361,6 +368,7 @@ def verify_registered_volume(
     if hashlib.sha256(registration_raw).hexdigest() != reference["sha256"]:
         _fail("data-volume registration SHA-256 differs from the worktree index")
     registration = _model.validate_registration(registration)
+    require_registration(pending, registration)
     if reference["volume_id"] != registration["volume_id"]:
         _fail("data-volume registration volume_id differs from the worktree index")
     if (
