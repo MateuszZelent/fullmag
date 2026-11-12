@@ -105,6 +105,24 @@ def _mounted_root(linux, provision):
     return target
 
 
+def validate_held_fence(held,token,volume_id,process_receipt_sha256):
+    """Authenticate the common five-guard snapshot; the caller holds it live."""
+    qualification.require(set(held) == {'schema','state','token','volume_id','observation'} and
+        held['schema'] == 'fullmag.data-copy-fence-event.v1' and held['state'] == 'held' and
+        held['volume_id'] == volume_id and held['token'] == token and
+        held['observation'].get('schema') == 'fullmag.data-volume-copy-fences.v1' and
+        held['observation'].get('authentication',{}).get('process_receipt_sha256') == process_receipt_sha256 and
+        held['observation'].get('authentication',{}).get('released',{}).get('active_count') == 0,
+        'Held copy-fence evidence differs from the terminal native drain')
+    locks = held['observation'].get('locks')
+    expected = ['/opt/fullmag/runtime-control/runtime-services/'+k+'.lock' for k in ('STARTUP-GATE','LAUNCH','OWNER')]
+    expected += ['/host-ledger/ledger/WRITER.lock','/state/runs/docker-all/session-store/WRITER.lock']
+    qualification.require(type(locks) is list and len(locks) == 5 and
+        [p.get('path') for p in locks] == expected and
+        all(set(p) == {'path','device','inode'} and all(type(p[k]) is int and p[k] > 0 for k in ('device','inode')) for p in locks) and
+        len({(p['device'],p['inode']) for p in locks}) == 5, 'All five distinct copy locks must be pinned')
+
+
 def load_context(request_path, request_sha256):
     """Authenticate existing inputs without creating an archive or directory."""
     qualification.require(os.name == 'posix' and os.geteuid() == 0, 'Host root required for metadata-preserving copy')
@@ -145,20 +163,7 @@ def load_context(request_path, request_sha256):
         all(type(drain[k]) is str and re.fullmatch('[0-9a-f]{64}',drain[k])
             for k in ('stop_sha256','process_receipt_sha256')), 'Exact managed stop pins required')
     _, held = qualification._read(op/'copy-fence-ready.json', request['fence_ready_sha256'])
-    qualification.require(set(held) == {'schema','state','token','volume_id','observation'} and
-        held['schema'] == 'fullmag.data-copy-fence-event.v1' and held['state'] == 'held' and
-        held['volume_id'] == request['volume_id'] and held['token'] == request['token'] and
-        held['observation'].get('schema') == 'fullmag.data-volume-copy-fences.v1' and
-        held['observation'].get('authentication',{}).get('process_receipt_sha256') == drain['process_receipt_sha256'] and
-        held['observation'].get('authentication',{}).get('released',{}).get('active_count') == 0,
-        'Held copy-fence evidence differs from the terminal native drain')
-    locks = held['observation'].get('locks')
-    expected = ['/opt/fullmag/runtime-control/runtime-services/'+k+'.lock' for k in ('STARTUP-GATE','LAUNCH','OWNER')]
-    expected += ['/host-ledger/ledger/WRITER.lock','/state/runs/docker-all/session-store/WRITER.lock']
-    qualification.require(type(locks) is list and len(locks) == 5 and
-        [p.get('path') for p in locks] == expected and
-        all(set(p) == {'path','device','inode'} and all(type(p[k]) is int and p[k] > 0 for k in ('device','inode')) for p in locks) and
-        len({(p['device'],p['inode']) for p in locks}) == 5, 'All five distinct copy locks must be pinned')
+    validate_held_fence(held,request['token'],request['volume_id'],drain['process_receipt_sha256'])
     journal_path, journal = qualification._selected_journal(op)
     qualification.require(journal['volume_id'] == request['volume_id'] and
         journal['request_sha256'] == qualification.digest(plan_raw) and next_phase(journal) == 'copy-verified' and
