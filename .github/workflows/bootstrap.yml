@@ -65,19 +65,39 @@ jobs:
           import gzip,hashlib,subprocess
           from pathlib import Path
           packed=Path('.github/antenna-completed-receipt/source.patch.gz').read_bytes()
-          assert hashlib.sha256(packed).hexdigest() == '9c3e197e5374441df3e5bc8dc544fb87d7965cd872acc5c7fc193fcd85fc609c'
+          assert hashlib.sha256(packed).hexdigest() == 'cd81f2c884805ac0b10790c9af6d116155b5fbffa07f6471dd46a8ff66723032'
           patch=gzip.decompress(packed)
-          assert len(patch) == 1505416
-          assert hashlib.sha256(patch).hexdigest() == '9c1d9e5f5b21a6afb2e3915ee98fb5e1f802393ee172d005569e92688f77d655'
+          assert len(patch) == 1509276
+          assert hashlib.sha256(patch).hexdigest() == 'fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7'
           subprocess.run(['git','apply','--check','--whitespace=nowarn','-'],input=patch,check=True)
           subprocess.run(['git','apply','--whitespace=nowarn','-'],input=patch,check=True)
-          print('Verified exact Rust source delta: 9c1d9e5f5b21a6afb2e3915ee98fb5e1f802393ee172d005569e92688f77d655')
+          print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
+          PY
+
+      - name: Reproduce publication re-entry (CI mutation only)
+        run: |
+          python -B - <<'PY'
+          import hashlib
+          from pathlib import Path
+          p=Path('crates/fullmag-api/src/accepted_study_worker.rs')
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == 'c2cf07ff3e9c12ede66c54ed823ee474037a74a28c3b30e30836aa50067ae1b7'
+          text=p.read_text()
+          before="""    let durable_execution = recover_accepted_completion_for_publication(
+                  &receipt_store, accepted, start, &accepted_step, &execution,
+              )"""
+          after="""    let durable_execution = execute_accepted_worker_start_from_snapshot(
+                  &receipt_store, accepted, start, &accepted_step, "default", None,
+              )"""
+          assert text.count(before)==1
+          p.write_text(text.replace(before,after))
+          print('CI-ONLY mutation restored launcher re-entry; real public-flow regression must fail')
           PY
 
       - name: Run actual completed receipt and existing worker regressions
         run: |
           set -o pipefail
           cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker:: -- --nocapture 2>&1 | tee antenna-worker-contracts.log
+          cargo test --locked -p fullmag-api --bin fullmag-api explicit_project_run_submit_is_durable_and_replays_without_live_session -- --nocapture 2>&1 | tee -a antenna-worker-contracts.log
 
       - name: Preserve contract log
         if: always()
