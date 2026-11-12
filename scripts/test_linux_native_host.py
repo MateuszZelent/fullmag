@@ -52,6 +52,38 @@ class LinuxNativeHostTests(unittest.TestCase):
                 self.assertEqual(evidence["host_attestation_sha256"],
                                  hashlib.sha256(certificate_path.read_bytes()).hexdigest())
 
+    def test_preflight_rejects_stale_namespace_inode_and_attestation(self):
+        for stale in ("inode", "attestation"):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as directory:
+                state = Path(directory)
+                certificate_path = state / host.CERTIFICATE_NAME
+                with patch.object(host, "local_volume", return_value=self.native(state)):
+                    certificate = host.attest(state, ASSEMBLY, "engine", {})
+                    host.publish_evidence(certificate_path, certificate)
+                    payload = host.read_owned_regular(state / ".linux-native-sentinel")
+                    host.publish_bytes(state / ".linux-native-restart", payload)
+                    probe = {
+                        "schema": "fullmag.linux-native-probe.v1",
+                        "storage_profile": host.PROFILE,
+                        "image_id": IMAGE,
+                        "owner_token": certificate["owner_token"],
+                        "root_inode": certificate["host_inode"] + (1 if stale == "inode" else 0),
+                        "host_attestation_sha256": (
+                            "0" * 64 if stale == "attestation" else
+                            hashlib.sha256(certificate_path.read_bytes()).hexdigest()
+                        ),
+                        "checks": {key: True for key in host.CHECKS},
+                    }
+                    host.publish_evidence(state / ".linux-native-probe.json", probe)
+                    original = certificate_path.read_bytes()
+                    with self.assertRaisesRegex(ValueError, "namespace identity"):
+                        host.complete_preflight(
+                            lambda *args, **kwargs: "stale retained bind", "container",
+                            state, certificate_path, certificate, log_writer=lambda output: None,
+                        )
+                    self.assertEqual(certificate_path.read_bytes(), original)
+                    self.assertFalse(certificate["restart_verified"])
+
     def test_recreate_retains_owner_and_refuses_another_engine(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
