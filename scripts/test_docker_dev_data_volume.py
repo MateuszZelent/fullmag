@@ -9,6 +9,43 @@ from unittest import mock
 from scripts import docker_dev_data_volume as controller
 
 
+class MigrationBindRoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.state = {'Status':'exited', 'Running':False, 'Paused':False,
+                      'Restarting':False, 'OOMKilled':False, 'Dead':False, 'Pid':0}
+
+    def test_exited_windows_reference_requires_its_own_physical_proof(self):
+        proof = {'schema':'fixture-physical-proof'}
+        with mock.patch.object(controller.stopped_windows, 'qualify_stopped_windows_bind', return_value=proof) as qualifier, \
+                mock.patch.object(controller, 'live_bind_path') as live:
+            self.assertEqual(controller._migration_bind_identity('C:/deleted/foreign', self.state), (None, proof))
+        qualifier.assert_called_once_with('C:/deleted/foreign', self.state)
+        live.assert_not_called()
+
+    def test_active_windows_missing_path_still_uses_strict_live_proof(self):
+        self.state.update(Status='running', Running=True, Pid=123)
+        with mock.patch.object(controller.stopped_windows, 'qualify_stopped_windows_bind') as qualifier, \
+                mock.patch.object(controller, 'live_bind_path', side_effect=ValueError('unproven')) as live, \
+                self.assertRaisesRegex(ValueError, 'unproven'):
+            controller._migration_bind_identity('C:/deleted/foreign', self.state)
+        qualifier.assert_not_called()
+        live.assert_called_once()
+
+    def test_linux_reference_never_uses_windows_missing_leaf_proof(self):
+        source = '/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/alias'
+        with mock.patch.object(controller.stopped_windows, 'qualify_stopped_windows_bind') as qualifier, \
+                mock.patch.object(controller, 'live_bind_path', return_value=Path('/actual/foreign')):
+            self.assertEqual(controller._migration_bind_identity(source, self.state), (Path('/actual/foreign'), None))
+        qualifier.assert_not_called()
+
+    def test_failed_windows_proof_cannot_fall_back_to_an_unrelated_route(self):
+        with mock.patch.object(controller.stopped_windows, 'qualify_stopped_windows_bind', side_effect=ValueError('reparse')) as qualifier, \
+                mock.patch.object(controller, 'live_bind_path') as live, \
+                self.assertRaisesRegex(ValueError, 'reparse'):
+            controller._migration_bind_identity('C:/deleted/foreign', self.state)
+        live.assert_not_called()
+
+
 class DataVolumePlanTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

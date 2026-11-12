@@ -21,6 +21,7 @@ from docker_development_inputs import select_checkout
 from docker_dev_host import local_volume, validate_host_path
 from docker_linux_native_readmission import live_bind_path
 from docker_volume_reconcile import fingerprint
+import data_volume_stopped_windows_bind as stopped_windows
 import fullmag_storage as storage
 import linux_native_host as host
 
@@ -32,7 +33,7 @@ CONTROLLERS = ('docker_dev_data_volume.py', 'fullmag_data_volume.py',
                'fullmag_data_volume_fs.py', 'fullmag_data_volume_manifest.py',
                'fullmag_data_volume_guard.py', 'linux_native_data_volume_migration.py',
                'linux_native_host.py', 'docker_dev.py', 'docker_volume_dev.py',
-               'fullmag_storage.py')
+               'fullmag_storage.py', 'data_volume_stopped_windows_bind.py')
 
 
 def _require(value, message):
@@ -42,6 +43,21 @@ def _require(value, message):
 
 def _sha(raw):
     return hashlib.sha256(raw).hexdigest()
+
+
+def _migration_bind_identity(value, container_state=None):
+    """A stopped Windows reference has a separate proof, never live admission."""
+    candidate = False
+    if container_state is not None:
+        try:
+            stopped_windows._require_stopped_state(container_state)
+            stopped_windows._canonical_windows_path(value)
+            candidate = True
+        except ValueError:
+            pass
+    if candidate:
+        return None, stopped_windows.qualify_stopped_windows_bind(value, container_state)
+    return live_bind_path(value), None
 
 
 def _sha_field(value):
@@ -132,16 +148,22 @@ def _observe_runtime(source, layout, control, pins):
         _require(local_volume(path).get('host_filesystem') == 'ext4', 'Source datasets must be ext4')
     ids = docker_capture('ps', '--all', '--no-trunc', '--format', '{{.ID}}').stdout.decode().split()
     actuals = _decode(docker_capture('inspect', *ids).stdout) if ids else []
-    services, consumers, bind_cache = {}, [], {}
-    def physical_bind(value):
+    services, consumers, bind_cache, stopped_proofs = {}, [], {}, []
+    def physical_bind(value, container_state=None):
         # Desktop can repeat the same Windows bind in many stopped containers.
         # Cache only within this read-only snapshot, never across actions.
-        if value not in bind_cache:
+        state_sha = _sha(canonical(container_state)) if container_state is not None else None
+        key = (value, state_sha)
+        if key not in bind_cache:
             try:
-                bind_cache[value] = (True, live_bind_path(value))
+                physical, proof = _migration_bind_identity(value, container_state)
+                if proof is not None:
+                    stopped_proofs.append({'source': value, 'container_state_sha256': state_sha,
+                                           'proof': proof})
+                bind_cache[key] = (True, physical)
             except (ValueError, RuntimeError, OSError) as error:
-                bind_cache[value] = (False, error)
-        success, result = bind_cache[value]
+                bind_cache[key] = (False, error)
+        success, result = bind_cache[key]
         if not success:
             raise result
         return result
@@ -172,7 +194,7 @@ def _observe_runtime(source, layout, control, pins):
                 consumers.append({'id': actual['Id'], 'reason': 'control-volume-reference'})
             if mount.get('Type') == 'bind':
                 try:
-                    physical = physical_bind(mount.get('Source'))
+                    physical = physical_bind(mount.get('Source'), actual.get('State'))
                     if physical is not None and any(
                         physical == p or physical in p.parents or p in physical.parents
                         for p in roots.values()
@@ -203,6 +225,7 @@ def _observe_runtime(source, layout, control, pins):
     return {'datasets': {role: {'canonical_root': str(p), 'device': p.stat().st_dev,
                                 'inode': p.stat().st_ino} for role, p in roots.items()},
             'services': services, 'consumers': consumers, 'engine_id': engine,
+            'stopped_windows_bind_proofs': stopped_proofs,
             'certificate_sha256': _sha(certificate_raw), 'compose_sha256': pins['config_sha256'],
             'runtime_source_commit': witness.get('source_commit'),
             'runtime_source_snapshot_sha256': witness.get('source_snapshot_sha256')}

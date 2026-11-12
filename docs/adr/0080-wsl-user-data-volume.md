@@ -101,6 +101,13 @@ uzgadnia istniejący własny obraz; nie formatuje go ponownie. Po nowych zapisac
 na ext4 nie wracamy do starszej kopii bez zachowania i uzgodnienia tych zapisów.
 Zerwanie mountu po restarcie powoduje odmowę, nigdy zapis do pustego underlay.
 
+Inwentaryzacja migracji może osobno kwalifikować referencję zatrzymanego
+kontenera do nieistniejącej już ścieżki Windows. Wymaga dokładnego stanu
+`exited`, PID 0 oraz odczytowego dowodu stałego NTFS/ReFS bez reparse points
+we wszystkich istniejących przodkach. Nie zmienia to ścisłego probe aktywnych
+bindów ani readmission runtime. Stan kontenera i proof trzeba odświeżyć przed
+przełączeniem; cache dotyczy tylko jednego snapshotu i uwzględnia stan kontenera.
+
 ## Weryfikacja
 
 Lekkie testy obejmują zamknięte rejestracje, UUID/inode, aliasowanie datasetów,
