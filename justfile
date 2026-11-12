@@ -203,6 +203,10 @@ docker-dev-stop-startup-diagnostic source_root image_id request request_sha256 a
 docker-dev-stop-diagnostic attempt config_sha256 source_root port="3197" resume_attempt="" preview="true":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" stop-diagnostic-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}}{{if resume_attempt == "" { "" } else { " --resume-attempt " + quote(resume_attempt) } }}{{if preview == "true" { " --preview" } else if preview == "false" { "" } else { error("preview must be true or false") } }}
 
+# Inspect one pinned WSL data move without changing disks or stopping services.
+docker-dev-data-volume-plan source_root runtime_pins backing_file mount_root wsl_distro capacity_gib="128":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev_data_volume.py" plan --source-root {{quote(source_root)}} --runtime-pins {{quote(runtime_pins)}} --backing-file {{quote(backing_file)}} --mount-root {{quote(mount_root)}} --wsl-distro {{quote(wsl_distro)}} --capacity-gib {{quote(capacity_gib)}}
+
 # Drain an idle backend without starting it again; retain all data and cache.
 docker-dev-stop-idle attempt config_sha256 source_root port="3197" allow_prepared_session="false":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" restart-idle-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --stop-only{{if allow_prepared_session == "true" { " --allow-prepared-session" } else if allow_prepared_session == "false" { "" } else { error("allow_prepared_session must be true or false") } }}
