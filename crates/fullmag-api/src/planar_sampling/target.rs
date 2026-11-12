@@ -16,6 +16,19 @@ use super::{
     PlanarSamplingEngine, ResolvedPlanarSampleRequest,
 };
 
+/// Nearest discretization node of a probe point; see
+/// [`ResolvedSpatialTarget::nearest_node`].
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PlanarNearestNode {
+    /// `fem_node` or `fdm_cell_center`.
+    pub kind: &'static str,
+    /// Global mesh node index or cell index.
+    pub node_id: u32,
+    pub world_m: [f64; 3],
+    /// Raw nodal (FEM) or cell (FDM) components, without interpolation.
+    pub values: Vec<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedSpatialScope {
     MonitorTarget,
@@ -78,6 +91,74 @@ impl ResolvedSpatialTarget {
                 super::fdm::cell_value_at(field, point).map(|(cell, value)| (cell, value.to_vec()))
             }
             TargetField::Fem(field) => super::fem::interpolate_at(field, point),
+        }
+    }
+
+    /// Nearest discretization node of `point` in the entity that contains it
+    /// (`eq-planar-nearest-node`). FEM: among the vertices of element
+    /// `entity_id`, the one at the smallest 3D distance from `point`, ties to
+    /// the lower node index, with its nodal values. FDM: the centre of cell
+    /// `entity_id` with the cell value. `None` when the entity is not part of
+    /// the selected target.
+    pub(crate) fn nearest_node(&self, point: [f64; 3], entity_id: u32) -> Option<PlanarNearestNode> {
+        match &self.field {
+            TargetField::Fem(field) => {
+                let element_index = entity_id as usize;
+                if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
+                    return None;
+                }
+                let element = field.elements().get(element_index)?;
+                let mut best: Option<(u32, f64)> = None;
+                for node in element.nodes().iter().copied() {
+                    let position = *field.nodes().get(node as usize)?;
+                    let distance_sq = (0..3)
+                        .map(|axis| (position[axis] - point[axis]).powi(2))
+                        .sum::<f64>();
+                    let closer = match best {
+                        None => true,
+                        Some((best_node, best_distance_sq)) => {
+                            distance_sq < best_distance_sq
+                                || (distance_sq == best_distance_sq && node < best_node)
+                        }
+                    };
+                    if closer {
+                        best = Some((node, distance_sq));
+                    }
+                }
+                let (node, _) = best?;
+                let n_comp = field.n_comp();
+                let start = node as usize * n_comp;
+                let values = field.values().get(start..start + n_comp)?.to_vec();
+                Some(PlanarNearestNode {
+                    kind: "fem_node",
+                    node_id: node,
+                    world_m: field.nodes()[node as usize],
+                    values,
+                })
+            }
+            TargetField::Fdm(field) => {
+                let cell = entity_id as usize;
+                let grid = field.grid();
+                let cell_count = grid.iter().map(|axis| *axis as usize).product::<usize>();
+                if cell >= cell_count || !field.contains_cell(cell) {
+                    return None;
+                }
+                let nx = grid[0] as usize;
+                let ny = grid[1] as usize;
+                let index = [cell % nx, (cell / nx) % ny, cell / (nx * ny)];
+                let origin = field.origin();
+                let spacing = field.spacing();
+                let world_m =
+                    [0, 1, 2].map(|axis| origin[axis] + (index[axis] as f64 + 0.5) * spacing[axis]);
+                let n_comp = field.n_comp();
+                let values = field.values().get(cell * n_comp..(cell + 1) * n_comp)?.to_vec();
+                Some(PlanarNearestNode {
+                    kind: "fdm_cell_center",
+                    node_id: entity_id,
+                    world_m,
+                    values,
+                })
+            }
         }
     }
 
@@ -233,6 +314,10 @@ pub(crate) struct PlanarSampleIdentity {
     pub source_device: Option<String>,
     pub source_precision: Option<String>,
     pub frame: PlanarFrameIR,
+    /// Resolved sampling window (`eq-planar-sampling-window`); omitted from
+    /// the token without a window so existing identities are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_uv_m: Option<[f64; 4]>,
     pub operator: PlanarOperatorIR,
     pub resolution: [u32; 2],
     pub quality: String,

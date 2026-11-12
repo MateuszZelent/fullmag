@@ -795,8 +795,11 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         ));
     }
     if let Some(overlays) = patch.field_overlays.as_ref() {
-        if overlays.len() > crate::schemas::visualization_state::PLANAR_FIELD_OVERLAYS_MAX {
-            return Err(ApiError::bad_request("planar.field_overlays must contain at most 4 entries"));
+        if overlays.len() > crate::schemas::visualization_state::PLANAR_FIELD_LAYERS_MAX {
+            return Err(ApiError::bad_request(format!(
+                "planar.field_overlays must contain at most {} entries",
+                crate::schemas::visualization_state::PLANAR_FIELD_LAYERS_MAX
+            )));
         }
         let mut ids = std::collections::HashSet::new();
         for overlay in overlays {
@@ -822,6 +825,9 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             })?;
         }
     }
+    if let Some(Some(crop)) = patch.crop.as_ref() {
+        validate_planar_crop(crop)?;
+    }
     if let Some(multislice) = patch.multislice.as_ref() {
         let count = multislice.position_fractions.len();
         if !(crate::schemas::visualization_state::PLANAR_MULTISLICE_MIN_PANELS
@@ -836,6 +842,21 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
                 "planar.multislice requires 2 to 4 finite position fractions between 0 and 1",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_planar_crop(
+    crop: &crate::schemas::visualization_state::PlanarCropState,
+) -> Result<(), ApiError> {
+    let values = [crop.u_min_m, crop.u_max_m, crop.v_min_m, crop.v_max_m];
+    if values.iter().any(|value| !value.is_finite())
+        || crop.u_min_m >= crop.u_max_m
+        || crop.v_min_m >= crop.v_max_m
+    {
+        return Err(ApiError::bad_request(
+            "invalid_planar_crop: planar.crop requires finite u_min_m < u_max_m and v_min_m < v_max_m",
+        ));
     }
     Ok(())
 }
@@ -957,6 +978,7 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         point_style: Some(state.point_style.clone()),
         vector_style: Some(state.vector_style.clone()),
         multislice: Some(state.multislice.clone()),
+        crop: Some(state.crop.clone()),
         ..PlanarVisualizationPatch::default()
     })
 }
@@ -1052,11 +1074,29 @@ fn apply_planar_visualization_patch(
     if let Some(visible) = patch.visible {
         state.visible = visible;
     }
+    // A crop lives in the u/v axes of one frame: a new source or plane makes
+    // it meaningless, so it is cleared unless the same patch supplies one.
+    let frame_changed = patch
+        .source
+        .as_ref()
+        .is_some_and(|source| *source != state.source)
+        || patch
+            .default_slice
+            .as_ref()
+            .is_some_and(|slice| slice.plane != state.default_slice.plane);
     if let Some(source) = &patch.source {
         state.source = source.clone();
     }
     if let Some(default_slice) = &patch.default_slice {
         state.default_slice = default_slice.clone();
+    }
+    match &patch.crop {
+        Some(crop) => state.crop = crop.clone(),
+        None if frame_changed => state.crop = None,
+        None => {}
+    }
+    if let Some(layer_model) = patch.layer_model {
+        state.layer_model = layer_model;
     }
     if let Some(view_scope) = &patch.view_scope {
         state.view_scope = view_scope.clone();
@@ -2530,7 +2570,13 @@ fn observation_quantities_for_visualization_state(
     }
     if visualization.planar.visible {
         for overlay in &visualization.planar.field_overlays {
-            if overlay.raster_visible || overlay.vectors_visible {
+            if overlay.visible
+                && (overlay.raster_visible
+                    || overlay.vectors_visible
+                    || overlay.points_visible
+                    || overlay.contours_visible
+                    || overlay.streamlines_visible)
+            {
                 candidates.push(overlay.quantity_id.clone());
             }
         }
