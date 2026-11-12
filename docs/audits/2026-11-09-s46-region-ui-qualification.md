@@ -1453,3 +1453,12 @@ plików: OpenAPI JSON, TypeScript types i Python models. Pozostałe cztery są
 identyczne. Strukturalny diff JSON ma wyłącznie opcjonalne intent_disposition
 i enum IntentDisposition, a zbiór eksportów Python dodaje tylko ten enum.
 SDK nie edytowano ręcznie. Determinizm na nowym HEAD wymaga kolejnego CI.
+
+
+Nowy Rust job `131567194495` wykrył E0425 w trzech regresjach restore/material:
+`live_compute_request.rs:1216,1268,1306` wywoływały prywatną bramkę sąsiedniego
+modułu. To błąd kompilacji testów, nie semantic RED. Udostępniono istniejącą
+`validate_authoring_gate_for_command_with_context` wyłącznie wewnątrz crate
+i dodano jawny import w testach. Publiczne HTTP ani reguły admission nie
+zmieniły się. Parser rustfmt i diff check PASS; kompilacja i wykonanie regresji
+na poprawionym commicie wymagają ponownego CI.

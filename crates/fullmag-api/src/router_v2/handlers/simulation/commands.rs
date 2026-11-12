@@ -1682,7 +1682,7 @@ fn stage_id_for_command_validation(index: usize) -> String {
     format!("stage-{index:03}")
 }
 
-async fn validate_authoring_gate_for_command_with_context(
+pub(crate) async fn validate_authoring_gate_for_command_with_context(
     state: &Arc<AppState>,
     req: &StructuredCommandRequest,
     context: Option<&crate::types::CurrentLiveRequestContext>,

@@ -694,6 +694,7 @@ pub(crate) fn scene_document_sha256(scene: &fullmag_authoring::SceneDocument) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::router_v2::handlers::simulation::commands::validate_authoring_gate_for_command_with_context;
     use serde_json::json;
 
     fn context(session_id: &str) -> CurrentLiveRequestContext {
