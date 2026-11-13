@@ -4751,6 +4751,20 @@ const recompiledChild={...child,stages:child.stages.map((row,index)=>index===0
 assert.deepEqual(scope(recompiledChild,ids,['relax-a'],[result('relax-a',recompiledId,'run-child')],
   current,'run-current'),['relax-a'],
   'completed current rows use current-run evidence even when recompilation changes their durable ID');
+const scopedChild={...child,total_stages:1,stage_statuses:['completed'],completed_stage_indexes:[0],
+  stages:[child.stages[0]]};
+assert.deepEqual(scope(scopedChild,ids,['relax-a'],childResults),['relax-a'],
+  'a selected A run may publish only its single admitted stage, while the scene retains ABC');
+const scopedB={...scopedChild,stages:[{stage_id:compiled[1],index:0,status:'completed'}]};
+assert.deepEqual(scope(scopedB,ids,['relax-b'],[result('relax-b',compiled[1],'run-child')]),['relax-b'],
+  'selected B is resource index zero in a one-stage run, without using positional identity fallback');
+assert.throws(()=>scope(scopedB,ids,['relax-a'],childResults), /mapping|source|stage/i,
+  'a one-stage execution of B cannot satisfy an authored A target');
+const disabledB={...child,total_stages:2,stage_statuses:['completed','completed'],completed_stage_indexes:[0,1],
+  stages:[{stage_id:compiled[0],index:0,status:'completed'},{stage_id:compiled[2],index:1,status:'completed'}]};
+assert.deepEqual(scope(disabledB,ids,['relax-a','relax-c'],[
+  result('relax-a',compiled[0],'run-child'),result('relax-c',compiled[2],'run-child')]),['relax-a','relax-c'],
+  'disabled B remains in the authoring scene but cannot appear in the admitted execution');
 assert.throws(()=>scope(child,ids,['relax-a'],childResults,current,'foreign-prior-run'), /run/i,
   'a prior mapping is pinned to the exact preceding run');
 const ambiguousPrior=[result('relax-b',compiled[0],'run-current')];

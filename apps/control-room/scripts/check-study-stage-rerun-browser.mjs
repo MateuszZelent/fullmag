@@ -1100,14 +1100,18 @@ export function studyStageTerminalScope(execution, authoredIds, expectedExecuted
   const mappings = studyStageExecutionSourceMap(
     execution, authoredIds, currentResults, priorResults, priorRunId,
   );
-  assert.equal(execution.total_stages, authoredIds.length,
-    "P22 execution stage count differs from the authored stage list");
-  const expectedStatuses = authoredIds.map((id) => selected.has(id) ? "completed" : "pending");
+  // Scene definitions remain complete, while a selected-run view can contain
+  // only its admitted steps. Source mappings below still prove every row ID.
+  const executionAuthoredIds = execution.total_stages === authoredIds.length
+    ? authoredIds : expectedExecutedIds;
+  assert.equal(execution.total_stages, executionAuthoredIds.length,
+    "P22 execution stage count contains neither the authored view nor exactly the selected run scope");
+  const expectedStatuses = executionAuthoredIds.map((id) => selected.has(id) ? "completed" : "pending");
   assert.deepEqual(execution.stage_statuses, expectedStatuses,
     "P22 current execution includes another or unfinished stage");
   assert.deepEqual(execution.completed_stage_indexes,
-    authoredIds.flatMap((id, index) => selected.has(id) ? [index] : []));
-  assert(Array.isArray(execution.stages) && execution.stages.length === authoredIds.length,
+    executionAuthoredIds.flatMap((id, index) => selected.has(id) ? [index] : []));
+  assert(Array.isArray(execution.stages) && execution.stages.length === executionAuthoredIds.length,
     "P22 execution row count differs from the authored stage list");
   const authoredRows = [];
   const seenExecutionIds = new Set();
@@ -1138,7 +1142,7 @@ export function studyStageTerminalScope(execution, authoredIds, expectedExecuted
     }
     authoredRows.push(authoredId);
     assert.equal(row.index, index);
-    const authoredIndex = authoredIds.indexOf(authoredId);
+    const authoredIndex = executionAuthoredIds.indexOf(authoredId);
     assert.notEqual(authoredIndex, -1, "Execution source mapping names an unknown authored stage");
     assert.equal(row.status, expectedStatuses[authoredIndex]);
     if (!selected.has(authoredId)) {
@@ -1147,7 +1151,7 @@ export function studyStageTerminalScope(execution, authoredIds, expectedExecuted
       }
     }
   }
-  assert.deepEqual(authoredRows, authoredIds,
+  assert.deepEqual(authoredRows, executionAuthoredIds,
     "P22 durable execution rows do not map in exact authored stage order");
   for (const [executionId, authoredId] of mappings.currentByExecutionId) {
     const row = execution.stages.find((candidate) => candidate.stage_id === executionId);
