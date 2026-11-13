@@ -163,3 +163,14 @@ Funkcja replay completed() zachowuje dodatkowe sprawdzenie current/verified.
 Właściwa generacja jest przenoszona także przez specialized completed/resume.
 Testy i rzeczywisty readonly preflight nie zastępują końcowego managed startu
 oraz odbioru natywnej aplikacji i UI.
+
+
+## Świeżość instalacji zależności
+
+Historyczny ready receipt oraz obecność Next nie wystarczają po zmianie
+manifestów. Install key jest deterministycznym SHA z dependency_seed_sha256
+i toolpins_sha256, bez source_commit. Ready history wolno ponownie użyć tylko
+przy zgodnym kluczu i istniejącym poprawnym drzewie zależności. Brak starego
+klucza lub rozbieżność wywołuje zwykłe pnpm install --frozen-lockfile. Nie
+zmienia to receipt ownership/lease, wersji bibliotek ani zachowania HMR przy
+zmianie samego źródła. Nie nadpisuje się ręcznie stanu działającego kontenera.

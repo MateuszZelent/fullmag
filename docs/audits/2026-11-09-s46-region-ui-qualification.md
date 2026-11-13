@@ -1954,3 +1954,40 @@ bajty kontrolowanych dokumentów; services_mutated=false. Cztery aktualne moduł
 są przypięte hashami w indeksie audytu. To nadal nie jest start/NativeReady
 ani odbiór UI. Następną czynnością jest jeden nowy przypięty start z zachowanego
 stanu, bez ponowienia removal lub Compute.
+
+
+### Rzeczywisty start a5: natywny backend Ready, wykryty stale install frontendu
+
+Commit `a5a202de04fc1c623f11534d150ee7e0a6b3b598` jest wypchnięty. Jawna
+kontynuacja zakończyła się exit0/succeeded jako development
+`2f2192a269f84a94b1703031bb9618b2`, config
+`7d6842e5c1bf35d2a8e66265cd5ccaeb9364f961f4e733321f7b31c90d3d739d`.
+Właściwa generacja33052 została zachowana. Backend cdd43759d3d5 rzeczywiście
+kompilował aplikację; package_cache_hit=false, a nowy API/native runtime
+potwierdził commit a5, clean i snapshot
+`f1053aa71a6fae8bf3ad0222317be95dcd5b186a9a5ca3655c5b563ad00cb729`.
+API health: HTTP200/status ok/active_session=false. Active marker po zakończeniu
+nieobecny. Nie ponowiono removal ani Solve/Compute.
+
+Frontend909a555c5a4a ma poprawny health procesu, ale /workspace zwraca HTTP500:
+`Can't resolve 'postprocessing'`. Bieżące repo i prywatny package.json wymagają
+6.39.6, podczas gdy zachowane node_modules zawiera katalog 6.39.1 i nie ma
+bezpośredniego linku aplikacji. Read-only analiza wykazała, że frontend_dev.py
+uznaje stary ready receipt oraz samą obecność Next za wystarczające do
+pominięcia instalacji; nie porównuje tożsamości zależności. Poprawka ma
+przypinać dependency_seed_sha256+toolpins_sha256 i przy niezgodnym/brakującym
+kluczu wykonać normalną instalację frozen. Natywny start jest potwierdzony;
+rzeczywisty odbiór Cell i interaktywnego cyklu UI pozostaje otwarty.
+
+
+Poprawka install freshness jest wdrożona w źródłach frontend_dev.py. Ready receipt
+zapisuje klucz z dependency_seed_sha256 i toolpins_sha256; brak lub rozbieżność
+klucza uruchamia istniejącą instalację frozen. Zgodny klucz nadal wymaga
+strukturalnie poprawnego drzewa. source_commit nie jest częścią tego klucza.
+Luna przygotowała patch w /tmp podczas buildu backendu; koordynator przejrzał
+diff, zastosował go dopiero po zakończeniu próby2f i uruchomił pełne 62 testy:
+PASS. Regresja pustego cache ma teraz zgodny klucz, więc rzeczywiście sprawdza
+niezależny warunek struktury. Test jest już w istniejącym workflow
+dispersion-artifact-consumers. Nie zmieniano wersji zależności/lockfile ani
+instalacji działającego kontenera. Managed rebuild i rzeczywisty odbiór UI
+pozostają następnym krokiem.

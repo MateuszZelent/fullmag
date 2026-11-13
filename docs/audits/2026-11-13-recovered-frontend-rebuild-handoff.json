@@ -1,7 +1,7 @@
 {
   "schema": "fullmag.p22.recovered-frontend-rebuild-handoff.v1",
   "source_commit": "3542403e42d626ee55d56c59d8feff6e5c096829",
-  "state": "rebuild-refused-frontend-generation-handoff",
+  "state": "backend-native-ready-frontend-dependency-mismatch",
   "canonical_up_exit_code": 2,
   "controlled_stop": {
     "attempt": "d159da3080d54bc9a6139464ad9eecac",
@@ -34,8 +34,8 @@
     }
   ],
   "native_rebuild_executed": false,
-  "actual_UI_acceptance": "NOT VERIFIED; Docker engine responds, own application containers absent after recreation and pre-service refusal",
-  "fix_state": "normal generation carry and explicit historical d7 continuation implemented; full readonly validation passed; actual start pending",
+  "actual_UI_acceptance": "FAILED opening workspace: missing postprocessing from stale installation; real Cell/interactive acceptance not yet performed",
+  "fix_state": "legacy d7 continuation succeeded; current a5 native backend Ready; frontend dependency freshness correction pending",
   "merged_source_CI": {
     "run": 43371559095,
     "conclusion": "success"
@@ -369,5 +369,53 @@
     "fresh_state_ordering_fix": "capture moved after initialization; full pre-admission integration13PASS; prior2052 normal slice had this uncovered error",
     "lease_receipt_ordering_fix": "full validation now first statement under start lease; issued-receipt identity regression RED->GREEN",
     "runtime_native_application": "NOT VERIFIED; app containers absent, UI3243 down, no Solve replay"
+  },
+  "latest_native_start": {
+    "source_commit": "a5a202de04fc1c623f11534d150ee7e0a6b3b598",
+    "source_digest": "62189e791519b2113e3e8efa1d02ca15032d28f5e379edf7216a5a28aaca5084",
+    "source_snapshot_sha256": "f1053aa71a6fae8bf3ad0222317be95dcd5b186a9a5ca3655c5b563ad00cb729",
+    "attempt": "2f2192a269f84a94b1703031bb9618b2",
+    "state": "succeeded",
+    "backend_package_cache_hit": false,
+    "backend_build_receipt_sha256": "ce5701a1da4c46e9c326cee511d874e0be9ff436333eeb1200df6b76bb1b89ac",
+    "backend_container": "cdd43759d3d573f06bca351dccad0a212346fb05d3854dcdd3eab097f80df3ea",
+    "frontend_container": "909a555c5a4ae053b2aff8b1c2623b09bf357da67d3c970607265f3a7c02a65a",
+    "config_sha256": "7d6842e5c1bf35d2a8e66265cd5ccaeb9364f961f4e733321f7b31c90d3d739d",
+    "canonical_resume_exit_code": 0,
+    "active_marker": null,
+    "api_health_http_status": 200,
+    "api_health_status": "ok",
+    "api_active_session": false,
+    "native_ready_observed": true,
+    "solver_execution": "NOT VERIFIED in this new runtime; no Solve/Compute performed",
+    "retained_state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400"
+  },
+  "frontend_current_blocker": {
+    "process_health": "healthy",
+    "workspace_http_status": 500,
+    "error": "Module not found: Can't resolve 'postprocessing'",
+    "selected_manifest_dependency": "6.39.6",
+    "private_app_manifest_dependency": "6.39.6",
+    "app_node_modules_direct_link_exists": false,
+    "private_pnpm_store_entries": [
+      "postprocessing@6.39.1_three@0.186.1"
+    ],
+    "root_cause": "ready history plus Next existence skips frozen install without comparing dependency_seed/toolpins identity",
+    "next": "review candidate two-file install-key correction, managed rebuild after commit; no manual running-container patch or dependency version change"
+  },
+  "frontend_dependency_fix": {
+    "state": "implemented; managed rebuild pending",
+    "files": [
+      "docker/all-in-one/frontend_dev.py",
+      "scripts/test_docker_frontend_dev.py"
+    ],
+    "source_sha256": "b034586aac7976ca6bffe37673bfc2f999725cea13f2f4020b4f5170b3b32f98",
+    "tests_passed": 62,
+    "scope": "dependency install key derives from dependency_seed_sha256 and toolpins_sha256; ready history reuses only on exact key and structural readiness",
+    "regressions": "stale/missing key with valid Next installs; matching key reuses; matching key with missing tree installs; source-commit-only change does not invalidate; dependency/toolpin changes invalidate",
+    "candidate_red_green": "worker reproduced stale/missing keys skipping install; coordinator reviewed patch and ran complete62 tests in real worktree, including strengthened empty-cache fixture",
+    "dependency_versions_changed": false,
+    "private_install_state_mutated_manually": false,
+    "runtime_acceptance": "pending managed image rebuild and actual workspace/browser/Cell acceptance"
   }
 }
