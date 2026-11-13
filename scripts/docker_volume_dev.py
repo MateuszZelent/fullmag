@@ -688,37 +688,138 @@ def _owned_volume(control, role, key):
     return name
 
 
-def _frontend(control, operation, selected, state, port, image):
+def _frontend(control, operation, selected, state, port, image, *, create_generation=False,
+              old_generation_id=None, old_seed_sha256=None, publish_inputs=True):
     from docker_development_inputs import metadata_cache_key, seed
     files = []
     inputs = seed(selected, state, port, write_file=lambda relative, data: files.append({
         "relative": relative, "data": base64.b64encode(data).decode("ascii")}))
     previous_inputs = control.read("frontend/development-inputs.json", optional=True)
-    if (isinstance(previous_inputs, dict)
+    if (not create_generation and isinstance(previous_inputs, dict)
             and all(previous_inputs.get(key) == inputs.get(key) for key in
                 ("source_root", "worktree_id", "dependency_seed_sha256", "toolpins_sha256", "host_port", "files", "live_directories"))):
         inputs = previous_inputs
     key = metadata_cache_key(inputs, control.project)
     grouped = _uses_private_group_storage(control, operation)
+    frontend_generation = None
+    generation_id = None
+    generation_subpath = None
     if grouped:
         import docker_group_storage as group_storage
         volume = control.volume
+        previous_generation_id = operation["receipt"].get("frontend_generation_id")
+        previous_generation_path = operation["receipt"].get("frontend_generation_subpath")
+        if create_generation:
+            if ((previous_generation_id, previous_generation_path) != (old_generation_id,
+                    (group_storage.frontend_generation_subpath(control, old_generation_id)
+                     if old_generation_id is not None else None))
+                    or not isinstance(old_seed_sha256, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", old_seed_sha256)
+                    or hashlib.sha256(b"").hexdigest() != old_seed_sha256):
+                raise BuildControlError("New frontend generation requires the exact empty old-seed proof")
+            generation_id = operation["receipt"].get("attempt")
+            generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+            frontend_generation = {"mode": "create", "generation_id": generation_id,
+                "old_generation_id": old_generation_id, "old_seed_sha256": old_seed_sha256}
+        elif previous_generation_id is None and previous_generation_path is None:
+            generation_id = None
+            generation_subpath = group_storage.role_subpath(control, "frontend")
+            frontend_generation = None
+        elif previous_generation_id is None or previous_generation_path is None:
+            raise BuildControlError("Retained frontend generation ID/path pair is incomplete")
+        else:
+            generation_id = previous_generation_id
+            generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+            if previous_generation_path != generation_subpath:
+                raise BuildControlError("Retained frontend generation path differs from its ID")
+            frontend_generation = {"mode": "active", "generation_id": generation_id}
     else:
+        if create_generation or operation["receipt"].get("frontend_generation_id") is not None:
+            raise BuildControlError("Frontend generations require the selected private group volume")
         volume = _owned_volume(control, "frontend", key)
     operation["receipt"]["frontend_volume"] = volume
-    request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs, "group_storage": grouped})
+    if create_generation and publish_inputs:
+        raise BuildControlError("New frontend generation inputs must be staged until old CAS revalidation")
+    request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs,
+        "group_storage": grouped, "frontend_generation": frontend_generation})
     if len(request) > 8 * 1024 * 1024:
         raise BuildControlError("Frontend metadata exceeds transfer budget")
     # Metadata only: the four application directories stay live readonly binds.
     script = r'''
 import base64, hashlib, json, os, pathlib, stat, sys, fcntl
-root=pathlib.Path('/data/workspace')
 request=json.load(sys.stdin)
-if root.is_symlink(): raise RuntimeError('Frontend workspace root is a link')
+base=pathlib.Path('/data')
 grouped=request.get('group_storage') is True
+generation=request.get('frontend_generation')
+generation_probe=None
+data_root=base
+if generation is not None:
+ if not grouped or not isinstance(generation,dict): raise RuntimeError('Frontend generation requires group storage')
+ if generation is not None and (base.is_symlink() or not base.is_dir()): raise RuntimeError('Frontend group root is not a real directory')
+ if generation is not None:
+  base_meta=base.stat()
+  def owned_private_dir(path):
+   metadata=path.lstat()
+   if (not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)
+       or metadata.st_uid!=base_meta.st_uid or metadata.st_gid!=base_meta.st_gid
+       or stat.S_IMODE(metadata.st_mode)!=0o750): raise RuntimeError('Frontend private generation ownership/mode differs')
+   return metadata
+ mode=generation.get('mode');generation_id=generation.get('generation_id')
+ if not isinstance(generation_id,str) or len(generation_id)!=32 or any(c not in '0123456789abcdef' for c in generation_id): raise RuntimeError('Unsafe frontend generation ID')
+ generations=base/'generations'
+ if generations.is_symlink(): raise RuntimeError('Frontend generations root is a link')
+ if mode=='active':
+  if set(generation)!={'mode','generation_id'} or not generations.is_dir(): raise RuntimeError('Active frontend generation root is missing')
+  owned_private_dir(generations)
+  data_root=generations/generation_id
+  owned_private_dir(data_root)
+ elif mode=='create':
+  if set(generation)!={'mode','generation_id','old_generation_id','old_seed_sha256'}: raise RuntimeError('New frontend generation proof fields differ')
+  old_id=generation.get('old_generation_id');expected_old_sha=generation.get('old_seed_sha256')
+  if old_id is not None and (not isinstance(old_id,str) or len(old_id)!=32 or any(c not in '0123456789abcdef' for c in old_id)): raise RuntimeError('Old frontend generation ID is unsafe')
+  if not isinstance(expected_old_sha,str) or len(expected_old_sha)!=64: raise RuntimeError('Old frontend seed digest is missing')
+  old_root=base if old_id is None else generations/old_id
+  if old_id is None:
+   owned_private_dir(old_root)
+  else:
+   owned_private_dir(generations)
+   owned_private_dir(old_root)
+  for directory in (old_root/'workspace',old_root/'workspace/apps',old_root/'workspace/apps/control-room'):
+   if directory.is_symlink() or not directory.is_dir(): raise RuntimeError('Old frontend seed ancestry is not a real directory')
+  freeze_old=old_root/'inputs-freeze.json';frozen_old=old_root/'frozen-inputs'
+  for forbidden in (freeze_old,frozen_old):
+   try: forbidden.lstat()
+   except FileNotFoundError: pass
+   else: raise RuntimeError('Old frontend generation contains freeze state')
+  old_seed=old_root/'workspace/apps/control-room/next-env.d.ts'
+  if old_seed.is_symlink(): raise RuntimeError('Old frontend seed is a link')
+  seed_meta=old_seed.lstat()
+  if not stat.S_ISREG(seed_meta.st_mode) or seed_meta.st_nlink!=1 or seed_meta.st_size!=0: raise RuntimeError('Old frontend seed is not the exact empty regular file')
+  old_seed_bytes=old_seed.read_bytes()
+  old_observed_sha=hashlib.sha256(old_seed_bytes).hexdigest()
+  if old_observed_sha!=expected_old_sha: raise RuntimeError('Old frontend seed hash changed before generation')
+  if not generations.exists(): generations.mkdir(mode=0o750)
+  if generations.is_symlink() or not generations.is_dir(): raise RuntimeError('Frontend generations root is not a real directory')
+  owned_private_dir(generations)
+  data_root=generations/generation_id
+  try: data_root.lstat()
+  except FileNotFoundError: pass
+  else: raise RuntimeError('Frontend generation already exists; no overwrite or replay')
+  os.mkdir(data_root,0o750)
+  owned_private_dir(data_root)
+  descriptor=os.open(generations,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+  try: os.fsync(descriptor)
+  finally: os.close(descriptor)
+  generation_probe={'mode':'created','generation_id':generation_id,'old_generation_id':old_id,
+   'old_seed_sha256':old_observed_sha,'inputs_freeze_absent':True,'frozen_root_absent':True}
+ else: raise RuntimeError('Unknown frontend generation operation')
+root=data_root/'workspace'
+cache=data_root/'cache'
+freeze=data_root/'inputs-freeze.json'
+frozen_root=data_root/'frozen-inputs'
+if root.is_symlink(): raise RuntimeError('Frontend workspace root is a link')
 previous=request.get('previous_inputs')
 if grouped:
-    cache=pathlib.Path('/data/cache')
     if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
     cache.mkdir(exist_ok=True)
     descriptor=os.open(cache/'.fullmag-frontend-runtime.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
@@ -737,7 +838,6 @@ if grouped:
                 requested=hashlib.sha256(base64.b64decode(record['data'],validate=True)).hexdigest()
                 if actual not in (requested,allowed.get(record['relative'])):
                     raise RuntimeError('Frontend metadata has unknown changes; all state retained')
-freeze=pathlib.Path('/data/inputs-freeze.json')
 if freeze.exists() or freeze.is_symlink():
     descriptor=os.open(freeze, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(descriptor, 'rb') as stream:
@@ -757,7 +857,6 @@ if freeze.exists() or freeze.is_symlink():
     if without_commit(original)!=without_commit(request['inputs']):
         if not grouped or not isinstance(previous,dict) or without_commit(original)!=without_commit(previous):
             raise RuntimeError('Frozen frontend configuration differs from its saved group inputs')
-        frozen_root=pathlib.Path('/data/frozen-inputs')
         if frozen_root.is_symlink() or not frozen_root.is_dir(): raise RuntimeError('Frozen input root is not a real directory')
         allowed={item['relative']:item['sha256'] for item in original['files']}
         observed=[]
@@ -779,7 +878,6 @@ if freeze.exists() or freeze.is_symlink():
     else:
         request['inputs']=original
 root.mkdir(parents=True,exist_ok=True)
-cache=pathlib.Path('/data/cache')
 if cache.is_symlink(): raise RuntimeError('Frontend cache is a link')
 cache.mkdir(exist_ok=True)
 lock=cache/'.fullmag-frontend-runtime.lock'
@@ -820,7 +918,9 @@ for name in ('app','src','public','scripts'):
     target=root/'apps/control-room'/name
     if target.is_symlink(): raise RuntimeError('Live directory is a link')
     target.mkdir(exist_ok=True)
-print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':request['inputs']}))
+print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':request['inputs'],
+ 'frontend_generation_probe':generation_probe,
+ 'frontend_generation':({'mode':'active','generation_id':generation['generation_id']} if isinstance(generation,dict) and generation.get('mode')=='active' else None)}))
 '''
     args = control.helper_args("exec /usr/local/bin/python3 -I -c " + __import__('shlex').quote(script))
     extra = (group_storage.cli_mount_args(control, "frontend", "/data") if grouped else
@@ -832,8 +932,25 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
         raise BuildControlError(result.stderr.decode("utf-8", "replace"))
     seeded = json.loads(result.stdout)
     inputs = seeded.pop("inputs")
+    generation_probe = seeded.pop("frontend_generation_probe", None)
+    observed_generation = seeded.pop("frontend_generation", None)
+    if create_generation:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        seed_recovery.validate_generation_probe(generation_probe, generation_id=generation_id,
+            old_generation_id=old_generation_id, old_seed_sha256=old_seed_sha256)
+        operation["receipt"].update(frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+            frontend_generation_probe=generation_probe)
+    elif generation_id is not None:
+        if observed_generation != {"mode": "active", "generation_id": generation_id}:
+            raise BuildControlError("Frontend helper mounted a different active generation")
+    elif observed_generation is not None or generation_probe is not None:
+        raise BuildControlError("Legacy frontend helper returned unexpected generation evidence")
+    if not publish_inputs and not create_generation:
+        raise BuildControlError("Deferred input publication requires a new frontend generation")
     control.write(operation["root"] + "/frontend-seed.json", seeded)
-    control.write("frontend/development-inputs.json", inputs)
+    if publish_inputs:
+        control.write("frontend/development-inputs.json", inputs)
     return inputs, volume
 
 
@@ -850,7 +967,7 @@ def _uses_private_group_storage(control, operation):
     return False
 
 
-def _pin_private_group_storage(control, operation, *, new_render, previous=None):
+def _pin_private_group_storage(control, operation, *, new_render, previous=None, document=None):
     """Persist layout selection before allocation so interrupted resume is stable."""
     recorded = operation["receipt"].get("private_group_storage")
     if recorded not in (None, "group-volume-v1"):
@@ -861,6 +978,23 @@ def _pin_private_group_storage(control, operation, *, new_render, previous=None)
     if new_render or inherited is not None:
         operation["receipt"]["private_group_storage"] = "group-volume-v1"
         control.write(operation["root"] + "/receipt.json", operation["receipt"])
+    if previous is not None and inherited == "group-volume-v1":
+        generation_fields_present = (
+            "frontend_generation_id" in previous or "frontend_generation_subpath" in previous)
+        if generation_fields_present and document is not None:
+            import docker_volume_frontend_seed_recovery as seed_recovery
+            operation["receipt"].update(
+                seed_recovery.generation_receipt_fields(control, previous, document))
+        elif generation_fields_present:
+            import docker_group_storage as group_storage
+            generation_id = previous.get("frontend_generation_id")
+            generation_path = previous.get("frontend_generation_subpath")
+            if (not isinstance(generation_id, str)
+                    or group_storage.frontend_generation_subpath(control, generation_id) != generation_path):
+                raise BuildControlError("Retained frontend generation ID/path pair is malformed")
+            operation["receipt"].update(
+                frontend_generation_id=generation_id,
+                frontend_generation_subpath=generation_path)
     return _uses_private_group_storage(control, operation)
 
 
@@ -2857,7 +2991,9 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             import docker_group_storage as group_storage
             for mount in frontend["volumes"]:
                 if mount.get("target") == "/state/development":
-                    mount["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+                    mount["volume"]["subpath"] = operation["receipt"].get(
+                        "frontend_generation_subpath",
+                        group_storage.role_subpath(control, "frontend"))
             frontend["environment"]["FULLMAG_PRIVATE_GROUP_STORAGE"] = "group-volume-v1"
         owner_tmpfs = "/run/fullmag/frontend-owner:rw,nosuid,nodev,noexec,size=1m,uid=65532,gid=65532,mode=0700"
         existing_tmpfs = [
@@ -6994,13 +7130,22 @@ print(json.dumps({'processes':sorted(processes,key=lambda p:p['pid']),'api_insta
     return json.loads(output)
 
 
-def _frontend_refresh_document(document, volume, inputs, *, frontend_image=None):
+def _frontend_refresh_document(document, volume, inputs, *, frontend_image=None,
+                              frontend_generation_subpath=None):
     import copy
     refreshed = copy.deepcopy(document)
     refreshed['volumes']['frontend-build']['name'] = volume
     refreshed['services']['frontend']['environment']['FULLMAG_SOURCE_COMMIT'] = inputs['source_commit']
     # Upgrade the former default; preserve explicitly different retained limits.
     frontend = refreshed['services']['frontend']
+    if frontend_generation_subpath is not None:
+        mounts = [mount for mount in frontend.get('volumes', [])
+                  if isinstance(mount, Mapping) and mount.get('target') == '/state/development']
+        if (len(mounts) != 1 or mounts[0].get('type') != 'volume'
+                or mounts[0].get('source') != 'frontend-build'
+                or not isinstance(mounts[0].get('volume'), Mapping)):
+            raise BuildControlError('Frontend refresh generation mount is missing or ambiguous')
+        mounts[0]['volume']['subpath'] = frontend_generation_subpath
     if str(frontend.get('mem_limit')) in ('6442450944', '6g'):
         frontend['mem_limit'] = str(8 * 1024**3)
     if frontend_image is not None:
@@ -7118,7 +7263,8 @@ def _repin_frontend_daemon_binds(document, actual, selected, reconcile):
 
 
 def _refresh_frontend_services(control, args, previous_root, previous, document, selected,
-                               layout, actual, ids, image, operator_probe_record, *, recover_oom=False, frozen_context=None):
+                               layout, actual, ids, image, operator_probe_record, *, recover_oom=False,
+                               frozen_context=None, failed_seed_context=None):
     """Create a new DEV handoff by replacing only the frontend generation."""
     import docker_dev_codegen as codegen
     from docker_development_inputs import describe, frontend_view
@@ -7126,6 +7272,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     host = _session_host()
     read_owned_regular = host.read_owned_regular
     from docker_build_control import ControlOutcomeUnknown
+    if failed_seed_context is not None and (recover_oom or frozen_context is not None):
+        raise BuildControlError('Failed-seed generation cannot combine with another frontend recovery mode')
     state = storage.validate_path(Path(previous['state_root']), layout['runtime_root'], 'retained sessions')
     if args.port != int(document['services']['frontend']['environment']['FULLMAG_FRONTEND_HOST_PORT']):
         raise BuildControlError('Frontend refresh port differs from retained published port')
@@ -7156,6 +7304,33 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     if recover_oom:
         frontend_image, image_witness = _verified_frontend_recovery_image(control, selected)
         backend_observation = _frontend_recovery_backend_observation(ids['backend'])
+    seed_recovery = None
+    seed_backend_anchor = None
+    if failed_seed_context is not None:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        backend_observation = _frontend_recovery_backend_observation(ids['backend'], allow_empty=True)
+        seed_backend_anchor = seed_recovery.backend_anchor(
+            actual['backend'], fingerprint(actual['backend']),
+            json.loads(certificate), backend_observation)
+
+    def validate_seed_backend(backend):
+        if failed_seed_context is None:
+            return None
+        observed_certificate = read_owned_regular(certificate_path)
+        observed_owner = read_owned_regular(owner_path)
+        try:
+            certificate_document = json.loads(observed_certificate)
+            owner_document = json.loads(observed_owner)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise BuildControlError('Frontend seed recovery backend certificate is malformed') from error
+        if canonical(owner_document) != canonical(certificate_document):
+            raise BuildControlError('Frontend seed recovery backend owner/certificate diverged')
+        observation = _frontend_recovery_backend_observation(ids['backend'], allow_empty=True)
+        current_anchor = seed_recovery.backend_anchor(
+            backend, fingerprint(backend), certificate_document, observation)
+        seed_recovery.validate_backend_anchor(seed_backend_anchor, current_anchor)
+        return observation
+
     def inspect_services(frontend_id):
         current = {name: json.loads(docker_text('inspect', identifier))[0]
                    for name, identifier in {'backend': ids['backend'], 'frontend': frontend_id}.items()}
@@ -7175,10 +7350,13 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 raise BuildControlError('Backend processes/session changed during frontend recovery')
         if frozen_context is not None and backend_observation(ids['backend']) != backend_observation_pin:
             raise BuildControlError('Terminal backend observation changed during frontend refresh')
+        validate_seed_backend(backend)
         _assert_private_restart_network(current, {'backend': ids['backend'], 'frontend': frontend_id}, control.project)
         return current
     health_script = "import json,urllib.request\nwith urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5) as r:\n value=json.load(r)\n if r.status!=200 or value.get('status')!='ok' or value.get('active_session') is not False:raise RuntimeError('Frontend refresh requires an empty healthy API')\n print(json.dumps(value))"
     def source_matches(probe, backend_source, package):
+        if failed_seed_context is not None:
+            return True
         if frozen_context is None:
             return codegen._source_matches(probe, backend_source)
         from docker_volume_frontend_frozen_recovery import source_qualification
@@ -7186,6 +7364,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                              probe, backend_source, package['source'])
         return True
     def healthy_idle():
+        if failed_seed_context is not None:
+            return validate_seed_backend(json.loads(docker_text('inspect', ids['backend']))[0])
         if frozen_context is not None:
             value = backend_observation(ids['backend'])
             if value != backend_observation_pin:
@@ -7202,6 +7382,15 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                       selected_source_qualification='NOT VERIFIED')
     if frozen_context is not None:
         inputs['helper_transition'] = frozen_context['request']['source_transition']
+    if failed_seed_context is not None:
+        inputs['failed_seed_new_generation'] = {
+            'schema': failed_seed_context['schema'],
+            'failed_attempt': failed_seed_context['attempt'],
+            'failed_config_sha256': failed_seed_context['config_sha256'],
+            'source_pins': failed_seed_context['source_pins'],
+            'prior_terminal_sha256': failed_seed_context['terminal_sha256'],
+            'prior_input_manifest_sha256': failed_seed_context['input_manifest_sha256'],
+        }
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
     carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
@@ -7209,7 +7398,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     # A refused preflight must not displace the still-live verified DEV fence.
     inspect_services(ids['frontend']); healthy_idle()
     with control.operation('development', inputs) as operation:
-        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous,
+                                   document=document)
         operation['receipt'].update(operator_probe_record)
         operation['receipt'].update(state='validating-frontend-refresh', state_root=str(state),
             backend_volumes=previous['backend_volumes'], previous_frontend_volume=previous['frontend_volume'])
@@ -7219,19 +7409,29 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             repeated = refresh_context(control, args, previous, document, actual)
             if repeated != frozen_context:
                 raise BuildControlError('Frozen frontend proof changed under refresh lease')
+        if failed_seed_context is not None:
+            current_actual = inspect_services(ids['frontend'])
+            seed_recovery.revalidate_context(
+                control, args, previous, document, current_actual, selected, failed_seed_context)
         try:
             package, provenance, package_sha, binary_provenance = codegen._backend_documents(ids['backend'])
             backend_source, _, _ = codegen._validate_backend(package, provenance, package_sha, binary_provenance)
             source_probe = None
-            if not recover_oom:
+            if not recover_oom and failed_seed_context is None:
                 source_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
         except codegen.CodegenError as error:
             if error.reconciliation_required:
                 raise ControlOutcomeUnknown(str(error)) from error
             raise
-        if not recover_oom and not source_matches(source_probe, backend_source, package):
+        if failed_seed_context is not None:
+            if (failed_seed_context['source_pins']['backend_app_commit'] != backend_source.get('commit')
+                    or backend_source.get('commit') != previous.get('source_commit')):
+                raise BuildControlError('Retained frontend seed recovery backend app commit differs')
+        elif not recover_oom and not source_matches(source_probe, backend_source, package):
             raise BuildControlError('Frontend refresh requires the current native source capture; run the canonical idle restart first')
         desired = describe(selected, args.port)
+        if failed_seed_context is not None and desired['files'] != failed_seed_context['current_inputs'].get('files'):
+            raise BuildControlError('Selected frontend seed changed after the prior manifest capture')
         control.write(operation['root'] + '/rollback-compose.json', document)
         control.write(operation['root'] + '/rollback-development-inputs.json',
                       control.read('frontend/development-inputs.json'))
@@ -7240,32 +7440,84 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         # Quiesce the sole browser admission route before the final empty-API
         # fence. Unknown stop/seed outcomes retain this exact control lease.
         operation['daemon_pending'] = True
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             docker_capture('stop', '--time', '60', ids['frontend'], timeout=90)
         quiesced = inspect_services(ids['frontend'])
         if quiesced['frontend']['State'].get('Running') is not False:
             raise BuildControlError('Owned frontend did not quiesce before refresh')
         healthy_idle()
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             source_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
             if not source_matches(source_probe, backend_source, package):
                 raise BuildControlError('Backend source changed after frontend quiescence')
-        seeded, volume = _frontend(control, operation, selected, state, args.port, frontend_image)
-        if seeded['files'] != desired['files']:
-            raise BuildControlError('Frontend seed changed during refresh')
-        refreshed = _frontend_refresh_document(document, volume, seeded,
-            frontend_image=frontend_image if recover_oom else None)
-        control.write(operation['root'] + '/compose.json', refreshed)
         control.write(operation['root'] + '/backend-build-receipt.json', package)
         control.write(operation['root'] + '/provenance.json', provenance)
         if recover_oom:
             if (_verified_frontend_recovery_image(control, selected) != (frontend_image, image_witness)
                     or codegen._backend_documents(ids['backend']) != (package, provenance, package_sha, binary_provenance)):
                 raise BuildControlError('Recovery image or backend package changed before frontend recreation')
-        healthy_idle(); inspect_services(ids['frontend'])
-        operation['receipt']['state'] = 'recreating-owned-frontend'
-        compose_capture(refreshed, 'up', '--detach', '--no-build', '--pull', 'never',
-                        '--no-deps', '--force-recreate', 'frontend', timeout=180)
+        if failed_seed_context is not None:
+            def guard_prior_consumers():
+                fresh = inspect_services(ids['frontend'])
+                seed_recovery.assert_group_local_consumers(
+                    control, fresh['backend'], fresh['frontend'], document)
+
+            def stage_generation():
+                seeded_inputs, seed_volume = _frontend(
+                    control, operation, selected, state, args.port, frontend_image,
+                    create_generation=True,
+                    old_generation_id=failed_seed_context['active_generation']['generation_id'],
+                    old_seed_sha256=failed_seed_context['failure_identity']['old_seed_sha256'],
+                    publish_inputs=False)
+                if seeded_inputs != failed_seed_context['current_inputs']:
+                    raise BuildControlError('New frontend generation seed differs from the authenticated source manifest')
+                if seeded_inputs['files'] != desired['files']:
+                    raise BuildControlError('Frontend seed changed during refresh')
+                probe = operation['receipt'].get('frontend_generation_probe')
+                seed_recovery.validate_generation_probe(
+                    probe, generation_id=operation['receipt'].get('frontend_generation_id'),
+                    old_generation_id=failed_seed_context['active_generation']['generation_id'],
+                    old_seed_sha256=failed_seed_context['failure_identity']['old_seed_sha256'])
+                new_document = _frontend_refresh_document(document, seed_volume, seeded_inputs,
+                    frontend_generation_subpath=operation['receipt'].get('frontend_generation_subpath'))
+                return {"inputs": seeded_inputs, "compose": new_document, "volume": seed_volume}
+
+            def guard_consumers(staged_generation):
+                fresh = inspect_services(ids['frontend'])
+                seed_recovery.assert_group_local_consumers(
+                    control, fresh['backend'], fresh['frontend'], staged_generation['compose'])
+
+            def final_prior_cas(staged_generation):
+                healthy_idle()
+                fresh = inspect_services(ids['frontend'])
+                seed_recovery.revalidate_context(
+                    control, args, previous, document, fresh, selected, failed_seed_context)
+                if describe(selected, args.port)['files'] != staged_generation['inputs']['files']:
+                    raise BuildControlError('Selected frontend seed changed before generation publication')
+
+            operation['receipt']['state'] = 'recreating-owned-frontend'
+            staged = seed_recovery.stage_and_publish_generation(
+                control, operation, guard_prior_consumers=guard_prior_consumers,
+                stage_generation=stage_generation,
+                guard_consumers=guard_consumers,
+                revalidate_prior=final_prior_cas,
+                compose_apply=lambda compose: compose_capture(
+                    compose, 'up', '--detach', '--no-build', '--pull', 'never',
+                    '--no-deps', '--force-recreate', 'frontend', timeout=180),
+            )
+            seeded, refreshed, volume = staged['inputs'], staged['compose'], staged['volume']
+        else:
+            seeded, volume = _frontend(control, operation, selected, state, args.port, frontend_image)
+            if seeded['files'] != desired['files']:
+                raise BuildControlError('Frontend seed changed during refresh')
+            refreshed = _frontend_refresh_document(document, volume, seeded,
+                frontend_image=frontend_image if recover_oom else None,
+                frontend_generation_subpath=operation['receipt'].get('frontend_generation_subpath'))
+            healthy_idle(); inspect_services(ids['frontend'])
+            operation['receipt']['state'] = 'recreating-owned-frontend'
+            control.write(operation['root'] + '/compose.json', refreshed)
+            compose_capture(refreshed, 'up', '--detach', '--no-build', '--pull', 'never',
+                            '--no-deps', '--force-recreate', 'frontend', timeout=180)
         frontend_id = compose_capture(refreshed, 'ps', '--all', '--quiet', 'frontend').decode().strip()
         if not re.fullmatch('[0-9a-f]{64}', frontend_id) or frontend_id == ids['frontend']:
             raise BuildControlError('Frontend refresh did not produce one new owned incarnation')
@@ -7295,14 +7547,16 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
         control.write(operation['root'] + '/frontend-source-view.json', view)
         again_package, again_provenance, again_sha, again_binary = codegen._backend_documents(ids['backend'])
         again_probe = None
-        if not recover_oom:
+        if not recover_oom and failed_seed_context is None:
             again_probe, _ = codegen._probe_source(ids['backend'], operation['receipt']['attempt'])
         if (again_package != package or again_provenance != provenance or again_sha != package_sha
                 or again_binary != binary_provenance
-                or (not recover_oom and not source_matches(again_probe, backend_source, package))
+                or (not recover_oom and failed_seed_context is None
+                    and not source_matches(again_probe, backend_source, package))
                 or describe(selected, args.port)['files'] != seeded['files']
-                or read_owned_regular(certificate_path) != certificate
-                or read_owned_regular(owner_path) != owner):
+                or (failed_seed_context is None
+                    and (read_owned_regular(certificate_path) != certificate
+                         or read_owned_regular(owner_path) != owner))):
             raise BuildControlError('Backend package/source, frontend seed or session storage changed during refresh')
         if recover_oom and _verified_frontend_recovery_image(control, selected) != (frontend_image, image_witness):
             raise BuildControlError('Frontend recovery image inputs changed after recreation')
@@ -7311,6 +7565,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                 or final['frontend']['State'].get('Running') is not True
                 or final['frontend']['State'].get('Health', {}).get('Status') != 'healthy'):
             raise BuildControlError('New frontend changed during source-view verification')
+        if failed_seed_context is not None:
+            validate_seed_backend(final['backend'])
         if frontend_bind_witness is not None:
             operation['receipt']['frontend_bind_source_witness'] = frontend_bind_witness
         new_config_sha = hashlib.sha256(canonical(refreshed)).hexdigest()
@@ -7326,6 +7582,24 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             complete_refresh(control, operation, frozen_context, final['backend'])
             operation['receipt']['frontend_frozen_resume'] = {
                 'attempt': frozen_context['resume'], 'terminal_sha256': frozen_context['terminal_sha256']}
+        if failed_seed_context is not None:
+            operation['receipt'].update(frontend_input_commit=seeded['source_commit'],
+                backend_app_commit=backend_source['commit'], frontend_generation_changed=True,
+                frontend_seed_recovery={
+                    'schema': failed_seed_context['schema'],
+                    'failed_attempt': failed_seed_context['attempt'],
+                    'failed_config_sha256': failed_seed_context['config_sha256'],
+                    'prior_terminal_sha256': failed_seed_context['terminal_sha256'],
+                    'prior_current_sha256': failed_seed_context['current_sha256'],
+                    'prior_verified_sha256': failed_seed_context['verified_sha256'],
+                    'prior_compose_sha256': failed_seed_context['compose_sha256'],
+                    'prior_input_manifest_sha256': failed_seed_context['input_manifest_sha256'],
+                    'failed_frontend_identity': failed_seed_context['failure_identity'],
+                    'source_pins': failed_seed_context['source_pins'],
+                    'controller_source_sha256': failed_seed_context['controller_source_sha256'],
+                    'new_generation_probe': operation['receipt']['frontend_generation_probe'],
+                    'backend_anchor_sha256': hashlib.sha256(canonical(seed_backend_anchor)).hexdigest(),
+                })
         operation['receipt'].update(frontend_volume=volume, backend_container=ids['backend'],
             frontend_container=frontend_id, backend_started_at=backend_pin[0], config_sha256=new_config_sha,
             source_commit=backend_source['commit'], source_digest=backend_source['source_digest'],
@@ -7338,6 +7612,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
 
 
 def refresh_frontend(args):
+    import docker_volume_frontend_seed_recovery as seed_recovery
+    seed_recovery.validate_refresh_options(args)
     return _retained_operation(args, recreate_services=False, refresh_frontend_service=True)
 
 
@@ -7823,6 +8099,10 @@ def _retained_operation(
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
     capture_terminal = getattr(args, "capture_terminal_observation", False)
+    failed_seed_new_generation = False
+    if refresh_frontend_service:
+        import docker_volume_frontend_seed_recovery as seed_recovery
+        failed_seed_new_generation = seed_recovery.validate_refresh_options(args)
     quiesce_api = getattr(args, "quiesce_api", False)
     from docker_volume_prelaunch_failure_stop import validate_options as prelaunch_failure_options
     capture_prelaunch_failure, prelaunch_failure_pin = prelaunch_failure_options(
@@ -8070,6 +8350,13 @@ def _retained_operation(
         return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
             layout, actual, ids, image, operator_probe_record, recover_oom=True)
     if refresh_frontend_service:
+        if failed_seed_new_generation:
+            import docker_volume_frontend_seed_recovery as seed_recovery
+            failed_seed_context = seed_recovery.refresh_context(
+                control, args, previous, document, actual, selected)
+            return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
+                layout, actual, ids, image, operator_probe_record,
+                failed_seed_context=failed_seed_context)
         from docker_volume_frontend_frozen_recovery import refresh_context
         frozen_context = refresh_context(control, args, previous, document, actual)
         return _refresh_frontend_services(control, args, previous_root, previous, document, selected,
@@ -9320,7 +9607,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         operation["receipt"].update(state="resuming-observation", state_root=str(state),
             backend_volumes=previous["backend_volumes"], frontend_volume=previous["frontend_volume"])
         _record_service_pins(control, operation, document, ids["backend"], ids["frontend"])
-        _pin_private_group_storage(control, operation, new_render=False, previous=previous)
+        _pin_private_group_storage(control, operation, new_render=False, previous=previous,
+                                   document=document)
         if terminal_context is not None:
             fresh = {name: json.loads(docker_text("inspect", identifier))[0] for name, identifier in ids.items()}
             _assert_private_restart_network(fresh, ids, control.project)

@@ -157,10 +157,10 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
                         'HostConfig': {'Memory': 8 * 1024**3 + (1 if fault == 'memory-drift' else 0)},
                         'State': {'StartedAt': 'new-start', 'Running': True, 'Health': {'Status': 'healthy'}}}
         observed = {'backend': backend, 'frontend': old_frontend}
-        document = {'services': {'backend': {'image': backend_image, 'same': 'declaration'},
+        document = {'services': {'backend': {'image': backend_image, 'same': 'declaration', 'environment': {}},
                                 'frontend': {'image': backend_image, 'mem_limit': str(6 * 1024**3),
                                              'environment': {'FULLMAG_FRONTEND_HOST_PORT': '3202'},
-                                             'tmpfs': ['/tmp:rw,size=512m']}},
+                                             'tmpfs': ['/tmp:rw,size=512m'], 'volumes': []}},
                     'volumes': {'frontend-build': {'name': 'old-volume'}, 'backend-cache': {'name': 'same'}}}
         before = copy.deepcopy(document)
         args = SimpleNamespace(port=3202, attempt='a'*32, config_sha256='c'*64)
@@ -230,6 +230,13 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(dev, '_session_host', return_value=windows_folder_host))
             stack.enter_context(mock.patch.object(windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'))
             stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            # These service-lifecycle fixtures retain a validated legacy host ledger.
+            # Ledger attestation itself is covered by its dedicated contracts.
+            stack.enter_context(mock.patch.object(dev, '_retained_ledger_profile', return_value={
+                'profile': 'host-ledger-v1',
+                'host_receipt': {'host_id': 'retained-host'},
+                'maintenance_document': {'name': 'retained-host-ledger'},
+            }))
             stack.enter_context(mock.patch.object(dev, 'docker_text', side_effect=text))
             stopped = stack.enter_context(mock.patch.object(dev, 'docker_capture'))
             stack.enter_context(mock.patch.object(dev, '_assert_private_restart_network'))
@@ -267,6 +274,10 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
         self.assertEqual(terminal['backend_observation']['session'], 'same')
         self.assertEqual(len(recreated), 1)
         self.assertTrue(any(k.endswith('/rollback-compose.json') for k in writes))
+        self.assertTrue(any(k.endswith('/host-ledger.json') and v == {'host_id': 'retained-host'}
+                            for k, v in writes.items()))
+        self.assertTrue(any(k.endswith('/ledger-maintenance-compose.json')
+                            and v == {'name': 'retained-host-ledger'} for k, v in writes.items()))
         logger.wait.assert_called_once()
 
     def test_non_oom_is_refused_without_seeding_or_lifecycle(self):
@@ -374,6 +385,7 @@ class FrontendRecoveryDispatchTests(unittest.TestCase):
                     'inputs': {'source_root': str(source), 'image_id': backend_image}}
         control = mock.Mock(project='own')
         control.read.side_effect = lambda path, optional=False: (None if optional else document if path.endswith('/compose.json') else previous)
+        control.read_bytes.return_value = None  # This dispatch fixture has no prepared quarantine.
         args = SimpleNamespace(repo_root=str(Path(__file__).resolve().parent.parent), source_root=str(source),
                                attempt='a'*32, config_sha256=hashlib.sha256(build_control.canonical(document)).hexdigest(),
                                port=3202)

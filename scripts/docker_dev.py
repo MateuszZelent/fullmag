@@ -2618,7 +2618,12 @@ def _parser() -> argparse.ArgumentParser:
     frontend_refresh.add_argument("--config-sha256", required=True)
     frontend_refresh.add_argument("--source-root", type=Path, required=True)
     frontend_refresh.add_argument("--port", type=int, required=True)
-    frontend_refresh.add_argument("--frontend-frozen-resume")
+    frontend_refresh_modes = frontend_refresh.add_mutually_exclusive_group()
+    frontend_refresh_modes.add_argument("--frontend-frozen-resume")
+    frontend_refresh_modes.add_argument(
+        "--failed-seed-new-generation", action="store_true",
+        help="create a fresh private frontend generation after an exactly verified failed seed",
+    )
     frontend_refresh.add_argument("--frontend-frozen-resume-sha256")
     run_script_parser = subparsers.add_parser(
         "run-script",
@@ -3155,6 +3160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.action == "build":
             build(args)
         elif args.action == "refresh-frontend-volume":
+            if args.failed_seed_new_generation and args.frontend_frozen_resume_sha256 is not None:
+                raise _fail("Failed-seed generation cannot use a frozen-resume digest")
             from docker_volume_dev import refresh_frontend
             refresh_frontend(args)
         elif args.action == "maintain-cache":

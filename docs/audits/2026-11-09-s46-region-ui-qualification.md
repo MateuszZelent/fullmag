@@ -1588,3 +1588,59 @@ SHA `e3b0c442…b855`; źródło czyste 247 B, SHA `7b550dda…e712651`.
 Brakuje freeze i frozen copy, dlatego istniejący frozen refresh nie jest
 adekwatny. Nowa prywatna generacja frontendu jest przygotowywana jako
 jawny tryb naprawy. Dotychczasowy workspace pozostaje zachowany; UI niegotowe.
+
+
+### Regresja Compute E096 — rzeczywisty GREEN w CI
+
+Rust run `43343485862`, job `131617151250`, dla dokładnego
+`e0961730168f679d03f978ef4ddf823f976f5e6f` wykonał cały filtr
+`live_compute_request::tests::`. Log 2026-11-13T01:33:16Z potwierdza PASS
+parent HTTP regression i jego izolowanego child procesu (child rzeczywiście
+uruchomiony przez --ignored --exact), oraz PASS durable acceptance/release
+replay i no-key private acceptance. Przeszły kontrole scope/restore, brak
+store/no-key/body conflict, starszy/równy/przyszły/MAX scene pin, nieanotowany
+błąd mesh pod fence oraz rzeczywista kolejność frozen-spins binding w HTTP.
+Bramka workspace startup/projection przeszła; reszta Rust job w toku bez
+ówczesnych błędów. To dowód kontraktów backendu, nie odbiór UI, runtime
+naukowego ani całej macierzy. Pełny log zachowano lokalnie jako
+`/tmp/p22-e096-rust-job.log`. Działający backend nadal app commit 48845db…;
+E096 różni się w testach i audycie, bez nowego kodu produkcyjnego API.
+
+
+Run `43343485862` zakończył się następnie **SUCCESS** dla E096; wszystkie
+wybrane bramki Rust przeszły. Nowa, jeszcze nieopublikowana naprawa frontendu
+ma osobny zakres weryfikacji. Jej CLI: 49 mocked up/parser tests PASS,
+cztery dotknięte przypadki dodatkowo PASS po doprecyzowaniu odrzucenia pustego
+sprzecznego digestu. Nie wykonano jeszcze rzeczywistego frontend apply.
+
+
+### Nowa generacja frontendu — source review i testy przed apply
+
+Jawny tryb `--failed-seed-new-generation` i wrapper
+`just docker-dev-recover-frontend-seed` odtwarzają wyłącznie frontend w świeżej
+prywatnej generacji. Stary workspace pozostaje zachowany. Dwie kontrole
+konsumentów (przed seedingiem i przed publikacją/Compose), stary CAS,
+oddzielne commity backend/input/controller oraz późniejsze przenoszenie
+wybranej generacji mają pokrycie w testach. Review wykrył i poprawił również
+UnboundLocalError dla legacy non-group volume; nowa regresja wykonała RED,
+a po inicjalizacji pól generacji przechodzi. Produkcyjne guardy zachowano.
+
+Ostateczny lokalny zestaw dziewięciu modułów: **233 testy PASS** (7.100 s),
+wyłącznie Python metadata/guest-tempdir i mocked Docker. Log:
+`/tmp/p22-frontend-final-tests.log`. Obejmuje nowy proof/guest lifecycle,
+group frontend seed, frozen recovery, runtime state, recreate, container
+recovery, abrupt/v6 consumer scope, parser/up oraz legacy frontend recovery.
+Dwa dodatkowe suite'y dodano do istniejącego CI. AST/diff i rozwinięcie
+recepty są sprawdzane; `just --dry-run` oznacza tylko rendering komendy,
+a nie rzeczywisty wynik guardów. Rzeczywisty guarded apply jeszcze wymagany.
+
+Starszy legacy suite miał te same 6 failures/4 errors na E096. Uzupełniono
+fixture braku prepared quarantine oraz zweryfikowanego legacy ledgeru,
+zachowując asercje lifecycle, drift i outcome-unknown; dodatkowo sprawdzono
+przeniesienie dokumentów ledgeru. Pełne porównanie bazowe: 1377 tracked Python
+files, 32677065 B, baseline-only cwd/PYTHONPATH, log
+`/tmp/p22-e096-frontend-baseline.log`. Zbyt duży wcześniejszy scratch snapshot
+wyczerpał WSL; usunięto wyłącznie utworzone przez test kopie. Backend po tym
+pozostał healthy z tym samym API instance/PID/start ticks, bez aktywnej sesji.
+WSL około 453 MiB; S46 minimum 1 GiB nadal niespełnione. Danych użytkownika
+ani cudzych runtime'ów nie usuwano.

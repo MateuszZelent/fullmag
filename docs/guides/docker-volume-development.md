@@ -203,6 +203,49 @@ Ta procedura nie przyznaje automatycznie prawa zapisu do `examples`.
 
 ## Iteracje i awarie
 
+### Nowa generacja po odmowie seedowania `next-env.d.ts`
+
+Ten jawny tryb dotyczy wyłącznie przypiętej, nieudanej próby frontendowej:
+receipt `failed-confirmed`, frontend dokładnie `Exited 1` z PID 0, końcowy log
+z odmową hasha `apps/control-room/next-env.d.ts`, plik w prywatnym workspace
+ma 0 bajtów, a `inputs-freeze.json` i `frozen-inputs` nie istnieją. Nie naprawia
+pliku na miejscu i nie próbuje ponownie historycznego startu.
+
+Read-only kontrole wiążą poprzedni terminal/current/verified i Compose CAS,
+stary seed oraz bieżący manifest źródeł. Bieżący manifest frontendu musi być
+zgodny ze starym we wszystkich wejściach poza `source_commit`; receipt
+oddzielnie zapisuje commit pakietu aplikacji/backendu, commit starego manifestu
+frontendu, commit aktualnego manifestu kontrolera i hash helperów. Nie oznacza
+to ogólnej zgodności HEAD-ów ani odbioru S46. Proces tworzy
+`private/frontend/generations/<attempt>` i zachowuje stary workspace oraz jego
+receipty. Dopiero po ponownym odczycie starego CAS i drugiej kontroli
+konsumentów zapisuje nowy manifest, aktualizuje konfigurację wyłącznie frontendu i
+wykonuje `compose up --no-deps --force-recreate frontend`. Zdrowy, bezczynny
+backend zachowuje ten sam ID, StartedAt, PID, owner/certificate i proces API;
+żaden build ani restart backendu nie jest częścią tej procedury. Następne
+normalne resume i refresh biorą generację z receiptu i Compose, bez powrotu do
+domyślnego `private/frontend`.
+
+Zakres izolacji obejmuje wybraną grupę Linux-native, jej prywatne wolumeny,
+chronione direct binds i blokady/hashy. Kontrola korzysta z metadanych
+konsumentów Docker i odrzuca kolizje lub nieznane mapowania; nie bada zawartości
+obcych checkoutów Windows. Współdzielone zależności i wyniki pozostają poza
+nową generacją. Jeśli którakolwiek kontrola odmówi, nie ma automatycznego
+fallbacku ani replayu; zachowaj oba workspace’y i receipt nieznanego wyniku.
+
+Poniższy `--dry-run` wyłącznie renderuje wywołanie recepty. Nie wykonuje
+operacyjnych guardów i nie jest ich wynikiem. Zwykłe wywołanie jest zarządzanym
+apply: przed utworzeniem generacji wykonuje odczytowe kontrole, a pod lease
+powtarza CAS i kontrolę konsumentów przed Compose.
+
+```sh
+just --dry-run docker-dev-recover-frontend-seed \
+  <failed-attempt> <config-sha256> <source-root> <port>
+
+just docker-dev-recover-frontend-seed \
+  <failed-attempt> <config-sha256> <source-root> <port>
+```
+
 Gotowy kandydat pakietu po nieudanej publikacji jest odrębny od działającego
 pakietu. Backend najpierw sprawdza jego kompletność i dowody Make oraz
 zachowuje oryginalny manifest przed następnym capture źródeł. Dopiero świeże

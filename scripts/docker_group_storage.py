@@ -76,6 +76,25 @@ def role_subpath(control, role: str) -> str:
     return expected
 
 
+def frontend_generation_subpath(control, generation_id: str) -> str:
+    """Return one exact private frontend generation below the owned role."""
+    if not isinstance(generation_id, str) or _ATTEMPT_RE.fullmatch(generation_id) is None:
+        _fail("Frontend generation ID must be one exact operation UUID")
+    relative = "private/frontend/generations/" + generation_id
+    namespace = _namespace(control)
+    expected = "/".join(part for part in (namespace, relative) if part)
+    subpath = getattr(control, "subpath", None)
+    if not callable(subpath):
+        _fail("BuildControl does not expose its validated subpath resolver")
+    try:
+        observed = subpath(relative)
+    except Exception as error:
+        raise GroupStorageError("BuildControl rejected the frontend generation subpath") from error
+    if observed != expected:
+        _fail("BuildControl namespace resolver returned a different frontend generation subpath")
+    return expected
+
+
 def volume_declaration(control) -> dict[str, object]:
     """Return a Compose declaration for the existing external group volume."""
     volume = getattr(control, "volume", None)

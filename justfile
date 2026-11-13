@@ -175,10 +175,14 @@ docker-dev-script script source_root="" port="" request_id="":
 docker-dev-script-pinned attempt config_sha256 source_root script request_id="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" run-script --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --script {{quote(script)}} {{if request_id == "" { "" } else { "--request-id " + quote(request_id) } }}
 
-# Restart a pinned healthy backend only when its API confirms no active session.
 # Replace only the frontend generation; backend/source correspondence is required.
 docker-dev-refresh-frontend attempt config_sha256 source_root port="3197" frozen_resume="" frozen_resume_sha256="":
     @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} {{if frozen_resume == "" { if frozen_resume_sha256 == "" { "" } else { error("frozen frontend recovery requires both pins") } } else if frozen_resume_sha256 == "" { error("frozen frontend recovery requires both pins") } else { "--frontend-frozen-resume " + quote(frozen_resume) + " --frontend-frozen-resume-sha256 " + quote(frozen_resume_sha256) } }}
+
+# Recover one confirmed unfrozen seed failure into a fresh private frontend generation.
+# Preserve the old workspace and the exact healthy, idle backend process.
+docker-dev-recover-frontend-seed attempt config_sha256 source_root port="3197":
+    @{{storage_python}} "{{repo_root}}/scripts/docker_dev.py" --repo-root "{{repo_root}}" refresh-frontend-volume --attempt {{quote(attempt)}} --config-sha256 {{quote(config_sha256)}} --source-root {{quote(source_root)}} --port {{quote(port)}} --failed-seed-new-generation
 
 # Prepare one exact retained frontend completion; no service mutation or Solve.
 docker-dev-prepare-frontend-completion attempt base_attempt source_root port="3197":
