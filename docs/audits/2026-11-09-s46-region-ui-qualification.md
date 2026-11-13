@@ -1462,3 +1462,24 @@ modułu. To błąd kompilacji testów, nie semantic RED. Udostępniono istnieją
 i dodano jawny import w testach. Publiczne HTTP ani reguły admission nie
 zmieniły się. Parser rustfmt i diff check PASS; kompilacja i wykonanie regresji
 na poprawionym commicie wymagają ponownego CI.
+
+
+Przegląd kolejności bramek wykazał dodatkową lukę: mesh conflict poprzedza
+scene revision, a nadal błędny materiał może przerwać admission jeszcze
+wcześniej. Po edycji modelu stary body z finite scene pin mógł więc pozostać
+unresolved mimo nieodwracalnie starszej rewizji. Końcowa kontrola pod fence
+sprawdza teraz typed scene pin niezależnie od pierwszego powodu błędu, dopiero
+po completed durable miss i walidacji jawnego scope. Nie zmienia statusu, code
+ani message. Dodano rzeczywiste przypadki HTTP mesh mismatch + starsza scena
+oraz missing material + starsza scena. Parser/diff PASS; nowe regresje czekają
+na wykonanie w CI. To poprawka przepływu sterowania, bez zmian solvera.
+
+
+Rust run `43332086918`, job `131579020339`, przeszedł wcześniejszą bramkę
+kompilacji API, ale osobny target `fullmag-api-accepted-worker` wykrył
+E0433/E0432: współdzielony error.rs importował `crate::schemas`, którego worker
+nie posiada. Przeniesiono jedyny enum IntentDisposition do wspólnego modułu
+błędów, a common schema re-eksportuje ten sam typ. Nie dodano schematów Control
+Room do workera ani drugiego enumu. Publiczna nazwa i serializacja są bez
+zmian; istniejący SDK pozostaje oryginalnym wynikiem generatora. Parsery PASS,
+ponowne CI obu targetów i regresji wymagane. To nie jest nowy semantic RED.

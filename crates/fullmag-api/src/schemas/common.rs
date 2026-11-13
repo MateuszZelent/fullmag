@@ -57,11 +57,7 @@ pub struct ApiErrorDiagnosticResponse {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum IntentDisposition {
-    NotAccepted,
-}
+pub use crate::error::IntentDisposition;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ApiErrorResponse {

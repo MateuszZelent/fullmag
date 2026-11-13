@@ -184,11 +184,9 @@ impl LiveComputeRequest {
             ComputeReplayOutcome::CompletedMiss => {}
         }
 
-        let Some(rejection) = error.terminal_compute_rejection.clone() else {
-            return Ok(None);
-        };
+        let rejection = error.terminal_compute_rejection.clone();
         if self
-            .terminal_rejection_still_applies(state, expected, &rejection)
+            .terminal_rejection_still_applies(state, expected, rejection.as_ref())
             .await?
         {
             error.mark_intent_not_accepted();
@@ -200,7 +198,7 @@ impl LiveComputeRequest {
         &self,
         state: &Arc<AppState>,
         expected: &CurrentLiveRequestContext,
-        rejection: &TerminalComputeRejection,
+        rejection: Option<&TerminalComputeRejection>,
     ) -> Result<bool, ApiError> {
         let Some(explicit_scope) = self.explicit_scope.as_ref() else {
             return Ok(false);
@@ -235,6 +233,18 @@ impl LiveComputeRequest {
         {
             return Ok(false);
         }
+
+        // An immutable older scene pin cannot admit after a canonical edit,
+        // even when another guard (for example mesh or material validation)
+        // reports the first error. Preserve that error's status and message.
+        if self.scene_revision_pin.is_some_and(|pin| {
+            snapshot.scene_document.as_ref().is_some_and(|scene| scene.revision > pin)
+        }) {
+            return Ok(true);
+        }
+        let Some(rejection) = rejection else {
+            return Ok(false);
+        };
 
         match rejection {
             TerminalComputeRejection::CurrentRunMismatch { expected, observed } => {
@@ -1498,6 +1508,41 @@ mod tests {
             .as_str()
             .is_some_and(|message| message.contains("scene_revision precondition failed")));
         assert_eq!(body["intent_disposition"], "not_accepted");
+
+        // A mesh mismatch or still-incomplete material may be reported before
+        // scene validation. Neither may hide the independent older-scene proof.
+        for (missing_material, mesh_revision, expected_status, expected_code) in [
+            (false, 999, axum::http::StatusCode::CONFLICT, "conflict"),
+            (true, 0, axum::http::StatusCode::BAD_REQUEST, "bad_request"),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let store_root = directory.path().join("submit-store");
+            SessionStore::open(&store_root).unwrap();
+            let state = compute_http_test_state(Some(store_root), missing_material, true).await;
+            let scope = current_session_scope_header(&state).await;
+            let (status, body) = post_compute_http_with_scope(
+                state,
+                keyed_solve_request(
+                    Some("compute-intent"),
+                    json!({
+                        "scene_revision": 11,
+                        "mesh_revision": mesh_revision,
+                        "current_run": {"kind": "none"}
+                    }),
+                ),
+                Some("compute-intent"),
+                Some(&scope),
+            )
+            .await;
+            assert_eq!(status, expected_status);
+            assert_eq!(body["code"], expected_code);
+            assert_eq!(body["intent_disposition"], "not_accepted");
+            if !missing_material {
+                assert!(body["message"].as_str().is_some_and(|message| {
+                    message.contains("mesh_revision precondition failed")
+                }));
+            }
+        }
 
         // Future and saturated pins mismatch too, but cannot establish that
         // later authoring will leave an immutable request stale.

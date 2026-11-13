@@ -2331,3 +2331,9 @@ jawny scope żądania. Rewizja sceny saturuje, nie zawija się; przyszły pin
 ani sam fingerprint domeny nie są taką podstawą. To pozwala rozstrzygnąć
 starą intencję po edycji materiału lub tekstury, zanim użytkownik jawnie
 uruchomi nowy Compute.
+
+Dowód ściśle starszej rewizji jest niezależny od pierwszego zgłoszonego błędu
+admission: wcześniejszy konflikt mesha lub nadal niepełny materiał nie może
+go maskować. Oryginalny status, code i message pozostają zachowane. Nadal
+wymagane są jawny aktualny scope, transition i zakończony trwały keyed miss;
+ACK, brak skanu, headerless oraz konflikt body zachowują dotychczasowe reguły.

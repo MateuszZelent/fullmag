@@ -3,10 +3,14 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::schemas::common::IntentDisposition;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentDisposition {
+    NotAccepted,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TerminalComputeRejection {
