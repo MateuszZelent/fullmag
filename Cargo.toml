@@ -9,6 +9,7 @@ members = [
   "crates/fullmag-build-info",
   "crates/fullmag-cli",
   "crates/fullmag-engine",
+  "crates/fullmag-expr",
   "crates/fullmag-fdm-demag",
   "crates/fullmag-fdm-sys",
   "crates/fullmag-fem-sys",

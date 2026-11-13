@@ -1324,6 +1324,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fullmag-expr"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "fullmag-fdm-demag"
 version = "0.1.0"
 dependencies = [

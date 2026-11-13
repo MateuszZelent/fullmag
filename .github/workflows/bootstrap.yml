@@ -277,6 +277,9 @@ jobs:
       - name: Run CPU periodic Newell kernel cache regressions
         run: cargo test -p fullmag-engine periodic_newell_kernel_cache_tests --lib
 
+      - name: Run field_expr.v1 mask function and time bytecode contracts
+        run: cargo test --locked -p fullmag-expr
+
       - name: Run periodic XY multilayer PG-BB contracts
         run: |
           cargo test --locked -p fullmag-fdm-demag --test periodic_xy_kernel
