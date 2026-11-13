@@ -1261,9 +1261,27 @@ fn defer_scheduler_writer_busy<T>(
 fn defer_scheduler_queue_operation<T>(
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<SchedulerOperation<T>> {
-    defer_scheduler_writer_busy(operation, || {
-        "compute scheduler: build accepted run queue".to_owned()
-    })
+    let result = operation().context("compute scheduler: build accepted run queue");
+    match result {
+        Err(error)
+            if error.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<std::fs::TryLockError>(),
+                    Some(std::fs::TryLockError::WouldBlock)
+                )
+            }) =>
+        {
+            // A shared snapshot reader can collide with the native writer.
+            // No task has been admitted from this queue observation: let the
+            // next scheduling pass acquire a fresh, complete snapshot.
+            tracing::warn!(
+                error = ?error,
+                "compute scheduler deferred its queue snapshot while the session store writer is busy"
+            );
+            Ok(SchedulerOperation::Deferred)
+        }
+        result => classify_scheduler_operation(result),
+    }
 }
 
 fn classify_scheduler_operation<T>(result: Result<T>) -> Result<SchedulerOperation<T>> {
@@ -2002,9 +2020,36 @@ mod scheduler_writer_busy_tests {
             .unwrap();
         let busy =
             defer_scheduler_queue_operation(|| store.write_transaction().map(|_| ())).unwrap();
+        let mut reader_attempts = 0;
+        let reader_busy = defer_scheduler_queue_operation(|| {
+            reader_attempts += 1;
+            store.read_transaction().map(|_| ())
+        });
         release_tx.send(()).unwrap();
         holder.join().unwrap();
         assert!(matches!(busy, SchedulerOperation::Deferred));
+        assert!(matches!(reader_busy.unwrap(), SchedulerOperation::Deferred));
+        assert_eq!(reader_attempts, 1);
+
+        let ready = defer_scheduler_queue_operation(|| {
+            reader_attempts += 1;
+            store.read_transaction().map(|_| ())
+        })
+        .unwrap();
+        assert!(matches!(ready, SchedulerOperation::Completed(())));
+        assert_eq!(reader_attempts, 2);
+
+        let denied = defer_scheduler_queue_operation(|| {
+            Err::<(), _>(anyhow::Error::new(std::fs::TryLockError::Error(
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            )))
+        })
+        .unwrap_err();
+        assert!(denied.chain().any(|cause| matches!(
+            cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::Error(error))
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+        )));
 
         let ordinary = defer_scheduler_queue_operation(|| {
             Err::<(), _>(anyhow::anyhow!("queue snapshot is corrupt"))

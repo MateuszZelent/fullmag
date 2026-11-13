@@ -1991,3 +1991,40 @@ niezależny warunek struktury. Test jest już w istniejącym workflow
 dispersion-artifact-consumers. Nie zmieniano wersji zależności/lockfile ani
 instalacji działającego kontenera. Managed rebuild i rzeczywisty odbiór UI
 pozostają następnym krokiem.
+
+
+### Rebuild cb: frontend działa, ujawniona awaria odczytu kolejki schedulera
+
+Managed rebuild commita `cbdfedb9477414de0d87ed47acaf6c2223e36121` zakończył
+się exit0 jako development `a4ac20f260394af4ac1e5e1f575dcd3b`, config
+`97d9187961866ba76200796a50187c8fd23603aeda69a0845ca477c3ba99afc9`.
+Backend d7886b2d7e6b osiągnął NativeReady na snapshot
+`fb2c1d1efd2da26b28f99fe82712fb9ced73990a8aad7499bb18e50f1ba71fb2`.
+Frontend b64855408203 wykonał frozen install i rzeczywiście rozwiązuje
+postprocessing 6.39.6; /workspace zwraca HTTP200. Sam ten wynik nie oznacza
+odbioru operacji UI.
+
+Pierwsza próba browser QA `c8781e11c9924ca7aaa79927275ded8a` zakończyła się
+w preflight z outcome not-dispatched: nie było aktywnego modelu. Liczniki
+Compute oraz zmian materiału, tekstury i mesha pozostały zerowe. Następnie
+jednorazowo aktywowano fdm_cpu_three_relax_continue.py, request
+`18ba6191-92da-4a84-8d31-77fa62c98370`. Przyjęty run
+`run-live-a041e935283fe2613d2783b4831d6131fb9e50b564011bb80ef97b2a566b9b4a`
+ma niepotwierdzony wynik obserwacji (launcher exit75); nie wolno powtarzać
+skryptu lub Compute na podstawie samego timeoutu.
+
+Compute scheduler zakończył pracę przy budowaniu kolejki: współdzielony
+ReadTransaction otrzymał std::fs::TryLockError::WouldBlock podczas aktywnego
+zapisu sesji. Istniejący mechanizm odroczenia rozpoznawał StoreWriterBusy,
+ale nie ten typ błędu. Owner 93f34eb0-acc6-4a3a-90fa-1dbf0ef44310 jest failed;
+compute exited_failure, preparation exited_success. Natywne PID19145/19154/19155
+nie istnieją, API19133 zachowano wyłącznie do diagnostyki z admission fence.
+Dowód zapisano w /tmp/p22-cb-native-scheduler-failure.json. Docker nadal działa;
+natywny backend aplikacji wymaga naprawy i kwalifikowanego recovery.
+
+Poprawka źródłowa rozpoznaje dokładnie typed WouldBlock wyłącznie na granicy
+odczytu kolejki i korzysta z istniejącego odroczenia całego przebiegu admission.
+Regresja obejmuje rzeczywistą kolizję read_transaction z trzymanym writerem,
+pojedynczą próbę przed odroczeniem, udany odczyt po zwolnieniu oraz zachowanie
+błędów uprawnień i uszkodzonej kolejki. Testy natywne tej poprawki i ponowny
+odbiór runtime pozostają otwarte. Nie zmieniono solverów ani danych runu.
