@@ -2025,11 +2025,22 @@ mod scheduler_writer_busy_tests {
             reader_attempts += 1;
             store.read_transaction().map(|_| ())
         });
+        let mut admission_attempts = 0;
+        let admission_busy = defer_scheduler_writer_busy(
+            || {
+                admission_attempts += 1;
+                store.read_transaction().map(|_| ())
+            },
+            || "compute scheduler: admit queued task".to_owned(),
+        )
+        .unwrap();
         release_tx.send(()).unwrap();
         holder.join().unwrap();
         assert!(matches!(busy, SchedulerOperation::Deferred));
         assert!(matches!(reader_busy.unwrap(), SchedulerOperation::Deferred));
         assert_eq!(reader_attempts, 1);
+        assert!(matches!(admission_busy, SchedulerOperation::Deferred));
+        assert_eq!(admission_attempts, 1, "defer the admission call; do not replay the pass");
 
         let ready = defer_scheduler_queue_operation(|| {
             reader_attempts += 1;

@@ -55,6 +55,16 @@ fn writer_busy_error(root: &Path, conflict: WriterBusyConflict) -> anyhow::Error
     ))
 }
 
+fn reader_lock_error(root: &Path, error: TryLockError) -> anyhow::Error {
+    let error = match error {
+        TryLockError::WouldBlock => {
+            writer_busy_error(root, WriterBusyConflict::NativeDescriptor)
+        }
+        other => anyhow::Error::new(other),
+    };
+    error.context("session read transaction requires no active store writer")
+}
+
 impl std::fmt::Display for StoreWriterBusy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("session store writer is busy")
@@ -157,8 +167,9 @@ impl ReadTransaction {
         if !opened.is_file() {
             bail!("session read lock descriptor must be a regular file");
         }
-        file.try_lock_shared()
-            .context("session read transaction requires no active store writer")?;
+        if let Err(error) = file.try_lock_shared() {
+            return Err(reader_lock_error(root, error));
+        }
         let lock = NativeLock { file, locked: true };
         let mut descriptor = Vec::new();
         lock.file
@@ -611,6 +622,44 @@ mod tests {
             let file = OpenOptions::new().read(true).write(true).open(&path).unwrap();
             file.try_lock().unwrap();
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn read_transaction_maps_native_writer_contention_to_typed_busy() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("store");
+        std::fs::create_dir(&root).unwrap();
+        let writer = Writer::new(root.clone());
+        let _lease = writer.acquire().unwrap();
+
+        let error = match ReadTransaction::acquire(&root) {
+            Ok(_) => panic!("a native reader must not enter while the writer owns WRITER.lock"),
+            Err(error) => error,
+        };
+        assert!(error.chain().any(|cause| cause.is::<StoreWriterBusy>()), "{error:#}");
+        assert!(!error.chain().any(|cause| matches!(
+            cause.downcast_ref::<TryLockError>(),
+            Some(TryLockError::WouldBlock)
+        )), "native reader contention must use the shared typed busy contract");
+        assert!(
+            format!("{error:#}").contains("session read transaction requires no active store writer"),
+            "the read-context must remain attached: {error:#}"
+        );
+    }
+
+    #[test]
+    fn nonbusy_reader_lock_error_retains_original_trylock_chain() {
+        let error = reader_lock_error(
+            Path::new("store"),
+            TryLockError::Error(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        );
+        assert!(!error.chain().any(|cause| cause.is::<StoreWriterBusy>()));
+        assert!(error.chain().any(|cause| matches!(
+            cause.downcast_ref::<TryLockError>(),
+            Some(TryLockError::Error(io))
+                if io.kind() == std::io::ErrorKind::PermissionDenied
+        )), "{error:#}");
     }
 
     #[cfg(unix)]

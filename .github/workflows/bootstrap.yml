@@ -165,6 +165,8 @@ jobs:
           cargo test -p fullmag-runtime-control --lib study_inspection_integrity
           cargo test --locked -p fullmag-runtime-control --lib claim::scoped_store_io_classification_tests::raw_enodata_is_not_a_global_transient_store_error -- --exact
           cargo test -p fullmag-api --bin fullmag-api router_v2::handlers::data::antenna_inspection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::handlers::data::accepted_antenna_inspection::tests
+          cargo test --locked -p fullmag-api --bin fullmag-api session_persistence::historical_export_busy_tests
 
       - name: Run terminal Docker recovery contracts
         run: cargo test -p fullmag-session --lib runtime_service::retained_terminal_runs::tests --no-fail-fast

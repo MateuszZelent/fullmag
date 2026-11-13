@@ -12817,8 +12817,11 @@ mod read_transaction_tests {
         let rival = SessionStore::open_existing(store.root()).unwrap();
         let _writer = rival.write_transaction().unwrap();
         let error = store.read_coordinator_journal_batched_readonly(&catalog).unwrap_err();
-        assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
-            Some(std::fs::TryLockError::WouldBlock))));
+        assert!(error.chain().any(|cause| cause.is::<crate::StoreWriterBusy>()), "{error:#}");
+        assert!(!error.chain().any(|cause| matches!(
+            cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        )), "read contention should be normalized once at the native lock boundary");
     }
 
     #[test]

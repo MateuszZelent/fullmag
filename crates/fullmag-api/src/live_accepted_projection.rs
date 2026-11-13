@@ -1915,9 +1915,14 @@ fn load_stage_journal_details(
         match store.read_coordinator_journal_batched_readonly(catalog) {
             Ok(Some(journal)) => journal,
             Ok(None) => return Ok(StageJournalCapture { details, pending: true }),
-            Err(error) if error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
-                Some(std::fs::TryLockError::WouldBlock))) => {
-                // Only native shared-lock acquisition has this typed error.
+            Err(error) if error.chain().any(|cause| {
+                cause.is::<fullmag_session::StoreWriterBusy>()
+                    || matches!(
+                        cause.downcast_ref::<std::fs::TryLockError>(),
+                        Some(std::fs::TryLockError::WouldBlock)
+                    )
+            }) => {
+                // Only native shared-lock acquisition is deferred here.
                 // No unlocked journal read or fabricated verified cache entry.
                 return Ok(StageJournalCapture { details, pending: true });
             }

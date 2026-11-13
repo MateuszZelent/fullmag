@@ -1483,8 +1483,13 @@ fn accepted_plan_for_profile(
 }
 
 fn historical_export_error(error: anyhow::Error) -> ApiError {
-    if error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(),
-        Some(std::fs::TryLockError::WouldBlock))) {
+    if error.chain().any(|cause| {
+        cause.is::<fullmag_session::StoreWriterBusy>()
+            || matches!(
+                cause.downcast_ref::<std::fs::TryLockError>(),
+                Some(std::fs::TryLockError::WouldBlock)
+            )
+    }) {
         ApiError::conflict_with_code("antenna_store_busy", "accepted source has an active writer; retry this read")
     } else {
         ApiError::conflict(format!("historical_export_source_invalid: {error}"))
@@ -6563,5 +6568,27 @@ mod archive_error_regressions {
         let storage = archive_preflight_error(
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "staging denied").into(), "preflight");
         assert_eq!(storage.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
+
+#[cfg(test)]
+mod historical_export_busy_tests {
+    use super::*;
+
+    #[test]
+    fn typed_reader_busy_keeps_public_busy_code() {
+        let error = anyhow::Error::new(fullmag_session::StoreWriterBusy)
+            .context("read accepted historical export fence");
+        let mapped = historical_export_error(error);
+        assert_eq!(mapped.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(mapped.code.as_deref(), Some("antenna_store_busy"));
+    }
+
+    #[test]
+    fn nonbusy_reader_failure_remains_a_historical_export_error() {
+        let mapped = historical_export_error(anyhow::anyhow!("permission denied"));
+        assert_eq!(mapped.status, axum::http::StatusCode::CONFLICT);
+        assert_ne!(mapped.code.as_deref(), Some("antenna_store_busy"));
+        assert!(mapped.message.contains("historical_export_source_invalid"));
     }
 }

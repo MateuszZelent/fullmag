@@ -3320,7 +3320,9 @@ fn execute_accepted_closed_loop_worker_start(
         bail!("accepted inspection requires v4 FEM CPU/auto strict double, one artifact, no horizon/state/seeds");
     }
     validate_inspection_run_parameters(&accepted.run.specification, &study_step.step_id, true)?;
-    if !store.accepted_run_start_permitted(accepted.run.specification.run_id.as_str())? {
+    if !retry_store_writer_busy(|| {
+        store.accepted_run_start_permitted(accepted.run.specification.run_id.as_str())
+    })? {
         bail!("accepted inspection refuses to execute before explicit Compute release");
     }
     let maximum=fullmag_runtime_control::study_inspection::inspection_bundle_budget(&accepted_step.claim)?;
@@ -3956,7 +3958,7 @@ pub(crate) fn run_pending_accepted_start(
     // Recheck the immutable Compute release immediately before loading the
     // accepted study or executing a solver. Legacy runs without the optional
     // manual policy remain permitted by the session gate.
-    if !store.accepted_run_start_permitted(run_id.as_str())? {
+    if !retry_store_writer_busy(|| store.accepted_run_start_permitted(run_id.as_str()))? {
         bail!("accepted worker refuses to execute before explicit Compute release");
     }
     let snapshot_started_at = Instant::now();
@@ -5465,6 +5467,94 @@ mod accepted_worker_claim_retry_tests {
             )
             .unwrap();
         (directory, store)
+    }
+
+    #[test]
+    fn worker_start_gate_retries_real_writer_contention_without_execution_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SessionStore::open(directory.path().join("store")).unwrap();
+        let run_id = "run-worker-start-gate-busy";
+        let intent = fullmag_session::FmsRunIntent::new(
+            run_id,
+            "intent-worker-start-gate-busy",
+            serde_json::json!({
+                "run_id": run_id,
+                "parameters": {
+                    (fullmag_session::ACCEPTED_RUN_START_POLICY_KEY): {
+                        "schema_version": "accepted_run_start_policy.v1",
+                        "mode": "manual"
+                    }
+                }
+            }),
+        );
+        store.commit_run_intent(&intent).unwrap();
+        store
+            .release_accepted_run_start(
+                run_id,
+                &intent.payload_sha256,
+                "compute-worker-start-gate-busy",
+            )
+            .unwrap();
+
+        let reader = SessionStore::open_existing(store.root()).unwrap();
+        let rival = SessionStore::open_existing(store.root()).unwrap();
+        let (ready_tx, ready_rx) = sync_channel(1);
+        let (release_tx, release_rx) = sync_channel(1);
+        let holder = thread::spawn(move || {
+            let _writer = rival.write_transaction().unwrap();
+            ready_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let first_error = reader.read_transaction().err().expect("writer must exclude a reader");
+        assert!(
+            first_error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()),
+            "{first_error:#}"
+        );
+
+        let mut attempts = 0;
+        let mut release = Some(release_tx);
+        let permitted = retry_store_writer_busy(|| {
+            attempts += 1;
+            if attempts == 3 {
+                release.take().unwrap().send(()).unwrap();
+            }
+            reader.accepted_run_start_permitted(run_id)
+        });
+        if let Some(release) = release.take() {
+            let _ = release.send(());
+        }
+        holder.join().unwrap();
+
+        assert!(permitted.unwrap(), "the exact release remains authoritative after contention");
+        assert!(attempts >= 3, "the worker must retry the gate, not fail on the first busy read");
+        assert!(store.read_run_catalog(run_id).unwrap().is_none());
+        assert!(
+            !store.root().join(format!("runs/{run_id}/worker-attempts")).exists(),
+            "the read-only gate must not start execution or create attempt evidence"
+        );
+    }
+
+    #[test]
+    fn worker_start_gate_retry_does_not_retry_plain_or_text_only_busy_errors() {
+        let mut plain_attempts = 0;
+        let plain = retry_store_writer_busy(|| {
+            plain_attempts += 1;
+            Err::<(), _>(anyhow::anyhow!("permission denied"))
+        })
+        .unwrap_err();
+        assert_eq!(plain_attempts, 1);
+        assert!(plain.to_string().contains("permission denied"));
+
+        let mut text_busy_attempts = 0;
+        let text_busy = retry_store_writer_busy(|| {
+            text_busy_attempts += 1;
+            Err::<(), _>(anyhow::anyhow!("session store writer is busy"))
+        })
+        .unwrap_err();
+        assert_eq!(text_busy_attempts, 1);
+        assert_eq!(text_busy.to_string(), "session store writer is busy");
     }
 
     #[test]

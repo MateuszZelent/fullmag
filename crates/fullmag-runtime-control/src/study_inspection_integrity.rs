@@ -48,9 +48,13 @@ fn acquire_inspection_read_transaction(store: &SessionStore, wait: std::time::Du
     loop {
         match store.read_transaction() {
             Ok(transaction) => return Ok(transaction),
-            Err(error) if error.chain().any(|cause| matches!(
-                cause.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock)
-            )) && Instant::now() < deadline => {
+            Err(error) if error.chain().any(|cause| {
+                cause.is::<fullmag_session::StoreWriterBusy>()
+                    || matches!(
+                        cause.downcast_ref::<std::fs::TryLockError>(),
+                        Some(std::fs::TryLockError::WouldBlock)
+                    )
+            }) && Instant::now() < deadline => {
                 // Match the existing store-writer backoff without changing its error classification.
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 std::process::id().hash(&mut hasher);
@@ -362,7 +366,11 @@ mod tests {
         let error = acquire_inspection_read_transaction(&store, wait).err().unwrap();
         assert!(start.elapsed() >= wait, "persistent contention must wait through the acquisition deadline");
         assert!(start.elapsed() < Duration::from_secs(2), "the short test deadline must not become the five-second production wait");
-        assert!(error.chain().any(|cause| matches!(cause.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock))));
+        assert!(error.chain().any(|cause| cause.is::<fullmag_session::StoreWriterBusy>()), "{error:#}");
+        assert!(!error.chain().any(|cause| matches!(
+            cause.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        )), "the deadline should preserve normalized writer contention");
         assert_eq!(std::fs::read(store.root().join("WRITER.owner.json")).unwrap(), owner);
     }
 
