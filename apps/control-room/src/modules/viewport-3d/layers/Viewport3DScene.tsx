@@ -338,6 +338,7 @@ interface Viewport3DSceneProps {
   scaleUnitMode: Viewport3DScaleUnitMode;
   viewCubeVisible: boolean;
   visualProfileId: Viewport3DVisualProfileId;
+  qualityProfileId?: Viewport3DVisualProfileId;
 }
 
 interface Viewport3DViewportSize {
@@ -1977,6 +1978,7 @@ export function Viewport3DScene({
   scaleUnitMode,
   viewCubeVisible,
   visualProfileId,
+  qualityProfileId,
 }: Viewport3DSceneProps) {
   const appearance = useViewport3DAppearance();
   const invalidate = useBatchedInvalidate("camera");
@@ -2153,8 +2155,8 @@ export function Viewport3DScene({
     [bounds, cameraOrthographicScale, effectiveCameraState, viewportSize],
   );
   const visualProfile = useMemo(
-    () => getViewport3DVisualProfile(visualProfileId),
-    [visualProfileId],
+    () => getViewport3DVisualProfile(qualityProfileId ?? visualProfileId),
+    [qualityProfileId, visualProfileId],
   );
   const materialProfile = useMemo(
     () => resolveViewport3DMaterialProfile(visualProfile, appearance),
@@ -2340,7 +2342,7 @@ export function Viewport3DScene({
       <SavedAntennaSourceLayer model={savedAntennaSourceModel ?? null} colors={colors} tracker={tracker} />
       <Viewport3DBackground colors={colors} mode={appearance.backgroundMode} strength={appearance.backgroundStrength} tracker={tracker} />
       <Viewport3DCaptureSource onFrameReady={onCaptureFrameReady} />
-      <Viewport3DLightingRig profileId={visualProfileId} appearance={appearance} />
+      <Viewport3DLightingRig profileId={qualityProfileId ?? visualProfileId} appearance={appearance} bounds={bounds} tracker={tracker} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
         <CanvasLifecycleProbe diagnostics={requestDiagnostics} tracker={tracker} />
       ) : null}

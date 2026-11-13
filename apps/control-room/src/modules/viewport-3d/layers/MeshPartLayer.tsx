@@ -7,6 +7,7 @@ import {
   BufferGeometry,
   type MeshBasicMaterial,
   type MeshLambertMaterial,
+  type MeshStandardMaterial,
   type ShaderMaterial,
 } from "three";
 import {
@@ -71,6 +72,7 @@ import { BoundsBox } from "./BoundsLayers";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolveMeshPartSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   pointColorFromSettings,
@@ -985,6 +987,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const materialFrontRef = useRef<MeshBasicMaterial>(null);
   const litMaterialRef = useRef<MeshLambertMaterial>(null);
   const litMaterialFrontRef = useRef<MeshLambertMaterial>(null);
+  const standardMaterialRef = useRef<MeshStandardMaterial>(null);
+  const standardMaterialFrontRef = useRef<MeshStandardMaterial>(null);
   const { hasScalarColors: hasUploadedVertexScalarColors } =
     resolveMeshPartVisibleScalarColorState({
     effectiveScalarColors,
@@ -1006,8 +1010,6 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const surfacePolicy = surfacePassPolicies.back;
   const surfacePolicyFront = surfacePassPolicies.front;
-  const litSurfaceMaterial =
-    !hasUploadedVertexScalarColors && materialProfile.uniformGeometry.lit;
   const scalarShaderBuffer = committedScalarColorState.buffer;
   // Stable "program shape" key: null when there is no buffer, otherwise one of 4 strings
   // (scalar/orientation × real/complex). Deliberately does NOT depend on scalarShaderBuffer's
@@ -1044,6 +1046,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   );
   const scalarShaderMaterial = scalarShaderMaterials.back;
   const scalarShaderMaterialFront = scalarShaderMaterials.front;
+  const surfaceMaterialPlan = resolveMeshPartSurfaceMaterialPlan({
+    hasScalarShaderMaterial: Boolean(scalarShaderMaterial),
+    hasUploadedVertexScalarColors,
+    materialProfile,
+  });
 
   useLayoutEffect(() => {
     // Add normals only for an explicitly lit pass; keep the same geometry and
@@ -1055,9 +1062,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       Boolean(scalarShaderMaterial) &&
       materialProfile.magneticSurface.shadeStrength > 0;
     const uniformSurfaceNeedsNormals =
-      !hasUploadedVertexScalarColors &&
-      !scalarShaderMaterial &&
-      materialProfile.uniformGeometry.lit;
+      surfaceMaterialPlan.kind === "standard" ||
+      surfaceMaterialPlan.kind === "lambert";
     if (!shaderNeedsNormals && !uniformSurfaceNeedsNormals) {
       return;
     }
@@ -1065,11 +1071,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     invalidate();
   }, [
     geometry,
-    hasUploadedVertexScalarColors,
     invalidate,
     materialProfile.magneticSurface.shadeStrength,
-    materialProfile.uniformGeometry.lit,
     scalarShaderMaterial,
+    surfaceMaterialPlan.kind,
   ]);
 
   useEffect(
@@ -1136,6 +1141,12 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     }
     if (litMaterialFrontRef.current) {
       litMaterialFrontRef.current.needsUpdate = true;
+    }
+    if (standardMaterialRef.current) {
+      standardMaterialRef.current.needsUpdate = true;
+    }
+    if (standardMaterialFrontRef.current) {
+      standardMaterialFrontRef.current.needsUpdate = true;
     }
   }, [hasUploadedVertexScalarColors]);
 
@@ -1240,35 +1251,50 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {(modalSurfaceActive || renderPlan.surface.visible) && geometry ? (
         <>
           <mesh
+            castShadow={surfaceMaterialPlan.castShadow}
             geometry={geometry}
+            receiveShadow={surfaceMaterialPlan.receiveShadow}
             renderOrder={surfacePassPolicies.renderOrderBack}
             userData={MESH_PART_SURFACE_USER_DATA}
           >
             {scalarShaderMaterial ? (
               <primitive attach="material" object={scalarShaderMaterial} />
-            ) : litSurfaceMaterial ? (
+            ) : surfaceMaterialPlan.kind === "standard" ? (
+              <meshStandardMaterial
+                ref={standardMaterialRef}
+                color={meshColor}
+                metalness={surfaceMaterialPlan.metalness}
+                opacity={surfaceOpacity}
+                roughness={surfaceMaterialPlan.roughness}
+                toneMapped={surfaceMaterialPlan.toneMapped}
+                vertexColors={false}
+                {...surfacePolicy}
+              />
+            ) : surfaceMaterialPlan.kind === "lambert" ? (
               <meshLambertMaterial
                 ref={litMaterialRef}
                 color={meshColor}
                 opacity={surfaceOpacity}
-                toneMapped={materialProfile.magneticSurface.toneMapped}
+                toneMapped={surfaceMaterialPlan.toneMapped}
                 vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
-            ) : (
+            ) : surfaceMaterialPlan.kind === "basic" ? (
               <meshBasicMaterial
                 ref={materialRef}
                 color={meshColor}
                 opacity={surfaceOpacity}
-                toneMapped={materialProfile.magneticSurface.toneMapped}
+                toneMapped={surfaceMaterialPlan.toneMapped}
                 vertexColors={hasUploadedVertexScalarColors}
                 {...surfacePolicy}
               />
-            )}
+            ) : null}
           </mesh>
           {surfacePolicyFront ? (
             <mesh
+              castShadow={surfaceMaterialPlan.castShadow}
               geometry={geometry}
+              receiveShadow={surfaceMaterialPlan.receiveShadow}
               renderOrder={
                 surfacePassPolicies.renderOrderFront ??
                 RENDER_POLICIES.contextSurfaceFront.renderOrder
@@ -1277,25 +1303,36 @@ export const MeshPartLayer = memo(function MeshPartLayer({
             >
               {scalarShaderMaterialFront ? (
                 <primitive attach="material" object={scalarShaderMaterialFront} />
-              ) : litSurfaceMaterial ? (
+              ) : surfaceMaterialPlan.kind === "standard" ? (
+                <meshStandardMaterial
+                  ref={standardMaterialFrontRef}
+                  color={meshColor}
+                  metalness={surfaceMaterialPlan.metalness}
+                  opacity={surfaceOpacity}
+                  roughness={surfaceMaterialPlan.roughness}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
+                  vertexColors={false}
+                  {...surfacePolicyFront}
+                />
+              ) : surfaceMaterialPlan.kind === "lambert" ? (
                 <meshLambertMaterial
                   ref={litMaterialFrontRef}
                   color={meshColor}
                   opacity={surfaceOpacity}
-                  toneMapped={materialProfile.magneticSurface.toneMapped}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
                   vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
-              ) : (
+              ) : surfaceMaterialPlan.kind === "basic" ? (
                 <meshBasicMaterial
                   ref={materialFrontRef}
                   color={meshColor}
                   opacity={surfaceOpacity}
-                  toneMapped={materialProfile.magneticSurface.toneMapped}
+                  toneMapped={surfaceMaterialPlan.toneMapped}
                   vertexColors={hasUploadedVertexScalarColors}
                   {...surfacePolicyFront}
                 />
-              )}
+              ) : null}
             </mesh>
           ) : null}
         </>

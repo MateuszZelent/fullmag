@@ -1,5 +1,7 @@
 "use client";
 
+import { resolveViewport3DPresentationQuality } from "./viewport3dPresentation";
+
 import { useCallback, useSyncExternalStore } from "react";
 
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
@@ -351,6 +353,10 @@ class Viewport3DStore {
     if (resetAll || section === "lighting") {
       appearance = {
         ...appearance,
+        renderMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.renderMode,
+        materialRoughness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialRoughness,
+        materialMetalness: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.materialMetalness,
+        softShadows: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.softShadows,
         lightingMode: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingMode,
         lightingIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingIntensity,
         lightingAzimuth: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.lightingAzimuth,
@@ -363,6 +369,7 @@ class Viewport3DStore {
         ...appearance,
         aoIntensity: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoIntensity,
         aoRadius: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.aoRadius,
+        exportScale: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportScale,
         exportAnnotations: DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES.exportAnnotations,
       };
       widgets = {
@@ -1017,6 +1024,7 @@ function buildViewport3DAppearanceDiagnostics(
     antialiasRequested: widgets.effectAntialias,
     bloomRequested: widgets.effectBloom,
     profileAllowsAntialias: getViewport3DVisualProfile(profileId).antialias,
+    profileAllowsAmbientOcclusion: resolveViewport3DPresentationQuality(profileId).aoEnabled,
     postProcessingAvailable,
     postProcessingDataProtected,
   });
@@ -1044,7 +1052,12 @@ function sameViewport3DAppearancePreferences(
   left: Viewport3DAppearancePreferences,
   right: Viewport3DAppearancePreferences,
 ): boolean {
-  return left.backgroundMode === right.backgroundMode &&
+  return left.renderMode === right.renderMode &&
+    left.materialRoughness === right.materialRoughness &&
+    left.materialMetalness === right.materialMetalness &&
+    left.softShadows === right.softShadows &&
+    left.exportScale === right.exportScale &&
+    left.backgroundMode === right.backgroundMode &&
     left.backgroundStrength === right.backgroundStrength &&
     left.lightingMode === right.lightingMode &&
     left.lightingIntensity === right.lightingIntensity &&

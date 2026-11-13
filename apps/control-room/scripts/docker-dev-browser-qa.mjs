@@ -2378,6 +2378,7 @@ const main = async () => {
           throw new Error(`Viewport QA fixture unavailable: ${partialProof.fixture_preparation.reason}`);
         }
       }
+      try {
       appearanceQa = await runViewportAppearanceBrowserQa(page, {
         assertCanvas: (label) => assertCanvas(page, label),
         expectedSession: sessionBefore,
@@ -2385,6 +2386,10 @@ const main = async () => {
         pngDecoder: PNG,
         timeout,
       });
+      } catch (error) {
+        if (error.partialProof) partialProof.viewport_appearance = error.partialProof;
+        throw error;
+      }
       partialProof.viewport_appearance = appearanceQa;
       try {
         partialProof.viewport_camera = await runViewportCameraBrowserQa(page, {
@@ -2396,7 +2401,7 @@ const main = async () => {
         throw error;
       }
       exportQa = await runViewportExportBrowserQa(page, {
-        assertCanvas: (label) => assertCanvas(page, label), pngDecoder: PNG, timeout,
+        assertCanvas: (label) => assertCanvas(page, label), pngDecoder: PNG, timeout, expectedCaptureDpr: 1,
       });
       partialProof.viewport_export = exportQa;
       layoutQa = await runViewportLayoutBrowserQa(page, {

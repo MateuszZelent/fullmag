@@ -1,3 +1,5 @@
+import { runViewportExportBrowserQa } from "./viewport-export-browser-qa.mjs";
+
 const APPEARANCE_STORAGE_KEY =
   "fullmag.control-room.viewport-3d.appearance-preferences";
 
@@ -33,6 +35,7 @@ export async function runViewportAppearanceBrowserQa(page, {
   const originalDialogOpen = await dialog.isVisible().catch(() => false);
   const storageBefore = await readAppearanceStorage(page);
   let originalControls = null;
+  let presentationRendering = null;
   let result = null;
   let operationError = null;
   let restorationError = null;
@@ -47,6 +50,16 @@ export async function runViewportAppearanceBrowserQa(page, {
     }
     await ensureSettingsOpen(page, dialog, false, timeout);
     originalControls = await readControls(page, dialog);
+
+    try {
+      presentationRendering = await checkPresentationRendering(page, dialog, {
+        assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit: await page.evaluate(() => window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__?.()),
+      });
+    } catch (error) {
+      if (error.partialProof) error.partialProof = { presentation_rendering: error.partialProof };
+      throw error;
+    }
+
 
     await choose(page, "Background", BACKGROUND_OPTIONS.gradient, "fm-view-background", timeout);
     await setRangeValue(page, "#fm-view-background-strength", 1);
@@ -149,6 +162,7 @@ export async function runViewportAppearanceBrowserQa(page, {
       throw new Error("Quantitative color protection was not reported for both AO and Bloom");
     }
 
+
     const narrowLayout = await checkNarrowViewport(page, dialog, timeout);
     await page.setViewportSize(originalViewport);
     await page.waitForTimeout(100);
@@ -171,6 +185,7 @@ export async function runViewportAppearanceBrowserQa(page, {
         };
 
     result = {
+      presentation_rendering: presentationRendering,
       settings_dialog: {
         opened_from_view_settings: true,
         title: "3D View Settings",
@@ -233,6 +248,7 @@ export async function runViewportAppearanceBrowserQa(page, {
       },
     };
   } catch (error) {
+    if (presentationRendering) error.partialProof = { ...error.partialProof, presentation_rendering: presentationRendering };
     operationError = error;
   } finally {
     pixelSnapshots.clear();
@@ -359,6 +375,7 @@ async function setSwitch(page, label, checked, timeout) {
   const inputId = {
     "Ambient occlusion": "fm-viewport-3d-effect-ambient-occlusion",
     "Bloom (Glow)": "fm-viewport-3d-effect-bloom",
+    "Soft shadows": "fm-view-shadows",
   }[label];
   if (!inputId) throw new Error(`Unknown appearance switch ${label}`);
   const control = page.getByRole("switch", { name: label, exact: true });
@@ -631,4 +648,96 @@ function assertSameSession(expected, actual, label) {
 
 function normalizeText(value) {
   return String(value).replace(/\s+/g, " ").trim();
+}
+
+
+async function checkPresentationRendering(page, dialog, { assertCanvas, pngDecoder, timeout, pixelSnapshots, lightingAudit }) {
+  const [originalMode, originalQuality, originalLighting, originalAo] = await Promise.all([
+    readChoice(page, "Visualization mode"),
+    readChoice(page, "Render quality"),
+    readChoice(page, "Geometry appearance"),
+    dialog.getByRole("switch", { name: "Ambient occlusion", exact: true }).isChecked(),
+  ]);
+  let originalRoughness;
+  let originalMetalness;
+  let originalShadows;
+  let difference = null;
+  let presentationPng = null;
+  const profiles = ["Interactive Lite", "Interactive", "Balanced", "Figure"];
+  const isolatedQaBox = new Set(lightingAudit?.litPrimitiveObjectIds ?? []).has("qa-studio-box");
+  try {
+    await choose(page, "Visualization mode", "Presentation — PBR and studio HDRI", "fm-view-render-mode", timeout);
+    await choose(page, "Geometry appearance", "Studio", "fm-view-lighting", timeout);
+    await setSwitch(page, "Ambient occlusion", false, timeout);
+    originalShadows = await dialog.getByRole("switch", { name: "Soft shadows", exact: true }).isChecked();
+    await setSwitch(page, "Soft shadows", false, timeout);
+    originalRoughness = Number(await page.locator("#fm-view-roughness").inputValue());
+    originalMetalness = Number(await page.locator("#fm-view-metalness").inputValue());
+    await setRangeValue(page, "#fm-view-metalness", 1);
+    await setRangeValue(page, "#fm-view-roughness", 0.1);
+    const polishedAudit = await page.evaluate(() => window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__?.());
+    await readCanvasPixels(page, dialog, "presentation-polished", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    await setRangeValue(page, "#fm-view-roughness", 0.9);
+    await readCanvasPixels(page, dialog, "presentation-rough", pixelSnapshots, pngDecoder, assertCanvas, timeout);
+    difference = comparePixelSnapshots(pixelSnapshots, "presentation-polished", "presentation-rough");
+    const polishedPixels = pixelSnapshots.get("presentation-polished");
+    if (polishedPixels) {
+      const png = pngDecoder.sync.write(polishedPixels);
+      if (png.length <= 2 * 1024 * 1024) presentationPng = png.toString("base64");
+    }
+    if (lightingAudit?.litPrimitiveMeshCount > 0 && lightingAudit.otherSurfaceMeshCount === 0 && difference.changed_pixels < 8) {
+      const error = new Error("PBR roughness did not change an isolated uniform primitive under studio HDRI");
+      error.partialProof = { difference, polishedAudit, roughAudit: await page.evaluate(() => window.__FULLMAG_READ_VIEWPORT_3D_LIGHTING__?.()), polished_png_base64: presentationPng };
+      throw error;
+    }
+    await setSwitch(page, "Ambient occlusion", true, timeout);
+    await setSwitch(page, "Soft shadows", true, timeout);
+    const qualityPixels = [];
+    for (const [index, profile] of profiles.entries()) {
+      await choose(page, "Render quality", profile, "fm-view-quality", timeout);
+      await waitForRenderedFrame(page);
+      await assertCanvas("presentation quality " + profile);
+      const snapshotName = `presentation-quality-${index}`;
+      await readCanvasPixels(page, dialog, snapshotName, pixelSnapshots, pngDecoder, assertCanvas, timeout);
+      const reference = pixelSnapshots.get("presentation-rough");
+      const current = pixelSnapshots.get(snapshotName);
+      let blackenedPixels = 0;
+      if (reference && current && reference.data.length === current.data.length) {
+        for (let offset = 0; offset < reference.data.length; offset += 4) {
+          if (Math.max(reference.data[offset], reference.data[offset + 1], reference.data[offset + 2]) > 8 &&
+              Math.max(current.data[offset], current.data[offset + 1], current.data[offset + 2]) <= 1) blackenedPixels += 1;
+        }
+      }
+      if (isolatedQaBox && blackenedPixels > current.width * current.height * 0.1) {
+        const error = new Error(`${profile} AO/shadows blackened the isolated QA box: ${blackenedPixels} pixels`);
+        error.partialProof = { profile, blackenedPixels, polished_png_base64: presentationPng,
+          current_png_base64: pngDecoder.sync.write(current).toString("base64") };
+        throw error;
+      }
+      qualityPixels.push({ profile, blackened_pixels: blackenedPixels });
+    }
+    await choose(page, "Render quality", "Interactive", "fm-view-quality", timeout);
+    const exportProof = await runViewportExportBrowserQa(page, {
+      assertCanvas, pngDecoder, timeout, expectedCaptureDpr: 1,
+    });
+    return {
+      state: lightingAudit?.litPrimitiveMeshCount > 0 && lightingAudit.otherSurfaceMeshCount === 0 ? "passed" : "nonisolated-scene",
+      roughness_changed_pixels: difference.changed_pixels,
+      polished_png_base64: presentationPng,
+      render_quality_profiles: profiles,
+      context_checks: profiles.length,
+      quality_pixel_checks: qualityPixels,
+      presentation_png_export: exportProof,
+      quantitative_data_protection: "Reported separately when quantitative data are visible",
+    };
+  } finally {
+    if (originalShadows !== undefined) await setSwitch(page, "Soft shadows", originalShadows, timeout);
+    if (originalRoughness !== undefined) await setRangeValue(page, "#fm-view-roughness", originalRoughness);
+    if (originalMetalness !== undefined) await setRangeValue(page, "#fm-view-metalness", originalMetalness);
+    await choose(page, "Render quality", originalQuality, "fm-view-quality", timeout);
+    await choose(page, "Geometry appearance", originalLighting, "fm-view-lighting", timeout);
+    await choose(page, "Visualization mode", originalMode, "fm-view-render-mode", timeout);
+    await setSwitch(page, "Ambient occlusion", originalAo, timeout);
+    clearPixelSnapshots(pixelSnapshots, ["presentation-polished", "presentation-rough", ...profiles.map((_, index) => `presentation-quality-${index}`)]);
+  }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+
 import type { ThreeEvent } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { BufferAttribute, BufferGeometry, SphereGeometry } from "three";
@@ -27,6 +28,7 @@ import type {
 } from "../viewport3dPrimitiveModel";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolvePrimitiveObjectSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   wireframeColorFromSettings,
   pointColorFromSettings,
@@ -208,6 +210,10 @@ function RenderablePrimitiveObject({
     tracker.release("texture", antennaTextures.matcap);
     tracker.release("texture", antennaTextures.brush);
   }, [antennaTextures, tracker]);
+  const surfaceMaterialPlan = resolvePrimitiveObjectSurfaceMaterialPlan({
+    hasAntennaMatcap: Boolean(antennaTextures),
+    materialProfile,
+  });
   const renderSettings = resolvePrimitiveObjectRenderSettings(
     object,
     settings,
@@ -219,11 +225,18 @@ function RenderablePrimitiveObject({
   );
 
   useLayoutEffect(() => {
-    if (!materialProfile.uniformGeometry.lit || geometry.getAttribute("normal")) {
+    if (
+      (!materialProfile.uniformGeometry.lit && !materialProfile.uniformGeometry.pbr) ||
+      geometry.getAttribute("normal")
+    ) {
       return;
     }
     geometry.computeVertexNormals();
-  }, [geometry, materialProfile.uniformGeometry.lit]);
+  }, [
+    geometry,
+    materialProfile.uniformGeometry.lit,
+    materialProfile.uniformGeometry.pbr,
+  ]);
 
   useEffect(
     () => () => releasePrimitiveObjectGeometry(tracker, geometry),
@@ -272,7 +285,9 @@ function RenderablePrimitiveObject({
     >
       {renderPlan.primitive.visible ? (
         <mesh
+          castShadow={surfaceMaterialPlan.castShadow}
           onPointerDown={handlePointerDown}
+          receiveShadow={surfaceMaterialPlan.receiveShadow}
           renderOrder={
             surfaceMaterialPolicyProps(opacity).transparent
               ? RENDER_POLICIES.contextSurface.renderOrder
@@ -294,21 +309,30 @@ function RenderablePrimitiveObject({
               {...materialProfile.primitivePreview}
               {...surfaceMaterialPolicyProps(opacity)}
             />
-          ) : materialProfile.uniformGeometry.lit ? (
+          ) : surfaceMaterialPlan.kind === "standard" ? (
+            <meshStandardMaterial
+              color={shaderColor}
+              metalness={surfaceMaterialPlan.metalness}
+              opacity={opacity}
+              roughness={surfaceMaterialPlan.roughness}
+              toneMapped={surfaceMaterialPlan.toneMapped}
+              {...surfaceMaterialPolicyProps(opacity)}
+            />
+          ) : surfaceMaterialPlan.kind === "lambert" ? (
             <meshLambertMaterial
               color={shaderColor}
               opacity={opacity}
-              toneMapped={materialProfile.primitivePreview.toneMapped}
+              toneMapped={surfaceMaterialPlan.toneMapped}
               {...surfaceMaterialPolicyProps(opacity)}
             />
-          ) : (
+          ) : surfaceMaterialPlan.kind === "basic" ? (
             <meshBasicMaterial
               color={shaderColor}
               opacity={opacity}
-              {...materialProfile.primitivePreview}
+              toneMapped={surfaceMaterialPlan.toneMapped}
               {...surfaceMaterialPolicyProps(opacity)}
             />
-          )}
+          ) : null}
         </mesh>
       ) : null}
       {renderPlan.wireframe.visible && edgeGeometry ? (
