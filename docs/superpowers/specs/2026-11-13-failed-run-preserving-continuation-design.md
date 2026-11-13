@@ -119,3 +119,9 @@ handoff i uruchamia zwykły managed start. SHA terminala wcześniejszej odmowy j
 ponownie sprawdzane pod nowym lease i przed Compose, obok całej pierwotnej
 rewalidacji owner/run/resource. Unknown, rozpoczęty start, inne błędy oraz
 jakiekolwiek pola późniejszych faz nadal odmawiają automatycznej kontynuacji.
+
+Po kwalifikowanej odmowie frontend handoff otrzymuje current_sha256 tego dokładnego
+terminala przez istniejący `_capture_frontend_start_handoff` i jego jawny
+expected_current_sha256. Recapture musi zachować wszystkie pozostałe pola
+identycznie z handoffem zapisanym w odmowie. Inna generation, verified, terminal,
+Compose, source lub state odmawia kontynuacji przed startem.

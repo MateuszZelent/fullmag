@@ -187,7 +187,7 @@ class FailedRunResumeControlTests(unittest.TestCase):
         import docker_volume_dev as dev
         control=Control();ctx=self.prepare(control,args())['context']
         failure=self._failed_prestart(control,ctx)
-        failure['inputs']['frontend_start_handoff']={'fixture':'pinned-handoff'}
+        failure['inputs']['frontend_start_handoff']={'fixture':'pinned-handoff','current_sha256':'3'*64}
         control.write('development/current.json',failure)
         control.write('development/attempts/'+'e'*32+'/terminal.json',failure)
         removal={'attempt':'f'*32,'inputs':{'failed_run_resume':ctx}}
@@ -196,11 +196,13 @@ class FailedRunResumeControlTests(unittest.TestCase):
         previous={'inputs':{'image_id':'sha256:'+'2'*64,'gpu_access_requested':'disabled'}}
         control.write('development/attempts/'+'a'*32+'/terminal.json',previous)
         control.write('development/attempts/'+'a'*32+'/compose.json',{'name':'group'})
+        failure_pin=resume.qualify_prestart_failure(control,ctx)
+        refreshed={'fixture':'pinned-handoff','current_sha256':failure_pin['terminal_sha256']}
         request=args(preview=False,apply=True,expected_plan_sha256=ctx['plan_sha256'])
         def start(call_args,**kwargs):
             self.assertIsNone(call_args.script);self.assertFalse(call_args.fresh_state)
             self.assertEqual(kwargs['retained_device_access'],'cpu')
-            self.assertEqual(kwargs['reuse_state']['frontend_start_handoff'],{'fixture':'pinned-handoff'})
+            self.assertEqual(kwargs['reuse_state']['frontend_start_handoff'],refreshed)
             self.assertEqual(kwargs['failed_run_resume_context']['prestart_failure']['development_attempt'],'e'*32)
             resume.bind_start_attempt(control,ctx,{'receipt':{'attempt':'9'*32}})
             control.write('development/attempts/'+'9'*32+'/terminal.json',{
@@ -212,12 +214,19 @@ class FailedRunResumeControlTests(unittest.TestCase):
               mock.patch.object(dev,'include_untracked_from_compose',return_value=[]),
               mock.patch.object(dev,'_retained_native_contracts',return_value=[]),
               mock.patch.object(dev,'_retained_device_access',return_value='cpu'),
+              mock.patch.object(dev,'_capture_frontend_start_handoff',return_value=refreshed) as capture,
               mock.patch('docker_dev_network.retained_requested_subnet',return_value=None),
               mock.patch.object(dev,'start',side_effect=start) as started,
               mock.patch.object(dev,'resume_failed_run') as recreate):
+            capture.return_value={**refreshed,'fixture':'changed-private-generation'}
+            with self.assertRaisesRegex(resume.ResumeError,'changed pins'):
+                resume.run(request)
+            started.assert_not_called();recreate.assert_not_called()
+            capture.reset_mock();capture.return_value=refreshed
             result=resume.run(request)
         self.assertEqual(result['development_attempt'],'9'*32)
         started.assert_called_once();recreate.assert_not_called()
+        capture.assert_called_once_with(control,previous,{'name':'group'},expected_current_sha256=failure_pin['terminal_sha256'])
         self.assertEqual(validate.call_args.kwargs,{'phase':'before-start','removal':removal})
 
 

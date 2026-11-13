@@ -900,7 +900,14 @@ def _resume_confirmed_prestart(control, args, context, removal):
         'receipt': {'image_id': previous['inputs']['image_id']},
         'operator_probe_environment_record': probe}
     if 'frontend_start_handoff' in failure['inputs']:
-        reuse['frontend_start_handoff'] = failure['inputs']['frontend_start_handoff']
+        original_handoff = failure['inputs']['frontend_start_handoff']
+        if not isinstance(original_handoff, Mapping):
+            _fail('confirmed prestart frontend handoff is malformed')
+        refreshed_handoff = dev._capture_frontend_start_handoff(
+            control, previous, document, expected_current_sha256=pin['terminal_sha256'])
+        if refreshed_handoff != {**original_handoff, 'current_sha256': pin['terminal_sha256']}:
+            _fail('frontend prestart continuation changed pins beyond the qualified current receipt')
+        reuse['frontend_start_handoff'] = refreshed_handoff
     args.gpu_access = previous['inputs']['gpu_access_requested']
     args.include_untracked = dev.include_untracked_from_compose(document)
     args.native_contract = dev._retained_native_contracts(previous, document)

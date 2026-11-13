@@ -1,0 +1,24 @@
+{
+  "state": "frontend-handoff-qualified-readonly",
+  "request_id": "d3faed88-e54e-4747-a554-2c02072eada7",
+  "prestart_failure": {
+    "schema": "fullmag.failed-run-prestart-failure.v1",
+    "development_attempt": "e9e1095cea614bdb9d6f656989e45fe7",
+    "terminal_sha256": "03455a2311954f29a50f546b1f2fa0ee421bac0cc7f248f3675eace61506d6fc",
+    "plan_sha256": "58d7b00e0c9f64734388a57ab25288344d8967df2df2e5dae843c6966b4371ad"
+  },
+  "unchanged_keys": [
+    "attempt",
+    "compose_sha256",
+    "frontend_generation_id",
+    "frontend_generation_subpath",
+    "schema",
+    "source_root",
+    "state_root",
+    "terminal_sha256",
+    "verified_sha256"
+  ],
+  "new_current_sha256": "03455a2311954f29a50f546b1f2fa0ee421bac0cc7f248f3675eace61506d6fc",
+  "source_sha256": "18c940f272939deebee7dadfbff5a36ea4a39f4961064f2ef01fc8f8cb2a6204",
+  "runtime_started": false
+}
