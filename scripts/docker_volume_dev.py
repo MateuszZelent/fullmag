@@ -6050,95 +6050,301 @@ def _native_failed_stop_recovery_context(
     }
 
 
-def _retained_recovery_context(
-    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
-):
-    context = _retained_native_recovery_context(
-        control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
-        removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+
+def _read_frontend_refresh_child_compose(control, relative, label, previous, *, child_attempt, parent_attempt):
+    """Read newline canonical Compose or the exact completion-published byte form."""
+    from docker_volume_stop_unadmitted import _control_bytes, _json
+
+    raw = _control_bytes(control, relative)
+    value = _json(raw, label)
+    if not isinstance(value, Mapping):
+        raise BuildControlError(label + " is not a JSON object")
+    canonical_raw = canonical(value)
+    if raw == canonical_raw + b"\n":
+        return raw, dict(value)
+    if raw != canonical_raw:
+        raise BuildControlError(label + " is not canonical")
+
+    marker = previous.get("frontend_refresh_completion")
+    marker_fields = {
+        "schema", "request", "request_sha256", "services_mutated", "original_compose",
+    }
+    if not isinstance(marker, Mapping):
+        raise BuildControlError(label + " lacks an authenticated frontend completion marker")
+    has_seed_completion = "seed_completion" in marker
+    if set(marker) != marker_fields | ({"seed_completion"} if has_seed_completion else set()):
+        raise BuildControlError(label + " completion marker fields differ")
+    request_sha = marker.get("request_sha256")
+    if (marker.get("schema") != "fullmag.docker-frontend-refresh-completion.v1"
+            or marker.get("services_mutated") is not False
+            or not isinstance(request_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", request_sha)):
+        raise BuildControlError(label + " completion marker is malformed")
+
+    child_root = "development/attempts/" + child_attempt
+    request_relative = "verification/frontend-refresh-completion/" + request_sha + "/request.json"
+    completion_root = child_root + "/completion/" + request_sha
+    if (marker.get("request") != request_relative
+            or marker.get("original_compose") != completion_root + "/original-compose.json"):
+        raise BuildControlError(label + " completion request/archive path differs")
+
+    import docker_volume_frontend_refresh_reconcile as completion
+    request_raw = _control_bytes(control, request_relative)
+    if hashlib.sha256(request_raw).hexdigest() != request_sha:
+        raise BuildControlError(label + " completion request digest differs")
+    request = _json(request_raw, "frontend refresh completion request")
+    if not isinstance(request, Mapping) or request_raw != canonical(request):
+        raise BuildControlError("Frontend refresh completion request is not canonical")
+    completion.validate_request(dict(request))
+    inputs = previous.get("inputs")
+    if (request.get("attempt") != child_attempt
+            or request.get("base_attempt") != parent_attempt
+            or request.get("compose_project") != control.project
+            or request.get("control_volume") != control.volume
+            or not isinstance(inputs, Mapping)
+            or request.get("source_root") != inputs.get("source_root")
+            or request.get("source_commit") != previous.get("source_commit")):
+        raise BuildControlError(label + " completion request identity differs")
+    request_evidence = request.get("evidence")
+    request_has_seed = (isinstance(request_evidence, Mapping)
+                        and "seed_completion" in request_evidence)
+    request_seed = request_evidence.get("seed_completion") if request_has_seed else None
+    if (has_seed_completion != request_has_seed
+            or has_seed_completion and (not isinstance(marker.get("seed_completion"), Mapping)
+                                        or marker.get("seed_completion") != request_seed)):
+        raise BuildControlError(label + " completion seed evidence differs")
+    if not completion.completed(control, dict(request), request_sha):
+        raise BuildControlError(label + " is not published by a completed frontend refresh")
+    return raw, dict(value)
+
+
+def _validate_frontend_refresh_recovery_namespace(control, child, parent):
+    namespace = getattr(control, "namespace", "")
+    registry_sha = getattr(control, "namespace_registry_sha256", None)
+    records = (child, parent)
+    if namespace:
+        if (not isinstance(namespace, str) or _CONTROL_NAMESPACE.fullmatch(namespace) is None
+                or not isinstance(registry_sha, str)
+                or re.fullmatch(r"[0-9a-f]{64}", registry_sha) is None):
+            raise BuildControlError("Frontend refresh recovery active namespace identity is malformed")
+        if any(record.get("control_namespace") != namespace
+               or record.get("namespace_registry_sha256") != registry_sha
+               for record in records):
+            raise BuildControlError("Frontend refresh recovery namespace/registry pin differs")
+    elif any("control_namespace" in record or "namespace_registry_sha256" in record
+             for record in records):
+        raise BuildControlError("Unnamespaced frontend refresh recovery has namespace markers")
+
+
+def _resolve_frontend_refresh_recovery_lineage(control, previous, document, *, actual=None):
+    """Restore only the missing pair from one authenticated immutable refresh parent."""
+    if not isinstance(previous, Mapping):
+        raise BuildControlError("Retained development receipt is malformed")
+    has_metadata = "container_recovery" in previous
+    has_names = "container_recovery_environment" in previous
+    # A partial current pair must reach the native validator unchanged and fail
+    # there; it must never select an ancestor as a repair source.
+    if has_metadata != has_names:
+        return previous
+
+    inputs = previous.get("inputs")
+    if not isinstance(inputs, Mapping):
+        inputs = {}
+    refresh_fields = (
+        "previous_development_attempt" in previous,
+        "previous_config_sha256" in previous,
+        "frontend_refresh_from_attempt" in inputs,
+        "frontend_refresh_from_config_sha256" in inputs,
+        "failed_seed_new_generation" in inputs,
     )
-    pin = previous.get("cold_budget_restore")
-    if pin is not None and not fresh_state:
-        from docker_volume_cold_budget_restore import authenticate_journal
-        journal = authenticate_journal(control, pin)
-        if journal["observation"]["source_root"] != previous.get("inputs", {}).get("source_root"):
-            raise BuildControlError("Retained budget restore source differs")
-        if context.get("cold_budget_restore", pin) != pin:
-            raise BuildControlError("Retained budget restore pin changed")
-        context["cold_budget_restore"] = pin
-    return context
+    has_frontend_lineage = any(refresh_fields[2:])
+    environment = document.get("services", {}).get("backend", {}).get("environment")
+    if not isinstance(environment, Mapping):
+        if has_metadata or has_names:
+            return previous
+        if has_frontend_lineage:
+            raise BuildControlError("Frontend refresh recovery lineage has no retained backend environment")
+        return previous
+    carried = {key: value for key, value in environment.items()
+               if isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
+    # Generic predecessor pins are also used by ordinary development handoffs.
+    # Only the explicit frontend-refresh markers authorize parent resolution.
+    if not has_frontend_lineage:
+        if carried and not (has_metadata and has_names):
+            raise BuildControlError("Retained container recovery capability has no authenticated refresh lineage")
+        return previous
+    if not all(refresh_fields[:4]):
+        raise BuildControlError("Frontend refresh recovery lineage is incomplete")
 
+    parent_attempt = previous.get("previous_development_attempt")
+    parent_config_sha = previous.get("previous_config_sha256")
+    if (not isinstance(parent_attempt, str) or not re.fullmatch(r"[0-9a-f]{32}", parent_attempt)
+            or parent_attempt == previous.get("attempt")
+            or not isinstance(parent_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", parent_config_sha)
+            or inputs.get("frontend_refresh_from_attempt") != parent_attempt
+            or inputs.get("frontend_refresh_from_config_sha256") != parent_config_sha):
+        raise BuildControlError("Frontend refresh recovery parent/config pins differ")
 
-def _retained_native_recovery_context(
-    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
-):
-    """Carry pending recovery authority, or consume a completed proof once.
+    child_attempt = previous.get("attempt")
+    child_config_sha = previous.get("config_sha256")
+    if (previous.get("schema") != "fullmag.docker-build-operation.v1"
+            or previous.get("phase") != "development"
+            or previous.get("state") != "succeeded"
+            or not isinstance(child_attempt, str) or not re.fullmatch(r"[0-9a-f]{32}", child_attempt)
+            or not isinstance(child_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", child_config_sha)
+            or child_config_sha != hashlib.sha256(canonical(document)).hexdigest()
+            or previous.get("compose_project") != control.project
+            or previous.get("control_volume") != control.volume
+            or document.get("name") != control.project):
+        raise BuildControlError("Frontend refresh recovery child identity/config differs")
 
-    PID 1 still authenticates the native request and current owner before any
-    recovery or service start. Pending authorization is carried unchanged;
-    a completed recovery receipt is validated before its authority is dropped.
-    A separate native-start-failure journal carries only reduced restart
-    evidence and never mints a recovery authorization.
-    """
-    from docker_volume_cold_budget_restore import retained_context as cold_restore_context
-    cold_restore = cold_restore_context(
-        control, previous, document, actual, fresh_state=fresh_state,
-        removed_container_proof=removed_container_proof,
+    child_root = "development/attempts/" + child_attempt
+    child_terminal_raw, child_terminal = _read_canonical_control_record(
+        control, child_root + "/terminal.json", "frontend refresh child terminal")
+    child_compose_raw, child_compose = _read_frontend_refresh_child_compose(
+        control, child_root + "/compose.json", "frontend refresh child Compose", previous,
+        child_attempt=child_attempt, parent_attempt=parent_attempt)
+    current_raw, current = _read_canonical_control_record(
+        control, "development/current.json", "current frontend refresh terminal")
+    if (child_terminal != previous or child_terminal_raw != canonical(previous) + b"\n"
+            or current != previous or current_raw != child_terminal_raw
+            or child_compose != document
+            or child_compose_raw not in (canonical(document), canonical(document) + b"\n")):
+        raise BuildControlError("Frontend refresh child is not the exact current immutable receipt")
+
+    parent_root = "development/attempts/" + parent_attempt
+    parent_terminal_raw, parent = _read_canonical_control_record(
+        control, parent_root + "/terminal.json", "frontend refresh parent terminal")
+    _, parent_document = _read_canonical_control_record(
+        control, parent_root + "/compose.json", "frontend refresh parent Compose")
+    _validate_frontend_refresh_recovery_namespace(control, previous, parent)
+    parent_state = parent.get("state")
+    allowed_parent = (
+        parent_state == "succeeded"
+        or (parent_state == "failed-confirmed"
+            and parent.get("error") == "DEV service exited before readiness: frontend")
     )
-    if cold_restore is not None:
-        if drained_successor is not None:
-            raise BuildControlError("Cold budget restore cannot combine with drained successor")
-        return cold_restore
-    if drained_successor is not None:
-        if fresh_state:
-            raise BuildControlError("Drained successor requires retained storage")
-        from docker_volume_drained_successor import retained_context
-        return retained_context(control, previous, document, actual, *drained_successor,
-                                removed_container_proof=removed_container_proof)
+    parent_inputs = parent.get("inputs")
+    child_source = inputs.get("source_root")
+    if (parent.get("schema") != "fullmag.docker-build-operation.v1"
+            or parent.get("phase") != "development" or not allowed_parent
+            or parent.get("attempt") != parent_attempt
+            or parent.get("config_sha256") != parent_config_sha
+            or not isinstance(parent_config_sha, str)
+            or hashlib.sha256(canonical(parent_document)).hexdigest() != parent_config_sha
+            or parent.get("compose_project") != control.project
+            or parent.get("control_volume") != control.volume
+            or parent_document.get("name") != control.project
+            or not isinstance(parent_inputs, Mapping)
+            or not isinstance(child_source, str)
+            or parent_inputs.get("source_root") != child_source
+            or parent.get("state_root") != previous.get("state_root")
+            or parent.get("backend_volumes") != previous.get("backend_volumes")
+            or parent.get("backend_container") != previous.get("backend_container")
+            or parent.get("backend_started_at") != previous.get("backend_started_at")
+            or not isinstance(parent.get("backend_started_at"), str)
+            or parent.get("control_namespace") != previous.get("control_namespace")
+            or parent_document.get("services", {}).get("backend")
+                != document.get("services", {}).get("backend")):
+        raise BuildControlError("Frontend refresh recovery parent identity or backend declaration differs")
+    if (not isinstance(previous.get("state_root"), str) or not previous.get("state_root")
+            or not isinstance(previous.get("backend_container"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", previous["backend_container"])):
+        raise BuildControlError("Frontend refresh recovery backend/storage identity is incomplete")
+    if actual is not None:
+        backend = actual.get("backend") if isinstance(actual, Mapping) else None
+        if (not isinstance(backend, Mapping)
+                or backend.get("Id") != previous.get("backend_container")
+                or backend.get("State", {}).get("StartedAt") != previous.get("backend_started_at")):
+            raise BuildControlError("Frontend refresh recovery live backend identity differs")
+
+    seed_marker = inputs.get("failed_seed_new_generation")
+    if seed_marker is not None:
+        if (not isinstance(seed_marker, Mapping)
+                or set(seed_marker) != {"schema", "failed_attempt", "failed_config_sha256",
+                                        "source_pins", "prior_terminal_sha256",
+                                        "prior_input_manifest_sha256"}
+                or seed_marker.get("schema") != "fullmag.docker-frontend-failed-seed-recovery.v1"
+                or seed_marker.get("failed_attempt") != parent_attempt
+                or seed_marker.get("failed_config_sha256") != parent_config_sha
+                or not isinstance(seed_marker.get("source_pins"), Mapping)
+                or not isinstance(seed_marker.get("prior_input_manifest_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", seed_marker["prior_input_manifest_sha256"])
+                or seed_marker.get("prior_terminal_sha256") != hashlib.sha256(parent_terminal_raw).hexdigest()):
+            raise BuildControlError("Frontend seed recovery marker does not authenticate its exact parent terminal")
+
+    parent_environment = parent_document.get("services", {}).get("backend", {}).get("environment")
+    if not isinstance(parent_environment, Mapping):
+        raise BuildControlError("Frontend refresh recovery parent backend environment is malformed")
+    parent_carried = {key: value for key, value in parent_environment.items()
+                      if isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
+    parent_has_metadata = "container_recovery" in parent
+    parent_has_names = "container_recovery_environment" in parent
+    if parent_has_metadata != parent_has_names:
+        raise BuildControlError("Frontend refresh recovery parent capability pair is partial")
+    if parent_carried or parent_has_metadata:
+        from docker_volume_container_recovery import (
+            AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV,
+        )
+        if (set(parent_carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV}
+                or not parent_has_metadata or not isinstance(parent.get("container_recovery"), Mapping)
+                or parent.get("container_recovery_environment") != sorted(parent_carried)
+                or set(carried) != set(parent_carried)):
+            raise BuildControlError("Frontend refresh recovery parent capability binding is incomplete")
+        parent_env = _validate_recovery_environment(parent_carried)
+        parent_metadata = _validate_recovery_metadata(parent["container_recovery"])
+        if has_metadata:
+            if (previous.get("container_recovery") != parent_metadata
+                    or previous.get("container_recovery_environment") != sorted(parent_env)):
+                raise BuildControlError("Frontend refresh recovery current capability differs from its parent")
+            return previous
+        resolved = dict(previous)
+        resolved["container_recovery"] = parent_metadata
+        resolved["container_recovery_environment"] = sorted(parent_env)
+        return resolved
+    if carried or has_metadata:
+        raise BuildControlError("Frontend refresh recovery capability is not present in its authenticated parent")
+    return previous
+
+
+def _retained_container_recovery_present(previous, document):
+    """Check only whether native container-recovery metadata is present."""
+    if not isinstance(previous, Mapping) or not isinstance(document, Mapping):
+        return False
+    if "container_recovery" in previous or "container_recovery_environment" in previous:
+        return True
+    services = document.get("services")
+    backend = services.get("backend") if isinstance(services, Mapping) else None
+    environment = backend.get("environment") if isinstance(backend, Mapping) else None
+    return isinstance(environment, Mapping) and any(
+        isinstance(key, str) and key.startswith("FULLMAG_CONTAINER_RECOVERY_")
+        for key in environment)
+
+
+def _retained_container_recovery_capability(control, previous, document, *, fresh_state):
+    """Authenticate the exact retained native recovery pair without lifecycle-specific probes."""
     import docker_volume_container_recovery as recovery_module
     from docker_volume_container_recovery import (
         AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV, CONTROL_ROOT,
-        _control_bytes, _parse_json, _relative_control_path,
-        validate_runtime_authorization,
+        _control_bytes, _parse_json, _relative_control_path, validate_runtime_authorization,
     )
     environment = document["services"]["backend"]["environment"]
     carried = {key: value for key, value in environment.items()
                if key.startswith("FULLMAG_CONTAINER_RECOVERY_")}
     metadata = previous.get("container_recovery")
-    if not carried and metadata is None:
-        native = _native_failed_stop_recovery_context(
-            control, previous, backend_id=backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if native is not None:
-            return native
-        from docker_volume_native_init_successor import retained_context as retained_successor_context
-        successor = retained_successor_context(
-            control, previous, document, backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if successor is not None:
-            return successor
-        from docker_volume_pre_api_stop import retained_context as retained_pre_api_context
-        pre_api = retained_pre_api_context(
-            control, previous, document, backend_id or previous.get("backend_container"),
-            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
-        )
-        if pre_api is not None:
-            return pre_api
-        if removed_container_proof is None:
-            from docker_volume_pre_ack_retry import retained_pre_ack_context
-            retry = retained_pre_ack_context(
-                control, previous, document, backend_id or previous.get("backend_container"), fresh_state=fresh_state
-            )
-            if retry is not None:
-                return retry
-        return {}
+    has_metadata = "container_recovery" in previous
+    has_environment_names = "container_recovery_environment" in previous
+    if has_metadata != has_environment_names:
+        raise BuildControlError("Retained container recovery capability is incomplete")
+    if not has_metadata:
+        if carried:
+            raise BuildControlError("Retained container recovery capability has no receipt binding")
+        return None
+    if (not isinstance(metadata, Mapping)
+            or not isinstance(previous.get("container_recovery_environment"), list)):
+        raise BuildControlError("Retained container recovery capability is malformed")
     if fresh_state:
         raise BuildControlError("Pending container recovery must retain its original session storage")
-    if set(carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV} or not isinstance(metadata, Mapping):
+    if set(carried) != {AUTHORIZATION_ENV, AUTHORIZATION_SHA_ENV}:
         raise BuildControlError("Retained container recovery capability is incomplete")
     if previous.get("container_recovery_environment") != sorted(carried):
         raise BuildControlError("Retained container recovery environment differs from its receipt")
@@ -6168,7 +6374,212 @@ def _retained_native_recovery_context(
     }
     if metadata != expected:
         raise BuildControlError("Retained container recovery metadata differs from authorization")
-    if _validate_completed_recovery_receipt(control, authorization, recovery_module):
+    completed = _validate_completed_recovery_receipt(control, authorization, recovery_module)
+    return {
+        "recovery_environment": _validate_recovery_environment(carried),
+        "recovery_metadata": _validate_recovery_metadata(expected),
+        "authorization": authorization,
+        "completed": completed,
+        "recovery_module": recovery_module,
+    }
+
+
+def preflight_retained_recovery_handoff(control, previous, document, actual, *, backend_id=None):
+    """Read-only capability binding before a managed up drains a running group.
+
+    The full state-dependent native recovery validator still runs later under the
+    recreate lease, after the exact stop/drain evidence is available.
+    """
+    previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual)
+    if not _retained_container_recovery_present(previous, document):
+        return None
+    capability = _retained_container_recovery_capability(
+        control, previous, document, fresh_state=False)
+    if capability is None:
+        return None
+    backend = actual.get("backend") if isinstance(actual, Mapping) else None
+    backend_id = backend_id or (backend.get("Id") if isinstance(backend, Mapping) else None)
+    if (not isinstance(backend, Mapping) or backend.get("Id") != backend_id
+            or backend_id != previous.get("backend_container")
+            or backend.get("State", {}).get("StartedAt") != previous.get("backend_started_at")
+            or backend.get("Image") != document["services"]["backend"].get("image")):
+        raise BuildControlError("Retained recovery preflight backend identity differs")
+    env_rows = backend.get("Config", {}).get("Env")
+    if not isinstance(env_rows, list):
+        raise BuildControlError("Retained recovery preflight backend environment is unavailable")
+    observed = {}
+    for row in env_rows:
+        if not isinstance(row, str):
+            raise BuildControlError("Retained recovery preflight backend environment is malformed")
+        if "=" not in row:
+            if row.startswith("FULLMAG_CONTAINER_RECOVERY_"):
+                raise BuildControlError("Retained recovery preflight backend environment is malformed")
+            continue
+        name, value = row.split("=", 1)
+        if name.startswith("FULLMAG_CONTAINER_RECOVERY_"):
+            if name in observed:
+                raise BuildControlError("Retained recovery preflight backend environment is ambiguous")
+            observed[name] = value
+    if observed != capability["recovery_environment"]:
+        raise BuildControlError("Retained recovery preflight backend capability differs from Compose")
+    return {
+        "container_recovery": capability["recovery_metadata"],
+        "container_recovery_environment": sorted(capability["recovery_environment"]),
+    }
+
+
+def _serialize_frontend_refresh_recovery_context(context):
+    """Project only already-validated recovery provenance into a DEV receipt."""
+    if not isinstance(context, Mapping):
+        raise BuildControlError("Frontend refresh recovery context is not a mapping")
+    allowed = {
+        "recovery_environment", "recovery_metadata", "native_restart_metadata",
+        "previous_config_sha256", "cold_budget_restore", "startup_diagnostic_restart",
+    }
+    unknown = set(context) - allowed
+    if unknown:
+        raise BuildControlError("Frontend refresh recovery context has unsupported fields")
+    receipt, inputs = {}, {}
+    environment = context.get("recovery_environment")
+    metadata = context.get("recovery_metadata")
+    if environment is not None or metadata is not None:
+        if environment is None or metadata is None:
+            raise BuildControlError("Frontend refresh recovery context capability pair is partial")
+        validated_environment = _validate_recovery_environment(environment)
+        validated_metadata = _validate_recovery_metadata(metadata)
+        receipt["container_recovery"] = validated_metadata
+        receipt["container_recovery_environment"] = sorted(validated_environment)
+    native_restart = context.get("native_restart_metadata")
+    if native_restart is not None:
+        inputs["native_failed_restart"] = _validate_recovery_metadata(native_restart)
+    previous_config_sha = context.get("previous_config_sha256")
+    if previous_config_sha is not None:
+        if not isinstance(previous_config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", previous_config_sha):
+            raise BuildControlError("Frontend refresh recovery runtime config pin is invalid")
+        inputs["previous_config_sha256"] = previous_config_sha
+    cold_budget = context.get("cold_budget_restore")
+    if cold_budget is not None:
+        if not isinstance(cold_budget, Mapping):
+            raise BuildControlError("Frontend refresh cold-budget receipt is malformed")
+        inputs["cold_budget_restore"] = dict(cold_budget)
+        receipt["cold_budget_restore"] = dict(cold_budget)
+    startup = context.get("startup_diagnostic_restart")
+    if startup is not None:
+        from docker_volume_startup_diagnostic_restart import validate_metadata
+        startup = validate_metadata(startup)
+        inputs["startup_diagnostic_restart"] = startup
+        receipt["startup_diagnostic_restart"] = startup
+    from docker_volume_drained_successor import DrainedSuccessorContext
+    if isinstance(context, DrainedSuccessorContext):
+        witness = context.witness
+        if not isinstance(witness, Mapping):
+            raise BuildControlError("Frontend refresh drained-successor witness is malformed")
+        receipt["drained_successor"] = dict(witness)
+    from docker_volume_native_init_successor import NativeInitSuccessorContext
+    if isinstance(context, NativeInitSuccessorContext):
+        witness = context.witness
+        if not isinstance(witness, Mapping):
+            raise BuildControlError("Frontend refresh native-init successor witness is malformed")
+        receipt["native_init_successor"] = dict(witness)
+    return {"receipt": receipt, "inputs": inputs}
+
+
+def _frontend_refresh_recovery_handoff(
+    control, previous, document, actual, *, backend_id=None, expected=None,
+):
+    effective_previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual)
+    context = _retained_recovery_context(
+        control, effective_previous, document, fresh_state=False,
+        backend_id=backend_id or effective_previous.get("backend_container"), actual=actual,
+    )
+    handoff = _serialize_frontend_refresh_recovery_context(context)
+    if expected is not None and handoff != expected:
+        raise BuildControlError("Retained frontend recovery handoff changed under its operation lease")
+    return handoff
+
+
+def _retained_recovery_context(
+    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
+    drained_successor=None, actual=None,
+):
+    context = _retained_native_recovery_context(
+        control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
+        removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+    )
+    pin = previous.get("cold_budget_restore")
+    if pin is not None and not fresh_state:
+        from docker_volume_cold_budget_restore import authenticate_journal
+        journal = authenticate_journal(control, pin)
+        if journal["observation"]["source_root"] != previous.get("inputs", {}).get("source_root"):
+            raise BuildControlError("Retained budget restore source differs")
+        if context.get("cold_budget_restore", pin) != pin:
+            raise BuildControlError("Retained budget restore pin changed")
+        context["cold_budget_restore"] = pin
+    return context
+
+
+def _retained_native_recovery_context(
+    control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
+    drained_successor=None, actual=None,
+):
+    """Carry pending recovery authority, or consume a completed proof once."""
+    previous = _resolve_frontend_refresh_recovery_lineage(
+        control, previous, document, actual=actual)
+    capability = None
+    if _retained_container_recovery_present(previous, document):
+        capability = _retained_container_recovery_capability(
+            control, previous, document, fresh_state=fresh_state)
+    from docker_volume_cold_budget_restore import retained_context as cold_restore_context
+    cold_restore = cold_restore_context(
+        control, previous, document, actual, fresh_state=fresh_state,
+        removed_container_proof=removed_container_proof,
+    )
+    if cold_restore is not None:
+        if drained_successor is not None:
+            raise BuildControlError("Cold budget restore cannot combine with drained successor")
+        return cold_restore
+    if drained_successor is not None:
+        if fresh_state:
+            raise BuildControlError("Drained successor requires retained storage")
+        from docker_volume_drained_successor import retained_context
+        return retained_context(control, previous, document, actual, *drained_successor,
+                                removed_container_proof=removed_container_proof)
+
+    if capability is None:
+        native = _native_failed_stop_recovery_context(
+            control, previous, backend_id=backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if native is not None:
+            return native
+        from docker_volume_native_init_successor import retained_context as retained_successor_context
+        successor = retained_successor_context(
+            control, previous, document, backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if successor is not None:
+            return successor
+        from docker_volume_pre_api_stop import retained_context as retained_pre_api_context
+        pre_api = retained_pre_api_context(
+            control, previous, document, backend_id or previous.get("backend_container"),
+            fresh_state=fresh_state, removed_container_proof=removed_container_proof,
+        )
+        if pre_api is not None:
+            return pre_api
+        if removed_container_proof is None:
+            from docker_volume_pre_ack_retry import retained_pre_ack_context
+            retry = retained_pre_ack_context(
+                control, previous, document, backend_id or previous.get("backend_container"), fresh_state=fresh_state
+            )
+            if retry is not None:
+                return retry
+        return {}
+
+    if capability["completed"]:
+        authorization = capability["authorization"]
+        recovery_module = capability["recovery_module"]
         from docker_volume_startup_diagnostic_restart import retained_context as diagnostic_context
         startup_stop = diagnostic_context(
             control, previous, document, backend_id or previous.get("backend_container"),
@@ -6183,11 +6594,11 @@ def _retained_native_recovery_context(
         )
         if native_restart is not None:
             return native_restart
-        # The first post-recovery Failed owner still needs the original
-        # capability for its authorized configuration-generation rotation.
-        # A completed receipt alone does not prove a later owner existed.
-    return {"recovery_environment": _validate_recovery_environment(carried),
-            "recovery_metadata": _validate_recovery_metadata(expected)}
+        # A completed receipt alone does not prove that a later owner exists.
+    return {
+        "recovery_environment": capability["recovery_environment"],
+        "recovery_metadata": capability["recovery_metadata"],
+    }
 
 
 def _read_canonical_control_record(control, relative, label):
@@ -7298,6 +7709,8 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
     from docker_build_control import ControlOutcomeUnknown
     if failed_seed_context is not None and (recover_oom or frozen_context is not None):
         raise BuildControlError('Failed-seed generation cannot combine with another frontend recovery mode')
+    recovery_handoff = _frontend_refresh_recovery_handoff(
+        control, previous, document, actual, backend_id=ids['backend'])
     state = storage.validate_path(Path(previous['state_root']), layout['runtime_root'], 'retained sessions')
     if args.port != int(document['services']['frontend']['environment']['FULLMAG_FRONTEND_HOST_PORT']):
         raise BuildControlError('Frontend refresh port differs from retained published port')
@@ -7415,13 +7828,27 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             'prior_terminal_sha256': failed_seed_context['terminal_sha256'],
             'prior_input_manifest_sha256': failed_seed_context['input_manifest_sha256'],
         }
+    inputs.update(recovery_handoff['inputs'])
     inputs.pop('attempt', None)
     inputs.pop('config_sha256', None)
     carry_documents = _frontend_refresh_carry_documents(control, previous_root, document, image)
+
+    def validate_recovery_handoff(current_actual):
+        return _frontend_refresh_recovery_handoff(
+            control, previous, document, current_actual, backend_id=ids['backend'],
+            expected=recovery_handoff,
+        )
     bind_reconcile = _frontend_refresh_bind_reconciler(document)
     # A refused preflight must not displace the still-live verified DEV fence.
     inspect_services(ids['frontend']); healthy_idle()
     with control.operation('development', inputs) as operation:
+        leased_actual = inspect_services(ids['frontend'])
+        healthy_idle()
+        leased_handoff = _frontend_refresh_recovery_handoff(
+            control, previous, document, leased_actual, backend_id=ids['backend'],
+            expected=recovery_handoff,
+        )
+        operation['receipt'].update(leased_handoff['receipt'])
         _pin_private_group_storage(control, operation, new_render=False, previous=previous,
                                    document=document)
         operation['receipt'].update(operator_probe_record)
@@ -7474,8 +7901,13 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
                       control.read('frontend/development-inputs.json'))
         for name, value in carry_documents.items():
             control.write(operation['root'] + '/' + name, value)
-        # Quiesce the sole browser admission route before the final empty-API
-        # fence. Unknown stop/seed outcomes retain this exact control lease.
+        # Quiesce the sole browser admission route only after the capability
+        # has been reauthenticated against the exact pre-stop service pair.
+        if not recover_oom and failed_seed_context is None:
+            pre_stop_actual = inspect_services(ids['frontend'])
+            healthy_idle()
+            validate_recovery_handoff(pre_stop_actual)
+        # Unknown stop/seed outcomes retain this exact control lease.
         operation['daemon_pending'] = True
         if not recover_oom and failed_seed_context is None:
             docker_capture('stop', '--time', '60', ids['frontend'], timeout=90)
@@ -7527,6 +7959,7 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             def final_prior_cas(staged_generation):
                 healthy_idle()
                 fresh = inspect_services(ids['frontend'])
+                validate_recovery_handoff(fresh)
                 seed_recovery.revalidate_context(
                     control, args, previous, document, fresh, selected, failed_seed_context)
                 if describe(selected, args.port)['files'] != staged_generation['inputs']['files']:
@@ -7550,7 +7983,9 @@ def _refresh_frontend_services(control, args, previous_root, previous, document,
             refreshed = _frontend_refresh_document(document, volume, seeded,
                 frontend_image=frontend_image if recover_oom else None,
                 frontend_generation_subpath=operation['receipt'].get('frontend_generation_subpath'))
-            healthy_idle(); inspect_services(ids['frontend'])
+            healthy_idle()
+            before_compose = inspect_services(ids['frontend'])
+            validate_recovery_handoff(before_compose)
             operation['receipt']['state'] = 'recreating-owned-frontend'
             control.write(operation['root'] + '/compose.json', refreshed)
             compose_capture(refreshed, 'up', '--detach', '--no-build', '--pull', 'never',

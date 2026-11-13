@@ -1,0 +1,65 @@
+{
+  "schema": "fullmag.p22.recovered-frontend-rebuild-handoff.v1",
+  "source_commit": "3542403e42d626ee55d56c59d8feff6e5c096829",
+  "state": "known-stopped-rebuild-refused",
+  "canonical_up_exit_code": 2,
+  "controlled_stop": {
+    "attempt": "d159da3080d54bc9a6139464ad9eecac",
+    "state": "succeeded",
+    "config_sha256": "e870d4a948f0f9c347ce01054ad175057da04b8a9f26b8c5eba10fb720ffc526"
+  },
+  "development_attempt": "33052febe7e54031a42865a76c067a68",
+  "base_attempt": "08a6cbffbe874153a6e7547eb5898650",
+  "missing_current_fields": [
+    "container_recovery",
+    "container_recovery_environment"
+  ],
+  "base_fields_present": true,
+  "backend_env_authorization_sha256": "070fee0fa02dbf92f35d67067376a6a598f13f77ddca256ae459ce2a826e340f",
+  "active_operation_marker": null,
+  "containers": [
+    {
+      "id": "1d3311194d380f36fc8875ec3195ee8fcddb9e385bcd906c4d0c4ef4c4365ad7",
+      "service": "backend",
+      "state": "exited",
+      "exit_code": 0,
+      "finished_at": "2026-11-13T05:32:13.933503153Z"
+    },
+    {
+      "id": "fc57c9ca6c41be8e21367eaa3052794e3b8a4440ce964f0c86506ce62d1d1340",
+      "service": "frontend",
+      "state": "exited",
+      "exit_code": 0,
+      "finished_at": "2026-11-13T05:32:10.222228925Z"
+    }
+  ],
+  "native_rebuild_executed": false,
+  "actual_UI_acceptance": "NOT VERIFIED; own runtime stopped during canonical rebuild",
+  "fix_state": "validated-readonly; startup and native rebuild pending",
+  "merged_source_CI": {
+    "run": 43371559095,
+    "conclusion": "success"
+  },
+  "historical_receipts_preserved": true,
+  "readonly_validation": {
+    "state": "validated-readonly",
+    "current_attempt": "33052febe7e54031a42865a76c067a68",
+    "base_attempt": "08a6cbffbe874153a6e7547eb5898650",
+    "stop_attempt": "d159da3080d54bc9a6139464ad9eecac",
+    "authorization_sha256": "070fee0fa02dbf92f35d67067376a6a598f13f77ddca256ae459ce2a826e340f",
+    "environment_names": [
+      "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION",
+      "FULLMAG_CONTAINER_RECOVERY_AUTHORIZATION_SHA256"
+    ],
+    "context_keys": [
+      "recovery_environment",
+      "recovery_metadata"
+    ],
+    "documents_unchanged": true,
+    "containers_still_stopped": true,
+    "services_mutated": false,
+    "source_helper_sha256": "c40afe806a776da5db9dd48456bccbe9ceb4b351b1de12daad4d58598ae59101"
+  },
+  "candidate_metadata_tests_passed": 213,
+  "candidate_review": "namespace binding and partial-pair early-return defects closed; no remaining blocker in bounded review"
+}

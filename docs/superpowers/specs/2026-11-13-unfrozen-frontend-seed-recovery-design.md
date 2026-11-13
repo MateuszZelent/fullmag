@@ -81,3 +81,40 @@ marks native qualification against the newer selected checkout NOT VERIFIED.
 Completion changes only operation metadata, archives the original unknown
 receipt/Compose and lets the original helper retire its lease. It never repeats
 Compose recreation, backend startup or Compute.
+
+
+## Retained native recovery handoff
+
+Frontend refresh must preserve validated native initialization provenance. In
+particular, the complete top-level `container_recovery` and the sorted
+`container_recovery_environment` name list must accompany the unchanged backend
+Compose environment. The abbreviated `inputs.container_recovery` request record
+cannot substitute for this capability. Validate before operation/staging or a
+service stop, repeat under the lease, then serialize only supported context
+fields through the existing receipt path.
+
+A legacy successful frontend-refresh receipt missing both top-level fields may
+resolve them in memory from its authenticated immutable predecessor. Both
+frontend-refresh attempt/config references must agree with previous-development
+references; current/parent terminal and Compose pins, project/control/source,
+state/backend volumes, backend ID/StartedAt and backend declaration must match.
+A failed predecessor is admissible only for the exact frontend readiness refusal.
+The failed-seed prior-terminal digest remains binding. Generic previous-* fields
+alone do not identify a frontend refresh. Partial/present-invalid capability,
+foreign or changed parent, missing evidence or a cycle refuses; no historical
+receipt/current/verified bytes may be repaired in place. The full existing
+runtime authorization/completion/owner/drain checks still run after resolution.
+
+Canonical running-group update must validate the metadata handoff before its
+first controlled stop; later stopped-state and destructive-boundary checks remain
+mandatory. An already successful controlled stop is continued from its exact
+record and must not be replayed. Acceptance includes the real stopped 33052/08a
+read-only validation and focused carry/order/negative tests before startup.
+
+
+The lineage resolver binds both receipt namespace markers and registry SHA to
+the active BuildControl namespace; unnamespaced controls reject either marker.
+A malformed-present capability must refuse before specialized cold/drained early
+returns. A no-newline child Compose is a supported completion encoding only
+when its typed request and existing `completed()` evidence authenticate it;
+other control records retain their strict canonical encoding contract.

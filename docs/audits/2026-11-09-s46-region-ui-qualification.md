@@ -1812,3 +1812,68 @@ namespace-completion22, nowe completion/observer16, frozen21, legacy-frontend17,
 shell26 oraz canonical DEV up49. Dotyczą połączonych źródeł, nie rzeczywistego nowego backendu.
 Pełny bootstrap `43365406857` dla wcześniejszego `6e8779c57` zakończył się
 sukcesem. Zintegrowane źródła wymagają własnego CI, managed rebuild i odbioru UI.
+
+
+### Canonical rebuild 3542403e — znany stop i odmowa handoff
+
+Scalenie `3542403e42d626ee55d56c59d8feff6e5c096829` jest wypchnięte.
+Automatyczny pełny bootstrap PR `43371559095` zakończył się sukcesem, w tym
+`generated-api-determinism` (job `131708255939`). Zdublowany własny manual run
+`43371692250` anulowano po porównaniu identycznej listy 21 jobów i zakresów;
+automatyczna pełna weryfikacja pozostała aktywna i przeszła.
+
+Hook commitowy uruchomił React Doctor, ale oxlint zgłosił błąd parsera
+`Unexpected discriminant 48 for TSNamespaceDeclarationKind`. Hook zakończył
+się 0 i commit został zapisany. Diagnostyka React Doctor jest INCOMPLETE,
+nie GREEN; nie wyłączano reguł ani nie zmieniano konfiguracji dla ukrycia błędu.
+Obowiązkowe kontrole CI są osobnym dowodem od tego lokalnego narzędzia.
+
+Po potwierdzeniu pustego API uruchomiono canonical `just docker-dev` dla tej
+grupy/portu 3243 z required GPU i bez skryptu. Controlled stop
+`d159da3080d54bc9a6139464ad9eecac` zakończył się sukcesem, następnie recreate
+odmówił przed nową kompilacją: `Retained container recovery capability is incomplete`.
+Oba istniejące kontenery są Exited(0); UI tej grupy jest chwilowo niedostępne.
+Active marker nie istnieje. To zakończony stop, nie nieznane wykonanie Solve.
+
+Odczyt danych potwierdził konkretny błąd: refresh/completion 33052 zgubił
+TOP-LEVEL `container_recovery` i `container_recovery_environment`, chociaż backend
+Compose zachował obie zmienne capability. Immutable base08a ma oba kompletne
+pola, zgodne SHA autoryzacji i ten sam backend. Potrzebna jest uwierzytelniona
+normalizacja tego legacy handoff oraz poprawne przenoszenie pary przy następnych
+refreshach; przyszły preflight ma odmawiać przed zatrzymaniem zdrowej grupy.
+Stare terminal/current/verified pozostają nieedytowane, env nie usuwano,
+a żadnego stopu ani Compute nie ponowiono.
+[Indeks stanu handoff](2026-11-13-recovered-frontend-rebuild-handoff.json)
+oddziela zakończone CI od nieprzeprowadzonego jeszcze odbioru nowej binarki/UI.
+
+
+### Handoff: poprawka, review i rzeczywista walidacja readonly
+
+Kandydat naprawy odtwarza w pamięci brakującą parę wyłącznie z przypiętej,
+niezmiennej frontend-refresh lineage. Przenosi pełną, zweryfikowaną recovery
+provenance do kolejnego receipt i porównuje ją ponownie pod lease. Running-up
+sprawdza container capability metadata przed controlled stop; późniejszy pełny
+validator zachowuje authorization/completion/owner/drain i wspierane specialized
+contexts. Zwykłe previous-* refs bez frontend markers nie uruchamiają resolvera.
+
+Rzeczywisty pierwszy readonly test ujawnił kanoniczny child Compose bez newline
+publikowany przez completion. Lokalny odczyt dopuszcza go tylko po typed
+completion request i `completed()` evidence; terminal/auth/owner strict readers
+nie zostały rozluźnione. Niezależny review zamknął dodatkowo exact active
+namespace/registry binding obu receipts oraz odmowę częściowej capability przed
+cold/drained early return. Nie ma pozostałego blokera w tym zakresie review.
+
+213 affected metadata/mock testów PASS: focused handoff20, legacy-frontend17,
+container-recovery20, canonicalup49, seed20, native-terminal29, native-init7,
+cold-budget35, pending-resume16. AST i diff-check PASS. Stara niepełna fixture
+lifecycle ma jawny mock NoRecovery; odkrywanie rzeczywistych journal contexts
+pozostało zachowane.
+
+Pełny rzeczywisty `_retained_native_recovery_context` na stopped33052/base08a
+przeszedł po poprawkach. Zweryfikował autoryzację SHA `070fee0f...`, zwrócił
+oryginalną parę recovery_environment/recovery_metadata, zachował wszystkie
+kontrolowane bajty dokumentów i stan obu zatrzymanych kontenerów. Wynik:
+`validated-readonly`, `services_mutated=false`; helper SHA
+`c40afe806a776da5db9dd48456bccbe9ceb4b351b1de12daad4d58598ae59101`.
+[Zaktualizowany indeks handoff](2026-11-13-recovered-frontend-rebuild-handoff.json)
+zawiera ten dowód. Nie jest on jeszcze uruchomieniem ani odbiorem nowej binarki/UI.

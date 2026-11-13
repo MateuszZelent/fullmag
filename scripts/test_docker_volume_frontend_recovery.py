@@ -230,6 +230,9 @@ class LegacyFrontendRecoveryTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(dev, '_session_host', return_value=windows_folder_host))
             stack.enter_context(mock.patch.object(windows_folder_host, 'read_owned_regular', return_value=b'{"owner":"same"}'))
             stack.enter_context(mock.patch.object(dev, '_retained_startup_enabled', return_value=False))
+            # This legacy lifecycle fixture has no retained recovery marker or
+            # recovery journal; focused recovery-context suites cover those gates.
+            stack.enter_context(mock.patch.object(dev, '_retained_recovery_context', return_value={}))
             # These service-lifecycle fixtures retain a validated legacy host ledger.
             # Ledger attestation itself is covered by its dedicated contracts.
             stack.enter_context(mock.patch.object(dev, '_retained_ledger_profile', return_value={
