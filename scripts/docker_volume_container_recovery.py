@@ -53,6 +53,17 @@ ATTEMPT_HISTORY_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v5"
 ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA = "fullmag.docker-abrupt-stop-proof.v3"
 ABRUPT_PROOF_BOOTSTRAP_SCHEMA = "fullmag.docker-abrupt-stop-proof.v4"
 ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA = "fullmag.docker-abrupt-stop-proof.v5"
+ABRUPT_PROOF_GROUP_LOCAL_SCHEMA = "fullmag.docker-abrupt-stop-proof.v6"
+GROUP_LOCAL_DIRECT_BINDS_SCOPE = "group-local-direct-binds-v1"
+_GROUP_LOCAL_PROTECTED_BIND_TARGETS = frozenset({
+    "/state", "/user-data", "/host-ledger", "/opt/fullmag/script-output",
+})
+_GROUP_LOCAL_PROTECTED_VOLUME_TARGETS = frozenset({
+    "/host-ledger", "/opt/fullmag/control", "/opt/fullmag/runtime-control",
+    "/state/runs/docker-all/session-store/runtime-services",
+    "/build", "/state/development",
+})
+
 AUTHORIZATION_SCHEMA = "fullmag.docker-container-recovery-authorization.v1"
 REQUEST_SCHEMA = "runtime_service_container_recovery_request.v1"
 RETAINED_REQUEST_SCHEMA = "runtime_service_container_recovery_request.v2"
@@ -1914,7 +1925,7 @@ def _assert_request_matches_abrupt_retained_pins(
     if (proof.get("schema") == ABRUPT_PROOF_BOOTSTRAP_SCHEMA
             and request.get("schema_version") != TERMINAL_REQUEST_SCHEMA):
         _fail("bootstrap stop proof requires native terminal recovery v3")
-    if proof.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+    if proof.get("schema") in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}:
         if (request.get("schema_version") != REQUEST_SCHEMA
                 or any(key in request for key in (
                     "retained_cancelled_runs", "retained_terminal_runs",
@@ -2060,6 +2071,253 @@ def _posix_paths_overlap(left, right):
     return left == right or left in right.parents or right in left.parents
 
 
+def _container_environment_value(container, name):
+    config = container.get("Config")
+    values = config.get("Env") if isinstance(config, Mapping) else None
+    if not isinstance(values, list):
+        return None
+    matches = [item.split("=", 1)[1] for item in values
+               if isinstance(item, str) and item.startswith(name + "=")]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _safe_posix_source(value, label):
+    if (not isinstance(value, str) or not value.startswith("/") or value.startswith("//")
+            or "\\" in value or "\x00" in value):
+        _fail(label + " is not an absolute Linux path")
+    path = PurePosixPath(value)
+    if ".." in path.parts or str(path) != value:
+        _fail(label + " is not a canonical Linux path")
+    return path
+
+
+def _windows_source_identity(value, label):
+    if re.fullmatch(r"[A-Za-z]:[\\/].*", value):
+        path = PureWindowsPath(value)
+        if ".." in path.parts:
+            _fail(label + " contains Windows path traversal")
+        normalized = value.replace("/", "\\")
+        if str(path).casefold() != normalized.rstrip("\\").casefold():
+            _fail(label + " is not a canonical Windows path")
+        return path
+
+    if value.startswith("/mnt/") and len(value) >= 6:
+        suffix = value[len("/mnt/"):]
+        parts = suffix.split("/")
+        if re.fullmatch(r"[A-Za-z]", parts[0] or ""):
+            if any(part in {"", ".", ".."} for part in parts[1:]):
+                _fail(label + " is not a canonical WSL drive path")
+            tail = "\\".join(parts[1:])
+            return PureWindowsPath(parts[0] + ":\\" + tail)
+
+    for prefix in _DESKTOP_HOST_PREFIXES:
+        if not value.startswith(prefix):
+            continue
+        suffix = value[len(prefix):]
+        parts = suffix.split("/")
+        if not parts or re.fullmatch(r"[A-Za-z]", parts[0] or "") is None:
+            _fail(label + " is an unclassified Desktop or UNC alias")
+        if any(part in {"", ".", ".."} for part in parts[1:]):
+            _fail(label + " is not a canonical Desktop drive alias")
+        tail = "\\".join(parts[1:])
+        return PureWindowsPath(parts[0] + ":\\" + tail)
+    return None
+
+
+def _raw_direct_identity(value, label):
+    if not isinstance(value, str) or not value:
+        _fail(label + " is missing")
+    wsl_prefix = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/"
+    if value.startswith(wsl_prefix):
+        if re.fullmatch(
+                r"/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/"
+                r"[A-Za-z0-9][A-Za-z0-9._-]*/[0-9a-f]{64}", value) is None:
+            _fail(label + " is an unknown WSL bind alias")
+        return "wsl-alias", value
+    windows = _windows_source_identity(value, label)
+    if windows is not None:
+        return "windows", windows
+    return "posix", _safe_posix_source(value, label)
+
+
+def _direct_identities_overlap(left, right):
+    if left[0] != right[0]:
+        return False
+    if left[0] == "posix":
+        return _posix_paths_overlap(left[1], right[1])
+    if left[0] == "windows":
+        return (left[1] == right[1] or left[1] in right[1].parents
+                or right[1] in left[1].parents)
+    return left[1] == right[1]
+
+
+def _canonical_direct_identity(identity, state_root, label):
+    if identity[0] != "wsl-alias":
+        return identity
+    try:
+        from docker_volume_host_device import bind_host_path
+        resolved = bind_host_path(identity[1], state_root)
+    except Exception as error:
+        _fail(label + " has no local WSL bind-mount mapping: " + str(error))
+    if resolved is None:
+        _fail(label + " cannot be mapped to the selected Linux filesystem")
+    text = str(resolved)
+    return "posix", _safe_posix_source(text, label + " canonical source")
+
+
+def _selected_linux_native_recovery_scope(backend, compose, project):
+    """Return the retained Linux state root only for a pinned native profile."""
+    if (not isinstance(project, str) or not isinstance(compose, Mapping)
+            or compose.get("name") != project):
+        _fail("group-local direct-bind scope requires the selected Compose identity")
+    config = backend.get("Config") if isinstance(backend, Mapping) else None
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    if (not isinstance(labels, Mapping)
+            or labels.get("com.docker.compose.project") != project
+            or labels.get("org.fullmag.compose.project") != project
+            or labels.get("com.docker.compose.service") != "backend"
+            or _container_environment_value(backend, "FULLMAG_SESSION_STORAGE_PROFILE") != "linux-native-v1"):
+        _fail("group-local direct-bind scope requires the selected linux-native-v1 group")
+    services = compose.get("services")
+    service = services.get("backend") if isinstance(services, Mapping) else None
+    environment = service.get("environment") if isinstance(service, Mapping) else None
+    volumes = service.get("volumes") if isinstance(service, Mapping) else None
+    daemon_binds = service.get("x-fullmag-daemon-binds") if isinstance(service, Mapping) else None
+    state_specs = [mount for mount in volumes if isinstance(mount, Mapping)
+                   and mount.get("type") == "bind" and mount.get("target") == "/state"] \
+        if isinstance(volumes, list) else []
+    actual = [mount for mount in backend.get("Mounts", [])
+              if isinstance(mount, Mapping) and mount.get("Destination") == "/state"]
+    if (not isinstance(environment, Mapping)
+            or environment.get("FULLMAG_SESSION_STORAGE_PROFILE") != "linux-native-v1"
+            or len(state_specs) != 1 or len(actual) != 1
+            or actual[0].get("Type") != "bind"
+            or not isinstance(actual[0].get("Source"), str)
+            or not isinstance(daemon_binds, Mapping)
+            or daemon_binds.get("/state") != actual[0].get("Source")):
+        _fail("group-local scope has no exact retained Linux session bind")
+    state_source = state_specs[0].get("source")
+    _safe_posix_source(state_source, "selected Compose state source")
+    state_actual = _raw_direct_identity(actual[0].get("Source"), "selected Docker state source")
+    if state_actual[0] == "windows":
+        _fail("group-local direct-bind scope requires a Linux-native state bind")
+    return state_source
+
+
+def _group_local_owned_identities(backend, frontend, compose, project, *, resolve_aliases=True):
+    """Return only the selected group's protected data and private mounts.
+
+    Source checkouts and shared Cargo/pnpm/package volumes remain shareable
+    dependencies. Their complete Compose/Docker inventory is still validated,
+    but they do not become exclusive recovery resources.
+    """
+    state_source = _selected_linux_native_recovery_scope(backend, compose, project)
+    state_root = Path(state_source)
+    raw_binds = []
+    canonical_binds = []
+    volume_names = set()
+    volume_roots = []
+    services = compose.get("services")
+    declared_volumes = compose.get("volumes")
+    if not isinstance(services, Mapping) or not isinstance(declared_volumes, Mapping):
+        _fail("group-local Compose mount inventory is missing")
+
+    for service_name, container in (("backend", backend), ("frontend", frontend)):
+        service = services.get(service_name)
+        specs = service.get("volumes") if isinstance(service, Mapping) else None
+        actual = container.get("Mounts") if isinstance(container, Mapping) else None
+        if not isinstance(specs, list) or not isinstance(actual, list):
+            _fail("group-local service has no complete direct-mount inventory")
+        spec_by_target = {}
+        for spec in specs:
+            if not isinstance(spec, Mapping):
+                _fail("group-local Compose mount is malformed")
+            target = spec.get("target")
+            if not isinstance(target, str) or not target or target in spec_by_target:
+                _fail("group-local Compose mount targets are missing or duplicated")
+            if spec.get("type") not in {"bind", "volume", "tmpfs"}:
+                _fail("group-local Compose mount type is unresolved")
+            spec_by_target[target] = spec
+        actual_by_target = {}
+        for mount in actual:
+            if not isinstance(mount, Mapping):
+                _fail("group-local Docker mount is malformed")
+            target = mount.get("Destination")
+            if not isinstance(target, str) or not target or target in actual_by_target:
+                _fail("group-local Docker mount targets are missing or duplicated")
+            actual_by_target[target] = mount
+        if set(spec_by_target) != set(actual_by_target):
+            _fail("group-local Docker/Compose mount inventories differ")
+
+        daemon_binds = service.get("x-fullmag-daemon-binds")
+        if daemon_binds is not None and not isinstance(daemon_binds, Mapping):
+            _fail("group-local daemon bind inventory is malformed")
+        for target, spec in spec_by_target.items():
+            mount = actual_by_target[target]
+            kind = spec.get("type")
+            if mount.get("Type") != kind:
+                _fail("group-local Docker/Compose mount type differs")
+            if kind == "bind" and target in _GROUP_LOCAL_PROTECTED_BIND_TARGETS:
+                expected = _raw_direct_identity(
+                    spec.get("source"), "selected protected Compose bind source")
+                if expected[0] != "posix":
+                    _fail("group-local scope refuses selected Windows protected binds")
+                actual_source = _raw_direct_identity(
+                    mount.get("Source"), "selected protected Docker bind source")
+                if actual_source[0] == "windows":
+                    _fail("group-local scope refuses selected Windows protected binds")
+                if isinstance(daemon_binds, Mapping) and target in daemon_binds:
+                    if daemon_binds[target] != mount.get("Source"):
+                        _fail("group-local Docker bind differs from its retained daemon pin")
+                raw_binds.extend((expected, actual_source))
+                if resolve_aliases:
+                    canonical_actual = _canonical_direct_identity(
+                        actual_source, state_root, "selected protected Docker bind")
+                elif (target == "/state" and actual_source[0] == "wsl-alias") or actual_source == expected:
+                    # The archived proof binds the exact source alias and
+                    # Compose daemon pin; only live preparation maps that alias
+                    # through local mount-table metadata.
+                    canonical_actual = expected
+                else:
+                    _fail("archived protected Docker bind differs from its retained Compose source")
+                if canonical_actual[0] != "posix" or canonical_actual[1] != expected[1]:
+                    _fail("selected protected Docker bind does not map to its retained Linux source")
+                canonical_binds.extend((expected, canonical_actual))
+            elif kind == "volume" and target in _GROUP_LOCAL_PROTECTED_VOLUME_TARGETS:
+                compose_name = spec.get("source")
+                if not isinstance(compose_name, str) or not compose_name:
+                    _fail("selected private Compose volume identity is missing")
+                declaration = declared_volumes.get(compose_name)
+                if not isinstance(declaration, Mapping):
+                    _fail("selected private Compose volume declaration is missing")
+                declared_name = declaration.get("name")
+                if declared_name is None:
+                    declared_name = (compose_name if declaration.get("external")
+                                     else project + "_" + compose_name)
+                if not isinstance(declared_name, str) or not declared_name:
+                    _fail("selected private Compose volume name is unresolved")
+                name = mount.get("Name")
+                if not isinstance(name, str) or not name or name != declared_name:
+                    _fail("selected private Docker/Compose volume identity differs")
+                source = _safe_posix_source(
+                    mount.get("Source"), "selected private Docker volume mountpoint")
+                volume_names.add(name)
+                volume_roots.append(source)
+            elif kind == "tmpfs" and mount.get("Type") != "tmpfs":
+                _fail("selected tmpfs mount differs from Compose")
+
+    selected_state = PurePosixPath(state_source)
+    if not any(source[0] == "posix" and source[1] == selected_state
+               for source in canonical_binds):
+        _fail("selected native state bind does not map to its retained Compose root")
+    return {
+        "raw_binds": raw_binds,
+        "canonical_binds": canonical_binds,
+        "volume_names": volume_names,
+        "volume_roots": volume_roots,
+    }
+
+
 def _read_foreign_docker_consumers(excluded):
     # Short-lived helpers can disappear between ps and bulk inspect. Restart
     # the entire read only when the inventory actually changed; never accept
@@ -2135,9 +2393,134 @@ def _prove_foreign_windows_bind(control, backend, item, source, compose, *, prep
                   + "; absent-stopped proof: " + str(absent_error))
 
 
+def _group_local_consumer_pin(item):
+    state = item.get("State")
+    config = item.get("Config")
+    labels = config.get("Labels") if isinstance(config, Mapping) else None
+    environment = config.get("Env") if isinstance(config, Mapping) else None
+    mounts = item.get("Mounts")
+    if not isinstance(state, Mapping) or not isinstance(mounts, list):
+        _fail("foreign Docker consumer has no stable state/mount inventory")
+    return _canonical({
+        "id": item.get("Id"),
+        "image": item.get("Image"),
+        "state": {key: state.get(key) for key in (
+            "Status", "Running", "Paused", "Restarting", "Pid", "RestartCount")},
+        "labels": labels,
+        "environment": environment,
+        "mounts": sorted(mounts, key=lambda mount: mount.get("Destination", "")
+                         if isinstance(mount, Mapping) else ""),
+    })
+
+
+def _assert_no_foreign_group_local_direct_bind_consumers(
+    control, backend, frontend, compose, *, prepared_reference=None
+):
+    project = getattr(control, "project", None)
+    owned = _group_local_owned_identities(backend, frontend, compose, project)
+    own_raw = list(owned["raw_binds"])
+    own_raw.extend(("posix", root) for root in owned["volume_roots"])
+    own_canonical = list(owned["canonical_binds"])
+    own_canonical.extend(("posix", root) for root in owned["volume_roots"])
+    own_volume_names = owned["volume_names"]
+
+    def qualify(item):
+        mounts = item.get("Mounts")
+        if not isinstance(mounts, list):
+            _fail("foreign Docker consumer has no complete mount inventory")
+        identities = []
+        volume_names = []
+        for mount in mounts:
+            if not isinstance(mount, Mapping):
+                _fail("foreign Docker consumer mount is malformed")
+            kind = mount.get("Type")
+            if kind == "bind":
+                identities.append(("bind", _raw_direct_identity(
+                    mount.get("Source"), "foreign Docker bind source")))
+            elif kind == "volume":
+                name = mount.get("Name")
+                if not isinstance(name, str) or not name:
+                    _fail("foreign Docker consumer volume identity is unresolved")
+                source = _safe_posix_source(mount.get("Source"),
+                                            "foreign Docker volume mountpoint")
+                volume_names.append(name)
+                identities.append(("volume", ("posix", source)))
+            elif kind == "tmpfs":
+                identities.append(("tmpfs", None))
+            else:
+                _fail("foreign Docker consumer mount type is unresolved")
+
+        # Compare raw identities before resolving a Desktop alias. This keeps
+        # exact same-source claims ahead of any local mount-table observation.
+        for kind, identity in identities:
+            if kind == "volume":
+                if identity[0] == "posix" and any(
+                        _direct_identities_overlap(identity, own)
+                        for own in own_raw):
+                    _fail("foreign Docker volume mountpoint overlaps an owned resource")
+            elif kind == "bind" and any(
+                    _direct_identities_overlap(identity, own) for own in own_raw):
+                _fail("foreign Docker direct bind overlaps an owned resource")
+        if own_volume_names.intersection(volume_names):
+            _fail("foreign Docker volume identity collides with an owned group volume")
+
+        state_root = Path(_selected_linux_native_recovery_scope(
+            backend, compose, project))
+        for kind, identity in identities:
+            if kind == "tmpfs":
+                continue
+            canonical_identity = _canonical_direct_identity(
+                identity, state_root, "foreign Docker mount")
+            if canonical_identity[0] == "windows":
+                # V6 proves the selected group-local Linux direct mounts and
+                # its private volumes. Windows drive namespaces are separate;
+                # no foreign Windows filesystem probe is part of this scope.
+                continue
+            if any(_direct_identities_overlap(canonical_identity, own)
+                   for own in own_canonical):
+                _fail("foreign Docker direct bind overlaps an owned group resource")
+
+    own_ids = {backend["Id"], frontend["Id"]}
+    operation = getattr(control, "_active_operation", None)
+    if operation is not None:
+        authenticate = getattr(control, "_pin_operation_helper", None)
+        if not callable(authenticate):
+            _fail("active recovery operation has no authenticated control helper")
+        own_ids.add(_require_container(
+            authenticate(operation), "authenticated operation helper ID"))
+    records = _read_foreign_docker_consumers(own_ids)
+    for item in records:
+        qualify(item)
+    if prepared_reference is None:
+        return
+
+    observed = {item["Id"]: _group_local_consumer_pin(item) for item in records}
+    for round_index in range(4):
+        prepared_reference.revalidate()
+        current = _read_foreign_docker_consumers(own_ids)
+        pins = {item["Id"]: _group_local_consumer_pin(item) for item in current}
+        changed = [item for item in current
+                   if pins[item["Id"]] != observed.get(item["Id"])]
+        if not changed:
+            return
+        if round_index == 3:
+            _fail("prepared group-local consumer inventory did not stabilize")
+        for item in changed:
+            qualify(item)
+        observed = pins
+
+
 def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=None, *,
-                                         prove_foreign_disjoint=None, prepared_reference=None):
+                                         prove_foreign_disjoint=None, prepared_reference=None,
+                                         consumer_scope=None):
     """Fence every Docker consumer, including stopped containers able to restart."""
+    if consumer_scope is not None:
+        if consumer_scope != GROUP_LOCAL_DIRECT_BINDS_SCOPE or compose is None:
+            _fail("abrupt recovery consumer scope is unsupported")
+        if prove_foreign_disjoint is not None:
+            _fail("group-local direct-bind scope does not accept physical proof callbacks")
+        return _assert_no_foreign_group_local_direct_bind_consumers(
+            control, backend, frontend, compose, prepared_reference=prepared_reference)
     if prepared_reference is not None and prove_foreign_disjoint is not None:
         _fail("prepared recovery requires the managed physical proof")
     reference = {"prepared_reference": prepared_reference} if prepared_reference is not None else {}
@@ -2297,7 +2680,8 @@ def _assert_no_foreign_storage_consumers(control, backend, frontend, compose=Non
 def prepare_abrupt_stop_proof(
     control, authorization_pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None, failed_outcome_retained=False
+    bootstrap_stop_reference=None, failed_outcome_retained=False,
+    group_local_direct_binds=False
 ):
     """Observe without writes. Publish the returned immutable JSON in a control operation.
 
@@ -2306,8 +2690,10 @@ def prepare_abrupt_stop_proof(
     stop journal, modifies OWNER/process-tree, removes containers, or runs Solve.
     """
     pins = _abrupt_pins(authorization_pins)
-    if type(failed_outcome_retained) is not bool:
-        _fail("failed_outcome_retained selector must be a boolean")
+    if type(failed_outcome_retained) is not bool or type(group_local_direct_binds) is not bool:
+        _fail("abrupt recovery selectors must be booleans")
+    if group_local_direct_binds and not failed_outcome_retained:
+        _fail("group-local direct-bind scope requires failed_outcome_retained")
     if failed_outcome_retained and any(value is not None for value in (
             retained_terminal_runs, retained_held_manual_runs, retained_attempt_histories,
             bootstrap_stop_reference)):
@@ -2382,7 +2768,11 @@ def prepare_abrupt_stop_proof(
         validated = validate(bootstrap, pins, raw_records, backend, control=control)
         if frontend.get("State", {}).get("StartedAt") != validated["frontend_started_at"]:
             _fail("bootstrap recovery frontend incarnation differs from failed resume")
-    _assert_no_foreign_storage_consumers(control, backend, frontend, compose)
+    _assert_no_foreign_storage_consumers(
+        control, backend, frontend, compose,
+        **({"consumer_scope": GROUP_LOCAL_DIRECT_BINDS_SCOPE}
+           if group_local_direct_binds else {}),
+    )
     storage_proof = _ledger_and_store_snapshot(control, backend, compose=compose,
                                               retained_terminal_runs=retained_terminal_runs,
                                               retained_held_manual_runs=retained_held_manual_runs,
@@ -2390,7 +2780,8 @@ def prepare_abrupt_stop_proof(
     if _docker_engine_sha() != engine_sha:
         _fail("Docker engine changed during abrupt proof preparation")
     proof = {"schema": (
-                 ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA if failed_outcome_retained
+                 ABRUPT_PROOF_GROUP_LOCAL_SCHEMA if group_local_direct_binds
+                 else ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA if failed_outcome_retained
                  else ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA if retained_attempt_histories is not None
                  else ABRUPT_PROOF_HELD_MANUAL_SCHEMA if retained_held_manual_runs is not None
                  else ABRUPT_PROOF_SCHEMA
@@ -2402,6 +2793,8 @@ def prepare_abrupt_stop_proof(
              "network": _abrupt_network(backend, frontend, control.project),
              "storage_proof": storage_proof,
              "retained_terminal_runs": copy.deepcopy(retained_terminal_runs)}
+    if group_local_direct_binds:
+        proof["consumer_scope"] = GROUP_LOCAL_DIRECT_BINDS_SCOPE
     if bootstrap is not None:
         proof.update(schema=ABRUPT_PROOF_BOOTSTRAP_SCHEMA, bootstrap_stop=bootstrap)
     if retained_held_manual_runs is not None:
@@ -2423,12 +2816,14 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     held_fields = legacy_fields | {"retained_held_manual_runs"}
     history_fields = held_fields | {"retained_attempt_histories"}
     bootstrap_fields = legacy_fields | {"bootstrap_stop"}
+    group_local_fields = legacy_fields | {"consumer_scope"}
     if ((proof_schema == ABRUPT_PROOF_SCHEMA and set(proof) != legacy_fields)
             or (proof_schema == ABRUPT_PROOF_HELD_MANUAL_SCHEMA and set(proof) != held_fields)
             or (proof_schema == ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA and set(proof) != history_fields)
             or (proof_schema == ABRUPT_PROOF_BOOTSTRAP_SCHEMA and set(proof) != bootstrap_fields)
             or (proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA and set(proof) != legacy_fields)
-            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA, ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA}):
+            or (proof_schema == ABRUPT_PROOF_GROUP_LOCAL_SCHEMA and set(proof) != group_local_fields)
+            or proof_schema not in {ABRUPT_PROOF_SCHEMA, ABRUPT_PROOF_HELD_MANUAL_SCHEMA, ABRUPT_PROOF_ATTEMPT_HISTORY_SCHEMA, ABRUPT_PROOF_BOOTSTRAP_SCHEMA, ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}):
         _fail("abrupt stop proof does not match its frozen schema")
     if proof["authorization_pins"] != _abrupt_authorization_pins(authorization):
         _fail("abrupt proof operator pins differ")
@@ -2436,9 +2831,12 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
     terminal_pins = proof["retained_terminal_runs"]
     held_pins = proof.get("retained_held_manual_runs")
     history_pins = proof.get("retained_attempt_histories")
-    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+    if proof_schema in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}:
         if terminal_pins is not None or held_pins is not None or history_pins is not None:
             _fail("failed_outcome_retained proof must select the empty v1 recovery request")
+        if (proof_schema == ABRUPT_PROOF_GROUP_LOCAL_SCHEMA
+                and proof.get("consumer_scope") != GROUP_LOCAL_DIRECT_BINDS_SCOPE):
+            _fail("group-local v6 proof has an unsupported consumer scope")
         storage = _require_mapping(proof.get("storage_proof"), "failed-outcome storage proof")
         if storage.get("run_directories") != [] or storage.get("run_records") != []:
             _fail("failed_outcome_retained proof requires an empty accepted namespace")
@@ -2469,7 +2867,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         expected_recovery_outcome({"schema_version": TERMINAL_REQUEST_SCHEMA, "retained_terminal_runs": terminal_pins})
     records = _require_mapping(proof["raw_records"], "abrupt raw records")
     expected_paths = {"process_receipt": "runtime-service/process-tree.json", "owner": "runtime-services/OWNER.json", "launch": "runtime-services/LAUNCH.json", "config": "runtime-service/docker-all.json"}
-    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+    if proof_schema in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}:
         process_record = _require_mapping(records.get("process_receipt"), "abrupt process receipt record")
         if not isinstance(process_record.get("raw_utf8"), str):
             _fail("failed_outcome_retained process receipt record is malformed")
@@ -2493,7 +2891,7 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         if control is not None and _control_bytes(control, item["path"]) != raw:
             _fail("abrupt raw proof is stale: " + key)
     process = decoded["process_receipt"]
-    if proof_schema == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA:
+    if proof_schema in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}:
         owner = _owner_for_native(decoded["owner"])
         _validate_failed_outcome_diagnostic(process, owner, decoded["api_failure_fence"])
     else:
@@ -2502,6 +2900,12 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         owner = _owner_for_native(decoded["owner"])
         _validate_proof_process_owner(process, owner, proof, authorization, control=control)
     containers = _require_mapping(proof["containers"], "abrupt archived containers")
+    if proof_schema == ABRUPT_PROOF_GROUP_LOCAL_SCHEMA:
+        if compose is None:
+            _fail("group-local v6 proof requires the retained Compose document")
+        _group_local_owned_identities(
+            containers.get("backend"), containers.get("frontend"), compose,
+            authorization["compose_project"], resolve_aliases=False)
     if set(containers) != {"backend", "frontend"}:
         _fail("abrupt archived service inventory differs")
     for service, item in containers.items():
@@ -2542,6 +2946,8 @@ def validate_abrupt_stop_proof(proof, authorization, *, control=None, compose=No
         _assert_no_foreign_storage_consumers(
             control, containers["backend"], containers["frontend"], compose,
             **({"prepared_reference": prepared_reference} if prepared_reference is not None else {}),
+            **({"consumer_scope": GROUP_LOCAL_DIRECT_BINDS_SCOPE}
+               if proof_schema == ABRUPT_PROOF_GROUP_LOCAL_SCHEMA else {}),
         )
         observed = _ledger_and_store_snapshot(
             control, containers["backend"], compose=compose,
@@ -3110,7 +3516,7 @@ def _revalidate_recovery_boundary(
     if terminal.get("phase") != "development" or terminal.get("attempt") != attempt:
         _fail("retained development attempt changed before the destructive boundary")
     if _is_abrupt(authorization):
-        validate_abrupt_stop_proof(journal, authorization)
+        validate_abrupt_stop_proof(journal, authorization, compose=compose)
     else:
         _validate_pre_admission_stop_journal(journal, authorization, attempt)
 
@@ -3144,7 +3550,7 @@ def _revalidate_recovery_boundary(
             _fail("prepared recovery manifest changed before the destructive boundary")
     process_receipt, _, process_receipt_sha = _runtime_process_receipt(
         control, abrupt=_is_abrupt(authorization),
-        failed_outcome_retained=(journal.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA),
+        failed_outcome_retained=(journal.get("schema") in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}),
     )
     if process_receipt_sha != expected_process_receipt_sha:
         _fail("shutdown_unknown process receipt changed before the destructive boundary")
@@ -3425,7 +3831,7 @@ def recover(args: argparse.Namespace) -> None:
     if _sha256(_canonical(compose)) != authorization["compose_config_sha256"] or _sha256(journal_raw) != authorization["stop_journal_sha256"]:
         _fail("retained Compose or stop journal bytes differ from authorization")
     if _is_abrupt(authorization):
-        validate_abrupt_stop_proof(journal, authorization)
+        validate_abrupt_stop_proof(journal, authorization, compose=compose)
     else:
         _validate_pre_admission_stop_journal(journal, authorization, attempt)
     if terminal.get("phase") != "development" or terminal.get("attempt") != attempt:
@@ -3449,7 +3855,7 @@ def recover(args: argparse.Namespace) -> None:
         network_name = transition["network_name"]
     process_receipt, process_receipt_raw, process_receipt_sha = _runtime_process_receipt(
         control, abrupt=_is_abrupt(authorization),
-        failed_outcome_retained=(journal.get("schema") == ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA),
+        failed_outcome_retained=(journal.get("schema") in {ABRUPT_PROOF_FAILED_OUTCOME_SCHEMA, ABRUPT_PROOF_GROUP_LOCAL_SCHEMA}),
     )
     if process_receipt_sha != authorization["process_receipt_sha256"]:
         _fail("current shutdown_unknown process receipt differs from operator authorization")

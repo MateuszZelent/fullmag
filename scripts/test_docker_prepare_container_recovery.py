@@ -84,6 +84,33 @@ class PreparationTests(unittest.TestCase):
         for call in self.builder.call_args_list:
             self.assertIs(call.kwargs['failed_outcome_retained'], True)
 
+    def test_group_local_mode_requires_failed_outcome_and_forwards_both_observations(self):
+        with self.assertRaisesRegex(BuildControlError, "--failed-outcome-retained"):
+            module.prepare(self.control, self.pins, {}, group_local_direct_binds=True)
+        self.builder.assert_not_called()
+
+        result = module.prepare(
+            self.control, self.pins, {}, failed_outcome_retained=True,
+            group_local_direct_binds=True, publish=True)
+        self.assertEqual(result["state"], "prepared-awaiting-explicit-start")
+        self.assertEqual(self.builder.call_count, 2)
+        for call in self.builder.call_args_list:
+            self.assertIs(call.kwargs["failed_outcome_retained"], True)
+            self.assertIs(call.kwargs["group_local_direct_binds"], True)
+
+    def test_cli_group_local_flag_is_explicit_and_requires_failed_outcome(self):
+        args = module._argument_parser().parse_args([
+            "--repo-root", "/tmp", "--source-root", "/tmp", "--operator-pins", "/tmp/pins",
+            "--failed-outcome-retained", "--group-local-direct-binds",
+        ])
+        self.assertTrue(args.failed_outcome_retained)
+        self.assertTrue(args.group_local_direct_binds)
+        with self.assertRaises(SystemExit):
+            module.main([
+                "--repo-root", "/tmp", "--source-root", "/tmp", "--operator-pins", "/tmp/pins",
+                "--group-local-direct-binds",
+            ])
+
     def test_failed_outcome_mode_rejects_retained_run_or_bootstrap_options(self):
         with self.assertRaisesRegex(BuildControlError, 'empty v1'):
             module.prepare(self.control, self.pins, {}, failed_outcome_retained=True,

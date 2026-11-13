@@ -447,6 +447,33 @@ nieznany wynik pozostają w immutable proof. Wszelki niepusty store, nierozliczo
 rezerwacja, zmiana fence/owner/kontenerów lub obcy konsument blokuje tę ścieżkę;
 nie zastępuj jej zwykłym resume, nowym namespace ani świeżym stanem.
 
+Wyłącznie jawnie wybrana ścieżka v6 obejmuje grupowy zakres bez fizycznego
+badania cudzych drzew. Użyj `--failed-outcome-retained --group-local-direct-binds`;
+nie jest on domyślny ani odtwarzany z samego receipt. Wymaga przypiętego
+`linux-native-v1`, pustego requestu v1, zatrzymanej pary, niezmienionego
+diagnostic fence/owner/CAS, pustego store i wszystkich rezerwacji `Released`.
+Zamrożony proof zawiera `consumer_scope=group-local-direct-binds-v1`, a jego
+kanoniczny digest jest częścią operator authorization.
+
+Zakres v6 sprawdza pełne metadane mountów aktualnych kontenerów względem
+chronionych bindów wybranej grupy (/state, /user-data, /host-ledger i
+/opt/fullmag/script-output, jeśli są bindami) oraz prywatnych wolumenów
+control, ledger, backend build i frontend development-state. Kontrola obejmuje
+surowe źródła bindów, ich lokalne kanoniczne mapowanie WSL, nazwy prywatnych
+wolumenów i ich mountpointy. Nakładanie dokładne, nadrzędne i podrzędne,
+nieznane aliasy, UNC, brak źródła i kolizje blokują recovery. Źródła checkoutu,
+source-git oraz współdzielone wolumeny Cargo, pnpm i package pozostają
+współdzielonymi zależnościami; nie stają się wyłącznymi zasobami grupy.
+
+Wybrana grupa z profilem Windows lub Windows bindem w chronionym zbiorze jest
+odrzucana. Znane ścieżki dysków Windows i aliasy Desktop są osobną przestrzenią
+ścieżek; po bezpośrednich kontrolach ich fizycznych drzew nie skanuje się ani
+nie uruchamia Windows CLI. Ten zakres dowodzi wyłącznie braku bezpośredniego
+nakładania deklarowanych chronionych mountów; nie dowodzi braku pośrednich
+junction, symlinków ani innych aliasów poza nimi. Nie zmienia domyślnego
+fence'u proofów v1-v5 i nie daje uprawnień do zmian cudzych kontenerów lub
+storage.
+
 `docker-dev-resume` wznawia obserwację konkretnego potwierdzonego nieudanego
 startu; opcja `restart_backend=true` może uruchomić zachowany zatrzymany backend, również po wcześniej udanym starcie.
 Po wcześniej udanym starcie `docker-dev-resume` może również odzyskać frontend

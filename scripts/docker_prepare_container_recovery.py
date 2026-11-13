@@ -68,9 +68,14 @@ def _read_retained_run_inputs(terminal_path, held_path):
 def prepare(
     control, pins, compose, *,
     retained_terminal_runs=None, retained_held_manual_runs=None, retained_attempt_histories=None,
-    bootstrap_stop_reference=None, failed_outcome_retained=False, publish=False
+    bootstrap_stop_reference=None, failed_outcome_retained=False,
+    group_local_direct_binds=False, publish=False
 ):
     """Return proof/auth references; publish only after a second frozen read."""
+    if type(group_local_direct_binds) is not bool:
+        raise BuildControlError("group-local direct-bind selector must be a boolean")
+    if group_local_direct_binds and not failed_outcome_retained:
+        raise BuildControlError("--group-local-direct-binds requires --failed-outcome-retained")
     if failed_outcome_retained and any(value is not None for value in (
             retained_terminal_runs, retained_held_manual_runs, retained_attempt_histories,
             bootstrap_stop_reference)):
@@ -86,6 +91,7 @@ def prepare(
         **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
         **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
         failed_outcome_retained=failed_outcome_retained,
+        **({"group_local_direct_binds": True} if group_local_direct_binds else {}),
     )
     proof_raw = recovery._canonical(proof)
     root = recovery.RECOVERY_RELATIVE_ROOT + "/" + pins["request_id"]
@@ -128,6 +134,7 @@ def prepare(
             **({"retained_attempt_histories": retained_attempt_histories} if retained_attempt_histories is not None else {}),
             **({"bootstrap_stop_reference": bootstrap_stop_reference} if bootstrap_stop_reference is not None else {}),
             failed_outcome_retained=failed_outcome_retained,
+            **({"group_local_direct_binds": True} if group_local_direct_binds else {}),
         )
         if recovery._canonical(fresh) != proof_raw:
             raise BuildControlError("Abrupt-stop evidence changed before publication")
@@ -141,7 +148,7 @@ def prepare(
     return result
 
 
-def main(argv=None):
+def _argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", required=True, type=Path)
     parser.add_argument("--source-root", required=True, type=Path)
@@ -153,8 +160,17 @@ def main(argv=None):
                         help="Explicit JSON {attempt, sha256} of a successful diagnostic bootstrap stop; terminal recovery only")
     parser.add_argument("--failed-outcome-retained", action="store_true",
                         help="Select the frozen diagnostic-only failed_outcome_retained proof variant; requires the empty v1 request")
+    parser.add_argument("--group-local-direct-binds", action="store_true",
+                        help="Opt into the frozen v6 Linux group-local direct-mount proof; requires --failed-outcome-retained")
     parser.add_argument("--publish", action="store_true", help="Publish evidence and operator capability under the group lease; never start services")
+    return parser
+
+
+def main(argv=None):
+    parser = _argument_parser()
     args = parser.parse_args(argv)
+    if args.group_local_direct_binds and not args.failed_outcome_retained:
+        parser.error("--group-local-direct-binds requires --failed-outcome-retained")
     terminal_pins, held_pins = _read_retained_run_inputs(
         args.retained_terminal_runs, args.retained_held_manual_runs
     )
@@ -186,6 +202,7 @@ def main(argv=None):
                              retained_held_manual_runs=held_pins, retained_attempt_histories=history_pins,
                              bootstrap_stop_reference=bootstrap_stop_reference,
                              failed_outcome_retained=args.failed_outcome_retained,
+                             group_local_direct_binds=args.group_local_direct_binds,
                              publish=args.publish), indent=2))
     return 0
 

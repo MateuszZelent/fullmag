@@ -1483,3 +1483,32 @@ błędów, a common schema re-eksportuje ten sam typ. Nie dodano schematów Cont
 Room do workera ani drugiego enumu. Publiczna nazwa i serializacja są bez
 zmian; istniejący SDK pozostaje oryginalnym wynikiem generatora. Parsery PASS,
 ponowne CI obu targetów i regresji wymagane. To nie jest nowy semantic RED.
+
+
+### Jawny group-local direct-bind scope v6 — rzeczywisty preview PASS
+
+Końcowy wariant to `fullmag.docker-abrupt-stop-proof.v6` z hashowanym polem
+`consumer_scope: group-local-direct-binds-v1` i jawnym selektorem
+`--failed-outcome-retained --group-local-direct-binds`. Realizuje wcześniej
+zatwierdzony zakres własnej grupy: chronione bindy danych i prywatne wolumeny,
+dokładne lub nadrzędne/podrzędne kolizje źródeł, blokady i hashe. Używa
+metadanych Docker oraz lokalnego mapowania mountów WSL. Nie wywołuje Windows
+dla fizycznego badania cudzych drzew, nie dotyka ich usług i nie deklaruje
+pełnej fizycznej rozłączności poza zakresem bezpośrednich mountów. Nieznane
+i UNC aliasy są odrzucane. Source/Git common i współdzielone Cargo/pnpm/package
+pozostają współdzielone. Domyślna ścieżka proofów v1–v5 jest niezmieniona;
+przejściowy wyjątek pięciu readonly źródeł nie jest częścią końcowego diffu.
+
+89 testów metadanych PASS: recovery 20, abrupt 54, preparer 15, z mockami
+Docker. Parsery i diff check PASS. Rzeczywisty preview requestu
+`6e00825f-9e01-4673-b7fd-82bacbc29232` zakończył się `validated-read-only`,
+`application_started=false`, `compute_started=false`. Proof SHA-256:
+`21ed52ae8e793382c64fae569c9bbcf899511adb72299750fcf33635375bbcd5`;
+operator authorization SHA-256:
+`d998f78cb50f32a67a59e33a7f9f722927a90ebee82edf15b11acb7eeb24a568`.
+To podgląd przygotowania, jeszcze nie publikacja ani działający runtime.
+
+Poprzednia odmowa dotyczyła m.in. działającego obcego backendu Windows-folder
+`2c822c41e754a1c48ee94d127e9f2430e4eb751fd42b03c6f8590fa0154cf007`
+z danymi na E:. Pozostał nietknięty. Nowy zakres nie wymaga jego zatrzymania
+ani zmiany jego poświadczeń na Linux.
