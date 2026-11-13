@@ -26,6 +26,9 @@ criteria, and expected artifacts.
    documented capability and validation scope.
 5. **{doc}`Control Room <control-room>`** — author, launch, monitor, and inspect a study through the
    browser interface.
+6. **{doc}`Live control from Python and Jupyter <../python-api/runtime/live-session>`** — drive the
+   current session of a running instance with `fm.connect()` from a script, an interpreter, or a
+   Jupyter notebook; runnable `.py` and `.ipynb` examples are in `examples/live/`.
 
 ## Public authoring contract
 
