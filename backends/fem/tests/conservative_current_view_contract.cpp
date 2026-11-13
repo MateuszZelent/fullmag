@@ -1962,6 +1962,30 @@ void orientation_conservation_and_source_cut_are_canonical()
     // face fluxes geometrically, and recomputes element/shared-face balances.
     // It does not consume the KKT residual or implementation certificate.
     const auto oracle = integrate_physical_piola_oracle(view->field(), ids);
+    if (!same_records(oracle.records, canonical_records)) {
+        std::cerr << "Piola record counts: oracle=" << oracle.records.size()
+                  << " published=" << canonical_records.size() << '\n';
+        std::size_t shown = 0;
+        for (std::size_t i = 0; i < std::min(
+                oracle.records.size(), canonical_records.size()); ++i) {
+            const auto &expected = oracle.records[i];
+            const auto &published = canonical_records[i];
+            if (expected.face_vertex_ids == published.face_vertex_ids &&
+                    expected.flux_a == published.flux_a) continue;
+            std::cerr << "Piola mismatch " << i << " oracle_key="
+                      << expected.face_vertex_ids[0] << ','
+                      << expected.face_vertex_ids[1] << ','
+                      << expected.face_vertex_ids[2] << " published_key="
+                      << published.face_vertex_ids[0] << ','
+                      << published.face_vertex_ids[1] << ','
+                      << published.face_vertex_ids[2] << std::hexfloat
+                      << " oracle_A=" << expected.flux_a
+                      << " published_A=" << published.flux_a
+                      << " difference_A=" << (published.flux_a - expected.flux_a)
+                      << std::defaultfloat << '\n';
+            if (++shown == 8) break;
+        }
+    }
     require(same_records(oracle.records, canonical_records),
         "published canonical records disagree with independent Piola quadrature");
     require(std::abs(oracle.max_internal_jump_a -
