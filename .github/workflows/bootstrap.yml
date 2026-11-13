@@ -4,7 +4,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: antenna-completed-receipt-${{ github.event.pull_request.number }}
+  group: antenna-retained-dtq-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
   rust-contracts:
@@ -74,22 +74,35 @@ jobs:
           print('Verified exact Rust source delta: fcfdde4ac3dbb1061682e4bc838565b723457020e2380c3ef461005f9c9d99c7')
           PY
 
-      - name: Run actual completed receipt and existing worker regressions
+      - name: Apply exact artifact RED source snapshot
+        run: |
+          python -B - <<'PYCI'
+          import gzip,hashlib,io,tarfile
+          from pathlib import Path
+          packed=Path('.github/antenna-retained-dtq/task-1-source.tar.gz').read_bytes()
+          assert hashlib.sha256(packed).hexdigest() == 'e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c'
+          allowed=('crates/fullmag-antenna-artifacts/','crates/fullmag-ir/','crates/fullmag-quantities/')
+          with tarfile.open(fileobj=io.BytesIO(gzip.decompress(packed)),mode='r:') as archive:
+              members=archive.getmembers()
+              assert len(members)==117
+              for entry in members:
+                  name=entry.name
+                  assert entry.isfile() and not name.startswith('/') and '..' not in Path(name).parts
+                  assert name in ('Cargo.toml','Cargo.lock') or name.startswith(allowed)
+                  data=archive.extractfile(entry).read()
+                  target=Path(name)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  target.write_bytes(data)
+          print('Exact Task 1 RED source overlay: e785f593142bfb3922b21ad6251986758fe6cbf910f137145ecdc25e41b9578c')
+          PYCI
+      - name: Run actual retained-current artifact regressions
         run: |
           set -o pipefail
-          cargo test --locked -p fullmag-api --bin fullmag-api-accepted-worker accepted_study_worker:: -- --nocapture 2>&1 | tee antenna-worker-contracts.log
-          cargo test --locked -p fullmag-api --bin fullmag-api explicit_project_run_submit_is_durable_and_replays_without_live_session -- --nocapture 2>&1 | tee -a antenna-worker-contracts.log
-
-      - name: Preserve contract log
+          cargo test --locked -p fullmag-antenna-artifacts --lib retained_current:: -- --nocapture 2>&1 | tee antenna-retained-dtq-artifact.log
+      - name: Preserve artifact contract log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: antenna-completed-receipt-contracts
-          path: antenna-worker-contracts.log
+          name: antenna-retained-dtq-task1-red
+          path: antenna-retained-dtq-artifact.log
           if-no-files-found: warn
-
-  native-current-view:
-    name: Native current-view baseline
-    uses: ./.github/workflows/fem-positive-mass-contract.yml
-    with:
-      contract_profile: conservative-current-view
