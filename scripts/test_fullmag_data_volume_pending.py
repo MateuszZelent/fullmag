@@ -66,6 +66,63 @@ class PendingMarkerTests(unittest.TestCase):
     def fixture(self):
         return GuardFixture(self)
 
+    def test_explicit_scope_cannot_bypass_absent_pending_or_committed_registration(self):
+        fixture = self.fixture()
+        fixture._write_index(b'', reference=False)
+        with self.assertRaisesRegex(ValueError, 'Prepared migration startup requires'):
+            guard.verify_registered_volume(fixture.layout, fixture.compose_project,
+                                           migration_scope=object())
+        fixture.write_marker()
+        fixture.write_active_registration()
+        with self.assertRaisesRegex(ValueError, 'Prepared migration startup requires'):
+            guard.verify_registered_volume(fixture.layout, fixture.compose_project,
+                                           migration_scope=object())
+
+    def test_explicit_scope_still_requires_existing_index_and_valid_registration_reference(self):
+        fixture = self.fixture()
+        fixture.write_marker()
+        with self.assertRaisesRegex(ValueError, 'Prepared migration startup requires'):
+            guard.verify_registered_volume(fixture.layout, fixture.compose_project,
+                                           migration_scope=object())
+        fixture._write_index(b'', reference=False)
+        before = fixture.index_path.read_bytes()
+        document = json.loads(before)
+        document['data_volume_registration'] = {'path': 'foreign'}
+        fixture.index_path.write_text(json.dumps(document))
+        with self.assertRaisesRegex(ValueError, 'open or incomplete'):
+            guard.verify_registered_volume(fixture.layout, fixture.compose_project,
+                                           migration_scope=object())
+
+    def test_launcher_passes_only_the_current_internal_scope_to_the_volume_guard(self):
+        from scripts import docker_dev as launcher
+        import docker_data_volume_startup_scope as startup
+        scope = object()
+        with patch.object(startup, 'current_scope', return_value=scope), \
+             patch('fullmag_data_volume_guard.verify_registered_volume', return_value={'fixture': 'verified'}) as verify:
+            result = launcher._verify_registered_data_volume({'layout': 'fixture'}, 'project',
+                state_root=Path('/canonical/state'), user_data_root=Path('/canonical/user'))
+        self.assertEqual(result, {'fixture': 'verified'})
+        verify.assert_called_once_with({'layout': 'fixture'}, 'project',
+            state_root=Path('/canonical/state'), user_data_root=Path('/canonical/user'), migration_scope=scope)
+
+    def test_live_prepared_handoff_is_scoped_and_ordinary_startup_stays_blocked(self):
+        import docker_data_volume_startup_scope as startup
+        from scripts.test_docker_data_volume_startup_scope import StartupScopeFixture
+        fixture = StartupScopeFixture(self)
+        prepared = fixture.issue()
+        index_path = Path(fixture.layout['storage_root']) / 'index' / (fixture.layout['worktree_id'] + '.json')
+        index_path.write_text(json.dumps({'schema': 'fullmag.worktree.v1',
+                                         'worktree_id': fixture.layout['worktree_id']}))
+        with fixture.validator_patch(), startup.startup_scope(prepared) as scope:
+            result = guard.verify_registered_volume(fixture.layout, 'compose-fixture',
+                state_root=fixture.state_root, user_data_root=fixture.user_root, migration_scope=scope)
+            self.assertEqual(result['state'], 'pending-prepared-not-registered')
+            self.assertFalse(result['namespace_admitted'])
+            with self.assertRaisesRegex(ValueError, 'Pending data-volume migration'):
+                guard.verify_registered_volume(fixture.layout, 'compose-fixture')
+        with self.assertRaisesRegex(ValueError, 'active startup-scope'):
+            guard.verify_registered_volume(fixture.layout, 'compose-fixture', migration_scope=scope)
+
     def test_pending_path_does_not_create_directories(self):
         fixture = self.fixture()
         path = pending.pending_path(fixture.layout)

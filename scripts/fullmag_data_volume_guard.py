@@ -1,4 +1,4 @@
-"""Read-only startup verification for explicitly registered data volumes."""
+"""Read-only verification of registered volumes and live migration handoffs."""
 from __future__ import annotations
 
 import hashlib
@@ -311,11 +311,14 @@ def verify_registered_volume(
     *,
     state_root: Path | None = None,
     user_data_root: Path | None = None,
+    migration_scope=None,
 ) -> dict | None:
     """Verify an explicit volume opt-in, otherwise return ``None`` untouched.
 
     This function only reads the worktree/volume records and mount metadata.
     It never creates, mounts, deletes, admits, or falls back to another root.
+    An internal migration scope can verify only its exact pending, unregistered
+    roots while the original host lock is still held; ordinary callers cannot.
     """
 
     if type(layout) is not dict:
@@ -346,6 +349,12 @@ def verify_registered_volume(
         if index is not None
         else None
     )
+    if migration_scope is not None:
+        if pending is None or index is None or registration_raw is not None or reference is not None:
+            _fail("Prepared migration startup requires pending with an existing unregistered worktree index")
+        from docker_data_volume_startup_scope import verify_pending
+        return verify_pending(migration_scope, layout, compose_project, pending,
+                              state_root=state_root, user_data_root=user_data_root)
     if index is None and registration_raw is None:
         require_registration(pending, None)
         return None

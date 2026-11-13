@@ -354,9 +354,28 @@ Parent zachowuje w nim głęboką kopię obserwacji pięciu plików native i ino
 certyfikatu sprzed tego samego wywołania supervisora. Dane pozostają w RAM,
 poza receiptem i prywatnym archiwum root; podlegają kontroli niezmienności
 kontekstu, a zmiana zwróconej kopii nie modyfikuje obserwacji joba.
-Nie daje prawa do namespace, startupu, rejestracji ani usunięcia oryginałów.
-Kontrolowany startup przy pending oraz świeża kwalifikacja pozostają osobnym
-etapem integracji. Nie jest to wykonanie migracji ani readmission na hoście.
+Nie daje prawa do namespace, rejestracji ani usunięcia oryginałów.
+
+Wewnętrzny `docker_data_volume_startup_scope.startup_scope` przekazuje żywe
+przygotowanie do guardów standardowego startu. Rozpoznaje rzeczywistego issuera
+parenta i przed wejściem ponawia walidator jego terminalu z zachowaną obserwacją
+native. Request, started, result i journal są przypięte po obu stronach tej
+walidacji; failure odmawia wejścia lub dalszego użycia. Kontekst ma jedną
+kanoniczną instancję modułu, jest ważny tylko w tym samym PID/wątku i sprawdza
+niezmienność dowodów oraz fizyczną tożsamość obu rootów również przy udanym
+wyjściu. Standardowy init może później rotować pliki native i wykonać świeżą
+guest admission; guard nie zastępuje tych operacji ani nie ustawia readiness.
+
+Opcjonalny wewnętrzny `migration_scope` w guardzie volume wymaga istniejącego
+indeksu bez registration, dokładnego pending i żywego kontekstu powyżej.
+Sprawdza wyłącznie wskazaną grupę oraz dokładne canonical StateRoot i user-data
+root; nowy namespace lub inny root odmawia. Zwykły start nadal jest blokowany
+przez pending. Marker, zapisany słownik, CLI i zmienna środowiskowa nie dają
+takiego uprawnienia. Wynik kontroli pozostaje `pending-prepared-not-registered`.
+
+Pełny sterownik musi jeszcze połączyć tę kontynuację z kwalifikowanym usunięciem
+starej zatrzymanej pary oraz standardowym `start(reuse_state=...)` i świeżą
+kwalifikacją. Nie jest to wykonanie migracji ani readmission na hoście.
 
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,

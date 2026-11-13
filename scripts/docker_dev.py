@@ -936,6 +936,11 @@ def _verify_registered_data_volume(layout, project, *, state_root=None, user_dat
         return None
     from fullmag_data_volume_guard import verify_registered_volume
     try:
+        from docker_data_volume_startup_scope import current_scope
+        scope = current_scope()
+        if scope is not None:
+            return verify_registered_volume(layout, project, state_root=state_root,
+                                            user_data_root=user_data_root, migration_scope=scope)
         return verify_registered_volume(layout, project, state_root=state_root,
                                         user_data_root=user_data_root)
     except (ValueError, OSError) as error:
