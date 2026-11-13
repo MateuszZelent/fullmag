@@ -373,9 +373,33 @@ root; nowy namespace lub inny root odmawia. Zwykły start nadal jest blokowany
 przez pending. Marker, zapisany słownik, CLI i zmienna środowiskowa nie dają
 takiego uprawnienia. Wynik kontroli pozostaje `pending-prepared-not-registered`.
 
-Pełny sterownik musi jeszcze połączyć tę kontynuację z kwalifikowanym usunięciem
-starej zatrzymanej pary oraz standardowym `start(reuse_state=...)` i świeżą
-kwalifikacją. Nie jest to wykonanie migracji ani readmission na hoście.
+Captured terminal observation może przygotować prywatne proof/request pod
+posiadanym lease migracji przez wewnętrzny `owned_operation`. Publikacja
+korzysta z dokładnego aktywnego helpera, bez drugiego flocka i bez usuwania
+`active`. Dopuszcza tylko dwa rekordy o ścieżkach wyprowadzonych z proof SHA,
+identyczne istniejące bajty lub nowe pliki O_EXCL, z nofollow/CAS/fsync oraz
+ponawianiem tożsamości rootu, rodziców i tokena. Timeout nie uruchamia replay.
+Ten wariant obsługuje zwykły successful captured stop w rootowym control;
+diagnostic oraz current-backend pre-owner/cold odmawiają przed helper dispatch.
+Historyczny pin cold-budget musi być oddzielnie uwierzytelniony i przeniesiony
+przez sterownik. Bez `owned_operation` istniejąca ścieżka publikacji nie zmienia
+zachowania. Producer nie zastępuje żywych OLD fences callera ani readmission.
+
+Readonly `docker_data_volume_removed_group.observe_removed_group` potwierdza
+brak dokładnych starych ID pod żywym lease i kontekstem relocated. Sprawdza
+pełny inventory wszystkich kontenerów, również zatrzymanych, wspólną politykę
+obcych konsumentów i fizycznych aliasów oraz ponawia inventory przed wynikiem.
+Brak kontenera nie jest wnioskowany z błędu inspect. Observer nie usuwa niczego.
+
+Wewnętrzne `start(capture_terminal=True)` może zwrócić receipt dokładnie tego
+wywołania po zamknięciu jego nowej operacji development. Sprawdza sukces, piny
+operacji i rzeczywiste bajty jej terminalu, bez odczytu wskaźnika `current`.
+Nie może przejąć operacji callera; domyślne API startu pozostaje bez zmian.
+
+Pełny sterownik musi jeszcze połączyć te elementy z kwalifikowanym usunięciem
+starej zatrzymanej pary, zachowaniem uwierzytelnionych observation/budget pinów
+oraz standardowym `start(reuse_state=...)` i świeżą kwalifikacją. Nie jest to
+wykonanie migracji ani readmission na hoście.
 
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,

@@ -2226,7 +2226,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
           accepted_reattach_metadata=None, recreation_resume_proof=None,
           post_build_generation=None, retained_device_access=None, maintenance=None,
           startup_diagnostic_restart=None, terminal_observation=None, helper_source_binding=None,
-          cold_budget_restore=None, prepared_recovery_constraints=None):
+          cold_budget_restore=None, prepared_recovery_constraints=None, capture_terminal=False):
+    if type(capture_terminal) is not bool:
+        raise BuildControlError("Internal start terminal capture must be boolean")
+    if capture_terminal and (control is not None or operation is not None):
+        raise BuildControlError("Captured start must own its new development operation")
     from docker_dev import (_select_source, _compose_identity, _verify_registered_data_volume,
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
@@ -2962,6 +2966,32 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
             _finish(control, operation, document, backend_id, frontend_id, selected, state,
                     certificate_path, certificate, cache, toolchain, image, git_common,
                     ledger_profile, args.port, helper_source_binding=helper_source_binding)
+    if capture_terminal:
+        return _captured_start_terminal(control, operation)
+
+
+def _captured_start_terminal(control, operation):
+    """Return this invocation's exact finalized receipt, never a current pointer."""
+    receipt = operation.get("receipt") if isinstance(operation, Mapping) else None
+    if (getattr(control, "_active_operation", None) is not None
+            or not isinstance(receipt, dict) or operation.get("daemon_pending") is not False
+            or receipt.get("phase") != "development" or receipt.get("state") != "succeeded"
+            or receipt.get("compose_project") != control.project
+            or receipt.get("control_volume") != control.volume
+            or not isinstance(receipt.get("attempt"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", receipt["attempt"]) is None
+            or operation.get("root") != "development/attempts/" + receipt["attempt"]
+            or any(not isinstance(receipt.get(key), str) or
+                   re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is None
+                   for key in ("backend_container", "frontend_container"))):
+        raise BuildControlError("Captured start has no exact successful closed development operation")
+    relative = operation["root"] + "/terminal.json"
+    raw = control.read_bytes(relative)
+    if raw != canonical(receipt) + b"\n":
+        raise BuildControlError("Captured start terminal differs from this invocation's finalized receipt")
+    from copy import deepcopy
+    return {"schema": "fullmag.development-start-terminal.v1", "relative": relative,
+            "sha256": hashlib.sha256(raw).hexdigest(), "receipt": deepcopy(receipt)}
 
 
 
