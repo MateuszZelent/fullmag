@@ -14,6 +14,8 @@ class Mesh;
 
 namespace fullmag::fem::oersted {
 
+struct SurfaceRt0ProgressObserver;
+
 /**
  * CPU/double direct Biot--Savart policy for an affine tetrahedral RT0 source.
  * The kernel returns H in A/m, so no mu0 is included here.
@@ -72,13 +74,15 @@ public:
     static DirectTetraQuadratureResult Evaluate(
         const fullmag::fem::transport::ConservativeCurrentView &source,
         const std::vector<std::array<double, 3>> &target_points,
-        const DirectTetraQuadratureOptions &options = {});
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
 
     static DirectTetraQuadratureResult EvaluateField(
         const mfem::Mesh &mesh,
         const mfem::GridFunction &rt0_field,
         const std::vector<std::array<double, 3>> &target_points,
-        const DirectTetraQuadratureOptions &options = {});
+        const DirectTetraQuadratureOptions &options = {},
+        const SurfaceRt0ProgressObserver *observer = nullptr);
 
     /**
      * Consistent CPU-double L2 projection of the direct field into a vector

@@ -5322,7 +5322,7 @@ void accepted_terminal_charge_source_preserves_nanometre_scale_and_rejects_degen
                     1.0e-18 + 1.0e-8 * std::abs(expected),
             "nanometre accepted terminal currents failed the unchanged signed certificate");
     }
-    auto degenerate = mesh;
+    mfem::Mesh degenerate(mesh);
     for (int vertex = 0; vertex < degenerate.GetNV(); ++vertex) degenerate.GetVertex(vertex)[2] = 0.0;
     auto invalid = request;
     invalid.mesh = &degenerate;
