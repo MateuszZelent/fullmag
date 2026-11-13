@@ -69,6 +69,7 @@ class FailedRunResumeLifecycleTests(unittest.TestCase):
         self.assertEqual(started.call_args.args[0].script, None)
         self.assertFalse(started.call_args.args[0].fresh_state)
         self.assertNotIn('native_restart_metadata', started.call_args.kwargs)
+        self.assertEqual(started.call_args.kwargs['previous_config_sha256'],'b'*64)
 
     def test_run_drift_before_removal_never_removes_or_starts(self):
         with self.assertRaisesRegex(BuildControlError, 'pinned run changed before before-remove'):
@@ -155,9 +156,22 @@ class FailedRunResumeLifecycleTests(unittest.TestCase):
                     stack.enter_context(item)
                 with self.assertRaisesRegex(BuildControlError, 'pinned run drift before start'):
                     dev.start(args, reuse_state=reuse, retained_device_access='gpu',
-                              failed_run_resume_context={'context': {'request_id': 'exact'}})
+                              previous_config_sha256='f'*64,
+                              failed_run_resume_context={'context': {'request_id': 'exact',
+                                  'stop_pin': {'runtime_hashes': {'runtime_config_sha256': 'f'*64}}}})
             compose.assert_not_called()
             control.write.assert_not_called()
+
+
+    def test_start_rejects_missing_or_mismatched_runtime_config_pin_before_io(self):
+        for context,pin in (({'context':{}},'b'*64),
+                ({'context':{'stop_pin':{'runtime_hashes':{'runtime_config_sha256':'a'*64}}}},'b'*64)):
+            with self.subTest(context=context),mock.patch.object(
+                    dev,'require_host',side_effect=AssertionError('IO before config pin check')) as host:
+                with self.assertRaisesRegex(BuildControlError,'config.*pin|pinned.*config'):
+                    dev.start(SimpleNamespace(script=None),reuse_state={},
+                        previous_config_sha256=pin,failed_run_resume_context=context)
+                host.assert_not_called()
 
 
 if __name__ == '__main__':

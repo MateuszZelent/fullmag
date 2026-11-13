@@ -125,3 +125,10 @@ terminala przez istniejący `_capture_frontend_start_handoff` i jego jawny
 expected_current_sha256. Recapture musi zachować wszystkie pozostałe pola
 identycznie z handoffem zapisanym w odmowie. Inna generation, verified, terminal,
 Compose, source lub state odmawia kontynuacji przed startem.
+
+Start otrzymuje previous_config_sha256 dokładnie z
+stop_pin.runtime_hashes.runtime_config_sha256. Granica start API sprawdza tę
+równość przed I/O; sam poprawny format SHA nie wystarcza. Istniejący
+FULLMAG_DOCKER_PREVIOUS_CONFIG_SHA256 pozwala na jednorazową rotację generacji,
+a runtime nadal wymaga zgodności surowego poprzedniego hasha i profilu operatora.
+Nie tworzy się native failed-stop metadata ani nie zmienia ownera z hosta.

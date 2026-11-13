@@ -36,7 +36,7 @@ def args(**changes):
 
 def context():
     return {'schema':'fullmag.failed-run-resume-context.v1','request_id':args().request_id,
-        'run_id':'run-existing','stop_pin':{'stop_attempt':'c'*32,'stop_terminal_raw_sha256':'d'*64,'development_attempt':'a'*32},'run_pin':{'store_inventory_sha256':'a'*64},
+        'run_id':'run-existing','stop_pin':{'stop_attempt':'c'*32,'stop_terminal_raw_sha256':'d'*64,'development_attempt':'a'*32,'runtime_hashes':{'runtime_config_sha256':'7'*64}},'run_pin':{'store_inventory_sha256':'a'*64},
         'previous_terminal_sha256':'b'*64,'config_sha256':'b'*64,
         'source_root':'/tmp/source','compose_project':'group','control_volume':'control',
         'backend_pin':{'Id':'e'*64},'frontend_pin':{'Id':'f'*64},'state_root':'/tmp/state'}
@@ -202,6 +202,7 @@ class FailedRunResumeControlTests(unittest.TestCase):
         def start(call_args,**kwargs):
             self.assertIsNone(call_args.script);self.assertFalse(call_args.fresh_state)
             self.assertEqual(kwargs['retained_device_access'],'cpu')
+            self.assertEqual(kwargs['previous_config_sha256'],ctx['stop_pin']['runtime_hashes']['runtime_config_sha256'])
             self.assertEqual(kwargs['reuse_state']['frontend_start_handoff'],refreshed)
             self.assertEqual(kwargs['failed_run_resume_context']['prestart_failure']['development_attempt'],'e'*32)
             resume.bind_start_attempt(control,ctx,{'receipt':{'attempt':'9'*32}})

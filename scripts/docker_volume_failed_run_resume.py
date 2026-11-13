@@ -917,6 +917,7 @@ def _resume_confirmed_prestart(control, args, context, removal):
     handoff = {'context': dict(context), 'previous': previous, 'document': document,
         'actual': actual, 'state': str(state), 'removal': dict(removal), 'prestart_failure': pin}
     return dev.start(args, reuse_state=reuse,
+        previous_config_sha256=context['stop_pin']['runtime_hashes']['runtime_config_sha256'],
         retained_device_access=dev._retained_device_access(previous, document),
         failed_run_resume_context=handoff)
 

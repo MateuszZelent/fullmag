@@ -2527,6 +2527,13 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                     recreation_resume_proof, post_build_generation, startup_diagnostic_restart,
                     terminal_observation, cold_budget_restore, maintenance, prepared_recovery_constraints))):
             raise BuildControlError("Failed-run continuation requires its own retained authority without another restore")
+        request = failed_run_resume_context.get("context") if isinstance(failed_run_resume_context, Mapping) else None
+        stop = request.get("stop_pin") if isinstance(request, Mapping) else None
+        hashes = stop.get("runtime_hashes") if isinstance(stop, Mapping) else None
+        pinned_config = hashes.get("runtime_config_sha256") if isinstance(hashes, Mapping) else None
+        if (not isinstance(pinned_config, str) or re.fullmatch(r"[0-9a-f]{64}", pinned_config) is None
+                or previous_config_sha256 != pinned_config):
+            raise BuildControlError("Failed-run runtime config pin differs from its typed diagnostic-stop authority")
     validated_recovery_environment = _validate_recovery_environment(recovery_environment)
     validated_recovery_metadata = _validate_recovery_metadata(recovery_metadata)
     validated_native_restart_metadata = _validate_recovery_metadata(native_restart_metadata)
@@ -9473,7 +9480,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         if failed_resume_prepared is not None:
             if certificate.get("restart_verified") is not True:
                 raise BuildControlError("Failed-run continuation requires verified retained storage")
-            recovery_context = {"failed_run_resume_context": failed_resume_prepared["context"]}
+            recovery_context = {
+                "failed_run_resume_context": failed_resume_prepared["context"],
+                "previous_config_sha256": failed_resume_prepared["context"]["stop_pin"]["runtime_hashes"]["runtime_config_sha256"],
+            }
         else:
             recovery_context = {} if fresh_state else _retained_recovery_context(
                 control, previous, document, fresh_state=False,
@@ -9808,7 +9818,10 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
                 revalidate_resume_request(
                     control, args, failed_resume_prepared["context"], previous, document,
                     actual, state, phase="recreate-lease")
-                leased_recovery_context = {"failed_run_resume_context": failed_resume_prepared["context"]}
+                leased_recovery_context = {
+                    "failed_run_resume_context": failed_resume_prepared["context"],
+                    "previous_config_sha256": failed_resume_prepared["context"]["stop_pin"]["runtime_hashes"]["runtime_config_sha256"],
+                }
                 operation["receipt"]["failed_run_resume"] = failed_resume_prepared["context"]
             else:
                 leased_recovery_context = {} if fresh_state else _retained_recovery_context(
