@@ -1922,3 +1922,35 @@ completed/resume oraz jawna kontynuacja failed-precompose d7 pozostają kolejnym
 fragmentem. Odczyt rzeczywistego zachowanego owner/certificate po d7 potwierdził
 identyczne hashe, dotychczasowy image b6dc i restart_verified=true; certyfikat
 nie został obrócony do obrazu nieudanego startu. UI 3243 pozostaje niedostępne.
+
+
+### Jawna kontynuacja historycznego failed-precompose d7
+
+Dodano parę `--failed-frontend-start/--failed-frontend-start-sha256` wyłącznie
+z istniejącym `--resume-recreation`. Obsługuje historyczną utratę generacji:
+receipt nie może już mieć generation markers ani frontend_start_handoff.
+Nowsze błędy z kompletnym handoff są jawnie odrzucane; nie jest to ogólne
+przyzwolenie na ponawianie nieznanych zmian workspace.
+
+Dokładny failed terminal/current/receipt, base verified, recreate current/verified,
+source/state/device/operator intent, kolejność czasowa i brak publikacji usług
+są sprawdzane przed istniejącą pełną walidacją removed-container/native.
+Następnie capability jest porównana z uwierzytelnionym wynikiem. Cała walidacja
+powtarza się jako pierwsza instrukcja pod nową blokadą startu, przed zmianami
+receiptu, budżetu, cache i usług. Historyczny Compose po metadata completion
+korzysta z niezmiennego terminal/result/archive proof; replay completion nadal
+wymaga aktualnych current/verified. Żadne stare dokumenty nie są przepisywane.
+
+Szersza integracja wykryła i naprawiła błąd pierwszego fragmentu 2052: przechwycenie
+handoff odwoływało się do fresh_state przed jego ustawieniem. Nowa asercja
+wykazała również, że ui_mode zmieniało in-memory receipt przed kontrolą zgodności
+z wydaną blokadą; walidację przeniesiono na początek lease. Fixture AST wybiera
+rzeczywistą gałąź walidacji zamiast zakładać indeks pierwszej instrukcji.
+Końcowa grupa 22 adekwatnych suit: 412 PASS.
+
+Rzeczywisty pełny readonly preflight przeszedł dla base33052, recreate6d125 i
+failedd7c399. Potwierdził pełną parę native recovery, generację33052 i identyczne
+bajty kontrolowanych dokumentów; services_mutated=false. Cztery aktualne moduły
+są przypięte hashami w indeksie audytu. To nadal nie jest start/NativeReady
+ani odbiór UI. Następną czynnością jest jeden nowy przypięty start z zachowanego
+stanu, bez ponowienia removal lub Compute.

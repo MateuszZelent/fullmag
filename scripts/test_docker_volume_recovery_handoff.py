@@ -525,6 +525,21 @@ class FrontendRefreshChildComposeTests(unittest.TestCase):
         self.assertEqual(control.read_bytes("development/attempts/" + CHILD + "/compose.json"),
                          canonical(child_doc))
 
+    def test_historical_completion_authenticates_compose_after_current_advances(self):
+        control, _, _, child, child_doc, _, _ = fixture()
+        request, request_sha = self._install_completed_child_compose(control, child, child_doc)
+        control.put("development/current.json", {"attempt": "f" * 32, "state": "failed-confirmed"})
+        import docker_volume_frontend_refresh_reconcile as completion
+        with patch.object(completion, "read_raw", side_effect=lambda ctl, relative, optional=False:
+                          ctl.read_bytes(relative, optional=optional)):
+            with self.assertRaises(BuildControlError):
+                completion.completed(control, request, request_sha)
+            raw, saved = dev._read_frontend_refresh_child_compose(
+                control, "development/attempts/" + CHILD + "/compose.json", "historical Compose", child,
+                child_attempt=CHILD, parent_attempt=PARENT)
+        self.assertEqual(raw, canonical(child_doc))
+        self.assertEqual(saved, child_doc)
+
     def test_ordinary_canonical_child_compose_with_newline_remains_accepted(self):
         control, _, _, child, child_doc, actual, _ = fixture()
         resolved = self._resolve(control, child, child_doc, actual)

@@ -977,7 +977,7 @@ print(json.dumps({'state':'seeded','files':len(request['files']),'inputs':reques
 
 
 
-def _capture_frontend_start_handoff(control, previous, document):
+def _capture_frontend_start_handoff(control, previous, document, *, expected_current_sha256=None):
     """Pin a retained private generation before removal or a new start."""
     if not isinstance(previous, Mapping) or not isinstance(document, Mapping):
         raise BuildControlError("Frontend start predecessor is malformed")
@@ -1006,7 +1006,11 @@ def _capture_frontend_start_handoff(control, previous, document):
         raise BuildControlError("Frontend start predecessor attempt is malformed")
     root = "development/attempts/" + attempt
     raw = control.read_bytes(root + "/terminal.json")
-    if raw != canonical(previous) + b"\n" or control.read_bytes("development/current.json") != raw:
+    current_raw = control.read_bytes("development/current.json")
+    current_sha = hashlib.sha256(current_raw).hexdigest()
+    expected_current = (hashlib.sha256(raw).hexdigest() if expected_current_sha256 is None
+                        else expected_current_sha256)
+    if raw != canonical(previous) + b"\n" or current_sha != expected_current:
         raise BuildControlError("Frontend start predecessor terminal/current CAS differs")
     compose_raw = control.read_bytes(root + "/compose.json")
     if compose_raw != canonical(document) + b"\n":
@@ -1024,7 +1028,7 @@ def _capture_frontend_start_handoff(control, previous, document):
     _validate_frontend_refresh_recovery_namespace(control, previous, previous)
     verified = control.read_bytes("development/verified.json", optional=True)
     return {"schema": "fullmag.frontend-start-handoff.v1", "attempt": attempt,
-        "terminal_sha256": hashlib.sha256(raw).hexdigest(),
+        "terminal_sha256": hashlib.sha256(raw).hexdigest(), "current_sha256": current_sha,
         "compose_sha256": hashlib.sha256(compose_raw).hexdigest(),
         "verified_sha256": hashlib.sha256(verified).hexdigest() if verified is not None else None,
         "source_root": previous.get("inputs", {}).get("source_root"),
@@ -1043,7 +1047,8 @@ def _validate_frontend_start_handoff(control, handoff, selected, state):
     root = "development/attempts/" + handoff["attempt"]
     previous = control.read(root + "/terminal.json")
     document = control.read(root + "/compose.json")
-    if _capture_frontend_start_handoff(control, previous, document) != handoff:
+    if _capture_frontend_start_handoff(control, previous, document,
+            expected_current_sha256=handoff.get("current_sha256")) != handoff:
         raise BuildControlError("Frontend start handoff authority changed")
     return previous, document
 
@@ -2458,6 +2463,10 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         _assert_no_running_fullmag, _source_git_common_directory, _workspace_state_root,
         _operator_probe_environment_from_host)
     import fullmag_docker_runtime as runtime
+    from docker_volume_frontend_start_resume import validate_options as frontend_resume_options
+    failed_frontend_resume = frontend_resume_options(args)
+    if failed_frontend_resume and (reuse_state is None or recreation_resume_proof is None):
+        raise BuildControlError("Failed frontend start requires the validated recreation resume context")
     headless = getattr(args, "headless", False)
     if type(headless) is not bool:
         raise BuildControlError("Headless mode must be boolean")
@@ -2676,6 +2685,11 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
     if frontend_handoff is not None:
         _validate_frontend_start_handoff(control, frontend_handoff, selected, reuse_state["state"])
         operation_inputs["frontend_start_handoff"] = frontend_handoff
+    if failed_frontend_resume:
+        operation_inputs["failed_frontend_start"] = {
+            "attempt": args.failed_frontend_start,
+            "terminal_sha256": args.failed_frontend_start_sha256,
+        }
     if getattr(args, "completed_recreation_attempt", None):
         operation_inputs["completed_recreation"] = {
             "attempt": args.completed_recreation_attempt,
@@ -2721,6 +2735,15 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
                          if provided_operation is None
                          else nullcontext(provided_operation))
     with operation_context as operation:
+        if recreation_resume_proof is not None and (
+                validated_startup_diagnostic_restart is not None or failed_frontend_resume):
+            leased_records = _validate_recreation_resume_records(
+                args, control, selected, identity, expected_proof=recreation_resume_proof,
+                current_operation=operation, helper_source_binding=helper_source_binding,
+            )
+            if (validated_startup_diagnostic_restart is not None
+                    and leased_records["native_recovery_context"].get("startup_diagnostic_restart") != validated_startup_diagnostic_restart):
+                raise BuildControlError("Startup diagnostic recreation resume changed under start lease")
         prepared_budget_render = _preflight_prepared_start_budget(
             control, operation, maintenance, prepared_recovery_constraints, selected,
             native_contracts, include_untracked,
@@ -2728,13 +2751,6 @@ def start(args, *, reuse_state=None, control=None, operation=None, prepared=None
         if prepared_budget_render is not None and cold_budget_restore is not None:
             raise BuildControlError("Prepared budget cannot be combined with another retained restore")
         operation["receipt"]["ui_mode"] = ui_mode
-        if validated_startup_diagnostic_restart is not None and recreation_resume_proof is not None:
-            leased_records = _validate_recreation_resume_records(
-                args, control, selected, identity, expected_proof=recreation_resume_proof,
-                current_operation=operation, helper_source_binding=helper_source_binding,
-            )
-            if leased_records["native_recovery_context"].get("startup_diagnostic_restart") != validated_startup_diagnostic_restart:
-                raise BuildControlError("Startup diagnostic recreation resume changed under start lease")
         if getattr(args, "completed_recreation_attempt", None):
             # Recheck the exact completed transition under the new development
             # lease before any state/cache/admission write or service creation.
@@ -6198,7 +6214,7 @@ def _read_frontend_refresh_child_compose(control, relative, label, previous, *, 
             or has_seed_completion and (not isinstance(marker.get("seed_completion"), Mapping)
                                         or marker.get("seed_completion") != request_seed)):
         raise BuildControlError(label + " completion seed evidence differs")
-    if not completion.completed(control, dict(request), request_sha):
+    if not completion.completed_publication(control, dict(request), request_sha):
         raise BuildControlError(label + " is not published by a completed frontend refresh")
     return raw, dict(value)
 
@@ -6221,7 +6237,7 @@ def _validate_frontend_refresh_recovery_namespace(control, child, parent):
         raise BuildControlError("Unnamespaced frontend refresh recovery has namespace markers")
 
 
-def _resolve_frontend_refresh_recovery_lineage(control, previous, document, *, actual=None):
+def _resolve_frontend_refresh_recovery_lineage(control, previous, document, *, actual=None, expected_current_sha256=None):
     """Restore only the missing pair from one authenticated immutable refresh parent."""
     if not isinstance(previous, Mapping):
         raise BuildControlError("Retained development receipt is malformed")
@@ -6292,7 +6308,9 @@ def _resolve_frontend_refresh_recovery_lineage(control, previous, document, *, a
     current_raw, current = _read_canonical_control_record(
         control, "development/current.json", "current frontend refresh terminal")
     if (child_terminal != previous or child_terminal_raw != canonical(previous) + b"\n"
-            or current != previous or current_raw != child_terminal_raw
+            or not ((current == previous and current_raw == child_terminal_raw)
+                    or (isinstance(expected_current_sha256, str)
+                        and hashlib.sha256(current_raw).hexdigest() == expected_current_sha256))
             or child_compose != document
             or child_compose_raw not in (canonical(document), canonical(document) + b"\n")):
         raise BuildControlError("Frontend refresh child is not the exact current immutable receipt")
@@ -6589,11 +6607,12 @@ def _frontend_refresh_recovery_handoff(
 
 def _retained_recovery_context(
     control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
+    drained_successor=None, actual=None, frontend_current_sha256=None,
 ):
     context = _retained_native_recovery_context(
         control, previous, document, fresh_state=fresh_state, backend_id=backend_id,
         removed_container_proof=removed_container_proof, drained_successor=drained_successor, actual=actual,
+        **({"frontend_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}),
     )
     pin = previous.get("cold_budget_restore")
     if pin is not None and not fresh_state:
@@ -6609,11 +6628,19 @@ def _retained_recovery_context(
 
 def _retained_native_recovery_context(
     control, previous, document, *, fresh_state, backend_id=None, removed_container_proof=None,
-    drained_successor=None, actual=None,
+    drained_successor=None, actual=None, frontend_current_sha256=None,
 ):
     """Carry pending recovery authority, or consume a completed proof once."""
+    if frontend_current_sha256 is not None:
+        if (not isinstance(removed_container_proof, Mapping)
+                or removed_container_proof.get("prior_terminal_sha256") != hashlib.sha256(canonical(previous) + b"\n").hexdigest()
+                or removed_container_proof.get("prior_compose_sha256") not in {
+                    hashlib.sha256(canonical(document)).hexdigest(),
+                    hashlib.sha256(canonical(document) + b"\n").hexdigest()}):
+            raise BuildControlError("Historical frontend lineage requires its exact removed recreation proof")
     previous = _resolve_frontend_refresh_recovery_lineage(
-        control, previous, document, actual=actual)
+        control, previous, document, actual=actual,
+        **({"expected_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}))
     capability = None
     if _retained_container_recovery_present(previous, document):
         capability = _retained_container_recovery_capability(
@@ -7001,7 +7028,7 @@ def _validate_failed_prestart_successor(
 def _validate_removed_recreation_proof(
     args, control, previous, document, identity, *, operation_id, operation_raw,
     operation_terminal, retained_raw, retained, previous_raw, document_raw, operator_probe_record,
-    helper_source_binding=None,
+    helper_source_binding=None, frontend_current_sha256=None,
 ):
     """Validate the retained incarnation and native proof after exact app-ID removal.
 
@@ -7178,6 +7205,7 @@ def _validate_removed_recreation_proof(
         backend_id=ids["backend"],
         removed_container_proof=proof,
         drained_successor=((successor_path, successor_sha) if successor_path else None), actual=snapshot,
+        **({"frontend_current_sha256": frontend_current_sha256} if frontend_current_sha256 is not None else {}),
     )
     from docker_volume_drained_successor import DrainedSuccessorContext
     if isinstance(native_recovery_context, DrainedSuccessorContext):
@@ -7202,6 +7230,8 @@ def _validate_removed_recreation_proof(
 def _validate_recreation_resume_records(args, control, selected, identity, *, expected_proof=None,
                                         current_operation=None, helper_source_binding=None):
     """Revalidate one completed recreation and prove its old app IDs are absent."""
+    import docker_volume_frontend_start_resume as frontend_resume
+    failed_frontend_resume = frontend_resume.validate_options(args)
 
     from docker_volume_stop_unadmitted import _control_bytes
 
@@ -7238,9 +7268,13 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
         raise BuildControlError("Recreation resume has no immutable prior image identity")
 
-    document_raw, document = _read_canonical_control_record(
-        control, previous_root + "/compose.json", "prior development Compose document"
-    )
+    if "frontend_refresh_completion" in previous:
+        document_raw, document = _read_frontend_refresh_child_compose(
+            control, previous_root + "/compose.json", "prior development Compose document", previous,
+            child_attempt=args.attempt, parent_attempt=previous.get("previous_development_attempt"))
+    else:
+        document_raw, document = _read_canonical_control_record(
+            control, previous_root + "/compose.json", "prior development Compose document")
     if (
         hashlib.sha256(canonical(document)).hexdigest() != args.config_sha256
         or document.get("name") != control.project
@@ -7310,16 +7344,29 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
     retained_raw, retained = _read_canonical_control_record(
         control, operation_root + "/retained-containers.json", "recreation retained-container snapshot"
     )
+    if failed_frontend_resume:
+        _validate_frontend_refresh_recovery_namespace(control, current, previous)
+        frontend_resume.validate_failed_start_boundary(
+            args, control, selected, identity, current_raw=current_raw, current=current,
+            previous_raw=previous_raw, previous=previous, operation_raw=operation_raw,
+            operation_terminal=operation_terminal, operator_probe_record=operator_probe_record)
     snapshot, proof, native_recovery_context = _validate_removed_recreation_proof(
         args, control, previous, document, identity, operation_id=operation_id,
         operation_raw=operation_raw, operation_terminal=operation_terminal,
         retained_raw=retained_raw, retained=retained, previous_raw=previous_raw,
         document_raw=document_raw, operator_probe_record=operator_probe_record,
         helper_source_binding=helper_source_binding,
+        **({"frontend_current_sha256": hashlib.sha256(current_raw).hexdigest()} if failed_frontend_resume else {}),
     )
     if expected_proof is not None and proof != expected_proof:
         raise BuildControlError("Recreation resume evidence changed before the new start admission")
-    if current_raw != canonical(current) + b"\n" or current != previous:
+    if failed_frontend_resume:
+        frontend_resume.validate_failed_start(
+            args, control, selected, identity, current_raw=current_raw, current=current,
+            previous_raw=previous_raw, previous=previous, operation_raw=operation_raw,
+            operation_terminal=operation_terminal, operator_probe_record=operator_probe_record,
+            capability=native_recovery_context)
+    elif current_raw != canonical(current) + b"\n" or current != previous:
         _validate_failed_prestart_successor(
             args,
             control,
@@ -7347,6 +7394,7 @@ def _validate_recreation_resume_records(args, control, selected, identity, *, ex
         "operator_probe_record": operator_probe_record,
         "proof": proof,
         "native_recovery_context": native_recovery_context,
+        "current_sha256": hashlib.sha256(current_raw).hexdigest(),
     }
 
 
@@ -7546,6 +7594,11 @@ def _resume_recreated_operation(args, control, selected, layout, identity, *, he
     }
     if helper_source_binding is not None:
         reuse["helper_source_binding"] = helper_source_binding
+    if previous.get("private_group_storage") == "group-volume-v1":
+        handoff = _capture_frontend_start_handoff(
+            control, previous, document, expected_current_sha256=records["current_sha256"])
+        if handoff is not None:
+            reuse["frontend_start_handoff"] = handoff
     recovery_context.update(accepted_reattach_context)
     args.include_untracked = include_untracked_from_compose(document)
     args.gpu_access = previous["inputs"]["gpu_access_requested"]
@@ -8255,6 +8308,10 @@ def _completed_recreation_start_context(control, args, selected, layout):
         "owner_marker": owner_marker, "receipt": {"image_id": image},
         "operator_probe_environment_record": operator_probe_record,
         "removed_recreation_proof_sha256": hashlib.sha256(canonical(removed_proof)).hexdigest()}
+    if previous.get("private_group_storage") == "group-volume-v1":
+        handoff = _capture_frontend_start_handoff(control, previous, document)
+        if handoff is not None:
+            reuse["frontend_start_handoff"] = handoff
     return {"reuse_state": reuse,
             "retained_device_access": _retained_device_access(previous, document), **recovery}
 
@@ -8657,6 +8714,8 @@ def _retained_operation(
     resume_recreation_id=None, refresh_frontend_service=False, retire_only=False,
 ):
     """Resume one exact retained start; a frontend-only recovery never restarts the backend."""
+    from docker_volume_frontend_start_resume import validate_options as frontend_resume_options
+    frontend_resume_options(args)
     capture_terminal = getattr(args, "capture_terminal_observation", False)
     failed_seed_new_generation = False
     if refresh_frontend_service:
@@ -9271,8 +9330,6 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
     if recreate_services:
         if actual["backend"]["State"]["Running"]:
             raise BuildControlError("Recreation requires the backend stopped; an active build/runtime is never interrupted")
-        frontend_handoff = (None if fresh_state else
-            _capture_frontend_start_handoff(control, previous, document))
         prelaunch_failure_archive = None
         prelaunch_failure_store = None
         if prelaunch_failure_pin is not None:
@@ -9336,6 +9393,8 @@ with urllib.request.urlopen('http://127.0.0.1:8081/v2/platform/health',timeout=5
         certificate_path = _certificate_path(state)
         owner_path = state / _session_host().OWNER_NAME
         fresh_state = bool(getattr(args, "fresh_state", False))
+        frontend_handoff = (None if fresh_state else
+            _capture_frontend_start_handoff(control, previous, document))
         lost_state_pin = getattr(args, "lost_state_stop", None)
         lost_state = None
         if lost_state_pin is not None:

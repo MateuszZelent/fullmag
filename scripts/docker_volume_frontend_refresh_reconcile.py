@@ -532,7 +532,8 @@ def transaction_script(control, r, request_sha, result_sha, derived_sha):
     return script + "}; publish || retain_unknown; printf 'COMMITTED\\n'"
 
 
-def completed(control, r, request_sha):
+def completed_publication(control, r, request_sha):
+    """Authenticate immutable completion evidence, including after a later start."""
     root = "development/attempts/" + r["attempt"]
     terminal = read_raw(control, root + "/terminal.json", optional=True)
     if terminal is None:
@@ -540,14 +541,24 @@ def completed(control, r, request_sha):
     result = json.loads(terminal)
     require(result.get("state") == "succeeded" and result.get("frontend_refresh_completion", {}).get("request_sha256") == request_sha,
             "Foreign terminal publication")
-    for p in (root + "/receipt.json", "development/current.json", "development/verified.json",
-              root + "/completion/" + request_sha + "/result.json"):
+    for p in (root + "/receipt.json", root + "/completion/" + request_sha + "/result.json"):
         require(read_raw(control, p) == terminal, "Partial terminal publication; retain lease and journal")
     require(digest(read_raw(control, root + "/completion/" + request_sha + "/original-compose.json"))
             == r["evidence"]["documents"][root + "/compose.json"], "Original Compose archive differs")
     require(digest(read_raw(control, root + "/unknown-receipt.json"))
             == r["evidence"]["documents"][root + "/receipt.json"], "Original receipt archive differs")
     require(digest(read_raw(control, root + "/compose.json")) == r["evidence"]["derived_compose_sha256"], "Derived Compose differs")
+    return True
+
+
+def completed(control, r, request_sha):
+    """Replay still requires the exact current and verified terminal pointers."""
+    if not completed_publication(control, r, request_sha):
+        return False
+    terminal = read_raw(control, "development/attempts/" + r["attempt"] + "/terminal.json")
+    for relative in ("development/current.json", "development/verified.json"):
+        require(read_raw(control, relative) == terminal,
+                "Partial terminal publication; retain lease and journal")
     return True
 
 

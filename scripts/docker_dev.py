@@ -2901,6 +2901,8 @@ def _parser() -> argparse.ArgumentParser:
             "and is never resolved as a host path"
         ),
     )
+    recreate_volume.add_argument("--failed-frontend-start", help="Exact legacy lost-generation metadata refusal, only with recreation resume")
+    recreate_volume.add_argument("--failed-frontend-start-sha256", help="SHA-256 of that exact failed terminal receipt")
     recreate_volume.add_argument("--completed-recreation-attempt", help="Continue this exact succeeded removal without repeating rm")
     recreate_volume.add_argument("--completed-recreation-sha256", help="SHA-256 of the completed removal terminal receipt")
     recreate_volume.add_argument("--drained-successor-proof", help="Exact control-volume proof of a later successful managed drain")

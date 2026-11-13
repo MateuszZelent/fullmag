@@ -142,3 +142,24 @@ własnych usług i starych IDs, porządek czasowy, namespace/registry binding or
 ponowna walidacja pod lease. Pełne owner/certificate/native authorization checks
 pozostają obowiązkowe. Nie ma ogólnego fallbacku do najnowszego verified ani
 zmiany któregokolwiek historycznego receipt/current/verified.
+
+
+## Realizacja historycznej kontynuacji
+
+Wybrano istniejące `recreate-volume --resume-recreation` z jawną parą
+`--failed-frontend-start` i `--failed-frontend-start-sha256`. To migracja starego
+failed-precompose bez generacji/handoff; bieżące generation-aware failures
+są poza jej zakresem i są jawnie odrzucane. Nie dodaje się wildcard inputów.
+
+Validator metadata-only boundary poprzedza pełny istniejący removed/native proof;
+porównanie pełnej capability następuje po nim. Pod lease całe sprawdzenie
+wyprzedza jakąkolwiek zmianę in-memory issued receipt. Oddzielny pin aktualnego
+failed terminala pozwala czytać historyczną lineage tylko z dokładnym dowodem
+usunięcia poprzednich IDs i hashami old terminal/Compose. Domyślna lineage nadal
+wymaga current==old terminal. Nie ma fallbacku do latest verified.
+
+Niezmienny dowód completion publication służy czytaniu historycznego Compose.
+Funkcja replay completed() zachowuje dodatkowe sprawdzenie current/verified.
+Właściwa generacja jest przenoszona także przez specialized completed/resume.
+Testy i rzeczywisty readonly preflight nie zastępują końcowego managed startu
+oraz odbioru natywnej aplikacji i UI.

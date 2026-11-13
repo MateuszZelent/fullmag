@@ -35,7 +35,7 @@
   ],
   "native_rebuild_executed": false,
   "actual_UI_acceptance": "NOT VERIFIED; Docker engine responds, own application containers absent after recreation and pre-service refusal",
-  "fix_state": "normal recreate/start generation carry implemented and locally tested; explicit continuation of retained failed d7 and actual start pending",
+  "fix_state": "normal generation carry and explicit historical d7 continuation implemented; full readonly validation passed; actual start pending",
   "merged_source_CI": {
     "run": 43371559095,
     "conclusion": "success"
@@ -214,5 +214,160 @@
     "actual_failed_d7_continuation": "NOT IMPLEMENTED; requires explicit terminal pins and existing full removal/native proof; no restart attempted",
     "specialized_completed_resume_generation_carry": "pending next slice",
     "actual_UI_acceptance": "NOT VERIFIED"
+  },
+  "failed_precompose_resume_fix": {
+    "base_source_commit": "2052d97c34d09e1ba34a9e2e531bb6bed7af1b89",
+    "state": "qualified-readonly; actual start pending",
+    "scope": "historical lost-generation receipts only; exact failed attempt/SHA and resume-recreation; generation-aware failures explicitly refused",
+    "full_readonly_validation": {
+      "state": "validated-readonly",
+      "base_attempt": "33052febe7e54031a42865a76c067a68",
+      "recreation_attempt": "6d12568afc4342768d405fcc49a5ce18",
+      "failed_attempt": "d7c399ef69fe494ca484696bd2b98858",
+      "current_sha256": "08e8f68685eb368e982b6131d2b11b8b08db04fbf74f809e6eb84ffb41fd5dbb",
+      "native_context_keys": [
+        "recovery_environment",
+        "recovery_metadata"
+      ],
+      "frontend_handoff": {
+        "schema": "fullmag.frontend-start-handoff.v1",
+        "attempt": "33052febe7e54031a42865a76c067a68",
+        "terminal_sha256": "e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4",
+        "current_sha256": "08e8f68685eb368e982b6131d2b11b8b08db04fbf74f809e6eb84ffb41fd5dbb",
+        "compose_sha256": "e870d4a948f0f9c347ce01054ad175057da04b8a9f26b8c5eba10fb720ffc526",
+        "verified_sha256": "e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4",
+        "source_root": "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108",
+        "state_root": "/home/kkingstoun/git/fullmag/storage/runtimes/interactive-study-t8-20261108-1759273bcd4c305b/docker-volume-dev/ac4efcc4b2bf457081755eb045853400",
+        "frontend_generation_id": "33052febe7e54031a42865a76c067a68",
+        "frontend_generation_subpath": "private/frontend/generations/33052febe7e54031a42865a76c067a68"
+      },
+      "documents_unchanged": true,
+      "services_mutated": false,
+      "source_helper_sha256": "0a8782c81a806cd0a7cc5fa93d725d444451e0a992401861080abb7396c0762f",
+      "source_modules_sha256": {
+        "scripts/docker_volume_dev.py": "0a8782c81a806cd0a7cc5fa93d725d444451e0a992401861080abb7396c0762f",
+        "scripts/docker_dev.py": "6223deb072d7f9ecdc87c59310f448a869ff32772222d6f8f64cb63a02c05cc5",
+        "scripts/docker_volume_frontend_start_resume.py": "e784200303b378ef6eaf168e5a6c873b913403fb9b95f1c6de82f28e89fc93f3",
+        "scripts/docker_volume_frontend_refresh_reconcile.py": "430d3ae3965e79b17cc789dd12dc62714d1ee59b372a218298c8c92e2ad7dc1f"
+      }
+    },
+    "tests_passed": 412,
+    "test_suites": [
+      {
+        "suite": "test_docker_frontend_start_resume.py",
+        "exit_code": 0,
+        "tests": 7
+      },
+      {
+        "suite": "test_docker_frontend_start_handoff.py",
+        "exit_code": 0,
+        "tests": 9
+      },
+      {
+        "suite": "test_docker_volume_recovery_handoff.py",
+        "exit_code": 0,
+        "tests": 21
+      },
+      {
+        "suite": "test_docker_volume_frontend_refresh_reconcile.py",
+        "exit_code": 0,
+        "tests": 22
+      },
+      {
+        "suite": "test_docker_native_failed_recreate.py",
+        "exit_code": 0,
+        "tests": 64
+      },
+      {
+        "suite": "test_docker_volume_pending_resume.py",
+        "exit_code": 0,
+        "tests": 16
+      },
+      {
+        "suite": "test_docker_prestart_resume.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_volume_pre_admission_integration.py",
+        "exit_code": 0,
+        "tests": 13
+      },
+      {
+        "suite": "test_docker_volume_post_build_integration.py",
+        "exit_code": 0,
+        "tests": 3
+      },
+      {
+        "suite": "test_docker_volume_startup_diagnostic_restart.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_dev_up.py",
+        "exit_code": 0,
+        "tests": 49
+      },
+      {
+        "suite": "test_docker_retained_recovery_context.py",
+        "exit_code": 0,
+        "tests": 13
+      },
+      {
+        "suite": "test_docker_volume_retained_device_lifecycle.py",
+        "exit_code": 0,
+        "tests": 7
+      },
+      {
+        "suite": "test_docker_volume_unclaimed_layout.py",
+        "exit_code": 0,
+        "tests": 18
+      },
+      {
+        "suite": "test_docker_volume_frontend_recovery.py",
+        "exit_code": 0,
+        "tests": 17
+      },
+      {
+        "suite": "test_docker_frontend_seed_generated.py",
+        "exit_code": 0,
+        "tests": 6
+      },
+      {
+        "suite": "test_docker_volume_frontend_seed_recovery.py",
+        "exit_code": 0,
+        "tests": 20
+      },
+      {
+        "suite": "test_docker_frontend_seed_completion_observer.py",
+        "exit_code": 0,
+        "tests": 8
+      },
+      {
+        "suite": "test_docker_volume_frontend_seed_completion.py",
+        "exit_code": 0,
+        "tests": 8
+      },
+      {
+        "suite": "test_docker_volume_cold_budget_restore.py",
+        "exit_code": 0,
+        "tests": 35
+      },
+      {
+        "suite": "test_docker_volume_native_terminal_stop.py",
+        "exit_code": 0,
+        "tests": 29
+      },
+      {
+        "suite": "test_docker_volume_native_init_successor.py",
+        "exit_code": 0,
+        "tests": 7
+      }
+    ],
+    "review": "validation order/native authority reviewed; input-shape concern resolved by explicit historical-only contract and rejection tests",
+    "historical_completion": "immutable publication proof separated from replay; completed() keeps exact current/verified CAS",
+    "fresh_state_ordering_fix": "capture moved after initialization; full pre-admission integration13PASS; prior2052 normal slice had this uncovered error",
+    "lease_receipt_ordering_fix": "full validation now first statement under start lease; issued-receipt identity regression RED->GREEN",
+    "runtime_native_application": "NOT VERIFIED; app containers absent, UI3243 down, no Solve replay"
   }
 }
