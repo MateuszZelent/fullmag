@@ -484,6 +484,48 @@ kwalifikację zapisu/Zarr i rejestrację pod ciągłą kontrolą. Rzeczywista ko
 przełączenie bindów, admission, odtworzenie grupy, kwalifikacja Zarr, rejestracja
 i usunięcie starych duplikatów pozostają **NOT VERIFIED**.
 
+## Końcowa kwalifikacja i publikacja rejestracji
+
+`docker_dev_data_volume_register.register_qualified_group` przyjmuje wyłącznie
+rzeczywisty `StartedGroup`, dokładny zakończony wynik standardowego launchera
+oraz przypięty skrypt. Nie wykonuje Solve. Oryginalny `copied_group` nadal
+utrzymuje hostlock. Qualification scope musi wcześniej zakończyć się poprawnie;
+publisher jeszcze raz sprawdza issuer i readback przed nową operacją grupy.
+
+Pełny nowy Zarr musi być nieobecny w zachowanym oryginalnym drzewie. Kwalifikator
+sprawdza cały zapis, wszystkie próbki, build identity i realizację bez fallbacku,
+energie, torque oraz zapisane native residuum. Jest to odczyt końcowego
+certyfikatu native, nie nowe niezależne rozwiązanie Poissona. Publisher przypina
+kontrakt źródłowy jego wyznaczania do rzeczywistego builda i zachowuje także
+pełne bajty receiptu backendu. Dodatkowy probe zapisuje dwa nowe niepowtarzalne
+pliki nonce przez `/state` i `/user-data`; host potwierdza ich treść, UUID,
+urządzenie i inode. Odczyty końcowe nie powtarzają zapisu nonce.
+
+Pierwszy append `runtime-qualified` świadomie zużywa dotychczasowe capability.
+Allowlist `RelocatedGroup`, snapshoty i ContextVar nie są poszerzane. Fazy
+runtime/Zarr akceptują już wykonane dowody; ich started nie udaje wcześniejszego
+rozpoczęcia symulacji. Publisher zapisuje immutable receipty, registration oraz
+referencję indeksu przez CAS, zachowując obce pola. Przed i po ostatnim zapisie
+ponawia odczyt źródeł, runtime, nonce i pełnego Zarr bez używania starych
+capability. Błąd pozostawia dane i jawny `registration-failed.json` do recovery.
+
+Gdy istnieje pending, zgodna para registration + indeks nie wystarcza do zwykłego
+startu. Ostatni zapis `registration-committed.json` wiąże ją z zakończonym
+`volume-registered`, kwalifikacją runtime/Zarr oraz dokładnym prefixem journala.
+Czytnik `fullmag_data_volume_completion` odmawia przy brakującym, częściowym lub
+zmienionym dowodzie. Późniejszy poprawny suffix retirementu nie unieważnia
+rejestracji; niepowodzenie samej publikacji ją blokuje. Grupy bez pending
+zachowują wcześniejsze zachowanie. Pending pozostaje jako dowód historyczny.
+
+Przed rootowym cutover operator przygotowuje własny chroniony katalog
+`index/data-volumes`, aby publikacja pending przez root nie tworzyła
+niezapisywalnego katalogu dla późniejszej rejestracji. Istniejący obcy właściciel
+oznacza odmowę; ta ścieżka nie zmienia uprawnień ani właścicieli.
+
+To opis implementacji źródłowej. Nie dowodzi rzeczywistego przełączenia grupy,
+nowego Zarr ani zwolnienia starych bloków WSL. Usunięcie oryginałów pozostaje
+osobnym etapem wymagającym aktualnej kwalifikacji referencji i archiwum.
+
 ## Weryfikacja
 
 Lekkie testy obejmują zamknięte rejestracje, UUID/inode, aliasowanie datasetów,

@@ -533,4 +533,12 @@ def verify_registered_volume(
             "volume_inode": volume_identity["inode"],
         }
 
-    return _model.validate_mount_evidence(registration, observations)
+    verified = _model.validate_mount_evidence(registration, observations)
+    if pending is not None:
+        try:
+            from .fullmag_data_volume_completion import verify_committed_registration
+        except ImportError:
+            from fullmag_data_volume_completion import verify_committed_registration
+        verify_committed_registration(layout, compose_project, pending, registration,
+                                      hashlib.sha256(registration_raw).hexdigest())
+    return verified

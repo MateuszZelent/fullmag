@@ -62,6 +62,7 @@ jobs:
           scripts.test_fullmag_data_volume_journal scripts.test_docker_dev_data_volume
           scripts.test_fullmag_data_volume_linux_request scripts.test_linux_data_volume_provision
           scripts.test_linux_data_volume_format scripts.test_linux_data_volume_recover scripts.test_docker_data_volume_linux
+          scripts.test_fullmag_data_volume_completion scripts.test_fullmag_data_volume_zarr_qualification scripts.test_docker_dev_data_volume_register
           scripts.test_linux_data_volume_copy scripts.test_fullmag_data_volume_bind
           scripts.test_linux_data_volume_bind
           scripts.test_linux_data_volume_admission

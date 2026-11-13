@@ -221,15 +221,15 @@ class PendingMarkerTests(unittest.TestCase):
         observe_directory.assert_not_called()
         self.assertEqual(path.read_bytes(), before)
 
-    def test_matching_committed_registration_keeps_mount_guards_and_marker(self):
+    def test_matching_registration_without_commit_witness_keeps_mount_guards_and_marker(self):
         fixture = self.fixture()
         path, before = fixture.write_marker()
         fixture.write_active_registration()
         mount_patch, directory_patch = fixture._probe_mocks()
         with mount_patch as observe_mount, directory_patch as observe_directory:
-            result = guard.verify_registered_volume(fixture.layout, fixture.compose_project)
+            with self.assertRaisesRegex(ValueError, "registration commit witness"):
+                guard.verify_registered_volume(fixture.layout, fixture.compose_project)
 
-        self.assertEqual(result["state"], "verified")
         self.assertGreater(observe_mount.call_count, 0)
         self.assertGreater(observe_directory.call_count, 0)
         self.assertEqual(path.read_bytes(), before)
