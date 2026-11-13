@@ -4108,6 +4108,79 @@ pub enum FemGpuExecutionClass {
     Cpu,
 }
 
+/// Complete native v1 FEM GPU performance snapshot, attached only to terminal
+/// direct-minimizer provenance. Integer fields retain the native ABI values.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FemGpuPerformanceSnapshotProvenance {
+    pub schema_version: String,
+    pub scope: String,
+    pub accepted_source_step: u64,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub available: u32,
+    pub execution_class: u32,
+    pub precision: u32,
+    pub integrator: u32,
+    pub device_ordinal: i32,
+    pub completed_step: u64,
+    pub completed_execution_id: u64,
+    pub completed_operator_id: u64,
+    pub completed_attempt_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub physical_rhs_evaluations: u64,
+    pub physical_exchange_applies: u64,
+    pub physical_exchange_launches: u64,
+    pub physical_exchange_nnz_visited: u64,
+    pub physical_demag_solves: u64,
+    pub physical_demag_iterations: u64,
+    pub physical_demag_rhs_norm_evaluations: u64,
+    pub physical_demag_stage_energy_evaluations: u64,
+    pub physical_normalization_launches: u64,
+    pub physical_normalization_readbacks: u64,
+    pub physical_adaptive_readbacks: u64,
+    pub physical_control_fences: u64,
+    pub physical_endpoint_cache_hits: u64,
+    pub physical_endpoint_cache_misses: u64,
+    pub physical_endpoint_cache_invalidations: u64,
+    pub physical_device_to_device_bytes: u64,
+    pub physical_control_d2h_bytes: u64,
+    pub physical_bulk_d2h_bytes: u64,
+    pub physical_demag_rhs_norm_sum: f64,
+    pub physical_demag_stage_energy_sum_joules: f64,
+    pub accepted_rhs_evaluations: u64,
+    pub accepted_exchange_applies: u64,
+    pub accepted_exchange_launches: u64,
+    pub accepted_exchange_nnz_visited: u64,
+    pub accepted_demag_solves: u64,
+    pub accepted_demag_iterations: u64,
+    pub accepted_demag_rhs_norm_evaluations: u64,
+    pub accepted_demag_stage_energy_evaluations: u64,
+    pub accepted_normalization_launches: u64,
+    pub accepted_normalization_readbacks: u64,
+    pub accepted_adaptive_readbacks: u64,
+    pub accepted_control_fences: u64,
+    pub accepted_endpoint_cache_hits: u64,
+    pub accepted_endpoint_cache_misses: u64,
+    pub accepted_endpoint_cache_invalidations: u64,
+    pub accepted_device_to_device_bytes: u64,
+    pub accepted_control_d2h_bytes: u64,
+    pub accepted_bulk_d2h_bytes: u64,
+    pub accepted_demag_rhs_norm_sum: f64,
+    pub accepted_demag_stage_energy_sum_joules: f64,
+    pub physical_exchange_elapsed_ns: u64,
+    pub physical_demag_assemble_elapsed_ns: u64,
+    pub physical_demag_recover_elapsed_ns: u64,
+    pub physical_demag_energy_elapsed_ns: u64,
+    pub physical_rhs_elapsed_ns: u64,
+    pub accepted_exchange_elapsed_ns: u64,
+    pub accepted_demag_assemble_elapsed_ns: u64,
+    pub accepted_demag_recover_elapsed_ns: u64,
+    pub accepted_demag_energy_elapsed_ns: u64,
+    pub accepted_rhs_elapsed_ns: u64,
+}
+
 /// Native FEM GPU execution evidence captured after execution.
 ///
 /// The resolved and executed fields are derived only from the versioned
@@ -4604,6 +4677,10 @@ pub struct ExecutionProvenance {
     /// Native accounting for accepted PG-BB/NCG steps, without RK operators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_minimizer_execution_receipt: Option<FemGpuMinimizerExecutionReceipt>,
+    /// Complete native v1 performance snapshot, published once at direct
+    /// minimizer finalization rather than repeated in per-step telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_performance_snapshot: Option<FemGpuPerformanceSnapshotProvenance>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.
@@ -6131,6 +6208,24 @@ mod tests {
         let provenance: ExecutionProvenance = serde_json::from_value(value).unwrap();
 
         assert!(provenance.executed_physics_module_ids.is_empty());
+    }
+
+    #[test]
+    fn legacy_execution_provenance_without_performance_snapshot_remains_valid() {
+        let mut value = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        value
+            .as_object_mut()
+            .expect("execution provenance JSON object")
+            .remove("fem_gpu_performance_snapshot");
+
+        let provenance: ExecutionProvenance = serde_json::from_value(value)
+            .expect("legacy execution provenance should omit the optional snapshot");
+
+        assert!(provenance.fem_gpu_performance_snapshot.is_none());
+        assert!(serde_json::to_value(provenance)
+            .unwrap()
+            .get("fem_gpu_performance_snapshot")
+            .is_none());
     }
 
     #[test]

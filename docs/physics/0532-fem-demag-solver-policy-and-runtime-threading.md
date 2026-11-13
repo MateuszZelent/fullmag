@@ -2,7 +2,7 @@
 
 - Status: implemented
 - Owners: Fullmag FEM/runtime
-- Last updated: 2026-11-07
+- Last updated: 2026-11-13
 - Related ADRs: `docs/adr/` (execution-selection + canonical IR contract)
 - Related specs: `docs/specs/capability-matrix-v0.md`
 
@@ -368,6 +368,27 @@ observed quantities.
   - FEM demag solver policy
 - Logs and UI must not pretend that live thread-pool changes apply to an already
   running solve
+
+### Terminal direct-minimizer GPU performance snapshot
+
+The bounded runner contract is to publish the complete existing
+`fullmag_fem_gpu_performance_snapshot_v1` once in terminal execution
+provenance for native FEM GPU direct minimization, when at least one accepted
+step exists. Its recorded scope is
+`backend_lifetime_through_relaxation_finalization`, and
+`accepted_source_step` must match the native snapshot's completed step. Physical
+and accepted counters retain their native meanings; rejected and failed work is
+not reclassified. Nanosecond, byte, and Joule fields retain those units, and
+Poisson RHS norm sums describe the unscaled residual system in
+$\mathrm{A\,m}$.
+
+This is bounded observability for the direct-minimizer lane, not a new physical
+quantity, Python/IR setting, or qualification of full SP4. It adds no per-step
+`StepStats` record, device readback, CUDA fence, or ABI field. The existing
+480-byte native v1 ABI remains authoritative. Legacy provenance without the
+optional snapshot remains valid. Runner serialization and its managed
+regression gate are pending; do not infer CPU, LLG, interactive-runtime, or
+full-run coverage from this scope.
 
 ### 5.1 Fail-closed linear-solve publication
 
@@ -1058,6 +1079,12 @@ managed-runtime qualification.
 | Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
 |---|---|---|---|---|---|---|
 | Paired scalar certificate readback | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `fullmag_cuda_demag_validation_norm_pair` | Both scaled norms complete before aliased scratch output; one 16-byte readback for at least two rows. | FEM GPU | Managed `fem-demag-poisson` native contract passed at attempt `c1321d9442c641bd910f25b1b67a4a0e`; SP4 timing/parity NOT VERIFIED. | [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu#L116) |
+| Typed terminal GPU performance snapshot | `crates/fullmag-runner/src/types.rs` | `FemGpuPerformanceSnapshotProvenance` | Holds all native v1 fields with schema, accepted source step, and backend-lifetime scope; no per-step record or ABI change. | FEM GPU direct minimizer | Source change present; managed runner validation pending. | Unpublished task candidate. |
+| Native snapshot mapping | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `to_provenance` | Preserves native integer values and rejects non-finite totals or a terminal-step mismatch. | FEM GPU direct minimizer | Unit regressions added; managed execution pending. | Unpublished task candidate. |
+| Terminal snapshot publication | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | Captures once before artifact finish only for accepted direct native-GPU relaxations. | FEM GPU direct minimizer | Source change present; managed execution pending. | Unpublished task candidate. |
+| Terminal snapshot regression | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `performance_snapshot_v1_roundtrips_every_native_field` | Checks all mapped counters, ABI size 480, exact large integers, finiteness, and accepted-step identity. | FEM GPU direct minimizer | Regression source added; managed execution pending. | Unpublished task candidate. |
+| Legacy provenance regression | `crates/fullmag-runner/src/types.rs` | `legacy_execution_provenance_without_performance_snapshot_remains_valid` | Confirms old provenance JSON without the optional snapshot remains deserializable and omits the null field on serialization. | Artifact provenance compatibility | Regression source added; managed execution pending. | Unpublished task candidate. |
+| Zarr terminal snapshot regression | `crates/fullmag-runner/src/artifacts.rs` | `performance_snapshot_reaches_terminal_zarr_provenance` | Uses the existing streamed-stage writer and checks the final manifest and field `.zattrs`. | Artifact provenance serialization | Regression source added; managed execution pending. | Unpublished task candidate. |
 | Public policy defaults, validation, and object IR | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FemLinearSolverPolicy` | Defines the six policy fields and omits `atol` when `None`. | FEM CPU/GPU API | Source and object lowering checked for this page. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L160) |
 | Positive tolerance validation | `packages/fullmag-py/src/fullmag/_validation.py` | `require_positive` | Converts a numeric value and rejects nonfinite or nonpositive tolerances. | FEM CPU/GPU API | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/_validation.py#L261) |
 | FEM policy container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Places the optional policy in FEM discretization hints. | FEM CPU/GPU API | Source-visible; no runtime claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L476) |

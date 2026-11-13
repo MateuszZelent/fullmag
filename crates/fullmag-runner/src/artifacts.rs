@@ -6261,6 +6261,154 @@ mod tests {
         (problem, plan, summary, executed, output_dir)
     }
 
+    fn performance_snapshot_provenance_fixture() -> crate::types::FemGpuPerformanceSnapshotProvenance {
+        let mut value = serde_json::Map::new();
+        value.insert(
+            "schema_version".into(),
+            serde_json::json!("fullmag.fem.gpu.performance-snapshot.v1"),
+        );
+        value.insert(
+            "scope".into(),
+            serde_json::json!("backend_lifetime_through_relaxation_finalization"),
+        );
+        let integer_fields = [
+            "accepted_source_step",
+            "abi_version",
+            "struct_size",
+            "available",
+            "execution_class",
+            "precision",
+            "integrator",
+            "device_ordinal",
+            "completed_step",
+            "completed_execution_id",
+            "completed_operator_id",
+            "completed_attempt_count",
+            "rejected_attempt_count",
+            "failed_attempt_count",
+            "physical_rhs_evaluations",
+            "physical_exchange_applies",
+            "physical_exchange_launches",
+            "physical_exchange_nnz_visited",
+            "physical_demag_solves",
+            "physical_demag_iterations",
+            "physical_demag_rhs_norm_evaluations",
+            "physical_demag_stage_energy_evaluations",
+            "physical_normalization_launches",
+            "physical_normalization_readbacks",
+            "physical_adaptive_readbacks",
+            "physical_control_fences",
+            "physical_endpoint_cache_hits",
+            "physical_endpoint_cache_misses",
+            "physical_endpoint_cache_invalidations",
+            "physical_device_to_device_bytes",
+            "physical_control_d2h_bytes",
+            "physical_bulk_d2h_bytes",
+            "accepted_rhs_evaluations",
+            "accepted_exchange_applies",
+            "accepted_exchange_launches",
+            "accepted_exchange_nnz_visited",
+            "accepted_demag_solves",
+            "accepted_demag_iterations",
+            "accepted_demag_rhs_norm_evaluations",
+            "accepted_demag_stage_energy_evaluations",
+            "accepted_normalization_launches",
+            "accepted_normalization_readbacks",
+            "accepted_adaptive_readbacks",
+            "accepted_control_fences",
+            "accepted_endpoint_cache_hits",
+            "accepted_endpoint_cache_misses",
+            "accepted_endpoint_cache_invalidations",
+            "accepted_device_to_device_bytes",
+            "accepted_control_d2h_bytes",
+            "accepted_bulk_d2h_bytes",
+            "physical_exchange_elapsed_ns",
+            "physical_demag_assemble_elapsed_ns",
+            "physical_demag_recover_elapsed_ns",
+            "physical_demag_energy_elapsed_ns",
+            "physical_rhs_elapsed_ns",
+            "accepted_exchange_elapsed_ns",
+            "accepted_demag_assemble_elapsed_ns",
+            "accepted_demag_recover_elapsed_ns",
+            "accepted_demag_energy_elapsed_ns",
+            "accepted_rhs_elapsed_ns",
+        ];
+        for field in integer_fields {
+            value.insert(field.into(), serde_json::json!(0));
+        }
+        for field in [
+            "physical_demag_rhs_norm_sum",
+            "physical_demag_stage_energy_sum_joules",
+            "accepted_demag_rhs_norm_sum",
+            "accepted_demag_stage_energy_sum_joules",
+        ] {
+            value.insert(field.into(), serde_json::json!(0.0));
+        }
+        value.insert("abi_version".into(), serde_json::json!(1));
+        value.insert("struct_size".into(), serde_json::json!(480));
+        value.insert("available".into(), serde_json::json!(1));
+        value.insert("execution_class".into(), serde_json::json!(1));
+        value.insert("completed_step".into(), serde_json::json!(3));
+        value.insert("accepted_source_step".into(), serde_json::json!(3));
+        value.insert(
+            "completed_execution_id".into(),
+            serde_json::json!(9_007_199_254_740_993_u64),
+        );
+        value.insert("physical_rhs_evaluations".into(), serde_json::json!(17));
+        value.insert("accepted_rhs_evaluations".into(), serde_json::json!(13));
+        value.insert(
+            "physical_demag_rhs_norm_sum".into(),
+            serde_json::json!(0.125),
+        );
+        serde_json::from_value(serde_json::Value::Object(value))
+            .expect("full typed performance snapshot fixture")
+    }
+
+    #[test]
+    fn performance_snapshot_reaches_terminal_zarr_provenance() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-performance-snapshot-zarr-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let autosave_root = root.join("autosave");
+        let (problem, plan, summary, mut executed, output) =
+            stage_completion_fixture(&root, &autosave_root, "relax", "gpu", None);
+        let snapshot = performance_snapshot_provenance_fixture();
+        executed.provenance.fem_gpu_performance_snapshot = Some(snapshot.clone());
+
+        write_artifacts(&output, &problem, &plan, &executed, Some(&summary))
+            .expect("publish the final execution provenance to the existing Zarr stage writer");
+
+        let target = summary
+            .stage_autosave_completion_target
+            .as_ref()
+            .expect("stage autosave completion target");
+        let stage: serde_json::Value =
+            serde_json::from_slice(&fs::read(&target.stage_manifest_path).unwrap()).unwrap();
+        let zarr_attrs_path = target
+            .stage_manifest_path
+            .parent()
+            .expect("stage root")
+            .join("fields/m/.zattrs");
+        let attrs: serde_json::Value =
+            serde_json::from_slice(&fs::read(zarr_attrs_path).unwrap()).unwrap();
+        let expected = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(
+            stage["provenance"]["fem_gpu_performance_snapshot"],
+            expected
+        );
+        assert_eq!(
+            attrs["provenance"]["fem_gpu_performance_snapshot"],
+            expected
+        );
+        assert_eq!(
+            stage["provenance"]["fem_gpu_performance_snapshot"]["completed_execution_id"],
+            serde_json::json!(9_007_199_254_740_993_u64)
+        );
+
+        fs::remove_dir_all(root).expect("remove temporary writer fixture");
+    }
+
     fn assert_owner_bound_stage_finalization(separate_root: bool) {
         let root =
             std::env::temp_dir().join(format!("fullmag-stage-owner-{}", uuid::Uuid::new_v4()));
@@ -12052,6 +12200,7 @@ mod tests {
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
+            fem_gpu_performance_snapshot: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -12964,6 +13113,7 @@ mod tests {
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
             fem_gpu_minimizer_execution_receipt: None,
+            fem_gpu_performance_snapshot: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

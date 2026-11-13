@@ -8,7 +8,7 @@ use crate::fem::execution_receipt::{
 };
 use crate::types::{
     FemBemDemagProvenance, FemGpuExecutionClass, FemGpuExecutionReceipt,
-    FemGpuMinimizerExecutionReceipt, RunError,
+    FemGpuMinimizerExecutionReceipt, FemGpuPerformanceSnapshotProvenance, RunError,
 };
 
 use std::ffi::CStr;
@@ -676,6 +676,94 @@ impl NativeFemGpuPerformanceSnapshot {
         self.summary.abi_version == FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1
             && self.summary.struct_size == FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE
     }
+
+    pub(crate) fn to_provenance(
+        &self,
+        accepted_source_step: u64,
+    ) -> Result<FemGpuPerformanceSnapshotProvenance, RunError> {
+        let raw = self.raw;
+        if raw.completed_step != accepted_source_step {
+            return Err(receipt_error(
+                "performance_snapshot_terminal_step_mismatch",
+            ));
+        }
+        if !raw.physical_demag_rhs_norm_sum.is_finite()
+            || !raw.physical_demag_stage_energy_sum_joules.is_finite()
+            || !raw.accepted_demag_rhs_norm_sum.is_finite()
+            || !raw.accepted_demag_stage_energy_sum_joules.is_finite()
+        {
+            return Err(receipt_error("performance_snapshot_non_finite_total"));
+        }
+
+        Ok(FemGpuPerformanceSnapshotProvenance {
+            schema_version: "fullmag.fem.gpu.performance-snapshot.v1".into(),
+            scope: "backend_lifetime_through_relaxation_finalization".into(),
+            accepted_source_step,
+            abi_version: raw.abi_version,
+            struct_size: raw.struct_size,
+            available: raw.available,
+            execution_class: raw.execution_class,
+            precision: raw.precision,
+            integrator: raw.integrator,
+            device_ordinal: raw.device_ordinal,
+            completed_step: raw.completed_step,
+            completed_execution_id: raw.completed_execution_id,
+            completed_operator_id: raw.completed_operator_id,
+            completed_attempt_count: raw.completed_attempt_count,
+            rejected_attempt_count: raw.rejected_attempt_count,
+            failed_attempt_count: raw.failed_attempt_count,
+            physical_rhs_evaluations: raw.physical_rhs_evaluations,
+            physical_exchange_applies: raw.physical_exchange_applies,
+            physical_exchange_launches: raw.physical_exchange_launches,
+            physical_exchange_nnz_visited: raw.physical_exchange_nnz_visited,
+            physical_demag_solves: raw.physical_demag_solves,
+            physical_demag_iterations: raw.physical_demag_iterations,
+            physical_demag_rhs_norm_evaluations: raw.physical_demag_rhs_norm_evaluations,
+            physical_demag_stage_energy_evaluations: raw.physical_demag_stage_energy_evaluations,
+            physical_normalization_launches: raw.physical_normalization_launches,
+            physical_normalization_readbacks: raw.physical_normalization_readbacks,
+            physical_adaptive_readbacks: raw.physical_adaptive_readbacks,
+            physical_control_fences: raw.physical_control_fences,
+            physical_endpoint_cache_hits: raw.physical_endpoint_cache_hits,
+            physical_endpoint_cache_misses: raw.physical_endpoint_cache_misses,
+            physical_endpoint_cache_invalidations: raw.physical_endpoint_cache_invalidations,
+            physical_device_to_device_bytes: raw.physical_device_to_device_bytes,
+            physical_control_d2h_bytes: raw.physical_control_d2h_bytes,
+            physical_bulk_d2h_bytes: raw.physical_bulk_d2h_bytes,
+            physical_demag_rhs_norm_sum: raw.physical_demag_rhs_norm_sum,
+            physical_demag_stage_energy_sum_joules: raw.physical_demag_stage_energy_sum_joules,
+            accepted_rhs_evaluations: raw.accepted_rhs_evaluations,
+            accepted_exchange_applies: raw.accepted_exchange_applies,
+            accepted_exchange_launches: raw.accepted_exchange_launches,
+            accepted_exchange_nnz_visited: raw.accepted_exchange_nnz_visited,
+            accepted_demag_solves: raw.accepted_demag_solves,
+            accepted_demag_iterations: raw.accepted_demag_iterations,
+            accepted_demag_rhs_norm_evaluations: raw.accepted_demag_rhs_norm_evaluations,
+            accepted_demag_stage_energy_evaluations: raw.accepted_demag_stage_energy_evaluations,
+            accepted_normalization_launches: raw.accepted_normalization_launches,
+            accepted_normalization_readbacks: raw.accepted_normalization_readbacks,
+            accepted_adaptive_readbacks: raw.accepted_adaptive_readbacks,
+            accepted_control_fences: raw.accepted_control_fences,
+            accepted_endpoint_cache_hits: raw.accepted_endpoint_cache_hits,
+            accepted_endpoint_cache_misses: raw.accepted_endpoint_cache_misses,
+            accepted_endpoint_cache_invalidations: raw.accepted_endpoint_cache_invalidations,
+            accepted_device_to_device_bytes: raw.accepted_device_to_device_bytes,
+            accepted_control_d2h_bytes: raw.accepted_control_d2h_bytes,
+            accepted_bulk_d2h_bytes: raw.accepted_bulk_d2h_bytes,
+            accepted_demag_rhs_norm_sum: raw.accepted_demag_rhs_norm_sum,
+            accepted_demag_stage_energy_sum_joules: raw.accepted_demag_stage_energy_sum_joules,
+            physical_exchange_elapsed_ns: raw.physical_exchange_elapsed_ns,
+            physical_demag_assemble_elapsed_ns: raw.physical_demag_assemble_elapsed_ns,
+            physical_demag_recover_elapsed_ns: raw.physical_demag_recover_elapsed_ns,
+            physical_demag_energy_elapsed_ns: raw.physical_demag_energy_elapsed_ns,
+            physical_rhs_elapsed_ns: raw.physical_rhs_elapsed_ns,
+            accepted_exchange_elapsed_ns: raw.accepted_exchange_elapsed_ns,
+            accepted_demag_assemble_elapsed_ns: raw.accepted_demag_assemble_elapsed_ns,
+            accepted_demag_recover_elapsed_ns: raw.accepted_demag_recover_elapsed_ns,
+            accepted_demag_energy_elapsed_ns: raw.accepted_demag_energy_elapsed_ns,
+            accepted_rhs_elapsed_ns: raw.accepted_rhs_elapsed_ns,
+        })
+    }
 }
 
 fn execution_class_name(class: FemGpuExecutionClass) -> &'static str {
@@ -1037,6 +1125,242 @@ mod tests {
         assert_eq!(parsed.summary.accepted_rhs_evaluations, 3);
         raw.available = 0;
         assert!(NativeFemGpuPerformanceSnapshot::from_ffi(raw).is_err());
+    }
+
+    fn complete_performance_snapshot_fixture() -> ffi::fullmag_fem_gpu_performance_snapshot_v1 {
+        let mut raw = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
+            abi_version: FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+            struct_size: FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+            available: 1,
+            execution_class:
+                ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN as u32,
+            device_ordinal: -7,
+            completed_step: 13,
+            completed_execution_id: 9_007_199_254_740_993,
+            completed_operator_id: 9_007_199_254_740_995,
+            completed_attempt_count: 17,
+            rejected_attempt_count: 11,
+            failed_attempt_count: 12,
+            physical_demag_rhs_norm_sum: 0.125,
+            physical_demag_stage_energy_sum_joules: 0.25,
+            accepted_demag_rhs_norm_sum: 0.375,
+            accepted_demag_stage_energy_sum_joules: 0.5,
+            ..Default::default()
+        };
+        let mut counter = 1_000;
+        macro_rules! set_counters {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    raw.$field = counter;
+                    counter += 1;
+                )+
+            };
+        }
+        set_counters!(
+            physical_rhs_evaluations,
+            physical_exchange_applies,
+            physical_exchange_launches,
+            physical_exchange_nnz_visited,
+            physical_demag_solves,
+            physical_demag_iterations,
+            physical_demag_rhs_norm_evaluations,
+            physical_demag_stage_energy_evaluations,
+            physical_normalization_launches,
+            physical_normalization_readbacks,
+            physical_adaptive_readbacks,
+            physical_control_fences,
+            physical_endpoint_cache_hits,
+            physical_endpoint_cache_misses,
+            physical_endpoint_cache_invalidations,
+            physical_device_to_device_bytes,
+            physical_control_d2h_bytes,
+            physical_bulk_d2h_bytes,
+        );
+        counter = 100;
+        set_counters!(
+            accepted_rhs_evaluations,
+            accepted_exchange_applies,
+            accepted_exchange_launches,
+            accepted_exchange_nnz_visited,
+            accepted_demag_solves,
+            accepted_demag_iterations,
+            accepted_demag_rhs_norm_evaluations,
+            accepted_demag_stage_energy_evaluations,
+            accepted_normalization_launches,
+            accepted_normalization_readbacks,
+            accepted_adaptive_readbacks,
+            accepted_control_fences,
+            accepted_endpoint_cache_hits,
+            accepted_endpoint_cache_misses,
+            accepted_endpoint_cache_invalidations,
+            accepted_device_to_device_bytes,
+            accepted_control_d2h_bytes,
+            accepted_bulk_d2h_bytes,
+        );
+        counter = 2_000;
+        set_counters!(
+            physical_exchange_elapsed_ns,
+            physical_demag_assemble_elapsed_ns,
+            physical_demag_recover_elapsed_ns,
+            physical_demag_energy_elapsed_ns,
+            physical_rhs_elapsed_ns,
+            accepted_exchange_elapsed_ns,
+            accepted_demag_assemble_elapsed_ns,
+            accepted_demag_recover_elapsed_ns,
+            accepted_demag_energy_elapsed_ns,
+            accepted_rhs_elapsed_ns,
+        );
+        raw
+    }
+
+    #[test]
+    fn performance_snapshot_v1_roundtrips_every_native_field() {
+        let raw = complete_performance_snapshot_fixture();
+        let parsed = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
+        let provenance = parsed.to_provenance(raw.completed_step).unwrap();
+        let value = serde_json::to_value(&provenance).unwrap();
+        let fields = value.as_object().expect("snapshot JSON object");
+
+        assert_eq!(fields.len(), 66, "all 63 ABI fields plus three scope fields");
+        assert_eq!(
+            value["schema_version"],
+            "fullmag.fem.gpu.performance-snapshot.v1"
+        );
+        assert_eq!(
+            value["scope"],
+            "backend_lifetime_through_relaxation_finalization"
+        );
+        assert_eq!(
+            value["accepted_source_step"].as_u64(),
+            Some(raw.completed_step)
+        );
+        macro_rules! assert_u64_fields {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    assert_eq!(
+                        value[stringify!($field)].as_u64(),
+                        Some(raw.$field),
+                        stringify!($field)
+                    );
+                )+
+            };
+        }
+        for (name, expected) in [
+            ("abi_version", raw.abi_version),
+            ("struct_size", raw.struct_size),
+            ("available", raw.available),
+            ("execution_class", raw.execution_class),
+            ("precision", raw.precision),
+            ("integrator", raw.integrator),
+        ] {
+            assert_eq!(value[name].as_u64(), Some(expected as u64), "{name}");
+        }
+        assert_eq!(
+            value["device_ordinal"].as_i64(),
+            Some(raw.device_ordinal as i64)
+        );
+        assert_u64_fields!(
+            completed_step,
+            completed_execution_id,
+            completed_operator_id,
+            completed_attempt_count,
+            rejected_attempt_count,
+            failed_attempt_count,
+            physical_rhs_evaluations,
+            physical_exchange_applies,
+            physical_exchange_launches,
+            physical_exchange_nnz_visited,
+            physical_demag_solves,
+            physical_demag_iterations,
+            physical_demag_rhs_norm_evaluations,
+            physical_demag_stage_energy_evaluations,
+            physical_normalization_launches,
+            physical_normalization_readbacks,
+            physical_adaptive_readbacks,
+            physical_control_fences,
+            physical_endpoint_cache_hits,
+            physical_endpoint_cache_misses,
+            physical_endpoint_cache_invalidations,
+            physical_device_to_device_bytes,
+            physical_control_d2h_bytes,
+            physical_bulk_d2h_bytes,
+            accepted_rhs_evaluations,
+            accepted_exchange_applies,
+            accepted_exchange_launches,
+            accepted_exchange_nnz_visited,
+            accepted_demag_solves,
+            accepted_demag_iterations,
+            accepted_demag_rhs_norm_evaluations,
+            accepted_demag_stage_energy_evaluations,
+            accepted_normalization_launches,
+            accepted_normalization_readbacks,
+            accepted_adaptive_readbacks,
+            accepted_control_fences,
+            accepted_endpoint_cache_hits,
+            accepted_endpoint_cache_misses,
+            accepted_endpoint_cache_invalidations,
+            accepted_device_to_device_bytes,
+            accepted_control_d2h_bytes,
+            accepted_bulk_d2h_bytes,
+            physical_exchange_elapsed_ns,
+            physical_demag_assemble_elapsed_ns,
+            physical_demag_recover_elapsed_ns,
+            physical_demag_energy_elapsed_ns,
+            physical_rhs_elapsed_ns,
+            accepted_exchange_elapsed_ns,
+            accepted_demag_assemble_elapsed_ns,
+            accepted_demag_recover_elapsed_ns,
+            accepted_demag_energy_elapsed_ns,
+            accepted_rhs_elapsed_ns,
+        );
+        assert_eq!(
+            value["physical_demag_rhs_norm_sum"].as_f64(),
+            Some(raw.physical_demag_rhs_norm_sum)
+        );
+        assert_eq!(
+            value["physical_demag_stage_energy_sum_joules"].as_f64(),
+            Some(raw.physical_demag_stage_energy_sum_joules)
+        );
+        assert_eq!(
+            value["accepted_demag_rhs_norm_sum"].as_f64(),
+            Some(raw.accepted_demag_rhs_norm_sum)
+        );
+        assert_eq!(
+            value["accepted_demag_stage_energy_sum_joules"].as_f64(),
+            Some(raw.accepted_demag_stage_energy_sum_joules)
+        );
+
+        let decoded: FemGpuPerformanceSnapshotProvenance =
+            serde_json::from_value(value).expect("complete snapshot should deserialize");
+        assert_eq!(decoded, provenance);
+        assert_eq!(decoded.completed_execution_id, 9_007_199_254_740_993);
+        assert_eq!(decoded.completed_operator_id, 9_007_199_254_740_995);
+    }
+
+    #[test]
+    fn performance_snapshot_rejects_non_finite_native_totals() {
+        for mutation in 0..4 {
+            let mut raw = complete_performance_snapshot_fixture();
+            match mutation {
+                0 => raw.physical_demag_rhs_norm_sum = f64::NAN,
+                1 => raw.physical_demag_stage_energy_sum_joules = f64::INFINITY,
+                2 => raw.accepted_demag_rhs_norm_sum = f64::NEG_INFINITY,
+                3 => raw.accepted_demag_stage_energy_sum_joules = f64::NAN,
+                _ => unreachable!(),
+            }
+            let snapshot = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
+            assert!(snapshot.to_provenance(raw.completed_step).is_err());
+        }
+    }
+
+    #[test]
+    fn performance_snapshot_requires_the_terminal_accepted_step() {
+        let raw = complete_performance_snapshot_fixture();
+        let snapshot = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
+        assert!(snapshot.to_provenance(raw.completed_step + 1).is_err());
     }
 
     fn metric_name(name: &str) -> [i8; 64] {

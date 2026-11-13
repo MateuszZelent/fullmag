@@ -474,6 +474,7 @@ jobs:
           cargo test --locked -p fullmag-api --bin fullmag-api script::tests::gpu_bb_preparation_borrows_only_study_and_preserves_physical_payload -- --exact
           cargo test --locked -p fullmag-plan --lib gpu_bb_policy
           cargo test --locked -p fullmag-runner --lib native_fem_snapshot_flat_values
+          cargo test --locked -p fullmag-runner --lib performance_snapshot
           cargo test --locked -p fullmag-runner --lib relaxation::provenance::tests
 
       - name: Run full field identity binary transport contracts
