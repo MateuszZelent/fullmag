@@ -575,8 +575,7 @@ attempt `c1321d9442c641bd910f25b1b67a4a0e`, source snapshot
 `c078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785`, compile
 13.122 s, test 5.200 s, exit 0. The gate also includes the paired-norm,
 true-residual corruption, and queue-property fixtures. It does not establish
-SP4 timing, speedup, or cross-backend parity for C7. An immutable implementation
-commit link remains pending.
+SP4 timing, speedup, or cross-backend parity for C7. The implementation is pinned by [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/relaxation/pgbb.cpp#L636).
 
 (python-api)=
 ### 11.5 API, ProblemIR, validation errors, and provenance
@@ -783,7 +782,7 @@ against MuMax3. See the
 | Nonexecuted BB-only pipeline carrier | `crates/fullmag-ir/src/bb_pipeline.rs` | `is_gpu_bb_pipeline_carrier` | FEM GPU authoring | Source contract; managed bridge validation required |
 | Matching Python pipeline structural validation | `packages/fullmag-py/src/fullmag/model/bb_pipeline.py` | `is_gpu_bb_only_pipeline` | FEM GPU authoring | Interpreted regression tests |
 | BB preparation without stage physical mutations | `crates/fullmag-api/src/script.rs` | `gpu_bb_preparation_study` | FEM GPU preparation | Source regression; managed compile required |
-| Capture the final direct/refined Armijo snapshot for accepted PG-BB state | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | FEM GPU | Managed native contract passed; no C7 SP4 performance/parity claim; immutable source commit pending |
-| Overlay the nine published energies after the existing scalar readback | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp` | `gpu_rk_overlay_final_energy_terms` | FEM GPU | Managed native contract and shared nine-term overlay fixture passed; immutable source commit pending |
-| Preserve fresh observables and the existing stream fence during finalization | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu` | `gpu_rk_finalize_step_stats_control_readback_with_energy_terms` | FEM GPU | Managed native contract passed; SP4 timing/parity not established; immutable source commit pending |
-| Synthetic accepted-energy, observable, Robin, and finite-failure regression | `backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp` | `gpu_pgbb_final_energy_overlay_contract` | FEM GPU native contract | Included in managed `fem-demag-poisson` attempt `c1321d9442c641bd910f25b1b67a4a0e`; immutable source commit pending |
+| Capture the final direct/refined Armijo snapshot for accepted PG-BB state | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | FEM GPU | Managed native contract passed; no C7 SP4 performance/parity claim; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/relaxation/pgbb.cpp#L636) |
+| Overlay the nine published energies after the existing scalar readback | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp` | `gpu_rk_overlay_final_energy_terms` | FEM GPU | Managed native contract and shared nine-term overlay fixture passed; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp#L50) |
+| Preserve fresh observables and the existing stream fence during finalization | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu` | `gpu_rk_finalize_step_stats_control_readback_with_energy_terms` | FEM GPU | Managed native contract passed; SP4 timing/parity not established; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu#L559) |
+| Synthetic accepted-energy, observable, Robin, and finite-failure regression | `backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp` | `gpu_pgbb_final_energy_overlay_contract` | FEM GPU native contract | Included in managed `fem-demag-poisson` attempt `c1321d9442c641bd910f25b1b67a4a0e`; [source](https://github.com/MateuszZelent/fullmag/blob/b8f6f0ff3141645f872c84f172e33a1720ea264d/backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp#L13) |
