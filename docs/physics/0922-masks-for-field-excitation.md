@@ -57,15 +57,21 @@ $f_i(\tau)$, the flux density and field of the drive are
 \mathbf H_{\mathrm{mask}}=\frac{\mathbf B_{\mathrm{mask}}}{\mu_0}.
 ```
 
-A term without a time function has $f_i\equiv 1$. The drive clock is
+A term without a time function has $f_i\equiv 1$. The drive clock is the
+stage clock of regional drives (note 0920, section 4):
 
 ```{math}
 :label: mask-clock
-\tau(t)=t-t_{\mathrm{add}},
+\tau(t)=
+\begin{cases}
+t-t_{\mathrm{stage}}, & \text{time origin } \texttt{stage\_local},\\
+t, & \text{time origin } \texttt{absolute},
+\end{cases}
 ```
 
-where $t$ is the physical simulation time and $t_{\mathrm{add}}$ its value at the
-start of the stage that added the drive. Relaxation stages do not advance $t$.
+where $t$ is the physical simulation time and $t_{\mathrm{stage}}$ its value at
+the start of the current run stage. Relaxation stages do not advance $t$
+(note 0530).
 
 The field enters the effective field additively,
 
@@ -101,7 +107,7 @@ where $\boldsymbol\beta_i$ is the authored function.
 | $\mathbf r=(x,y,z)$ | position in the world frame | $\mathrm{m}$ |
 | $\mathbf r_0$ | position of the support shape | $\mathrm{m}$ |
 | $t$ | physical simulation time | $\mathrm{s}$ |
-| $t_{\mathrm{add}}$ | simulation time at the start of the stage that added the drive | $\mathrm{s}$ |
+| $t_{\mathrm{stage}}$ | simulation time at the start of the current run stage | $\mathrm{s}$ |
 | $\tau$ | drive clock | $\mathrm{s}$ |
 | $\Omega_m$ | magnetic domain of the target object | $\mathrm{m^3}$ |
 | $G$ | support shape (box, cylinder, sphere) placed at $\mathbf r_0$ | $\mathrm{m^3}$ |
@@ -185,7 +191,7 @@ def antenna_time(t, frequency, t0):
 
 antenna = study.add_simpleantenna.mask(
     target=film, shape=fm.Box(2000 * nm, 500 * nm, 10 * nm), position=(0.0, 0.0, -5 * nm),
-    frame="world", name="Antenna",
+    frame="world", time_origin="stage_local", name="Antenna",
 )
 antenna.add(
     fm.mask(antenna_mask, B01=0.2 * mT, wavelength=279 * nm, fwhm_y=240 * nm, xs=600 * nm),
@@ -219,13 +225,16 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
 | `…mask.shape` | `fm.Box`, `fm.Cylinder`, sphere | required | $\mathrm{m}$ | positive sizes | support shape $G$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].shape` |
 | `…mask.position` | 3 floats | `(0, 0, 0)` | $\mathrm{m}$ | finite | $\mathbf r_0$ | FDM CPU/GPU; FEM rejected | `mask_field_drives[].position_m` |
 | `…mask.frame` | `"local"`, `"world"` | `"local"` | $1$ | one of the two | frame of $\mathbf r_0$ and of mask coordinates, {eq}`mask-local-frame` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].frame` |
+| `…mask.time_origin` | `"stage_local"`, `"absolute"` | `"stage_local"` | $1$ | one of the two | clock of {eq}`mask-clock` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].time_origin` |
 | `…mask.name`, `…mask.id` | `str` | derived | $1$ | non-empty, unique id | display name, stable id | all | `mask_field_drives[].name`, `.id` |
 | `antenna.add(mask, time)` | `MaskFunction` or `VectorMask`; `TimeFunction` or `None` | `time=None` | $\mathrm{T}$, $1$ | at most 8 terms; bare callables rejected | one term of {eq}`mask-field` | FDM CPU/GPU; FEM rejected | `mask_field_drives[].terms[]` |
 | `fm.mask(function, **values)` | restricted function + numbers | required | $\mathrm{T}$ | rules of `mask-function-v1`; every parameter needs a value | function mask $\boldsymbol\beta_i$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: function`) |
 | `fm.time(function, **values)` | restricted function + numbers | required | $1$ | rules of `mask-function-v1` | time function $f_i$ | FDM CPU/GPU; FEM rejected | `terms[].time` |
 | `study.new_vector_mask(size, cell, origin)` | 3 ints, 3 floats, 3 floats | the FDM grid of the study | $\mathrm{m}$ | positive size and cell; a lattice is required when the study has no FDM cell | array mask $\mathbf A_{ijk}$ | FDM CPU/GPU; FEM rejected | `terms[].mask` (`kind: sampled`) |
 | `VectorMask.set_vector(i, j, k, value)` | ints, 3 floats | — | $\mathrm{T}$ | indices in range, finite values | one lattice value | FDM CPU/GPU; FEM rejected | array file |
-| `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive; defines $t_{\mathrm{add}}$ | FDM CPU/GPU; FEM rejected | stage action; `mask_field_drives[].activation` |
+| `study.stages.add_field_drive(antenna, stage_id)` | `MaskAntenna`, `str` | generated id | $1$ | unique stage id | adds the drive from this pipeline point on | FDM CPU/GPU; FEM rejected | stage action `add_mask_field_drive` |
+| `study.field_drives.add(antenna)` | `MaskAntenna` | — | $1$ | unique id | adds the drive for the whole study | FDM CPU/GPU; FEM rejected | `mask_field_drives[]` |
+| `study.stages.remove_field_drive(id, stage_id)` | `str`, `str` | generated id | $1$ | the id is active | removes the drive from this point on | all lanes | stage action `remove_field_drive` |
 
 (problem-ir)=
 ## 6. ProblemIR representation
@@ -268,6 +277,7 @@ antenna.add(uniform_layers(study.new_vector_mask(), bz=0.1 * mT, n_layers=2))
       }
     }
   ],
+  "time_origin": "stage_local",
   "activation": {"kind": "all_time_evolution"}
 }
 ```

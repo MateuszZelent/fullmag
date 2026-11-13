@@ -11,7 +11,10 @@
 ## 1. Scope
 
 A mask field drive is a list of terms. Each term is a mask (a vector field in
-tesla) and an optional time function (dimensionless). The field of the drive is
+tesla) and an optional time function (dimensionless). It enters a study through
+the stage action `add_mask_field_drive` (Python: `study.stages.add_field_drive`)
+or the drive list (`study.field_drives.add`), and leaves it through
+`remove_field_drive`. The field of the drive is
 the sum of `mask_i(r) · time_i(t)` on the support of the drive. This file fixes
 the three data languages behind it:
 

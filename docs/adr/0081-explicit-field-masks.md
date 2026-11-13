@@ -55,9 +55,13 @@ other regions.
    will evaluate the same masks at magnetic nodes and feed its existing
    pre-projected nodal basis; the IR, the crate, the Python API and the UI do not
    change for that.
-8. **Clock.** `t` of a time function is the physical time since the stage that
-   added the drive, continuous over the following run stages. Relaxation stages
-   do not advance it.
+8. **Stages and clock.** An antenna is authored by creation and enters the
+   physics at a pipeline point with `study.stages.add_field_drive(antenna, …)`
+   (stage action `add_mask_field_drive`, beside the existing `add_field_drive`) or
+   for the whole study with `study.field_drives.add(antenna)`;
+   `remove_field_drive` removes either kind. `t` of a time function follows the
+   stage clock of regional drives (ADR 0019): `stage_local` by default, `absolute`
+   on request (the `t` of mumax3).
 
 ## Consequences
 

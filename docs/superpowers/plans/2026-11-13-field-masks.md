@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (new `fullmag-expr`; `fullmag-ir`, `-plan`, `-runner`, `-engine`, `-authoring`, `-api`), C/CUDA (`native/include`, `backends/fdm`), Python (`packages/fullmag-py`), TypeScript (`apps/control-room`), mumax3 v3.12.21 as the reference.
 
-**Spec:** `docs/superpowers/specs/2026-11-13-field-masks-design.md` (rev. 6). § numbers refer to it.
+**Spec:** `docs/superpowers/specs/2026-11-13-field-masks-design.md` (rev. 7). § numbers refer to it.
 
 ## Global Constraints
 
@@ -32,7 +32,7 @@
 1. Python the transpiler cannot express (`if`, a loop, `np.sin`, a helper call, `t` inside a mask, `x` inside a time function), or a parameter that got no value in `fm.mask(...)`/`fm.time(...)` → `MaskFunctionError` naming the line or the parameter, never a silently dropped statement. Test in Task 4.
 2. A parameter or an equation edited in the Control Room drops another term, parameter or local, or reorders locals so a later local refers to an undefined name. Tests in Tasks 7, 8.
 3. A time function non-finite inside the run (`log(t)` at t = 0) → planning error, not NaN. A mask on `fem` or with two magnets → `mask_field_drive_unsupported_lane`. Tests in Task 5.
-4. The clock of `t` jumps at a stage boundary (two consecutive runs) → wrong phase in the second run. Test in Task 10.
+4. The clock of `t` jumps at a stage boundary, or a relaxation stage advances the absolute clock → wrong phase after the boundary. Tests in Tasks 7 and 10.
 5. Existing `RegionalFieldDrive` scripts → unchanged IR, plan signature and CUDA trajectory. Tests in Tasks 3, 5, 9.
 
 ---
@@ -131,7 +131,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 - Consumes: `fullmag_expr::{compile_function, FunctionKind, FunctionSource, MAX_MASK_TERMS}`.
 - Produces: `MaskFieldDriveIR`, `MaskTermIR { mask: MaskSourceIR, time: Option<FunctionIR> }`, `MaskSourceIR::{Function, Sampled}` (serde tag `kind`), `LibraryCallIR` (`MaskTermIR.origin`, optional, ignored by the planner), `FunctionIR`, `FunctionParameterIR { name, value, source }`, `FunctionLocalIR { name, expression }` exactly as design §4 (`deny_unknown_fields`); `ProblemIR.mask_field_drives` with `#[serde(default, skip_serializing_if = "Vec::is_empty")]`; `pub fn validate_mask_field_drives(problem: &ProblemIR, errors: &mut Vec<String>)`; `impl FunctionIR { pub fn compile(&self, kind: FunctionKind) -> Result<CompiledFunction, FunctionError> }`. Error strings: `{code}: mask_field_drives[{i}].terms[{j}].{mask|time}.{path} @{position}: {message}`.
 
-- [ ] **Step 1: Write the tests:** `problem_without_mask_drives_serializes_unchanged`; `mask_field_drive_round_trips` (three terms: function + time, function without `time`, sampled array + time); `rejects_sampled_mask_with_bad_lattice` (zero size, non-positive cell, empty path or sha256 → `mask_array_invalid`); `rejects_mask_using_t` (`mask_function_wrong_variable`, path `mask_field_drives[0].terms[0].mask.outputs[0]`); `rejects_unknown_target` (`mask_target_unknown`); `rejects_non_finite_parameter`; `rejects_zero_or_nine_terms` (`mask_too_many_terms` for nine); `rejects_duplicate_ids` (also against `field_drives` ids); `drive_active_in_relax_requires_constant_time`.
+- [ ] **Step 1: Write the tests:** `problem_without_mask_drives_serializes_unchanged`; `mask_field_drive_round_trips` (three terms: function + time, function without `time`, sampled array + time); `rejects_sampled_mask_with_bad_lattice` (zero size, non-positive cell, empty path or sha256 → `mask_array_invalid`); `rejects_mask_using_t` (`mask_function_wrong_variable`, path `mask_field_drives[0].terms[0].mask.outputs[0]`); `rejects_unknown_target` (`mask_target_unknown`); `rejects_non_finite_parameter`; `rejects_zero_or_nine_terms` (`mask_too_many_terms` for nine); `rejects_duplicate_ids` (also against `field_drives` ids); `drive_active_in_relax_requires_constant_time`; `time_origin_defaults_to_stage_local_and_accepts_absolute`.
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Check** `just check-api-source` and `just check-cli-source` in the worktree backend — exit 0.
 - [ ] **Step 4: Commit** `feat(ir): add mask field drives to ProblemIR`.
@@ -173,9 +173,11 @@ class MaskAntenna:
     def add(self, mask: MaskFunction | VectorMask, time: TimeFunction | None = None) -> "MaskAntenna"
     def to_ir(self, *, activation: DriveActivation, asset_dir) -> dict[str, object]
 # study.add_simpleantenna.mask(target, shape, position=(0, 0, 0), frame="local",
-#                              name=None, id=None) -> MaskAntenna
+#     time_origin="stage_local", name=None, id=None) -> MaskAntenna   # authoring only
+# study.field_drives.add(antenna)                         # active for the whole study (activation)
 # study.new_vector_mask(size=None, cell=None, origin=None) -> VectorMask   # default: the study's FDM grid
-# study.stages.add_field_drive(antenna, stage_id=...)     # active in all later run stages
+# study.stages.add_field_drive(antenna, stage_id=...)     # stage action add_mask_field_drive
+# study.stages.remove_field_drive(antenna.id, stage_id=...)
 # fullmag.antennas.gaussian_k_source(study, *, amplitude, wavelength, frequency, fwhm_y, center_x,
 #     sigma_x=None, t0=0.0, n_layers=None, style="function")
 #     -> tuple[tuple[MaskFunction | VectorMask, TimeFunction], ...]   # style "function" | "loop"
@@ -192,7 +194,7 @@ class MaskAntenna:
   - `test_closure_and_global_numbers_are_captured`; `test_math_prefix_is_accepted`.
   - Rejections, each `MaskFunctionError` with the right line: `if`, `for`, a helper call, `np.sin`, a mask whose first parameters are not `x, y, z`, a time function whose first parameter is not `t`, `t` used in a mask, a mask `return` that is not a 3-tuple, a time `return` that is a tuple, augmented assignment, a local assigned twice, a lambda (no source).
 - [ ] **Step 1b: Write `test_vector_mask.py`:** `test_default_lattice_is_the_fdm_grid` (universe 80×40×20 nm, cell 5 nm → `size == (16, 8, 4)`, `index2coord(0,0,0) == (-37.5e-9, -17.5e-9, -7.5e-9)`); `test_set_vector_and_array_agree`; `test_loop_function_returns_filled_mask` (design §3 `antenna_mask_loop` on that grid equals the closed form at every cell within float32 rounding); `test_save_load_round_trip` (same sha256); `test_new_vector_mask_without_grid_needs_cell` (FEM study without `study.cell` → `ValueError` naming `cell`); `test_out_of_range_index_raises`.
-- [ ] **Step 2: Write `test_mask_antenna.py`:** `test_add_returns_self_and_appends_terms`; `test_bare_callable_is_rejected_with_hint`; `test_static_term_has_no_time`; `test_lowers_to_ir` (keys of design §4; an array term writes `<asset_dir>/<antenna id>_term<n>.npy` and records path, sha256, size, cell, origin); `test_ninth_term_is_rejected`; `test_add_field_drive_registers_stage_action`; `test_user_module_returning_pairs_works` (design §3 `my_antenna`, two terms); `test_problem_without_masks_has_no_mask_keys`; `test_target_must_be_a_magnet`.
+- [ ] **Step 2: Write `test_mask_antenna.py`:** `test_add_returns_self_and_appends_terms`; `test_bare_callable_is_rejected_with_hint`; `test_static_term_has_no_time`; `test_lowers_to_ir` (keys of design §4; an array term writes `<asset_dir>/<antenna id>_term<n>.npy` and records path, sha256, size, cell, origin); `test_ninth_term_is_rejected`; `test_add_field_drive_registers_stage_action` (action kind `add_mask_field_drive`, full drive payload; a `RegionalFieldDrive` still emits `add_field_drive`); `test_field_drives_add_accepts_mask_antenna`; `test_remove_field_drive_removes_mask_antenna`; `test_antenna_never_added_warns`; `test_user_module_returning_pairs_works` (design §3 `my_antenna`, two terms); `test_problem_without_masks_has_no_mask_keys`; `test_target_must_be_a_magnet`.
 - [ ] **Step 3: Write `test_ready_antennas.py`:** `test_gaussian_k_source_equals_hand_written` (`style="function"`: equal `outputs` text after parameter substitution to the design §3 functions); `test_loop_style_equals_function_style` (`style="loop"` on a 16×8×4 grid: array equals the function evaluated at the cell centres within float32 rounding); `test_terms_carry_origin` (function path, the argument values, `output_index`); `test_registry_lists_gaussian_k_source_with_argument_names`.
 - [ ] **Step 4: Run** the four files with the repo Python (`just ensure-python`) — fail (modules missing).
 - [ ] **Step 5: Implement.** Source lookup: `inspect.getsource`; fallback: the `FunctionDef` in `script_source` found by name and `__code__.co_firstlineno`. Parse with `ast`; defaults are evaluated by Python, their text taken with `ast.get_source_segment`; closure cells and globals resolve free names.
@@ -269,10 +271,11 @@ The support selector of a drive is `and(in_object(target), inside_geometry(shape
 - [ ] **Step 3: Check:** rebuild the worktree backend — the `phase: development` receipt reports success; `just check-api-source` exit 0.
 - [ ] **Step 4: Commit** `feat(fdm): add host-evaluated time multipliers for mask terms`.
 
-### Task 7: Scene, script and API round trip
+### Task 7: Stage pipeline, scene, script and API round trip
 
 **Files:**
-- Modify: `packages/fullmag-py/src/fullmag/runtime/script_builder.py`, `runtime/scene_document.py`, `runtime/loader.py` (stage action for mask antennas), `crates/fullmag-authoring/src/{scene.rs,validation.rs,adapters.rs}`, `crates/fullmag-api/src/schemas/authoring.rs` (`MaskFieldDriveResource`), `crates/fullmag-api/src/router_v2/handlers/model/authoring.rs` (CRUD like field drives)
+- Modify (stage pipeline): `crates/fullmag-application/src/script_stage_contract.rs` (`ScriptExecutionStageAction::AddMaskFieldDrive { drive: MaskFieldDriveIR }`, `ResolvedScriptStageAction::AddMaskFieldDrive`), `crates/fullmag-application/src/script_stage_materialization.rs` (materialize the action and the pipeline payload, `ensure_mask_field_drive_can_be_added`, `remove_field_drive` searches both lists, transition metadata = continue in place), `crates/fullmag-application/src/script_pipeline_compilation.rs` (authored-configuration check), `crates/fullmag-cli/src/orchestrator.rs` (synthetic stage record `add_mask_field_drive`), `crates/fullmag-cli/src/control_room.rs` (stage kind lists), `crates/fullmag-authoring/src/builder.rs` (`StudyPrimitiveStageKind::AddMaskFieldDrive`, pipeline-input configuration), `crates/fullmag-api/src/openapi_v2.rs` (stage kind enum)
+- Modify (Python): `packages/fullmag-py/src/fullmag/runtime/script_builder.py` (stage rendering `study.stages.add_field_drive(<antenna>, stage_id=...)` for both kinds; label "Add Antenna"), `runtime/scene_document.py`, `runtime/loader.py` (introduced drive ids for `add_mask_field_drive`), `crates/fullmag-authoring/src/{scene.rs,validation.rs,adapters.rs}`, `crates/fullmag-api/src/schemas/authoring.rs` (`MaskFieldDriveResource`), `crates/fullmag-api/src/router_v2/handlers/model/authoring.rs` (CRUD like field drives)
 - Regenerate: OpenAPI + TS types (`just docker-dev-codegen "$PWD"`), Python client models
 - Test: `packages/fullmag-py/tests/test_script_builder_roundtrip.py`, `test_scene_document_problem_ir.py`; Rust round-trip test beside the field-drive one
 
@@ -300,23 +303,24 @@ for field, drive in <function>(study, <name>=<value>, ...):                     
 
   API error body `{code, path, position, message}`.
 
-- [ ] **Step 1: Write the tests:** `test_mask_antenna_survives_script_scene_script` (design §3 antenna plus a second static term: the two ProblemIR `mask_field_drives` are equal; parameter sources survive; locals keep their order); `test_rendered_functions_transpile_to_same_ir`; `test_user_module_script_exports_l0_form` (the `my_antenna` script exports two `def` pairs and two `.add` lines); `test_loop_mask_script_exports_a_file_load` (the exported script loads the `.npy` with the same sha256 and plans to the same basis); `test_ready_antenna_exports_import_and_call` (terms with an `origin` export as `from fullmag.antennas import gaussian_k_source` plus the call with the stored arguments, and re-import to the same IR); `test_script_without_masks_renders_unchanged`; Rust `mask_field_drive_resource_round_trips_through_ir`.
+- [ ] **Step 1: Write the tests:** `test_stage_added_mask_antenna_survives_script_scene_script` (Mateusz's form: `add_field_drive(antenna, stage_id="add_source")` then `add_run`; the stage list, stage ids and the drive payload survive); `test_add_then_remove_mask_antenna_stage_round_trips`; Rust `materialize_add_mask_field_drive_updates_following_stages` and `remove_field_drive_removes_mask_drive` (beside the existing `materialize_explicit_remove_field_drive_action_updates_following_state` in `crates/fullmag-cli/src/step_utils.rs`); `test_mask_antenna_survives_script_scene_script` (design §3 antenna plus a second static term: the two ProblemIR `mask_field_drives` are equal; parameter sources survive; locals keep their order); `test_rendered_functions_transpile_to_same_ir`; `test_user_module_script_exports_l0_form` (the `my_antenna` script exports two `def` pairs and two `.add` lines); `test_loop_mask_script_exports_a_file_load` (the exported script loads the `.npy` with the same sha256 and plans to the same basis); `test_ready_antenna_exports_import_and_call` (terms with an `origin` export as `from fullmag.antennas import gaussian_k_source` plus the call with the stored arguments, and re-import to the same IR); `test_script_without_masks_renders_unchanged`; Rust `mask_field_drive_resource_round_trips_through_ir`.
 - [ ] **Step 2: Run** the Python tests — the first five fail.
 - [ ] **Step 3: Implement**, regenerate API artifacts (diff shows additions only).
 - [ ] **Step 4: Run** the tests (pass) and `just check-api-source` (exit 0).
-- [ ] **Step 5: Commit** `feat(authoring): carry mask antennas through scene, script and API`.
+- [ ] **Step 4b: Stage probe** (extends Task 5's probe): a script `run 10 ps → add_field_drive(antenna) → run 10 ps → run 10 ps → remove_field_drive → run 10 ps` plans to: no `mask_field_term_bases` in run 1, one basis in runs 2 and 3, none in run 4. With `time_origin="absolute"`, the planned `time_stage.start_time_s` of run 2 equals 10 ps; with a relaxation stage inserted before run 2 it still equals 10 ps (note 0530). If the relaxation advances it, record the measured value as a finding; do not change the clock in this task.
+- [ ] **Step 5: Commit** `feat(stages): add and remove mask antennas in the study pipeline`.
 
 ### Task 8: Control Room panel
 
 **Files:**
 - Create: `apps/control-room/src/modules/inspector/panels/mask/MaskAntennaPanel.tsx`, `MaskAntennaPanelModel.ts`, `MaskAntennaPanelModel.test.ts`, `MaskAntennaPanel.dom.test.tsx`
-- Modify: the inspector registry that lists `RegionalFieldDrivePanel`; resource hooks (typed client only)
+- Modify: the inspector registry that lists `RegionalFieldDrivePanel`; resource hooks (typed client only); the study pipeline: `apps/control-room/src/modules/explorer/builders/study/` (node for `add_mask_field_drive`), `inspector/panels/StudyStageAuthoringModel.ts`, `studyPipelineStageDrafts.ts`, `StudyStageInspectorRouter.tsx` (the "Add Antenna" stage offers both antenna types; the mask type embeds `MaskAntennaPanel`)
 
 **Interfaces:**
 - Consumes: generated `MaskFieldDriveResource`; error body of Task 7.
 - Produces: `applyMaskAntennaEdit(resource, edit): MaskFieldDriveResource` (pure; keeps everything the edit does not name; never reorders terms or locals).
 
-- [ ] **Step 1: Write the tests:** `changing a parameter value keeps locals, outputs and other terms`; `adding a term keeps existing terms`; `removing term 1 keeps term 2 unchanged`; `editing one local keeps the order of the others`; `shows the server error under its equation` (path `terms[1].mask.locals[2]` → message under the third local of term 2, with position); `target and shape edits keep the terms`; `an array term is shown read-only and survives edits of other terms`; `changing an argument of a ready antenna posts the call and replaces only its terms`.
+- [ ] **Step 1: Write the tests:** `changing a parameter value keeps locals, outputs and other terms`; `adding a term keeps existing terms`; `removing term 1 keeps term 2 unchanged`; `editing one local keeps the order of the others`; `shows the server error under its equation` (path `terms[1].mask.locals[2]` → message under the third local of term 2, with position); `target and shape edits keep the terms`; `an array term is shown read-only and survives edits of other terms`; `changing an argument of a ready antenna posts the call and replaces only its terms`; `Add Antenna stage with the mask type creates an add_mask_field_drive draft`; `the stage inspector edits the antenna of its stage only`.
 - [ ] **Step 2: Run** `pnpm --dir apps/control-room exec vitest run src/modules/inspector/panels/mask` in the frontend container — fails.
 - [ ] **Step 3: Implement.** Antenna: target, shape, position, frame. Term list with Add/Remove; per term the mask (parameter table: name, value, source read-only; local equations; `Bx`, `By`, `Bz` in T) and the time function (parameters, locals, `f(t)`; "static" toggle); an array mask shows file, lattice and value range, read-only; terms with an origin are grouped under the ready antenna's name with its argument form ("Add ready antenna" lists the registry). Save sends the whole resource and shows server errors. No client-side evaluation.
 - [ ] **Step 4: Run** the tests, `just lint-control-room-source`, `just check-control-room-production-source` — pass. Browser check in the worktree group: open the antenna, change `frequency`, save, export the script, find the new value in the `def`; add a second term; enter `t` in a mask equation and see the error at its field. Screenshot to `~/git/simulations/fullmag/field_masks/ui_panel.png`.
@@ -354,7 +358,7 @@ Overhead (GPU double, grid 256×256×8, exchange and demag on, adaptive RK45, 20
 **Interfaces:**
 - Consumes: `~/git/simulations/amumax/racetrack_3.6GHz/inputs.npz`, `clock_check.zarr/table.txt`.
 
-- [ ] **Step 1: Write the reproduction script** (design §10 model; antenna exactly as design §3, hand-written, `frame="world"`; a switch `MASK_STYLE = "function" | "loop"` selects `fm.mask(antenna_mask, …)` or `antenna_mask_loop(study.new_vector_mask(), …)`). Stages: `relax`, `add_antenna` (`add_field_drive`), `drive` (15 ns, `study.solver(integrator="rk45", max_error=1e-7, dt_max=1e-13)`), `sample` (160 · 9.5785e-12 s, `dt_max=5e-14`, `m` and `torque` every 9.5785e-12 s). Switch `STAGES = "full" | "short"`; `"short"`: no relax, `add_antenna`, one 100 ps run with `m` every 10 ps.
+- [ ] **Step 1: Write the reproduction script** (design §10 model; antenna exactly as design §3, hand-written, `frame="world"`, `time_origin="absolute"` with `t0 = 2 ns` as in mumax3, added by `study.stages.add_field_drive(antenna, stage_id="add_antenna")`; a switch `MASK_STYLE = "function" | "loop"` selects `fm.mask(antenna_mask, …)` or `antenna_mask_loop(study.new_vector_mask(), …)`). Stages as `reference_nothermal.mx3`: `run` 1 ns, `minimize` (PG-BB), `run` 1 ns, `relax`, `add_antenna`, `drive` (15 ns, `study.solver(integrator="rk45", max_error=1e-7, dt_max=1e-13)`), `sample` (160 · 9.5785e-12 s, `dt_max=5e-14`, `m` and `torque` every 9.5785e-12 s). Switch `STAGES = "full" | "short"`; `"short"`: no relax, `add_antenna`, one 100 ps run with `m` every 10 ps.
 - [ ] **Step 2: Plan it** with `~/git/simulations/fullmag/region_examples/check_plan.sh` against the worktree backend — `PLAN OK` for all stages; `drive` and `sample` carry exactly 1 `mask_field_term_bases` entry.
 - [ ] **Step 3: Compare** (`compare_racetrack_antenna.py`, order z,y,x):
 

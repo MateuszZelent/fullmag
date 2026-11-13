@@ -1,6 +1,6 @@
 # Masks for field excitation — design
 
-Date: 2026-11-13 (rev. 6). Source: `~/git/fullmag` master `438d917ff`.
+Date: 2026-11-14 (rev. 7). Source: `~/git/fullmag` master `438d917ff`.
 Plan: `docs/superpowers/plans/2026-11-13-field-masks.md`.
 
 Scope: masks as a field excitation (antenna) only, no material parameters.
@@ -174,9 +174,17 @@ Common rules:
   `frame="local"`: `x, y, z` of mask functions are measured from `position`, given
   in the target's object frame (translation only in v1). Array masks are always in
   the world frame.
-- `t` is the physical time since the stage that added the antenna
-  (`add_field_drive`), continuous over the following run stages; relaxation stages
-  do not advance it.
+- `t` follows the stage clock of regional field drives (ADR 0019, note 0920 §4),
+  chosen per antenna with `time_origin`: `"stage_local"` (default) — `t = 0` at the
+  start of every run stage in which the drive is active; `"absolute"` — the
+  simulation time, i.e. `t` of mumax3. Relaxation stages must not advance the
+  absolute clock (note 0530); the plan verifies it.
+- Stages: creating an antenna (`study.add_simpleantenna.mask(...)`) only authors
+  it. It enters the physics at a pipeline point with
+  `study.stages.add_field_drive(antenna, stage_id=...)` (Mateusz's form) or for the
+  whole study with `study.field_drives.add(antenna)`;
+  `study.stages.remove_field_drive(antenna_id, stage_id=...)` removes it. An
+  antenna that is never added gives a warning when the script is captured.
 - Units: `fullmag.nm, um, mT, T, GHz, MHz, ns, ps` are plain floats.
 
 ## 4. ProblemIR (L0 only)
@@ -188,6 +196,7 @@ MaskFieldDriveIR {
   target_object_id: String,
   shape: RegionShapeIR, position_m: [f64; 3], frame: "world" | "local",
   terms: Vec<MaskTermIR>,                                 # 1..=8
+  time_origin: FieldTimeOriginIR,                         # reused: stage_local | absolute
   activation: DriveActivationIR,                          # reused
 }
 MaskTermIR { mask: MaskSourceIR, time: Option<FunctionIR>,   # time absent = 1
@@ -212,6 +221,23 @@ do not use `t`, time functions do not use `x, y, z`, parameter values finite. A
 drive active in a relaxation stage needs every time function free of `t`.
 Existing drive types are not changed; a problem without masks serializes
 byte-identically.
+
+## 4a. Stage pipeline
+
+| Stage action (`ScriptExecutionStageAction`) | Payload | Effect on the following stages |
+|---|---|---|
+| `add_field_drive` (exists) | `drive: RegionalFieldDriveIR` | unchanged |
+| **`add_mask_field_drive`** (new) | `drive: MaskFieldDriveIR` | pushed to `ProblemIR.mask_field_drives` |
+| `remove_field_drive` (exists) | `drive_id` | removes the drive with that id from either list |
+
+- Both add actions are pipeline-input configuration stages: no solver work, a
+  synthetic stage record, magnetization carried on (as `add_field_drive` today).
+- Python: `study.stages.add_field_drive(x, stage_id=...)` emits `add_field_drive`
+  for a `RegionalFieldDrive` and `add_mask_field_drive` for a mask antenna, so the
+  user writes the same call for both.
+- Ids are unique across `field_drives` and `mask_field_drives`.
+- Control Room: the "Add Antenna" stage offers both antenna types; the mask type
+  opens the mask antenna editor (section 7).
 
 ## 5. Equation engine: crate `fullmag-expr` (std only)
 
@@ -300,7 +326,8 @@ demag="truncated_images", images=(4,256,0))` with CUDA double, no thermal step.
 ## 11. Open points for the co-author (defaults used by the plan)
 
 1. Functions are transpiled to equations and never called by the solver. (assumed)
-2. `t` = time since the `add_field_drive` stage, continuous across runs. (assumed)
+2. `t` uses the existing stage clock of drives: `time_origin="stage_local"` by
+   default, `"absolute"` = mumax3 `t`. (assumed; replaces "time since the add stage")
 3. `frame="local"`: coordinates from `position` in the target's frame; `"world"` also
    available. (assumed)
 4. Masks exist next to `RegionalFieldDrive`; nothing is removed. (assumed)
