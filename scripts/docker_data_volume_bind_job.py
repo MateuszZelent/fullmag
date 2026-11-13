@@ -20,12 +20,14 @@ from fullmag_data_volume_runtime_binding import load_plan
 import linux_data_volume_provision as qualification
 
 try:
+    from . import docker_data_volume_root_bootstrap as root_bootstrap
     from . import docker_data_volume_copy_job as copy_job
     from . import fullmag_data_volume_pending as pending
     from . import linux_data_volume_bind as bind_stage
     from . import linux_data_volume_copy as copy_stage
     from .fullmag_data_volume_journal import next_phase
 except ImportError:
+    import docker_data_volume_root_bootstrap as root_bootstrap
     import docker_data_volume_copy_job as copy_job
     import fullmag_data_volume_pending as pending
     import linux_data_volume_bind as bind_stage
@@ -33,133 +35,7 @@ except ImportError:
     from fullmag_data_volume_journal import next_phase
 
 run_prepared_root = copy_job.run_prepared_root
-
-
-_ROOT_BIND_BOOTSTRAP = r'''import hashlib, importlib.abc, importlib.util, json, os, stat, sys
-source, request_path, request_sha256, expected_json = sys.argv[1:]
-
-def need(value, message):
-    if not value:
-        raise SystemExit(message)
-
-directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-file_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
-
-def open_directory(path):
-    need(type(path) is str and path.startswith('/') and not path.startswith('//') and
-         os.path.normpath(path) == path, 'noncanonical root-bind path')
-    descriptor = os.open('/', directory_flags)
-    try:
-        for component in path.split('/')[1:]:
-            need(component not in ('', '.', '..'), 'unsafe root-bind path component')
-            child = os.open(component, directory_flags, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-def read_regular(descriptor, maximum):
-    before = os.fstat(descriptor)
-    need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size <= maximum,
-         'unsafe root-bind evidence file')
-    chunks = []
-    total = 0
-    while True:
-        chunk = os.read(descriptor, min(1024 * 1024, maximum + 1 - total))
-        if not chunk:
-            break
-        total += len(chunk)
-        need(total <= maximum, 'oversized root-bind evidence file')
-        chunks.append(chunk)
-    after = os.fstat(descriptor)
-    need((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) ==
-         (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
-         'root-bind evidence changed while hashing')
-    return b''.join(chunks)
-
-def read_path(path, maximum):
-    need(type(path) is str and path.startswith('/') and not path.startswith('//') and
-         os.path.normpath(path) == path, 'noncanonical root-bind evidence path')
-    parent_path, name = os.path.split(path)
-    need(name not in ('', '.', '..'), 'invalid root-bind evidence name')
-    parent = open_directory(parent_path)
-    try:
-        descriptor = os.open(name, file_flags, dir_fd=parent)
-        try:
-            return read_regular(descriptor, maximum)
-        finally:
-            os.close(descriptor)
-    finally:
-        os.close(parent)
-
-need(type(request_sha256) is str and len(request_sha256) == 64 and
-     all(character in '0123456789abcdef' for character in request_sha256), 'invalid root-bind request SHA')
-raw_request = read_path(request_path, 256 * 1024)
-need(hashlib.sha256(raw_request).hexdigest() == request_sha256, 'root-bind request SHA changed')
-request = json.loads(raw_request)
-request_keys = {'schema', 'volume_id', 'storage_root', 'token', 'copy_request_sha256',
-                'copy_receipt_sha256', 'fence_ready_sha256', 'components'}
-need(type(request) is dict and set(request) == request_keys and
-     request['schema'] == 'fullmag.data-volume-linux-bind-request.v1', 'closed root-bind request required')
-expected = json.loads(expected_json)
-need(type(expected) is dict and expected == request['components'] and expected,
-     'root-bind component pin set changed')
-source_fd = open_directory(source)
-scripts_fd = None
-verified_sources = {}
-try:
-    scripts_fd = os.open('scripts', directory_flags, dir_fd=source_fd)
-    for name in sorted(expected):
-        digest = expected[name]
-        need(type(name) is str and name.endswith('.py') and '/' not in name and '\\' not in name and
-             name not in ('', '.', '..') and type(digest) is str and len(digest) == 64 and
-             all(character in '0123456789abcdef' for character in digest), 'invalid root-bind component pin')
-        descriptor = os.open(name, file_flags, dir_fd=scripts_fd)
-        try:
-            raw = read_regular(descriptor, 4 * 1024 * 1024)
-        finally:
-            os.close(descriptor)
-        need(hashlib.sha256(raw).hexdigest() == digest, 'root-bind component changed: ' + name)
-        verified_sources[name[:-3]] = (source + '/scripts/' + name, raw)
-finally:
-    if scripts_fd is not None:
-        os.close(scripts_fd)
-    os.close(source_fd)
-
-need(set(verified_sources) == {name[:-3] for name in expected}, 'root-bind verified module set changed')
-need(not (set(verified_sources) & set(sys.modules)), 'pinned root-bind module was already imported')
-
-class VerifiedLoader(importlib.abc.Loader):
-    def __init__(self, fullname, path, raw):
-        self.fullname = fullname
-        self.path = path
-        self.raw = raw
-    def create_module(self, spec):
-        return None
-    def exec_module(self, module):
-        module.__file__ = self.path
-        module.__cached__ = None
-        code = compile(self.raw, self.path, 'exec', dont_inherit=True)
-        exec(code, module.__dict__)
-
-class VerifiedFinder(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        pinned = verified_sources.get(fullname)
-        if pinned is None:
-            return None
-        if fullname in sys.modules:
-            raise ImportError('pinned root-bind module was already imported: ' + fullname)
-        module_path, raw = pinned
-        loader = VerifiedLoader(fullname, module_path, raw)
-        return importlib.util.spec_from_loader(fullname, loader, origin=module_path)
-
-sys.meta_path.insert(0, VerifiedFinder())
-import importlib
-bind_module = importlib.import_module('linux_data_volume_bind')
-bind_module.bind_verified(request_path, request_sha256)
-'''
+_ROOT_BIND_BOOTSTRAP = root_bootstrap.bootstrap("bind")
 
 
 def _operation_match(fence, request):

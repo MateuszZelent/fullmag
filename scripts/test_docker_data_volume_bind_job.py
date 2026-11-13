@@ -465,7 +465,7 @@ class RootBindCommandContracts(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("component changed", result.stderr)
+            self.assertIn("source changed", result.stderr)
             self.assertFalse(sentinel.exists())
 
     def test_isolated_bootstrap_executes_hashed_source_bytes_instead_of_timestamp_valid_pyc(self):

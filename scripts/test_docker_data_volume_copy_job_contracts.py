@@ -44,10 +44,12 @@ class CopyCommandContracts(unittest.TestCase):
 
     def test_argv_is_literal_and_bound_to_current_components_and_scope(self):
         with self.patches():argv,op,request=self.call()
-        self.assertEqual(argv[:8],['/mnt/c/Windows/System32/wsl.exe','--distribution','Ubuntu2',
-            '--user','root','--exec','/usr/bin/python3','-B'])
-        self.assertEqual(argv[8:], [str(self.source/'scripts/linux_data_volume_copy.py'),
-            '--request',str(self.f.path),'--request-sha256','f'*64])
+        self.assertEqual(argv[:10],['/mnt/c/Windows/System32/wsl.exe','--distribution','Ubuntu2',
+            '--user','root','--exec','/usr/bin/python3','-I','-B','-c'])
+        self.assertEqual(argv[10],job._ROOT_COPY_BOOTSTRAP)
+        self.assertEqual(argv[11:14],[str(self.source),str(self.f.path),'f'*64])
+        self.assertEqual(len(argv),15)
+        self.assertEqual(json.loads(argv[14]),request['components'])
         self.assertEqual(op,self.f.op);self.assertEqual(request,self.f.request)
 
     def test_another_distro_or_injected_option_does_not_reach_root_executable(self):

@@ -4,6 +4,7 @@ from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
+import py_compile
 import subprocess
 import sys
 import tempfile
@@ -585,6 +586,259 @@ except storage.StorageError:
                 self.assertEqual(existing.read_bytes(), sentinel)
                 self.assertEqual(fixture.fence.finish_calls, [])
                 self.assertTrue(fixture.operation["daemon_pending"])
+
+
+class RootCopyBootstrapTests(unittest.TestCase):
+    def test_closed_component_tables_match_both_root_stage_contracts(self):
+        from scripts import linux_data_volume_bind as bind_stage
+        self.assertEqual(tuple(job.root_bootstrap.COPY_COMPONENTS),tuple(linux_copy.COMPONENTS))
+        self.assertEqual(tuple(job.root_bootstrap.BIND_COMPONENTS),tuple(bind_stage.COMPONENTS))
+
+    def test_only_fixed_copy_and_bind_stages_can_be_generated(self):
+        for stage in (None,True,'admission','copy;bind','Copy'):
+            with self.subTest(stage=stage),self.assertRaises(ValueError):job.root_bootstrap.bootstrap(stage)
+
+    @staticmethod
+    def _fixture(root, good_sentinel):
+        source = root / "source"
+        scripts = source / "scripts"
+        scripts.mkdir(parents=True)
+        operation = root / "operation"
+        operation.mkdir()
+        request_path = operation / "linux-copy-request.json"
+        dependency = (
+            "from pathlib import Path\n"
+            f"Path({str(good_sentinel)!r}).write_text(__file__ + '|' + str(__cached__))\n"
+            "def archive_and_extract():\n    return None\n"
+        ).encode()
+        entrypoint = (
+            "from fullmag_data_volume_fs import archive_and_extract\n"
+            "def copy_verified(request_path, request_sha256):\n"
+            "    return archive_and_extract()\n"
+            "if __name__ == '__main__':\n    archive_and_extract()\n"
+        ).encode()
+        components = {}
+        for name in linux_copy.COMPONENTS:
+            raw = entrypoint if name == "linux_data_volume_copy.py" else (
+                dependency if name == "fullmag_data_volume_fs.py" else b"\n"
+            )
+            (scripts / name).write_bytes(raw)
+            components[name] = hashlib.sha256(raw).hexdigest()
+        request = {
+            "schema": linux_copy.SCHEMA,
+            "volume_id": "1" * 32,
+            "storage_root": "/srv/fullmag/storage",
+            "token": "2" * 32,
+            "linux_request_sha256": "3" * 64,
+            "provision_result_sha256": "4" * 64,
+            "drain_sha256": "5" * 64,
+            "fence_ready_sha256": "6" * 64,
+            "components": components,
+        }
+        request_raw = json.dumps(request, sort_keys=True).encode()
+        request_path.write_bytes(request_raw)
+        expected_json = json.dumps(components, sort_keys=True, separators=(",", ":"))
+        return source, scripts, request_path, request_raw, expected_json
+
+    def test_copy_bootstrap_executes_pinned_bytes_instead_of_timestamp_valid_pyc(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-copy-bootstrap-pyc-") as temporary:
+            root = Path(temporary)
+            good_sentinel = root / "sentinel-good"
+            evil_sentinel = root / "sentinel-evil"
+            source, scripts, request_path, request_raw, expected_json = self._fixture(root, good_sentinel)
+            good_dependency = (scripts / "fullmag_data_volume_fs.py").read_bytes()
+            evil_dependency = good_dependency.replace(str(good_sentinel).encode(), str(evil_sentinel).encode())
+            self.assertEqual(len(good_dependency), len(evil_dependency))
+
+            dependency_path = scripts / "fullmag_data_volume_fs.py"
+            dependency_path.write_bytes(evil_dependency)
+            fixed_mtime_ns = 1_700_000_000_000_000_000
+            os.utime(dependency_path, ns=(fixed_mtime_ns, fixed_mtime_ns))
+            py_compile.compile(str(dependency_path), doraise=True)
+            dependency_path.write_bytes(good_dependency)
+            os.utime(dependency_path, ns=(fixed_mtime_ns, fixed_mtime_ns))
+
+            ordinary = subprocess.run(
+                [sys.executable, "-B", str(scripts / "linux_data_volume_copy.py"),
+                 "--request", str(request_path), "--request-sha256",
+                 hashlib.sha256(request_raw).hexdigest()],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
+            self.assertTrue(evil_sentinel.exists(), "legacy script import did not exercise the poisoned pyc control")
+            self.assertFalse(good_sentinel.exists())
+            evil_sentinel.unlink()
+
+            from scripts import docker_data_volume_root_bootstrap as root_bootstrap
+            bootstrap_code = root_bootstrap.bootstrap("copy")
+            bootstrapped = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", bootstrap_code, str(source), str(request_path),
+                 hashlib.sha256(request_raw).hexdigest(), expected_json],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(bootstrapped.returncode, 0, bootstrapped.stderr)
+            self.assertEqual(good_sentinel.read_text(), str(scripts / "fullmag_data_volume_fs.py") + "|None")
+            self.assertFalse(evil_sentinel.exists(), "copy bootstrap executed timestamp-valid unpinned pyc bytes")
+
+    def test_copy_bootstrap_rejects_entrypoint_source_drift_before_import_side_effect(self):
+        with tempfile.TemporaryDirectory(prefix="fullmag-copy-bootstrap-entry-drift-") as temporary:
+            root = Path(temporary)
+            sentinel = root / "entrypoint-imported"
+            source, scripts, request_path, request_raw, expected_json = self._fixture(root, root / "unused")
+            from scripts import docker_data_volume_root_bootstrap as root_bootstrap
+            bootstrap_code = root_bootstrap.bootstrap("copy")
+            drifted = (
+                "from pathlib import Path\n"
+                f"Path({str(sentinel)!r}).touch()\n"
+                "def copy_verified(request_path, request_sha256):\n    return None\n"
+            ).encode()
+            (scripts / "linux_data_volume_copy.py").write_bytes(drifted)
+
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", bootstrap_code, str(source), str(request_path),
+                 hashlib.sha256(request_raw).hexdigest(), expected_json],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("source changed", result.stderr)
+            self.assertFalse(sentinel.exists(), "drifted root-copy entrypoint ran before pin validation")
+
+    def test_direct_job_and_builder_imports_work_with_only_scripts_path_outside_checkout(self):
+        scripts = Path(job.__file__).resolve().parent
+        with tempfile.TemporaryDirectory(prefix="fullmag-copy-import-outside-root-") as outside:
+            probe = (
+                "import sys\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import docker_data_volume_root_bootstrap as root_bootstrap\n"
+                "import docker_data_volume_copy_job\n"
+                "import docker_data_volume_bind_job\n"
+                "assert callable(root_bootstrap.bootstrap)\n"
+                "assert callable(docker_data_volume_copy_job.prepare_command)\n"
+                "assert callable(docker_data_volume_bind_job.prepare_command)\n"
+                "try: root_bootstrap.bootstrap('admission')\n"
+                "except ValueError: pass\n"
+                "else: raise AssertionError('unsupported root stage accepted')\n"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", probe, str(scripts)], cwd=outside,
+                capture_output=True, text=True, timeout=10,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class CopyPrepareScenario:
+    def __init__(self):
+        from scripts import test_linux_data_volume_copy as copy_fixtures
+
+        self.copy = copy_fixtures.CopyContextTests()
+        self.copy.setUp()
+        self.source = Path(job.__file__).resolve().parents[1]
+        self.distro = "UbuntuFixture"
+        self.identity = {
+            "project_name": "compose-fixture",
+            "project_id": "project-fixture",
+            "worktree_id": "worktree-fixture",
+        }
+        self.image = "sha256:" + "a" * 64
+        self.copy.plan.update(
+            source_root=str(self.source),
+            project_id=self.identity["project_id"],
+            worktree_id=self.identity["worktree_id"],
+            compose_project=self.identity["project_name"],
+            provision_request={"wsl_distro": self.distro},
+        )
+        self.copy.plan["runtime_pins"]["image_id"] = self.image
+        self.copy.plan_raw = (json.dumps(self.copy.plan, sort_keys=True) + "\n").encode()
+        self.copy.expected["plan.json"] = None
+        self.copy.evidence["plan.json"] = self.copy.plan
+        self.copy.drain["plan_sha256"] = hashlib.sha256(self.copy.plan_raw).hexdigest()
+        self.copy.evidence["group-drained.json"] = self.copy.drain
+        self.operation = {
+            "root": "/srv/fullmag/storage/migrations/data-volumes/attempts/" + self.copy.request["token"],
+            "receipt": {"phase": "data-volume-migration", "attempt": self.copy.request["token"]},
+            "daemon_pending": True,
+        }
+        self.fence = SimpleNamespace(
+            operation=self.operation,
+            control=SimpleNamespace(
+                _active_operation=self.operation,
+                project=self.identity["project_name"],
+                image=self.image,
+            ),
+            request={
+                "token": self.copy.request["token"],
+                "volume_id": self.copy.request["volume_id"],
+                "source_roots": {
+                    role: {key: value[key] for key in ("device", "inode")}
+                    for role, value in self.copy.linux["source_roots"].items()
+                },
+            },
+            ready=self.copy.ready,
+            released=False,
+        )
+        self.layout = {"storage_root": self.copy.request["storage_root"]}
+
+    def patches(self):
+        stack = ExitStack()
+        stack.enter_context(self.copy.patches())
+        stack.enter_context(patch.object(job.storage, "resolve_layout", return_value=self.layout))
+        stack.enter_context(patch.object(job, "compose_project_identity", return_value=self.identity))
+        stack.enter_context(patch.object(
+            job, "load_plan", return_value=(self.copy.plan_raw, self.copy.plan, None)
+        ))
+        return stack.enter_context(patch.object(job, "_wsl_executable", return_value="/fixture/wsl.exe")), stack
+
+
+class RootCopyPrepareCommandTests(unittest.TestCase):
+    def test_prepare_uses_fixed_isolated_stage_bootstrap_and_exact_component_argv(self):
+        from scripts import docker_data_volume_root_bootstrap as root_bootstrap
+
+        fixture = CopyPrepareScenario()
+        wsl, stack = fixture.patches()
+        with stack:
+            command, operation_root, request = job.prepare_command(
+                fixture.fence, fixture.source, fixture.distro, fixture.copy.path, "f" * 64
+            )
+        self.assertEqual(command, [
+            "/fixture/wsl.exe", "--distribution", fixture.distro, "--user", "root", "--exec",
+            "/usr/bin/python3", "-I", "-B", "-c", root_bootstrap.bootstrap("copy"),
+            str(fixture.source), str(fixture.copy.path), "f" * 64,
+            json.dumps(fixture.copy.request["components"], sort_keys=True, separators=(",", ":")),
+        ])
+        self.assertEqual(operation_root, fixture.copy.op)
+        self.assertEqual(request, fixture.copy.request)
+        wsl.assert_called_once_with()
+
+    def test_existing_scope_and_provenance_prechecks_still_refuse_before_wsl_launch(self):
+        mutations = ("distro", "source", "group", "image", "storage", "old-roots", "ready", "component")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                fixture = CopyPrepareScenario()
+                distro = fixture.distro
+                if mutation == "distro":
+                    distro = "OtherUbuntu"
+                elif mutation == "source":
+                    fixture.copy.plan["source_root"] = "/foreign/source"
+                elif mutation == "group":
+                    fixture.identity["worktree_id"] = "foreign-worktree"
+                elif mutation == "image":
+                    fixture.fence.control.image = "sha256:" + "b" * 64
+                elif mutation == "storage":
+                    fixture.copy.request["storage_root"] = "/srv/foreign/storage"
+                elif mutation == "old-roots":
+                    fixture.fence.request["source_roots"]["state"]["inode"] += 1
+                elif mutation == "ready":
+                    fixture.fence.ready = dict(fixture.copy.ready, state="released")
+                else:
+                    fixture.copy.request["components"]["linux_data_volume_copy.py"] = "0" * 64
+                fixture.copy.plan_raw = (json.dumps(fixture.copy.plan, sort_keys=True) + "\n").encode()
+                wsl, stack = fixture.patches()
+                with stack, self.assertRaises((RuntimeError, ValueError)):
+                    job.prepare_command(
+                        fixture.fence, fixture.source, distro, fixture.copy.path, "f" * 64
+                    )
+                wsl.assert_not_called()
 
 
 if __name__ == "__main__":

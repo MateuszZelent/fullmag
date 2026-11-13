@@ -253,8 +253,13 @@ zajmuje pięć guardów przez nowy helper. Nie zagnieżdża lease kontrolera.
 Nieznany dodatkowy konsument, także pozostawiony helper poprzedniej operacji,
 blokuje przejście; samo readonly i `exited` nie tworzą wyjątku.
 
-`docker_data_volume_bind_job` przypina literalne argv do wybranego checkoutu,
-grupy, WSL i źródeł. Izolowany bootstrap WSL przed pierwszym importem Fullmaga
+Joby kopii i bindu przypinają literalne argv do wybranego checkoutu, grupy,
+WSL i źródeł. Wspólny `docker_data_volume_root_bootstrap` dopuszcza wyłącznie
+dwa zamknięte etapy `copy` i `bind`, ich schematy, listy komponentów oraz stałe
+funkcje wejścia. Oba używają `/usr/bin/python3 -I -B -c`; bezpośrednie wejście
+kopii przez skrypt nie jest już używane przez zarządzany job. Bootstrap ustawia
+minimalne zaufane środowisko narzędzi przed kodem Fullmaga, w tym stały PATH.
+Izolowany bootstrap WSL przed pierwszym importem Fullmaga
 sprawdza SHA requestu i wszystkich modułów, odczytując je przez nofollow FD.
 Zachowuje zweryfikowane bajty całego zamkniętego grafu i wykonuje je własnym
 loaderem `compile`/`exec` z rzeczywistym `__file__`. Nie korzysta z lokalnego

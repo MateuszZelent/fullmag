@@ -37,6 +37,7 @@ import linux_data_volume_provision as qualification
 
 PARENT_COMPONENTS = ('docker_dev_data_volume_copy.py','docker_data_volume_stopped_group.py',
                      'docker_data_volume_copy_job.py','docker_data_volume_copy_guard.py',
+                     'docker_data_volume_root_bootstrap.py',
                      'docker_data_volume_relocated.py',
                      'fullmag_data_volume_pending.py','fullmag_data_volume_runtime_binding.py')
 NEW_ARTIFACTS = ('group-drain-inputs.json','group-drained.json','group-drain-source-proof.json',

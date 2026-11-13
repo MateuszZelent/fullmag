@@ -25,6 +25,13 @@ from linux_data_volume_copy import COMPONENTS, validate_request, validate_result
 from linux_data_volume_format import _document
 import linux_data_volume_provision as qualification
 
+try:
+    from . import docker_data_volume_root_bootstrap as root_bootstrap
+except ImportError:
+    import docker_data_volume_root_bootstrap as root_bootstrap
+
+_ROOT_COPY_BOOTSTRAP = root_bootstrap.bootstrap("copy")
+
 
 def _operation_match(fence, request):
     operation = fence.operation
@@ -74,8 +81,8 @@ def prepare_command(fence, source, distro, request_path, request_sha256):
         qualification.require(raw is not None and hashlib.sha256(raw).hexdigest() == request['components'][name],
                               'Root copy component source changed: '+name)
     command = [_wsl_executable(),'--distribution',distro,'--user','root','--exec',
-        '/usr/bin/python3','-B',str(source/'scripts/linux_data_volume_copy.py'),
-        '--request',str(request_path),'--request-sha256',request_sha256]
+        '/usr/bin/python3','-I','-B','-c',_ROOT_COPY_BOOTSTRAP,str(source),str(request_path),
+        request_sha256,json.dumps(request['components'],sort_keys=True,separators=(',',':'))]
     return command,op,request
 
 
