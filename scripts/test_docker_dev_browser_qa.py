@@ -459,6 +459,9 @@ def _browser_qa_reconciliation_fixture(
     browser_name = "fullmag-browser-qa-" + attempt[:12]
     browser_image = qa.DEFAULT_BROWSER_IMAGE
     frontend_volume = "fullmag-frontend-state"
+    development_attempt = "f" * 32
+    development_compose = {"name": project, "services": {}}
+    development_config_sha256 = hashlib.sha256(qa.canonical(development_compose)).hexdigest()
     receipt = {
         "schema": "fullmag.docker-build-operation.v1",
         "phase": "browser-qa",
@@ -469,6 +472,9 @@ def _browser_qa_reconciliation_fixture(
         "inputs": {
             "source_root": str(selected),
             "worktree_id": identity["worktree_id"],
+            "compose_project": project,
+            "development_attempt": development_attempt,
+            "development_config_sha256": development_config_sha256,
             "browser_image": browser_image,
             "frontend_volume": frontend_volume,
             "browser_runtime_timeout": 180,
@@ -557,6 +563,13 @@ def _browser_qa_reconciliation_fixture(
             self.documents = {
                 "browser-qa/attempts/" + attempt + "/receipt.json": receipt_raw,
                 "browser-qa/attempts/" + attempt + "/compose.json": compose_raw,
+                "development/current.json": {
+                    "attempt": development_attempt,
+                    "config_sha256": development_config_sha256,
+                    "compose_project": project,
+                    "frontend_volume": frontend_volume,
+                },
+                "development/attempts/" + development_attempt + "/compose.json": development_compose,
             }
             root = "browser-qa/attempts/" + attempt
             if retained is not None:
@@ -692,6 +705,11 @@ def _mock_browser_qa_reconciliation(qa, case):
 
     def validate_browser_helper(*args, **kwargs):
         control.events.append(("validate-browser-helper", args))
+        calls.setdefault("browser_helper_validation", []).append((args, kwargs))
+
+    def compose_document(*args, **kwargs):
+        calls.setdefault("compose_document", []).append((args, kwargs))
+        return case["document"]
 
     with ExitStack() as stack:
         stack.enter_context(patch.object(activation_reconcile, "_control_bytes",
@@ -707,8 +725,7 @@ def _mock_browser_qa_reconciliation(qa, case):
             activation_reconcile, "_wait_for_helper_exit",
             side_effect=lambda helper_id: calls["wait"].append(helper_id),
         ))
-        stack.enter_context(patch.object(qa, "_compose_document",
-                                         return_value=case["document"]))
+        stack.enter_context(patch.object(qa, "_compose_document", side_effect=compose_document))
         stack.enter_context(patch.object(qa, "_inspect", side_effect=inspect_browser))
         stack.enter_context(patch.object(qa, "_inspect_image",
                                          return_value=case["image_document"]))
@@ -2588,6 +2605,8 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         attempt = "c" * 32
         current = {
             "attempt": attempt,
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
             "private_group_storage": "group-volume-v1",
             "config_sha256": hashlib.sha256(qa.canonical(compose)).hexdigest(),
             "inputs": {"image_id": backend_image},
@@ -2854,6 +2873,428 @@ assert.throws(() => inspectorAckRestoreDecision({...options, scene:{revision:9,o
         )
         self.assertEqual(legacy["volumes"]["frontend-state"]["name"], "fullmag-dev-frontend-v1-legacy")
         self.assertEqual(legacy["services"]["browser-qa"]["volumes"][0]["volume"], {"nocopy": True})
+
+    def test_private_group_generation_is_pinned_through_frontend_and_browser_helper(self):
+        case = self._private_group_fixture()
+        qa, control, identity = case["qa"], case["control"], case["identity"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        current = case["current"]
+        current.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+
+        def read(path, *, optional=False):
+            if path == "private/.owner.json":
+                return deepcopy(case["marker"])
+            if path == f"development/attempts/{current['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        frontend = {
+            "Image": case["frontend_image"],
+            "State": {"Running": True},
+            "Config": {"Labels": {
+                **qa.source_labels(identity),
+                "com.docker.compose.project": control.project,
+                "com.docker.compose.service": "frontend",
+            }},
+            "HostConfig": {
+                "NetworkMode": identity["network_name"],
+                "PortBindings": {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3202"}]},
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "VolumeOptions": {"NoCopy": True, "Subpath": generation_subpath}},
+                    {"Type": "volume", "Source": control.volume, "Target": "/opt/fullmag/control",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": control.subpath("frontend")}},
+                ],
+            },
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": True, "Driver": "local", "Source": case["mountpoint"]},
+                {"Type": "volume", "Name": control.volume, "Destination": "/opt/fullmag/control",
+                 "RW": False, "Driver": "local", "Source": case["mountpoint"]},
+            ],
+        }
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            pins = qa._validate_frontend(
+                frontend, control, identity, control.volume, current, 3202,
+            )
+
+        self.assertEqual(pins, {
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        })
+        browser_compose = qa._compose_document(
+            ROOT, identity, qa.DEFAULT_BROWSER_IMAGE, control.volume, 3202, 180,
+            control=control, private_group_storage=True,
+            frontend_generation_id=generation_id,
+        )
+        service = browser_compose["services"]["browser-qa"]
+        self.assertEqual(service["volumes"][0]["volume"], {
+            "nocopy": True, "subpath": generation_subpath,
+        })
+        self.assertEqual(
+            {mount["target"] for mount in service["volumes"]},
+            {"/state/development", "/state/development/workspace/apps/control-room/scripts"},
+        )
+        browser_id = "sha256:" + "c" * 64
+        observed = {
+            "Id": browser_id,
+            "Image": browser_id,
+            "Config": {
+                "User": service["user"],
+                "Cmd": service["command"],
+                "Env": [f"{key}={value}" for key, value in service["environment"].items()],
+                "Labels": {
+                    **qa.source_labels(identity),
+                    "com.docker.compose.project": control.project,
+                    "com.docker.compose.service": "browser-qa",
+                },
+            },
+            "HostConfig": {
+                "GroupAdd": service["group_add"],
+                "ReadonlyRootfs": service["read_only"],
+                "NetworkMode": identity["network_name"],
+                "PortBindings": None,
+                "Tmpfs": {"/tmp": "rw,nosuid,nodev,size=256m"},
+                "CapDrop": service["cap_drop"],
+                "SecurityOpt": service["security_opt"],
+                "ExtraHosts": None,
+                "Mounts": [
+                    {"Type": "volume", "Source": control.volume, "Target": "/state/development",
+                     "ReadOnly": True, "VolumeOptions": {"NoCopy": True, "Subpath": generation_subpath}},
+                    {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                     "Target": "/state/development/workspace/apps/control-room/scripts", "ReadOnly": True},
+                ],
+            },
+            "State": {"Running": False, "ExitCode": 0},
+            "NetworkSettings": {"Networks": {identity["network_name"]: {}}, "Ports": {}},
+            "Mounts": [
+                {"Type": "volume", "Name": control.volume, "Destination": "/state/development",
+                 "RW": False, "Driver": "local", "Source": case["mountpoint"]},
+                {"Type": "bind", "Source": str(ROOT / "apps/control-room/scripts"),
+                 "Destination": "/state/development/workspace/apps/control-room/scripts", "RW": False},
+            ],
+        }
+        with patch.object(qa, "_inspect_existing_volume", return_value=case["volume"]):
+            qa._validate_browser_helper(
+                observed, control, identity, control.volume, browser_id, 0, ROOT,
+                private_group_storage=True,
+                frontend_generation_id=generation_id,
+                frontend_generation_subpath=generation_subpath,
+            )
+
+            wrong_mount = deepcopy(observed)
+            wrong_mount["HostConfig"]["Mounts"][0]["VolumeOptions"]["Subpath"] = (
+                group_storage.frontend_generation_subpath(control, "e" * 32)
+            )
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    wrong_mount, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                    frontend_generation_id=generation_id,
+                    frontend_generation_subpath=generation_subpath,
+                )
+            with self.assertRaises(qa.ControlOutcomeUnknown):
+                qa._validate_browser_helper(
+                    observed, control, identity, control.volume, browser_id, 0, ROOT,
+                    private_group_storage=True,
+                    frontend_generation_id=generation_id,
+                )
+
+        bad_current = deepcopy(current)
+        bad_current.pop("frontend_generation_subpath")
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_current = deepcopy(current)
+        bad_current["frontend_generation_subpath"] = group_storage.frontend_generation_subpath(
+            control, "e" * 32,
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_current = deepcopy(current)
+        bad_current["frontend_generation_subpath"] = (
+            "namespaces/" + "e" * 32 + "/private/frontend/generations/" + generation_id
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(compose, control, bad_current)
+        bad_compose = deepcopy(compose)
+        bad_mount = next(
+            mount for mount in bad_compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        bad_mount["volume"]["subpath"] = group_storage.frontend_generation_subpath(
+            control, "e" * 32,
+        )
+        with self.assertRaises(qa.BuildControlError):
+            qa._validate_private_group_compose(bad_compose, control, current)
+
+    def test_private_group_generation_reconciliation_matches_runtime_and_legacy_receipts(self):
+        qa = self.qa
+        case = self._private_group_fixture()
+        control = case["control"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        current = case["current"]
+        current.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        current["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+        inputs = {
+            "development_attempt": current["attempt"],
+            "development_config_sha256": current["config_sha256"],
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            **{
+                "frontend_generation_id": generation_id,
+                "frontend_generation_subpath": generation_subpath,
+            },
+        }
+
+        def read(path, *, optional=False):
+            if path == "development/current.json":
+                return deepcopy(current)
+            if path == f"development/attempts/{current['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        with patch.object(control, "read", side_effect=read):
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                ),
+                {
+                    "frontend_generation_id": generation_id,
+                    "frontend_generation_subpath": generation_subpath,
+                },
+            )
+            for bad_inputs in (
+                {key: value for key, value in inputs.items() if key != "frontend_generation_subpath"},
+                {**inputs, "frontend_generation_id": "e" * 32},
+                {**inputs, "development_attempt": "e" * 32},
+                {**inputs, "development_config_sha256": "f" * 64},
+            ):
+                with self.subTest(bad_inputs=bad_inputs), self.assertRaises(qa.BuildControlError):
+                    qa._reconcile_frontend_generation(
+                        control, bad_inputs, private_group_storage=True,
+                    )
+            changed_compose = deepcopy(compose)
+            changed_mount = next(
+                mount for mount in changed_compose["services"]["frontend"]["volumes"]
+                if mount.get("target") == "/state/development"
+            )
+            changed_mount["volume"]["subpath"] = group_storage.frontend_generation_subpath(
+                control, "e" * 32,
+            )
+            original_compose = deepcopy(compose)
+            compose.clear()
+            compose.update(changed_compose)
+            with self.assertRaisesRegex(qa.BuildControlError, "Compose pin differs"):
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                )
+            compose.clear()
+            compose.update(original_compose)
+
+            legacy = deepcopy(current)
+            legacy.pop("frontend_generation_id")
+            legacy.pop("frontend_generation_subpath")
+            legacy_compose = deepcopy(compose)
+            legacy_mount = next(
+                mount for mount in legacy_compose["services"]["frontend"]["volumes"]
+                if mount.get("target") == "/state/development"
+            )
+            legacy_mount["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+            legacy["config_sha256"] = hashlib.sha256(qa.canonical(legacy_compose)).hexdigest()
+            legacy_inputs = {
+                "development_attempt": legacy["attempt"],
+                "development_config_sha256": legacy["config_sha256"],
+                "compose_project": control.project,
+                "frontend_volume": control.volume,
+            }
+            current_before, compose_before = current.copy(), compose.copy()
+            current.clear()
+            current.update(legacy)
+            compose.clear()
+            compose.update(legacy_compose)
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, legacy_inputs, private_group_storage=True,
+                ),
+                {},
+            )
+            with self.assertRaises(qa.BuildControlError):
+                qa._reconcile_frontend_generation(
+                    control, {**legacy_inputs, "frontend_generation_id": generation_id},
+                    private_group_storage=True,
+                )
+            current.clear()
+            current.update(current_before)
+            compose.clear()
+            compose.update(compose_before)
+
+    def test_reconciliation_uses_authenticated_effective_receipt_for_failed_current(self):
+        qa = self.qa
+        case = self._private_group_fixture()
+        control, identity = case["control"], case["identity"]
+        import docker_group_storage as group_storage
+
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        effective = deepcopy(case["current"])
+        effective.update(
+            compose_project=control.project,
+            frontend_volume=control.volume,
+            frontend_generation_id=generation_id,
+            frontend_generation_subpath=generation_subpath,
+        )
+        compose = case["compose"]
+        frontend_mount = next(
+            mount for mount in compose["services"]["frontend"]["volumes"]
+            if mount.get("target") == "/state/development"
+        )
+        frontend_mount["volume"]["subpath"] = generation_subpath
+        effective["config_sha256"] = hashlib.sha256(qa.canonical(compose)).hexdigest()
+        raw_current = {
+            **effective,
+            "attempt": "a" * 32,
+            "state": "failed-confirmed",
+            "config_sha256": None,
+            "inputs": {"frontend_refresh_from_attempt": effective["attempt"]},
+        }
+        inputs = {
+            "development_attempt": effective["attempt"],
+            "development_config_sha256": effective["config_sha256"],
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        }
+
+        def read(path, *, optional=False):
+            if path == "development/current.json":
+                return deepcopy(raw_current)
+            if path == f"development/attempts/{effective['attempt']}/compose.json":
+                return deepcopy(compose)
+            raise AssertionError("unexpected control read: " + path)
+
+        with patch.object(control, "read", side_effect=read), \
+             patch.object(qa, "_read_recovered_development", return_value=effective) as recover:
+            self.assertEqual(
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                    selected=ROOT.resolve(), identity=identity,
+                ),
+                {
+                    "frontend_generation_id": generation_id,
+                    "frontend_generation_subpath": generation_subpath,
+                },
+            )
+            recover.assert_called_once_with(control, raw_current, ROOT.resolve(), identity)
+
+            with self.assertRaises(qa.BuildControlError):
+                qa._reconcile_frontend_generation(
+                    control, inputs, private_group_storage=True,
+                )
+
+            for changed in (
+                {**effective, "config_sha256": "f" * 64},
+                {**effective, "frontend_generation_subpath": group_storage.frontend_generation_subpath(
+                    control, "e" * 32,
+                )},
+            ):
+                recover.return_value = changed
+                with self.subTest(changed=changed), self.assertRaises(qa.BuildControlError):
+                    qa._reconcile_frontend_generation(
+                        control, inputs, private_group_storage=True,
+                        selected=ROOT.resolve(), identity=identity,
+                    )
+
+    def test_browser_qa_reconciliation_rebuilds_compose_from_the_retained_generation(self):
+        qa = self.qa
+        case = _browser_qa_reconciliation_fixture(qa)
+        control = case["control"]
+        import docker_group_storage as group_storage
+
+        control.namespace = ""
+        control.subpath = lambda relative: relative
+        generation_id = "d" * 32
+        generation_subpath = group_storage.frontend_generation_subpath(control, generation_id)
+        development_attempt = "e" * 32
+        development_compose = {
+            "name": control.project,
+            "services": {"frontend": {"volumes": [{
+                "type": "volume",
+                "source": "frontend-build",
+                "target": "/state/development",
+                "volume": {"nocopy": True, "subpath": generation_subpath},
+            }]}},
+            "volumes": {"frontend-build": {"name": control.volume, "external": True}},
+        }
+        development_config_sha256 = hashlib.sha256(qa.canonical(development_compose)).hexdigest()
+        development_current = {
+            "attempt": development_attempt,
+            "config_sha256": development_config_sha256,
+            "compose_project": control.project,
+            "frontend_volume": control.volume,
+            "private_group_storage": "group-volume-v1",
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        }
+        control.documents["development/current.json"] = development_current
+        control.documents[f"development/attempts/{development_attempt}/compose.json"] = development_compose
+        case["receipt"]["inputs"].update({
+            "compose_project": control.project,
+            "development_attempt": development_attempt,
+            "development_config_sha256": development_config_sha256,
+            "frontend_volume": control.volume,
+            "private_group_storage": "group-volume-v1",
+            "frontend_generation_id": generation_id,
+            "frontend_generation_subpath": generation_subpath,
+        })
+        receipt_raw = qa.canonical(case["receipt"])
+        browser_root = "browser-qa/attempts/" + case["attempt"]
+        control.documents[browser_root + "/receipt.json"] = receipt_raw
+        case["args"].expected_receipt_sha256 = hashlib.sha256(receipt_raw).hexdigest()
+
+        with _mock_browser_qa_reconciliation(qa, case):
+            qa.reconcile_browser_qa(
+                control, case["selected"], case["identity"], case["args"],
+            )
+
+        self.assertEqual(
+            case["calls"]["compose_document"][0][1]["frontend_generation_id"],
+            generation_id,
+        )
+        helper_kwargs = case["calls"]["browser_helper_validation"][0][1]
+        self.assertEqual(helper_kwargs["frontend_generation_id"], generation_id)
+        self.assertEqual(helper_kwargs["frontend_generation_subpath"], generation_subpath)
 
     def test_browser_image_reuses_compatible_local_digest_without_pull(self):
         qa = self.qa

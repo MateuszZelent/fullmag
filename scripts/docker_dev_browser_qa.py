@@ -289,6 +289,104 @@ def _private_group_storage_mode(receipt: Mapping[str, object]) -> bool:
     return True
 
 
+_FRONTEND_GENERATION_FIELDS = (
+    "frontend_generation_id",
+    "frontend_generation_subpath",
+)
+
+
+def _resolve_frontend_generation(
+    control: BuildControl,
+    receipt: Mapping[str, object],
+    compose: Mapping[str, object],
+) -> dict[str, str]:
+    """Return the private frontend leaf authenticated by one DEV receipt + Compose."""
+    has_generation_fields = any(key in receipt for key in _FRONTEND_GENERATION_FIELDS)
+    if not _private_group_storage_mode(receipt):
+        if has_generation_fields:
+            raise BuildControlError("Frontend generation pins require private group storage")
+        return {}
+    import docker_volume_frontend_seed_recovery as seed_recovery
+
+    try:
+        active = seed_recovery.resolve_active_generation(control, receipt, compose)
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("Retained frontend generation could not be authenticated") from error
+    if active.get("generation_id") is None:
+        return {}
+    return {
+        "frontend_generation_id": active["generation_id"],
+        "frontend_generation_subpath": active["subpath"],
+    }
+
+
+def _require_frontend_generation_inputs(
+    inputs: Mapping[str, object],
+    expected: Mapping[str, str],
+    *,
+    error: str,
+) -> None:
+    for key in _FRONTEND_GENERATION_FIELDS:
+        if ((key in inputs) != (key in expected)
+                or (key in expected and inputs.get(key) != expected[key])):
+            raise BuildControlError(error)
+
+
+def _reconcile_frontend_generation(
+    control: BuildControl,
+    inputs: Mapping[str, object],
+    *,
+    private_group_storage: bool,
+    selected: Path | None = None,
+    identity: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Bind a QA operation to the same retained development receipt and generation."""
+    attempt = inputs.get("development_attempt")
+    config_sha256 = inputs.get("development_config_sha256")
+    if (not isinstance(attempt, str) or re.fullmatch(r"[0-9a-f]{32}", attempt) is None
+            or not isinstance(config_sha256, str) or SHA256_RE.fullmatch(config_sha256) is None):
+        raise BuildControlError("QA reconciliation has no exact development attempt/configuration pin")
+    try:
+        current = control.read("development/current.json")
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("QA reconciliation development receipt is unavailable") from error
+    if isinstance(current, Mapping) and current.get("state") == "failed-confirmed":
+        if selected is None or identity is None:
+            raise BuildControlError("QA reconciliation cannot recover the failed development receipt without source identity")
+        current = _read_recovered_development(control, current, selected, identity)
+    if (not isinstance(current, Mapping)
+            or current.get("attempt") != attempt
+            or current.get("config_sha256") != config_sha256
+            or current.get("compose_project") != control.project
+            or inputs.get("compose_project") != control.project
+            or not isinstance(inputs.get("frontend_volume"), str)
+            or current.get("frontend_volume") != inputs.get("frontend_volume")
+            or _private_group_storage_mode(current) is not private_group_storage):
+        raise BuildControlError("QA reconciliation development runtime receipt differs")
+    if private_group_storage and inputs.get("frontend_volume") != control.volume:
+        raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
+    try:
+        compose = control.read(f"development/attempts/{attempt}/compose.json")
+    except BuildControlError:
+        raise
+    except Exception as error:
+        raise BuildControlError("QA reconciliation development Compose is unavailable") from error
+    if (not isinstance(compose, Mapping)
+            or hashlib.sha256(canonical(compose)).hexdigest() != config_sha256):
+        raise BuildControlError("QA reconciliation development Compose pin differs")
+    pins = _resolve_frontend_generation(control, current, compose)
+    _require_frontend_generation_inputs(
+        inputs,
+        pins,
+        error="QA reconciliation frontend generation differs from its development runtime",
+    )
+    return pins
+
+
 def _control_subpath(control: BuildControl, relative: str) -> str:
     """Resolve a control subpath while keeping namespace and relative path exact."""
     namespace = getattr(control, "namespace", None)
@@ -834,7 +932,7 @@ def _validate_private_group_compose(
     compose: Mapping[str, object],
     control: BuildControl,
     current: Mapping[str, object],
-) -> None:
+) -> dict[str, str]:
     """Validate retained frontend/backend/ledger leaves for group-volume-v1."""
     import docker_backend_volume_cache as backend_cache
     import docker_group_ledger as group_ledger
@@ -855,13 +953,17 @@ def _validate_private_group_compose(
 
     try:
         group_storage.volume_declaration(control)
-        frontend_subpath = group_storage.role_subpath(control, "frontend")
         backend_subpath = group_storage.role_subpath(control, "backend")
         ledger_subpath = group_storage.role_subpath(control, "ledger")
         control_subpath = _control_subpath(control, "frontend")
+        frontend_generation = _resolve_frontend_generation(control, current, compose)
         expected_frontend_mount = group_storage.compose_mount_descriptor(
             control, "frontend", "/state/development", compose_name="frontend-build",
         )
+        if frontend_generation:
+            expected_frontend_mount["volume"]["subpath"] = frontend_generation[
+                "frontend_generation_subpath"
+            ]
         expected_backend_mount = group_storage.compose_mount_descriptor(
             control, "backend", backend_cache.BUILD_TARGET,
             compose_name=backend_cache.COMPOSE_BUILD_VOLUME,
@@ -949,6 +1051,7 @@ def _validate_private_group_compose(
         raise BuildControlError("Retained group ledger is not the private/ledger subpath")
     if backend_subpath != expected_backend_mount["volume"].get("subpath"):
         raise BuildControlError("Retained backend subpath is not canonical")
+    return frontend_generation
 
 
 def _validate_frontend(
@@ -959,7 +1062,7 @@ def _validate_frontend(
     current: Mapping[str, object],
     port: int,
     *, cache_project_id: str | None = None,
-) -> None:
+) -> dict[str, str]:
     grouped = _private_group_storage_mode(current)
     if grouped and frontend_volume != control.volume:
         raise BuildControlError("Frontend state volume differs from the pinned private group volume")
@@ -992,8 +1095,11 @@ def _validate_frontend(
             or not isinstance(services.get("backend"), Mapping)
             or services["backend"].get("image") != (current.get("inputs") or {}).get("image_id")):
         raise BuildControlError("Pinned development service image declarations differ")
+    frontend_generation: dict[str, str] = {}
     if grouped:
-        _validate_private_group_compose(compose, control, current)
+        frontend_generation = _validate_private_group_compose(compose, control, current)
+    else:
+        frontend_generation = _resolve_frontend_generation(control, current, compose)
     expected_image = services["frontend"].get("image")
     if (not isinstance(expected_image, str) or IMAGE_ID_RE.fullmatch(expected_image) is None
             or document.get("Image") != expected_image):
@@ -1015,7 +1121,11 @@ def _validate_frontend(
 
         volume = _validate_existing_control_volume(control)
         _validate_group_volume_mounts(document, control, volume, {
-            "/state/development": (group_storage.role_subpath(control, "frontend"), False),
+            "/state/development": (
+                frontend_generation.get("frontend_generation_subpath")
+                or group_storage.role_subpath(control, "frontend"),
+                False,
+            ),
             "/opt/fullmag/control": (_control_subpath(control, "frontend"), True),
         })
     else:
@@ -1033,6 +1143,7 @@ def _validate_frontend(
             raise BuildControlError("Frontend has a writable host bind")
         if mount.get("Type") == "volume" and mount.get("Name") not in {frontend_volume, control.volume, *shared_volumes}:
             raise BuildControlError("Frontend has an unexpected named volume")
+    return dict(frontend_generation)
 
 
 def _validate_browser_image_reference(image: str) -> None:
@@ -1315,6 +1426,7 @@ def _compose_document(
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
     region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
+    frontend_generation_id: str | None = None,
 ) -> dict[str, object]:
     if type(inspector_ack) is not bool:
         raise BuildControlError("Inspector ACK scenario marker must be boolean")
@@ -1386,13 +1498,20 @@ def _compose_document(
             raise BuildControlError("Browser QA private group volume differs from the selected BuildControl")
         try:
             group_storage.volume_declaration(control)
-            frontend_state_volume["volume"]["subpath"] = group_storage.role_subpath(control, "frontend")
+            frontend_state_volume["volume"]["subpath"] = (
+                group_storage.frontend_generation_subpath(control, frontend_generation_id)
+                if frontend_generation_id is not None
+                else group_storage.role_subpath(control, "frontend")
+            )
         except BuildControlError:
             raise
         except Exception as error:
             raise BuildControlError("Browser QA private frontend subpath is invalid") from error
-    elif control is not None and control.project != identity.get("project_name"):
-        raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
+    else:
+        if frontend_generation_id is not None:
+            raise BuildControlError("Browser QA frontend generation requires private group storage")
+        if control is not None and control.project != identity.get("project_name"):
+            raise BuildControlError("Browser QA BuildControl belongs to another Compose project")
     if saved_playback_item_id is not None:
         if not re.fullmatch(r"[0-9]{1,20}", saved_playback_item_id):
             raise BuildControlError("Saved Playback QA requires a decimal item id of at most 20 digits")
@@ -1684,6 +1803,8 @@ def _validate_browser_helper(
     study_stage_rerun_resume_evidence: Mapping[str, object] | None = None,
     region_reset_parent_evidence: Mapping[str, object] | None = None,
     expect_fdm_cell_physics: bool = False,
+    frontend_generation_id: str | None = None,
+    frontend_generation_subpath: str | None = None,
 ) -> None:
     if type(expect_fdm_cell_physics) is not bool:
         raise ControlOutcomeUnknown("FDM cell physics helper expectation must be boolean")
@@ -1988,7 +2109,16 @@ def _validate_browser_helper(
 
         volume = _validate_existing_control_volume(control)
         try:
-            frontend_subpath = group_storage.role_subpath(control, "frontend")
+            if frontend_generation_id is None and frontend_generation_subpath is None:
+                frontend_subpath = group_storage.role_subpath(control, "frontend")
+            elif frontend_generation_id is None or frontend_generation_subpath is None:
+                raise BuildControlError("Browser helper frontend generation pins are incomplete")
+            else:
+                frontend_subpath = group_storage.frontend_generation_subpath(
+                    control, frontend_generation_id,
+                )
+                if frontend_generation_subpath != frontend_subpath:
+                    raise BuildControlError("Browser helper frontend generation path differs from its ID")
         except BuildControlError as error:
             raise ControlOutcomeUnknown("Browser helper private frontend subpath is invalid") from error
         try:
@@ -2018,6 +2148,8 @@ def _validate_browser_helper(
                     resolved_binds[0].get("Source"), selected / "apps/control-room/scripts"
                 )):
             raise ControlOutcomeUnknown("Browser helper resolved script mount is not the selected readonly bind")
+    elif frontend_generation_id is not None or frontend_generation_subpath is not None:
+        raise ControlOutcomeUnknown("Browser helper generation pins require private group storage")
     for mount in mounts:
         if mount.get("RW") is not False:
             raise ControlOutcomeUnknown("Browser helper has a writable volume or bind")
@@ -6317,7 +6449,9 @@ def _run(
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        frontend_generation_id=receipt_inputs.get("frontend_generation_id"),
+        frontend_generation_subpath=receipt_inputs.get("frontend_generation_subpath"))
     if observed["Config"].get("Cmd") != document["services"]["browser-qa"]["command"]:
         raise ControlOutcomeUnknown("Browser helper command differs from the admitted Compose harness")
     operation["receipt"]["browser_container_id"] = observed["Id"]
@@ -6449,8 +6583,16 @@ def _probe_prestart_browser_qa(control, selected, identity, args, receipt, helpe
             or hashlib.sha256(canonical(frontend_inputs)).hexdigest() != inputs.get("frontend_inputs_sha256")):
         raise BuildControlError("Prestart QA session services changed since admission")
     frontend = _inspect(frontend_id)
-    _validate_frontend(frontend, control, identity, volume, current, args.port,
+    generation_pins = _validate_frontend(frontend, control, identity, volume, current, args.port,
         cache_project_id=cache_project_id)
+    if not isinstance(generation_pins, Mapping):
+        if _private_group_storage_mode(current):
+            raise BuildControlError("Prestart QA frontend generation was not authenticated")
+        generation_pins = {}
+    _require_frontend_generation_inputs(
+        inputs, generation_pins,
+        error="Prestart QA frontend generation changed since admission",
+    )
     backend = _inspect(backend_id)
     from docker_volume_dev import _validate_retained_service
     development_compose = control.read("development/attempts/" + current["attempt"] + "/compose.json")
@@ -6567,6 +6709,10 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
     private_group_storage = private_group_marker == "group-volume-v1"
     if private_group_storage and inputs.get("frontend_volume") != control.volume:
         raise BuildControlError("QA reconciliation frontend volume differs from its group profile")
+    frontend_generation = _reconcile_frontend_generation(
+        control, inputs, private_group_storage=private_group_storage,
+        selected=selected, identity=identity,
+    )
     scenario = inputs.get("scenario", "standard")
     if scenario not in {"standard", "airbox-inspector", "saved-playback", "planar-airbox", "inspector-ack", "study-stage-rerun"}:
         raise BuildControlError("QA reconciliation scenario is unsupported")
@@ -6869,7 +7015,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         control=control,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        frontend_generation_id=frontend_generation.get("frontend_generation_id"))
     if canonical(document) != canonical(expected_document):
         raise BuildControlError("QA reconciliation Compose recipe differs")
     helper_name = "fullmag-control-" + attempt
@@ -6946,7 +7093,8 @@ def reconcile_browser_qa(control, selected, identity, args, *, cache_project_id=
         saved_playback_item_id=saved_playback_item_id,
         source_script_sha256=source_script_sha256,
         expect_planar_airbox=expect_planar_airbox_input,
-        private_group_storage=private_group_storage)
+        private_group_storage=private_group_storage,
+        **frontend_generation)
     service = document["services"]["browser-qa"]
     if (observed["Config"].get("Cmd") != service["command"]
             or observed["Config"].get("Entrypoint") != image["Config"].get("Entrypoint")):
@@ -7263,7 +7411,10 @@ def main(argv: list[str] | None = None) -> int:
     private_group_storage = _private_group_storage_mode(current)
     _validate_frontend_volume(control, frontend_volume, frontend_inputs, current)
     frontend = _inspect(frontend_id)
-    _validate_frontend(frontend, control, identity, frontend_volume, current, args.port, cache_project_id=cache_project_id_for_layout(layout))
+    frontend_generation = _validate_frontend(
+        frontend, control, identity, frontend_volume, current, args.port,
+        cache_project_id=cache_project_id_for_layout(layout),
+    )
     try:
         _validate_live_network(backend_id, frontend_id, control.project, args.port)
     except BuildControlError as error:
@@ -7347,6 +7498,7 @@ def main(argv: list[str] | None = None) -> int:
         source_script_sha256=source_script_sha256,
         control=control,
         private_group_storage=private_group_storage,
+        frontend_generation_id=frontend_generation.get("frontend_generation_id"),
     )
     source_commit = (current.get("source_commit") or (current.get("inputs") or {}).get("source_commit"))
     inputs = {
@@ -7404,6 +7556,7 @@ def main(argv: list[str] | None = None) -> int:
             inputs["region_reset_parent_fresh_state"] = region_reset_parent_evidence["fresh_state"]
     if private_group_storage:
         inputs["private_group_storage"] = "group-volume-v1"
+    inputs.update(frontend_generation)
     if args.expect_fem_airbox_vectors:
         inputs["expect_fem_airbox_vectors"] = True
     if args.saved_playback_item_id is not None:

@@ -1726,3 +1726,63 @@ completion, 20 seed recovery, 17 legacy frontend recovery, 21 frozen recovery,
 26 shell). Testy obejmują odmowę przy dryfie PID/API, pakietu, manifestu,
 generacji i źródeł oraz zachowanie zwykłego native source gate. Nie jest to
 jeszcze dowód rzeczywistego domknięcia operacji 33052.
+
+
+### Rzeczywiste domknięcie 33052 — PASS
+
+Poprawka `6e8779c57df82ff03ec0fc880bc2827416c6b2ec` jest na gałęzi PR #423.
+Prepare i apply istniejącej próby `33052febe7e54031a42865a76c067a68` przeszły:
+`state=succeeded`, `lease_retired=true`, `services_mutated=false`.
+Wniosek `313409b78445f313b3fbc248a56534b0f2b7bb9504ed4e663320855ddf378590`
+przypiął 21 dokumentów CAS oraz dwa niezależne dowody źródeł (root i scripts).
+Oddzielny odczyt po apply potwierdził identyczne receipt/current/verified/terminal,
+zachowane archiwa unknown receipt i oryginalnego Compose oraz derived Compose
+`e870d4a948f0f9c347ce01054ad175057da04b8a9f26b8c5eba10fb720ffc526`.
+Terminal ma SHA `e9f99ba46cd8245f0b3dacff033ad006c5f6b32d273a25cc946a3e1eeb6846a4`.
+
+Po zwolnieniu lease backend zachował ten sam container/PID/StartedAt/restart=0,
+API instance `232a9161-f138-4dbe-b95c-f5deff875ef8` i cztery pary PID/start_ticks.
+API pozostało idle bez sesji/runu. Backend i frontend były healthy,
+`GET /workspace` ponownie dał 200. Żadnego Compute ani restartu backendu
+nie powtórzono. [Indeks dowodów](2026-11-13-frontend-recovery-completion.json)
+przechowuje role commitów i granice kwalifikacji.
+
+Pierwszy rzeczywisty managed browser CLI `fdm-cell-study` odmówił przed
+`control.operation`, uruchomieniem browser helpera i wysłaniem poleceń:
+`Retained frontend role/control subpath mount differs`. Validator QA nadal
+oczekiwał wyłącznie legacy `private/frontend`, a poprawnie przypięty frontend
+używa `private/frontend/generations/33052...`. To luka narzędzia odbiorowego,
+nie awaria zdrowych usług. Naprawa QA ma przenieść tę samą receipt/Compose
+związaną generację przez walidację usługi, readonly mount browsera i
+reconciliation; stare receipt bez generacji zachowują legacy kontrakt.
+Pełny CI dla 6e8779c57 to workflow `43365406857` (w toku podczas tego zapisu).
+Odbiór UI/Cell i S46 nie są zaliczone na podstawie samego HTTP lub recovery.
+
+
+### Rzeczywisty target integracji
+
+Ponowny odczyt `branches/master` i lokalnej gałęzi master wskazał
+`caf0029de19c7d1c4e33e9973fcdbf2877418d47` (PR #428). Pole `base.sha`
+PR #423 nadal pokazywało `da795b55...`. Poprzednie porównanie z tym starym SHA
+potwierdzało jedynie jego bycie przodkiem HEAD; nie wykluczało rzeczywistych
+konfliktów z aktualnym masterem. Read-only `git merge-tree` przeciw caf0029de
+wykazał cztery hunki konfliktowe w dwóch plikach recovery:
+`docker_volume_container_recovery.py` i `docker_volume_dev.py`.
+Integracja pozostaje konieczna. Preview nie zmieniło checkoutu ani usług.
+
+
+### QA: przypięta generacja i recovered current
+
+Narzędzie browser QA uwzględnia teraz dokładną generację uwierzytelnioną przez
+DEV receipt i jego Compose. ID/subpath przechodzą do readonly mountu helpera,
+wejść próby, prestart i reconciliation. Niepełne piny, inny subpath, obca
+przestrzeń nazw lub dryf development attempt/config są odrzucane. Legacy bez
+generacji zachowuje `private/frontend`.
+
+Review wykrył dodatkową regresję: surowy failed-confirmed current może mieć
+`config_sha256=None`, podczas gdy admission prawidłowo korzysta z efektywnego,
+uwierzytelnionego recovered runtime. Reconciliation używa teraz istniejącego
+walidatora recovery przed porównaniem pinów; brak kontekstu source/identity
+odmawia, a dryf efektywnego config lub generation nadal blokuje domknięcie.
+Pełna izolowana suite `test_docker_dev_browser_qa.py`: 77 PASS; AST i diff-check
+PASS. To testy metadanych i mocków; rzeczywisty browser cykl pozostaje otwarty.
