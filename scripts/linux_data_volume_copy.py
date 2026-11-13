@@ -282,6 +282,7 @@ def copy_verified(request_path, request_sha256):
         qualification.require(fresh == context, 'Copy context changed before its lock')
         target = context['target']; archive_root = target/'migration'/request['volume_id']
         for path in (op/'linux-copy-started.json',op/'linux-copy-result.json',op/'linux-copy-failed.json',
+                     op/'source-manifest-export.json',
                      target/'payload',target/'migration'):
             qualification.require(not os.path.lexists(path), 'Copy target already exists; reconcile, never replay')
         started = append_started(context['journal'], 'copy-verified', request_sha256)
@@ -296,6 +297,11 @@ def copy_verified(request_path, request_sha256):
                                          archive_root/'originals.pax', target/'payload')
             _source_roots(context['linux']);_mounted_root(context['linux'],context['provision'])
             manifest_sha = _document(archive_root,'source-manifest.json',copied['source_manifest'])
+            # Keep the PAX and native admission archive behind root-only
+            # directories. The unprivileged host parent authenticates this
+            # byte-identical metadata export against the same receipt digest.
+            export_sha = _document(op,'source-manifest-export.json',copied['source_manifest'])
+            qualification.require(export_sha == manifest_sha, 'Source manifest export differs from its private original')
             result = {'schema':'fullmag.data-volume-linux-copy-result.v1','state':'copied-and-verified-not-switched',
                 'volume_id':request['volume_id'],'token':request['token'],'request_sha256':request_sha256,
                 'filesystem_uuid':context['linux']['filesystem_uuid'],'data_sha256':copied['data_sha256'],

@@ -65,6 +65,7 @@ class AdmissionJobScenario:
         }
         manifest_path = Path(self.case.copy_result["manifest_path"])
         self.case.copy_result["manifest_sha256"] = self.case.put(manifest_path, self.case.manifest)
+        self.case.put(self.case.op / "source-manifest-export.json", self.case.manifest)
         self.case.copy_result["data_sha256"] = self.case.manifest["data_sha256"]
         self._refresh_lineage()
         self.request = self.case.request
@@ -615,6 +616,25 @@ class AdmissionTerminalContracts(unittest.TestCase):
         self.assertEqual(set(old_files), set(job.native_host.READMISSION_FILES))
         archive = Path(result["preparation"]["archive"]["path"])
         self.assertNotIn(archive, fixture.read_paths)
+        self.assertNotIn(Path(fixture.case.copy_result['manifest_path']),fixture.read_paths)
+        self.assertIn(fixture.case.op/'source-manifest-export.json',fixture.read_paths)
+
+    def test_host_manifest_reader_uses_export_and_rejects_missing_or_changed_bytes(self):
+        from scripts import docker_data_volume_admission_job as job
+        fixture=AdmissionJobScenario(self)
+        private=Path(fixture.case.copy_result['manifest_path'])
+        del fixture.case.docs[private]
+        with fixture.patches(job):
+            value,entries=job._native_manifest(fixture.terminal_context())
+        self.assertEqual(value['data_sha256'],fixture.case.copy_result['data_sha256'])
+        self.assertNotIn(private,fixture.read_paths)
+        exported=fixture.case.op/'source-manifest-export.json'
+        for replacement in (None,b'changed bytes'):
+            with self.subTest(replacement=replacement):
+                if replacement is None:fixture.case.docs.pop(exported,None)
+                else:fixture.case.docs[exported]=replacement
+                with fixture.patches(job),self.assertRaises(ValueError):
+                    job._native_manifest(fixture.terminal_context())
 
     def test_nonzero_exit_and_late_started_or_wrong_journal_never_validate(self):
         for change in ("nonzero", "started", "late", "wrong-bind", "wrong-plan", "missing-result"):

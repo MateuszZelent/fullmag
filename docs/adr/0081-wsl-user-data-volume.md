@@ -522,6 +522,13 @@ Przed rootowym cutover operator przygotowuje własny chroniony katalog
 niezapisywalnego katalogu dla późniejszej rejestracji. Istniejący obcy właściciel
 oznacza odmowę; ta ścieżka nie zmienia uprawnień ani właścicieli.
 
+Techniczne katalogi `migration/<volume_id>` oraz archiwum admission pozostają
+prywatne dla root. Kończący kopiowanie helper zapisuje dodatkowo identyczny
+bajtowo `source-manifest-export.json` w katalogu operacji. Odczytowa kontrola
+hostowa admission sprawdza ten stały plik względem tego samego SHA manifestu,
+digestu danych i oryginalnych rootów. Czytelnicy root nadal używają prywatnego
+manifestu. Eksport metadanych nie zmienia uprawnień katalogów, PAX ani danych.
+
 To opis implementacji źródłowej. Nie dowodzi rzeczywistego przełączenia grupy,
 nowego Zarr ani zwolnienia starych bloków WSL. Usunięcie oryginałów pozostaje
 osobnym etapem wymagającym aktualnej kwalifikacji referencji i archiwum.

@@ -299,6 +299,9 @@ class CopyArchiveLifecycleTests(unittest.TestCase):
         self.assertEqual((self.source/'state/owner').read_bytes(),b'original owner')
         self.assertEqual((self.target/'payload/state/owner').read_bytes(),b'original owner')
         self.assertEqual(digest(Path(result['manifest_path']).read_bytes()),result['manifest_sha256'])
+        export=self.op/'source-manifest-export.json'
+        self.assertEqual(export.read_bytes(),Path(result['manifest_path']).read_bytes())
+        self.assertEqual(digest(export.read_bytes()),result['manifest_sha256'])
         self.assertEqual(digest(Path(result['archive_path']).read_bytes()),result['archive_sha256'])
         journal=json.loads((self.op/'journal.json').read_text())
         self.assertEqual(journal['events'][-1]['state'],'succeeded')
@@ -345,6 +348,14 @@ class CopyArchiveLifecycleTests(unittest.TestCase):
         with self.patches(),mock.patch.object(stage,'archive_and_extract') as archive,self.assertRaisesRegex(ValueError,'never replay'):
             stage.copy_verified(self.op/'linux-copy-request.json','d'*64)
         archive.assert_not_called();self.assertEqual((self.target/'payload/keep').read_bytes(),b'foreign')
+        self.assertEqual(json.loads((self.op/'journal.json').read_text()),self.journal)
+
+    def test_existing_manifest_export_is_never_replaced_by_another_copy(self):
+        export=self.op/'source-manifest-export.json';export.write_bytes(b'prior evidence')
+        with self.patches(),mock.patch.object(stage,'archive_and_extract') as archive,self.assertRaisesRegex(ValueError,'never replay'):
+            stage.copy_verified(self.op/'linux-copy-request.json','d'*64)
+        archive.assert_not_called()
+        self.assertEqual(export.read_bytes(),b'prior evidence')
         self.assertEqual(json.loads((self.op/'journal.json').read_text()),self.journal)
 
 

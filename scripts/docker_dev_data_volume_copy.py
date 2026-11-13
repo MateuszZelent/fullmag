@@ -44,7 +44,7 @@ NEW_ARTIFACTS = ('group-drain-inputs.json','group-drained.json','group-drain-sou
                  'copy-fence-ready.json','linux-copy-request.json','linux-copy-started.json',
                  'linux-copy-result.json','linux-copy-failed.json','linux-copy-client-intent.json',
                  'linux-copy-client-started.json','linux-copy-client.stdout','linux-copy-client.stderr',
-                 'linux-copy-client-observation-error.json')
+                 'linux-copy-client-observation-error.json','source-manifest-export.json')
 
 _CURRENT_COPY_SCOPE=ContextVar('fullmag_current_copied_group',default=None)
 

@@ -297,7 +297,8 @@ def _read_native_file(path, expected_entry=None):
 def _native_manifest(context):
     result = context["copy_result"]
     raw = qualification._read_optional_regular(
-        Path(result["manifest_path"]), "admission source manifest", maximum=bind_stage.MAX_MANIFEST_BYTES
+        context["operation_root"] / "source-manifest-export.json", "admission source manifest",
+        maximum=bind_stage.MAX_MANIFEST_BYTES
     )
     qualification.require(raw is not None and qualification.digest(raw) == result["manifest_sha256"],
                            "Admission source manifest SHA changed")
@@ -462,6 +463,7 @@ def validate_terminal(operation_root, request, request_sha256, exit_code, *, exp
         expected_before["source_data_sha256"] == result["source_data_sha256"],
         "Root admission result differs from the pre-root native snapshot")
     _validate_native_after({
+        "operation_root": operation_root,
         "bind_result": bind_result,
         "copy_result": copy_result,
         "linux": linux,
