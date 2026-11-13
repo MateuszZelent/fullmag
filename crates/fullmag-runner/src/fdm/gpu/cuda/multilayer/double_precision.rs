@@ -5,7 +5,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
     plan: &FdmMultilayerPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
-    mut live: Option<(&[u32; 3], u64, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    mut live: Option<(&[u32; 3], crate::LiveFieldCadence, Option<&serde_json::Value>, &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
     pure_damping_relax: bool,
     contexts: Vec<LayerContext>,
@@ -115,12 +115,10 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             &mut artifacts,
         )?;
 
-        if let Some((grid, field_every_n, layout, on_step)) = live.as_mut() {
-            let magnetization = crate::types::fdm_multilayer_live_field_due(
-                latest_stats.step,
-                *field_every_n,
-            )
-            .then(|| crate::preview::flatten_vectors(&observables.magnetization));
+        if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+            let magnetization = field_cadence
+                .multilayer_field_due(latest_stats.step)
+                .then(|| crate::preview::flatten_vectors(&observables.magnetization));
             let magnetization_carrier = magnetization.as_ref().and_then(|_| {
                 crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &latest_stats)
             });
@@ -188,6 +186,19 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
         0,
         &final_observables,
     );
+    // This lane has no terminal live snapshot: republish the final accepted
+    // state when the wall-clock gate skipped its payload, on every outcome.
+    if let Some((grid, field_cadence, layout, on_step)) = live.as_mut() {
+        if field_cadence.take_deferred_step().is_some() {
+            let _ = on_step(crate::live_field_cadence::deferred_magnetization_update(
+                &final_stats,
+                [grid[0], grid[1], grid[2]],
+                None,
+                crate::preview::flatten_vectors(&final_observables.magnetization),
+                crate::types::fdm_multilayer_live_magnetization_carrier(*layout, &final_stats),
+            ));
+        }
+    }
     if !steps
         .iter()
         .any(|step| step.step == final_stats.step && (step.time - final_stats.time).abs() <= 1e-18)
