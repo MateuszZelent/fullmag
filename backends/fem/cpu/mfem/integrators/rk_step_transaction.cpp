@@ -145,6 +145,7 @@ struct PoissonStepStateSnapshot {
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
+    uint32_t linear_iterations_current_step = 0;
     uint32_t setup_count_current_step = 0;
     uint32_t fresh_zero_guess_count_current_step = 0;
     uint32_t event_wait_count_current_step = 0;
@@ -166,6 +167,7 @@ PoissonStepStateSnapshot capture_poisson_step_state(
         source.step_energy_wall_time_ns,
         source.last_solver_setup_reused,
         source.solves_current_step,
+        source.linear_iterations_current_step,
         source.setup_count_current_step,
         source.fresh_zero_guess_count_current_step,
         source.event_wait_count_current_step,
@@ -188,6 +190,7 @@ void restore_poisson_step_state(
     target.step_energy_wall_time_ns = source.step_energy_wall_time_ns;
     target.last_solver_setup_reused = source.last_solver_setup_reused;
     target.solves_current_step = source.solves_current_step;
+    target.linear_iterations_current_step = source.linear_iterations_current_step;
     target.setup_count_current_step = source.setup_count_current_step;
     target.fresh_zero_guess_count_current_step =
         source.fresh_zero_guess_count_current_step;

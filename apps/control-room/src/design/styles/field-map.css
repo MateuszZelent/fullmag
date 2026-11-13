@@ -1,17 +1,20 @@
+/* Layout A/B/C/D (plan 2.1): toolbar, stage with the legend, status bar. */
 .fm-field-map {
   position: relative;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   height: 100%;
   color: var(--fm-text-primary);
   background: var(--fm-bg-canvas);
-  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .fm-field-map--status,
 .fm-field-map--error {
-  place-items: center;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
   padding: var(--fm-space-6);
   color: var(--fm-text-secondary);
 }
@@ -78,36 +81,130 @@
 }
 
 .fm-field-map__toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
+}
+
+/* A: one line of icon groups; never wraps, extra actions sit in the menu. */
+.fm-planar-toolbar {
   display: flex;
+  flex-wrap: nowrap;
+  gap: var(--fm-space-1);
+  align-items: center;
+  height: 34px;
+  min-width: 0;
+  padding: 0 var(--fm-space-2);
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.fm-planar-toolbar__group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  align-items: center;
+}
+
+.fm-planar-toolbar__separator {
+  align-self: stretch;
+  margin: var(--fm-space-2) var(--fm-space-1);
+  background: var(--fm-border-subtle);
+}
+
+.fm-planar-toolbar__spacer {
+  flex: 1 1 auto;
+}
+
+/* Narrow panes keep export in the overflow menu only. */
+@container (max-width: 560px) {
+  .fm-planar-toolbar__export,
+  .fm-planar-toolbar__export-separator {
+    display: none;
+  }
+}
+
+.fm-field-map__subbar {
+  display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: var(--fm-space-3);
   align-items: center;
-  min-height: var(--fm-inspector-nav-icon-size);
-  padding: 0 var(--fm-space-3);
-  border-bottom: 1px solid var(--fm-border-subtle);
-  background: var(--fm-bg-panel);
-  font-variant-numeric: tabular-nums;
-}
-
-.fm-field-map__section {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--fm-space-2) var(--fm-space-3);
-  align-items: center;
   min-width: 0;
-  margin-left: auto;
-  padding: var(--fm-space-1) 0;
+  padding: 0 var(--fm-space-3);
 }
 
-.fm-field-map__section-slider {
-  width: clamp(96px, 16vw, 220px);
-  accent-color: var(--fm-accent);
+.fm-field-map__subbar:empty {
+  display: none;
 }
 
-.fm-field-map__section-caption {
+/* D: plane, position slider, coordinate, cursor, zoom and crop chip. */
+.fm-planar-statusbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: var(--fm-space-3);
+  align-items: center;
+  height: 28px;
+  min-width: 0;
+  padding: 0 var(--fm-space-3);
+  overflow: hidden;
+  border-top: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-panel);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.fm-planar-statusbar__plane {
+  color: var(--fm-text-primary);
+  font-weight: 600;
+}
+
+.fm-planar-statusbar__section {
+  display: inline-flex;
+  flex: 0 1 auto;
+  gap: var(--fm-space-1);
+  align-items: center;
+  min-width: 0;
+}
+
+.fm-planar-statusbar__slider {
+  width: clamp(96px, 16vw, 220px);
+}
+
+.fm-planar-statusbar__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-planar-statusbar__separator {
+  align-self: stretch;
+  margin: var(--fm-space-1) 0;
+  background: var(--fm-border-subtle);
+}
+
+.fm-planar-statusbar__cursor {
+  min-width: 10rem;
+  font-family: var(--fm-font-mono);
+}
+
+.fm-planar-statusbar__zoom {
+  margin-left: auto;
+}
+
+.fm-planar-statusbar__crop {
+  display: inline-flex;
+  gap: var(--fm-space-1);
+  align-items: center;
+  padding: 0 0 0 var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  color: var(--fm-text-primary);
+  background: var(--fm-bg-elevated);
 }
 
 .fm-field-map__diagnostic {
@@ -117,6 +214,7 @@
 
 .fm-field-map__stage {
   position: relative;
+  flex: 1 1 auto;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   row-gap: calc(var(--fm-space-6) + 1.75rem);
@@ -177,8 +275,15 @@
 /* A line profile shares the module height with the map. Neither is squeezed
    below a usable size: in a short pane the module scrolls instead. */
 .fm-field-map--with-profile {
-  grid-template-rows: max-content minmax(320px, 1fr) minmax(220px, 34%);
   overflow-y: auto;
+}
+
+.fm-field-map--with-profile > .fm-field-map__stage {
+  flex: 1 0 320px;
+}
+
+.fm-field-map--with-profile > .fm-field-map__profile {
+  flex: 0 0 max(220px, 34%);
 }
 
 .fm-field-map__profile {
@@ -207,28 +312,193 @@
   min-height: 100px;
 }
 
-.fm-field-map__probe {
+/* Canvas tools (plan §2.3): shapes in a stretched 0..100 SVG, labels,
+   handles and buttons as HTML so they keep their size and shape. */
+.fm-planar-tool-overlay {
   position: absolute;
-  right: var(--fm-space-2);
-  bottom: var(--fm-space-2);
+  inset: 0;
+  pointer-events: none;
+}
+
+.fm-planar-tool-overlay__shapes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.fm-planar-tool-overlay__dim {
+  fill: color-mix(in srgb, var(--fm-bg-canvas) 55%, transparent);
+}
+
+.fm-planar-tool-overlay__crop,
+.fm-planar-tool-overlay__zoom-box {
+  fill: none;
+  stroke: var(--fm-accent);
+  stroke-width: 1.5px;
+  stroke-dasharray: 5 3;
+}
+
+.fm-planar-tool-overlay__zoom-box {
+  fill: color-mix(in srgb, var(--fm-accent) 12%, transparent);
+}
+
+.fm-planar-tool-overlay__ruler {
+  stroke: var(--fm-text-primary);
+  stroke-width: 2px;
+  stroke-linecap: round;
+}
+
+.fm-planar-tool-overlay__handle,
+.fm-planar-tool-overlay__ruler-end {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  translate: -50% -50%;
+  border: 1px solid var(--fm-bg-canvas);
+  background: var(--fm-accent);
+}
+
+.fm-planar-tool-overlay__handle {
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.fm-planar-tool-overlay__handle--n,
+.fm-planar-tool-overlay__handle--s {
+  cursor: ns-resize;
+}
+
+.fm-planar-tool-overlay__handle--e,
+.fm-planar-tool-overlay__handle--w {
+  cursor: ew-resize;
+}
+
+.fm-planar-tool-overlay__handle--ne,
+.fm-planar-tool-overlay__handle--sw {
+  cursor: nesw-resize;
+}
+
+.fm-planar-tool-overlay__handle--nw,
+.fm-planar-tool-overlay__handle--se {
+  cursor: nwse-resize;
+}
+
+.fm-planar-tool-overlay__ruler-end {
+  border-radius: 50%;
+  background: var(--fm-text-primary);
+}
+
+.fm-planar-tool-overlay__crop-panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  align-items: center;
+  translate: -50% -50%;
+}
+
+.fm-planar-tool-overlay__actions {
+  display: flex;
+  gap: var(--fm-space-1);
+  pointer-events: auto;
+}
+
+.fm-planar-tool-overlay__label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: var(--fm-space-1) var(--fm-space-2);
   color: var(--fm-text-primary);
   background: var(--fm-bg-overlay);
+  box-shadow: var(--fm-shadow-sm);
   font-family: var(--fm-font-mono);
-  font-size: var(--fm-font-size-xs);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.fm-field-map__pinned-probe {
+.fm-planar-tool-overlay__ruler-label {
   position: absolute;
-  top: var(--fm-space-3);
-  right: var(--fm-space-3);
+  translate: -50% calc(-100% - var(--fm-space-2));
+}
+
+.fm-planar-node-ring {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  translate: -50% -50%;
+  border: 2px solid var(--fm-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--fm-bg-canvas);
+  pointer-events: none;
+}
+
+.fm-planar-node-ring--off-plane {
+  border-style: dashed;
+}
+
+/* Node readout: opens towards the larger free side of the canvas. */
+.fm-planar-node-readout {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  gap: var(--fm-space-1);
+  align-items: flex-start;
   width: max-content;
-  max-width: min(22rem, calc(100% - 2 * var(--fm-space-3)));
+  max-width: min(22rem, 90%);
   padding: var(--fm-space-2);
+  translate: var(--fm-space-3) var(--fm-space-3);
   color: var(--fm-text-primary);
   background: var(--fm-bg-overlay);
+  box-shadow: var(--fm-shadow-panel);
   font-size: var(--fm-font-size-xs);
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.fm-planar-node-readout--pinned {
+  pointer-events: auto;
+}
+
+.fm-planar-node-readout--flip-x {
+  translate: calc(-100% - var(--fm-space-3)) var(--fm-space-3);
+}
+
+.fm-planar-node-readout--flip-y {
+  translate: var(--fm-space-3) calc(-100% - var(--fm-space-3));
+}
+
+.fm-planar-node-readout--flip-x.fm-planar-node-readout--flip-y {
+  translate: calc(-100% - var(--fm-space-3)) calc(-100% - var(--fm-space-3));
+}
+
+.fm-planar-node-readout__table caption {
+  padding-bottom: var(--fm-space-1);
+  color: var(--fm-text-secondary);
+  text-align: left;
+}
+
+.fm-planar-node-readout__table th,
+.fm-planar-node-readout__table td {
+  padding: 0 var(--fm-space-2) 0 0;
+  text-align: left;
+  font-weight: normal;
+}
+
+.fm-planar-node-readout__table th[scope="row"] {
+  color: var(--fm-text-secondary);
+}
+
+.fm-planar-node-readout__heading {
+  padding-top: var(--fm-space-1);
+  font-weight: 600;
+}
+
+.fm-planar-node-readout__actions {
+  display: flex;
+  flex-direction: column;
 }
 
 .fm-field-map__axes {
@@ -489,47 +759,10 @@
   }
 }
 
-/* 2D toolbar: one row of mumax3-style display decisions above the map. */
-.fm-field-map__controls {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: var(--fm-space-2) var(--fm-space-3);
-  align-items: center;
-  min-width: 0;
-  padding: var(--fm-space-1) 0;
-}
-
-.fm-field-map__control {
-  display: inline-flex;
-  gap: var(--fm-space-2);
-  align-items: center;
-  min-width: 0;
-}
-
 .fm-field-map__control-label {
   color: var(--fm-text-tertiary);
   font-size: var(--fm-font-size-xs);
   white-space: nowrap;
-}
-
-.fm-field-map__quantity-trigger {
-  min-width: 9rem;
-  max-width: 16rem;
-}
-
-.fm-field-map__component {
-  min-width: 15rem;
-}
-
-.fm-field-map__toggles {
-  display: inline-flex;
-  gap: var(--fm-space-1);
-  align-items: center;
-}
-
-.fm-field-map__controls .fm-field-map__section {
-  margin-left: 0;
 }
 
 .fm-field-map__direction-legend {
@@ -633,15 +866,64 @@
   color: var(--fm-text-secondary);
 }
 
-/* Independent quantities retain distinct legends and SI units in one row. */
+/* Layer legends overlay the bottom-left of the plot (plan §2.1 C) instead of
+   taking a grid row from it; independent quantities keep distinct SI units. */
 .fm-field-map__composition-legends {
+  position: absolute;
+  left: calc(var(--fm-space-6) + 4.5rem + var(--fm-space-2));
+  bottom: calc(var(--fm-space-4) + var(--fm-space-6) + 1.75rem + var(--fm-space-2));
+  /* Bounded by the stage on both edges so a short stage scrolls the stack
+     instead of letting it rise over the toolbar. */
+  top: var(--fm-space-6);
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  align-items: start;
-  justify-content: center;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  gap: var(--fm-space-2);
+  max-width: min(18rem, 45%);
+  overflow-y: auto;
+}
+
+/* Field-layer legend stack: one compact card per drawn layer, top layer first. */
+.fm-field-map__layer-legends {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--fm-space-2);
   min-width: 0;
 }
+
+/* In the column stack a flex-basis would become the card height. */
+.fm-field-map__layer-legends > .fm-field-map__colorbar,
 .fm-field-map__composition-legends > .fm-field-map__colorbar {
-  flex: 1 1 20rem;
+  flex: 0 0 auto;
+}
+
+.fm-field-map__colorbar--compact .fm-field-map__direction-swatch {
+  width: 28px;
+  height: 28px;
+}
+
+.fm-field-map__colorbar--compact {
+  flex: 0 1 17rem;
+  width: auto;
+  min-width: 12rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-1) var(--fm-space-2);
+}
+
+.fm-field-map__colorbar--compact .fm-field-map__colorbar-row {
+  grid-template-columns: minmax(3.5rem, auto) minmax(3rem, 1fr) minmax(3.5rem, auto);
+  gap: var(--fm-space-1);
+  font-size: var(--fm-font-size-2xs);
+}
+
+.fm-field-map__colorbar--compact .fm-field-map__colorbar-ramp {
+  height: 0.5rem;
+}
+
+.fm-field-map__colorbar--compact .fm-field-map__colorbar-range-label {
+  display: none;
 }

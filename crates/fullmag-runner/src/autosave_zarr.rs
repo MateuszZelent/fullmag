@@ -239,6 +239,11 @@ fn initialize_array(path: &Path, sample_count: usize, width: usize) -> Result<()
 
 pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    write_bytes_atomic(path, &bytes)
+}
+
+/// Atomically replace metadata while preserving exact bytes for rollback.
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     // Each concurrent publication must own its temporary file.
     let temporary = path.with_extension(format!(
         "tmp.{}.{}",
@@ -247,9 +252,7 @@ pub(crate) fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> R
     ));
     let file = fs::File::create(&temporary).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
-    writer
-        .write_all(&bytes)
-        .map_err(|error| error.to_string())?;
+    writer.write_all(bytes).map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
     writer
         .get_ref()
@@ -357,6 +360,20 @@ mod tests {
 
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!("fullmag-autosave-zarr-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn metadata_atomic_replace_preserves_exact_bytes() {
+        let root = temp_root();
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(".zattrs");
+        let original = b"{ \"retained\": true }\n";
+        // Exercise replacing an existing destination, including Windows' adapter.
+        write_bytes_atomic(&path, original).unwrap();
+        write_json_atomic(&path, &json!({"completion": null})).unwrap();
+        write_bytes_atomic(&path, original).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

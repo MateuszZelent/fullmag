@@ -136,6 +136,23 @@ def fake_run_environment(control, observed, events, docker_capture=None):
 
 
 class BootstrapFrontendStopTests(unittest.TestCase):
+    def test_historical_reference_requires_both_canonical_path_and_digest_before_context(self):
+        for path, digest in [
+            (None, "a" * 64), ("proof.json", None),
+            ("../proof.json", "a" * 64), ("/proof.json", "a" * 64),
+            ("a//proof.json", "a" * 64), ("a/./proof.json", "a" * 64),
+            ("a\\proof.json", "a" * 64), ("a\nproof.json", "a" * 64),
+            ("proof.json", "A" * 64), ("proof.json", "short"),
+        ]:
+            with self.subTest(path=path, digest=digest):
+                supplied = args(apply=False)
+                supplied.historical_namespace_proof = path
+                supplied.historical_namespace_proof_sha256 = digest
+                with patch.object(frontend_stop, "_build_context") as context:
+                    with self.assertRaises(BuildControlError):
+                        frontend_stop.run(supplied)
+                    context.assert_not_called()
+
     def test_preview_returns_stable_plan_without_operation_write_or_signal(self):
         control, events = FakeControl(), []
         observed = snapshot(frontend_running=True)
@@ -287,8 +304,11 @@ class BootstrapFrontendStopTests(unittest.TestCase):
 
 class BootstrapFrontendObservationTests(unittest.TestCase):
     def _observe(self, *, backend_running=False, frontend_started_at="frontend-start",
-                 frontend_running=True, validation_error=None):
+                 frontend_running=True, validation_error=None, historical_reference=None):
         args_value = args(apply=False)
+        if historical_reference is not None:
+            args_value.historical_namespace_proof = historical_reference["path"]
+            args_value.historical_namespace_proof_sha256 = historical_reference["sha256"]
         selected = "/selected"
         identity = {"project_name": "fullmag-worktree-sp4", "worktree_id": "sp4", "project_id": "fullmag"}
         control = SimpleNamespace(project="fullmag-worktree-sp4", volume="fullmag-control-sp4",
@@ -387,8 +407,9 @@ class BootstrapFrontendObservationTests(unittest.TestCase):
         service_validator_patch = patch("docker_volume_dev._validate_retained_service", side_effect=validate_retained)
         network_validator_patch = patch("docker_volume_stop_unadmitted._validate_network")
         network_capture_patch = patch("docker_volume_container_recovery.docker_capture", side_effect=docker)
+        collect_patch = patch.object(frontend_stop.recovery, "collect", return_value=evidence)
         contexts = [
-            patch.object(frontend_stop.recovery, "collect", return_value=evidence),
+            collect_patch,
             patch.object(frontend_stop.recovery, "validate",
                          side_effect=validation_error or (lambda *_a, **_k: {"frontend_started_at": "frontend-start"})),
             patch.object(frontend_stop, "compose_capture", side_effect=compose_capture),
@@ -404,7 +425,9 @@ class BootstrapFrontendObservationTests(unittest.TestCase):
         for context in contexts:
             started.append(context)
             mock = context.start()
-            if context is service_validator_patch:
+            if context is collect_patch:
+                self.collect_mock = mock
+            elif context is service_validator_patch:
                 service_validator = mock
             elif context is network_validator_patch:
                 network_validator = mock
@@ -416,6 +439,19 @@ class BootstrapFrontendObservationTests(unittest.TestCase):
         except BaseException:
             raise
         return observation, service_validator, network_validator, network_capture
+
+    def test_historical_reference_is_collected_and_bound_in_preview_plan(self):
+        reference = {"path": "recovery/attempts/" + "e" * 32 + "/namespace.json",
+                     "sha256": "a" * 64}
+        observation, *_ = self._observe(historical_reference=reference)
+        self.assertEqual(observation["plan"]["historical_namespace_proof"], reference)
+        self.assertEqual(self.collect_mock.call_args.kwargs,
+                         {"historical_namespace_reference": reference})
+
+    def test_ordinary_host_path_does_not_supply_historical_reference(self):
+        observation, *_ = self._observe()
+        self.assertNotIn("historical_namespace_proof", observation["plan"])
+        self.assertEqual(self.collect_mock.call_args.kwargs, {})
 
     def test_observation_validates_both_service_configs_and_native_proof(self):
         observation, service_validator, network_validator, _network_capture = self._observe()

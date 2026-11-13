@@ -3,231 +3,124 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import {
+  findElements,
   installSimulationPreparationTestDom,
   TestElement,
   TestEvent,
-  TestNode,
+  type TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { PlanarTargetFieldSection } from "./PlanarTargetFieldSection";
-import {
-  createPlanarTargetFieldProfile,
-  planarAirboxEnablePatch,
-  type PlanarTargetFieldProfile,
-  type PlanarTargetFieldQuantityOption,
-} from "./planarTargetFieldProfile";
+import { createFieldLayer, type PlanarFieldLayer, type PlanarFieldQuantityOption, type PlanarLayerState } from "./planarFieldLayers";
 
-type Planar = NonNullable<VisualizationStateResource["planar"]>;
-type PlanarWithOverlays = Planar & { field_overlays?: PlanarTargetFieldProfile[] };
-
-const vectorStyle: Planar["vector_style"] = {
-  color_mode: "orientation",
-  length_mode: "uniform",
-  monochrome_color: "#cdd6f4",
-  opacity: 1,
-  scale: 1,
-  thickness: 1,
+const masks: PlanarLayerState = {
+  boundaries: false, bounds: false, contours: false, mesh: true, points: false,
+  probes: true, raster: true, streamlines: false, vectors: false,
 };
-
-const quantities: PlanarTargetFieldQuantityOption[] = [
-  {
-    id: "m",
-    label: "Magnetization",
-    unit: "1",
-    vector: true,
-    components: [
-      { value: "magnitude", label: "magnitude" },
-      { value: "x", label: "x" },
-      { value: "y", label: "y" },
-      { value: "z", label: "z" },
-    ],
-  },
-  {
-    id: "H_demag",
-    label: "Demagnetizing field",
-    unit: "A/m",
-    vector: true,
-    components: [{ value: "magnitude", label: "magnitude" }],
-  },
+const quantities: PlanarFieldQuantityOption[] = [
+  { id: "m", label: "Magnetization", unit: "1", vector: true, components: [
+    { value: "magnitude", label: "magnitude" }, { value: "x", label: "x" },
+  ] },
+  { id: "E_density", label: "Energy density", unit: "J/m3", vector: false, components: [
+    { value: "magnitude", label: "magnitude", outputKind: "scalar" },
+  ] },
+  { id: "H_demag", label: "Demagnetizing field", unit: "A/m", vector: true, components: [
+    { value: "magnitude", label: "magnitude" },
+  ] },
 ];
+const film = createFieldLayer({ id: "object:film", kind: "object" });
 
-function basePlanar(overrides: Partial<Planar> = {}): PlanarWithOverlays {
-  return {
-    visible: true,
-    colormap: "viridis",
-    component: "magnitude",
-    display_unit: "A/m",
-    layers: {
-      boundaries: true,
-      bounds: false,
-      contours: false,
-      mesh: true,
-      points: false,
-      probes: true,
-      raster: true,
-      vectors: false,
-    },
-    quantity_id: "m",
-    source: { kind: "monitor", monitor_id: "plane-1" },
-    default_slice: {
-      operator: { kind: "plane_sample" },
-      plane: "xy",
-      position_fraction: 0.5,
-    },
-    range: { mode: "auto", min: null, max: null },
-    raster_opacity: 1,
-    viewport_colorbar_visible: true,
-    wireframe_style: { color: "#94a3b8", opacity: 1 },
-    target_overrides: [],
-    point_style: { color: "#89b4fa", opacity: 1, size: 3 },
-    interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
-    quality: "interactive",
-    resolution: { height: 256, vector_budget: 512, width: 512 },
-    vector_style: { ...vectorStyle },
-    view_scope: { kind: "monitor_target" },
-    multislice: { enabled: true, position_fractions: [0.25, 0.5, 0.75] },
-    ...overrides,
-  } as PlanarWithOverlays;
+function render(layer: PlanarFieldLayer | null, onWrite = vi.fn(), extra: Partial<Parameters<typeof PlanarTargetFieldSection>[0]> = {}) {
+  return (
+    <PlanarTargetFieldSection
+      layer={layer}
+      layers={layer ? [layer] : []}
+      quantities={quantities}
+      targetLabel="film"
+      viewMasks={masks}
+      onAdd={vi.fn()}
+      onWrite={onWrite}
+      {...extra}
+    />
+  );
 }
 
-function findControl(root: TestNode, label: string): TestElement {
-  const control = findElements(root, (element) => element.getAttribute("aria-label") === label)[0];
-  if (!control) throw new Error(`Missing control ${label}`);
-  return control;
+async function mount(node: ReturnType<typeof render>) {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  const root = createRoot(container as unknown as Element);
+  await act(async () => root.render(node));
+  return { container, unmount: async () => { await act(async () => root.unmount()); dom.restore(); } };
+}
+
+function control(root: TestNode, label: string): TestElement {
+  const element = findElements(root, (candidate) => candidate.getAttribute("aria-label") === label)[0];
+  if (!element) throw new Error(`Missing ${label}`);
+  return element;
 }
 
 function change(element: TestElement, value: string): void {
-  const tracker = (element as TestElement & {
-    _valueTracker?: { setValue: (next: string) => void };
-  })._valueTracker;
+  const tracker = (element as TestElement & { _valueTracker?: { setValue: (next: string) => void } })._valueTracker;
   const previous = element.value;
   element.value = value;
   tracker?.setValue(previous);
-  element.dispatchEvent(new TestEvent(
-    element.tagName === "INPUT" ? "input" : "change",
-    { bubbles: true },
-  ));
-}
-
-function clickControl(root: TestNode, label: string): void {
-  const button = findElements(
-    root,
-    (element) => element.tagName === "BUTTON" && element.getAttribute("aria-label") === label,
-  )[0];
-  if (!button) throw new Error(`Missing button ${label}`);
-  button.click();
-}
-
-function clickButton(root: TestNode, label: string): void {
-  const button = findElements(
-    root,
-    (element) => element.tagName === "BUTTON" && element.textContent === label,
-  )[0];
-  if (!button) throw new Error(`Missing button ${label}`);
-  button.click();
-}
-
-function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
-  const found: TestElement[] = [];
-  const visit = (node: TestNode) => {
-    if (node instanceof TestElement && predicate(node)) found.push(node);
-    node.childNodes.forEach(visit);
-  };
-  visit(root);
-  return found;
+  element.dispatchEvent(new TestEvent("change", { bubbles: true }));
 }
 
 describe("PlanarTargetFieldSection", () => {
-  it("patches only the selected object profile for palette and vector changes", async () => {
-    const objectA = createPlanarTargetFieldProfile("body-a", vectorStyle);
-    const objectB = createPlanarTargetFieldProfile("body-b", { ...vectorStyle, scale: 2 });
-    const onPatch = vi.fn();
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
+  it("renders the six passes, with a masked pass on and noted", () => {
+    const html = renderToStaticMarkup(render({ ...film, vectors_visible: true, mesh_visible: true }));
+    for (const pass of ["Raster", "Vectors", "Points", "Mesh", "Contours", "Streamlines"]) {
+      expect(html).toContain(`aria-label="Toggle ${pass}"`);
+    }
+    expect(html).toMatch(/aria-label="Toggle Vectors" aria-pressed="true"[^>]*>.*?hidden in toolbar/);
+    expect(html).toMatch(/aria-label="Toggle Mesh" aria-pressed="true"/);
+    expect(html).not.toMatch(/aria-label="Toggle Mesh"[^>]*>.*?hidden in toolbar<\/span><\/button><button aria-label="Toggle Contours"/);
+  });
+
+  it("disables every pass of a hidden layer and keeps its configured flags", () => {
+    const html = renderToStaticMarkup(render({ ...film, visible: false }));
+    expect(html).toContain("Hidden. Show the layer to change what it draws.");
+    expect(html).toMatch(/aria-label="Toggle Raster" aria-pressed="false"[^>]*disabled/);
+  });
+
+  it("flushes a quantity change and drops vector passes of a scalar quantity", async () => {
+    const onWrite = vi.fn();
+    const layer = { ...film, vectors_visible: true };
+    const view = await mount(render(layer, onWrite));
     try {
-      await act(async () => root.render(
-        <PlanarTargetFieldSection
-          target={{ id: "object:body-a", kind: "object", label: "Body A" }}
-          planar={basePlanar({ field_overlays: [objectA, objectB] })}
-          quantities={quantities}
-          onPatch={onPatch}
-        />,
-      ));
-      expect(container.textContent).toContain("Body A");
-      await act(async () => change(findControl(container, "Color map"), "inferno"));
-      expect(onPatch).toHaveBeenLastCalledWith({
-        field_overlays: [
-          { ...objectA, colormap: "inferno" },
-          objectB,
-        ],
-      }, objectA.id);
-      await act(async () => clickControl(container, "Toggle Vectors"));
-      expect(onPatch).toHaveBeenLastCalledWith({
-        field_overlays: [
-          { ...objectA, vectors_visible: true },
-          objectB,
-        ],
-      }, objectA.id);
-      await act(async () => change(findControl(container, "Vector scale"), "1.5"));
-      expect(onPatch).toHaveBeenLastCalledWith({
-        field_overlays: [
-          { ...objectA, vector_style: { ...objectA.vector_style, scale: 1.5 } },
-          objectB,
-        ],
-      }, objectA.id);
-      await act(async () => clickButton(container, "Hide field on target"));
-      expect(onPatch).toHaveBeenLastCalledWith({
-        field_overlays: [objectB],
-      }, objectA.id);
+      await act(async () => change(control(view.container, "Quantity"), "E_density"));
+      expect(onWrite).toHaveBeenCalledWith([{
+        ...layer,
+        quantity_id: "E_density",
+        component: "magnitude",
+        colormap: "viridis",
+        vectors_visible: false,
+        streamlines_visible: false,
+      }], "object:film", { flush: true });
     } finally {
-      await act(async () => root.unmount());
-      dom.restore();
+      await view.unmount();
     }
   });
 
-  it("creates an Airbox base patch and keeps its source and quantity rules", async () => {
-    const planar = basePlanar();
-    const expected = planarAirboxEnablePatch(planar, quantities);
-    const onPatch = vi.fn();
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    try {
-      await act(async () => root.render(
-        <PlanarTargetFieldSection
-          target={{ id: "airbox", kind: "airbox", label: "Airbox" }}
-          planar={planar}
-          quantities={quantities}
-          onPatch={onPatch}
-        />,
-      ));
-      await act(async () => clickButton(container, "Show Airbox field"));
-      expect(onPatch).toHaveBeenLastCalledWith(expected);
-      expect(onPatch.mock.lastCall?.[0]).not.toHaveProperty("field_overlays");
-      expect(expected).toMatchObject({
-        source: { kind: "default" },
-        view_scope: { kind: "airbox" },
-      });
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
+  it("does not offer magnetization on an Airbox layer", () => {
+    const html = renderToStaticMarkup(render(createFieldLayer({ id: "airbox", kind: "airbox" })));
+    expect(html).not.toContain("Magnetization (1)");
+    expect(html).toContain("Demagnetizing field (A/m)");
   });
 
-  it("keeps a dormant target disabled with its reason visible", () => {
-    const html = renderToStaticMarkup(
-      <PlanarTargetFieldSection
-        target={{ id: "object:missing", kind: "object", label: "Missing body" }}
-        targetReason="The selected target is absent from the current visualization registry."
-        planar={basePlanar()}
-        quantities={quantities}
-        onPatch={vi.fn()}
-      />,
-    );
-    expect(html).toContain("The selected target is absent from the current visualization registry.");
-    expect(html).toMatch(/<button(?=[^>]*disabled)[^>]*>Show field on target<\/button>/);
+  it("shows the empty state with one Add field action for a target without a layer", async () => {
+    const onAdd = vi.fn();
+    const candidate = { id: "object:film", label: "film", target: { id: "object:film", kind: "object" as const } };
+    const view = await mount(render(null, vi.fn(), { emptyTarget: candidate, onAdd }));
+    try {
+      expect(view.container.textContent).toContain("film has no 2D field layer.");
+      const add = findElements(view.container, (element) => element.tagName === "BUTTON" && element.textContent === "Add field for film")[0]!;
+      await act(async () => add.click());
+      expect(onAdd).toHaveBeenCalledWith(candidate);
+    } finally {
+      await view.unmount();
+    }
   });
 });

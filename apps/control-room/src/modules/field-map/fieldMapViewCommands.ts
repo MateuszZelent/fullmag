@@ -7,6 +7,7 @@ import type {
   PlanarFieldSource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { planarWindowParams } from "@/kernel/resources/planarFieldResources";
 import { stepSectionFraction } from "@/kernel/visualization/planarSectionModel";
 
 import { downloadPlanarBlob, planarDataCsv, planarExportFilename } from "./fieldMapExport";
@@ -17,7 +18,8 @@ type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarLayerKey = "contours" | "mesh" | "vectors";
 
 /**
- * mumax3-style keyboard and toolbar commands of the mounted 2D surface. They
+ * mumax3-style keyboard commands of the mounted 2D surface (toolbar tools,
+ * navigation and view masks live in `fieldMapToolCommands`). They
  * patch the same server-owned `visualization/state.planar` as the Inspector
  * and are enabled only while the 2D surface is the active center module, so
  * single-key shortcuts never fire over the 3D viewport.
@@ -35,7 +37,6 @@ const viewCommands = {
   "field-map.toggle-vectors": { title: "Toggle 2D Vectors", shortcut: "A" },
   "field-map.toggle-mesh": { title: "Toggle 2D Mesh", shortcut: "G" },
   "field-map.toggle-contours": { title: "Toggle 2D Contours", shortcut: undefined },
-  "field-map.fit": { title: "Fit 2D View", shortcut: undefined },
   "field-map.reset-view": { title: "Reset 2D View", shortcut: undefined },
   "field-map.export-data": { title: "Export 2D Data", shortcut: undefined },
 } as const;
@@ -63,7 +64,7 @@ const LAYER_TOGGLES: Partial<Record<ViewCommandId, PlanarLayerKey>> = {
   "field-map.toggle-vectors": "vectors",
 };
 
-function planarFromContext(context: CommandContext): PlanarState | null {
+export function planarFromContext(context: CommandContext): PlanarState | null {
   // The mounted surface publishes its presented profile (including queued
   // patches); shortcut contexts do not carry the visualization resource.
   const presented = fieldMapStore.get().planar;
@@ -74,7 +75,7 @@ function planarFromContext(context: CommandContext): PlanarState | null {
     : null;
 }
 
-function fieldMapActive(context: CommandContext): boolean {
+export function fieldMapActive(context: CommandContext): boolean {
   return context.layout?.get().activeViewportMainModuleId === "field-map";
 }
 
@@ -108,6 +109,8 @@ async function exportPlanarData(context: CommandContext): Promise<CommandResult>
         ? planar.view_scope.scope_id
         : undefined,
     scope_kind: planar.view_scope.kind,
+    // The crop belongs to the current source's plane; another monitor exports in full.
+    ...(typeof input?.monitorId === "string" ? {} : planarWindowParams(planar.crop)),
   };
   const [meta, scalar, mask] = await Promise.all([
     context.api.data.fields.planar.meta(planar.quantity_id, source, query, options),
@@ -191,7 +194,7 @@ function runViewCommand(id: ViewCommandId, context: CommandContext): Promise<Com
     });
     return { status: "completed" };
   }
-  // fit and reset-view both return the camera to the full sample extent.
+  // reset-view returns the camera to the full sample extent (as `field-map.fit`).
   context.visualizationSync.queuePatch({
     planar: { interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 } },
   });
@@ -206,6 +209,10 @@ export const fieldMapViewCommands: CommandContribution[] = (
   id,
   // Export also serves Explorer monitor rows, so it does not need the mounted surface.
   isEnabled: id === "field-map.export-data" ? undefined : (context) => fieldMapActive(context),
+  // The 2D toolbar renders the layer toggles as pressed buttons.
+  isActive: LAYER_TOGGLES[id]
+    ? (context) => planarFromContext(context)?.layers[LAYER_TOGGLES[id]!] ?? false
+    : undefined,
   disabledReason: id === "field-map.export-data"
     ? undefined
     : (context) => fieldMapActive(context) ? null : "Open the 2D view first.",

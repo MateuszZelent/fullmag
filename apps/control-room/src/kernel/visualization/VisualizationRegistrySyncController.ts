@@ -3,7 +3,7 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "../api/apiTypes";
-import type { ResourceRevision } from "../api/apiTypes";
+import type { PlanarCropState, ResourceRevision } from "../api/apiTypes";
 import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
@@ -656,6 +656,18 @@ export class VisualizationRegistrySyncController {
     );
   }
 
+  /**
+   * Sets or clears the 2D crop window (ADR 0080). A crop changes the sampled
+   * frame, so the view resets to fit it and the patch is sent at once.
+   */
+  queuePlanarCropPatch(crop: PlanarCropState | null): VisualizationPatchReceipt {
+    const receipt = this.queuePatch({
+      planar: { crop, interaction: { zoom: 1, pan_u_m: 0, pan_v_m: 0 } },
+    });
+    void this.flushNow();
+    return receipt;
+  }
+
   queuePlanarFieldOverlayPatch(
     patch: VisualizationStatePatch,
     touchedProfileId: string,
@@ -1078,7 +1090,17 @@ function mergeQueuedPlanarFieldOverlays(
       result.push(profile);
     }
   }
-  return result;
+  // The list order is the draw order (ADR 0080). A patch that lists every
+  // current layer was authored from the whole list (reorder, add on top) and
+  // its order wins; a partial patch from a stale closure keeps the remote
+  // order and appends what it adds.
+  const nextIndex = new Map(next.map((profile, index) => [profile.id, index]));
+  const fullList = current.every((profile) => nextIndex.has(profile.id) || touched.has(profile.id));
+  if (!fullList) return result;
+  return result
+    .map((profile, index) => ({ index, order: nextIndex.get(profile.id) ?? Number.POSITIVE_INFINITY, profile }))
+    .sort((left, right) => left.order - right.order || left.index - right.index)
+    .map(({ profile }) => profile);
 }
 
 function mergeQueuedPlanarTargetOverrides(

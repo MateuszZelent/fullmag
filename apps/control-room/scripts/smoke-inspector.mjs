@@ -1054,6 +1054,7 @@ try {
   assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
 
   await qualifyVisualizationMutationStability(page, inspector, fixture);
+  await qualifyPlanarLayerListStability(page, inspector, fixture);
 
   await reloadInspectorDocument(page, fixture, {
     waitUntil: "domcontentloaded",
@@ -1545,6 +1546,187 @@ async function qualifyVisualizationMutationStability(page, inspector, fixture) {
   } finally {
     fixture.visualizationPatchDelayMs = 0;
     fixture.visualizationPatchRejectOnce = false;
+  }
+}
+
+function inspectorPlanarFieldLayer(id, viewScope, quantityId, colormap) {
+  return {
+    id,
+    view_scope: viewScope,
+    quantity_id: quantityId,
+    component: "magnitude",
+    colormap,
+    range: { mode: "auto", min: null, max: null },
+    raster_opacity: 1,
+    visible: true,
+    raster_visible: true,
+    vectors_visible: false,
+    points_visible: false,
+    mesh_visible: false,
+    contours_visible: false,
+    streamlines_visible: false,
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
+  };
+}
+
+/** Planar state of the layer-list regression: field-layer model with Object and Airbox rows. */
+function inspectorPlanarLayerState() {
+  return {
+    visible: true,
+    layer_model: "layers",
+    colormap: "hsl_direction",
+    component: "magnitude",
+    display_unit: null,
+    crop: null,
+    layers: {
+      boundaries: false,
+      bounds: false,
+      contours: false,
+      mesh: false,
+      points: false,
+      probes: true,
+      raster: true,
+      streamlines: false,
+      vectors: false,
+    },
+    quantity_id: "m",
+    source: { kind: "default" },
+    default_slice: { operator: { kind: "plane_sample" }, plane: "xy", position_fraction: 0.5 },
+    range: { mode: "auto", min: null, max: null },
+    raster_opacity: 1,
+    viewport_colorbar_visible: true,
+    wireframe_style: { color: "#94a3b8", opacity: 1 },
+    target_overrides: [],
+    point_style: { color: "#89b4fa", opacity: 1, size: 3 },
+    interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+    quality: "interactive",
+    resolution: { height: 256, vector_budget: 0, width: 256 },
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
+    field_overlays: [
+      inspectorPlanarFieldLayer("object:film", { kind: "object", scope_id: "film" }, "m", "hsl_direction"),
+      inspectorPlanarFieldLayer("airbox", { kind: "airbox" }, "H_demag", "viridis"),
+      inspectorPlanarFieldLayer("all", { kind: "monitor_target" }, "m", "hsl_direction"),
+    ],
+    multislice: { enabled: false, position_fractions: [0.25, 0.5, 0.75] },
+    view_scope: { kind: "monitor_target" },
+  };
+}
+
+/**
+ * Plan 2026-11-12 Task 12 Step 2: the 2D field-layer list of the Object and
+ * Airbox visualization Inspectors keeps its panel mounted and its scroll
+ * position while a layer mutation is pending and after its ACK. The 2D stage
+ * has no planar samples in this fixture; its planar data reads are answered
+ * with 409 and kept out of the Inspector request budget and error evidence.
+ */
+async function qualifyPlanarLayerListStability(page, inspector, fixture) {
+  const consoleStart = consoleErrorEvents.length;
+  const previousVisualization = structuredClone(fixture.visualization);
+  fixture.visualization = { ...fixture.visualization, planar: inspectorPlanarLayerState() };
+  fixture.planarLayerListEnabled = true;
+  fixture.visualizationPatchDelayMs = 180;
+  const targets = [
+    { label: "Object", layerId: "object:film", name: "Film", nodeId: "model:object:film:visualization", owner: "object-visualization" },
+    { label: "Airbox", layerId: "airbox", name: "Airbox", nodeId: "model:airbox:visualization", owner: "airbox-visualization" },
+  ];
+  const observations = [];
+  try {
+    await reloadInspectorDocument(page, fixture, {
+      waitUntil: "domcontentloaded",
+      timeout: 60_000,
+    }, "planar-layer-list");
+    await inspector.waitFor({ state: "visible" });
+    for (const target of targets) {
+      await waitForInspectorRequestQuiet(page, fixture);
+      await selectInspectorNode(page, inspector, target.nodeId, { owner: target.owner, label: target.name });
+      const planarContext = inspector
+        .getByRole("radiogroup", { name: "Visualization context" })
+        .getByRole("radio", { name: "2D", exact: true });
+      if ((await planarContext.getAttribute("aria-checked")) !== "true") await planarContext.click();
+      const list = inspector.locator('[data-slot="planar-field-layer-list"]');
+      await list.waitFor({ state: "visible", timeout: 30_000 });
+      const row = list.locator(`li[data-layer-id="${target.layerId}"]`);
+      await row.waitFor({ state: "visible" });
+      const panel = inspector.locator(".fm-inspector-panel").first();
+      const eye = row.getByRole("button", { name: /^(Show|Hide) / });
+      await eye.scrollIntoViewIfNeeded();
+      const identity = `${target.label.toLowerCase()}-planar-layer-list-stability`;
+      const baseline = await captureInspectorMutationSnapshot(panel, { marker: identity, scrollTop: 80 });
+      assert(baseline.scrollTop > 0, `${target.label}: 2D Inspector fixture was not scrollable.`);
+      const requestStart = fixture.requests.length;
+      for (let iteration = 0; iteration < 4; iteration += 1) {
+        await eye.evaluate((control) => control.click());
+        await page.waitForTimeout(40);
+        const duringMutation = await captureInspectorMutationSnapshot(panel);
+        assert(
+          duringMutation.connected && duringMutation.marker === identity,
+          `${target.label}: 2D layer list Inspector remounted during mutation.`,
+        );
+        assert(
+          duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
+          `${target.label}: 2D layer mutation changed Inspector opacity or started an opacity animation.`,
+        );
+        assert(
+          Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
+          `${target.label}: 2D layer mutation reset Inspector scroll: baseline=${baseline.scrollTop}, during=${duringMutation.scrollTop}.`,
+        );
+        await page.waitForTimeout(fixture.visualizationPatchDelayMs + 80);
+        const afterAck = await captureInspectorMutationSnapshot(panel);
+        assert(
+          afterAck.connected && afterAck.marker === identity,
+          `${target.label}: 2D layer list Inspector remounted after mutation ACK.`,
+        );
+        assert(
+          Math.abs(afterAck.scrollTop - baseline.scrollTop) <= 1,
+          `${target.label}: 2D layer mutation ACK reset Inspector scroll: baseline=${baseline.scrollTop}, after=${afterAck.scrollTop}.`,
+        );
+      }
+      await waitForInspectorRequestQuiet(page, fixture);
+      const visible = fixture.visualization.planar.field_overlays
+        .find((layer) => layer.id === target.layerId)?.visible;
+      assert(visible === true, `${target.label}: four visibility toggles did not return the layer to visible.`);
+      observations.push({
+        target: target.label,
+        interactions: 4,
+        patchCount: fixture.requests
+          .slice(requestStart)
+          .filter((request) => request === "PATCH /v2/sessions/current/visualization/state")
+          .length,
+        scrollTop: baseline.scrollTop,
+      });
+    }
+    return observations;
+  } finally {
+    const threeD = inspector
+      .getByRole("radiogroup", { name: "Visualization context" })
+      .getByRole("radio", { name: "3D", exact: true });
+    if (await threeD.count() === 1 && (await threeD.getAttribute("aria-checked")) !== "true") {
+      await threeD.click().catch(() => {});
+    }
+    fixture.visualizationPatchDelayMs = 0;
+    fixture.planarLayerListEnabled = false;
+    fixture.visualization = { ...previousVisualization, revision: fixture.visualization.revision };
+    // The 2D stage's planar reads are answered with 409 on purpose; their
+    // console echoes belong to this scenario, not to the Inspector.
+    for (let index = consoleErrorEvents.length - 1; index >= consoleStart; index -= 1) {
+      if (consoleErrorEvents[index].text.includes("the server responded with a status of 409 (Conflict)")) {
+        consoleErrorEvents.splice(index, 1);
+      }
+    }
   }
 }
 
@@ -4294,6 +4476,8 @@ function createInspectorFixture() {
     visualizationPatchDelayMs: 0,
     visualizationPatchRejectOnce: false,
     visualization: inspectorVisualizationState(),
+    planarLayerListEnabled: false,
+    planarDataRequests: [],
   };
 }
 
@@ -4415,6 +4599,21 @@ async function installInspectorFixtureApi(page, fixture) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    // The mounted 2D stage also reads the geometry realization for its object
+    // section list; this fixture has none, so it is unavailable like the samples.
+    if (
+      fixture.planarLayerListEnabled &&
+      request.method() === "GET" &&
+      (/\/planar-(default|monitors)\//.test(path) ||
+        path === "/v2/sessions/current/model/geometry/realizations/current")
+    ) {
+      fixture.planarDataRequests.push(`${request.method()} ${path}`);
+      return fulfillJson(
+        route,
+        { code: "inspector_fixture_planar_unavailable", message: "The Inspector fixture has no planar samples." },
+        409,
+      );
+    }
     fixture.requests.push(`${request.method()} ${path}${url.search}`);
     const requestKey = `${request.method()} ${path}`;
     const requestLimit =
@@ -5322,6 +5521,15 @@ function mergeInspectorVisualizationState(state, patch) {
     ...state,
     ...patch,
     layers: { ...state.layers, ...(patch.layers ?? {}) },
+    ...(patch.planar && state.planar
+      ? {
+          planar: {
+            ...state.planar,
+            ...patch.planar,
+            layers: { ...state.planar.layers, ...(patch.planar.layers ?? {}) },
+          },
+        }
+      : {}),
     quantity: { ...state.quantity, ...(patch.quantity ?? {}) },
     revision: state.revision,
   };

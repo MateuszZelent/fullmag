@@ -100,6 +100,36 @@ describe("projectPlanarPresentationState", () => {
     ]);
   });
 
+  it("projects field layers in the pending order with new layers and pending flags", () => {
+    const layer = (id: string, quantity = "m") => ({
+      colormap: "viridis", component: "magnitude", id, quantity_id: quantity, range: { mode: "auto" },
+      raster_opacity: 1, raster_visible: true, vector_style: base.planar.vector_style, vectors_visible: false,
+      view_scope: { kind: "object", scope_id: id },
+    });
+    const authoritative = {
+      planar: { ...base.planar, field_overlays: [layer("film"), layer("airbox")] },
+    } as unknown as VisualizationStateResource;
+    const pending = {
+      planar: {
+        ...base.planar,
+        field_overlays: [
+          { ...layer("airbox", "H_demag"), visible: false, colormap: "magma" },
+          { ...layer("film"), contours_visible: true, mesh_visible: true, points_visible: true, streamlines_visible: true },
+          layer("cap"),
+        ],
+      },
+    } as unknown as VisualizationStateResource;
+
+    const projected = projectPlanarPresentationState(authoritative, pending)?.field_overlays ?? [];
+    expect(projected.map((entry) => entry.id)).toEqual(["airbox", "film", "cap"]);
+    // A new quantity is sample identity: it waits for the server; flags do not.
+    expect(projected[0]).toMatchObject({ colormap: "viridis", quantity_id: "m", visible: false });
+    expect(projected[1]).toMatchObject({
+      contours_visible: true, mesh_visible: true, points_visible: true, streamlines_visible: true,
+    });
+    expect(projected[2]).toMatchObject({ id: "cap", quantity_id: "m" });
+  });
+
   it("adopts a pending component only when the switch is client-side (D2D-12)", () => {
     const pending = { planar: { ...base.planar, component: "x" } } as unknown as VisualizationStateResource;
     const derivable = (component: string) => ["x", "y", "z", "magnitude"].includes(component);

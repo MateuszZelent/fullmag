@@ -40,6 +40,7 @@ class HistoryInventoryTests(unittest.TestCase):
         files=RejectedHistoryTests().evidence()
         receipt=json.loads(files["receipt.json"]);receipt["activation_receipt_key"]="c"*64
         files["receipt.json"]=files["terminal.json"]=raw(receipt)
+        qualified={"candidate":RejectedHistoryTests().check(files),"files":files}
         for name,content in files.items():
             path=self.root/"activation/attempts"/TOKEN/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
         marker={"schema":"fullmag.docker-startup-activation-receipt.v1","state":"rejected",
@@ -47,12 +48,12 @@ class HistoryInventoryTests(unittest.TestCase):
                 "authorization":json.loads(files["authorization.json"]),"result":json.loads(files["result.json"])}
         path=self.put("backend/script-activation-"+"c"*64+"/activation.json",marker)
         with self.assertRaises(HistoryError):control_references(self.root,TOKEN)
-        self.assertNotIn(TOKEN,control_references(self.root,TOKEN,qualified_rejection=files)["protected"])
+        self.assertNotIn(TOKEN,control_references(self.root,TOKEN,qualified_rejection=qualified)["protected"])
         self.put("backend/recovery.json",{"activation":TOKEN})
-        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=qualified)
         (self.root/"backend/recovery.json").unlink()
         marker["future_pin"]=TOKEN;path.write_bytes(raw(marker))
-        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=files)
+        with self.assertRaises(HistoryError):control_references(self.root,TOKEN,qualified_rejection=qualified)
 
     def test_known_operational_roots_are_live_references_not_excluded(self):
         for name in ["browser-qa","claimed-interruption-collect","cancel-failed-no-spawn",
@@ -61,6 +62,19 @@ class HistoryInventoryTests(unittest.TestCase):
             path=self.put(name+"/current.json",{"activation":TOKEN})
             with self.subTest(root=name),self.assertRaises(HistoryError):control_references(self.root,TOKEN)
             path.unlink();path.parent.rmdir()
+
+    def test_bootstrap_proof_roots_keep_activation_path_pins(self):
+        self.terminal(TOKEN, RUN)
+        activation_path = "/control/activation/attempts/" + TOKEN + "/receipt.json"
+        for name in ("bootstrap-namespace-proof", "bootstrap-container-proof"):
+            with self.subTest(root=name):
+                relative = name + "/proof.json"
+                path = self.put(relative, {"activation_path": activation_path})
+                proof = control_references(self.root, "0" * 32)
+                self.assertIn(TOKEN, proof["protected"])
+                self.assertIn(relative, proof["pins"])
+                path.unlink()
+                path.parent.rmdir()
 
     def test_current_and_direct_predecessor_protected_without_pinning_entire_history(self):
         a, b, c = "a" * 32, "b" * 32, "c" * 32

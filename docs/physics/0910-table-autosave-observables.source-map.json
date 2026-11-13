@@ -27,13 +27,32 @@
   "equations": [
     {
       "id": "eq-table-time-cadence",
-      "symbols": ["t", "epsilon", "t_next"],
-      "sources": ["table-store", "stage-autosave-append", "native-fem-origin-limit", "native-fem-initial-field", "origin-requirement", "native-fem-stage-table-origin", "stage-table-origin-artifact-job"]
+      "symbols": [
+        "t",
+        "epsilon",
+        "t_next"
+      ],
+      "sources": [
+        "table-store",
+        "stage-autosave-append",
+        "native-fem-origin-limit",
+        "native-fem-initial-field",
+        "origin-requirement",
+        "native-fem-stage-table-origin",
+        "stage-table-origin-artifact-job"
+      ]
     },
     {
       "id": "eq-table-accepted-step-cadence",
-      "symbols": ["accepted-step", "every-steps", "final-step"],
-      "sources": ["table-store", "table-final-step"]
+      "symbols": [
+        "accepted-step",
+        "every-steps",
+        "final-step"
+      ],
+      "sources": [
+        "table-store",
+        "table-final-step"
+      ]
     }
   ],
   "symbols": [
@@ -186,6 +205,42 @@
       "path": "crates/fullmag-runner/src/artifact_pipeline.rs",
       "symbol": "record_stage_autosave_scalar",
       "responsibility": "Queue the initialized scalar state for StageAutosave table output."
+    },
+    {
+      "id": "stage-authoritative-completion",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "StageCompletionIR",
+      "responsibility": "Preserve authoritative convergence, stop reason and optional metric without inferring success from writer closure."
+    },
+    {
+      "id": "stage-manifest-completion",
+      "path": "crates/fullmag-runner/src/autosave_storage.rs",
+      "symbol": "StageManifest",
+      "responsibility": "Store optional completion separately from sample writer completion, retaining legacy deserialization."
+    },
+    {
+      "id": "stage-writer-identity",
+      "path": "crates/fullmag-runner/src/autosave_storage.rs",
+      "symbol": "StageManifestIdentity",
+      "responsibility": "Bind metadata finalization to the exact target, stage id and stage index returned by the writer."
+    },
+    {
+      "id": "stage-final-artifacts",
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "finalize_streamed_stage_artifacts",
+      "responsibility": "Finalize authoritative completion and execution resolution only for the exact stage and regular field stores returned by the drained writer."
+    },
+    {
+      "id": "stage-final-manifest",
+      "path": "crates/fullmag-runner/src/autosave_storage.rs",
+      "symbol": "finalize_stage_completion",
+      "responsibility": "Validate full stage identity, update matching stage and aggregate provenance plus declared metadata, and restore original bytes if publication fails."
+    },
+    {
+      "id": "stage-metadata-atomic-bytes",
+      "path": "crates/fullmag-runner/src/autosave_zarr.rs",
+      "symbol": "write_bytes_atomic",
+      "responsibility": "Share the existing cross-platform atomic replace adapter with exact-byte rollback of metadata."
     }
   ],
   "tests": [
@@ -233,6 +288,26 @@
       "path": "crates/fullmag-runner/src/dispatch.rs",
       "symbol": "native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer",
       "scope": "Qualify source admission at physical time zero with explicit direct-minimizer and nonzero-start exclusions."
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "write_artifacts_finalizes_stage_completion_in_same_root_zarr_autosave",
+      "scope": "Same-root finalization with different CPU/GPU resolution records, repeated stage IDs and preservation of earlier stage metadata and payloads; does not execute a GPU solver."
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "write_artifacts_finalizes_stage_completion_in_separate_zarr_autosave",
+      "scope": "Separate-root finalization with authoritative torque, step-limit and absent completion and unchanged scientific payload."
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "regular_zarr_completion_updates_only_exact_attrs_and_preserves_payloads",
+      "scope": "Finalize only writer-listed regular field metadata and preserve unrelated stores and raw chunks."
+    },
+    {
+      "path": "crates/fullmag-runner/src/autosave_zarr.rs",
+      "symbol": "metadata_atomic_replace_preserves_exact_bytes",
+      "scope": "Replace an existing metadata destination and restore exact bytes through the platform adapter."
     }
   ]
 }

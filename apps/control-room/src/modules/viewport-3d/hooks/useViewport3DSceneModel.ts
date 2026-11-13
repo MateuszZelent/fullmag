@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveViewport3DQualityProfileId } from "../viewport3dPresentation";
 import { isFlowMajorTensorDescriptor, isTensorFrobeniusSurfaceField, retainTensorSurfaceField } from "@/kernel/api/tensorFieldProjection";
 
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
@@ -3282,7 +3283,7 @@ export function useViewport3DSceneModel({
   const resolvedPlanarMonitorFramePreview = usePlanarMonitorFramePreview();
   const committedPlanarMonitorPreviewDraft = usePlanarMonitorFramePreviewDraft();
   const cameraRegistryCamera = useCameraRegistryCamera();
-  const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
+  const visualProfile = getViewport3DVisualProfile(resolveViewport3DQualityProfileId(commandState.visualProfileId, commandState.captureReturnProfileId));
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
   const sessionDiscretization = useSessionStatusSelector((status) =>
     resolveSessionDiscretization(status.data),
@@ -6353,8 +6354,8 @@ export function useViewport3DSceneModel({
     ],
   );
   const fdmMultilayerVoxelFillRatio = useMemo(
-    () => getViewport3DVisualProfile(commandState.visualProfileId).voxelFillRatio,
-    [commandState.visualProfileId],
+    () => getViewport3DVisualProfile(resolveViewport3DQualityProfileId(commandState.visualProfileId, commandState.captureReturnProfileId)).voxelFillRatio,
+    [commandState.visualProfileId, commandState.captureReturnProfileId],
   );
   const fdmMultilayerAirboxRegionIds = useMemo(() => {
     const layout = fdmMultilayerLayout.data;

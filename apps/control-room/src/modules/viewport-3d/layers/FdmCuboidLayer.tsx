@@ -27,6 +27,7 @@ import {
   InstancedMesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
+  MeshStandardMaterial,
   Raycaster,
   Vector2,
   Vector3,
@@ -48,6 +49,7 @@ import {
 } from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
+import { resolveFdmCuboidSurfaceMaterialPlan } from "./viewport3DSurfaceMaterialPlans";
 import {
   buildViewport3DFdmInspectSample,
   type Viewport3DInspectSample,
@@ -1133,34 +1135,52 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     colors.mesh,
     usesInstanceColors,
   );
-  const litSurface = !usesInstanceColors && materialProfile.uniformGeometry.lit;
+  const surfaceMaterialPlan = resolveFdmCuboidSurfaceMaterialPlan(
+    materialProfile,
+    usesInstanceColors,
+  );
+  const materialMetalness = surfaceMaterialPlan.kind === "standard" ? surfaceMaterialPlan.metalness : undefined;
+  const materialRoughness = surfaceMaterialPlan.kind === "standard" ? surfaceMaterialPlan.roughness : undefined;
   const surfaceMaterial = useMemo(
     () => {
-      const MaterialConstructor = litSurface
-        ? MeshLambertMaterial
-        : MeshBasicMaterial;
-      return tracker.track(
-        "material",
-        new MaterialConstructor({
-          color: surfaceMaterialColor,
-          opacity: surfaceOpacity,
-          vertexColors: usesInstanceColors,
-          toneMapped: materialProfile.magneticSurface.toneMapped,
-          ...surfaceMaterialPolicyProps(surfaceOpacity),
-        }),
-      );
+      const materialParameters = {
+        color: surfaceMaterialColor,
+        opacity: surfaceOpacity,
+        toneMapped: surfaceMaterialPlan.toneMapped,
+        vertexColors: surfaceMaterialPlan.vertexColors,
+        ...surfaceMaterialPolicyProps(surfaceOpacity),
+      };
+      if (surfaceMaterialPlan.kind === "standard") {
+        return tracker.track(
+          "material",
+          new MeshStandardMaterial({
+            ...materialParameters,
+            metalness: materialMetalness,
+            roughness: materialRoughness,
+          }),
+        );
+      }
+      if (surfaceMaterialPlan.kind === "lambert") {
+        return tracker.track(
+          "material",
+          new MeshLambertMaterial(materialParameters),
+        );
+      }
+      return tracker.track("material", new MeshBasicMaterial(materialParameters));
     },
     [
-      litSurface,
-      materialProfile.magneticSurface.toneMapped,
+      surfaceMaterialPlan.kind,
+      materialMetalness,
+      materialRoughness,
+      surfaceMaterialPlan.toneMapped,
+      surfaceMaterialPlan.vertexColors,
       surfaceMaterialColor,
       surfaceOpacity,
       tracker,
-      usesInstanceColors,
     ],
   );
   const surfaceMaterialRef = useRef<
-    MeshBasicMaterial | MeshLambertMaterial
+    MeshBasicMaterial | MeshLambertMaterial | MeshStandardMaterial
   >(null);
   const wireframePolicy = RENDER_POLICIES.featureEdges;
   const wireframeColor = wireframeColorFromSettings(renderSettings, colors.wire);
@@ -1236,7 +1256,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       if (
         mountedSurfaceMaterial === surfaceMaterial &&
         (mountedSurfaceMaterial instanceof MeshBasicMaterial ||
-          mountedSurfaceMaterial instanceof MeshLambertMaterial)
+          mountedSurfaceMaterial instanceof MeshLambertMaterial ||
+          mountedSurfaceMaterial instanceof MeshStandardMaterial)
       ) {
         mountedSurfaceMaterial.needsUpdate = true;
       }
@@ -1339,9 +1360,11 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     <>
       <instancedMesh
         args={[geometry, undefined, renderCount]}
+        castShadow={surfaceMaterialPlan.castShadow}
         frustumCulled={false}
         onPointerMove={renderPlan.surface.visible ? onPointerMove : undefined}
         onPointerOut={renderPlan.surface.visible ? onPointerOut : undefined}
+        receiveShadow={surfaceMaterialPlan.receiveShadow}
         ref={surfaceRef}
         renderOrder={surfacePolicy.renderOrder}
         visible={renderPlan.surface.visible}

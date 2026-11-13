@@ -34,6 +34,9 @@ fn finalize_receipt_result<T>(
     match outcome {
         Ok(value) => {
             receipt_result?;
+            if let Some(artifacts) = artifacts.as_deref_mut() {
+                artifacts.replace_provenance_synchronously(provenance.clone())?;
+            }
             Ok(value)
         }
         Err(primary) => {
@@ -1454,6 +1457,40 @@ mod tests {
         FdmGpuPrecisionPolicyReceipt, FdmGpuTransferCounts,
     };
 
+    fn disconnected_artifact_recorder() -> (
+        crate::artifact_pipeline::ArtifactRecorder,
+        std::path::PathBuf,
+    ) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-fdm-gpu-receipt-finalizer-{}-{unique}",
+            std::process::id()
+        ));
+        let context = crate::artifacts::FieldArtifactContext {
+            problem_name: "fdm-gpu-receipt-finalizer".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "cell_count": 1}),
+            magnetization_field_semantics: Ok(None),
+            execution_resolution: None,
+        };
+        let mut pipeline =
+            crate::artifact_pipeline::ArtifactPipeline::start(output_dir.clone(), context, 2)
+                .expect("start receipt finalizer artifact pipeline");
+        let recorder = crate::artifact_pipeline::ArtifactRecorder::streaming(
+            crate::types::ExecutionProvenance::default(),
+            pipeline.sender(),
+        );
+        pipeline
+            .finish()
+            .expect("stop artifact writer before finalizer call");
+        (recorder, output_dir)
+    }
+
     #[cfg(feature = "cuda")]
     fn native_precision_policy(
         realization: u32,
@@ -2008,6 +2045,65 @@ mod tests {
         )
         .expect_err("successful execution must not hide receipt validation failure");
         assert_eq!(error.message, "receipt validation failure");
+    }
+
+    #[test]
+    fn success_finalizer_propagates_terminal_provenance_publication_failure() {
+        let (mut artifacts, output_dir) = disconnected_artifact_recorder();
+        let mut provenance = crate::types::ExecutionProvenance {
+            precision: "double".into(),
+            ..Default::default()
+        };
+        let receipt = strict_device_receipt();
+
+        let error = super::finalize_receipt_result(
+            Ok(receipt.clone()),
+            &mut provenance,
+            Some(&mut artifacts),
+            Ok(7_u32),
+        )
+        .expect_err("successful execution must surface terminal provenance write failure");
+
+        assert!(
+            error
+                .message
+                .contains("artifact writer stopped before provenance update was queued")
+        );
+        assert_eq!(provenance.fdm_gpu_execution_receipt, Some(receipt.clone()));
+        assert_eq!(
+            artifacts.provenance_snapshot().fdm_gpu_execution_receipt,
+            Some(receipt)
+        );
+        std::fs::remove_dir_all(output_dir).expect("remove finalizer artifact fixture");
+    }
+
+    #[test]
+    fn error_finalizer_preserves_primary_error_when_terminal_publication_fails() {
+        let (mut artifacts, output_dir) = disconnected_artifact_recorder();
+        let mut provenance = crate::types::ExecutionProvenance {
+            precision: "double".into(),
+            ..Default::default()
+        };
+        let receipt = strict_device_receipt();
+        let primary_message = "primary solver failure".to_string();
+
+        let error = super::finalize_receipt_result::<()>(
+            Ok(receipt.clone()),
+            &mut provenance,
+            Some(&mut artifacts),
+            Err(crate::types::RunError {
+                message: primary_message.clone(),
+            }),
+        )
+        .expect_err("terminal publication failure must not replace solver error");
+
+        assert_eq!(error.message, primary_message);
+        assert_eq!(provenance.fdm_gpu_execution_receipt, Some(receipt.clone()));
+        assert_eq!(
+            artifacts.provenance_snapshot().fdm_gpu_execution_receipt,
+            Some(receipt)
+        );
+        std::fs::remove_dir_all(output_dir).expect("remove finalizer artifact fixture");
     }
 
     #[cfg(feature = "cuda")]

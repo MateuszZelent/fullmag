@@ -22,6 +22,21 @@ import {
   Activity,
   Blend,
   Maximize2,
+  ChartSpline,
+  CircleDashed,
+  Crop,
+  Crosshair,
+  FileDown,
+  Grip,
+  Hand,
+  LayoutGrid,
+  Maximize,
+  MoveUpRight,
+  Palette,
+  ScanSearch,
+  Waves,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import type { RibbonTabContent } from "./ribbonTypes";
@@ -300,6 +315,25 @@ export const homeTab: RibbonTabContent = {
     },
   ],
 };
+
+const PLANAR_TOOLBAR_RIBBON_ACTIONS: RibbonTabContent["groups"][number]["actions"] = ([
+  ["field-map.tool.navigate", Hand, "Navigate"],
+  ["field-map.tool.zoom-box", ScanSearch, "Zoom box"],
+  ["field-map.tool.crop", Crop, "Crop"],
+  ["field-map.tool.inspect", Crosshair, "Inspect"],
+  ["field-map.tool.profile", ChartSpline, "Profile"],
+  ["field-map.tool.measure", Ruler, "Measure"],
+  ["field-map.zoom-in", ZoomIn, "Zoom in"],
+  ["field-map.zoom-out", ZoomOut, "Zoom out"],
+  ["field-map.fit", Maximize, "Fit"],
+  ["field-map.toggle-vectors", MoveUpRight, "Vectors"],
+  ["field-map.toggle-points", Grip, "Points"],
+  ["field-map.toggle-mesh", Triangle, "Mesh"],
+  ["field-map.toggle-streamlines", Waves, "Field lines"],
+  ["field-map.toggle-contours", CircleDashed, "Contours"],
+  ["field-map.toggle-multislice", LayoutGrid, "Slices"],
+  ["field-map.toggle-legend", Palette, "Legend"],
+] as const).map(([id, Icon, label]) => ({ id, icon: icon(Icon), label, size: "compact" as const }));
 
 export const viewTab: RibbonTabContent = {
   tabId: "view",
@@ -633,12 +667,22 @@ export const viewTab: RibbonTabContent = {
           iconColor: "text-sky-300",
           tooltip: "Open the active monitor in 2D View",
         },
+        // Same command ids as the 2D view toolbar (spec 12 §5.1): tools,
+        // navigation and whole-view masks.
+        ...PLANAR_TOOLBAR_RIBBON_ACTIONS,
         {
           id: "field-map.export-png",
           icon: icon(Download),
           label: "Export",
           iconColor: "text-amber-300",
           tooltip: "Export the current 2D field map",
+        },
+        {
+          id: "field-map.export-data",
+          icon: icon(FileDown),
+          label: "Data",
+          size: "compact",
+          tooltip: "Export the current 2D field data",
         },
       ],
     },

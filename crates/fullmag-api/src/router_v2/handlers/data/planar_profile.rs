@@ -102,6 +102,10 @@ pub(super) async fn planar_profile_response(
         ));
     }
     let query = PlanarFieldQuery {
+        window_u_min_m: profile.window_u_min_m,
+        window_u_max_m: profile.window_u_max_m,
+        window_v_min_m: profile.window_v_min_m,
+        window_v_max_m: profile.window_v_max_m,
         sample_token: profile.sample_token.clone(),
         component: profile.component.clone(),
         scope_kind: profile.scope_kind.clone(),
@@ -124,7 +128,9 @@ pub(super) async fn planar_profile_response(
         position_m: profile.position_m,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
-    let bounds = built.result.meta.bounds_uv_m;
+    // Profile points are probe-equivalent: a sampling window does not mark
+    // points of the full frame as outside.
+    let bounds = built.full_bounds_uv_m;
     let frame = &built.frame;
 
     let mut parameters = (0..samples)

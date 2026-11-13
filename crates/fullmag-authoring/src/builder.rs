@@ -923,6 +923,8 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_threads: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compute_resources: Option<fullmag_ir::ComputeResourcesIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_execution: Option<fullmag_ir::ParallelExecutionPolicyIR>,
     #[serde(default)]
     pub pbc: Option<fullmag_ir::FdmPeriodicityIR>,

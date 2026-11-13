@@ -4269,7 +4269,7 @@ impl NativeFemBackend {
             .enable_demag
             .then(|| resolved_native_fem_demag_solver_policy(plan));
 
-        let backend = Self {
+        let mut backend = Self {
             handle,
             stage_oersted_provider: None,
             stage_transport_provider: None,
@@ -4311,12 +4311,7 @@ impl NativeFemBackend {
                 .as_ref()
                 .filter(|adaptive| adaptive.rtol == 0.0)
                 .map(|adaptive| adaptive.atol),
-            backend_create_wall_time_ns: Some(
-                backend_create_started
-                    .elapsed()
-                    .as_nanos()
-                    .min(u128::from(u64::MAX)) as u64,
-            ),
+            backend_create_wall_time_ns: None,
             rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
                 && plan.interfacial_dmi.is_none()
                 && plan.bulk_dmi.is_none()
@@ -4324,6 +4319,18 @@ impl NativeFemBackend {
                 && plan.dbulk_field.is_none(),
             local_node_map_identity: std::sync::Mutex::new(None),
         };
+        if native_fem_plan_requests_gpu_mfem_device(plan) {
+            // Prepare object ownership before the first accepted step. This
+            // reads the resident initial magnetization without changing it;
+            // subsequent observations reuse the uploaded ownership records.
+            backend.attach_native_object_average_m(&mut StepStats::default())?;
+        }
+        backend.backend_create_wall_time_ns = Some(
+            backend_create_started
+                .elapsed()
+                .as_nanos()
+                .min(u128::from(u64::MAX)) as u64,
+        );
         Ok(backend)
     }
 
@@ -4958,7 +4965,6 @@ impl NativeFemBackend {
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -4967,6 +4973,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -5418,7 +5425,6 @@ impl NativeFemBackend {
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -5427,6 +5433,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -5771,7 +5778,6 @@ impl NativeFemBackend {
         copy_demag_diagnostics(&mut step_stats, &stats);
         step_stats.cpu_fixed_coupling = self.cpu_fixed_coupling_telemetry()?;
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
-        self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -5780,6 +5786,7 @@ impl NativeFemBackend {
                 weighted_object_scalars(&step_stats, &self.object_weights)
             };
         self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_transfer_audit(&mut step_stats)?;
         Ok(step_stats)
     }
 

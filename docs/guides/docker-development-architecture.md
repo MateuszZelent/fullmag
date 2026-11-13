@@ -843,6 +843,30 @@ sesje i lease pozostają zachowane, a native execution pozostaje `unknown`.
 Zatrzymanie diagnostycznego API nie stanowi dowodu native drain i nie uprawnia
 do archiwizacji namespace wymagającej rzeczywistego stanu Drained.
 
+Wąski wariant recovery z historycznym ownerem dopuszcza osobny dowód
+`fullmag.docker-bootstrap-historical-namespace-absence.v1`. Dotyczy sytuacji,
+gdy zachowany `OWNER.host` wskazuje wcześniejszy, usunięty kontener tej samej
+grupy, a obecny backend zatrzymano przez przypięty diagnostic bootstrap stop.
+Dowód wiąże obecne bajty OWNER/process z archiwalnym inspect, buildem i jawnym
+łańcuchem udanych rekreacji; ponownie sprawdza nieobecność dokładnych starych
+kontenerów oraz brak ponownego użycia historycznego hostname w całym silniku.
+Nie odtwarza brakującej historycznej obserwacji procesu i nie deklaruje drain.
+Zwykły recovery nadal wymaga zgodności hosta właściciela.
+
+Dowód powstaje przez `prepare_historical_namespace_absence` i jest publikowany
+niezmiennie w operacji BuildControl. `stop-bootstrap-frontend-volume` wymaga
+wtedy jawnej pary `--historical-namespace-proof <control-relative-path>` oraz
+`--historical-namespace-proof-sha256 <raw-sha256>`; preview i apply wiążą ten
+sam dowód i ponawiają kontrole nieobecności. Archiwizacja nadal wymaga pełnego
+terminalnego accepted store, przypiętego proof i operator authorization.
+Sesje, Zarr, historyczne metadane i lease pozostają zachowane. Ten wyjątek nie
+uprawnia do kasowania rekordów ownera ani do uznania Unknown za terminalny run.
+
+Inwentarz historii aktywacji traktuje `bootstrap-namespace-proof` i
+`bootstrap-container-proof` jako znane, konserwatywne źródła pinów. Ich
+odwołania do aktywacji nadal blokują archiwizację; nie należą do wykluczonych
+danych technicznych. Nieznany root control nadal powoduje odmowę kwalifikacji.
+
 ### Przygotowana, nieopublikowana awaria tworzenia sieci
 
 `scripts/docker_volume_network_failure_reconcile.py` może wznowić kompletny
@@ -896,6 +920,17 @@ archiwizację tego pustego bootstrapu. Konsument przed operacją i pod jej
 blokadą porównuje raw receipty, plan, kontenery oraz ponowny odczyt pustego
 namespace. Nie przywraca go jako retained runtime i zachowuje stare dane.
 
+### Zachowane wyniki przed archiwizacją aktywacji
+
+Kwalifikacja pojedynczego ukończonego runu rozpoznaje dwa istniejące układy:
+`reversal-attempt-1` z targetem `main` oraz `relax-attempt-1` z targetem
+`relax`. Nazwa katalogu musi zgadzać się z oboma receiptami storage i wpisem
+etapu w `fullmag-run.json`; target musi zgadzać się z deklaracjami wyjść,
+manifestem autosave i metadanymi Zarr. Dodatkowy katalog próby, brakujący
+chunk lub niezgodna tożsamość nadal blokują operację. Walidator nie zmienia
+nazw wyników ani ich zawartości. To rozszerzenie nie uchyla kontroli lease,
+referencji control, aktualnej aktywacji i jej chronionego poprzednika.
+
 ### Archiwizacja odrzuconej aktywacji bez Run
 
 `docker-dev-archive-activation` obsługuje jawny wariant `rejected-no-run-v1`:
@@ -913,6 +948,15 @@ odtwarzać eksportu z oszacowanych danych. Brak Run/session/reconciliation,
 brak wycofania poprzednika i kompletny skan SessionStore są wymagane.
 Znaleziony request, jego hash, źródło, RunIntent, admission lub lease blokują
 kwalifikację. Nie pomija się poddrzew wyników ani historii.
+
+Dla tak zakwalifikowanego odrzucenia samo `activation/current.json` może być
+historycznym wskaźnikiem: jego surowe bajty muszą być identyczne z terminalem
+tego samego kandydata. Plan wiąże rodzaj kwalifikacji, identyfikator próby
+oraz oba hashe; pointer pozostaje przypięty w guardach/CAS. Apply ponownie
+kwalifikuje kandydata pod blokadą. `verified`, inne referencje recovery,
+nieznany wynik i zmiana choćby formatu bajtów nadal blokują operację.
+Pozostawiony pointer korzysta z istniejącego odczytu archiwalnego pod dawną
+ścieżką; nie jest usuwany ani przestawiany na inny wynik.
 
 Preview i apply zachowują istniejące blokady, source/consumer pins oraz
 niezmienny digest planu. Apply przenosi dokładnie jeden rekord do `history-v1`

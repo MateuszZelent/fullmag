@@ -250,6 +250,7 @@ struct GpuRelaxNcgRollbackState {
     uint64_t poisson_step_energy_wall_time_ns = 0;
     bool poisson_last_solver_setup_reused = false;
     uint32_t poisson_solves_current_step = 0;
+    uint32_t poisson_linear_iterations_current_step = 0;
     uint32_t poisson_setup_count_current_step = 0;
     uint32_t poisson_fresh_zero_guess_count_current_step = 0;
     uint32_t poisson_event_wait_count_current_step = 0;
@@ -278,6 +279,7 @@ GpuRelaxNcgRollbackState capture_gpu_relax_ncg_rollback_state(
         ctx.poisson_demag.step_energy_wall_time_ns,
         ctx.poisson_demag.last_solver_setup_reused,
         ctx.poisson_demag.solves_current_step,
+        ctx.poisson_demag.linear_iterations_current_step,
         ctx.poisson_demag.setup_count_current_step,
         ctx.poisson_demag.fresh_zero_guess_count_current_step,
         ctx.poisson_demag.event_wait_count_current_step,
@@ -331,6 +333,8 @@ void restore_gpu_relax_ncg_metadata(
         rollback.poisson_last_solver_setup_reused;
     ctx.poisson_demag.solves_current_step =
         rollback.poisson_solves_current_step;
+    ctx.poisson_demag.linear_iterations_current_step =
+        rollback.poisson_linear_iterations_current_step;
     ctx.poisson_demag.setup_count_current_step =
         rollback.poisson_setup_count_current_step;
     ctx.poisson_demag.fresh_zero_guess_count_current_step =

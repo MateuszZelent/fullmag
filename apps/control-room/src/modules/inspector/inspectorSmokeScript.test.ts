@@ -15,6 +15,11 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("installInspectorFixtureApi");
     expect(smokeScript).toContain("model:airbox:visualization");
     expect(smokeScript).toContain("model:object:film:visualization");
+    // 2D field-layer list: Object and Airbox mutations keep the panel and scroll.
+    expect(smokeScript).toContain("await qualifyPlanarLayerListStability(page, inspector, fixture);");
+    expect(smokeScript).toContain('[data-slot="planar-field-layer-list"]');
+    expect(smokeScript).toContain("2D layer list Inspector remounted during mutation.");
+    expect(smokeScript).toContain("2D layer mutation reset Inspector scroll");
     expect(smokeScript).toContain("model:mesh:unassigned:orphan-part");
     expect(smokeScript).toContain(
       "model:object:film:visualization:mode-visualization",

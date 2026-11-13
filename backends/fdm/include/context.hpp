@@ -846,6 +846,9 @@ struct Context {
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
+    // Valid only after the DMI launcher has cleared every multilayer channel.
+    // Active DMI invalidates it before writing any nonzero candidate field.
+    bool multilayer_dmi_zero_fields_valid = false;
     bool multilayer_xy_periodic = false;
     // Lazily allocated once for FP64 multilayer PG-BB scalar reductions.
     bool multilayer_bb_history_valid = false;

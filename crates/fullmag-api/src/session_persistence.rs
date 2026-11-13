@@ -159,6 +159,9 @@ fn restore_display_presentation(
         )),
     }?;
 
+    if let Some(planar) = restored.visualization_planar.as_mut() {
+        crate::schemas::visualization_state::migrate_planar_layer_model(planar);
+    }
     if let Some(overrides) = restored.visualization_overrides.take() {
         let canonicalized = canonicalize_visualization_overrides_with_diagnostics(&overrides);
         restored.visualization_overrides = Some(canonicalized.overrides);

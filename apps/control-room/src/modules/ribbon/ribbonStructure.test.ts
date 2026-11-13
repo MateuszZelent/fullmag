@@ -3898,10 +3898,31 @@ describe("ribbon structure", () => {
       subtitle: "planar monitor",
       title: "2D View",
     });
+    // The 2D view toolbar renders exactly these command ids (spec 12 §5.1).
+    const toolbarCommandIds = [
+      "field-map.tool.navigate",
+      "field-map.tool.zoom-box",
+      "field-map.tool.crop",
+      "field-map.tool.inspect",
+      "field-map.tool.profile",
+      "field-map.tool.measure",
+      "field-map.zoom-in",
+      "field-map.zoom-out",
+      "field-map.fit",
+      "field-map.toggle-vectors",
+      "field-map.toggle-points",
+      "field-map.toggle-mesh",
+      "field-map.toggle-streamlines",
+      "field-map.toggle-contours",
+      "field-map.toggle-multislice",
+      "field-map.toggle-legend",
+      "field-map.export-png",
+      "field-map.export-data",
+    ];
     expect(actionIds).toEqual([
       RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
       "field-map.open",
-      "field-map.export-png",
+      ...toolbarCommandIds,
     ]);
     expect(menuNodeIds).not.toEqual(
       expect.arrayContaining([

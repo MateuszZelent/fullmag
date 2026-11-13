@@ -78,7 +78,10 @@ def validate_pool_failure(error: object, network_name: str, project: str) -> str
     removed = [f"Network {network_name} Removing", f"Network {network_name} Removed"]
     if lines[:2] == removed:
         lines = lines[2:]
-    require(lines == expected,
+    # Compose may reject the network before announcing backend creation. Both
+    # exact sequences are fenced by independent service/network absence checks.
+    before_container_creation = expected[:4] + expected[5:]
+    require(lines in (expected, before_container_creation),
             "Original Compose output differs from the exact observed address-pool failure")
     require(not re.search(r"\b(?:Created|Started|Running|Done)\b", error, re.IGNORECASE),
             "Compose output includes a successful creation or start")

@@ -690,10 +690,13 @@ def _owned_volume(control, role, key):
 
 def _frontend(control, operation, selected, state, port, image, *, create_generation=False,
               old_generation_id=None, old_seed_sha256=None, publish_inputs=True):
-    from docker_development_inputs import metadata_cache_key, seed
+    from docker_development_inputs import metadata_cache_key, seed, _next_generated_seed_variants
     files = []
     inputs = seed(selected, state, port, write_file=lambda relative, data: files.append({
         "relative": relative, "data": base64.b64encode(data).decode("ascii")}))
+    for record in files:
+        record["generated_sha256"] = [hashlib.sha256(value).hexdigest() for value in
+            _next_generated_seed_variants(record["relative"], base64.b64decode(record["data"]))]
     previous_inputs = control.read("frontend/development-inputs.json", optional=True)
     if (not create_generation and isinstance(previous_inputs, dict)
             and all(previous_inputs.get(key) == inputs.get(key) for key in
@@ -740,6 +743,19 @@ def _frontend(control, operation, selected, state, port, image, *, create_genera
     operation["receipt"]["frontend_volume"] = volume
     if create_generation and publish_inputs:
         raise BuildControlError("New frontend generation inputs must be staged until old CAS revalidation")
+    if grouped and isinstance(previous_inputs, dict) and not create_generation:
+        previous_hashes = {item["relative"]: item["sha256"] for item in previous_inputs.get("files", [])}
+        frozen_base = ("private/frontend/generations/" + generation_id
+                       if generation_id is not None else "private/frontend")
+        for record in files:
+            if record["relative"] not in ("apps/control-room/tsconfig.json", "apps/control-room/next-env.d.ts"):
+                continue
+            # Authenticate the old seed inside its own generation before
+            # accepting a Next rewrite across a configuration change.
+            previous_source = control.read_bytes(frozen_base + "/frozen-inputs/" + record["relative"], optional=True)
+            if previous_source is not None and hashlib.sha256(previous_source).hexdigest() == previous_hashes.get(record["relative"]):
+                record["generated_sha256"].extend(hashlib.sha256(value).hexdigest() for value in
+                    _next_generated_seed_variants(record["relative"], previous_source))
     request = canonical({"files": files, "inputs": inputs, "previous_inputs": previous_inputs,
         "group_storage": grouped, "frontend_generation": frontend_generation})
     if len(request) > 8 * 1024 * 1024:
@@ -833,10 +849,12 @@ if grouped:
             for part in relative.parts:
                 node=node/part
                 if node.is_symlink(): raise RuntimeError('Frontend metadata ancestry is a link')
-            if node.exists() and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+            if node.exists():
                 actual=hashlib.sha256(node.read_bytes()).hexdigest()
                 requested=hashlib.sha256(base64.b64decode(record['data'],validate=True)).hexdigest()
-                if actual not in (requested,allowed.get(record['relative'])):
+                generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+                accepted=record.get('generated_sha256',[]) if generated else (requested,allowed.get(record['relative']))
+                if actual not in accepted:
                     raise RuntimeError('Frontend metadata has unknown changes; all state retained')
 if freeze.exists() or freeze.is_symlink():
     descriptor=os.open(freeze, os.O_RDONLY | os.O_NOFOLLOW)
@@ -896,11 +914,15 @@ for record in request['files']:
     data=base64.b64decode(record['data'],validate=True)
     if target.is_symlink(): raise RuntimeError('Frontend seed is a link')
     if target.exists():
-        if target.read_bytes()!=data and record['relative'] not in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts'):
+        if target.read_bytes()!=data:
+            generated=record['relative'] in ('apps/control-room/tsconfig.json','apps/control-room/next-env.d.ts')
+            if generated and not grouped:
+                continue
             if not grouped or not isinstance(previous,dict):
                 raise RuntimeError('Frontend metadata changed; cache retained')
             allowed={item['relative']:item['sha256'] for item in previous.get('files',[])}
-            if hashlib.sha256(target.read_bytes()).hexdigest()!=allowed.get(record['relative']):
+            accepted=record.get('generated_sha256',[]) if generated else (allowed.get(record['relative']),)
+            if hashlib.sha256(target.read_bytes()).hexdigest() not in accepted:
                 raise RuntimeError('Frontend metadata contains unknown changes; retained')
             temporary=target.with_name(target.name+'.group-seed.tmp')
             if temporary.is_symlink(): raise RuntimeError('Frontend metadata staging is a link')
@@ -2252,7 +2274,9 @@ def _native_contracts(values):
         return ()
     if (not isinstance(values, (list, tuple))
             or any(not isinstance(value, str)
-                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace"}
+                   or value not in {"fem-demag-poisson", "fem-cuda-activity-trace",
+                                    "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                    "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"}
                    for value in values)
             or len(values) > 1
             or len(set(values)) != len(values)):

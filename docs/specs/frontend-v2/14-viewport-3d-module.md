@@ -257,3 +257,44 @@ Required verification:
 - API hygiene proves no module-level fetch or raw `/v2/...` strings.
 - per-object visualization changes update only affected layer style/field buffers and do not rebuild topology for unaffected objects.
 - new object creation displays primitive geometry and fallback wireframe without object topology, then switches to current mesh topology after a successful mesh build.
+
+
+## Presentation rendering and PNG export (2026-11-12)
+
+The existing single viewport exposes two independent preferences: visualization
+mode and render quality. Scientific mode is the default, including migrated
+preferences. Presentation mode uses MeshStandardMaterial on uniform geometry,
+a locally generated linear HDR studio panorama filtered through PMREM, and
+filtered directional shadows. Roughness and metalness are visual preferences,
+not solver material parameters. No remote asset request is required.
+
+Quantitative surfaces and glyphs retain their unlit palette and bypass tone
+mapping in both modes. AO, bloom and presentation tone mapping are suppressed
+while quantitative data are visible. Interactive Lite disables AO/shadows;
+Interactive and Balanced use half-resolution AO and progressively larger
+shadow maps; Figure uses full-resolution AO and 2048 shadow maps. One-shot
+PNG retains the selected profile and data/glyph budget rather than forcing
+a higher-cost capture profile.
+The HDR compositor uses single-sample targets and FXAA where the selected
+profile enables antialiasing. This avoids invalid HDR MSAA resolves observed
+on the managed software WebGL renderer while preserving the quality controls.
+All frame scheduling remains demand-driven. HDRI/PMREM and shadow resources
+have explicit lifecycle ownership and are released on mode changes/unmount.
+
+PNG renders at a selected 1, 2 or 4 times the CSS viewport size using the same
+geometry/effects pipeline as the live view, for both viewport and transparent
+backgrounds. Effect exports read linear RGBA16F from the final composed target,
+so RGB and coverage use the same FXAA-filtered samples, independent of the
+canvas alpha setting. The path without effects retains its raw RGBA capture. ACES maps
+straight linear light before restoring coverage, avoiding bright translucent
+edges. Pure additive glow outside geometry receives the smallest non-clipping
+alpha derived from its linear RGB, retaining its black-background composition.
+Standard PNG alpha cannot reproduce purely additive light on every background.
+Export omits
+both the HUD pass and DOM annotations when annotations are disabled. Limits
+(8192 pixels per side, 16 million pixels and device texture limits) fail with
+an actionable error before allocating oversized targets. Export restores
+renderer/composer dimensions and state even on failure. Ray tracing is outside
+this implementation.
+
+Adapter N8AO stabilizuje normalne z pochodnych w jednostkach SI przez skalowanie operandów iloczynu wektorowego. Nie zmienia jednostek, geometrii ani kamery. Śledzenie nowej shadow map odbywa się po renderze sceny i HUD; dodatkowy callback nie renderuje sceny. Po zakończeniu gestu OrbitControls kompozycja współczynnika tłumienia według czasu ogranicza długi ogon przy wolnych klatkach; zapis pozycji wymaga zaobserwowanego spoczynku.

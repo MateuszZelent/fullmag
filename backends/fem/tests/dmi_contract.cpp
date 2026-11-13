@@ -219,6 +219,10 @@ void dmi_element_loops_are_parallelized_with_thread_local_residuals() {
     check(
         workspace_header.find("residual_xyz_by_thread") != std::string::npos,
         "DMI workspace must own reusable per-thread residual buffers");
+    const auto policy_source = read_text_file(
+        root / "cpu" / "mfem" / "runtime" / "element_parallel_policy.cpp");
+    check(policy_source.find("defined(_OPENMP) && defined(MFEM_USE_OPENMP) && defined(MFEM_THREAD_SAFE)") != std::string::npos,
+          "native element parallel policy requires both compiler and provider thread safety");
     for (const std::string *source : {&interfacial, &bulk}) {
         check(
             source->find("#pragma omp parallel") != std::string::npos,
@@ -232,6 +236,14 @@ void dmi_element_loops_are_parallelized_with_thread_local_residuals() {
         check(
             source->find("thread_energy") != std::string::npos,
             "DMI energy accumulation must use thread-local reductions");
+        check(source->find("mfem_shared_element_evaluation_parallel_safe()") != std::string::npos,
+              "DMI element parallelism requires the actual MFEM provider safety policy");
+        check(source->find("mesh->GetElementTransformation(elem, T)") != std::string::npos &&
+              source->find("mesh->GetElementTransformation(elem)") == std::string::npos,
+              "DMI workers must populate their owned transformation rather than shared mesh scratch");
+        check(source->find("IntRules.Get(") == std::string::npos &&
+              source->find("element_rules[static_cast<size_t>(elem)]") != std::string::npos,
+              "DMI workers consume serially prepared quadrature rules");
     }
 }
 

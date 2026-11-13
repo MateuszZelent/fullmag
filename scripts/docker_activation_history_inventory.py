@@ -10,7 +10,7 @@ import subprocess
 import uuid
 
 from docker_activation_history_policy import (
-    HistoryError, canonical, digest, document, referenced_attempts,
+    HistoryError, canonical, digest, document, file_manifest, referenced_attempts,
 )
 from docker_activation_history_reader import activation_history_read_script
 from docker_activation_history_storage import _directory, _raw, _entries
@@ -30,6 +30,7 @@ KNOWN_ROOTS = frozenset({
     "startup-recovery-stop", "startup-recovery-stop-preview",
     "browser-qa", "claimed-interruption-collect", "cancel-failed-no-spawn",
     "no-spawn-cancellation", "stop-failed-runtime", "recovery-promotion", "recovery-build",
+    "bootstrap-namespace-proof", "bootstrap-container-proof",
 }) | EXCLUDED_ROOTS
 MAX_INVENTORY_ENTRIES = 70000
 MAX_PIN_BYTES = 32 * 1024 * 1024
@@ -159,29 +160,44 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
     script activation markers are historical only when confirmed activated.
     """
     root = _directory(root)
+    rejected_terminal_raw = None
+    rejection_files = None
     if qualified_rejection is not None:
         from docker_activation_history_storage import source_files
+        rejection_candidate = qualified_rejection.get("candidate")
+        rejection_files = qualified_rejection.get("files")
+        if (not isinstance(rejection_candidate, dict)
+                or rejection_candidate.get("qualification_kind") != "rejected-no-run-v1"
+                or rejection_candidate.get("attempt") != candidate
+                or rejection_candidate.get("run_id") is not None
+                or rejection_candidate.get("session_id") is not None
+                or not isinstance(rejection_files, dict)
+                or rejection_candidate.get("files") != file_manifest(rejection_files)):
+            raise HistoryError("Qualified rejection lacks its current no-run qualification")
         directory = root / "activation/attempts" / candidate
         if not directory.exists():
             directory = root / "activation/history-v1" / candidate
-        if source_files(directory) != qualified_rejection:
+        if source_files(directory) != rejection_files:
             raise HistoryError("Qualified rejection bytes changed before reference inventory")
-        rejected_receipt = document(qualified_rejection["receipt.json"], "qualified rejection")
+        rejected_receipt = document(rejection_files["receipt.json"], "qualified rejection")
+        rejected_terminal_raw = rejection_files.get("terminal.json")
         if (rejected_receipt.get("attempt") != candidate
                 or rejected_receipt.get("state") != "failed-confirmed"
                 or rejected_receipt.get("activation_state") != "rejected"
-                or rejected_receipt.get("run_id") is not None):
+                or rejected_receipt.get("run_id") is not None
+                or not isinstance(rejected_terminal_raw, bytes)):
             raise HistoryError("Invalid qualified rejection reference identity")
         expected_rejected_marker = {
             "schema": "fullmag.docker-startup-activation-receipt.v1", "state": "rejected",
             "request_id": rejected_receipt["request_id"],
             "source_sha256": rejected_receipt["source_sha256"],
             "provenance_sha256": rejected_receipt["provenance_sha256"],
-            "authorization": document(qualified_rejection["authorization.json"], "authorization"),
-            "result": document(qualified_rejection["result.json"], "result")}
+            "authorization": document(rejection_files["authorization.json"], "authorization"),
+            "result": document(rejection_files["result.json"], "result")}
     references, pins = {}, {}
     known_runs = {}
     closed_activations = {}
+    qualified_current_terminal = None
     live = _entries(root / "activation/attempts")
     def closed_terminal(path):
         terminal, receipt = path / "terminal.json", path / "receipt.json"
@@ -191,7 +207,7 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
             if (value.get("schema") == "fullmag.docker-build-operation.v1"
                     and (value.get("state") == "succeeded" or (
                         qualified_rejection is not None and path.name == candidate
-                        and terminal_raw == qualified_rejection["terminal.json"]
+                        and terminal_raw == rejection_files["terminal.json"]
                         and value.get("state") == "failed-confirmed"
                         and value.get("activation_state") == "rejected"))
                     and value.get("attempt") == path.name
@@ -291,7 +307,21 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
                     # Every retained live JSON document must be readable. Do
                     # not silently omit a new pin vocabulary or malformed JSON.
                     document(raw, relative)
-                    references[relative] = raw
+                    if (relative == "activation/current.json"
+                            and rejected_terminal_raw is not None
+                            and raw == rejected_terminal_raw):
+                        # This one no-run terminal pointer is historical only
+                        # under exact qualification. Keep its raw pin/CAS and
+                        # leave every other root in the live reference graph.
+                        qualified_current_terminal = {
+                            "path": relative,
+                            "qualification_kind": "rejected-no-run-v1",
+                            "attempt": candidate,
+                            "terminal_sha256": digest(rejected_terminal_raw),
+                            "current_sha256": digest(raw),
+                        }
+                    else:
+                        references[relative] = raw
                     pins[relative] = _reference_digest(root, relative, raw)
             else:
                 raise HistoryError("Linked or special control reference entry")
@@ -317,6 +347,7 @@ def control_references(root, candidate, *, owner_marker_pin=None, qualified_reje
         raise HistoryError("Activation is referenced by live control/recovery roots: "
                            + ", ".join(direct[:12] or ["transitive attempt pin"]))
     return {"protected": sorted(protected), "pins": pins,
+            "qualified_current_terminal": qualified_current_terminal,
             "live_attempts": live, "sha256": digest(canonical(pins))}
 
 

@@ -12,11 +12,15 @@ import {
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
 
+import { type PlanarFieldLayer } from "@/modules/inspector/public";
+import { isDirectionColormap } from "@/shared/visualization/directionColor";
+
+import { planarScopeQuery } from "../model/fieldMapDataPlan";
 import {
   derivePlanarComponentScalar,
   isClientDerivablePlanarComponent,
 } from "../model/planarComponentDerivation";
-import { resolvePlanarDisplayRange, type PlanarDisplayRange } from "../model/fieldMapRenderModel";
+import { normalizePlanarColorRange, resolvePlanarDisplayRange, type PlanarDisplayRange } from "../model/fieldMapRenderModel";
 import { createPlanarColorizer } from "../renderer/planarColorizer";
 import { createPlanarRenderer, type PlanarRenderer } from "../renderer/planarRenderer";
 import {
@@ -39,8 +43,41 @@ export interface PlanarMultisliceGridProps {
   requestVectors: boolean;
   range: PlanarDisplayRange | null;
   rasterOpacity: number;
-  /** Shared colour legend, rendered with the union range. */
-  renderLegend: (range: { max: number; min: number } | null) => ReactNode;
+  /**
+   * Shared colour legend, rendered with the union range and the canonical
+   * unit the panels' metadata reports (`null` until the first panel loads).
+   */
+  renderLegend: (range: { max: number; min: number } | null, panelCanonicalUnit: string | null) => ReactNode;
+  /**
+   * Layers model (ADR 0080 W7): the panels draw this layer — the first visible
+   * one — instead of the base field. `null` means no layer is visible.
+   * Omitted in the legacy model.
+   */
+  fieldLayer?: PlanarFieldLayer | null;
+}
+
+/** Panel inputs of one field layer: its quantity, component, scope and colouring. */
+export function multisliceLayerProps(
+  props: PlanarMultisliceGridProps,
+  layer: PlanarFieldLayer,
+): PlanarMultisliceGridProps {
+  const direction = isDirectionColormap(layer.colormap);
+  return {
+    ...props,
+    baseQuery: {
+      ...props.baseQuery,
+      component: layer.component,
+      ...planarScopeQuery(layer.view_scope),
+      vector_budget: direction ? Math.max(1, props.baseQuery.vector_budget ?? 1) : 0,
+    },
+    clientComponent: null,
+    colorByDirection: direction,
+    colormap: layer.colormap,
+    quantityId: layer.quantity_id,
+    range: normalizePlanarColorRange(layer.range),
+    rasterOpacity: layer.raster_opacity,
+    requestVectors: direction,
+  };
 }
 
 /**
@@ -49,10 +86,29 @@ export interface PlanarMultisliceGridProps {
  * colour range are shared, the auto range being the union of panel extrema.
  */
 export function PlanarMultisliceGrid(props: PlanarMultisliceGridProps) {
+  if (props.fieldLayer === null) {
+    return (
+      <div className="fm-field-map__multislice" data-multislice-panels={0}>
+        <p className="fm-field-map__diagnostic" role="status">No visible field layer. Show a layer to draw slice panels.</p>
+      </div>
+    );
+  }
+  return <PlanarMultislicePanels {...(props.fieldLayer ? multisliceLayerProps(props, props.fieldLayer) : props)} />;
+}
+
+function PlanarMultislicePanels(props: PlanarMultisliceGridProps) {
   const [extents, setExtents] = useState<readonly (MultisliceExtent | null)[]>([]);
   // One panel per distinct position: a repeated fraction is the same sample.
   const fractions = useMemo(() => [...new Set(props.positionFractions)], [props.positionFractions]);
   const count = fractions.length;
+  // Every panel samples the same quantity, so the first panel's metadata (the
+  // same resource the panel itself loads) names the legend unit.
+  const firstQuery = useMemo(
+    () => ({ ...props.baseQuery, position_fraction: fractions[0] }),
+    [fractions, props.baseQuery],
+  );
+  const firstMeta = usePlanarFieldMetaResource(props.quantityId, props.source, firstQuery, { enabled: count > 0 });
+  const panelUnit = firstMeta.data?.canonical_unit ?? null;
   const onExtent = useCallback((index: number, extent: MultisliceExtent | null) => {
     setExtents((current) => {
       const previous = current[index] ?? null;
@@ -83,7 +139,7 @@ export function PlanarMultisliceGrid(props: PlanarMultisliceGridProps) {
           />
         ))}
       </div>
-      {props.renderLegend(sharedRange)}
+      {props.renderLegend(sharedRange, panelUnit)}
     </div>
   );
 }

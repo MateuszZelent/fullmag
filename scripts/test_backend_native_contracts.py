@@ -140,6 +140,42 @@ class BackendNativeContractsTests(unittest.TestCase):
             self.assertEqual(report["contracts"][name]["test"]["exit_code"], code)
             self.assertFalse(receipt_satisfies(report, requested=[name], source_snapshot_sha256=SNAPSHOT, package_root=self.package_root))
 
+    def _assert_performance_contract_binding(self, name, target):
+        binary = self.build_fem / target
+        binary.write_bytes(b"performance contract executable")
+        runner, calls = self._runner(outcomes=[0, 0])
+        with runner:
+            self._prepare([name])
+            report = self._run_prepared([name])
+        self.assertEqual(calls[0][0][4], target)
+        self.assertEqual(calls[1][0], [str(binary)])
+        self.assertTrue(receipt_satisfies(
+            report, requested=[name], source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+        self.assertFalse(receipt_satisfies(
+            report, requested=[FEM_DEMAG_POISSON], source_snapshot_sha256=SNAPSHOT,
+            package_root=self.package_root))
+
+    def test_pgbb_reuse_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cuda-pgbb-reuse", "fem_cuda_pgbb_reuse_contract")
+
+    def test_rk_guard_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cuda-rk-guard", "fem_cuda_rk_guard_contract")
+
+    def test_cpu_pgbb_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cpu-pgbb-reuse", "fem_pgbb_accepted_cache_contract")
+
+    def test_object_average_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cuda-object-average", "fem_cuda_object_average_contract")
+
+    def test_cpu_threads_binds_its_own_executable_and_receipt(self):
+        self._assert_performance_contract_binding(
+            "fem-cpu-threads", "fem_cpu_threads_contract")
+
     def test_combined_contract_request_is_refused_before_any_command(self):
         runner, calls = self._runner()
         with runner, self.assertRaises(ValueError):

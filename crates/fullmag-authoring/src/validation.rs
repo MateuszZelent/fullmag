@@ -172,6 +172,14 @@ fn validate_scene_document_with_mode(
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
     validate_execution_profile_intent(&scene.study)?;
+    if let Some(resources) = &scene.study.compute_resources {
+        resources.validate().map_err(|errors| {
+            SceneDocumentValidationError::new(format!(
+                "study.compute_resources is invalid: {}",
+                errors.join("; ")
+            ))
+        })?;
+    }
     if let Some(Some(thermal)) = &scene.study.thermal_noise {
         thermal.validate().map_err(SceneDocumentValidationError::new)?;
     }

@@ -8,6 +8,8 @@
  * and observable paths.
  */
 
+#include "gpu/cuda/reductions/object_average_state.hpp"
+
 #include <cstdint>
 #include <array>
 
@@ -16,6 +18,7 @@ namespace fullmag::fem {
 static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 32;
 
 struct FemGpuReductionWorkspaceDeviceState {
+    GpuObjectAverageState object_average;
     double *scalar_workspace = nullptr;
     double *scalar_result = nullptr;
     double *host_scalar_result = nullptr;

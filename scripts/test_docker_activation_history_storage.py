@@ -222,6 +222,64 @@ class RejectedHistoryStorageTests(HistoryStorageTests):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout,expected)
 
+    def test_exact_rejected_current_terminal_is_qualified_and_hash_pinned(self):
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+
+        plan = self.plan()
+
+        self.assertEqual(plan["qualified_current_terminal"], {
+            "path": "activation/current.json",
+            "qualification_kind": "rejected-no-run-v1",
+            "attempt": TOKEN,
+            "terminal_sha256": self.candidate["files"]["terminal.json"]["sha256"],
+            "current_sha256": policy.digest(self.files["terminal.json"]),
+        })
+        self.assertEqual(plan["guard_files"]["activation/current.json"],
+                         policy.digest(self.files["terminal.json"]))
+        self.assertNotIn(TOKEN, plan["protected"])
+        self.apply(plan)
+        self.assert_archive()
+
+    def test_rejected_current_pointer_drift_after_preview_refuses_apply(self):
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+        plan = self.plan()
+        current.write_bytes(self.files["terminal.json"] + b" ")
+
+        with self.assertRaisesRegex(policy.HistoryError, "guard pointers changed"):
+            self.apply(plan)
+        self.assertTrue(self.source.exists())
+
+    def test_unqualified_or_verified_pointer_still_protects_rejected_activation(self):
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(self.files["terminal.json"])
+
+        unqualified = copy.deepcopy(self.candidate)
+        del unqualified["qualification_kind"]
+        with self.assertRaisesRegex(policy.HistoryError, "protected"):
+            storage.make_plan(self.root, [unqualified], identity=self.identity,
+                              external_evidence_sha256=self.evidence, protected=set())
+
+        verified = self.root / "activation/verified.json"
+        verified.write_bytes(self.files["terminal.json"])
+        with self.assertRaisesRegex(policy.HistoryError, "protected"):
+            self.plan()
+
+    def test_unknown_current_pointer_still_protects_rejected_activation(self):
+        current = self.root / "activation/current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_bytes(raw({
+            "attempt": TOKEN,
+            "state": "outcome-unknown-resources-retained",
+        }))
+
+        with self.assertRaisesRegex(policy.HistoryError, "protected"):
+            self.plan()
+
 
 if __name__ == "__main__":
     unittest.main()

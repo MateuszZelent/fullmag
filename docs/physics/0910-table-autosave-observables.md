@@ -360,7 +360,36 @@ At stage entry the runtime activates only the owning policy. At stage exit it
 flushes and drains the existing bounded artifact pipeline before committing
 the stage manifest. Encoding, compression, HDF5/Zarr writes, and TXT writes
 remain outside solver callbacks and GPU control fences. Failed stages preserve
-completed samples and record an incomplete marker and stop reason.
+completed samples. A writer-close marker alone does not establish solver
+success; an error before the solver returns an authoritative completion record
+must not be relabelled as convergence or assigned a fabricated stop reason.
+
+### Wynik etapu w samowystarczalnym Zarr
+
+Flaga manifestu `complete` opisuje zakończenie zapisu próbek. Nie zastępuje
+wyniku solvera i nie potwierdza konwergencji. Opcjonalny `completion` zachowuje
+autorytatywny `StageCompletionIR`: `status`, `converged`, `reason` oraz metrykę
+z wartością i progiem, jeśli solver je podał. `None` oznacza brak takiego
+potwierdzenia; limit kroków nie staje się zbieżnością przez zamknięcie writera.
+Dotyczy to wspólnego toru artefaktów FDM CPU, FDM GPU, FEM CPU i FEM GPU,
+bez zmiany kryteriów zatrzymania poszczególnych solverów.
+
+Po opróżnieniu kolejki finalizacja wiąże wynik i końcową provenance z dokładną
+instancją etapu zwróconą przez writer: `target`, `stage_id`, `stage_index`.
+Manifest tego etapu i odpowiadający wpis `<target>.autosave.json` muszą
+zachować ten sam wynik i resolution wykonania. Ponowne użycie `stage_id`
+nie uprawnia do zmiany wcześniejszej instancji. Wspólny root wieloetapowego
+Zarr nie otrzymuje płaskiego `completion` bieżącego etapu. Zwykłe strumieniowe
+field-Zarr otrzymują wynik tylko pod dokładnymi ścieżkami otwartymi przez
+bieżący writer; ich istniejący kontrakt identyfikuje etap przez `stage_id`,
+bez wymyślonego indeksu etapu.
+
+Finalizacja zmienia metadane po drain. Nie dopisuje odczytów pól GPU,
+nie zmienia chunków, kształtu tablic, indeksów próbek ani backpressure.
+Kontrole regresyjne muszą obejmować wspólny i osobny katalog autosave,
+różne resolution kolejnych etapów, powtórzony identyfikator, torque,
+limit kroków i brak completion. Dowody źródłowe i testy writera nie zastępują
+kwalifikacji pełnego biegu na urządzeniu.
 
 (validation)=
 
@@ -471,3 +500,9 @@ completed samples and record an incomplete marker and stop reason.
 | `crates/fullmag-runner/src/dispatch.rs` | `record_native_fem_initial_field_snapshots` | Capture scheduled initial field data without emitting a table scalar row. |
 | `crates/fullmag-runner/src/dispatch.rs` | `native_fem_initial_snapshot_is_lazy_for_headless_time_domain` | Verify current native FEM initial-output admission behavior. |
 | `docs/physics/0910-table-autosave-observables.md` | `DOC-ANCHOR:table-time-origin-contract` | Physical-time origin sampling and current native FEM qualification scope. |
+| `crates/fullmag-ir/src/study.rs` | `StageCompletionIR` | Autorytatywny wynik solvera i opcjonalna metryka zatrzymania. |
+| `crates/fullmag-runner/src/autosave_storage.rs` | `StageManifest` | Oddzielny marker zamknięcia writera i opcjonalny wynik etapu. |
+| `crates/fullmag-runner/src/autosave_storage.rs` | `StageManifestIdentity` | Dokładna instancja etapu zapisana przez writer. |
+| `crates/fullmag-runner/src/artifacts.rs` | `finalize_streamed_stage_artifacts` | Finalizacja po drain wyłącznie dla artefaktów wskazanych przez writer. |
+| `crates/fullmag-runner/src/autosave_storage.rs` | `finalize_stage_completion` | Zgodny wynik i provenance właściwego manifestu, wpisu aggregate i metadanych próbek. |
+| `crates/fullmag-runner/src/autosave_zarr.rs` | `write_bytes_atomic` | Wspólny atomowy zapis metadanych i dokładne bajty rollbacku, z adapterem Windows. |

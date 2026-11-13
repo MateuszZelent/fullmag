@@ -1786,3 +1786,29 @@ walidatora recovery przed porównaniem pinów; brak kontekstu source/identity
 odmawia, a dryf efektywnego config lub generation nadal blokuje domknięcie.
 Pełna izolowana suite `test_docker_dev_browser_qa.py`: 77 PASS; AST i diff-check
 PASS. To testy metadanych i mocków; rzeczywisty browser cykl pozostaje otwarty.
+
+
+### Integracja z mastercaf0029de — źródła i regresje
+
+Po commicie QA `3e8ef37e60f80be4602339585bc89d0cf26d53fe` połączono źródła
+z przypiętym masterem `caf0029de19c7d1c4e33e9973fcdbf2877418d47`.
+Cztery konfliktowe hunki w dwóch modułach recovery zachowują diagnostic/failure
+fence i group-local P22 oraz typed historical namespace/bootstrap z mastera.
+Wszystkie 55 metod testowych P22 abrupt recovery pozostały w drzewie.
+
+Frontend seed zachowuje generation-aware request, probe i odroczoną publikację.
+Dodaje masterowe dowody wariantów plików generowanych przez Next. Poprzednie
+zamrożone źródło jest czytane wyłącznie z aktywnej generacji (lub legacy leaf),
+po zgodności SHA z poprzednim manifestem; create-generation wymaga braku freeze.
+Regresja obejmuje także namespaced volume i odmowę niezgodnego zamrożonego
+źródła. Fixture guest otrzymuje rzeczywiste `generated_sha256`; brak tej listy
+nadal odmawia. Masterowa fixture została dostosowana do nowego korzenia `/data`
+wewnątrz tempdir, zachowując rzeczywisty embedded helper i odmowy nieznanych
+plików. Suite generated-file została jawnie dodana do istniejącego CI.
+
+Po połączeniu przeszło 375 izolowanych testów metadanych/guest/protokołu:
+abrupt55, bootstrap28, seed20, generated6, recreate34, group-frontend4, browser77,
+namespace-completion22, nowe completion/observer16, frozen21, legacy-frontend17,
+shell26 oraz canonical DEV up49. Dotyczą połączonych źródeł, nie rzeczywistego nowego backendu.
+Pełny bootstrap `43365406857` dla wcześniejszego `6e8779c57` zakończył się
+sukcesem. Zintegrowane źródła wymagają własnego CI, managed rebuild i odbioru UI.

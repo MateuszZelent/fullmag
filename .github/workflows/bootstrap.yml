@@ -532,6 +532,14 @@ jobs:
           RUST_MIN_STACK: 8388608
         run: cargo test -p fullmag-api --bin fullmag-api scene_pbc_overrides_roundtrip_via_python_helper
 
+      - name: Run typed compute resource authoring bridge regressions
+        env:
+          FULLMAG_REPO_ROOT: ${{ github.workspace }}
+          RUST_MIN_STACK: 8388608
+        run: |
+          cargo test --locked -p fullmag-authoring --lib compute_resources
+          cargo test --locked -p fullmag-api --bin fullmag-api router_v2::tests::typed_compute_resources_cross_python_scene_rust_builder_and_problem_ir -- --exact
+
       - name: Run full field identity binary transport contracts
         run: |
           cargo test -p fullmag-api --bin fullmag-api field_vector_v5
@@ -561,6 +569,35 @@ jobs:
           cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::initial_stage_autosave_table_scalar_does_not_write_legacy_scalar_trace -- --exact
           cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_stage_autosave_initial_table_is_t0_only_and_skips_direct_minimizer -- --exact
           cargo test --locked -p fullmag-runner --lib dispatch::tests::native_fem_initial_snapshot_is_lazy_for_headless_time_domain -- --exact
+
+      - name: Run FDM GPU terminal provenance contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib artifact_pipeline::tests::fdm_multilayer_terminal_provenance_is_preserved_across_zarr_metadata_updates -- --exact
+          cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::success_finalizer_propagates_terminal_provenance_publication_failure -- --exact
+          cargo test --locked -p fullmag-runner --lib fdm::gpu::cuda::native::residency::tests::error_finalizer_preserves_primary_error_when_terminal_publication_fails -- --exact
+
+      - name: Run authoritative Zarr stage completion contracts
+        run: |
+          cargo test --locked -p fullmag-runner --lib stage_completion
+          cargo test --locked -p fullmag-runner --lib autosave_storage::tests
+          cargo test --locked -p fullmag-runner --lib regular_zarr_completion
+          cargo test --locked -p fullmag-runner --lib autosave_zarr::tests::metadata_atomic_replace_preserves_exact_bytes -- --exact
+
+      - name: Run FDM CPU BB demag reuse contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib demag_cache_tests
+          cargo test --locked -p fullmag-runner --lib relaxation::direct_minimizer_reference::tests::projected_gradient_bb_reuses_each_trial_demag_fft_in_aos_and_soa -- --exact
+
+      - name: Run FDM CPU single-layer FFT oracle contracts
+        run: |
+          cargo test --locked -p fullmag-engine --lib half_spectrum_3d_matches_direct_dft_and_normalized_round_trip
+          cargo test --locked -p fullmag-engine --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_workspace_shape_has_a_distinct_lifecycle_key
+          cargo test --locked -p fullmag-engine --features parallel --lib half_spectrum_3d_matches_direct_dft_and_normalized_round_trip
+          cargo test --locked -p fullmag-engine --features parallel --lib open_single_layer_workspace_matches_legacy_aos_and_soa_oracle
+          cargo test --locked -p fullmag-engine --features parallel --lib single_layer_specialization_excludes_3d_pbc_and_non_open_demag
 
       - name: Run native session writer lease contracts
         run: cargo test -p fullmag-session --lib writer --no-fail-fast
@@ -664,6 +701,9 @@ jobs:
 
       - name: Verify the Windows checkpoint policy from its real writer
         run: cargo test -p fullmag-runner persists_platform_directory_sync_policy_from_real_checkpoint_writer --lib
+
+      - name: Verify atomic Zarr metadata replacement on Windows
+        run: cargo test --locked -p fullmag-runner --lib autosave_zarr::tests::metadata_atomic_replace_preserves_exact_bytes -- --exact
 
       - name: Verify the Windows writer-to-inspector contract
         env:
@@ -1163,6 +1203,7 @@ jobs:
           python -B scripts/test_docker_frontend_frozen_recovery.py -v
           python -B scripts/test_docker_volume_frontend_recovery.py -v
           python -B scripts/test_docker_volume_frontend_seed_recovery.py -v
+          python -B scripts/test_docker_frontend_seed_generated.py -v
           python -B scripts/test_docker_volume_frontend_seed_completion.py -v
           python -B scripts/test_docker_frontend_seed_completion_observer.py -v
           python -B scripts/test_docker_volume_frontend_refresh_reconcile.py -v

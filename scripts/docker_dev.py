@@ -2849,6 +2849,10 @@ def _parser() -> argparse.ArgumentParser:
     stop_bootstrap_frontend.add_argument("--port", type=int, required=True)
     stop_bootstrap_frontend.add_argument("--bootstrap-stop-attempt", required=True)
     stop_bootstrap_frontend.add_argument("--bootstrap-stop-sha256", required=True)
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof",
+                                        help="immutable control-relative historical namespace absence proof")
+    stop_bootstrap_frontend.add_argument("--historical-namespace-proof-sha256",
+                                        help="exact raw SHA-256 of the historical namespace proof")
     stop_bootstrap_frontend.add_argument("--apply", action="store_true")
     stop_bootstrap_frontend.add_argument("--expected-plan-sha256")
     recreate_volume = subparsers.add_parser("recreate-volume", help="Replace exact stopped-backend DEV services while retaining Docker caches")
@@ -2860,7 +2864,9 @@ def _parser() -> argparse.ArgumentParser:
     recreate_volume.add_argument('--prepared-quarantine-sha256',
                                  help='exact prepared quarantine digest; permits fresh archival only after native cancellation')
     recreate_volume.add_argument("--native-contract", action="append", default=None,
-                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
+                                 choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"),
                                  help="require an allowlisted native contract before publishing the replacement backend package")
     recreate_volume.add_argument(
         "--helper-source-root", type=Path,
@@ -3026,7 +3032,9 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--source-root", type=Path,
                              help="registered checkout/worktree mounted live by both services")
         command.add_argument("--native-contract", action="append", default=None,
-                             choices=("fem-demag-poisson", "fem-cuda-activity-trace"),
+                             choices=("fem-demag-poisson", "fem-cuda-activity-trace",
+                                          "fem-cuda-pgbb-reuse", "fem-cuda-rk-guard",
+                                          "fem-cpu-pgbb-reuse", "fem-cuda-object-average", "fem-cpu-threads"),
                              help="qualify the package with this native contract before API startup")
         command.add_argument(
             "--profile", choices=sorted(BUILD_PROFILE_TO_CARGO_PROFILE),

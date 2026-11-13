@@ -17,7 +17,8 @@ use crate::{
     planar_sampling::{
         resolve_authored_planar_source, resolve_default_planar_source_at_position,
         resolve_spatial_target, FemNodePlaneStops,
-        evaluate_point_component, sample_resolved_target_cached, Occupancy, PlanarComponent, PlanarSampleIdentity,
+        evaluate_point_component, sample_resolved_target_cached, Occupancy, PlanarComponent,
+        PlanarNearestNode, PlanarSampleIdentity,
         PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSection,
         ResolvedPlanarSourceIdentity,
         ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
@@ -38,8 +39,8 @@ use crate::{
     schemas::{
         PlanarFieldFrameResource, PlanarFieldLinksResource, PlanarFieldMetaResource,
         PlanarFieldOccupancyResource, PlanarFieldProbeQuery, PlanarFieldProbeResource,
-        PlanarFieldQuery, PlanarMeshOverlayDescriptor, PlanarSampleSourceResource,
-        PlanarSectionResource,
+        PlanarFieldQuery, PlanarMeshOverlayDescriptor, PlanarProbeNodeResource,
+        PlanarSampleSourceResource, PlanarSectionResource,
     },
     types::AppState,
 };
@@ -89,6 +90,10 @@ struct BuiltPlanarField {
     /// Default-source position override (multislice panel), echoed into links.
     position_fraction: Option<f64>,
     position_m: Option<f64>,
+    /// Full u/v bounds of the resolved frame, before the sampling window.
+    full_bounds_uv_m: [f64; 4],
+    /// Resolved sampling window, echoed into links; `None` samples the frame.
+    window_uv_m: Option<[f64; 4]>,
     etag: String,
     sample_token: String,
 }
@@ -508,6 +513,12 @@ async fn build_planar_field_from_source(
     let request_context = crate::capture_current_live_request_context(state).await?;
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
+    let requested_window = planar_window_from_query(
+        query.window_u_min_m,
+        query.window_u_max_m,
+        query.window_v_min_m,
+        query.window_v_max_m,
+    )?;
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -776,6 +787,23 @@ async fn build_planar_field_from_source(
     };
     let target = resolve_spatial_target(&resolved_field, &target_definition, scope, &operator)?;
     target.resolve_dynamic_extent(&mut frame)?;
+    // The sampling window replaces the sampled extent, so the raster, mask,
+    // overlay and their identity all describe the window at full resolution
+    // (`eq-planar-sampling-window`); the full bounds stay published.
+    let full_bounds_uv_m = explicit_frame_bounds(&frame)?;
+    let window_uv_m = match requested_window {
+        Some(window) => {
+            let resolved = resolve_planar_window(full_bounds_uv_m, Some(window))?;
+            frame.extent = fullmag_ir::PlanarExtentIR::Explicit {
+                u_min_m: resolved[0],
+                u_max_m: resolved[1],
+                v_min_m: resolved[2],
+                v_max_m: resolved[3],
+            };
+            Some(resolved)
+        }
+        None => None,
+    };
     let session_id = snapshot.session.session_id.clone();
     let target_fingerprint = target.fingerprint().to_string();
     let target_kind = target.target_kind().to_string();
@@ -856,6 +884,7 @@ async fn build_planar_field_from_source(
         source_device: source_device.clone(),
         source_precision: source_precision.clone(),
         frame: frame.clone(),
+        window_uv_m,
         operator: operator.clone(),
         resolution,
         quality: query
@@ -966,9 +995,83 @@ async fn build_planar_field_from_source(
         scope_region_id: query.scope_region_id.clone(),
         position_fraction: query.position_fraction,
         position_m: query.position_m,
+        full_bounds_uv_m,
+        window_uv_m,
         etag,
         sample_token,
     })
+}
+
+/// All four window parameters or none (`invalid_planar_window` otherwise);
+/// each must be finite with `min < max` per axis.
+pub(crate) fn planar_window_from_query(
+    u_min_m: Option<f64>,
+    u_max_m: Option<f64>,
+    v_min_m: Option<f64>,
+    v_max_m: Option<f64>,
+) -> Result<Option<[f64; 4]>, ApiError> {
+    match (u_min_m, u_max_m, v_min_m, v_max_m) {
+        (None, None, None, None) => Ok(None),
+        (Some(u_min), Some(u_max), Some(v_min), Some(v_max)) => {
+            let window = [u_min, u_max, v_min, v_max];
+            if window.iter().any(|value| !value.is_finite()) || u_min >= u_max || v_min >= v_max
+            {
+                return Err(ApiError::bad_request(
+                    "invalid_planar_window: window bounds must be finite with min < max",
+                ));
+            }
+            Ok(Some(window))
+        }
+        _ => Err(ApiError::bad_request(
+            "invalid_planar_window: window_u_min_m, window_u_max_m, window_v_min_m and window_v_max_m must be given together",
+        )),
+    }
+}
+
+/// Sampled u/v bounds: the full frame bounds without a window, otherwise the
+/// window clipped to them. An empty intersection is rejected rather than
+/// sampled as an empty raster.
+pub(crate) fn resolve_planar_window(
+    full_bounds_uv_m: [f64; 4],
+    window: Option<[f64; 4]>,
+) -> Result<[f64; 4], ApiError> {
+    let Some(window) = window else {
+        return Ok(full_bounds_uv_m);
+    };
+    if window.iter().any(|value| !value.is_finite())
+        || window[0] >= window[1]
+        || window[2] >= window[3]
+    {
+        return Err(ApiError::bad_request(
+            "invalid_planar_window: window bounds must be finite with min < max",
+        ));
+    }
+    let resolved = [
+        window[0].max(full_bounds_uv_m[0]),
+        window[1].min(full_bounds_uv_m[1]),
+        window[2].max(full_bounds_uv_m[2]),
+        window[3].min(full_bounds_uv_m[3]),
+    ];
+    if resolved[0] >= resolved[1] || resolved[2] >= resolved[3] {
+        return Err(ApiError::bad_request(
+            "invalid_planar_window: window does not intersect the frame",
+        ));
+    }
+    Ok(resolved)
+}
+
+fn explicit_frame_bounds(frame: &PlanarFrameIR) -> Result<[f64; 4], ApiError> {
+    match frame.extent {
+        fullmag_ir::PlanarExtentIR::Explicit {
+            u_min_m,
+            u_max_m,
+            v_min_m,
+            v_max_m,
+        } => Ok([u_min_m, u_max_m, v_min_m, v_max_m]),
+        _ => Err(ApiError::internal(
+            "planar frame extent was not resolved before sampling",
+        )),
+    }
 }
 
 async fn planar_meta_response(
@@ -1080,7 +1183,20 @@ async fn planar_probe_response(
             "invalid_planar_probe: coordinates must be finite",
         ));
     }
+    let nearest_requested = match probe.nearest.as_deref() {
+        None => false,
+        Some("node") => true,
+        Some(other) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid_planar_probe: nearest must be 'node', got '{other}'"
+            )));
+        }
+    };
     let query = PlanarFieldQuery {
+        window_u_min_m: probe.window_u_min_m,
+        window_u_max_m: probe.window_u_max_m,
+        window_v_min_m: probe.window_v_min_m,
+        window_v_max_m: probe.window_v_max_m,
         sample_token: probe.sample_token.clone(),
         component: probe.component.clone(),
         scope_kind: probe.scope_kind.clone(),
@@ -1103,7 +1219,9 @@ async fn planar_probe_response(
         position_m: probe.position_m,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
-    let bounds = built.result.meta.bounds_uv_m;
+    // A sampling window narrows the raster, not the probe: any point of the
+    // full frame is evaluated exactly.
+    let bounds = built.full_bounds_uv_m;
     let frame = &built.frame;
     // The probe is a point evaluation at the exact requested position: never
     // clamped to the raster edge, and position and value refer to one point.
@@ -1133,7 +1251,31 @@ async fn planar_probe_response(
         (true, None) => "empty",
         (true, Some(_)) => "occupied",
     };
+    let (nearest_node, nearest_node_status) = if !nearest_requested {
+        (None, "not_requested")
+    } else if !matches!(built.operator, PlanarOperatorIR::PlaneSample) {
+        // A slab or depth reduction has no single source node (W9).
+        (None, "unsupported_operator")
+    } else {
+        match &point {
+            None => (None, "empty"),
+            Some((entity_id, _)) => {
+                match built.target.nearest_node(world_m, *entity_id) {
+                    None => (None, "empty"),
+                    Some(node) if node.values.iter().any(|value| !value.is_finite()) => {
+                        (None, "unsupported_quantity")
+                    }
+                    Some(node) => (
+                        Some(probe_node_resource(&node, frame, [probe.u_m, probe.v_m], &built.request)?),
+                        "ok",
+                    ),
+                }
+            }
+        }
+    };
     Ok(Json(PlanarFieldProbeResource {
+        nearest_node,
+        nearest_node_status: nearest_node_status.to_string(),
         source: source_resource(&built.source),
         quantity_id: quantity_id.to_string(),
         u_m: probe.u_m,
@@ -1150,6 +1292,32 @@ async fn planar_probe_response(
         occupancy: occupancy.to_string(),
         sampling_method: "point_probe".to_string(),
     }))
+}
+
+/// Projects a nearest node onto the frame and evaluates the requested
+/// component of its raw values (`eq-planar-nearest-node`).
+pub(crate) fn probe_node_resource(
+    node: &PlanarNearestNode,
+    frame: &PlanarFrameIR,
+    probe_uv_m: [f64; 2],
+    request: &ResolvedPlanarSampleRequest,
+) -> Result<PlanarProbeNodeResource, ApiError> {
+    let delta = [0, 1, 2].map(|axis| node.world_m[axis] - frame.origin_m[axis]);
+    let along = |axis: [f64; 3]| delta[0] * axis[0] + delta[1] * axis[1] + delta[2] * axis[2];
+    let u_m = along(frame.u_axis);
+    let v_m = along(frame.v_axis);
+    let (scalar, vector) = evaluate_point_component(&node.values, request)?;
+    Ok(PlanarProbeNodeResource {
+        kind: node.kind.to_string(),
+        node_id: node.node_id,
+        world_m: node.world_m,
+        u_m,
+        v_m,
+        in_plane_distance_m: (u_m - probe_uv_m[0]).hypot(v_m - probe_uv_m[1]),
+        normal_offset_m: along(frame.normal),
+        scalar,
+        vector,
+    })
 }
 
 async fn planar_render_png_response(
@@ -1540,6 +1708,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             v_axis: built.frame.v_axis,
             normal: built.frame.normal,
             bounds_uv_m: bounds,
+            full_bounds_uv_m: built.full_bounds_uv_m,
         },
         section: built.section.as_ref().map(section_resource),
         operator: (&built.operator).into(),
@@ -1657,6 +1826,14 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
     }
     if let Some(position_m) = built.position_m {
         entries.push(("position_m", position_m.to_string()));
+    }
+    if let Some(window) = built.window_uv_m {
+        // The resolved window: clipping is idempotent, so a link replays the
+        // same sample identity.
+        entries.push(("window_u_min_m", window[0].to_string()));
+        entries.push(("window_u_max_m", window[1].to_string()));
+        entries.push(("window_v_min_m", window[2].to_string()));
+        entries.push(("window_v_max_m", window[3].to_string()));
     }
     if let Some(stage_id) = &built.stage_id {
         entries.push(("stage_id", stage_id.clone()));

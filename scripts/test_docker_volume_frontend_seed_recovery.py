@@ -18,6 +18,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import docker_volume_frontend_seed_recovery as recovery
 from docker_build_control import BuildControlError
+from docker_development_inputs import _next_generated_seed_variants
 
 
 SOURCE_BYTES = (
@@ -741,6 +742,10 @@ class FrontendGenerationGuestTests(unittest.TestCase):
             {"relative": "apps/control-room/package.json",
              "data": base64.b64encode(PACKAGE_BYTES).decode("ascii")},
         ]
+        for record in files:
+            data = base64.b64decode(record["data"])
+            record["generated_sha256"] = sorted(hashlib.sha256(value).hexdigest()
+                for value in _next_generated_seed_variants(record["relative"], data))
         request = {"files": files, "inputs": current_inputs, "previous_inputs": old_inputs,
                    "group_storage": True, "frontend_generation": generation}
         return subprocess.run(
