@@ -5,6 +5,7 @@ import {
   ArrowRightLeft,
   CircleDashed,
   Grip,
+  Layers3,
   MoveUpRight,
   Palette,
   ScanLine,
@@ -35,6 +36,7 @@ import {
   layerVisible,
   patchFieldLayer,
   PLANAR_FIELD_LAYERS_MAX,
+  removeFieldLayer,
   type PlanarFieldLayer,
   type PlanarFieldQuantityOption,
   type PlanarLayerPass,
@@ -57,9 +59,16 @@ export interface PlanarLayerWriteOptions {
 /** Disabled reason per pass; omitted passes are available. */
 export type PlanarLayerPassReasons = Partial<Record<PlanarLayerPass, string>>;
 
-const PASS_ITEMS: readonly { pass: PlanarLayerPass; label: string; icon: typeof Square }[] = [
-  { pass: "raster", label: "Raster", icon: Square },
-  { pass: "vectors", label: "Vectors", icon: MoveUpRight },
+type PassItem = { pass: PlanarLayerPass; label: string; icon: typeof Square };
+
+/** The two everyday passes, shown directly under the quantity. */
+const MAIN_PASS_ITEMS: readonly PassItem[] = [
+  { pass: "raster", label: "Color", icon: Square },
+  { pass: "vectors", label: "Arrows", icon: MoveUpRight },
+];
+
+/** Less common passes, kept in the collapsed "More drawing" group. */
+const MORE_PASS_ITEMS: readonly PassItem[] = [
   { pass: "points", label: "Points", icon: Grip },
   { pass: "mesh", label: "Mesh", icon: Triangle },
   { pass: "contours", label: "Contours", icon: CircleDashed },
@@ -67,6 +76,7 @@ const PASS_ITEMS: readonly { pass: PlanarLayerPass; label: string; icon: typeof 
 ];
 
 const NOT_VECTOR_REASON = "The selected quantity has no vector components.";
+const NO_QUANTITY_VALUE = "";
 
 function defaultComponent(option: PlanarFieldQuantityOption | undefined): string {
   return option?.components.find((component) => component.value === "frobenius")?.value
@@ -88,9 +98,34 @@ function numberValue(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** Editor of the selected 2D field layer (spec 23 §5, plan §2.4 block 3). */
+function quantityName(quantities: readonly PlanarFieldQuantityOption[], quantityId: string): string {
+  return quantities.find((quantity) => quantity.id === quantityId)?.label ?? quantityId;
+}
+
+/** One-line answer to "what does this target show in the 2D view?". */
+export function planarFieldShownText(
+  layer: PlanarFieldLayer | null,
+  inherited: PlanarFieldLayer | null,
+  quantities: readonly PlanarFieldQuantityOption[],
+): string {
+  if (layer) {
+    const state = layerVisible(layer) ? "Own setting" : "Own setting, hidden";
+    return `${state} · ${quantityName(quantities, layer.quantity_id)} · ${planarLayerComponentLabel(layer)}`;
+  }
+  if (inherited) {
+    return `Inherited from All objects · ${quantityName(quantities, inherited.quantity_id)} · ${planarLayerComponentLabel(inherited)}`;
+  }
+  return "Not drawn in the 2D view";
+}
+
+/**
+ * "Field in <target>" (spec 23 §5): what the selected target shows and the
+ * one place where its quantity is chosen. Without an own layer, choosing a
+ * quantity is the explicit edit that creates it.
+ */
 export function PlanarTargetFieldSection({
   emptyTarget,
+  inherited = null,
   layer,
   layers,
   passReasons,
@@ -101,8 +136,10 @@ export function PlanarTargetFieldSection({
   onAdd,
   onWrite,
 }: {
-  /** Selected target that has no layer yet; offers "Add field for <name>". */
+  /** Selected target that has no layer yet; choosing a quantity creates it. */
   emptyTarget?: PlanarFieldLayerCandidate | null;
+  /** Layer that draws the target while it has no own layer (the `all` layer). */
+  inherited?: PlanarFieldLayer | null;
   layer: PlanarFieldLayer | null;
   layers: readonly PlanarFieldLayer[];
   passReasons?: PlanarLayerPassReasons;
@@ -110,46 +147,60 @@ export function PlanarTargetFieldSection({
   targetLabel: string;
   targetReason?: string;
   viewMasks: PlanarLayerState;
-  onAdd: (candidate: PlanarFieldLayerCandidate) => void;
+  onAdd: (candidate: PlanarFieldLayerCandidate, quantityId?: string) => void;
   onWrite: (layers: PlanarFieldLayer[], touchedLayerId: string, options?: PlanarLayerWriteOptions) => void;
 }) {
   const [validationErrors, setValidationErrors] = useState<Record<string, string | null>>({});
   const [refusal, setRefusal] = useState<string | null>(null);
 
   if (!layer) {
+    if (!emptyTarget) {
+      return (
+        <InspectorGroup icon={<ScanLine aria-hidden="true" size={16} strokeWidth={1.75} />} title="Field">
+          <p className="fm-planar-layer-editor__empty">
+            Select an object or the Airbox in the model tree, or a row under 2D view → Field layers, to choose what it shows.
+          </p>
+        </InspectorGroup>
+      );
+    }
+    const createOptions = emptyTarget.target !== "all" && emptyTarget.target.kind === "airbox"
+      ? quantities.filter((quantity) => quantity.id !== "m")
+      : quantities;
+    const create = (quantityId: string) => {
+      if (!quantityId || targetReason !== undefined) return;
+      if (layers.length >= PLANAR_FIELD_LAYERS_MAX) {
+        setRefusal(PLANAR_FIELD_LAYERS_FULL_REASON);
+        return;
+      }
+      setRefusal(null);
+      onAdd(emptyTarget, quantityId);
+    };
     return (
       <InspectorGroup
+        badge={inherited ? "Inherited" : "Not drawn"}
         icon={<ScanLine aria-hidden="true" size={16} strokeWidth={1.75} />}
-        title="Selected layer"
+        title={`Field in ${emptyTarget.label}`}
       >
-        {emptyTarget ? (
-          <>
-            <p className="fm-planar-layer-editor__empty">{emptyTarget.label} has no 2D field layer.</p>
-            {targetReason ? <FieldRow label="Availability" value={targetReason} /> : null}
-            <div className="fm-inspector-toolbar">
-              <Button
-                disabled={targetReason !== undefined}
-                disabledReason={targetReason}
-                size="sm"
-                type="button"
-                variant="primary"
-                onClick={() => {
-                  if (layers.length >= PLANAR_FIELD_LAYERS_MAX) {
-                    setRefusal(PLANAR_FIELD_LAYERS_FULL_REASON);
-                    return;
-                  }
-                  setRefusal(null);
-                  onAdd(emptyTarget);
-                }}
-              >
-                Add field for {emptyTarget.label}
-              </Button>
-            </div>
-            {refusal ? <p className="fm-planar-layer-list__refusal" role="status">{refusal}</p> : null}
-          </>
-        ) : (
-          <p className="fm-planar-layer-editor__empty">Select a field layer to edit it.</p>
-        )}
+        {targetReason ? <FieldRow label="Availability" value={targetReason} /> : null}
+        <FieldRow label="Shown" value={planarFieldShownText(null, inherited, quantities)} />
+        <FormField
+          disabled={targetReason !== undefined || createOptions.length === 0}
+          hint={inherited
+            ? `Choose a quantity to give ${emptyTarget.label} its own setting.`
+            : `Choose a quantity to draw it in ${emptyTarget.label}.`}
+          label="Quantity"
+          type="select"
+          value={NO_QUANTITY_VALUE}
+          onChange={(event) => create(event.currentTarget.value)}
+        >
+          <option disabled value={NO_QUANTITY_VALUE}>
+            {inherited ? `As All objects (${quantityName(quantities, inherited.quantity_id)})` : "Choose a quantity…"}
+          </option>
+          {createOptions.map((quantity) => (
+            <option key={quantity.id} value={quantity.id}>{quantity.label} ({quantity.unit || "1"})</option>
+          ))}
+        </FormField>
+        {refusal ? <p className="fm-planar-layer-list__refusal" role="status">{refusal}</p> : null}
       </InspectorGroup>
     );
   }
@@ -178,6 +229,10 @@ export function PlanarTargetFieldSection({
   const vectorStyle = layer.vector_style;
   const disabled = targetReason !== undefined;
   const vectorHint = !vectorQuantity ? NOT_VECTOR_REASON : targetReason;
+  const visible = layerVisible(layer);
+  // An object or part layer falls back to the `all` layer; others leave the view.
+  const fallsBackToAll = (layer.view_scope.kind === "object" || layer.view_scope.kind === "mesh_part")
+    && layers.some((entry) => entry.id === "all");
 
   const changeQuantity = (nextQuantityId: string) => {
     const nextQuantity = quantityOptions.find((quantity) => quantity.id === nextQuantityId);
@@ -225,8 +280,7 @@ export function PlanarTargetFieldSection({
   const patchVectorStyle = (next: Partial<PlanarVectorStyle>) =>
     write({ vector_style: { ...vectorStyle, ...next } });
 
-  const visible = layerVisible(layer);
-  const passItems = PASS_ITEMS.map(({ pass, label, icon: Icon }) => {
+  const passItems = (items: readonly PassItem[]) => items.map(({ pass, label, icon: Icon }) => {
     const state = effectivePass(layer, viewMasks, pass);
     const vectorPass = pass === "vectors" || pass === "streamlines";
     const reason = vectorPass && !vectorQuantity ? NOT_VECTOR_REASON : passReasons?.[pass];
@@ -242,15 +296,26 @@ export function PlanarTargetFieldSection({
       onToggle: () => write(layerPassPatch(pass, !layerPassFlag(layer, pass))),
     };
   });
+  const morePassReasons = Object.entries(passReasons ?? {})
+    .filter(([pass]) => MORE_PASS_ITEMS.some((item) => item.pass === pass));
+  const morePassesOn = MORE_PASS_ITEMS.filter(({ pass }) => effectivePass(layer, viewMasks, pass) !== "off")
+    .map(({ label }) => label);
 
   return (
     <InspectorGroup
+      badge="Own setting"
       icon={<ScanLine aria-hidden="true" size={16} strokeWidth={1.75} />}
-      badge={`${layer.quantity_id} · ${planarLayerComponentLabel(layer)}`}
-      title={`Selected layer: ${targetLabel}`}
+      title={`Field in ${targetLabel}`}
     >
       {targetReason ? <FieldRow label="Availability" value={targetReason} /> : null}
-      {!visible ? <FieldRow label="Visibility" value="Hidden. Show the layer to change what it draws." /> : null}
+      <FieldRow label="Shown" value={planarFieldShownText(layer, null, quantities)} />
+      {!visible ? (
+        <div className="fm-inspector-toolbar">
+          <Button size="sm" type="button" variant="secondary" onClick={() => write({ visible: true })}>
+            Show {targetLabel} in the 2D view
+          </Button>
+        </div>
+      ) : null}
       <FormField
         disabled={disabled || quantityOptions.length === 0}
         hint={targetReason}
@@ -279,13 +344,8 @@ export function PlanarTargetFieldSection({
         ))}
       </FormField>
       <div className="fm-inspector-form-field">
-        <span className="fm-inspector-form-field__label">Draw</span>
-        <VisualizationDisplayPassesControl items={passItems} />
-        {passReasons && Object.keys(passReasons).length > 0 ? (
-          <p className="fm-planar-layer-editor__reasons">
-            {Object.entries(passReasons).map(([pass, reason]) => `${pass}: ${reason}`).join(" ")}
-          </p>
-        ) : null}
+        <span className="fm-inspector-form-field__label">Show</span>
+        <VisualizationDisplayPassesControl items={passItems(MAIN_PASS_ITEMS)} />
       </div>
       <InspectorGroup
         collapsible
@@ -344,8 +404,8 @@ export function PlanarTargetFieldSection({
         collapsible
         defaultOpen={false}
         icon={<ArrowRightLeft aria-hidden="true" size={16} strokeWidth={1.75} />}
-        summary="Quiver"
-        title="Vectors"
+        summary={vectorQuantity ? "Quiver" : "Not a vector quantity"}
+        title="Arrows"
         variant="nav"
       >
         <FormField disabled={disabled || !vectorQuantity} hint={vectorHint} label="Vector scale" min="0" step="0.1" type="number" value={vectorStyle.scale} onChange={(event) => { const value = numberValue(event.currentTarget.value); if (value !== null && value > 0) patchVectorStyle({ scale: value }); }} />
@@ -361,6 +421,33 @@ export function PlanarTargetFieldSection({
           <ColorField disabled={disabled || !vectorQuantity} label="Vector color" value={vectorStyle.monochrome_color} onChange={(color) => patchVectorStyle({ monochrome_color: color })} />
         ) : null}
       </InspectorGroup>
+      <InspectorGroup
+        collapsible
+        defaultOpen={false}
+        icon={<Layers3 aria-hidden="true" size={16} strokeWidth={1.75} />}
+        summary={morePassesOn.length > 0 ? morePassesOn.join(", ") : "Off"}
+        title="More drawing"
+        variant="nav"
+      >
+        <VisualizationDisplayPassesControl items={passItems(MORE_PASS_ITEMS)} />
+        {morePassReasons.length > 0 ? (
+          <p className="fm-planar-layer-editor__reasons">
+            {morePassReasons.map(([pass, reason]) => `${pass}: ${reason}`).join(" ")}
+          </p>
+        ) : null}
+      </InspectorGroup>
+      <div className="fm-inspector-toolbar">
+        <Button
+          disabled={disabled}
+          disabledReason={targetReason}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() => onWrite(removeFieldLayer(layers, layerId), layerId, { flush: true })}
+        >
+          {fallsBackToAll ? "Use All objects setting" : "Remove from 2D view"}
+        </Button>
+      </div>
     </InspectorGroup>
   );
 }

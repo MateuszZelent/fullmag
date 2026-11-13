@@ -1164,6 +1164,8 @@ export default function FieldMapModule() {
         )}
         {presentationPlanar.viewport_colorbar_visible !== false && !multislice && !metaOnlyBase && !presentationPlanar.field_overlays?.length ? (
           <PlanarColorLegend
+            // A legacy base field covers all objects unless scoped to the Airbox.
+            targetLabel={presentationPlanar.view_scope.kind === "airbox" ? "Airbox" : "All objects"}
             colormap={renderModel.colormap ?? presentationPlanar.colormap}
             component={presentationPlanar.component}
             legendUnit={renderModel.display.legendUnit}

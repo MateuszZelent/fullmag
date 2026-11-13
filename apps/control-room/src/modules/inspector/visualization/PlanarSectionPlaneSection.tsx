@@ -14,6 +14,7 @@ import {
   stepSectionFraction,
   type ObjectSectionLayer,
   type PlanarSectionGeometry,
+  planarSectionPlanePatch,
   type PlanarSectionPlane,
   type PlanarSectionReduction,
 } from "@/kernel/visualization/planarSectionModel";
@@ -159,11 +160,8 @@ export function PlanarSectionPlaneSection({
             onValueChange={(value) => {
               setError(null);
               setDraft(null);
-              patchSlice({
-                plane: value,
-                // A slab thickness belongs to the previous normal.
-                ...(reduction === "average" ? { operator: { kind: "plane_sample" as const } } : {}),
-              }, { crop: null });
+              // Same patch as the 2D toolbar plane buttons.
+              patch(planarSectionPlanePatch(defaultSlice, value));
             }}
           />
         </div>

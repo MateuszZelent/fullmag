@@ -182,6 +182,26 @@ Stan dowodów dla całej sekcji:
 | Sekcje inspektora „Płaszczyzna przekroju” i „Kadr i widok”; „Fit view” zależny od aktywnego modułu | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarSectionPlaneSection` (obejmuje też `PlanarCropViewSection`), `inspectorFitCommand`; browser NOT VERIFIED |
 | Migracja sesji `legacy → layers` (pole bazowe jako ostatnia warstwa `all`, nakładki z `visible = true`, idempotentna) | IMPLEMENTED | IMPLEMENTED | testy Rust `migrate_planar_layer_model` NOT RUN; browser NOT VERIFIED (`toolbar-legacy-session-image` wymaga fixture `CONTROL_ROOM_PLANAR_LEGACY_FIXTURE`, którego jeszcze nie ma) |
 
+## Uproszczony inspektor 2D i wybór płaszczyzny w pasku (2026-11-12)
+
+Zgłoszenie użytkownika: w inspektorze 2D nie było widać, jak zmienić wielkość
+(np. na H_demag w filmie i H_eff w airboxie), sesja w modelu `legacy` pokazywała
+„0 warstw”, choć płótno rysowało `m`, a wybór płaszczyzny XY/XZ/YZ był
+schowany w inspektorze. Kontrakt: spec 23 §5 (układ zakładki 2D) i spec 15
+§4.1 (grupa 0 paska).
+
+| Element | FDM CPU | FEM CPU/GPU | Dowód |
+|---|---|---|---|
+| Zakładka 2D zaczyna się od „Section plane” (XY/XZ/YZ, te same komendy co pasek) i grupy „Field in *nazwa*”: wiersz „Shown” (własne ustawienie / dziedziczone z All objects / nierysowane), wybór Quantity tworzy własną warstwę, Color i Arrows bezpośrednio, reszta przebiegów w „More drawing”, przycisk „Use All objects setting” / „Remove from 2D view” | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarTargetFieldSection`, `PlanarVisualizationSection`, `planarFieldLayers`; browser NOT VERIFIED |
+| Ustawienia całego widoku (lista warstw, płaszczyzna i źródło, kadr, styl punktów) w zwijanej grupie „2D view” z podsumowaniem | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarVisualizationSection`; browser NOT VERIFIED |
+| Brak osobnej sekcji „Base field (legacy)”: stan `legacy` pokazany jako lista warstw po migracji, konwertowany (`layer_model: "layers"`) przy pierwszej edycji warstwy | IMPLEMENTED | IMPLEMENTED | Vitest `planarFieldLayers` (zgodność z `migrate_planar_layer_model`), `PlanarVisualizationSection`; browser NOT VERIFIED |
+| Pasek 2D: grupa „Section plane” XY/XZ/YZ (`field-map.plane.*`), zmiana płaszczyzny czyści kadr i operator warstwy uśrednionej; zablokowana dla źródła z monitora | IMPLEMENTED | IMPLEMENTED | Vitest `PlanarToolbar`; browser NOT VERIFIED |
+| Legenda pola bazowego `legacy` podpisana „All objects” / „Airbox” zamiast „2D field” | IMPLEMENTED | IMPLEMENTED | przegląd kodu; browser NOT VERIFIED |
+
+Dowód w przeglądarce jest **NOT VERIFIED**: grupa Docker DEV tego worktree nie
+wystartuje, bo dysk C: ma poniżej wymaganych 32 GiB wolnego miejsca
+(`Docker build filesystem has less than 32 GiB free; admission refused`).
+
 ## Status Language
 
 Use these messages consistently:
