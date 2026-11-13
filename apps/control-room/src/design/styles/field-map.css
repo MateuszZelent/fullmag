@@ -107,6 +107,14 @@
   align-items: center;
 }
 
+.fm-planar-toolbar__plane-label {
+  min-width: 2ch;
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
 .fm-planar-toolbar__separator {
   align-self: stretch;
   margin: var(--fm-space-2) var(--fm-space-1);

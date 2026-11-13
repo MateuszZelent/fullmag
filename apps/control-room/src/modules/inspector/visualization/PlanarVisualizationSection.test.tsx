@@ -297,22 +297,25 @@ describe("PlanarVisualizationSection", () => {
       expect(rows.map((row) => row.getAttribute("data-layer-id"))).toEqual(["all", "object:free-layer"]);
       expect(rows[1]!.getAttribute("aria-current")).toBe("true");
       expect(rows[1]!.textContent).toContain("film · m · direction");
-      expect(view.container.textContent).toContain("Selected layer: film");
+      expect(view.container.textContent).toContain("Field in film");
+      expect(view.container.textContent).toContain("Own setting · Magnetization · direction");
     } finally {
       await view.unmount();
     }
   });
 
-  it("offers Add field for an object without a layer and never writes on selection", async () => {
+  it("shows the inherited field of an object and creates its layer only from a chosen quantity", async () => {
     const view = await mount(objectSelection);
     try {
       expect(mocks.queuePlanarFieldOverlayPatch).not.toHaveBeenCalled();
-      expect(view.container.textContent).toContain("film has no 2D field layer.");
-      await act(async () => clickButton(view.container, "Add field for film"));
+      expect(view.container.textContent).toContain("Inherited from All objects · Magnetization · direction");
+      await act(async () => change(findControl(view.container, "Quantity"), "H_demag"));
       const write = lastOverlayWrite();
       expect(write.touched).toBe("object:free-layer");
       expect(write.layers.map((layer) => layer.id)).toEqual(["object:free-layer", "all"]);
-      expect(write.layers[0]!.view_scope).toEqual({ kind: "object", scope_id: "free-layer" });
+      expect(write.layers[0]).toMatchObject({
+        quantity_id: "H_demag", colormap: "viridis", view_scope: { kind: "object", scope_id: "free-layer" },
+      });
       expect(mocks.queuePatch).not.toHaveBeenCalled();
     } finally {
       await view.unmount();
@@ -322,10 +325,11 @@ describe("PlanarVisualizationSection", () => {
   it("adds an Airbox layer without changing the base view scope", async () => {
     const view = await mount(airboxSelection);
     try {
-      await act(async () => clickButton(view.container, "Add field for Airbox"));
+      expect(view.container.textContent).toContain("Not drawn in the 2D view");
+      await act(async () => change(findControl(view.container, "Quantity"), "h_eff"));
       const write = lastOverlayWrite();
       expect(write.touched).toBe("airbox");
-      expect(write.layers[0]).toMatchObject({ id: "airbox", quantity_id: "H_demag", view_scope: { kind: "airbox" } });
+      expect(write.layers[0]).toMatchObject({ id: "airbox", quantity_id: "h_eff", view_scope: { kind: "airbox" } });
       const patch = mocks.queuePlanarFieldOverlayPatch.mock.calls.at(-1)![0].planar;
       expect(Object.keys(patch)).toEqual(["field_overlays"]);
       expect(mocks.queuePatch).not.toHaveBeenCalled();
@@ -339,7 +343,7 @@ describe("PlanarVisualizationSection", () => {
     planar().field_overlays = [filmLayer({ vectors_visible: true })];
     const view = await mount(objectSelection);
     try {
-      const vectors = findControl(view.container, "Toggle Vectors");
+      const vectors = findControl(view.container, "Toggle Arrows");
       expect(vectors.getAttribute("aria-pressed")).toBe("true");
       expect(vectors.textContent).toContain("hidden in toolbar");
       expect(findControl(view.container, "Toggle Points").getAttribute("aria-pressed")).toBe("false");
@@ -534,10 +538,36 @@ describe("PlanarVisualizationSection", () => {
     }
   });
 
-  it("shows the legacy base field controls only in the legacy model", () => {
-    expect(renderToStaticMarkup(<PlanarVisualizationSection selection={sceneSelection} />)).not.toContain("Base field (legacy)");
-    planar().layer_model = "legacy";
-    expect(renderToStaticMarkup(<PlanarVisualizationSection selection={sceneSelection} />)).toContain("Base field (legacy)");
+  it("shows a legacy state as its migrated layers and converts it on the first edit", async () => {
+    Object.assign(planar(), { layer_model: "legacy", field_overlays: [], quantity_id: "m" });
+    const view = await mount(objectSelection);
+    try {
+      expect(view.container.textContent).not.toContain("Base field (legacy)");
+      expect(view.container.textContent).toContain("Inherited from All objects · Magnetization · direction");
+      const rows = findElements(view.container, (element) => element.getAttribute("data-layer-id") !== null);
+      expect(rows.map((row) => row.getAttribute("data-layer-id"))).toEqual(["all"]);
+      await act(async () => change(findControl(view.container, "Quantity"), "H_demag"));
+      const patch = mocks.queuePlanarFieldOverlayPatch.mock.calls.at(-1)![0].planar;
+      expect(patch.layer_model).toBe("layers");
+      expect(patch.field_overlays.map((layer: PlanarFieldLayer) => layer.id)).toEqual(["object:free-layer", "all"]);
+      expect(patch.field_overlays[1]).toMatchObject({ quantity_id: "m", view_scope: { kind: "monitor_target" } });
+      expect(mocks.flushNow).toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("switches the section plane through the shared 2D plane command", async () => {
+    const view = await mount(airboxSelection);
+    try {
+      const group = findControl(view.container, "Section plane");
+      const yz = findElements(group, (element) => element.getAttribute("role") === "radio" && element.textContent.trim() === "YZ")[0]!;
+      await act(async () => yz.click());
+      expect(mocks.execute).toHaveBeenCalledWith("field-map.plane.yz", expect.anything());
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+    } finally {
+      await view.unmount();
+    }
   });
 
   it("hydrates its server snapshot without a mismatch", async () => {

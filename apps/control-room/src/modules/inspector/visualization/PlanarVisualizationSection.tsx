@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
-import { Layers, Settings2 } from "lucide-react";
+import { Layers, Monitor, Settings2 } from "lucide-react";
 
 import type {
   PlanarCropState,
   PlanarFieldSource,
   VisualizationStatePatch,
-  VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import { useKernel } from "@/kernel/KernelContext";
@@ -18,10 +17,11 @@ import {
   usePlanarMaskResource,
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
-import { isFlowMajorTensorDescriptor, tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
+import { tensorProjectionOutputKind } from "@/kernel/api/tensorFieldProjection";
 import { quantityCatalogEntrySpatialProjections, quantityCatalogEntrySupportsAnySpatialVisualization } from "@/kernel/api/quantityIds";
 import { useFieldCatalogResource, useQuantityCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import {
+  formatSectionLength,
   planarGridResolutionPresets,
   planarSectionAxes,
   resolvePlanarSectionGeometryFromMeta,
@@ -44,36 +44,25 @@ import {
   fieldMapSurfaceStore,
   useFieldMapSurfaceEvidenceStatus,
 } from "@/kernel/visualization/fieldMapSurfaceStore";
-import { DIRECTION_COLORMAP } from "@/shared/visualization/directionColor";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
 import {
   resolvePlanarInspectorCapabilities,
   type FieldMapCapability,
 } from "@/kernel/visualization/planarCapabilities";
 import type { Selection } from "@/kernel/selection/selectionTypes";
-import { Button } from "@/shared/ui/Button";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { SCALAR_COLOR_PALETTE_ITEMS } from "../panels/ObjectVisualizationPanelModel";
 import {
-  PLANAR_RANGE_MODE_ITEMS,
-  planarDisplayModePatch,
-  planarRangeForMode,
-  resolvePlanarDisplayMode,
-} from "./presentationSemantics";
-import {
-  PlanarDisplayPassesSection,
   PlanarPointsSection,
   PlanarProvenanceSection,
   PlanarQualitySection,
-  PlanarVectorStyleSection,
   PlanarWireframeSection,
 } from "./PlanarPresentationSections";
-import { VisualizationRenderModeControl } from "./VisualizationInspectorControls";
-import { planarViewScopeForSelection, planarVisualizationCoverage } from "./VisualizationViewContext";
+import { planarVisualizationCoverage } from "./VisualizationViewContext";
 import { PlanarTargetFieldSection, type PlanarLayerPassReasons, type PlanarLayerWriteOptions } from "./PlanarTargetFieldSection";
 import { PlanarFieldLayerList, type PlanarFieldLayerCandidate } from "./PlanarFieldLayerList";
 import { PlanarSectionPlaneSection } from "./PlanarSectionPlaneSection";
@@ -81,7 +70,9 @@ import { PlanarCropViewSection } from "./PlanarCropViewSection";
 import {
   addFieldLayer,
   createFieldLayer,
+  effectivePlanarFieldLayers,
   fieldLayerTargetSupported,
+  inheritedFieldLayer,
   layerIdForTarget,
   layerVisible,
   PLANAR_FIELD_LAYERS_MAX,
@@ -95,20 +86,17 @@ const serverFieldMapSectionGeometry = () => null;
 const currentFieldMapObjectLayers = () => fieldMapSurfaceStore.get().objectLayers;
 const SERVER_OBJECT_LAYERS: readonly never[] = [];
 const serverFieldMapObjectLayers = () => SERVER_OBJECT_LAYERS;
-const NO_LAYERS: readonly PlanarFieldLayer[] = [];
+const PLANE_OPTIONS = [
+  { label: "XY", value: "xy", commandId: "field-map.plane.xy" },
+  { label: "XZ", value: "xz", commandId: "field-map.plane.xz" },
+  { label: "YZ", value: "yz", commandId: "field-map.plane.yz" },
+] as const;
 
-type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
-type PlanarRange = NonNullable<PlanarState["range"]>;
 type PlanarPatch = NonNullable<VisualizationStatePatch["planar"]>;
 
 const PLANAR_COMPONENTS = [
   "x", "y", "z", "u", "v", "normal", "magnitude", "in_plane_magnitude", "orientation",
 ] as const;
-
-function finiteNumber(value: string): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
 
 function capabilityReason(capability: FieldMapCapability): string | undefined {
   if (capability.enabled) return undefined;
@@ -143,8 +131,10 @@ function capabilityReason(capability: FieldMapCapability): string | undefined {
 }
 
 /**
- * Inspector 2D tab (plan §2.4): status line, field layer list, selected layer
- * editor, section plane, crop and view. Every control writes immediately.
+ * Inspector 2D tab (spec 23 §5): status line, section plane, "Field in
+ * <target>", then the collapsible view-wide "2D view" group (field layer list,
+ * section details, crop, point and wireframe styles). Every control writes
+ * immediately.
  */
 export function PlanarVisualizationSection({ selection }: { selection: Selection }) {
   const kernel = useKernel();
@@ -152,16 +142,21 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const visualization = useVisualizationStateResource();
   const planar = projectPlanarPresentationState(visualization.data, visualization.optimisticData);
   const layerModel = planar?.layer_model ?? "legacy";
+  const legacy = layerModel !== "layers";
   const planarTarget = resolveVisualizationTargetFromSelection(selection);
   const planarTargetReason = planarTargetPresentationReason(planarTarget, visualization.data?.targets);
   const registryTargets = visualization.data?.targets;
-  // The editor shows the newest optimistic list; the canvas keeps its own projection.
-  const fieldLayers = visualization.optimisticData?.planar?.field_overlays
-    ?? visualization.data?.planar?.field_overlays
-    ?? NO_LAYERS;
+  // The editor shows the newest optimistic list; the canvas keeps its own
+  // projection. A live legacy state is shown as the list its migration makes.
+  const fieldLayers = planar
+    ? effectivePlanarFieldLayers({
+        ...planar,
+        field_overlays: visualization.optimisticData?.planar?.field_overlays
+          ?? visualization.data?.planar?.field_overlays
+          ?? planar.field_overlays,
+      })
+    : [];
   const coverage = planarVisualizationCoverage(selection);
-  const viewScope = planarViewScopeForSelection(selection);
-  const [validationError, setValidationError] = useState<string | null>(null);
   const selectionKey = selection.nodeId ?? "";
   const [pickedLayer, setPickedLayer] = useState<{ key: string; id: string } | null>(null);
   const surfaceEvidence = useFieldMapSurfaceEvidenceStatus();
@@ -245,9 +240,15 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
 
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
   const writeLayers = (layers: PlanarFieldLayer[], touchedLayerId: string, options?: PlanarLayerWriteOptions) => {
-    visualizationSync.queuePlanarFieldOverlayPatch({ planar: { field_overlays: layers } }, touchedLayerId);
-    if (options?.flush) void visualizationSync.flushNow?.();
+    // The first edit of a legacy state converts it, as the backend migration does.
+    visualizationSync.queuePlanarFieldOverlayPatch(
+      { planar: { field_overlays: layers, ...(legacy ? { layer_model: "layers" as const } : {}) } },
+      touchedLayerId,
+    );
+    if (options?.flush || legacy) void visualizationSync.flushNow?.();
   };
+  const runCommand = (commandId: string) =>
+    void kernel.commands.execute(commandId, createCommandContext("inspector", kernel));
 
   // Quantity options of the layer editor.
   const availableQuantities = (fieldCatalog.data?.quantities ?? []).filter(
@@ -324,13 +325,15 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         target: selectedTarget,
       }
     : null;
-  const addLayer = (candidate: PlanarFieldLayerCandidate) => {
+  const inherited = emptyTarget ? inheritedFieldLayer(fieldLayers, emptyTarget.target) : null;
+  const addLayer = (candidate: PlanarFieldLayerCandidate, quantityId?: string) => {
     let layer = createFieldLayer(candidate.target);
     const options = layer.view_scope.kind === "airbox"
       ? layerQuantities.filter((quantity) => quantity.id !== "m")
       : layerQuantities;
-    if (options.length > 0 && !options.some((quantity) => quantity.id === layer.quantity_id)) {
-      const quantity = options[0]!;
+    const chosen = quantityId ?? layer.quantity_id;
+    if (options.length > 0 && (chosen !== layer.quantity_id || !options.some((quantity) => quantity.id === chosen))) {
+      const quantity = options.find((option) => option.id === chosen) ?? options[0]!;
       const component = quantity.components.find((option) => option.value === "magnitude")?.value
         ?? quantity.components[0]?.value
         ?? "magnitude";
@@ -338,7 +341,8 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         ...layer,
         quantity_id: quantity.id,
         component: component as PlanarFieldLayer["component"],
-        colormap: quantity.vector ? layer.colormap : SCALAR_COLOR_PALETTE_ITEMS[0]?.value ?? "viridis",
+        // Direction colours belong to magnetization; other fields start as magnitude maps.
+        colormap: quantity.id === "m" ? layer.colormap : SCALAR_COLOR_PALETTE_ITEMS[0]?.value ?? "viridis",
       };
     }
     const result = addFieldLayer(fieldLayers, layer);
@@ -387,7 +391,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const resolutionPresets = source.kind === "default" ? planarGridResolutionPresets(sectionGeometry) : [];
 
   const visibleLayerCount = fieldLayers.filter(layerVisible).length;
-  const dataState = layerModel === "layers" && visibleLayerCount === 0
+  const dataState = visibleLayerCount === 0
     ? "No visible field layer"
     : surfaceEvidence === "ready"
       ? "Live"
@@ -409,6 +413,12 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     ? resolvePlanarTargetWireframeStyle(planar.wireframe_style, planar.target_overrides, planarTarget)
     : planar.wireframe_style;
 
+  const sectionPosition = sectionGeometry
+    ? `${sectionGeometry.normal} = ${formatSectionLength(sectionGeometry.normalMin + planar.default_slice.position_fraction * sectionGeometry.normalExtent)}`
+    : null;
+  const monitorSource = planar.source.kind === "monitor";
+  const viewSummary = `${plane.toUpperCase()}${sectionPosition ? ` · ${sectionPosition}` : ""} · ${fieldLayers.length} field ${fieldLayers.length === 1 ? "layer" : "layers"}`;
+
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group" data-planar-layer-model={layerModel}>
       <p
@@ -420,24 +430,27 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         <span className="fm-planar-status-line__item" data-tone={dataState === "Live" ? "success" : "neutral"}>{dataState}</span>
         <span className="fm-planar-status-line__item" data-tone={capabilities.mesh.enabled ? "success" : "degraded"}>{meshState}</span>
       </p>
-      <InspectorGroup
-        icon={<Layers aria-hidden="true" size={16} strokeWidth={1.75} />}
-        badge={`${fieldLayers.length} / ${PLANAR_FIELD_LAYERS_MAX}`}
-        title="Field layers"
-      >
-        <PlanarFieldLayerList
-          candidates={candidates}
-          layers={fieldLayers}
-          selectedLayerId={selectedLayer?.id ?? null}
-          targetLabel={targetLabelForLayer}
-          viewMasks={planar.layers}
-          onAdd={addLayer}
-          onSelect={(id) => setPickedLayer({ key: selectionKey, id })}
-          onWrite={writeLayers}
+      <div className="fm-inspector-form-field" data-slot="planar-quick-plane">
+        <span className="fm-inspector-form-field__label">Section plane</span>
+        <SegmentedControl
+          aria-label="Section plane"
+          columns={3}
+          options={PLANE_OPTIONS.map((option) => ({ label: option.label, value: option.value, disabled: monitorSource }))}
+          value={plane}
+          onValueChange={(value) => {
+            const option = PLANE_OPTIONS.find((entry) => entry.value === value);
+            if (option) runCommand(option.commandId);
+          }}
         />
-      </InspectorGroup>
+        <span className="fm-inspector-form-field__hint">
+          {monitorSource
+            ? "Defined by the monitor. Choose Source: Default under 2D view to change it."
+            : `${sectionPosition ?? "Waiting for the section extent"} · shared by every object in the 2D view`}
+        </span>
+      </div>
       <PlanarTargetFieldSection
         emptyTarget={emptyTarget}
+        inherited={inherited}
         layer={selectedLayer}
         layers={fieldLayers}
         passReasons={passReasons}
@@ -448,25 +461,6 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         onAdd={addLayer}
         onWrite={writeLayers}
       />
-      <PlanarSectionPlaneSection
-        defaultSlice={planar.default_slice}
-        geometry={sectionGeometry}
-        monitors={monitors.data?.monitors ?? []}
-        objectLayers={objectLayers}
-        source={planar.source}
-        patch={patch}
-      />
-      <PlanarCropViewSection
-        axisLabels={axes}
-        crop={planar.crop ?? null}
-        fullBounds={fullBounds}
-        quality={<PlanarQualitySection capability={capabilities.raster} interaction={planar.interaction} patch={patch} quality={planar.quality} resolution={planar.resolution} resolutionPresets={resolutionPresets} />}
-        zoom={planar.interaction.zoom}
-        onClear={() => visualizationSync.queuePlanarCropPatch(null)}
-        onCrop={(crop: PlanarCropState) => visualizationSync.queuePlanarCropPatch(crop)}
-        onFit={() => void kernel.commands.execute("field-map.fit", createCommandContext("inspector", kernel))}
-      />
-      {planar.layers.points ? <PlanarPointsSection patch={patch} style={planar.point_style} /> : null}
       {planar.layers.mesh || planar.layers.boundaries ? (
         <PlanarWireframeSection
           disabled={planarTarget === null || planarTargetReason !== undefined}
@@ -485,20 +479,52 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           style={planarWireframeStyle}
         />
       ) : null}
-      {layerModel === "legacy" ? (
-        <LegacyBaseFieldSection
-          capabilities={capabilities}
-          planar={planar}
+      <InspectorGroup
+        collapsible
+        defaultOpen={false}
+        description="Applies to the whole 2D view, not only to the selected object."
+        icon={<Monitor aria-hidden="true" size={16} strokeWidth={1.75} />}
+        summary={viewSummary}
+        title="2D view"
+        variant="nav"
+      >
+        <InspectorGroup
+          icon={<Layers aria-hidden="true" size={16} strokeWidth={1.75} />}
+          badge={`${fieldLayers.length} / ${PLANAR_FIELD_LAYERS_MAX}`}
+          description="Every object or Airbox with its own setting. The first row is drawn on top."
+          title="Field layers"
+        >
+          <PlanarFieldLayerList
+            candidates={candidates}
+            layers={fieldLayers}
+            selectedLayerId={selectedLayer?.id ?? null}
+            targetLabel={targetLabelForLayer}
+            viewMasks={planar.layers}
+            onAdd={(candidate) => addLayer(candidate)}
+            onSelect={(id) => setPickedLayer({ key: selectionKey, id })}
+            onWrite={writeLayers}
+          />
+        </InspectorGroup>
+        <PlanarSectionPlaneSection
+          defaultSlice={planar.default_slice}
+          geometry={sectionGeometry}
+          monitors={monitors.data?.monitors ?? []}
+          objectLayers={objectLayers}
+          source={planar.source}
           patch={patch}
-          quantityOptions={availableQuantities.map((quantity) => ({ id: quantity.quantity_id, label: quantity.label, unit: quantity.unit }))}
-          validationError={validationError}
-          setValidationError={setValidationError}
-          componentItems={componentItemsFor(catalogQuantity, selectedDescriptor)}
-          onUseTargetScope={() => patch({ view_scope: viewScope })}
-          tensorFlowMajor={isFlowMajorTensorDescriptor(tensor)}
-          quantityCatalog={quantityCatalog.data?.quantities ?? []}
         />
-      ) : null}
+        <PlanarCropViewSection
+          axisLabels={axes}
+          crop={planar.crop ?? null}
+          fullBounds={fullBounds}
+          quality={<PlanarQualitySection capability={capabilities.raster} interaction={planar.interaction} patch={patch} quality={planar.quality} resolution={planar.resolution} resolutionPresets={resolutionPresets} />}
+          zoom={planar.interaction.zoom}
+          onClear={() => visualizationSync.queuePlanarCropPatch(null)}
+          onCrop={(crop: PlanarCropState) => visualizationSync.queuePlanarCropPatch(crop)}
+          onFit={() => runCommand("field-map.fit")}
+        />
+        {planar.layers.points ? <PlanarPointsSection patch={patch} style={planar.point_style} /> : null}
+      </InspectorGroup>
       <InspectorGroup
         collapsible
         defaultOpen={false}
@@ -510,93 +536,5 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         <PlanarProvenanceSection meta={meta} source={source} />
       </InspectorGroup>
     </div>
-  );
-}
-
-type QuantityCatalogEntry = NonNullable<ReturnType<typeof useQuantityCatalogResource>["data"]>["quantities"][number];
-type FieldCatalogEntry = NonNullable<ReturnType<typeof useFieldCatalogResource>["data"]>["quantities"][number];
-
-function componentItemsFor(
-  catalogQuantity: QuantityCatalogEntry | undefined,
-  descriptor: FieldCatalogEntry | undefined,
-): readonly { value: string; label: string }[] {
-  const tensorOptions = quantityCatalogEntrySpatialProjections(catalogQuantity);
-  if (tensorOptions.length > 0) return tensorOptions;
-  if (catalogQuantity?.tensor != null || (descriptor && ![1, 2, 3].includes(descriptor.components))) return [];
-  return ((descriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"])
-    .map((value) => ({ value, label: value.replaceAll("_", " ") }));
-}
-
-/**
- * Base field of a session still in the legacy model, where the base quantity
- * is drawn under the layers. Persisted sessions migrate to layers on restore.
- */
-const LEGACY_BASE_PALETTE_ITEMS = [
-  { label: "Direction (HSL, mumax3)", value: DIRECTION_COLORMAP },
-  ...SCALAR_COLOR_PALETTE_ITEMS,
-];
-
-function LegacyBaseFieldSection({
-  capabilities,
-  componentItems,
-  planar,
-  patch,
-  quantityCatalog,
-  quantityOptions,
-  setValidationError,
-  tensorFlowMajor,
-  validationError,
-  onUseTargetScope,
-}: {
-  capabilities: ReturnType<typeof resolvePlanarInspectorCapabilities>;
-  componentItems: readonly { value: string; label: string }[];
-  planar: PlanarState;
-  patch: (next: PlanarPatch) => void;
-  quantityCatalog: readonly QuantityCatalogEntry[];
-  quantityOptions: readonly { id: string; label: string; unit: string }[];
-  setValidationError: (message: string | null) => void;
-  tensorFlowMajor: boolean;
-  validationError: string | null;
-  onUseTargetScope: () => void;
-}) {
-  const range = planar.range ?? { mode: "auto" as const, min: null, max: null };
-  const scalarReason = capabilityReason(capabilities.raster);
-  const paletteItems = LEGACY_BASE_PALETTE_ITEMS;
-  const renderModeOptions = capabilities.mesh.enabled
-    ? (["surface", "surface+edges", "wireframe", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const)
-    : (["surface", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const);
-  const updateManualRange = (field: "min" | "max", raw: string) => {
-    const value = finiteNumber(raw);
-    if (value === null) { setValidationError("Range limits must be finite SI values."); return; }
-    const next = { mode: "manual" as const, min: range.mode === "manual" ? range.min : -1, max: range.mode === "manual" ? range.max : 1, [field]: value };
-    if (typeof next.min !== "number" || typeof next.max !== "number" || next.min >= next.max) { setValidationError("Manual range requires minimum < maximum."); return; }
-    setValidationError(null);
-    patch({ range: next });
-  };
-  return (
-    <InspectorGroup collapsible defaultOpen={false} summary={planar.quantity_id} title="Base field (legacy)" variant="nav">
-      <PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} />
-      <VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} />
-      <FormField label="Base quantity" type="select" value={planar.quantity_id} onChange={(event) => {
-        const next = event.currentTarget.value;
-        const options = quantityCatalogEntrySpatialProjections(quantityCatalog.find((entry) => entry.id === next));
-        patch({ component: options.find((option) => option.value === "frobenius")?.value ?? options[0]?.value ?? "magnitude", quantity_id: next });
-      }}>
-        {quantityOptions.map((quantity) => <option key={quantity.id} value={quantity.id}>{quantity.label} ({quantity.unit || "1"})</option>)}
-      </FormField>
-      <FormField label="Base component" type="select" value={planar.component} onChange={(event) => {
-        const component = event.currentTarget.value as PlanarState["component"];
-        patch({ component, ...(tensorFlowMajor && tensorProjectionOutputKind(component) !== "vector" ? { layers: { ...planar.layers, vectors: false } } : {}) });
-      }}>
-        {componentItems.map((component) => <option key={component.value} value={component.value}>{component.label}</option>)}
-      </FormField>
-      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Base color map" type="select" value={planar.colormap} onChange={(event) => patch({ colormap: event.currentTarget.value })}>{paletteItems.map((palette) => <option key={palette.value} value={palette.value}>{palette.label}</option>)}</FormField>
-      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Base range mode" type="select" value={range.mode} onChange={(event) => patch({ range: planarRangeForMode(event.currentTarget.value as PlanarRange["mode"], range) })}>{PLANAR_RANGE_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
-      {range.mode === "manual" ? <><FormField error={validationError ?? undefined} label="Base range minimum" type="number" value={range.min ?? ""} onChange={(event) => updateManualRange("min", event.currentTarget.value)} /><FormField error={validationError ?? undefined} label="Base range maximum" type="number" value={range.max ?? ""} onChange={(event) => updateManualRange("max", event.currentTarget.value)} /></> : null}
-      <PlanarVectorStyleSection capability={capabilities.vectors} patch={patch} resolution={planar.resolution} vectorStyle={planar.vector_style} />
-      <div className="fm-inspector-toolbar">
-        <Button size="sm" type="button" variant="secondary" onClick={onUseTargetScope}>Use target scope</Button>
-      </div>
-    </InspectorGroup>
   );
 }

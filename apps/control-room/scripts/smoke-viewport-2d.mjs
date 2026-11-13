@@ -895,6 +895,7 @@ async function fieldLayerListCase(page) {
   // The layer list lives in the 2D tab of a visualization Inspector; select
   // the first visualization node of the model tree to open it.
   await page.getByRole("treeitem", { name: "Visualization" }).first().click();
+  await openPlanarViewGroup(page);
   const list = page.locator("[data-slot='planar-field-layer-list']");
   await list.waitFor({ state: "visible", timeout: timeoutMs });
   const addFor = async (pattern) => {
@@ -1774,3 +1775,10 @@ async function loadPlaywright() {
 }
 
 await main();
+
+/** Opens the collapsible "2D view" Inspector group that holds the field layer list (spec 23 §5). */
+async function openPlanarViewGroup(scope) {
+  const trigger = scope.locator('[data-slot="inspector-group-trigger"]').filter({ hasText: /^2D view/ }).first();
+  await trigger.waitFor({ state: "visible", timeout: 30_000 });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+}

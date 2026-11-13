@@ -4,6 +4,8 @@ import {
   addFieldLayer,
   createFieldLayer,
   effectivePass,
+  effectivePlanarFieldLayers,
+  inheritedFieldLayer,
   layerIdForTarget,
   moveFieldLayer,
   multisliceLayer,
@@ -109,5 +111,49 @@ describe("planar field layers", () => {
     const all = createFieldLayer("all");
     expect(multisliceLayer([hidden, all])).toBe(all);
     expect(multisliceLayer([hidden])).toBeNull();
+  });
+});
+
+describe("legacy projection and inheritance", () => {
+  const masks = {
+    boundaries: false, bounds: false, contours: false, mesh: true, points: false,
+    probes: true, raster: true, streamlines: false, vectors: true,
+  };
+  const base = {
+    component: "magnitude" as const,
+    colormap: "hsl_direction",
+    field_overlays: [] as ReturnType<typeof createFieldLayer>[],
+    layers: masks,
+    quantity_id: "m",
+    range: { mode: "auto" as const, min: null, max: null },
+    raster_opacity: 1,
+    vector_style: createFieldLayer("all").vector_style,
+    view_scope: { kind: "monitor_target" as const },
+  };
+
+  it("projects a legacy base field to the all layer beneath visible overlays, as the backend migration does", () => {
+    const airbox = { ...createFieldLayer({ id: "airbox", kind: "airbox" }), visible: false };
+    const layers = effectivePlanarFieldLayers({ ...base, layer_model: "legacy", field_overlays: [airbox] });
+    expect(layers.map((layer) => [layer.id, layer.visible])).toEqual([["airbox", true], ["all", true]]);
+    expect(layers[1]).toMatchObject({
+      quantity_id: "m", raster_visible: true, vectors_visible: true, mesh_visible: true,
+      view_scope: { kind: "monitor_target" },
+    });
+  });
+
+  it("keeps a layers state unchanged and skips a disabled legacy base field", () => {
+    const film = createFieldLayer({ id: "object:film", kind: "object" });
+    expect(effectivePlanarFieldLayers({ ...base, layer_model: "layers", field_overlays: [film] })).toEqual([film]);
+    expect(effectivePlanarFieldLayers({
+      ...base, layer_model: "legacy", layers: { ...masks, raster: false, vectors: false },
+    })).toEqual([]);
+  });
+
+  it("lets objects inherit the visible all layer, never the Airbox", () => {
+    const all = createFieldLayer("all");
+    const object = { id: "object:film", kind: "object" as const };
+    expect(inheritedFieldLayer([all], object)).toBe(all);
+    expect(inheritedFieldLayer([{ ...all, visible: false }], object)).toBeNull();
+    expect(inheritedFieldLayer([all], { id: "airbox", kind: "airbox" })).toBeNull();
   });
 });
