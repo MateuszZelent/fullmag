@@ -501,7 +501,7 @@ def diagnostic_api_evidence(process, owner, paths, claimed_pin=None):
     ledger_raw = read(ledger)
     reservations = json.loads(ledger_raw).get('reservations')
     extra = {}
-    if owner['state']=='failed':
+    if owner['state']=='failed' and claimed_pin is not None:
         require(isinstance(claimed_pin,dict) and claimed_pin.get('schema_version')=='fullmag.pending-admission-build-pin.v1', 'Failed diagnostic build requires an exact unused admission pin')
     if claimed_pin is None:
         require(isinstance(reservations, list)
