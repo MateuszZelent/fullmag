@@ -13,6 +13,11 @@ import {
 describe("viewport3dAppearancePreferences", () => {
   it("publishes the R1 default appearance contract", () => {
     expect(DEFAULT_VIEWPORT_3D_APPEARANCE_PREFERENCES).toEqual({
+      renderMode: "scientific",
+      materialRoughness: 0.35,
+      materialMetalness: 0.5,
+      softShadows: true,
+      exportScale: 2,
       backgroundMode: "gradient",
       backgroundStrength: 0.65,
       lightingMode: "studio",

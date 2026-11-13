@@ -727,7 +727,7 @@ async function exercisePointerGestures(page, { viewport, canvas, assertCanvas, t
   const translationError = Math.hypot(...afterPan.position.map((value, index) =>
     (value - beforePan.position[index]) - (afterPan.target[index] - beforePan.target[index])));
   if (translationError > scalarRelativeEpsilon(radius) * 100) {
-    throw new Error("Pan failed to translate the camera and orbit target together");
+    throw new Error(`Pan failed to translate the camera and orbit target together: error=${translationError}, limit=${scalarRelativeEpsilon(radius) * 100}, before=${formatCamera(beforePan)}, after=${formatCamera(afterPan)}`);
   }
   await assertCanvas("after right-button pan");
   return { state: "passed", view_cube: { state: "passed", face: "+X", hit_css: hit,

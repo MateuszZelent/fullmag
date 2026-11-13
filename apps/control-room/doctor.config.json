@@ -7,6 +7,10 @@
     ],
     "overrides": [
       {
+        "files": ["src/modules/viewport-3d/layers/Viewport3DLightingRig.tsx"],
+        "rules": ["react-doctor/r3f-require-render-with-positive-priority"]
+      },
+      {
         "files": ["dev-server.mjs"],
         "rules": ["react-doctor/local-rpc-native-bridge-risk"]
       },

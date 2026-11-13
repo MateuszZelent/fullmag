@@ -12,6 +12,7 @@ import {
   resolveViewport3DCameraFovDegrees,
 } from "../viewport3dCameraFov";
 import { nearTuple3, sameTuple3 } from "../viewport3dMath";
+import { scheduleViewport3DCameraRestCommit } from "./viewport3DCameraRestCommit";
 import { resolveViewport3DCameraDepthRange } from "./viewport3DCameraClip";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
 import { useBatchedInvalidate } from "../viewport3dBatchedInvalidate";
@@ -139,6 +140,8 @@ export function installScaleAwareOrbitChange(
   controls: OrbitControlsHandle,
   sceneRadius: number,
   interactionActive: () => boolean,
+  observeMotion: (moving: boolean) => void,
+  dampingTailActive: () => boolean = () => false,
 ): () => void {
   const originalUpdate = controls.update;
   const lastPosition = controls.object.position.clone();
@@ -146,6 +149,8 @@ export function installScaleAwareOrbitChange(
   const epsilon = Math.max(Math.abs(sceneRadius), 1e-18) * 1e-8;
   let nativeChange = false;
   let updating = false;
+  let previousUpdateAt = performance.now();
+  let wasDampingTail = false;
   const observeNativeChange = () => {
     if (updating) nativeChange = true;
   };
@@ -154,13 +159,26 @@ export function installScaleAwareOrbitChange(
     nativeChange = false;
     updating = true;
     let result: ReturnType<typeof originalUpdate>;
+    const now = performance.now();
+    const dampingTail = interactionActive() && dampingTailActive();
+    const baseDamping = controls.dampingFactor;
+    if (controls.enableDamping && dampingTail && wasDampingTail && baseDamping > 0 && baseDamping < 1) {
+      // Keep dragging unchanged. After release, compose the normal 60 Hz decay
+      // over elapsed time so slow frames do not leave a minute-long tail.
+      const elapsedSeconds = Math.min(0.25, Math.max(1 / 60, (now - previousUpdateAt) / 1000));
+      controls.dampingFactor = 1 - (1 - baseDamping) ** (elapsedSeconds * 60);
+    }
+    previousUpdateAt = now;
+    wasDampingTail = dampingTail;
     try {
       result = originalUpdate.apply(controls, args);
     } finally {
+      controls.dampingFactor = baseDamping;
       updating = false;
     }
     const moved = lastPosition.distanceToSquared(controls.object.position) > epsilon * epsilon ||
       lastTarget.distanceToSquared(controls.target) > epsilon * epsilon;
+    observeMotion(moved || nativeChange);
     // Keep the last significant pose, so subthreshold damping cannot keep a
     // demand frame alive indefinitely and small deltas can still accumulate.
     if (moved || nativeChange || !interactionActive()) {
@@ -909,9 +927,8 @@ function useOrbitCameraControlsModel({
   const activeGestureEpochRef = useRef<number | null>(null);
   const trajectoryFrameRef = useRef(0);
   const suppressNextRestCommitRef = useRef(false);
-  const cameraControlsPoseCommitTimeoutRef = useRef<ReturnType<
-    typeof setTimeout
-  > | null>(null);
+  const cameraControlsPoseCommitCancelRef = useRef<(() => void) | null>(null);
+  const controlsMovingRef = useRef(false);
 
   const recordCameraTrajectory = useCallback((
     reason: Viewport3DCameraTrajectoryReason,
@@ -966,6 +983,8 @@ function useOrbitCameraControlsModel({
       controls,
       bounds?.radius ?? FALLBACK_CAMERA_BOUNDS.radius,
       () => !controlsSyncingRef.current && viewport3DCameraGestureActive(cameraGestureRef),
+      (moving) => { controlsMovingRef.current = moving; },
+      () => cameraGestureEndedRef.current,
     );
   }, [bounds?.radius, camera, cameraGestureRef]);
 
@@ -1268,9 +1287,8 @@ function useOrbitCameraControlsModel({
   ]);
 
   const clearCameraControlsPoseCommit = useCallback(() => {
-    if (cameraControlsPoseCommitTimeoutRef.current === null) return;
-    clearTimeout(cameraControlsPoseCommitTimeoutRef.current);
-    cameraControlsPoseCommitTimeoutRef.current = null;
+    cameraControlsPoseCommitCancelRef.current?.();
+    cameraControlsPoseCommitCancelRef.current = null;
   }, []);
 
   const scheduleCameraControlsPoseCommit = useCallback((epoch: number, {
@@ -1283,15 +1301,22 @@ function useOrbitCameraControlsModel({
     ) {
       return;
     }
-    if (cameraControlsPoseCommitTimeoutRef.current !== null) {
+    if (cameraControlsPoseCommitCancelRef.current !== null) {
       if (!restart) return;
       clearCameraControlsPoseCommit();
     }
-    cameraControlsPoseCommitTimeoutRef.current = setTimeout(() => {
-      cameraControlsPoseCommitTimeoutRef.current = null;
-      commitCameraControlsPose(epoch);
-    }, VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS);
-  }, [clearCameraControlsPoseCommit, commitCameraControlsPose]);
+    cameraControlsPoseCommitCancelRef.current = scheduleViewport3DCameraRestCommit({
+      delayMs: VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS,
+      isCurrent: () => activeGestureEpochRef.current === epoch &&
+        viewport3DCameraGestureActive(cameraGestureRef) && viewport3DCameraGestureEpoch(cameraGestureRef) === epoch,
+      isMoving: () => controlsMovingRef.current,
+      requestFrame: invalidate,
+      commit: () => {
+        cameraControlsPoseCommitCancelRef.current = null;
+        commitCameraControlsPose(epoch);
+      },
+    });
+  }, [cameraGestureRef, clearCameraControlsPoseCommit, commitCameraControlsPose, invalidate]);
 
   useEffect(
     () => () => {
@@ -1339,6 +1364,7 @@ function useOrbitCameraControlsModel({
       onCameraInteractionEnd?.(previousEpoch);
     }
     cameraGestureEndedRef.current = false;
+    controlsMovingRef.current = true;
     const epoch = beginViewport3DCameraGesture(cameraGestureRef, "orbit");
     if (epoch < 0) return;
     activeGestureEpochRef.current = epoch;

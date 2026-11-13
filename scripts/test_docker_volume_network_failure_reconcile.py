@@ -119,6 +119,15 @@ class NetworkFailureValidatorsTests(unittest.TestCase):
         terminal = reconcile.validate_pool_failure(COMPOSE_ERROR, NETWORK, PROJECT)
         self.assertEqual(terminal, f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}")
 
+    def test_pool_failure_before_backend_creation_is_admissible(self):
+        # Compose 5.7 can fail the network before emitting a container progress line.
+        output = COMPOSE_ERROR.replace(f"Container {PROJECT}-backend-1 Creating\n", "")
+        terminal = reconcile.validate_pool_failure(output, NETWORK, PROJECT)
+        self.assertEqual(terminal, f"failed to create network {NETWORK}: Error response from daemon: {POOL_ERROR}")
+        for extra in (f"Container {PROJECT}-backend-1 Created", "Container foreign Creating"):
+            with self.subTest(extra=extra), self.assertRaises(BuildControlError):
+                reconcile.validate_pool_failure(output + "\n" + extra, NETWORK, PROJECT)
+
     def test_compose_success_or_other_error_lines_are_rejected(self):
         for text in (
             COMPOSE_ERROR.replace("backend-1 Creating", "backend-1 Created"),

@@ -6,6 +6,17 @@ describe("viewport3dStore appearance preferences", () => {
   beforeEach(() => viewport3dStore.resetForTest());
   afterEach(() => viewport3dStore.resetForTest());
 
+  it("publishes and persists presentation-only edits and resets them without changing camera", () => {
+    const camera = viewport3dStore.getSnapshot().camera;
+    viewport3dStore.setAppearance({ renderMode: "presentation" });
+    expect(viewport3dStore.getSnapshot().appearance.renderMode).toBe("presentation");
+    viewport3dStore.setAppearance({ materialRoughness: 0.8, materialMetalness: 0.9, softShadows: false, exportScale: 4 });
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ materialRoughness: 0.8, materialMetalness: 0.9, softShadows: false, exportScale: 4 });
+    viewport3dStore.resetAppearance("all");
+    expect(viewport3dStore.getSnapshot().appearance).toMatchObject({ renderMode: "scientific", exportScale: 2 });
+    expect(viewport3dStore.getSnapshot().camera).toBe(camera);
+  });
+
   it("bounds appearance patches and keeps the selected appearance snapshot stable", () => {
     const initialAppearance = viewport3dStore.getSnapshot().appearance;
     viewport3dStore.setAppearance({

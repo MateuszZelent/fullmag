@@ -1413,6 +1413,7 @@ async function completePendingViewport3DCapture(
   let url: string | null = null;
   try {
     const blob = await captureViewport3DImage(canvas, {
+      scale: appearance.exportScale,
       background: appearance.exportBackground,
       annotations: appearance.exportAnnotations,
     });
@@ -2218,7 +2219,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const canvasDpr = resolveViewport3DCanvasDpr({
     devicePixelRatio:
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
-    profile: visualProfile,
+    profile: getViewport3DVisualProfile(canvasContextProfileId),
   });
   const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(
     getViewport3DVisualProfile(canvasContextProfileId),
@@ -3123,6 +3124,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           />
           <Viewport3DScene
             {...sceneProps}
+            qualityProfileId={canvasContextProfileId}
             savedFieldIdentity={savedFieldIdentity}
             onVisibleColorScale={savedViewportActive ? onVisibleSavedColorScale : undefined}
             antennaFieldOverlay={antennaFieldOverlay}
