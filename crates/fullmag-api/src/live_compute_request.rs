@@ -1188,7 +1188,9 @@ mod tests {
             .reconcile_error_under_transition(&state, &request_context, &mut error)
             .await
             .unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("request_context_stale"));
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(error.message, "request_context_stale");
+        assert!(error.code.is_none());
         assert!(error.intent_disposition.is_none());
 
         // A restore can preserve logical session identity and scene revision
@@ -1256,10 +1258,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(
-            stale_scope_error.code.as_deref(),
-            Some("request_context_stale")
-        );
+        assert_eq!(stale_scope_error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(stale_scope_error.message, "request_context_stale");
+        assert!(stale_scope_error.code.is_none());
         assert!(old_rejection.intent_disposition.is_none());
         drop(_transition);
 

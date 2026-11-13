@@ -1537,3 +1537,25 @@ qualification PASS. Pozostałe bramki w toku; nie stanowi to odbioru aktualnego
 runtime 3243 ani pełnej macierzy P22. Bieżący silnik Docker 29.9.3 odpowiada,
 ale własne dwa kontenery pozostają Exited255, UI3243 nie odpowiada. WSL ma
 około 516 MiB wolnego, nadal poniżej minimum 1 GiB dla S46; nic nie usunięto.
+
+
+### Rzeczywiste recovery wykonane; frontend i regresja nadal otwarte
+
+Po poprawce `48845db95` publikacja `f8278d637b154c98a2e981bd0c96c50b`
+przeszła z tym samym proof SHA `21ed52ae…75bbcd5` i authorization SHA
+`d998f78c…4a568`. Zarządzane `docker-dev-recover-container` utworzyło nową
+własną parę. Backend `1d3311194d38` kompiluje kod w Dockerze; frontend
+`c5c799e9656f` zakończył się kodem 1: `seed file hash changed:
+apps/control-room/next-env.d.ts`. Trwa diagnoza bez pomijania hash guardu.
+Nie wykonano Solve/Compute ani restartu obcych usług. API/UI nie są gotowe.
+
+CI `43338301221`, Rust job `131599994594`, kompiluje oba targety i przechodzi
+accepted explicit Compute start-gate. Regresja HTTP doszła do linii 1191:
+przy zmianie request scope poprawnie zwrócono konflikt `request_context_stale`,
+ale nowy test oczekiwał go w opcjonalnym `code`, podczas gdy istniejący
+kontrakt `ApiError::conflict` zapisuje go w `message` z `code=None`. Tak samo
+błędna była późniejsza asercja przy restore. Poprawiono obie na dokładne
+`status=409`, `message=request_context_stale`, `code=None`; pozostawiono
+asercje braku `intent_disposition` i wszystkie kontrole admission/replay.
+To korekta oczekiwania testu, bez zmian kodu produkcyjnego. Wykonanie całej
+regresji ponownie w CI nadal wymagane; wcześniejszy run pozostaje FAIL.
