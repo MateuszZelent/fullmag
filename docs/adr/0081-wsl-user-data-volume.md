@@ -312,6 +312,31 @@ narzędzi oraz połączyć go z supervisorem. Same przekazane piny nie dowodzą
 tych warunków. Świeży probe oraz kwalifikacja runtime i zapisu Zarr pozostają
 odrębnymi wymaganiami po przygotowaniu admission.
 
+Źródłowe API `linux_data_volume_admission.admission_verified` wiąże zamknięty
+request z dokładnymi predecessor receipts provision/drain/copy/bind, oryginalnym
+planem, wybranym journalem, pending i nową obserwacją pięciu OLD guardów.
+Graf źródeł obejmuje 19 modułów i nie importuje hostowych jobów Docker.
+Wspólny, czysty `fullmag_data_volume_bind.validate_switch_result` służy
+zarówno hostowemu walidatorowi terminalu bindu, jak i temu etapowi root.
+Root API ponawia persistent boot, OLD backup IDs oraz NEW canonical
+inode/UUID/ext4/private/FSROOT i weryfikuje zachowany PAX. Przed zmianą
+certyfikatu oba pełne manifesty muszą odpowiadać oryginalnemu manifestowi.
+
+Zewnętrzny NEW writer pozostaje zajęty podczas kontroli danych, przygotowania
+certyfikatu i publikacji. Prymityw może przyjąć jego deskryptor jako wewnętrzny
+parametr: duplikuje OFD, sprawdza canonical writer przed flock i po nim oraz
+zamyka wyłącznie swój duplikat, bez LOCK_UN. Obcy deskryptor jest odrzucany
+przed zmianą jego blokady. Store FD/path, writer, rooty, cert/owner, chronione
+pliki admission i pending są ponawiane także wokół długiego OLD inventory oraz
+po zapisie result i journalu. Późny drift zgłasza błąd i zachowuje unknown lub
+ambiguous evidence; nawet zapisany success journal nie zastępuje rzeczywistego
+terminalnego sukcesu procesu i braku sprzecznego failure receiptu.
+
+Root API nie ma CLI i samo nie dowodzi istnienia żywych parent guardów.
+Podłączenie jego 19 modułów do izolowanego bootstrapu, supervisora i nadrzędnej
+kontynuacji hostlock oraz kontrolowanego startupu przy pending pozostaje
+osobnym etapem integracji. Nie jest to wykonanie migracji ani readmission.
+
 Sama integracja źródłowa i zapisane acknowledgements nie dowodzą wykonania
 na hoście. Pełny sterownik musi jeszcze połączyć admission, bezpieczny start,
 kwalifikację zapisu/Zarr i rejestrację pod ciągłą kontrolą. Rzeczywista kopia,

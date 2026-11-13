@@ -62,6 +62,7 @@ jobs:
           scripts.test_linux_data_volume_format scripts.test_docker_data_volume_linux
           scripts.test_linux_data_volume_copy scripts.test_fullmag_data_volume_bind
           scripts.test_linux_data_volume_bind
+          scripts.test_linux_data_volume_admission
           scripts.test_docker_data_volume_stopped_group scripts.test_docker_data_volume_copy_job
           scripts.test_docker_data_volume_copy_job_contracts scripts.test_docker_dev_data_volume_copy
           scripts.test_docker_data_volume_bind_job scripts.test_docker_dev_data_volume_bind

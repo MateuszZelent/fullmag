@@ -10,7 +10,8 @@ that never authorizes replay or a successful migration acknowledgement.
 """
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack,contextmanager
+import fcntl
 import hashlib
 import os
 from pathlib import Path
@@ -74,7 +75,24 @@ def _archive(parent,name,prepared):
     return hashlib.sha256(raw).hexdigest()
 
 
-def prepare_guarded(value):
+@contextmanager
+def _held_writer(state,entry,writer_fd,store_fd):
+    if writer_fd is None:
+        with bind_stage._copied_writer(state,entry) as descriptor:yield descriptor
+        return
+    require(type(writer_fd) is int and writer_fd >= 0,'Exact new store writer descriptor required')
+    # A duplicate retains the caller's open file description and flock. Close
+    # only our reference; never LOCK_UN a lock still owned by the outer stage.
+    descriptor=os.dup(writer_fd)
+    try:
+        _writer(descriptor,store_fd,entry)
+        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        _writer(descriptor,store_fd,entry)
+        yield descriptor
+    finally:os.close(descriptor)
+
+
+def prepare_guarded(value,*,writer_fd=None):
     """Prepare only under NEW writer; never start, probe, register or retire."""
     require(os.name == 'posix' and os.geteuid() == 0,'Host root required for protected admission preparation')
     request=validate_request(value);pins=request['pins'];entry=request['writer_entry']
@@ -91,17 +109,17 @@ def prepare_guarded(value):
         parent=_open_directory_nofollow(archive.parent);stack.callback(os.close,parent)
         _require_archive_directory(parent,pins)
         require(not os.path.lexists(archive),'Admission archive already exists; reconcile, never replay')
-        with bind_stage._copied_writer(state,entry) as writer_fd:
-            _writer(writer_fd,store_fd,entry)
+        with _held_writer(state,entry,writer_fd,store_fd) as locked_writer:
+            _writer(locked_writer,store_fd,entry)
             prepared=migration.prepare_state_migration(state,pins)
             _same_directory(state,root_fd);_same_directory(store,store_fd);_same_directory(archive.parent,parent)
-            _writer(writer_fd,store_fd,entry)
+            _writer(locked_writer,store_fd,entry)
             digest=_archive(parent,archive.name,prepared)
             _same_directory(archive.parent,parent)
-            _writer(writer_fd,store_fd,entry)
+            _writer(locked_writer,store_fd,entry)
             applied=migration.apply_state_migration(state,prepared,archive,digest)
             _same_directory(state,root_fd);_same_directory(store,store_fd);_same_directory(archive.parent,parent)
-            _writer(writer_fd,store_fd,entry)
+            _writer(locked_writer,store_fd,entry)
             require(migration._certificate_identity(state) == prepared['certificate_inode'] and
                 applied['state'] == 'prepared-not-admitted' and applied['namespace_admitted'] is False and
                 applied['certificate_sha256'] == prepared['candidate_sha256'],

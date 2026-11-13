@@ -80,6 +80,30 @@ class AdmissionPreparationTests(unittest.TestCase):
         self.assertFalse(self.archive.exists())
         self.assertEqual(self.case.fixture.certificate_path.read_bytes(),self.original['linux-native-host.json'])
 
+    def test_outer_new_writer_stays_locked_after_preparation_using_duplicate(self):
+        with self.module.bind_stage._copied_writer(self.state,self.entry) as descriptor:
+            result=self.module.prepare_guarded(self.request,writer_fd=descriptor)
+            self.locked()
+            self.assertEqual(os.fstat(descriptor).st_ino,self.writer.stat().st_ino)
+        self.assertEqual(result['state'],'admission-prepared-not-admitted')
+
+    def test_foreign_borrowed_descriptor_cannot_authorize_a_new_store_write(self):
+        other=self.state/'foreign-writer';other.touch();descriptor=os.open(other,os.O_RDONLY)
+        try:
+            with self.assertRaisesRegex(ValueError,'writer'):
+                self.module.prepare_guarded(self.request,writer_fd=descriptor)
+            separate=os.open(other,os.O_RDONLY)
+            try:fcntl.flock(separate,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            finally:os.close(separate)
+        finally:os.close(descriptor)
+        self.assertFalse(self.archive.exists())
+
+    def test_invalid_borrowed_descriptor_never_creates_archive(self):
+        for value in (True,-1,'3'):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                self.module.prepare_guarded(self.request,writer_fd=value)
+        self.assertFalse(self.archive.exists())
+
     def test_existing_archive_is_preserved_without_replay(self):
         self.archive.write_bytes(b'keep this exact previous attempt')
         with mock.patch.object(self.module.migration,'prepare_state_migration') as prepare, self.assertRaises(ValueError):self.call()
