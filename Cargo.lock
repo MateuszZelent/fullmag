@@ -1353,6 +1353,7 @@ version = "0.1.0"
 name = "fullmag-ir"
 version = "0.1.0"
 dependencies = [
+ "fullmag-expr",
  "fullmag-quantities",
  "num-bigint",
  "rayon",

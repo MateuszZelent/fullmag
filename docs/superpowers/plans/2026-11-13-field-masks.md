@@ -125,7 +125,7 @@ pub fn eval_time_program(code: &[f64], t_s: f64) -> f64;
 **Files:**
 - Create: `crates/fullmag-ir/src/mask_field_drive.rs`
 - Modify: `crates/fullmag-ir/src/lib.rs`, `crates/fullmag-ir/src/validation.rs`, `crates/fullmag-ir/Cargo.toml`
-- Test: `crates/fullmag-ir/tests/ir_tests.rs`
+- Test: `crates/fullmag-ir/tests/mask_field_drive_tests.rs`
 
 **Interfaces:**
 - Consumes: `fullmag_expr::{compile_function, FunctionKind, FunctionSource, MAX_MASK_TERMS}`.

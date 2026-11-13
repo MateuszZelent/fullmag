@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+fullmag-expr = { path = "../fullmag-expr" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 num-bigint = "=0.4.6"
 serde.workspace = true

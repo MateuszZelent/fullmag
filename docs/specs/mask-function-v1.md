@@ -134,7 +134,9 @@ value stack of at most 64 entries and one input, `t`.
 
 | Code | Raised by | Meaning |
 |---|---|---|
+| `mask_field_drive_invalid` | IR validation | wrong schema or expression version, empty or duplicate id or name, a non-finite parameter value, a bad ready-antenna origin, or a time-dependent term active in a relaxation stage |
 | `mask_target_unknown` | IR validation | `target_object_id` is not a magnet |
+| `mask_shape_invalid` | IR validation | a non-positive or non-finite shape size, a non-finite position, a zero cylinder axis, or a CSG shape (not part of v1) |
 | `mask_too_many_terms` | IR validation, runner | zero terms, or more than 8 terms on one drive, or more than 8 time-dependent mask terms active in one stage |
 | `mask_array_invalid` | IR validation, planner | array mask with a bad lattice, missing file, wrong sha256, dtype or shape |
 | `mask_support_empty` | planner | no active cell of the target lies inside the shape |

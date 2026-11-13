@@ -19372,6 +19372,7 @@ mod tests {
             },
             planar_monitors: Vec::new(),
             field_drives: Vec::new(),
+            mask_field_drives: Vec::new(),
             current_modules: Vec::new(),
             antenna_port_modes: Vec::new(),
             antenna_field_solve_stages: Vec::new(),
