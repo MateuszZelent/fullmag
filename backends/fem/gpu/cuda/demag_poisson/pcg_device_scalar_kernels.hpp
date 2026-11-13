@@ -1,6 +1,20 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+
+namespace fullmag::fem {
+// Keep this host queue policy shared with the terminal/readback contracts.
+// Two pre-loop AMG calls plus the first five queued calls fit the seven-call
+// post-latch budget even when initialization already found a terminal state.
+constexpr uint32_t demag_pcg_next_batch_iterations(uint32_t queued, uint32_t maximum)
+{
+    if (queued >= maximum) return 0u;
+    const uint32_t limit = queued == 0u ? 5u : 8u;
+    const uint32_t remaining = maximum - queued;
+    return remaining < limit ? remaining : limit;
+}
+}
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 namespace fullmag::fem {

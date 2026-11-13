@@ -1,8 +1,8 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU BB cooperative-PCG path has a managed hardware oracle and a passing frozen-SP4 common-stop component comparison at `1e-8 T`. Full scientific/performance qualification remains open, including the five alternating pairs; no production promotion is claimed.
+- Status: the historical FEM GPU NCG experiment remains invalid qualification/no-go. The separate FEM GPU BB cooperative-PCG path has a managed hardware oracle and a passing frozen-SP4 common-stop component comparison at `1e-8 T`. The C7 accepted-energy finalization overlay also passes the managed native contract; this is not an SP4 speedup or parity result. Full scientific/performance qualification remains open, including the five alternating pairs; no production promotion is claimed.
 - Owners: Fullmag FEM backend
-- Last updated: 2026-11-12 (historical NCG result remains dated 2026-07-26)
+- Last updated: 2026-11-13 (historical NCG result remains dated 2026-07-26)
 - Related physics notes:
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
 - Related specs:
@@ -498,7 +498,7 @@ separately from the resolved solver and execution provenance.
 | Solver | Device | Status for this preconditioner | Boundary |
 |---|---|---|---|
 | FEM | CPU | Existing reference | Consistent-mass exchange form and `step_m_per_a` scaling are owned by the current CPU minimizer helpers. |
-| FEM | GPU | Selected SP4 comparison passed; full qualification open | Managed native oracle and common-stop `1e-8 T` component parity passed; repeated performance/general qualification remains incomplete. |
+| FEM | GPU | Selected SP4 comparison passed; full qualification open | Managed native oracle, common-stop `1e-8 T` component parity, and C7 accepted-energy finalization contract passed; repeated performance/general qualification remains incomplete. |
 | FDM | CPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 | FDM | GPU | Not applicable | This contract is the FEM consistent-mass weak form; FDM operator semantics are not changed. |
 
@@ -540,6 +540,43 @@ the existing representable-chord Armijo path, fresh-zero Poisson trial
 evaluation, independent Poisson certification, energy ownership, and
 accepted-state semantics. The preconditioner changes only the search
 direction.
+
+#### 11.4.1 C7: final accepted-energy snapshot reuse
+
+The PG-BB direct Armijo evaluation already produces a `GpuDirectEnergySnapshot`
+for each trial. After the direct decision and any required refinement finish,
+`accepted_trial_snapshot` is copied only when that trial is accepted; rejected
+trials do not replace it. The successful accepted-step finalizer reuses the
+snapshot for the nine published energy terms: exchange, demag, external,
+drive, interfacial/rotated DMI, bulk DMI, uniaxial anisotropy, cubic anisotropy,
+and magnetoelastic energy. This removes the duplicate final energy-term
+reduction for that accepted trial only. It adds no cross-step energy cache and
+does not exchange or swap magnetization pointers.
+
+The finalizer still computes fresh final observable reductions from the
+accepted state, then performs the existing 18-scalar control readback and its
+stream fence. `MaxRhs`, field maxima, torque, and moment therefore remain fresh;
+timing collection, finite validation, publication, and accepted-step rollback
+remain on the existing path. The energy snapshot is overlaid onto the local
+readback values after the read, so stale or reused resident energy slots are not
+published. Enabled energy entries are all checked for finiteness before the
+overlay writes any of them. The Robin boundary energy slot is diagnostic only:
+it is not one of the nine energy terms and is excluded from the published
+energy total. Stationary/confirmation branches continue to use the ordinary
+finalizer without an overlay. If accepted-path finalization fails, the existing
+accepted-step rollback path remains in force.
+
+The shared `gpu_pgbb_final_energy_overlay_contract` fixture verifies all nine
+energy terms and their published total, preserves the fresh torque and moment
+slots, ignores the Robin diagnostic, and rejects a non-finite energy without
+partial overlay. It runs in the managed `fem-demag-poisson` native contract:
+attempt `c1321d9442c641bd910f25b1b67a4a0e`, source snapshot
+`49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0`, library
+`c078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785`, compile
+13.122 s, test 5.200 s, exit 0. The gate also includes the paired-norm,
+true-residual corruption, and queue-property fixtures. It does not establish
+SP4 timing, speedup, or cross-backend parity for C7. An immutable implementation
+commit link remains pending.
 
 (python-api)=
 ### 11.5 API, ProblemIR, validation errors, and provenance
@@ -746,3 +783,7 @@ against MuMax3. See the
 | Nonexecuted BB-only pipeline carrier | `crates/fullmag-ir/src/bb_pipeline.rs` | `is_gpu_bb_pipeline_carrier` | FEM GPU authoring | Source contract; managed bridge validation required |
 | Matching Python pipeline structural validation | `packages/fullmag-py/src/fullmag/model/bb_pipeline.py` | `is_gpu_bb_only_pipeline` | FEM GPU authoring | Interpreted regression tests |
 | BB preparation without stage physical mutations | `crates/fullmag-api/src/script.rs` | `gpu_bb_preparation_study` | FEM GPU preparation | Source regression; managed compile required |
+| Capture the final direct/refined Armijo snapshot for accepted PG-BB state | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_projected_gradient_bb_step` | FEM GPU | Managed native contract passed; no C7 SP4 performance/parity claim; immutable source commit pending |
+| Overlay the nine published energies after the existing scalar readback | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp` | `gpu_rk_overlay_final_energy_terms` | FEM GPU | Managed native contract and shared nine-term overlay fixture passed; immutable source commit pending |
+| Preserve fresh observables and the existing stream fence during finalization | `backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu` | `gpu_rk_finalize_step_stats_control_readback_with_energy_terms` | FEM GPU | Managed native contract passed; SP4 timing/parity not established; immutable source commit pending |
+| Synthetic accepted-energy, observable, Robin, and finite-failure regression | `backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp` | `gpu_pgbb_final_energy_overlay_contract` | FEM GPU native contract | Included in managed `fem-demag-poisson` attempt `c1321d9442c641bd910f25b1b67a4a0e`; immutable source commit pending |

@@ -20,6 +20,12 @@ cudaError_t fullmag_cuda_demag_validation_norm(
     double &norm,
     cudaStream_t stream);
 
+/// Two independent scaled L2 norms, one 16-byte readback/fence (rows >= 2).
+/// device_pair may alias either input's first two entries; all reads finish first.
+cudaError_t fullmag_cuda_demag_validation_norm_pair(
+    const double *rhs, const double *residual, int rows,
+    double *device_pair, double *host_pair, cudaStream_t stream);
+
 /// Device Poisson demag RHS: b = Bx mx + By my + Bz mz.
 void fullmag_cuda_demag_rhs_csr(
     const uint32_t *csr_row_offsets,

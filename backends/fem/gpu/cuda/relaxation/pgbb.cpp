@@ -851,6 +851,7 @@ int gpu_relax_projected_gradient_bb_step(
     uint32_t logical_rhs_evaluations = 1u;
     uint32_t refinement_rhs_evaluations = 0u;
     bool line_search_accepted = false;
+    GpuDirectEnergySnapshot accepted_trial_snapshot{};
     relaxation::EnergyDifference last_direct_difference{};
     double accepted_armijo_increment_rhs_j = 0.0;
     double last_armijo_increment_rhs_j = 0.0;
@@ -1002,6 +1003,7 @@ int gpu_relax_projected_gradient_bb_step(
             if (armijo) {
                 last_direct_difference = armijo_result.difference;
                 accepted_armijo_increment_rhs_j = armijo_rhs;
+                accepted_trial_snapshot = armijo_result.trial_snapshot;
             }
             if (armijo) {
                 line_search_accepted = true;
@@ -1135,7 +1137,33 @@ int gpu_relax_projected_gradient_bb_step(
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
-    if (!gpu_rk_finalize_step_stats_control_readback(ctx, out_stats, reason)) {
+    // Match the publication gates so disabled, potentially stale energy slots
+    // and the diagnostic Robin slot are never taken from the trial snapshot.
+    std::array<bool, kGpuFinalScalarSlots> accepted_energy_term_mask{};
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::ExchangeEnergy)] =
+        true;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DemagEnergy)] =
+        ctx.demag.enabled;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::ExternalEnergy)] =
+        ctx.zeeman.has_external_field;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DriveEnergy)] =
+        !ctx.zeeman.regional_drives.empty();
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::DmiEnergy)] =
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::BulkDmiEnergy)] =
+        ctx.dmi.bulk_enabled;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::AnisotropyEnergy)] =
+        ctx.anisotropy.uniaxial_enabled;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::CubicAnisotropyEnergy)] =
+        ctx.anisotropy.cubic_enabled;
+    accepted_energy_term_mask[static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy)] =
+        ctx.magnetoelastic.enabled;
+    if (!gpu_rk_finalize_step_stats_control_readback_with_energy_terms(
+            ctx,
+            out_stats,
+            accepted_trial_snapshot.terms_j,
+            accepted_energy_term_mask,
+            reason)) {
         return gpu_relax_restore_accepted_step_after_finalize_failure(
             ctx,
             stream,

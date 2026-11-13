@@ -375,8 +375,8 @@ bool apply_demag_poisson_device_pcg(Context &ctx, GpuDemagPoissonWorkspace &work
         // Reserve up to two pre-loop AMG calls for an already-terminal state;
         // the first batch of five keeps post-latch calls at seven without a
         // separate terminal-status D2H readback.
-        const uint32_t batch_limit = queued == 0u ? 5u : 8u;
-        const uint32_t batch=std::min<uint32_t>(batch_limit,ctx.demag.solver.max_iterations-queued);
+        const uint32_t batch=demag_pcg_next_batch_iterations(
+            queued,ctx.demag.solver.max_iterations);
         for (uint32_t index=0; index<batch; ++index) {
             pcg.p->HypreRead(); pcg.q->HypreWrite();
             if (!hypre_check("HYPRE_ParCSRMatrixMatvec",[&]() {
@@ -768,6 +768,8 @@ bool validate_demag_poisson_hypre_device_solve(
         const auto reject_queued_work = [&](std::string message) {
             // The stage may clear the candidate on the Fullmag stream after
             // failure. A rejected matvec can still have queued HYPRE work.
+            // This existing rejection drain is separate from certificate
+            // readback telemetry; the paired success path has one 16-byte read.
             const auto status = cudaStreamSynchronize(stream);
             error = std::move(message);
             if (status != cudaSuccess) {
@@ -781,10 +783,33 @@ bool validate_demag_poisson_hypre_device_solve(
         const auto memory_class = mfem::GetHypreMemoryClass();
         workspace.b_par->HypreRead();
         const double *rhs_data = workspace.b_par->GetMemory().Read(memory_class, rows);
-        // The owned residual vector is private to validation. Its first
-        // entry can hold the scalar before the matvec overwrites the vector.
+        // The owned residual vector is private to validation. For rows >= 2
+        // its first two entries become outputs only after all A*x-b/norm reads.
         workspace.residual->HypreWrite();
         double *scratch = workspace.residual->GetMemory().Write(memory_class, rows);
+        const auto note_validation_readback = [&](size_t bytes) {
+            record_device_control_scalar_to_host(ctx.transfer_audit.audit, bytes);
+            GpuPerformanceCounterDelta readback_delta{};
+            readback_delta.control_fences = 1;
+            readback_delta.control_d2h_bytes = bytes;
+            readback_delta.mandatory_controls.poisson_certificate_readbacks=1;
+            readback_delta.mandatory_controls.poisson_certificate_bytes=bytes;
+            note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,readback_delta.mandatory_controls);
+            gpu_performance_note(ctx.gpu_state.performance_counters, readback_delta);
+        };
+        const auto finite_norm = [&](double norm, const char *name) {
+            if (!std::isfinite(norm)) {
+                error = std::string("GPU Poisson demag ") + name + " norm is nonfinite";
+                return false;
+            }
+            return true;
+        };
+        const auto note_rhs_norm = [&]() {
+            GpuPerformanceCounterDelta performance_delta{};
+            performance_delta.demag_rhs_norm_evaluations = 1;
+            performance_delta.demag_rhs_norm_sum = rhs_norm;
+            gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
+        };
         const auto read_validation_norm = [&](const double *values, const char *name,
                                               double &norm) {
             const auto status = fullmag_cuda_demag_validation_norm(
@@ -793,27 +818,14 @@ bool validate_demag_poisson_hypre_device_solve(
                 return reject_queued_work(std::string("GPU Poisson demag ") + name +
                                           " norm failed: " + cudaGetErrorString(status));
             }
-            record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(norm));
-            GpuPerformanceCounterDelta readback_delta{};
-            readback_delta.control_fences = 1;
-            readback_delta.control_d2h_bytes = sizeof(norm);
-            readback_delta.mandatory_controls.poisson_certificate_readbacks=1;
-            readback_delta.mandatory_controls.poisson_certificate_bytes=sizeof(norm);
-            note_hot_loop_mandatory_controls(ctx.transfer_audit.audit,readback_delta.mandatory_controls);
-            gpu_performance_note(ctx.gpu_state.performance_counters, readback_delta);
-            if (!std::isfinite(norm)) {
-                error = std::string("GPU Poisson demag ") + name + " norm is nonfinite";
-                return false;
-            }
-            return true;
+            note_validation_readback(sizeof(norm));
+            return finite_norm(norm, name);
         };
-        if (!read_validation_norm(rhs_data, "RHS", rhs_norm)) {
-            return false;
+        const bool paired_norms = validation_needs.independent_residual && rows >= 2;
+        if (!paired_norms) {
+            if (!read_validation_norm(rhs_data, "RHS", rhs_norm)) return false;
+            note_rhs_norm();
         }
-        GpuPerformanceCounterDelta performance_delta{};
-        performance_delta.demag_rhs_norm_evaluations = 1;
-        performance_delta.demag_rhs_norm_sum = rhs_norm;
-        gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
 
         if (validation_needs.independent_residual) {
             const HYPRE_Int prior_status = HYPRE_GetError();
@@ -836,7 +848,23 @@ bool validate_demag_poisson_hypre_device_solve(
                 return reject_queued_work("GPU Poisson demag residual AXPY failed: HYPRE status " +
                                           std::to_string(axpy_status));
             }
-            if (!read_validation_norm(scratch, "residual", absolute_residual)) {
+            if (paired_norms) {
+                double norms[2]{};
+                const auto status = fullmag_cuda_demag_validation_norm_pair(
+                    rhs_data, scratch, rows, scratch, norms, stream);
+                if (status != cudaSuccess) {
+                    return reject_queued_work(std::string("GPU Poisson demag paired norms failed: ") +
+                                              cudaGetErrorString(status));
+                }
+                note_validation_readback(sizeof(norms));
+                rhs_norm = norms[0];
+                absolute_residual = norms[1];
+                // RHS remains the first diagnosis even when NaN propagates
+                // from it through A*x-b into the residual as well.
+                if (!finite_norm(rhs_norm, "RHS")) return false;
+                note_rhs_norm();
+                if (!finite_norm(absolute_residual, "residual")) return false;
+            } else if (!read_validation_norm(scratch, "residual", absolute_residual)) {
                 return false;
             }
             residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;

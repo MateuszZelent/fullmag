@@ -544,6 +544,12 @@
       "path": "backends/fem/tests/demag_poisson_contract.cpp",
       "symbol": "void direct_pgbb_performance_lifecycle_contract",
       "responsibility": "Existing native gate exercises real public-ABI accepted PGBB and repeated terminal confirmations with profiler off/on; managed native gate passed on library0bd7e6f1; same-binary SP4 validates both additive scopes."
+    },
+    {
+      "id": "gpu-residual-paired-norm",
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "symbol": "fullmag_cuda_demag_validation_norm_pair",
+      "responsibility": "Pairs the unchanged scaled RHS and true-residual norms into one 16-byte scalar readback after all aliased input reads; the one-row device path remains separate."
     }
   ],
   "public_api": {
@@ -640,6 +646,7 @@
     "device_scalar_pcg": "First69de pilot remains retained with failed PhysicalLifetime containment. Lifecycle-fixed35d15e3f native gate and3same-binary SP4 runs pass Physical/HotLoop,8energies,torque and independent true residual. No Poisson speedup was established for that change.",
     "mandatory_controls": "110 Python verifier/matrix tests passed including missing/zero Physical rejection. Real direct-BB profiler-off/on native regression and3fresh-reuse SP4 runs pass scopes and unchanged residual control budget. No Physical subtraction from narrower legacy aggregates. Direct-module entrypoint moved after all classes: targeted RED becomes8PASS; full110tests PASS25.582s.",
     "fresh_zero_initialization_reuse": "Native gate2a6aa743 PASS5.514010441s, library0bd7e6f1; fresh initial AMG count drops by1, warm unchanged. Three92-step SP4 runs preserve all numeric Zarr arrays bitwise; worker median44.611956→42.858635s, inclusive Poisson median19.719933→20.276239s. No isolated AMG or statistical paired speedup claim.",
-    "fresh_reuse_cupti": "Separate full92-step SP4 with solver_profile+cuda_trace passes science/control/Zarr. CUPTI is accepted as attempt/PID/GPU-bound but partial at512MiB,1021904records,5690drops,limit_flags1; timing qualification not_verified. Counts are incomplete; no full-run GPU timing/utilization or AMG speedup inferred."
+    "fresh_reuse_cupti": "Separate full92-step SP4 with solver_profile+cuda_trace passes science/control/Zarr. CUPTI is accepted as attempt/PID/GPU-bound but partial at512MiB,1021904records,5690drops,limit_flags1; timing qualification not_verified. Counts are incomplete; no full-run GPU timing/utilization or AMG speedup inferred.",
+    "paired_residual_readback": "Managed fem-demag-poisson contract passed at attempt c1321d9442c641bd910f25b1b67a4a0e, snapshot49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0 and libraryc078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785; includes zero/nonfinite/extreme-scale/aliasing, true-residual corruption and queue-property fixtures. Full-Zarr SP4 timing and parity NOT VERIFIED."
   }
 }

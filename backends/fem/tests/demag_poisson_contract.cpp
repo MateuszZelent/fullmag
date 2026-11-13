@@ -12,6 +12,7 @@
 #include "core/demag_solver_policy.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "cuda_demag_residual_fixture.hpp"
+#include "cuda_pgbb_final_energy_overlay_fixture.hpp"
 #include "mandatory_control_counter_fixture.hpp"
 #include "poisson_device_pcg_counter_fixture.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
@@ -2897,13 +2898,18 @@ void mandatory_control_scope_accounting_contract() {
           "direct attempt ownership excludes active work, publishes all terminal work and preserves outside-attempt legacy semantics");
     check(fullmag::fem::test::mandatory_control_accounting_contract(),
           "mandatory source controls preserve real SP4 counts, scopes and unchanged core budget");
+    fullmag::fem::test::gpu_pgbb_final_energy_overlay_contract(check);
 }
 
 void device_pcg_scope_accounting_contract() {
+    check(fullmag::fem::test::device_pcg_setup_copy_physical_accounting_contract(),
+          "PCG setup D2D bytes survive outside-attempt accounting without becoming accepted work");
     check(fullmag::fem::test::device_pcg_physical_subaccounting_survives_rollback(),
           "PCG physical subaccounting preserves active/reject/fail/copy/reset and exact aggregate subtraction");
     check(fullmag::fem::test::device_pcg_initial_batch_readback_bound_contract(),
           "PCG first short batch preserves the cumulative readback bound at boundaries");
+    check(fullmag::fem::test::device_pcg_batch_terminal_budget_contract(),
+          "PCG queue policy preserves readback and post-terminal AMG bounds independently");
 }
 
 void device_scalar_pcg_terminal_state_contract() {
@@ -3247,6 +3253,7 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     ctx.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
     ctx.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
     const auto before = fullmag::fem::transfer_audit_snapshot(ctx.transfer_audit.audit);
+    const auto mandatory_before = ctx.transfer_audit.audit.mandatory_controls_hot_loop;
     {
         fullmag::fem::TransferAuditScope hot_loop(
             ctx.transfer_audit.audit,
@@ -3270,9 +3277,17 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
                  ctx.demag.realization,
                  static_cast<unsigned long long>(control_bytes),
                  static_cast<unsigned long long>(control_fences));
-    // Aggregate counters include the explicitly classified scalar readbacks.
-    // Both solves must independently certify the RHS and residual norms.
-    check(control_fences == 4u && control_bytes == 4u * sizeof(double),
+    // Each solve independently certifies both norms in one paired readback.
+    // Check the certificate-specific counters as well as the aggregate audit:
+    // fewer fences must not hide an omitted norm or an uncertified solve.
+    const auto certificate_readbacks =
+        ctx.transfer_audit.audit.mandatory_controls_hot_loop.poisson_certificate_readbacks -
+        mandatory_before.poisson_certificate_readbacks;
+    const auto certificate_bytes =
+        ctx.transfer_audit.audit.mandatory_controls_hot_loop.poisson_certificate_bytes -
+        mandatory_before.poisson_certificate_bytes;
+    check(control_fences == 2u && control_bytes == 4u * sizeof(double) &&
+              certificate_readbacks == 2u && certificate_bytes == control_bytes,
           "mixed-P1 GPU validation must certify both solves using scalar-only readbacks");
     check(after.hot_loop_h2d_bytes == before.hot_loop_h2d_bytes &&
               after.hot_loop_d2h_bytes - before.hot_loop_d2h_bytes == control_bytes &&

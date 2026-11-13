@@ -12,7 +12,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "implemented-unvalidated",
-      "reason": "Managed native oracle and frozen-SP4 component parity at common torque 1e-8 T passed; the required five alternating performance pairs and broader scientific qualification remain open."
+      "reason": "Managed native oracle, frozen-SP4 component parity at common torque 1e-8 T, and the C7 accepted-energy finalization native contract passed; the required five alternating performance pairs and broader scientific qualification remain open. The C7 contract is not SP4 timing or parity evidence."
     },
     {
       "solver": "FDM",
@@ -352,6 +352,30 @@
       "path": "crates/fullmag-api/src/script.rs",
       "symbol": "gpu_bb_preparation_study",
       "responsibility": "Borrows only validated concrete BB study controls while preserving the base physical payload."
+    },
+    {
+      "id": "gpu-pgbb-accepted-energy-snapshot",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "symbol": "gpu_relax_projected_gradient_bb_step",
+      "responsibility": "Retains the final accepted direct/refined Armijo energy snapshot for final statistics; rejected trials do not publish it."
+    },
+    {
+      "id": "gpu-final-energy-overlay",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp",
+      "symbol": "gpu_rk_overlay_final_energy_terms",
+      "responsibility": "Validates and overlays only the nine enabled published energy terms; the Robin boundary diagnostic remains excluded."
+    },
+    {
+      "id": "gpu-final-stats-with-energy-overlay",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu",
+      "symbol": "gpu_rk_finalize_step_stats_control_readback_with_energy_terms",
+      "responsibility": "Keeps fresh observable reductions, the existing scalar control readback/fence, timing collection, and publication while reusing accepted energy terms."
+    },
+    {
+      "id": "gpu-final-energy-overlay-contract",
+      "path": "backends/fem/tests/cuda_pgbb_final_energy_overlay_fixture.hpp",
+      "symbol": "gpu_pgbb_final_energy_overlay_contract",
+      "responsibility": "Checks all nine published energies and their total, fresh torque/moment retention, Robin exclusion, and finite-failure atomicity."
     }
   ],
   "public_api": {

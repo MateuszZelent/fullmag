@@ -259,8 +259,10 @@ void gpu_performance_note(
         add_delta(state.active, delta);
     } else if (state.available) {
         // Additive physical counters also cover setup/initialization work.
-        // Legacy aggregates retain their attempt-only publication contract.
+        // Legacy control/RHS aggregates retain their attempt-only contract;
+        // physical D2D bytes also include cold device-scalar initialization.
         auto &physical = state.physical_lifetime;
+        physical.device_to_device_bytes += delta.device_to_device_bytes;
         add_mandatory_control_counters(physical.mandatory_controls, delta.mandatory_controls);
         physical.device_pcg_status_readbacks += delta.device_pcg_status_readbacks;
         physical.device_pcg_control_d2h_bytes += delta.device_pcg_control_d2h_bytes;

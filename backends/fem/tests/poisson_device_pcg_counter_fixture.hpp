@@ -6,6 +6,7 @@
 
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/demag_poisson/pcg_device_scalar_kernels.hpp"
 
 namespace fullmag::fem::test {
 
@@ -39,6 +40,73 @@ inline bool device_pcg_initial_batch_readback_bound_contract()
     if (!device_pcg_cumulative_readback_upper_bound(4,0,bound) || bound!=4) return false;
     if (device_pcg_cumulative_readback_upper_bound(std::numeric_limits<uint64_t>::max()/2,2,bound)) return false;
     return true;
+}
+
+inline bool device_pcg_setup_copy_physical_accounting_contract()
+{
+    GpuPerformanceCounterState state;
+    state.available = true;
+    GpuPerformanceCounterDelta setup{};
+    setup.device_to_device_bytes = sizeof(double);
+    gpu_performance_note(state, setup);
+    auto snapshot = gpu_performance_snapshot(state);
+    if (snapshot.physical_device_to_device_bytes != sizeof(double) ||
+        snapshot.accepted_device_to_device_bytes != 0) return false;
+
+    // A rejected step contributes actual work without claiming an accepted
+    // endpoint; setup must survive both transactional paths exactly once.
+    GpuPerformanceCounterDelta attempted{};
+    attempted.device_to_device_bytes = 2 * sizeof(double);
+    gpu_performance_begin_attempt(state, 1);
+    gpu_performance_note(state, attempted);
+    gpu_performance_reject_attempt(state);
+    snapshot = gpu_performance_snapshot(state);
+    if (snapshot.physical_device_to_device_bytes != 3 * sizeof(double) ||
+        snapshot.accepted_device_to_device_bytes != 0) return false;
+    gpu_performance_begin_attempt(state, 1);
+    gpu_performance_note(state, attempted);
+    gpu_performance_commit_attempt(state);
+    snapshot = gpu_performance_snapshot(state);
+    return snapshot.physical_device_to_device_bytes == 5 * sizeof(double) &&
+        // Accepted lifetime includes the backtrack work of this step, while
+        // setup stays exclusively in physical lifetime.
+        snapshot.accepted_device_to_device_bytes == 4 * sizeof(double);
+}
+
+inline bool device_pcg_batch_terminal_budget_contract()
+{
+    if (demag_pcg_next_batch_iterations(0,0)!=0) return false;
+    for (uint32_t maximum=1;maximum<=128;++maximum) {
+        for (uint32_t active=0;active<=maximum;++active) {
+            uint32_t queued=0;
+            uint64_t reads=0;
+            do {
+                const auto batch=demag_pcg_next_batch_iterations(queued,maximum);
+                if (batch==0 || batch>maximum-queued) return false;
+                queued+=batch;
+                ++reads;
+            } while (queued<active);
+            // Initialization can latch before either of two pre-loop calls.
+            // Later terminal states arise after the active iteration's AMG.
+            const auto post_latch=queued-active+(active==0 ? 2u : 0u);
+            uint64_t read_bound=0;
+            if (post_latch>7 ||
+                !device_pcg_cumulative_readback_upper_bound(1,active,read_bound) ||
+                reads>read_bound) return false;
+        }
+    }
+    constexpr uint32_t maximum=std::numeric_limits<uint32_t>::max();
+    if (demag_pcg_next_batch_iterations(maximum-2,maximum)!=2 ||
+        demag_pcg_next_batch_iterations(maximum,maximum)!=0) return false;
+
+    // A previous solve's 66 iterations do not provide a lower bound for the
+    // next solve. Its proposed first batch passes the readback check while
+    // violating the separate post-terminal AMG bound by a large margin.
+    constexpr uint32_t previous_iterations=66,active=1;
+    constexpr uint32_t history_batch=previous_iterations-1;
+    uint64_t read_bound=0;
+    return device_pcg_cumulative_readback_upper_bound(1,active,read_bound) &&
+        read_bound>=1 && history_batch-active>7;
 }
 
 inline bool device_pcg_physical_subaccounting_survives_rollback()

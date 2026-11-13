@@ -214,12 +214,12 @@ int main()
         "strict GPU Hypre demag solver must use the periodic reduced Poisson matrix for PBC");
     const size_t matvec_pos = gpu_hypre.find("workspace.A_par->Mult(");
     const size_t axpy_pos = gpu_hypre.find("HYPRE_ParVectorAxpy(", matvec_pos);
-    const size_t residual_norm_pos = gpu_hypre.find("read_validation_norm(", axpy_pos);
+    const size_t residual_norm_pos = gpu_hypre.find("fullmag_cuda_demag_validation_norm_pair(", axpy_pos);
     const size_t certify_pos = gpu_hypre.find("residual_independently_certified = true");
     const size_t norm_wrapper_pos =
-        demag_kernels.find("cudaError_t fullmag_cuda_demag_validation_norm(");
+        demag_kernels.find("cudaError_t fullmag_cuda_demag_validation_norm_pair(");
     const size_t norm_launch_pos =
-        demag_kernels.find("demag_validation_norm_kernel<<<1, kBlockSize, 0, stream>>>",
+        demag_kernels.find("demag_validation_norm_pair_kernel<<<1, kBlockSize, 0, stream>>>",
                            norm_wrapper_pos);
     const size_t copy_pos = demag_kernels.find("cudaMemcpyAsync(", norm_launch_pos);
     const size_t fence_pos = demag_kernels.find("cudaStreamSynchronize(stream)", copy_pos);
@@ -229,7 +229,7 @@ int main()
             norm_wrapper_pos < norm_launch_pos && norm_launch_pos < copy_pos &&
             copy_pos < fence_pos && fence_pos != std::string::npos &&
             gpu_hypre.find("mfem_default_stream_wait_for_hypre_validation(") == std::string::npos,
-        "strict GPU residual certification orders matvec, subtraction, and scalar readback on the borrowed stream");
+        "strict GPU residual certification orders matvec, subtraction, and paired readback on the borrowed stream");
     const size_t validate_pos =
         gpu_stage.find("validate_demag_poisson_hypre_device_solve(");
     const size_t recover_pos = gpu_stage.find("fullmag_cuda_demag_recovery_csr(");

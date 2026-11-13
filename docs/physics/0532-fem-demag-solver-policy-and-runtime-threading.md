@@ -412,6 +412,22 @@ of HYPRE's success report. It preserves authored tolerances, the iteration cap,
 the internal CG norm choice, and the existing shared acceptance rule. Only two
 scalar norms return to the host; full vectors stay on the device for this check.
 
+The paired-readback optimization keeps the same independently formed residual
+and scaled Euclidean norms. For at least two local rows,
+`fullmag_cuda_demag_validation_norm_pair` reduces both inputs before reusing
+the first two entries of the private residual scratch, then returns two doubles
+in one readback and stream fence. A one-row problem retains the single-norm
+device implementation. The RHS diagnosis still precedes the residual diagnosis
+for nonfinite inputs. This changes neither the stopping tolerance nor the
+physical operator. The managed `fem-demag-poisson` native contract passed at
+attempt `c1321d9442c641bd910f25b1b67a4a0e`, source snapshot
+`49e15a11671533dd16b06b2ce09ee838630427abc4523affa484edf5e621cae0`, and
+library `c078a75a57a5655c1f0fbd9965c52745711f1fb6771de8c99f97e23d7053e785`
+(compile 13.122 s, test 5.200 s, exit 0). The gate includes the paired-norm
+regression, true-residual corruption check, accepted-energy overlay, and queue
+property fixtures. It does not establish SP4 timing or parity; the historical
+evidence below qualifies the earlier two-readback implementation only.
+
 The native regression starts with a real successful GPU CG solve, zeros only
 the test-owned potential after its final use, and requires the production
 validator to reject that potential despite the stale success report. Managed
@@ -1041,6 +1057,7 @@ managed-runtime qualification.
 
 | Claim | Repository path | Symbol | Responsibility | Lane | Test or evidence status | Immutable source |
 |---|---|---|---|---|---|---|
+| Paired scalar certificate readback | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `fullmag_cuda_demag_validation_norm_pair` | Both scaled norms complete before aliased scratch output; one 16-byte readback for at least two rows. | FEM GPU | Managed `fem-demag-poisson` native contract passed at attempt `c1321d9442c641bd910f25b1b67a4a0e`; SP4 timing/parity NOT VERIFIED. | Pending the verified implementation commit. |
 | Public policy defaults, validation, and object IR | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FemLinearSolverPolicy` | Defines the six policy fields and omits `atol` when `None`. | FEM CPU/GPU API | Source and object lowering checked for this page. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L160) |
 | Positive tolerance validation | `packages/fullmag-py/src/fullmag/_validation.py` | `require_positive` | Converts a numeric value and rejects nonfinite or nonpositive tolerances. | FEM CPU/GPU API | Source-visible. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/_validation.py#L261) |
 | FEM policy container | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Places the optional policy in FEM discretization hints. | FEM CPU/GPU API | Source-visible; no runtime claim. | [source](https://github.com/MateuszZelent/fullmag/blob/51466dfe5d97738859ed8db47fe0c1293845bd30/packages/fullmag-py/src/fullmag/model/discretization.py#L476) |
@@ -1139,6 +1156,11 @@ the configured cap. After a device terminal latch, at most seven additional
 AMG API calls can be issued across the remainder of the apply, including up to
 two pre-loop applies and the first queued batch. This counts HYPRE API calls,
 not measured GPU cycles; no speedup is claimed.
+A history-based first batch is not qualified by the cumulative readback bound
+alone: after a previous solve of 66 iterations, a first batch of 65 would issue
+64 post-latch AMG calls if the next solve converges after one iteration. Any
+future adaptive schedule or graph replay must preserve both bounds for sudden
+early convergence, zero RHS and nonfinite input, as well as ordinary SP4 steps.
 The no-inner-norm claim applies to the qualified l1-Jacobi AMG smoother
 (relax type 18 and coarse type 18). The engine explicitly requires `MPI_COMM_SELF`, relax/coarse type 18 and
 `print_level=0`; explicit verbose requests keep the existing HYPRE GPU engine
@@ -1282,6 +1304,10 @@ This lifecycle is independent of the profiler setting. Legacy 480-byte
 `physical_control_*` aggregates remain attempt-scoped: setup counted by additive
 Physical must not be subtracted from those legacy aggregates. Only matching
 HotLoop scopes justify the core-budget subtraction.
+The physical D2D-byte field also includes the eight-byte denominator-to-rho
+initialization copy before the first attempt. Accepted D2D bytes retain their
+accepted-step transaction semantics; this correction does not change the
+legacy control-fence or control-byte subtraction rules.
 
 Completed-run validation requires both PCG scopes, identical status-record size,
 valid cumulative bounds, and Physical counters at least as large as HotLoop.
