@@ -4416,7 +4416,8 @@ def _validate_container_recovery_successor(
         "container recovery successor configuration",
         MAX_CONTAINER_RECOVERY_REQUEST_BYTES,
     )
-    if _container_recovery_successor_config_profile(current_config) != _container_recovery_successor_config_profile(historical_config):
+    if (_canonical_container_recovery_json(_container_recovery_successor_config_profile(current_config))
+            != _canonical_container_recovery_json(_container_recovery_successor_config_profile(historical_config))):
         _fail("container recovery successor configuration changed its operator profile")
     if current_config.get("target_id") != successor_owner.get("target_id"):
         _fail("container recovery successor configuration targets a different service")
@@ -4507,7 +4508,8 @@ def _validate_container_recovery_successor(
         ):
             _fail(f"container recovery successor pool record differs from owner {source}")
         expected_resources = current_config.get(config_key)
-        if not isinstance(expected_resources, list) or record.get("resources") != expected_resources:
+        if (not isinstance(expected_resources, list)
+                or _canonical_container_recovery_json(record.get("resources")) != _canonical_container_recovery_json(expected_resources)):
             _fail(f"container recovery successor pool resources differ from configuration {source}")
 
     for source in (
@@ -4612,6 +4614,14 @@ def _validate_container_recovery_archive(
         _fail("container recovery archive is not a directory")
     successor_sources = set()
     successor_optional_sources: set[str] = set()
+    if authenticated_drained_owner_sha256 is not None and authenticated_successor_owner is None:
+        drain = _read_authenticated_terminal_drain(paths)
+        current_owner, _, current_sha256 = _container_recovery_owner_digest(paths)
+        if (current_sha256 != authenticated_drained_owner_sha256
+                or current_owner != drain["owner"]
+                or _owner_identity(current_owner) == _owner_identity(context["expected_owner"])):
+            _fail("container recovery replay has no authenticated new drained generation")
+        authenticated_successor_owner = drain["pin"]
     if authenticated_successor_owner is not None:
         if authenticated_drained_owner_sha256 is None:
             _fail("container recovery successor is missing its drained-owner proof")
@@ -4666,7 +4676,7 @@ def _validate_container_recovery_archive(
                 result["owner_sha256_after"],
             }
             if authenticated_drained_owner_sha256 is not None:
-                allowed_owner_sha256.add(authenticated_drained_owner_sha256)
+                allowed_owner_sha256 = {authenticated_drained_owner_sha256}
             live_owner_sha256 = _sha256_bytes(live_bytes)
             if live_owner_sha256 not in allowed_owner_sha256:
                 _fail("container recovery live owner changed outside its pinned transition")
