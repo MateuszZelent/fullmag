@@ -1512,3 +1512,28 @@ Poprzednia odmowa dotyczyła m.in. działającego obcego backendu Windows-folder
 `2c822c41e754a1c48ee94d127e9f2430e4eb751fd42b03c6f8590fa0154cf007`
 z danymi na E:. Pozostał nietknięty. Nowy zakres nie wymaga jego zatrzymania
 ani zmiany jego poświadczeń na Linux.
+
+
+### Publikacja v6 — naprawa własnych aliasów chronionych bindów
+
+Na HEAD `a022a67f96b64e79939eef60844e755b6d247062` rzeczywista publikacja
+`3f9bb579fc2247a2b7c60994afa75809` odmówiła z komunikatem
+`archived protected Docker bind differs from its retained Compose source`.
+Aplikacja i compute nie zostały uruchomione. Zapisany Compose nadal ma dokładny
+pin SHA-256 `a2339e15196d619a630d5a656e79eac8677e82019b66408c82bf210472bb5fe8`.
+Walidacja archiwalna obsługiwała alias WSL `/state`, ale pomijała mapowanie
+aliasów własnych `/user-data` i `/opt/fullmag/script-output`. Istniejący lokalny
+adapter metadanych mountów mapuje oba dokładnie do źródeł zapisanego Compose.
+Poprawka używa tego adaptera także dla pozostałych chronionych aliasów WSL,
+nadal wymagając dokładnej kanonicznej zgodności. Nie dodaje sondowania cudzych
+drzew ani akceptacji dowolnego hasha. Regresja obejmuje oba rzeczywiste aliasy
+i odrzucenie błędnego mapowania. Abrupt recovery: 55 mockowanych testów PASS;
+wcześniejsze 20 recovery i 15 preparer pozostają aktualne. Diff check PASS.
+Ponowna rzeczywista publikacja/recovery i uruchomienie aplikacji są wymagane.
+
+Pełne CI `43338301221` dla `a022a67f9`: generated-api-determinism PASS
+(job `131599994714`), inspector-actions-browser-smoke PASS, CPU FDM relaxation
+qualification PASS. Pozostałe bramki w toku; nie stanowi to odbioru aktualnego
+runtime 3243 ani pełnej macierzy P22. Bieżący silnik Docker 29.9.3 odpowiada,
+ale własne dwa kontenery pozostają Exited255, UI3243 nie odpowiada. WSL ma
+około 516 MiB wolnego, nadal poniżej minimum 1 GiB dla S46; nic nie usunięto.

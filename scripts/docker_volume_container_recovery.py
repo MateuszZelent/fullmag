@@ -2270,13 +2270,16 @@ def _group_local_owned_identities(backend, frontend, compose, project, *, resolv
                     if daemon_binds[target] != mount.get("Source"):
                         _fail("group-local Docker bind differs from its retained daemon pin")
                 raw_binds.extend((expected, actual_source))
-                if resolve_aliases:
+                if resolve_aliases or (
+                        actual_source[0] == "wsl-alias" and target != "/state"):
+                    # Archived validation must map protected WSL aliases too;
+                    # their raw hashes are not a canonical source identity.
                     canonical_actual = _canonical_direct_identity(
                         actual_source, state_root, "selected protected Docker bind")
                 elif (target == "/state" and actual_source[0] == "wsl-alias") or actual_source == expected:
-                    # The archived proof binds the exact source alias and
-                    # Compose daemon pin; only live preparation maps that alias
-                    # through local mount-table metadata.
+                    # The exact /state source alias is already bound by the
+                    # retained daemon pin; non-aliased protected binds compare
+                    # directly to their Compose source.
                     canonical_actual = expected
                 else:
                     _fail("archived protected Docker bind differs from its retained Compose source")

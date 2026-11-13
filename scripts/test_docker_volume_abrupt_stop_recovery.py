@@ -649,6 +649,64 @@ class AbruptStopTests(unittest.TestCase):
                     control, backend, frontend, compose,
                     consumer_scope="group-local-direct-binds-v1")
 
+    def test_group_local_archived_validation_maps_exact_user_data_and_script_output_aliases(self):
+        control, backend, frontend, compose, _, _ = self.linux_native_scope_fixture()
+        user_data_source = (
+            "/home/kkingstoun/git/fullmag/storage/user-data/"
+            "fullmag-worktree-interactive-study-t8-20261108-1759273bcd4c305b"
+        )
+        script_output_source = (
+            "/home/kkingstoun/git/fullmag/worktrees/interactive-study-t8-20261108/examples"
+        )
+        user_data_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            "5677c10f5e74f352badbecb5f3de65acc8286ae6d48f89e440c954db9a64415d"
+        )
+        script_output_alias = (
+            "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu2/"
+            "fba7f54aeaabc3ae724e0262c54a3cde69fd2758c6757d81ba1e9edeedfda1c4"
+        )
+
+        def set_mount(target, source):
+            spec = next(item for item in compose["services"]["backend"]["volumes"]
+                        if item.get("target") == target)
+            spec["source"] = source
+            mount = next(item for item in backend["Mounts"]
+                         if item.get("Destination") == target)
+            mount["Source"] = source
+
+        set_mount("/user-data", user_data_source)
+        set_mount("/opt/fullmag/script-output", script_output_source)
+        next(item for item in backend["Mounts"]
+             if item.get("Destination") == "/user-data")["Source"] = user_data_alias
+        next(item for item in backend["Mounts"]
+             if item.get("Destination") == "/opt/fullmag/script-output")["Source"] = script_output_alias
+
+        aliases = {
+            user_data_alias: Path(user_data_source),
+            script_output_alias: Path(script_output_source),
+        }
+
+        def resolve(source, _state):
+            return aliases.get(source, Path(source))
+
+        with patch("docker_volume_host_device.bind_host_path", side_effect=resolve):
+            owned = r._group_local_owned_identities(
+                backend, frontend, compose, control.project, resolve_aliases=False)
+        canonical_binds = owned["canonical_binds"]
+        self.assertIn(("posix", Path(user_data_source)), canonical_binds)
+        self.assertIn(("posix", Path(script_output_source)), canonical_binds)
+
+        wrong_aliases = {
+            **aliases,
+            user_data_alias: Path(user_data_source) / "other",
+        }
+        with patch("docker_volume_host_device.bind_host_path",
+                   side_effect=lambda source, _state: wrong_aliases.get(source, Path(source))):
+            with self.assertRaisesRegex(r.ContainerRecoveryError, "does not map to its retained Linux source"):
+                r._group_local_owned_identities(
+                    backend, frontend, compose, control.project, resolve_aliases=False)
+
     def test_group_local_v6_proof_freezes_scope_and_requires_failed_outcome_opt_in(self):
         proof, auth, control, _, _, compose, _, _ = self.group_local_failed_outcome_fixture()
         r.validate_abrupt_stop_proof(proof, auth, compose=compose)
